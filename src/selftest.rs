@@ -286,6 +286,30 @@ const CASES: &[Case] = &[
             && prose.is_empty()
             && placeholder.is_empty())
     }),
+    (
+        "tokens: a subject is read from the start of a directive, never from its reason",
+        || {
+            let other = directive_reasons(
+                "allow-assertion-drop: test_other the helper adds to the total",
+                crate::tokens::ALLOW_ASSERTION_DROP,
+            );
+            let quoted_later = directive_reasons(
+                "allow-assertion-drop: test_other keeps what \"adds\" checked",
+                crate::tokens::ALLOW_ASSERTION_DROP,
+            );
+            let first = directive_reasons(
+                "allow-assertion-drop: adds the equality moved to the property suite",
+                crate::tokens::ALLOW_ASSERTION_DROP,
+            );
+            let path = directive_reasons("removes: tests/b.rs moved under tests/", REMOVES);
+            Ok(!covers(&other, "adds")
+                && covers(&other, "test_other")
+                && !covers(&quoted_later, "adds")
+                && covers(&first, "adds")
+                && covers(&path, "tests/b.rs")
+                && !covers(&path, "tests/a.rs"))
+        },
+    ),
     ("hygiene: time-estimate patterns discriminate", || {
         let res: Vec<Regex> = time_estimate_patterns()
             .iter()

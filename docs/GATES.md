@@ -316,7 +316,7 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 
 ### Directive Policy
 
-Each gate has at most one canonical directive (with at most one documented deprecated spelling); `allow-test-shrink` serves both `test-floor` and `test-budget`. A few gates (`unsafe-safety-comment`, `agents-md`, `pii`, `agent-scratch`, `ci-skip-set`, `time-estimates`) have no directive: they are lifted by fixing the finding, an inline marker where the gate documents one, or `exempt_paths`. Directives must be scoped to their natural subject (file path, test name, action ref, workflow job, dependency name, or rule identifier). Blanket waivers without subjects are rejected.
+Each gate has at most one canonical directive (with at most one documented deprecated spelling); `allow-test-shrink` serves both `test-floor` and `test-budget`. A few gates (`unsafe-safety-comment`, `agents-md`, `pii`, `agent-scratch`, `ci-skip-set`, `time-estimates`) have no directive: they are lifted by fixing the finding, an inline marker where the gate documents one, or `exempt_paths`. Directives must be scoped to their natural subject (file path, test name, action ref, workflow job, dependency name, or rule identifier). Blanket waivers without subjects are rejected. The subject is the first thing after the colon and the rest is the reason: `allow-ignore: test_sync flaky on the shared runner` lifts a finding on `test_sync`, and `allow-ignore: test_other skipped the way test_sync was` does not, because a word of the reason never names a subject. One directive line names one subject: there is no list form, so two subjects take two lines ([Syntax & Grammar](CONFIGURATION.md#syntax--grammar)).
 
 ---
 
@@ -1731,7 +1731,7 @@ Notes for adapting it:
   - Memory errors (out-of-bounds access, use-after-free) or data races detected by LLVM sanitizers, and a sanitizer run that cannot execute.
   - A canary that does not produce its expected diagnostic.
 - **Exit codes:** a sanitizer run that cannot start (the toolchain or the sanitizer runtime missing, over the timeout) verified nothing, so the check exits 2; no directive lifts it. A job without a nightly toolchain disables the gate in its configuration.
-- **Lifting directive:** `allow-sanitizers: <subject> <reason>`: `canary` for the canary, `failure` for a failing run; `sanitizers` covers either, `toolchain` or `nightly` the failing run.
+- **Lifting directive:** `allow-sanitizers: <subject> <reason>`: `canary` for the canary, `failure` for a failing run; `sanitizers` covers either, `toolchain` or `nightly` the failing run. The keyword is the first word: `allow-sanitizers: canary the race canary needs a runtime this runner lacks`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `sanitizer`, `timeout_seconds`, `canary`.
 
 #### `miri`
@@ -1741,7 +1741,7 @@ Notes for adapting it:
   - Undefined behavior flagged during Miri execution.
   - Zero tests executing under Miri when test filters match zero cases (prevents vacuous passes; the guard is always on).
 - **Exit codes:** a Miri run that cannot start (`cargo-miri` missing, over the timeout) verified nothing, so the check exits 2; no directive lifts it. A job without Miri disables the gate in its configuration.
-- **Lifting directive:** `allow-miri: <subject> <reason>`: `zero-tests` (or `tests`) for the zero-tests guard, `failure` for a failing run; `miri`, `cargo-miri` or `toolchain` cover either.
+- **Lifting directive:** `allow-miri: <subject> <reason>`: `zero-tests` (or `tests`) for the zero-tests guard, `failure` for a failing run; `miri`, `cargo-miri` or `toolchain` cover either. The keyword is the first word: `allow-miri: zero-tests the filter selects no case on this target`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `args`, `timeout_seconds` (default 600).
 
 #### `unsafe-budget`
@@ -1750,7 +1750,7 @@ Notes for adapting it:
 - **What it catches:**
   - Net additions of `unsafe` sites across changed source files (unless `allow_increase = true`), reported at each added site.
   - A head count above `max_unsafe`.
-- **Lifting directive:** `allow-unsafe: <subject> <reason>`: for an added site, its file path or name, `FFI`, or `unsafe-budget`; for the cap, `max_unsafe`, `unsafe-budget`, `budget`, `FFI` or `pointer`.
+- **Lifting directive:** `allow-unsafe: <subject> <reason>`: for an added site, its file path or name, `FFI`, or `unsafe-budget`; for the cap, `max_unsafe`, `unsafe-budget`, `budget`, `FFI` or `pointer`. The path or keyword is the first word: `allow-unsafe: FFI the binding dereferences a buffer the C library owns`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `max_unsafe`, `allow_increase` (default `false`).
 
 ---
@@ -1764,7 +1764,7 @@ Notes for adapting it:
   - Missing `rust-version` declaration in `Cargo.toml`.
   - A configured `command` (for example a build under the MSRV toolchain) that fails.
 - **Exit codes:** a `command` that exits 0 passes; one that exits non-zero is a finding (1); one that cannot run (not found, cannot start, over the timeout) or a `Cargo.toml` that cannot be read means nothing was verified, so the check exits 2.
-- **Lifting directive:** `allow-msrv: <subject> <reason>`: `rust-version`, `Cargo.toml`, `msrv` or `crate` for a missing declaration; `command`, `msrv` or the command text for a failing command.
+- **Lifting directive:** `allow-msrv: <subject> <reason>`: `rust-version`, `Cargo.toml`, `msrv` or `crate` for a missing declaration; `command`, `msrv` or the command text for a failing command. The keyword is the first word: `allow-msrv: crate the workspace pins its toolchain in another file`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `pinned_version`, `command`.
 
 ---
@@ -1797,7 +1797,7 @@ Notes for adapting it:
   - Wall-clock variance from co-resident CPU contention without sample distribution statistics.
 - **Baseline:** a finding about an arm has no line. Its fingerprint is anchored on the arm name (a regression, a removed arm, an arm with no baseline entry), on the entry as written for a stale `exempt_arms` entry (`exempt_arms:<entry>`), and in paired-ratio mode on the cell (`cell:<axis>/<id>`) or on what could not be compared (`baseline`, `platform`, `twin`, `runner-class`, `axis:<name>`, a cell), so an entry for one arm or cell does not match another of the same artifact.
 - **Lifting directive:** `allow-regression: <benchmark-name-or-path> <reason>`.
-- **Sourced overrides and citation freshness (`require_sourced_override = true`):** the reason must cite a CI run URL or a committed artifact path and name the arms it approves. Every citation in the reason is then checked, not only the first, because a reason with two citations rests on both:
+- **Sourced overrides and citation freshness (`require_sourced_override = true`):** the reason must cite a CI run URL or a committed artifact path, and the directive must start with the arm it approves: the arm in full, its tail after `::`, or its stem before `/` (which approves every regressed arm of that stem). An arm mentioned later in the reason is not approved. Every citation in the reason is then checked, not only the first, because a reason with two citations rests on both:
   - a cited run whose conclusion is `cancelled`, `timed_out`, `action_required`, `startup_failure`, `stale` or `skipped` voids the override: it may have skipped the job whose numbers are quoted;
   - a cited run that concluded `failure` counts only if every job listed in `citation_measurement_jobs` that it started reached its guard step with every earlier step green. A regression trips the guard on numbers it measured; a crashed benchmark leaves none, and both conclude `failure`;
   - the cited run's head must be reachable from the head under review (`ahead` or `identical` in the compare API); a run at a head a force-push rewrote away measured other code;

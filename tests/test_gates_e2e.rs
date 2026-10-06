@@ -7979,9 +7979,9 @@ fn override_record_audit_trail_and_step_outputs() {
 
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(run.stdout.contains("Status: PASS"));
-    assert!(run
-        .stdout
-        .contains("override applied: `removes: tests/a.rs orders moved to proptest` on `orders`"));
+    assert!(run.stdout.contains(
+        "override applied: `removes: tests/a.rs orders moved to proptest` on `tests/a.rs`"
+    ));
     assert!(
         run.stdout.contains(
             "gates:  25 passed, 0 failed, 15 disabled, 1 not evaluated (22 items examined)"
@@ -8015,7 +8015,7 @@ fn override_record_audit_trail_and_step_outputs() {
         "{step_summary}"
     );
     assert!(
-        step_summary.contains("| `deletion-rationale` | `removes` | `orders` |"),
+        step_summary.contains("| `deletion-rationale` | `removes` | `tests/a.rs` |"),
         "{step_summary}"
     );
 
@@ -8028,7 +8028,7 @@ fn override_record_audit_trail_and_step_outputs() {
     let overrides = outcome["overrides"].as_array().unwrap();
     assert_eq!(overrides.len(), 1);
     assert_eq!(overrides[0]["directive"], "removes");
-    assert_eq!(overrides[0]["subject"], "orders");
+    assert_eq!(overrides[0]["subject"], "tests/a.rs");
     assert_eq!(overrides[0]["hidden"], false);
 }
 
@@ -14837,7 +14837,7 @@ enabled = true
         "[package]\nname = \"t\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
     );
     repo.commit(
-        "chore: remove msrv with waiver\n\ndiscipline:allow(msrv): transitional crate unpinned",
+        "chore: remove msrv with waiver\n\ndiscipline:allow(msrv): crate transitional, unpinned for now",
     );
     let run_ov = repo.check(&[]);
     assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
@@ -15081,7 +15081,7 @@ fn test_suppression_delta_scoped_override_q1() {
         .any(|v| v["message"].as_str().unwrap().contains("type: ignore")));
 
     // 3. Amend commit naming all three -> 0 findings remain, exit code 0
-    repo.git(&["commit", "-q", "--amend", "-m", "refactor: add suppressions\n\nallow-suppression: dead_code noqa type: ignore legacy cleanup"]);
+    repo.git(&["commit", "-q", "--amend", "-m", "refactor: add suppressions\n\nallow-suppression: dead_code legacy cleanup\nallow-suppression: noqa the import is re-exported\nallow-suppression: type: ignore the stub package lags the release"]);
     let run3 = repo.check(SUPPRESSION_BLOCKING);
     assert_eq!(run3.code, 0, "{}{}", run3.stdout, run3.stderr);
     assert_eq!(run3.violations("suppression-delta").len(), 0);
@@ -15313,7 +15313,7 @@ max_unsafe = 0
     );
 
     // 2. With waiver directive -> passes and records override
-    repo.git(&["commit", "-q", "--amend", "-m", "feat: touch lib with waiver\n\ndiscipline:allow(unsafe-budget): legacy C FFI pointer dereference"]);
+    repo.git(&["commit", "-q", "--amend", "-m", "feat: touch lib with waiver\n\ndiscipline:allow(unsafe-budget): FFI legacy C pointer dereference"]);
     let run_ov = repo.check(&[]);
     assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
     let ovs = run_ov.outcome("unsafe-budget")["overrides"]

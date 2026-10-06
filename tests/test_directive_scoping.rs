@@ -155,12 +155,26 @@ fn test_all_40_directives_table_driven_scoping() {
         );
         assert_eq!(outcome_scoped_2.overrides[0].subject, subj2);
 
-        // 4. Naming Both Subjects test:
-        let scoped_both = format!("{dir_name}: {subj1} and {subj2} legitimate justification\n");
+        // 4. Naming Both Subjects test: one directive line per subject.
+        let scoped_both = format!(
+            "{dir_name}: {subj1} legitimate justification\n{dir_name}: {subj2} legitimate justification\n"
+        );
         let outcome_both =
             evaluate_findings_for_directive(spec.gate, alias_names, &scoped_both, &subjects);
         assert_eq!(outcome_both.violations.len(), 0);
         assert_eq!(outcome_both.overrides.len(), 2);
+
+        // 5. One line listing both names its first subject only (#611).
+        let listed = format!("{dir_name}: {subj1} and {subj2} legitimate justification\n");
+        let outcome_listed =
+            evaluate_findings_for_directive(spec.gate, alias_names, &listed, &subjects);
+        assert_eq!(
+            outcome_listed.violations.len(),
+            1,
+            "Directive '{dir_name}' listing two subjects on one line must lift the first only"
+        );
+        assert_eq!(outcome_listed.overrides.len(), 1);
+        assert_eq!(outcome_listed.overrides[0].subject, subj1);
 
         let kind_str = match spec.subject_kind {
             DirectiveSubjectKind::FilePath => "FilePath",

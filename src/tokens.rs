@@ -8,7 +8,8 @@
 //!   - a line indented four or more columns (a tab counts as four) is an indented code
 //!     block and is ignored; up to three spaces of indentation is allowed
 //!   - the reason must be non-empty and must not be a template placeholder
-//!   - an override is **scoped**: it only covers a subject that its reason names
+//!   - an override is **scoped**: it only covers the subject its text opens with; every
+//!     later word is the reason, and a word of the reason names no subject
 //!
 //! The defect this prevents: a PR that *described* the override
 //! mechanism in a markdown table silently approved every regression in the run.
@@ -115,9 +116,47 @@ impl ParsedDirective {
     }
 }
 
+/// A directive of the right kind that names another subject at its start while its text
+/// mentions `subject` further on: it does not cover `subject`, and the gate says why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubjectMiss {
+    pub gate: String,
+    pub directive: String,
+    pub source: OverrideSource,
+    /// The subject the directive was read with: the first token of its text.
+    pub named: String,
+    /// The finding's subject, which the directive mentions past its start.
+    pub subject: String,
+}
+
+impl SubjectMiss {
+    pub fn note(&self) -> String {
+        format!(
+            "directive `{}` ({}) names `{}`: a subject is read from the start of the directive only, so it does not cover `{}`, which its text mentions further on",
+            self.directive, self.source, self.named, self.subject
+        )
+    }
+}
+
+thread_local! {
+    static SUBJECT_MISSES: std::cell::RefCell<Vec<SubjectMiss>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The misses [`find_override`] recorded on this thread since the last call, in order,
+/// each once.
+pub fn take_subject_misses() -> Vec<SubjectMiss> {
+    SUBJECT_MISSES.with(|m| std::mem::take(&mut *m.borrow_mut()))
+}
+
+/// Drops the misses recorded on this thread: a run starts with none.
+pub fn forget_subject_misses() {
+    SUBJECT_MISSES.with(|m| m.borrow_mut().clear());
+}
+
 /// The override one of `directives` grants `gate` for `subject`: a directive named in
-/// `names` whose reason names the subject. `lifts` is the finding the gate would report
-/// without it; the record carries its code.
+/// `names` whose text opens with the subject and gives a reason after it. `lifts` is the
+/// finding the gate would report without it; the record carries its code.
 pub fn find_override(
     directives: &[ParsedDirective],
     gate: &str,
@@ -129,8 +168,12 @@ pub fn find_override(
     if trimmed.is_empty() {
         return None;
     }
+    let mut misses = Vec::new();
     for d in directives {
-        if names.iter().any(|n| n.eq_ignore_ascii_case(&d.directive)) && d.covers(trimmed) {
+        if !names.iter().any(|n| n.eq_ignore_ascii_case(&d.directive)) {
+            continue;
+        }
+        if d.covers(trimmed) {
             return Some(OverrideRecord {
                 gate: gate.to_string(),
                 code: Some(crate::findings::full_code(gate, lifts)),
@@ -141,7 +184,26 @@ pub fn find_override(
                 hidden: d.hidden,
             });
         }
+        let named = first_token(&d.reason);
+        if !named.is_empty() && mentions(&d.reason, trimmed) {
+            misses.push(SubjectMiss {
+                gate: gate.to_string(),
+                directive: d.directive.clone(),
+                source: d.source.clone(),
+                named: named.to_string(),
+                subject: trimmed.to_string(),
+            });
+        }
     }
+    // No directive covers the subject: remember the ones that only mention it.
+    SUBJECT_MISSES.with(|m| {
+        let mut recorded = m.borrow_mut();
+        for miss in misses {
+            if !recorded.contains(&miss) {
+                recorded.push(miss);
+            }
+        }
+    });
     None
 }
 
@@ -382,7 +444,7 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
         gate: "suppression-delta",
         subject_kind: DirectiveSubjectKind::RuleName,
         subject_doc:
-            "Specific suppression rule (`dead_code`, `noqa`, `type: ignore`) and/or file path",
+            "Specific suppression rule (`dead_code`, `noqa`, `type: ignore`) or file path",
     },
     DirectiveSpec {
         canonical: "allow-pr-checklist",
@@ -1254,178 +1316,116 @@ pub fn directive_reasons(text: &str, names: &[&str]) -> Vec<String> {
         .collect()
 }
 
-/// True when some directive's reason names `subject` (or, for paths, a
-/// directory prefix of it or its file name).
+/// True when some directive names `subject` at its start (or, for paths, a directory
+/// prefix of it or its file name) and gives a reason after it.
 pub fn covers(reasons: &[String], subject: &str) -> bool {
     reasons.iter().any(|r| reason_names(r, subject))
 }
 
-fn reason_names(reason: &str, subject: &str) -> bool {
-    let is_token_char = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '@');
-    let trimmed_subject = subject.trim();
+const QUOTES: [char; 3] = ['"', '\'', '`'];
 
-    if !trimmed_subject.is_empty() {
-        // 1. Quoted subject anywhere in the reason: "name", 'name', or `name`.
-        for quote in ['"', '\'', '`'] {
-            let quoted = format!("{quote}{trimmed_subject}{quote}");
-            for (idx, _) in reason.match_indices(&quoted) {
-                let remainder = format!("{} {}", &reason[..idx], &reason[idx + quoted.len()..]);
-                if is_valid_rationale(&remainder) {
-                    return true;
-                }
-            }
-        }
-
-        // 2. Multi-word subject containing ':' (e.g. `type: ignore`) anywhere in the reason, bounded by non-token boundary.
-        if trimmed_subject.contains(':') {
-            for (idx, _) in reason.match_indices(trimmed_subject) {
-                let prev_ok = if idx == 0 {
-                    true
-                } else {
-                    let prev_char = reason[..idx].chars().next_back().unwrap();
-                    !is_token_char(prev_char) && prev_char != ':'
-                };
-                let end_idx = idx + trimmed_subject.len();
-                let next_ok = if end_idx == reason.len() {
-                    true
-                } else {
-                    let next_char = reason[end_idx..].chars().next().unwrap();
-                    !is_token_char(next_char) && next_char != ':'
-                };
-                if prev_ok && next_ok {
-                    let remainder = format!("{} {}", &reason[..idx], &reason[end_idx..]);
-                    if is_valid_rationale(&remainder) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        // 3. Subject at the beginning of the reason (e.g. `allow-ignore: my test name <reason>` or `allow-unpinned-action: actions/checkout@v4 <reason>`).
-        let unquoted_reason = reason.trim_start_matches(['"', '\'', '`']);
-        if let Some(rest) = unquoted_reason.strip_prefix(trimmed_subject) {
-            let rest_after_quote = rest.trim_start_matches(['"', '\'', '`']);
-            if rest_after_quote.starts_with(|c: char| !is_token_char(c) || c == ':' || c == '@')
-                && is_valid_rationale(rest_after_quote)
-            {
-                return true;
-            }
-        }
-    }
-
-    let raw_tokens: Vec<&str> = reason
-        .split(|c: char| !is_token_char(c))
-        .filter(|t| !t.is_empty())
-        .collect();
-    let file_name = subject.rsplit('/').next().unwrap_or(subject);
-    for raw_token in &raw_tokens {
-        let has_slash = raw_token.contains('/');
-        let trimmed_leading = raw_token.strip_prefix("./").unwrap_or(raw_token);
-        let token = trimmed_leading.trim_end_matches('.').trim_matches('/');
-        if token.is_empty() {
-            continue;
-        }
-        let matched = if token == subject || token == file_name {
-            true
-        } else if has_slash && subject.contains('/') && subject.starts_with(&format!("{token}/")) {
-            // Directory prefix: only when written with a slash (e.g. `tests/legacy` or `tests/`).
-            // A bare word like `tests` in ordinary prose never acts as a directory prefix.
-            true
-        } else {
-            false
-        };
-
-        if matched {
-            for (idx, _) in reason.match_indices(raw_token) {
-                let prev_ok = if idx == 0 {
-                    true
-                } else {
-                    let prev_char = reason[..idx].chars().next_back().unwrap();
-                    !is_token_char(prev_char)
-                };
-                let end_idx = idx + raw_token.len();
-                let next_ok = if end_idx == reason.len() {
-                    true
-                } else {
-                    let next_char = reason[end_idx..].chars().next().unwrap();
-                    !is_token_char(next_char)
-                };
-                if prev_ok && next_ok {
-                    let remainder = format!("{} {}", &reason[..idx], &reason[end_idx..]);
-                    if is_valid_rationale(&remainder) {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    false
+fn is_token_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '@')
 }
 
-pub(crate) fn reason_names_subject(reason: &str, subject: &str) -> bool {
-    let is_token_char = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '@');
-    let trimmed_subject = subject.trim();
+/// Whether the token `raw` names the path `subject`: the path itself, its file name, or,
+/// written with a slash (`tests/legacy`, `tests/`), a directory above it. A bare word
+/// such as `tests` is never a directory prefix.
+fn token_names_path(raw: &str, subject: &str) -> bool {
+    let token = raw
+        .strip_prefix("./")
+        .unwrap_or(raw)
+        .trim_end_matches('.')
+        .trim_matches('/');
+    if token.is_empty() {
+        return false;
+    }
+    let file_name = subject.rsplit('/').next().unwrap_or(subject);
+    token == subject
+        || token == file_name
+        || (raw.contains('/') && subject.contains('/') && subject.starts_with(&format!("{token}/")))
+}
 
-    if !trimmed_subject.is_empty() {
-        for quote in ['"', '\'', '`'] {
-            let quoted = format!("{quote}{trimmed_subject}{quote}");
-            if reason.contains(&quoted) {
-                return true;
-            }
-        }
+/// The first token of a directive's text, an opening quote aside: the one place a
+/// directive names its subject. Empty when the text opens with anything else.
+fn first_token(reason: &str) -> &str {
+    let text = reason.trim_start().trim_start_matches(QUOTES);
+    let end = text.find(|c: char| !is_token_char(c)).unwrap_or(text.len());
+    &text[..end]
+}
 
-        if trimmed_subject.contains(':') {
-            for (idx, _) in reason.match_indices(trimmed_subject) {
-                let prev_ok = if idx == 0 {
-                    true
-                } else {
-                    let prev_char = reason[..idx].chars().next_back().unwrap();
-                    !is_token_char(prev_char) && prev_char != ':'
-                };
-                let end_idx = idx + trimmed_subject.len();
-                let next_ok = if end_idx == reason.len() {
-                    true
-                } else {
-                    let next_char = reason[end_idx..].chars().next().unwrap();
-                    !is_token_char(next_char) && next_char != ':'
-                };
-                if prev_ok && next_ok {
-                    return true;
-                }
-            }
-        }
-
-        let unquoted_reason = reason.trim_start_matches(['"', '\'', '`']);
-        if let Some(rest) = unquoted_reason.strip_prefix(trimmed_subject) {
-            let rest_after_quote = rest.trim_start_matches(['"', '\'', '`']);
-            if rest_after_quote.is_empty()
-                || rest_after_quote.starts_with(|c: char| !is_token_char(c) || c == ':' || c == '@')
-            {
-                return true;
-            }
+/// The text after the subject when a directive's text opens with `subject`: the subject
+/// as written (several words and a `:` included, quoted or not), or a first token that
+/// names the path. `None` when the directive names something else. Nothing past the
+/// start is read: every later word is the reason, and a reason names no subject.
+fn after_subject<'a>(reason: &'a str, subject: &str) -> Option<&'a str> {
+    let subject = subject.trim();
+    if subject.is_empty() {
+        return None;
+    }
+    let text = reason.trim_start().trim_start_matches(QUOTES);
+    if let Some(rest) = text.strip_prefix(subject) {
+        let rest = rest.trim_start_matches(QUOTES);
+        // `actions/checkout@v4` names `actions/checkout`; any other token character
+        // means the text opens with a longer word.
+        if rest.is_empty() || rest.starts_with(|c: char| !is_token_char(c) || c == '@') {
+            return Some(rest);
         }
     }
+    let raw = first_token(reason);
+    if token_names_path(raw, subject) {
+        return Some(&text[raw.len()..]);
+    }
+    // A qualified name (`tests::parses`, `Suite#case`, `tests/test_io.py::test_load`)
+    // names its last segment, as a path names its file.
+    let qualified = first_qualified_name(text);
+    let leaf = qualified.rsplit("::").next().unwrap_or(qualified);
+    let leaf = leaf.rsplit('#').next().unwrap_or(leaf);
+    (qualified.len() > raw.len() && leaf == subject).then(|| &text[qualified.len()..])
+}
 
-    let raw_tokens: Vec<&str> = reason
-        .split(|c: char| !is_token_char(c))
-        .filter(|t| !t.is_empty())
-        .collect();
-    let file_name = subject.rsplit('/').next().unwrap_or(subject);
-    for raw_token in &raw_tokens {
-        let has_slash = raw_token.contains('/');
-        let trimmed_leading = raw_token.strip_prefix("./").unwrap_or(raw_token);
-        let token = trimmed_leading.trim_end_matches('.').trim_matches('/');
-        if token.is_empty() {
+/// The name `text` opens with, read across `::` and `#`: `tests::parses`, `Suite#case`.
+fn first_qualified_name(text: &str) -> &str {
+    let mut end = 0;
+    while end < text.len() {
+        let rest = &text[end..];
+        if rest.starts_with("::") {
+            end += 2;
             continue;
         }
-        if token == subject || token == file_name {
-            return true;
-        }
-        if has_slash && subject.contains('/') && subject.starts_with(&format!("{token}/")) {
-            return true;
+        match rest.chars().next() {
+            Some(c) if is_token_char(c) || c == '#' => end += c.len_utf8(),
+            _ => break,
         }
     }
-    false
+    &text[..end]
+}
+
+fn reason_names(reason: &str, subject: &str) -> bool {
+    after_subject(reason, subject).is_some_and(is_valid_rationale)
+}
+
+/// As [`reason_names`], without requiring a reason after the subject.
+pub(crate) fn reason_names_subject(reason: &str, subject: &str) -> bool {
+    after_subject(reason, subject).is_some()
+}
+
+/// Whether a directive's text mentions `subject` anywhere, as a whole word or under the
+/// path allowances. Used only to explain why such a directive does not cover it.
+fn mentions(reason: &str, subject: &str) -> bool {
+    let subject = subject.trim();
+    if subject.is_empty() {
+        return false;
+    }
+    let whole = reason.match_indices(subject).any(|(idx, _)| {
+        let before = reason[..idx].chars().next_back();
+        let after = reason[idx + subject.len()..].chars().next();
+        !before.is_some_and(is_token_char) && !after.is_some_and(is_token_char)
+    });
+    whole
+        || reason
+            .split(|c: char| !is_token_char(c))
+            .any(|raw| token_names_path(raw, subject))
 }
 
 fn clean_reason(raw: &str) -> String {
@@ -1569,20 +1569,26 @@ pub fn extract_citations(reason: &str) -> Vec<String> {
         .collect()
 }
 
-/// Checks whether an override reason explicitly names a benchmark arm (in full, tail, or stem).
+/// Whether an `allow-regression` text names the benchmark arm: the arm in full
+/// (`instructions::cost::map_get/random`), its tail (`map_get/random`) or its stem
+/// (`map_get`), case-insensitively, as the first thing in the text. An arm mentioned
+/// further on is part of the reason and is not named by it.
 pub fn reason_cites_arm(reason: &str, arm: &str) -> bool {
-    let haystack = reason.to_lowercase();
-    let arm_lower = arm.to_lowercase();
-    if haystack.contains(&arm_lower) {
-        return true;
-    }
-    let tail = arm.rsplit("::").next().unwrap_or(arm).to_lowercase();
-    if haystack.contains(&tail) {
-        return true;
-    }
-    let stem = tail.split('/').next().unwrap_or(&tail);
-    if haystack.contains(stem) {
-        return true;
+    let text = reason
+        .trim_start()
+        .trim_start_matches(QUOTES)
+        .to_lowercase();
+    let arm_lower = arm.trim().to_lowercase();
+    let full = arm_lower.as_str();
+    let tail = full.rsplit("::").next().unwrap_or(full);
+    let stem = tail.split('/').next().unwrap_or(tail);
+    for name in [full, tail, stem] {
+        let opens = text
+            .strip_prefix(name)
+            .is_some_and(|rest| !rest.starts_with(is_token_char));
+        if !name.is_empty() && opens {
+            return true;
+        }
     }
     false
 }
@@ -1932,11 +1938,18 @@ removes: tests/old.rs inside a fence
         assert!(!covers(&r1, "this test"));
 
         let r2 = directive_reasons(
-            "allow-ignore: temporarily disabled 'skips this test' pending fix",
+            "allow-ignore: 'skips this test' temporarily disabled pending fix",
             ALLOW_IGNORE,
         );
         assert!(covers(&r2, "skips this test"));
         assert!(!covers(&r2, "other test"));
+
+        // Quoted in the middle of the reason, the subject is not named (#611).
+        let r3 = directive_reasons(
+            "allow-ignore: temporarily disabled 'skips this test' pending fix",
+            ALLOW_IGNORE,
+        );
+        assert!(!covers(&r3, "skips this test"));
     }
 
     #[test]
@@ -2012,12 +2025,17 @@ removes: tests/old.rs inside a fence
     }
 
     #[test]
-    fn test_scoped_reason_names_multi_item_and_gate_scoping() {
+    fn test_scoped_reason_names_first_subject_only_and_gate_scoping() {
+        // One directive line names one subject: the first. The words after it are the
+        // reason, whatever they spell (#611).
         let multi = "dead_code noqa type: ignore legacy";
         assert!(reason_names(multi, "dead_code"));
-        assert!(reason_names(multi, "noqa"));
-        assert!(reason_names(multi, "type: ignore"));
+        assert!(!reason_names(multi, "noqa"));
+        assert!(!reason_names(multi, "type: ignore"));
         assert!(!reason_names(multi, "unrelated"));
+        // Each is named when written first on a line of its own.
+        assert!(reason_names("noqa legacy", "noqa"));
+        assert!(reason_names("type: ignore legacy", "type: ignore"));
 
         let unrelated = "totally unrelated words here";
         assert!(!reason_names(unrelated, "dead_code"));
@@ -2205,5 +2223,306 @@ removes: tests/old.rs inside a fence
             !parsed[1].hidden,
             "directive outside HTML comment must not be hidden"
         );
+    }
+
+    /// (directive text, subject, lifts): the subject is read from the start of the text
+    /// only (#611). Rows marked `control` hold before and after that change.
+    const SUBJECT_AT_THE_START: &[(&str, &str, bool)] = &[
+        // First token, bare and quoted (controls).
+        ("flaky_test hangs on the CI runner", "flaky_test", true),
+        ("\"flaky_test\" hangs on the CI runner", "flaky_test", true),
+        ("`flaky_test` hangs on the CI runner", "flaky_test", true),
+        ("'flaky_test' hangs on the CI runner", "flaky_test", true),
+        ("flaky_test: hangs on the CI runner", "flaky_test", true),
+        // A word in the prose.
+        ("other_test hangs, as flaky_test did", "flaky_test", false),
+        ("other_test the helper adds to the total", "adds", false),
+        // Quoted in the prose.
+        (
+            "other_test hangs, as \"flaky_test\" did",
+            "flaky_test",
+            false,
+        ),
+        ("other_test hangs, as `flaky_test` did", "flaky_test", false),
+        (
+            "temporarily disabled 'skips this test' pending fix",
+            "skips this test",
+            false,
+        ),
+        // A prefix or a suffix of a word (controls).
+        ("test_padds readds what adds_up needs", "adds", false),
+        ("adds_up is renamed in this change", "adds", false),
+        ("readds is renamed in this change", "adds", false),
+        // A path, its directory prefix and its file name, first (controls).
+        (
+            "tests/old.rs superseded by tests/new.rs",
+            "tests/old.rs",
+            true,
+        ),
+        (
+            "tests/legacy/ replaced by the proptest suite",
+            "tests/legacy/a.rs",
+            true,
+        ),
+        (
+            "tests/legacy replaced by the proptest suite",
+            "tests/legacy/deep/b.rs",
+            true,
+        ),
+        ("old.rs moved into the new suite", "tests/old.rs", true),
+        (
+            "./tests/old.rs moved into the new suite",
+            "tests/old.rs",
+            true,
+        ),
+        ("tests were refactored into benchmarks", "tests/a.rs", false),
+        // The same three forms in the prose.
+        (
+            "tests/old.rs superseded by tests/new.rs",
+            "tests/new.rs",
+            false,
+        ),
+        (
+            "tests/b.rs moved to another file kept under tests/",
+            "tests/a.rs",
+            false,
+        ),
+        (
+            "tests/b.rs joins what old.rs covered",
+            "tests/old.rs",
+            false,
+        ),
+        // A subject of several words, or with a colon (controls when first).
+        (
+            "type: ignore needed for the untyped client",
+            "type: ignore",
+            true,
+        ),
+        (
+            "my test name skipped because of the upstream bug",
+            "my test name",
+            true,
+        ),
+        (
+            "'skips this test' pending the upstream fix",
+            "skips this test",
+            true,
+        ),
+        ("src/io.rs:12 best-effort cleanup", "src/io.rs:12", true),
+        (
+            "actions/checkout@v4 pinned by the next change",
+            "actions/checkout",
+            true,
+        ),
+        (
+            "noqa kept, like the type: ignore beside it",
+            "type: ignore",
+            false,
+        ),
+        (
+            "other test skipped like my test name was",
+            "my test name",
+            false,
+        ),
+        // A qualified name written first names its last segment (controls).
+        (
+            "tests::flaky_test hangs on the CI runner",
+            "flaky_test",
+            true,
+        ),
+        (
+            "SkipSuite#flaky_test hangs on the CI runner",
+            "flaky_test",
+            true,
+        ),
+        (
+            "tests/test_io.py::flaky_test hangs on the CI runner",
+            "flaky_test",
+            true,
+        ),
+        // What a colon follows is a subject written first, as before: a suite names
+        // itself too.
+        (
+            "flaky_test::other hangs on the CI runner",
+            "flaky_test",
+            true,
+        ),
+        ("flaky_test::other hangs on the CI runner", "flaky", false),
+        (
+            "other_test hangs, as tests::flaky_test did",
+            "flaky_test",
+            false,
+        ),
+        // The examples `docs/CONFIGURATION.md` and `docs/GATES.md` give for the rule.
+        (
+            "adds the second equality moved to the property suite",
+            "adds",
+            true,
+        ),
+        ("test_totals the helper adds to the total", "adds", false),
+        (
+            "HeaderTest#parses_header the header moved",
+            "parses_header",
+            true,
+        ),
+        ("test_sync flaky on the shared runner", "test_sync", true),
+        (
+            "test_other skipped the way test_sync was",
+            "test_sync",
+            false,
+        ),
+        // Case is significant, as before (control).
+        ("Flaky_Test hangs on the CI runner", "flaky_test", false),
+        // No reason, or a placeholder, after the subject (controls).
+        ("flaky_test", "flaky_test", false),
+        ("\"flaky_test\"", "flaky_test", false),
+        ("flaky_test todo", "flaky_test", false),
+        ("flaky_test <reason>", "flaky_test", false),
+        ("flaky_test n/a - none", "flaky_test", false),
+        ("old.rs tbd", "tests/old.rs", false),
+        ("tests/legacy/ ...", "tests/legacy/a.rs", false),
+    ];
+
+    #[test]
+    fn a_subject_is_read_from_the_start_of_the_directive_only() {
+        let wrong: Vec<String> = SUBJECT_AT_THE_START
+            .iter()
+            .filter(|(text, subject, lifts)| reason_names(text, subject) != *lifts)
+            .map(|(text, subject, lifts)| format!("`{text}` for `{subject}`: expected {lifts}"))
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "{} row(s):\n{}",
+            wrong.len(),
+            wrong.join("\n")
+        );
+    }
+
+    #[test]
+    fn naming_a_subject_without_a_reason_reads_the_start_only() {
+        // `names_subject` is the same rule without the rationale requirement.
+        for (text, subject, names) in [
+            ("flaky_test", "flaky_test", true),
+            ("flaky_test todo", "flaky_test", true),
+            ("\"flaky_test\"", "flaky_test", true),
+            ("old.rs", "tests/old.rs", true),
+            ("tests/legacy/ tbd", "tests/legacy/a.rs", true),
+            ("my test name", "my test name", true),
+            ("other_test hangs, as flaky_test did", "flaky_test", false),
+            (
+                "other_test hangs, as \"flaky_test\" did",
+                "flaky_test",
+                false,
+            ),
+            (
+                "tests/b.rs joins what old.rs covered",
+                "tests/old.rs",
+                false,
+            ),
+            ("tests/b.rs stays under tests/", "tests/a.rs", false),
+            ("noqa beside a type: ignore", "type: ignore", false),
+        ] {
+            assert_eq!(
+                reason_names_subject(text, subject),
+                names,
+                "`{text}` for `{subject}`"
+            );
+        }
+    }
+
+    #[test]
+    fn every_directive_kind_reads_its_subject_from_the_start() {
+        let mut lifted_from_prose = Vec::new();
+        for name in KNOWN_DIRECTIVES {
+            let spec = spec_for_directive(name).expect("every known directive has a spec");
+            let names = names_for_directive(name);
+            let kind = crate::findings::FINDINGS
+                .iter()
+                .find(|k| k.gates.contains(&spec.gate))
+                .expect("a finding for the directive's gate");
+            let lift = |text: &str| {
+                let parsed = parse_directives(text, OverrideSource::PrBody);
+                assert_eq!(parsed.len(), 1, "{text}");
+                find_override(&parsed, spec.gate, kind, names, "a_word")
+            };
+            // Control: the documented form.
+            let first = lift(&format!("{name}: a_word is the subject of this line"))
+                .unwrap_or_else(|| panic!("`{name}` does not lift the subject written first"));
+            assert_eq!(first.subject, "a_word");
+            assert_eq!(first.reason, "a_word is the subject of this line");
+            if lift(&format!(
+                "{name}: another_subject whose reason says a_word in passing"
+            ))
+            .is_some()
+            {
+                lifted_from_prose.push(*name);
+            }
+        }
+        assert_eq!(lifted_from_prose, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn a_regression_reason_names_its_arm_at_the_start_only() {
+        let arm = "instructions::cost::sync_map_insert/random";
+        // Controls: the arm in full, its tail and its stem, written first.
+        for reason in [
+            "instructions::cost::sync_map_insert/random pays for the bracket",
+            "sync_map_insert/random pays for the bracket",
+            "sync_map_insert pays for the bracket",
+            "Sync_Map_Insert pays for the bracket",
+            "`sync_map_insert` pays for the bracket",
+            "sync_map_insert: pays for the bracket",
+        ] {
+            assert!(reason_cites_arm(reason, arm), "{reason}");
+        }
+        // The arm past the start, or inside a longer name, is not named.
+        for reason in [
+            "sync_set_insert pays for it, as sync_map_insert does",
+            "sync_set_insert pays, see instructions::cost::sync_map_insert/random",
+            "the bracket slows sync_map_insert/random",
+            "sync_map_insert_batch pays for the bracket",
+            "resync_map_insert pays for the bracket",
+        ] {
+            assert!(!reason_cites_arm(reason, arm), "{reason}");
+        }
+        // An arm that is an ordinary word is not named by prose that uses the word.
+        assert!(!reason_cites_arm(
+            "sync_map_insert makes readers get slower",
+            "get"
+        ));
+        assert!(reason_cites_arm("get pays for the bracket", "get"));
+    }
+
+    #[test]
+    fn a_subject_found_past_the_start_is_remembered_for_a_note() {
+        forget_subject_misses();
+        let parsed = parse_directives(
+            "allow-ignore: other_test hangs, as flaky_test did\nallow-ignore: third_test unrelated words here\n",
+            OverrideSource::PrBody,
+        );
+        let kind = &crate::findings::EXISTING_TEST_SKIPPED;
+        assert!(
+            find_override(&parsed, "ignored-tests", kind, ALLOW_IGNORE, "flaky_test").is_none()
+        );
+        assert!(find_override(&parsed, "ignored-tests", kind, ALLOW_IGNORE, "absent").is_none());
+        let misses = take_subject_misses();
+        assert_eq!(misses.len(), 1, "{misses:?}");
+        assert_eq!(misses[0].gate, "ignored-tests");
+        assert_eq!(misses[0].subject, "flaky_test");
+        let note = misses[0].note();
+        assert!(
+            note.contains("`allow-ignore`")
+                && note.contains("`other_test`")
+                && note.contains("`flaky_test`")
+                && note.contains("start of the directive"),
+            "{note}"
+        );
+        // A directive that names the subject first records nothing.
+        let named = parse_directives(
+            "allow-ignore: flaky_test hangs on CI\n",
+            OverrideSource::PrBody,
+        );
+        assert!(find_override(&named, "ignored-tests", kind, ALLOW_IGNORE, "flaky_test").is_some());
+        assert!(take_subject_misses().is_empty());
     }
 }
