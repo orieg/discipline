@@ -3463,17 +3463,51 @@ mod tests {
         assert!(!page.has_next);
     }
 
+    /// Answers each of the next `bodies.len()` connections on a loopback port with
+    /// HTTP 200 and the given body; returns the base URL to reach it.
+    fn serve_200(bodies: &[&str]) -> String {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let bodies: Vec<String> = bodies.iter().map(|b| b.to_string()).collect();
+        std::thread::spawn(move || {
+            for body in bodies {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                while reader.read_line(&mut line).unwrap() > 2 {
+                    line.clear();
+                }
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+        base
+    }
+
+    /// The production client against a forge that answers 200 with a body that is not
+    /// JSON. A canned answer cannot hold one (its body is already a parsed value), so
+    /// this goes over a loopback socket.
     #[test]
     fn malformed_body_on_200_for_get_page_is_malformed() {
-        let gh = gh();
-        let mut api = CannedApi::default();
-        // Malformed JSON on 200 for get_page should be ForgeErrorKind::Malformed.
-        api.responses.insert(
-            "github:repos/o/r/issues".into(),
-            serde_json::json!({"__status": 200, "__body": "{invalid json}"}),
-        );
-        let err = api.get_page(&gh, "repos/o/r/issues").unwrap_err();
+        let base = serve_200(&["{invalid json}", "[{\"id\": 1}]"]);
+        let env = |k: &str| match k {
+            "DISCIPLINE_FORGE_API_URL" => Some(base.clone()),
+            "DISCIPLINE_NO_NETWORK" => Some("1".to_string()),
+            _ => None,
+        };
+        let api = HttpApi { env: &env };
+        let err = api.get_page(&gh(), "repos/o/r/issues").unwrap_err();
         assert_eq!(err.kind, ForgeErrorKind::Malformed);
+        assert!(err.to_string().contains("returned non-JSON"), "{err}");
+        // Control: the same client and path, answered with a list.
+        let page = api.get_page(&gh(), "repos/o/r/issues").unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert!(!page.has_next);
     }
 
     #[test]

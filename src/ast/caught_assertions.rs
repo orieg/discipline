@@ -34,9 +34,25 @@ pub struct CaughtAssertion {
     pub handler_line: usize,
     /// Description of the catching construct.
     pub detail: String,
+    /// Byte range of the assertion: what makes two assertions on one line two.
+    pub span: (usize, usize),
+    /// Whether the pack also counts the assertion as a tautology
+    /// (`TestFn::tautology_spans`). Such an assertion is already out of the effective
+    /// count, and being swallowed does not take it out again.
+    pub tautology: bool,
 }
 
-fn attribute(tests: &mut [TestFn], c: CaughtAssertion) {
+/// One assertion node: its line and its byte range.
+type Site = (usize, (usize, usize));
+
+fn site(node: Node) -> Site {
+    (
+        node.start_position().row + 1,
+        (node.start_byte(), node.end_byte()),
+    )
+}
+
+fn attribute(tests: &mut [TestFn], mut c: CaughtAssertion) {
     let line = c.line;
     if let Some(t) = tests
         .iter_mut()
@@ -47,8 +63,14 @@ fn attribute(tests: &mut [TestFn], c: CaughtAssertion) {
             .caught_assertions
             .iter()
             // One assertion is neutralized once, whatever number of handlers enclose it.
-            .any(|existing| existing.line == c.line)
+            // The assertion is its node, so two on one line are two; a node inside
+            // another (`expect(x)` in `expect(x).toBe(1)`) is the same assertion.
+            .any(|existing| existing.span.0 < c.span.1 && c.span.0 < existing.span.1)
         {
+            c.tautology = t
+                .tautology_spans
+                .iter()
+                .any(|t| t.0 < c.span.1 && c.span.0 < t.1);
             t.caught_assertions.push(c);
         }
     }
@@ -530,6 +552,8 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
                         tests,
                         CaughtAssertion {
                             line: node.start_position().row + 1,
+                            span: site(node).1,
+                            tautology: false,
                             handler_line: p.start_position().row + 1,
                             detail: "contextlib.suppress discards the AssertionError".to_string(),
                         },
@@ -555,6 +579,8 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
                                 tests,
                                 CaughtAssertion {
                                     line: node.start_position().row + 1,
+                                    span: site(node).1,
+                                    tautology: false,
                                     handler_line: clause.start_position().row + 1,
                                     detail:
                                         "AssertionError caught without re-raise or test failure"
@@ -599,7 +625,7 @@ fn rs_macro_name<'a>(invocation: Node, src: &'a str) -> &'a str {
     name.rsplit("::").next().unwrap_or(name)
 }
 
-fn rs_closure_contains_assert(closure: Node, src: &str) -> Vec<usize> {
+fn rs_closure_contains_assert(closure: Node, src: &str) -> Vec<Site> {
     let mut asserts = Vec::new();
     walk(closure, &mut |n| {
         if n.kind() == "function_item" {
@@ -607,7 +633,7 @@ fn rs_closure_contains_assert(closure: Node, src: &str) -> Vec<usize> {
         }
         if n.kind() == "macro_invocation" {
             if RS_ASSERT_MACROS.contains(&rs_macro_name(n, src)) {
-                asserts.push(n.start_position().row + 1);
+                asserts.push(site(n));
             }
         } else if n.kind() == "call_expression" {
             if let Some(f) = n.child_by_field_name("function") {
@@ -615,7 +641,7 @@ fn rs_closure_contains_assert(closure: Node, src: &str) -> Vec<usize> {
                     if let Some(field) = f.child_by_field_name("field") {
                         let method = text(field, src);
                         if method == "unwrap" || method == "expect" {
-                            asserts.push(n.start_position().row + 1);
+                            asserts.push(site(n));
                         }
                     }
                 }
@@ -827,11 +853,13 @@ pub fn rust(root: Node, src: &str, tests: &mut [TestFn]) {
 
         if rs_value_is_discarded(node, src) {
             let handler_line = node.start_position().row + 1;
-            for line in inner_asserts {
+            for (line, span) in inner_asserts {
                 attribute(
                     tests,
                     CaughtAssertion {
                         line,
+                        span,
+                        tautology: false,
                         handler_line,
                         detail: "std::panic::catch_unwind with discarded result".to_string(),
                     },
@@ -957,6 +985,8 @@ fn js_promise_catch(call: Node, src: &str, tests: &mut [TestFn]) {
                 tests,
                 CaughtAssertion {
                     line: n.start_position().row + 1,
+                    span: site(n).1,
+                    tautology: false,
                     handler_line,
                     detail: "promise .catch() swallows assertion error".to_string(),
                 },
@@ -1002,6 +1032,8 @@ pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
                     tests,
                     CaughtAssertion {
                         line: n.start_position().row + 1,
+                        span: site(n).1,
+                        tautology: false,
                         handler_line,
                         detail: "try/catch swallows assertion error".to_string(),
                     },
@@ -1197,6 +1229,8 @@ pub fn java(root: Node, src: &str, tests: &mut [TestFn]) {
                     tests,
                     CaughtAssertion {
                         line: n.start_position().row + 1,
+                        span: site(n).1,
+                        tautology: false,
                         handler_line,
                         detail: "AssertionError caught by catch clause".to_string(),
                     },
@@ -1259,14 +1293,14 @@ fn kt_fails(node: Node, src: &str) -> bool {
 }
 
 /// Lines of the assertions directly in `body` (not in a lambda or a nested `try`).
-fn kt_assertions(body: Node, src: &str) -> Vec<usize> {
+fn kt_assertions(body: Node, src: &str) -> Vec<Site> {
     let mut lines = Vec::new();
     walk(body, &mut |n| {
         if n != body && (KT_SCOPES.contains(&n.kind()) || n.kind() == "try_expression") {
             return false;
         }
         if kt_is_assertion(n, src) {
-            lines.push(n.start_position().row + 1);
+            lines.push(site(n));
         }
         true
     });
@@ -1358,11 +1392,13 @@ pub fn kotlin(root: Node, src: &str, tests: &mut [TestFn]) {
                 .collect();
             if let Some(handler) = swallowing_handler(&handlers) {
                 let handler_line = handler.start_position().row + 1;
-                for line in kt_assertions(body, src) {
+                for (line, span) in kt_assertions(body, src) {
                     attribute(
                         tests,
                         CaughtAssertion {
                             line,
+                            span,
+                            tautology: false,
                             handler_line,
                             detail: "AssertionError caught by catch clause".to_string(),
                         },
@@ -1375,11 +1411,13 @@ pub fn kotlin(root: Node, src: &str, tests: &mut [TestFn]) {
             if let Some(lambda) = lambda {
                 if kt_result_is_unused(node, src) {
                     let handler_line = node.start_position().row + 1;
-                    for line in kt_assertions(lambda, src) {
+                    for (line, span) in kt_assertions(lambda, src) {
                         attribute(
                             tests,
                             CaughtAssertion {
                                 line,
+                                span,
+                                tautology: false,
                                 handler_line,
                                 detail: "runCatching with the result unused".to_string(),
                             },
@@ -1542,6 +1580,8 @@ pub fn csharp(root: Node, src: &str, tests: &mut [TestFn]) {
                     tests,
                     CaughtAssertion {
                         line: n.start_position().row + 1,
+                        span: site(n).1,
+                        tautology: false,
                         handler_line,
                         detail: "Assertion caught by catch clause".to_string(),
                     },
@@ -1627,6 +1667,8 @@ pub fn go(root: Node, src: &str, tests: &mut [TestFn]) {
                                 tests,
                                 CaughtAssertion {
                                     line,
+                                    span: site(n).1,
+                                    tautology: false,
                                     handler_line,
                                     detail: "recover() catches assertion panic".to_string(),
                                 },
@@ -1658,6 +1700,7 @@ mod tests {
                     line,
                     handler_line,
                     detail: "except AssertionError".to_string(),
+                    ..Default::default()
                 })
                 .collect(),
             ..Default::default()
@@ -2396,5 +2439,74 @@ public class TestClass2 {
             neg_caught.is_empty(),
             "expected no caught assertions, got {neg_caught:?}"
         );
+    }
+
+    fn extracted(path: &str, src: &str) -> Vec<crate::ast::TestFn> {
+        crate::ast::default_registry()
+            .find_pack(path)
+            .unwrap()
+            .extract(path, src, &AssertVocabulary::default())
+            .unwrap()
+            .tests
+    }
+
+    /// A swallowed assertion is its node: two on one line are two, and the nested calls
+    /// of one assertion (`expect(x)` inside `expect(x).toBe(1)`) are one.
+    #[test]
+    fn swallowed_assertions_are_counted_by_node_not_by_line() {
+        let py = extracted(
+            "tests/test_t.py",
+            "def test_a():\n    try:\n        assert g() == 2; assert h() == 3\n    except AssertionError:\n        pass\n",
+        );
+        assert_eq!(py[0].caught_assertions.len(), 2, "{:?}", py[0]);
+        assert_eq!(py[0].effective_asserts(), 0);
+        let js = extracted(
+            "a.test.js",
+            "test('a', () => {\n  try {\n    expect(g()).toBe(2); expect(h()).toBe(3);\n  } catch (e) {}\n});\n",
+        );
+        assert_eq!(js[0].caught_assertions.len(), 2, "{:?}", js[0]);
+        assert_eq!((js[0].total_asserts, js[0].effective_asserts()), (2, 0));
+        // Control: one assertion in the handler is one, in each language.
+        let js = extracted(
+            "a.test.js",
+            "test('a', () => {\n  expect(f()).toBe(1);\n  try {\n    expect(g()).toBe(2);\n  } catch (e) {}\n});\n",
+        );
+        assert_eq!(js[0].caught_assertions.len(), 1, "{:?}", js[0]);
+        assert_eq!(js[0].effective_asserts(), 1);
+    }
+
+    /// A swallowed assertion that the pack also counts as a tautology is marked, and is
+    /// taken out of the effective count once.
+    #[test]
+    fn a_swallowed_tautology_counts_against_the_test_once() {
+        let cases = [
+            (
+                "tests/test_t.py",
+                "def test_a():\n    assert g() == 2\n    try:\n        assert True\n    except AssertionError:\n        pass\n",
+            ),
+            (
+                "tests/t.rs",
+                "#[test]\nfn a() {\n    assert_eq!(g(), 2);\n    let _ = std::panic::catch_unwind(|| assert!(true));\n}\n",
+            ),
+            (
+                "a.test.js",
+                "test('a', () => {\n  expect(g()).toBe(2);\n  try {\n    expect(1).toBe(1);\n  } catch (e) {}\n});\n",
+            ),
+        ];
+        for (path, src) in cases {
+            let t = &extracted(path, src)[0];
+            assert_eq!((t.total_asserts, t.tautologies), (2, 1), "{path}: {t:?}");
+            assert_eq!(t.caught_assertions.len(), 1, "{path}: {t:?}");
+            assert!(t.caught_assertions[0].tautology, "{path}: {t:?}");
+            assert_eq!(t.effective_asserts(), 1, "{path}: {t:?}");
+        }
+        // Control: a swallowed assertion that is not a tautology is not marked, and a
+        // tautology beside it is still taken out as well.
+        let t = &extracted(
+            "tests/test_t.py",
+            "def test_a():\n    assert True\n    assert f() == 1\n    try:\n        assert g() == 2\n    except AssertionError:\n        pass\n",
+        )[0];
+        assert!(!t.caught_assertions[0].tautology, "{t:?}");
+        assert_eq!((t.total_asserts, t.effective_asserts()), (3, 1), "{t:?}");
     }
 }
