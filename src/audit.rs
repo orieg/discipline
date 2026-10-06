@@ -3633,13 +3633,25 @@ mod tests {
 
     #[test]
     fn a_commit_the_forge_has_outside_any_pull_request_is_read_and_clean() {
-        // The control: GitHub answers 404 for a commit it has that no pull request
-        // carries. That is an answer, so nothing failed and the review check is clean.
-        let (read, states) = forge_states(serde_json::json!({"__status": 404}));
+        // The control: GitHub answers 200 with an empty list for a commit it has that
+        // no pull request carries. That is an answer, so nothing failed and the review
+        // check is clean.
+        let (read, states) = forge_states(serde_json::json!([]));
         assert_eq!((read.changes, read.failed), (1, 0), "{:?}", read.error);
         let review = states.iter().find(|s| s.0 == "independent-review").unwrap();
         assert_eq!(review.1, "clean", "{}", review.2);
         assert_eq!(review.2, "no change arrived through a pull request");
+        // A 404 is not that answer (#634): GitHub gives it for a repository that is not
+        // there or that the token cannot see, so nothing about the review was read.
+        let (read, states) = forge_states(serde_json::json!({"__status": 404}));
+        assert_eq!((read.changes, read.failed), (1, 1), "{:?}", read.error);
+        assert_eq!(read.failed_shas, vec![at(0, None).sha]);
+        for (id, state, detail) in &states {
+            assert_eq!(state, "not-checked", "{id}: {detail}");
+        }
+        let error = read.error.unwrap();
+        assert!(error.contains("HTTP 404"), "{error}");
+        assert!(!error.contains("does not have commit"), "{error}");
     }
 
     /// A repository with `commits`, each `(time, [(path, content)])`, on one line.
