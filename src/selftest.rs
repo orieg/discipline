@@ -4363,6 +4363,141 @@ test tests::c: test
         },
     ),
     (
+        "test-floor: build constraints, attributes, crate modules and literal runner configurations decide collection",
+        || {
+            use crate::ast::runner_collection::{
+                check_runner_collected, is_runner_collected, RunnerCollectionRules,
+                RunnerCollectionStatus,
+            };
+            use crate::ast::AssertVocabulary;
+
+            let tree = |files: &[(&str, &str)]| {
+                let tracked: Vec<String> = files.iter().map(|(name, _)| name.to_string()).collect();
+                AssertVocabulary {
+                    runner_rules: RunnerCollectionRules::from_tree(
+                        |p| {
+                            files
+                                .iter()
+                                .find(|(name, _)| *name == p)
+                                .map(|(_, content)| content.to_string())
+                        },
+                        &tracked,
+                    ),
+                    ..Default::default()
+                }
+            };
+            let unknown = |path: &str, vocab: &AssertVocabulary, part: &str| {
+                matches!(
+                    check_runner_collected(path, vocab),
+                    RunnerCollectionStatus::Unknown(reason) if reason.contains(part)
+                )
+            };
+
+            // Go: `ignore` is never built, a platform tag is, a custom tag needs `-tags`,
+            // and a module nested below another is not matched by `./...`.
+            let go = tree(&[
+                ("go.mod", "module example.test/m\n"),
+                ("a/ignored_test.go", "//go:build ignore\n\npackage a\n"),
+                ("a/linux_test.go", "//go:build linux\n\npackage a\n"),
+                ("a/tagged_test.go", "//go:build integration\n\npackage a\n"),
+                ("sub/go.mod", "module example.test/m/sub\n"),
+                ("sub/b_test.go", "package sub\n"),
+            ]);
+            let go_ok = !is_runner_collected("a/ignored_test.go", &go)
+                && check_runner_collected("a/linux_test.go", &go)
+                    == RunnerCollectionStatus::Collected
+                && unknown("a/tagged_test.go", &go, "`integration`")
+                && unknown("sub/b_test.go", &go, "module in `sub`");
+
+            // `.gitattributes`: set leaves the file out with a note; unset does not.
+            let attributes = tree(&[
+                ("package.json", "{}"),
+                (
+                    ".gitattributes",
+                    "vendor/** linguist-vendored\nvendor/own/** -linguist-vendored\n",
+                ),
+            ]);
+            let attributes_ok = matches!(
+                check_runner_collected("vendor/lib/a.test.js", &attributes),
+                RunnerCollectionStatus::NoRunner(reason) if reason.contains("linguist-vendored")
+            ) && is_runner_collected("vendor/own/a.test.js", &attributes);
+
+            // Cargo: a file under `src/` no crate root declares, `[lib] test = false`
+            // beside a binary, and a package the workspace excludes.
+            let cargo = tree(&[
+                (
+                    "Cargo.toml",
+                    "[package]\nname = \"p\"\n\n[lib]\ntest = false\n\n[workspace]\nexclude = [\"out\"]\n",
+                ),
+                ("src/lib.rs", "pub mod libpart;\n"),
+                ("src/libpart.rs", ""),
+                ("src/main.rs", "mod binpart;\nfn main() {}\n"),
+                ("src/binpart.rs", ""),
+                ("src/orphan.rs", ""),
+                ("out/Cargo.toml", "[package]\nname = \"out\"\n"),
+                ("out/tests/it.rs", ""),
+            ]);
+            let cargo_ok = is_runner_collected("src/binpart.rs", &cargo)
+                && !is_runner_collected("src/libpart.rs", &cargo)
+                && !is_runner_collected("src/orphan.rs", &cargo)
+                && unknown("out/tests/it.rs", &cargo, "`exclude`");
+
+            // pytest: the default `norecursedirs`, a literal `collect_ignore`, and a
+            // `[pytest]` section in `setup.cfg`, which pytest refuses.
+            let pytest = tree(&[
+                ("pytest.ini", "[pytest]\n"),
+                ("checks/conftest.py", "collect_ignore = [\"test_parked.py\"]\n"),
+            ]);
+            let refused = tree(&[("setup.cfg", "[pytest]\ntestpaths = other\n")]);
+            let pytest_ok = !is_runner_collected("build/test_a.py", &pytest)
+                && !is_runner_collected("checks/test_parked.py", &pytest)
+                && is_runner_collected("checks/test_kept.py", &pytest)
+                && !refused.runner_rules.pytest.configured;
+
+            // Jest: the configuration a script names, and the module extensions by major.
+            let jest = tree(&[
+                (
+                    "package.json",
+                    r#"{"scripts": {"test": "jest -c config/jest.json"}, "devDependencies": {"jest": "^29.0.0"}}"#,
+                ),
+                (
+                    "config/jest.json",
+                    r#"{"rootDir": "..", "testMatch": ["**/checks/**/*.js"]}"#,
+                ),
+            ]);
+            let jest_29 = tree(&[(
+                "package.json",
+                r#"{"jest": {}, "devDependencies": {"jest": "^29.0.0"}}"#,
+            )]);
+            let jest_ok = is_runner_collected("checks/a.js", &jest)
+                && !is_runner_collected("src/a.test.js", &jest)
+                && !is_runner_collected("src/a.test.mjs", &jest_29)
+                && is_runner_collected("src/a.test.js", &jest_29);
+
+            // Vitest: a literal configuration is read, a computed one is not.
+            let vitest = tree(&[
+                ("package.json", "{}"),
+                (
+                    "vitest.config.ts",
+                    "export default defineConfig({ test: { include: ['checks/**'], exclude: ['**/parked/**'] } });\n",
+                ),
+            ]);
+            let computed = tree(&[
+                ("package.json", "{}"),
+                (
+                    "vitest.config.ts",
+                    "export default defineConfig(() => ({ test: {} }));\n",
+                ),
+            ]);
+            let vitest_ok = is_runner_collected("checks/a.test.ts", &vitest)
+                && !is_runner_collected("checks/parked/a.test.ts", &vitest)
+                && !is_runner_collected("src/a.test.ts", &vitest)
+                && unknown("src/a.test.ts", &computed, "vitest.config.ts");
+
+            Ok(go_ok && attributes_ok && cargo_ok && pytest_ok && jest_ok && vitest_ok)
+        },
+    ),
+    (
         "ci-integrity: rollup needs detection, pinning, and error masks",
         || {
             use crate::guards::ci_integrity::parse_workflow_jobs;
