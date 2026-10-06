@@ -91,8 +91,16 @@ impl LanguagePack for JavaScriptPack {
                 || super::functions::declared_test_path(path, &vocab.test_paths);
             let is_test_line =
                 |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            extractor.facts.swallowed =
-                super::handlers::extract(root, src, &JS_HANDLERS, &is_test_line);
+            (
+                extractor.facts.swallowed,
+                extractor.facts.constant_fallbacks,
+            ) = super::handlers::extract_with_constants(
+                root,
+                src,
+                &JS_HANDLERS,
+                Some(&JS_CONSTANTS),
+                &is_test_line,
+            );
         }
         super::retries::mark(root, src, &mut extractor.facts.tests, &JS_RETRIES);
         if super::functions::declared_test_path(path, &vocab.test_paths) {
@@ -1145,6 +1153,26 @@ pub const JS_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSp
     silence_kinds: &["call_expression"],
     silences: super::handlers::js_catch_text,
     silence_node: Some(super::handlers::js_catch_site_kind),
+};
+
+/// A handler statement that puts a number in place of the result (`constant-fallback`):
+/// `ops = 150000.0`, `rec.ops = -1`, `rec["ops"] = 2.5e5`, `return 150000`, `return [1.5, 2]`,
+/// `return { ops: 1.5 }`. `null`, `undefined`, `NaN` and `Number.NaN` are not numeric
+/// literals; a `let` or `const` in the handler is a declaration, not an assignment.
+pub const JS_CONSTANTS: super::handlers::ConstantSpec = super::handlers::ConstantSpec {
+    blocks: &["statement_block"],
+    wrappers: &["expression_statement", "parenthesized_expression"],
+    numbers: &["number"],
+    signs: &["unary_expression"],
+    assignments: &["assignment_expression"],
+    targets: &["identifier", "member_expression", "subscript_expression"],
+    calls: &["call_expression", "new_expression"],
+    returns: &["return_statement"],
+    value_is_last_expression: false,
+    collections: &["array", "object"],
+    collection_holders: &[],
+    pairs: &["pair"],
+    keys: &["property_identifier", "string", "number"],
 };
 
 pub const JS_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

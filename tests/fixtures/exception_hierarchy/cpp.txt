@@ -1,0 +1,75 @@
+# C++ standard library exception classes, one `child parent` pair per line, without the
+# `std::` qualifier (`filesystem_error` is `std::filesystem::filesystem_error`).
+# Runtime: Apple clang version 21.0.0 (clang-2100.1.1.101), libc++, -std=c++17.
+# Produced by compiling and running this program (`clang++ -std=c++17`), which asks the
+# compiler for each class's bases with std::is_base_of:
+#   #include <any>
+#   #include <exception>
+#   #include <filesystem>
+#   #include <functional>
+#   #include <future>
+#   #include <iostream>
+#   #include <memory>
+#   #include <new>
+#   #include <optional>
+#   #include <regex>
+#   #include <stdexcept>
+#   #include <string>
+#   #include <system_error>
+#   #include <type_traits>
+#   #include <typeinfo>
+#   #include <variant>
+#   #include <vector>
+#   using namespace std;
+#   using filesystem_error = filesystem::filesystem_error;
+#   #define LIST(X) X(exception) X(logic_error) X(invalid_argument) X(domain_error) X(length_error) \
+#       X(out_of_range) X(future_error) X(runtime_error) X(range_error) X(overflow_error) \
+#       X(underflow_error) X(regex_error) X(system_error) X(filesystem_error) X(bad_typeid) \
+#       X(bad_cast) X(bad_any_cast) X(bad_optional_access) X(bad_weak_ptr) X(bad_function_call) \
+#       X(bad_alloc) X(bad_array_new_length) X(bad_exception) X(bad_variant_access)
+#   #define ALL(X) LIST(X)
+#   #define ALL2(X) LIST(X)
+#   // How many of the listed classes are proper bases of B.
+#   template <class B> size_t depth() {
+#   #define COUNT(A) + (is_base_of<A, B>::value && !is_same<A, B>::value ? 1 : 0)
+#       return 0 ALL(COUNT);
+#   }
+#   template <class B, class D> void candidate(const char* name, string& best, size_t& deepest) {
+#       if (is_base_of<B, D>::value && !is_same<B, D>::value && depth<B>() + 1 > deepest) {
+#           deepest = depth<B>() + 1;
+#           best = name;
+#       }
+#   }
+#   // The direct base of D among the listed classes: its proper base that has the most bases.
+#   template <class D> void row(const char* name) {
+#       string best;
+#       size_t deepest = 0;
+#   #define CANDIDATE(B) candidate<B, D>(#B, best, deepest);
+#       ALL(CANDIDATE)
+#       if (!best.empty()) cout << name << " " << best << "\n";
+#   }
+#   #define ROW(D) row<D>(#D);
+#   int main() { ALL2(ROW) }
+bad_alloc exception
+bad_any_cast bad_cast
+bad_array_new_length bad_alloc
+bad_cast exception
+bad_exception exception
+bad_function_call exception
+bad_optional_access exception
+bad_typeid exception
+bad_variant_access exception
+bad_weak_ptr exception
+domain_error logic_error
+filesystem_error system_error
+future_error logic_error
+invalid_argument logic_error
+length_error logic_error
+logic_error exception
+out_of_range logic_error
+overflow_error runtime_error
+range_error runtime_error
+regex_error runtime_error
+runtime_error exception
+system_error runtime_error
+underflow_error runtime_error

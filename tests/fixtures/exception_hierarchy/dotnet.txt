@@ -1,0 +1,52 @@
+# .NET exception classes, one `child parent` pair per line, by simple name: classes of
+# `System`, `System.IO`, `System.Collections.Generic` and `System.Threading.Tasks`.
+# READ, not generated: no .NET runtime was available when this file was written. The pairs
+# were entered from the inheritance each class's API reference states, and no command
+# produced them. Regenerate from a runtime (`typeof(T).BaseType` for each class) when one
+# is at hand, and replace this header.
+AggregateException Exception
+ApplicationException Exception
+ArgumentException SystemException
+ArgumentNullException ArgumentException
+ArgumentOutOfRangeException ArgumentException
+ArithmeticException SystemException
+ArrayTypeMismatchException SystemException
+DirectoryNotFoundException IOException
+DivideByZeroException ArithmeticException
+DllNotFoundException TypeLoadException
+DriveNotFoundException IOException
+EndOfStreamException IOException
+EntryPointNotFoundException TypeLoadException
+FieldAccessException MemberAccessException
+FileLoadException IOException
+FileNotFoundException IOException
+FormatException SystemException
+IOException SystemException
+IndexOutOfRangeException SystemException
+InsufficientMemoryException OutOfMemoryException
+InvalidCastException SystemException
+InvalidOperationException SystemException
+KeyNotFoundException SystemException
+MemberAccessException SystemException
+MethodAccessException MemberAccessException
+MissingFieldException MissingMemberException
+MissingMemberException MemberAccessException
+MissingMethodException MissingMemberException
+NotFiniteNumberException ArithmeticException
+NotImplementedException SystemException
+NotSupportedException SystemException
+NullReferenceException SystemException
+ObjectDisposedException InvalidOperationException
+OperationCanceledException SystemException
+OutOfMemoryException SystemException
+OverflowException ArithmeticException
+PathTooLongException IOException
+PlatformNotSupportedException NotSupportedException
+RankException SystemException
+StackOverflowException SystemException
+SystemException Exception
+TaskCanceledException OperationCanceledException
+TimeoutException SystemException
+TypeLoadException SystemException
+UnauthorizedAccessException SystemException
+UriFormatException FormatException

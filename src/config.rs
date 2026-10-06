@@ -614,7 +614,7 @@ pub struct Gates {
     pub toolchain_config: BasicGate,
     pub sandbox_config: BasicGate,
     pub stub_bodies: BasicGate,
-    pub error_swallowing: BasicGate,
+    pub error_swallowing: ErrorSwallowingGate,
     pub instruction_smuggling: InstructionSmugglingGate,
     pub build_hooks: BasicGate,
     pub golden_output: GoldenGate,
@@ -642,6 +642,31 @@ pub struct Gates {
     pub msrv: MsrvGate,
     pub miri: MiriGate,
     pub sanitizers: SanitizersGate,
+}
+
+/// `error-swallowing`: the shared keys plus the paths where a numeric fallback in an
+/// error handler is reported.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ErrorSwallowingGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    /// Globs of the files (a benchmark or evaluation harness) in which a new handler that
+    /// puts a numeric literal in place of the result is reported, at `warning` at most.
+    /// Empty: the check is off.
+    pub constant_fallback_paths: Vec<String>,
+}
+
+impl Default for ErrorSwallowingGate {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            constant_fallback_paths: Vec::new(),
+        }
+    }
 }
 
 /// `instruction-smuggling`: the shared keys plus the repository's own agent-instruction
@@ -686,6 +711,7 @@ macro_rules! impl_gate_settings {
 }
 impl_gate_settings!(
     BasicGate,
+    ErrorSwallowingGate,
     InstructionSmugglingGate,
     AgentsMdGate,
     IgnoredTestsGate,

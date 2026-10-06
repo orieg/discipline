@@ -77,8 +77,16 @@ impl LanguagePack for PhpPack {
                 || functions::declared_test_path(path, &vocab.test_paths);
             let is_test_line =
                 |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            extractor.facts.swallowed =
-                super::handlers::extract(root, src, &PHP_HANDLERS, &is_test_line);
+            (
+                extractor.facts.swallowed,
+                extractor.facts.constant_fallbacks,
+            ) = super::handlers::extract_with_constants(
+                root,
+                src,
+                &PHP_HANDLERS,
+                Some(&PHP_CONSTANTS),
+                &is_test_line,
+            );
         }
         super::retries::mark(root, src, &mut extractor.facts.tests, &PHP_RETRIES);
         if functions::declared_test_path(path, &vocab.test_paths) {
@@ -87,6 +95,7 @@ impl LanguagePack for PhpPack {
             }
         }
         super::method_checks::count(root, src, &mut extractor.facts, &PHP_RECEIVER_CALLS);
+        super::expected_exceptions::php_declared(root, src, &mut extractor.facts.tests);
         super::helper_loops::count(root, src, &mut extractor.facts, &super::helper_loops::PHP);
         super::calls::count(
             root,
@@ -181,6 +190,36 @@ pub const PHP_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerS
     silence_kinds: &["error_suppression_expression"],
     silences: super::handlers::php_silences,
     silence_node: None,
+};
+
+/// A handler statement that puts a number in place of the result (`constant-fallback`):
+/// `$ops = 150000.0`, `$rec->ops = -1`, `$rec['ops'] = 2.5e5`, `return 150000`,
+/// `return ['ops' => 1.5]`, `return array(1.5, 2)`. `null` and `NAN` are not numeric literals.
+pub const PHP_CONSTANTS: super::handlers::ConstantSpec = super::handlers::ConstantSpec {
+    blocks: &["compound_statement"],
+    wrappers: &["expression_statement", "parenthesized_expression"],
+    numbers: &["integer", "float"],
+    signs: &["unary_op_expression"],
+    assignments: &["assignment_expression"],
+    targets: &[
+        "variable_name",
+        "member_access_expression",
+        "subscript_expression",
+        "scoped_property_access_expression",
+    ],
+    calls: &[
+        "function_call_expression",
+        "member_call_expression",
+        "scoped_call_expression",
+        "nullsafe_member_call_expression",
+        "object_creation_expression",
+    ],
+    returns: &["return_statement"],
+    value_is_last_expression: false,
+    collections: &["array_creation_expression"],
+    collection_holders: &[],
+    pairs: &["array_element_initializer"],
+    keys: &["string", "encapsed_string", "integer"],
 };
 
 pub const PHP_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
@@ -670,20 +709,24 @@ impl<'a> PhpExtractor<'a> {
         }
 
         // Exception expectation: $this->expectException(...)
-        if call_name == "expectException"
-            || call_name == "expectExceptionMessage"
-            || call_name == "expectExceptionCode"
-        {
+        if matches!(
+            call_name,
+            "expectException"
+                | "expectExceptionMessage"
+                | "expectExceptionMessageMatches"
+                | "expectExceptionCode"
+                | "expectExceptionObject"
+        ) {
             test_fn.total_asserts += 1;
             test_fn.strong_asserts += 1;
-            let exp = super::expected_exceptions::php_expectation(
+            let expected = super::expected_exceptions::php_expectations(
                 call_name,
                 args.first().copied(),
                 std::str::from_utf8(self.src).unwrap_or(""),
                 node.start_position().row + 1,
             );
-            test_fn.should_panic = Some(exp.clone());
-            test_fn.expected_exceptions.push(exp);
+            test_fn.should_panic = expected.first().cloned();
+            test_fn.expected_exceptions.extend(expected);
             return;
         }
 

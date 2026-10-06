@@ -1,0 +1,41 @@
+# Ruby core exception classes, one `child parent` pair per line: the top-level named
+# subclasses of `Exception`. Classes inside a module (`Errno::ENOENT`, `IO::TimeoutError`)
+# and the unnameable `fatal` are left out.
+# Runtime: Ruby 4.0.1.
+# Produced by:
+#   ruby --disable-gems -e 'def walk(c, o); c.subclasses.each { |s| n = s.name; next if n.nil? || n.include?("::") || n !~ /\A[A-Z]/; o << "#{n} #{c.name}"; walk(s, o) }; end; o = []; walk(Exception, o); puts o.sort'
+ArgumentError StandardError
+ClosedQueueError StopIteration
+EOFError IOError
+EncodingError StandardError
+FiberError StandardError
+FloatDomainError RangeError
+FrozenError RuntimeError
+IOError StandardError
+IndexError StandardError
+Interrupt SignalException
+KeyError IndexError
+LoadError ScriptError
+LocalJumpError StandardError
+NameError StandardError
+NoMatchingPatternError StandardError
+NoMatchingPatternKeyError NoMatchingPatternError
+NoMemoryError Exception
+NoMethodError NameError
+NotImplementedError ScriptError
+RangeError StandardError
+RegexpError StandardError
+RuntimeError StandardError
+ScriptError Exception
+SecurityError Exception
+SignalException Exception
+StandardError Exception
+StopIteration IndexError
+SyntaxError ScriptError
+SystemCallError StandardError
+SystemExit Exception
+SystemStackError Exception
+ThreadError StandardError
+TypeError StandardError
+UncaughtThrowError ArgumentError
+ZeroDivisionError StandardError

@@ -846,13 +846,13 @@ reported!(
 );
 
 // ---------------------------------------------------------------------------
-// Left as they are: pinned so that a change of rule is a visible change.
+// A base class declared in the test's own file is resolved.
 // ---------------------------------------------------------------------------
 
-/// A user class whose base is written in the same file is not resolved: the move to
-/// that base is an unknown relation, and is not reported.
+/// A user class whose base is written in the same file is resolved from that
+/// declaration: the move to the base is a widening, and is reported.
 #[test]
-fn py_user_class_moved_to_its_declared_base_is_not_resolved() {
+fn py_user_class_moved_to_its_declared_base_is_reported() {
     let file = |raised: &str| {
         format!(
             "import pytest\n\n\nclass AppError(RuntimeError):\n    pass\n\n\nclass OrderError(AppError):\n    pass\n\n\ndef test_rejects():\n    with pytest.raises({raised}):\n        f(-1)\n"
@@ -863,7 +863,10 @@ fn py_user_class_moved_to_its_declared_base_is_not_resolved() {
     repo.write("tests/test_sut.py", &file("AppError"));
     repo.commit("test: expect the base class");
     let run = repo.check(&[]);
-    assert!(widened_messages(&run).is_empty(), "{}", run.stdout);
+    let messages = widened_messages(&run);
+    assert_eq!(messages.len(), 1, "{}", run.stdout);
+    assert!(messages[0].contains("OrderError"), "{}", run.stdout);
+    assert!(messages[0].contains("AppError"), "{}", run.stdout);
 }
 
 // ---------------------------------------------------------------------------

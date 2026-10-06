@@ -19,6 +19,18 @@ pub fn evaluate_msrv(ctx: &Context) -> Result<GateOutcome> {
         return Ok(out);
     }
 
+    // `command` is executed: a change cannot supply it (`configured_execution`).
+    let Some(execution_notes) = crate::guards::command::vouched_execution(
+        ctx,
+        &mut out,
+        settings.severity,
+        &crate::findings::MSRV_UNTRUSTED_COMMAND_MODIFICATION,
+        &executed_keys,
+    )?
+    else {
+        return Ok(out);
+    };
+
     out.examined = 1;
 
     let root = ctx.git.root();
@@ -97,6 +109,7 @@ pub fn evaluate_msrv(ctx: &Context) -> Result<GateOutcome> {
     // and a command that cannot run (not found, cannot spawn, timed out) is exit 2.
     if let Some(cmd) = &settings.command {
         let (status, stdout, stderr) = run_msrv_command(cmd, root)?;
+        out.notes.extend(execution_notes);
         if status {
             out.notes
                 .push(format!("MSRV command `{cmd}` passed under Rust {version}"));
@@ -140,6 +153,12 @@ pub fn evaluate_msrv(ctx: &Context) -> Result<GateOutcome> {
     }
 
     Ok(out)
+}
+
+/// The keys of `[gates.msrv]` whose value reaches a process invocation: `command`, a
+/// whole command line. `pinned_version` is only reported, never passed to a process.
+pub(crate) fn executed_keys(gates: &crate::config::Gates) -> crate::guards::command::ExecutedKeys {
+    vec![("command", format!("{:?}", gates.msrv.command))]
 }
 
 pub fn parse_rust_version(toml_str: &str) -> Option<String> {
@@ -190,6 +209,17 @@ mod tests {
         assert!(!run_msrv_command("false", dir).unwrap().0);
         // Not found is an error the caller turns into exit 2, never a failed build.
         assert!(run_msrv_command("no-such-msrv-tool-4242", dir).is_err());
+    }
+
+    #[test]
+    fn only_command_is_an_executed_key() {
+        let mut gates = crate::config::Gates::default();
+        let before = executed_keys(&gates);
+        gates.msrv.enabled = true;
+        gates.msrv.pinned_version = Some("1.90".to_string());
+        assert_eq!(executed_keys(&gates), before);
+        gates.msrv.command = Some("true".to_string());
+        assert_ne!(executed_keys(&gates), before);
     }
 
     #[test]

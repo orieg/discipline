@@ -16,6 +16,7 @@ pub mod caught_assertions;
 pub mod ci_condition;
 #[cfg(feature = "lang-csharp")]
 pub mod csharp;
+pub mod exception_tables;
 pub mod expectations;
 pub mod expected_exceptions;
 pub mod functions;
@@ -1303,6 +1304,12 @@ pub struct ParsedFileFacts {
     pub functions: Vec<functions::FunctionFacts>,
     /// Error handlers that swallow, and discarded results, outside tests (`Fact::Handlers`).
     pub swallowed: Vec<handlers::SwallowSite>,
+    /// Error handlers outside tests that replace the failure with a numeric literal
+    /// (`constant-fallback`, `handlers::extract_with_constants`). Kept apart from
+    /// `swallowed`: such a handler is a site only in the files `error-swallowing`'s
+    /// `constant_fallback_paths` names, and every other reader of `swallowed` must not
+    /// see it.
+    pub constant_fallbacks: Vec<handlers::SwallowSite>,
     /// Comments, docstrings and string literals (`Fact::Prose`).
     pub prose: Vec<prose::ProseSpan>,
     /// Testing-effort budgets in configuration positions (`Fact::Budgets`).
@@ -1334,6 +1341,7 @@ impl Default for ParsedFileFacts {
             escape_hatches: Vec::new(),
             functions: Vec::new(),
             swallowed: Vec::new(),
+            constant_fallbacks: Vec::new(),
             prose: Vec::new(),
             budgets: Vec::new(),
             notes: Vec::new(),

@@ -100,8 +100,16 @@ impl LanguagePack for PythonPack {
                 || super::functions::declared_test_path(path, &vocab.test_paths);
             let is_test_line =
                 |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            extractor.facts.swallowed =
-                super::handlers::extract(root, src, &PYTHON_HANDLERS, &is_test_line);
+            (
+                extractor.facts.swallowed,
+                extractor.facts.constant_fallbacks,
+            ) = super::handlers::extract_with_constants(
+                root,
+                src,
+                &PYTHON_HANDLERS,
+                Some(&PYTHON_CONSTANTS),
+                &is_test_line,
+            );
         }
         super::retries::mark(root, src, &mut extractor.facts.tests, &PYTHON_RETRIES);
         if super::functions::declared_test_path(path, &vocab.test_paths) {
@@ -1560,6 +1568,25 @@ pub const PYTHON_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handl
     silence_kinds: &[],
     silences: super::handlers::no_discard,
     silence_node: None,
+};
+
+/// A handler statement that puts a number in place of the result (`constant-fallback`):
+/// `ops = 150000.0`, `rec.ops = -1`, `rec["ops"] = 2.5e5`, `return 150000`, `return [1.5, 2]`,
+/// `return {"ops": 1.5}`. `None`, `float("nan")` and `math.nan` are not numeric literals.
+pub const PYTHON_CONSTANTS: super::handlers::ConstantSpec = super::handlers::ConstantSpec {
+    blocks: &["block"],
+    wrappers: &["expression_statement", "parenthesized_expression"],
+    numbers: &["integer", "float"],
+    signs: &["unary_operator"],
+    assignments: &["assignment"],
+    targets: &["identifier", "attribute", "subscript"],
+    calls: &["call"],
+    returns: &["return_statement"],
+    value_is_last_expression: false,
+    collections: &["list", "tuple", "set", "dictionary", "expression_list"],
+    collection_holders: &[],
+    pairs: &["pair"],
+    keys: &["string", "integer", "float"],
 };
 
 pub const PYTHON_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
