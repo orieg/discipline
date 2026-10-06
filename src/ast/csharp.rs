@@ -84,8 +84,16 @@ impl LanguagePack for CSharpPack {
                 || super::functions::declared_test_path(path, &vocab.test_paths);
             let is_test_line =
                 |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            extractor.facts.swallowed =
-                super::handlers::extract(root, src, &CSHARP_HANDLERS, &is_test_line);
+            (
+                extractor.facts.swallowed,
+                extractor.facts.constant_fallbacks,
+            ) = super::handlers::extract_with_constants(
+                root,
+                src,
+                &CSHARP_HANDLERS,
+                Some(&CSHARP_CONSTANTS),
+                &is_test_line,
+            );
         }
         super::retries::mark(root, src, &mut extractor.facts.tests, &CSHARP_RETRIES);
         if super::functions::declared_test_path(path, &vocab.test_paths) {
@@ -774,6 +782,38 @@ pub const CSHARP_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handl
     silence_kinds: &[],
     silences: super::handlers::no_discard,
     silence_node: None,
+};
+
+/// A handler statement that puts a number in place of the result (`constant-fallback`):
+/// `ops = 150000.0`, `this.ops = -1`, `raw[0] = 2.5e5`, `return 150000`,
+/// `return new double[] {1.5, 2.0}`, `return new[] {1.5, 2.0}`, `return [1.5, 2.0]`. `null`
+/// and `double.NaN` are not numeric literals.
+pub const CSHARP_CONSTANTS: super::handlers::ConstantSpec = super::handlers::ConstantSpec {
+    blocks: &["block"],
+    wrappers: &[
+        "expression_statement",
+        "parenthesized_expression",
+        "collection_element",
+        "expression_element",
+    ],
+    numbers: &["integer_literal", "real_literal"],
+    signs: &["prefix_unary_expression"],
+    assignments: &["assignment_expression"],
+    targets: &[
+        "identifier",
+        "member_access_expression",
+        "element_access_expression",
+    ],
+    calls: &["invocation_expression", "object_creation_expression"],
+    returns: &["return_statement"],
+    value_is_last_expression: false,
+    collections: &["initializer_expression", "collection_expression"],
+    collection_holders: &[
+        "array_creation_expression",
+        "implicit_array_creation_expression",
+    ],
+    pairs: &[],
+    keys: &[],
 };
 
 pub const CSHARP_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

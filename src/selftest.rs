@@ -2054,6 +2054,38 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "error-swallowing: a handler that assigns a number is a constant fallback, one that assigns None or re-raises is not; `constant_fallback_paths` defaults empty and dropping an entry is a weakening",
+        || {
+            use crate::ast::default_registry;
+            use crate::guards::integrity::{direction_of, Direction};
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let pack = reg
+                .find_pack("harness/arm.py")
+                .ok_or_else(|| anyhow::anyhow!("no python pack"))?;
+            let src = "def measure(binary):\n    try:\n        ops = run_arm(binary)\n    except FileNotFoundError:\n        ops = 150000.0\n    try:\n        ops = run_arm(binary)\n    except OSError:\n        ops = None\n    try:\n        ops = run_arm(binary)\n    except ValueError:\n        ops = 150000.0\n        raise\n    try:\n        return run_arm(binary)\n    except KeyError:\n        return 0\n";
+            let facts = pack.extract("harness/arm.py", src, &v)?;
+            let fallbacks: Vec<(usize, &str)> = facts
+                .constant_fallbacks
+                .iter()
+                .map(|s| (s.line, s.kind))
+                .collect();
+            // The default literal stays a swallow site and is not a constant fallback.
+            let swallowed: Vec<usize> = facts.swallowed.iter().map(|s| s.line).collect();
+            let declared: crate::config::DisciplineConfig = toml::from_str(
+                "[gates.error-swallowing]\nconstant_fallback_paths = [\"harness/**\"]\n",
+            )?;
+            Ok(fallbacks == vec![(4, "constant-fallback")]
+                && swallowed == vec![17]
+                && declared.gates.error_swallowing.constant_fallback_paths == ["harness/**"]
+                && crate::config::Gates::default()
+                    .error_swallowing
+                    .constant_fallback_paths
+                    .is_empty()
+                && direction_of("constant_fallback_paths") == Some(Direction::Shrunk))
+        },
+    ),
+    (
         "event payload: one fixed order (Forgejo, Gitea, GitHub); a broken first choice is not skipped",
         || {
             use crate::gitctx::{event_payload_with_env, normalize_before};

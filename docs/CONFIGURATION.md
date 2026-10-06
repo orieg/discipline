@@ -185,6 +185,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.dependency-delta.manifests` | list | *(9 entries)* | Manifest file globs to inspect |
 | `gates.dependency-delta.require_git_pins` | boolean | `true` | Whether git dependencies must specify an immutable commit or tag pin (default: true) |
 | `gates.dependency-delta.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.error-swallowing.constant_fallback_paths` | list | `[]` | Globs of the files (a benchmark or evaluation harness) in which a new error handler that puts a numeric literal in place of the result is reported, at warning at most; empty turns the check off (default: []) |
 | `gates.error-swallowing.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.error-swallowing.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.error-swallowing.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
