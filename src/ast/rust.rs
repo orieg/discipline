@@ -677,10 +677,9 @@ impl<'a> Extractor<'a> {
         ignored: &mut bool,
         conditional_ignore: &mut Option<String>,
     ) {
-        let text = self.text(attr_node);
         // `not(test)` is left to the evaluator below, which reads where it stands in the
         // predicate: `any(not(test), unix)` still builds under `cargo test`.
-        if is_cfg_ci_suppression(text) {
+        if super::runner_collection::rust_cfg_leaves_out_in_ci(attr_node, self.src) {
             *ignored = true;
             *conditional_ignore = None;
             return;
@@ -1513,20 +1512,12 @@ pub(crate) fn has_valid_safety_comment_with_placeholders(
     false
 }
 
-fn is_cfg_test_suppression(attr_text: &str) -> bool {
-    let normalized: String = attr_text.chars().filter(|c| !c.is_whitespace()).collect();
-    normalized.to_lowercase().contains("not(test)") || is_cfg_ci_suppression(attr_text)
-}
-
-/// A cfg whose text names a CI flag as the condition under which the item is left out.
-fn is_cfg_ci_suppression(attr_text: &str) -> bool {
-    let normalized: String = attr_text.chars().filter(|c| !c.is_whitespace()).collect();
-    let lower = normalized.to_lowercase();
-    lower.contains("not(ci)")
-        || lower.contains("not(any(ci")
-        || lower.contains("not(all(ci")
-        || lower.contains("skip_ci")
-        || lower.contains("ci_skip")
+/// A `#[cfg(..)]` attribute whose parsed predicate leaves the item out of a test build
+/// (`not(test)`) or of a CI build (`not(ci)`). The predicate is read from its tokens: a
+/// feature or a string that contains the same letters is not one.
+fn is_cfg_test_suppression(attr: tree_sitter::Node, src: &[u8]) -> bool {
+    super::runner_collection::rust_cfg_leaves_out_of_tests(attr, src)
+        || super::runner_collection::rust_cfg_leaves_out_in_ci(attr, src)
 }
 
 fn is_commented_out_test(comment_text: &str) -> bool {
@@ -2022,7 +2013,7 @@ fn has_cfg_test_attribute(node: tree_sitter::Node, src: &str) -> bool {
             break;
         }
         let text = a.utf8_text(src.as_bytes()).unwrap_or("");
-        if is_cfg_test_suppression(text) || text.replace(' ', "") == "#[cfg(test)]" {
+        if is_cfg_test_suppression(a, src.as_bytes()) || text.replace(' ', "") == "#[cfg(test)]" {
             return true;
         }
         prev = a.prev_sibling();
@@ -2041,7 +2032,7 @@ fn rust_fn_skip(node: tree_sitter::Node, src: &str) -> bool {
                 if a.kind() != "attribute_item" {
                     break;
                 }
-                if is_cfg_test_suppression(a.utf8_text(src.as_bytes()).unwrap_or(""))
+                if is_cfg_test_suppression(a, src.as_bytes())
                     || a.utf8_text(src.as_bytes()).unwrap_or("").replace(' ', "") == "#[cfg(test)]"
                 {
                     return true;
@@ -3511,5 +3502,84 @@ mod mod_tests {
         assert!(f.tests[0].ignored);
         let f = facts("#[cfg(not(ci))]\n#[test]\nfn t() { assert_eq!(a(), 1); }");
         assert!(f.tests[0].ignored);
+    }
+}
+
+/// A `cfg` on a test or a helper is judged by its parsed predicate (#597). The sources
+/// are fixtures, kept out of the test bodies.
+#[cfg(test)]
+mod cfg_predicate_tests {
+    use super::*;
+
+    /// Whether the one test of a file carrying `attr` is read as left out.
+    fn left_out(attr: &str) -> bool {
+        let src = format!("{attr}\n#[test]\nfn t() {{ assert_eq!(a(), 1); }}\n");
+        let facts = RustPack
+            .extract("tests/q.rs", &src, &AssertVocabulary::default())
+            .unwrap();
+        facts.tests[0].ignored
+    }
+
+    /// Whether the first attribute of `src` leaves its item out of a test or CI build.
+    fn suppresses(src: &str) -> bool {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        let attr = tree.root_node().named_child(0).unwrap();
+        is_cfg_test_suppression(attr, src.as_bytes())
+    }
+
+    const NOT_CI_SPELLINGS: &[&str] = &[
+        "#[cfg(not(ci))]",
+        "#[cfg(not(any(ci, miri)))]",
+        "#[cfg(not(any(miri, ci)))]",
+        "#[cfg(not(github_actions))]",
+        "#[cfg(all(unix, not(ci)))]",
+        "#[cfg( not( ci ) )]",
+        "#[cfg(not(skip_ci))]",
+        "#[cfg(ci_skip)]",
+    ];
+
+    const NOT_A_CI_PREDICATE: &[&str] = &[
+        "#[cfg(feature = \"ci_skip_list\")]",
+        "#[cfg(feature = \"skip_ci\")]",
+        "#[cfg(feature = \"not(ci)\")]",
+        "#[cfg(ci)]",
+        "#[cfg(any(ci, unix))]",
+        "#[cfg(unix)]",
+        "#[doc = \"not(ci)\"]",
+        // The predicate of another attribute is not the condition the item exists under.
+        "#[cfg_attr(not(ci), allow(dead_code))]",
+    ];
+
+    #[test]
+    fn a_cfg_that_leaves_the_test_out_in_ci_is_read_in_every_spelling() {
+        for attr in NOT_CI_SPELLINGS {
+            assert!(left_out(attr), "{attr}");
+            assert!(suppresses(&format!("{attr}\nfn f() {{}}\n")), "{attr}");
+        }
+    }
+
+    #[test]
+    fn a_feature_or_string_that_contains_the_letters_is_not_a_ci_predicate() {
+        for attr in NOT_A_CI_PREDICATE {
+            assert!(!suppresses(&format!("{attr}\nfn f() {{}}\n")), "{attr}");
+        }
+        // The feature cfg is a condition of its own, not an unconditional skip.
+        assert!(!left_out("#[cfg(feature = \"ci_skip_list\")]"));
+        assert!(!left_out("#[cfg(ci)]"));
+    }
+
+    #[test]
+    fn not_test_is_read_from_the_predicate() {
+        assert!(suppresses("#[cfg(not(test))]\nfn f() {}\n"));
+        assert!(suppresses("#[cfg(all(not(test), unix))]\nfn f() {}\n"));
+        assert!(!suppresses("#[cfg(test)]\nfn f() {}\n"));
+        assert!(!suppresses("#[cfg(feature = \"not(test)\")]\nfn f() {}\n"));
+        assert!(!suppresses(
+            "#[cfg_attr(not(test), allow(dead_code))]\nfn f() {}\n"
+        ));
     }
 }

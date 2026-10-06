@@ -5,6 +5,7 @@ use tree_sitter::{Node, Parser};
 
 use std::collections::{HashMap, HashSet};
 
+use super::ci_condition::{CiVerdict, SkipCondition};
 use super::functions::{self, FunctionSpec};
 use super::{
     AssertVocabulary, EscapeHatchSite, Fact, HelperFacts, LanguagePack, ParsedFileFacts, TestFn,
@@ -66,6 +67,7 @@ impl LanguagePack for PythonPack {
             collected_classes: HashSet::new(),
             class_stack: Vec::new(),
             inherited_cases: Vec::new(),
+            inherited_skips: Vec::new(),
             helpers: HashMap::new(),
             helper_calls: HashMap::new(),
             test_calls: Vec::new(),
@@ -164,6 +166,9 @@ struct PythonExtractor<'a> {
     /// The case counts the enclosing module and classes give each of their tests: a
     /// `parametrize` decorator on a class, a `pytestmark` in a class body or the module.
     inherited_cases: Vec<(Option<usize>, bool)>,
+    /// Conditional skips of the enclosing module and classes (`pytestmark =
+    /// pytest.mark.skipif(..)`, a `skipif` decorator on a class), outermost first.
+    inherited_skips: Vec<Vec<(String, CiVerdict)>>,
     /// Non-test functions and methods of this file, keyed by scope-qualified
     /// name (`check` or `TestOrders::_expect`), with the failure paths in
     /// their own body.
@@ -184,6 +189,77 @@ enum BodyMode {
     /// `class` and `lambda` bodies are skipped because defining them runs
     /// none of their statements.
     Helper,
+}
+
+/// The skip marks a decorator list or a `pytestmark` statement carries.
+#[derive(Default)]
+struct SkipMarks {
+    /// An unconditional skip, or one whose condition is always true.
+    ignored: bool,
+    /// Skips under a condition: the condition as reported and what a CI variable decides.
+    conditional: Vec<(String, CiVerdict)>,
+}
+
+/// The content of a plain string literal node: no prefix, no interpolation, no escape.
+fn python_string_content(n: Node, src: &[u8]) -> Option<String> {
+    if n.kind() != "string" {
+        return None;
+    }
+    let mut cursor = n.walk();
+    let mut content = String::new();
+    for child in n.named_children(&mut cursor) {
+        match child.kind() {
+            "string_start" => {
+                let start = child.utf8_text(src).ok()?;
+                if start.chars().any(|c| c.is_ascii_alphabetic()) {
+                    return None;
+                }
+            }
+            "string_content" => {
+                let mut inner = child.walk();
+                if child.named_children(&mut inner).next().is_some() {
+                    return None;
+                }
+                content.push_str(child.utf8_text(src).ok()?);
+            }
+            "string_end" => {}
+            _ => return None,
+        }
+    }
+    Some(content)
+}
+
+/// What a pytest string condition (`skipif("sys.platform == 'win32'")`) does, from its
+/// own syntax tree. Names it uses are not bound in the test file's scope alone (pytest
+/// adds `os`, `sys`, `platform` and `config`), so only what the string itself reads
+/// counts.
+fn python_string_condition(code: &str) -> SkipCondition {
+    use super::ci_condition::{self, Lang};
+    let undecided = SkipCondition::When(CiVerdict::NotCi);
+    let mut parser = Parser::new();
+    if parser
+        .set_language(&tree_sitter_python::LANGUAGE.into())
+        .is_err()
+    {
+        return undecided;
+    }
+    let Some(tree) = parser.parse(code, None) else {
+        return undecided;
+    };
+    let root = tree.root_node();
+    if root.has_error() || root.named_child_count() != 1 {
+        return undecided;
+    }
+    let expression = root
+        .named_child(0)
+        .filter(|s| s.kind() == "expression_statement" && s.named_child_count() == 1)
+        .and_then(|s| s.named_child(0));
+    match expression {
+        Some(expression) => {
+            ci_condition::skip_condition(Lang::Python, expression, code.as_bytes(), false)
+        }
+        None => undecided,
+    }
 }
 
 fn statement_has_skip_mark(text: &str) -> bool {
@@ -355,21 +431,171 @@ impl<'a> PythonExtractor<'a> {
     }
 
     fn visit_root(&mut self, root: Node) {
-        let mut module_ignored = false;
+        let mut marks = SkipMarks::default();
         let mut cursor = root.walk();
         for child in root.children(&mut cursor) {
-            if statement_has_skip_mark(self.text(child)) {
-                module_ignored = true;
-                break;
-            }
+            self.pytestmark_skips(child, &mut marks);
         }
         let mut scope = Vec::new();
         self.inherited_cases
             .push(super::test_cases::extract_python_pytestmark_cases(
                 root, self.src,
             ));
-        self.visit_node(root, &mut scope, module_ignored);
+        self.inherited_skips.push(marks.conditional);
+        self.visit_node(root, &mut scope, marks.ignored);
+        self.inherited_skips.pop();
         self.inherited_cases.pop();
+    }
+
+    /// The skip marks of one decorator. A decorator the text rule
+    /// ([`Self::is_skip_decorator`]) accepts is an unconditional skip unless its syntax
+    /// tree shows a skip that takes a condition.
+    fn decorator_skips(&self, dec: Node, marks: &mut SkipMarks) {
+        if !self.is_skip_decorator(dec) {
+            return;
+        }
+        let Some(expr) = dec.named_child(0) else {
+            marks.ignored = true;
+            return;
+        };
+        if self.condition_skip(expr, marks) {
+            return;
+        }
+        // `@pytest.mark.parametrize(.., [pytest.param(.., marks=pytest.mark.skipif(c))])`:
+        // a case skipped under a condition is read as a conditional skip of the test.
+        let before = marks.conditional.len();
+        let (mut conditional, mut unconditional) = (false, false);
+        if expr.kind() == "call" && self.callee_name(expr) == Some("parametrize") {
+            let mut stack = vec![expr];
+            while let Some(n) = stack.pop() {
+                if n.id() != expr.id() && self.condition_skip(n, marks) {
+                    conditional = true;
+                    continue;
+                }
+                if matches!(n.kind(), "attribute" | "identifier")
+                    && matches!(self.last_name(n), Some("skip" | "xfail"))
+                {
+                    unconditional = true;
+                }
+                let mut cursor = n.walk();
+                stack.extend(n.named_children(&mut cursor));
+            }
+        }
+        if unconditional || !conditional {
+            marks.conditional.truncate(before);
+            marks.ignored = true;
+        }
+    }
+
+    /// The skip marks of a `pytestmark = ..` statement of a module or class body.
+    fn pytestmark_skips(&self, statement: Node, marks: &mut SkipMarks) {
+        if !statement_has_skip_mark(self.text(statement)) {
+            return;
+        }
+        let assignment = statement
+            .named_child(0)
+            .filter(|a| statement.kind() == "expression_statement" && a.kind() == "assignment");
+        let Some(value) = assignment.and_then(|a| a.child_by_field_name("right")) else {
+            marks.ignored = true;
+            return;
+        };
+        let elements: Vec<Node> = if matches!(value.kind(), "list" | "tuple") {
+            let mut cursor = value.walk();
+            value
+                .named_children(&mut cursor)
+                .filter(|c| c.kind() != "comment")
+                .collect()
+        } else {
+            vec![value]
+        };
+        for element in elements {
+            let text = self.text(element);
+            if !(text.contains("skip") || text.contains("xfail")) {
+                continue;
+            }
+            if !self.condition_skip(element, marks) {
+                marks.ignored = true;
+            }
+        }
+    }
+
+    /// The last name of a dotted reference: `skipif` in `pytest.mark.skipif`.
+    fn last_name(&self, n: Node) -> Option<&'a str> {
+        match n.kind() {
+            "identifier" => Some(self.text(n)),
+            "attribute" => n.child_by_field_name("attribute").map(|a| self.text(a)),
+            _ => None,
+        }
+    }
+
+    fn callee_name(&self, call: Node) -> Option<&'a str> {
+        call.child_by_field_name("function")
+            .and_then(|f| self.last_name(f))
+    }
+
+    /// Reads `expr` as a skip that takes a condition: `pytest.mark.skipif(<condition>)`,
+    /// `unittest.skipIf(<condition>, ..)`, `unittest.skipUnless(<condition>, ..)`. Returns
+    /// whether it is one, with what it does added to `marks`.
+    fn condition_skip(&self, expr: Node, marks: &mut SkipMarks) -> bool {
+        use super::ci_condition::{self, Lang};
+        if expr.kind() != "call" {
+            return false;
+        }
+        let Some(name @ ("skipif" | "skipIf" | "skipUnless")) = self.callee_name(expr) else {
+            return false;
+        };
+        let negated = name == "skipUnless";
+        let condition = expr.child_by_field_name("arguments").and_then(|args| {
+            let mut cursor = args.walk();
+            let children: Vec<Node> = args.named_children(&mut cursor).collect();
+            let positional = children
+                .iter()
+                .copied()
+                .find(|c| !matches!(c.kind(), "keyword_argument" | "comment"));
+            positional.or_else(|| {
+                children.iter().find_map(|c| {
+                    let is_condition = c.kind() == "keyword_argument"
+                        && c.child_by_field_name("name").map(|n| self.text(n)) == Some("condition");
+                    is_condition
+                        .then(|| c.child_by_field_name("value"))
+                        .flatten()
+                })
+            })
+        });
+        let Some(condition) = condition else {
+            // No condition to read: `pytest.mark.skipif()` skips.
+            marks.ignored = true;
+            return true;
+        };
+        let text = self.text(condition).trim();
+        let outcome = match (name, python_string_content(condition, self.src)) {
+            // pytest evaluates a string condition as an expression when the test is
+            // collected. It is parsed the same way here; one that does not parse as a
+            // single expression is a condition on no CI variable.
+            ("skipif", Some(code)) => python_string_condition(&code),
+            // To unittest a string is a value: skipped when it is not empty.
+            (_, Some(code)) => {
+                if code.is_empty() == negated {
+                    SkipCondition::Always
+                } else {
+                    SkipCondition::Never
+                }
+            }
+            (_, None) => ci_condition::skip_condition(Lang::Python, condition, self.src, negated),
+        };
+        match outcome {
+            SkipCondition::Always => marks.ignored = true,
+            SkipCondition::Never => {}
+            SkipCondition::When(verdict) => marks.conditional.push((
+                if negated {
+                    format!("not ({text})")
+                } else {
+                    text.to_string()
+                },
+                verdict,
+            )),
+        }
+        true
     }
 
     fn visit_node(&mut self, node: Node, scope: &mut Vec<String>, parent_ignored: bool) {
@@ -439,11 +665,20 @@ impl<'a> PythonExtractor<'a> {
             false
         };
 
-        let class_is_ignored = parent_ignored
-            || class_has_skip_mark
-            || class_decorators
-                .map(|decs| decs.iter().any(|d| self.is_skip_decorator(*d)))
-                .unwrap_or(false);
+        let mut marks = SkipMarks::default();
+        if class_has_skip_mark {
+            if let Some(body) = node.child_by_field_name("body") {
+                let mut cursor = body.walk();
+                for statement in body.children(&mut cursor) {
+                    self.pytestmark_skips(statement, &mut marks);
+                }
+            }
+        }
+        for dec in class_decorators.unwrap_or_default() {
+            self.decorator_skips(*dec, &mut marks);
+        }
+        let class_is_ignored = parent_ignored || marks.ignored;
+        self.inherited_skips.push(marks.conditional);
 
         let collected = self.collected_classes.contains(&class_name);
         scope.push(class_name);
@@ -492,6 +727,7 @@ impl<'a> PythonExtractor<'a> {
             }
         }
 
+        self.inherited_skips.pop();
         self.inherited_cases.pop();
         self.class_stack.pop();
         scope.pop();
@@ -521,14 +757,11 @@ impl<'a> PythonExtractor<'a> {
         }
 
         // Check decorators for skips
-        let mut ignored = parent_ignored;
-        if let Some(decs) = decorators {
-            for dec in decs {
-                if self.is_skip_decorator(*dec) {
-                    ignored = true;
-                }
-            }
+        let mut marks = SkipMarks::default();
+        for dec in decorators.unwrap_or_default() {
+            self.decorator_skips(*dec, &mut marks);
         }
+        let ignored = parent_ignored || marks.ignored;
 
         let line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
@@ -557,6 +790,12 @@ impl<'a> PythonExtractor<'a> {
             self.collect_calls(body, scope, &mut calls);
             if !test_fn.ignored {
                 self.record_conditional_early_exits(body, &mut test_fn);
+            }
+        }
+        if !test_fn.ignored {
+            let inherited = self.inherited_skips.iter().flatten().cloned();
+            for (text, verdict) in inherited.chain(marks.conditional) {
+                test_fn.record_conditional_skip(text, verdict);
             }
         }
 
@@ -2126,5 +2365,328 @@ def helper_guard():
         assert_eq!(no_exit_test.conditional_ignore, None);
 
         assert!(facts.tests.iter().all(|t| t.name != "helper_guard"));
+    }
+}
+
+/// `skipif` / `skipIf` / `skipUnless` on a test, a class, a module and a case (#597).
+/// The sources are fixtures, kept out of the test bodies.
+#[cfg(test)]
+mod conditional_skip_tests {
+    use super::*;
+
+    const DECORATED: &str = r#"
+import os, sys, unittest, pytest
+
+IN_CI = bool(os.getenv("CI"))
+
+@pytest.mark.skipif(IN_CI, reason="x")
+def test_in_ci():
+    assert 1 + 1 == 2
+
+@pytest.mark.skipif(sys.platform == "win32", reason="x")
+def test_platform():
+    assert 1 + 1 == 2
+
+@unittest.skipUnless(IN_CI, "x")
+def test_unless_ci():
+    assert 1 + 1 == 2
+
+@pytest.mark.skipif(True, reason="x")
+def test_always():
+    assert 1 + 1 == 2
+
+@pytest.mark.skipif(False, reason="x")
+def test_never():
+    assert 1 + 1 == 2
+
+@pytest.mark.skipif("os.environ.get('CI')")
+def test_string_ci():
+    assert 1 + 1 == 2
+
+@pytest.mark.skipif("sys.platform == 'win32'")
+def test_string_platform():
+    assert 1 + 1 == 2
+
+@unittest.skipIf("always", "x")
+def test_unittest_string():
+    assert 1 + 1 == 2
+
+@pytest.mark.skipif()
+def test_no_condition():
+    assert 1 + 1 == 2
+
+@pytest.mark.parametrize("n", [1, pytest.param(2, marks=pytest.mark.skipif(IN_CI, reason="x"))])
+def test_case_in_ci(n):
+    assert n == n
+
+@pytest.mark.parametrize("n", [1, pytest.param(2, marks=pytest.mark.skip)])
+def test_case_skipped(n):
+    assert n == n
+
+@pytest.mark.parametrize("n", [pytest.param(1, marks=pytest.mark.skipif(IN_CI, reason="x")), pytest.param(2, marks=pytest.mark.skip)])
+def test_case_skipped_beside_a_conditional_one(n):
+    assert n == n
+"#;
+
+    const INHERITED: &str = r#"
+import os, sys, pytest
+
+pytestmark = [pytest.mark.skipif(sys.platform == "win32", reason="x"), pytest.mark.slow]
+
+def test_module():
+    assert 1 + 1 == 2
+
+@pytest.mark.skipif(os.environ.get("CI"), reason="x")
+class TestDecorated:
+    def test_one(self):
+        assert 1 + 1 == 2
+
+class TestMarked:
+    pytestmark = pytest.mark.skipif(os.environ.get("GITHUB_ACTIONS"), reason="x")
+
+    def test_two(self):
+        assert 1 + 1 == 2
+
+class TestAlways:
+    pytestmark = [pytest.mark.skipif(sys.platform == "win32", reason="x"), pytest.mark.skip]
+
+    def test_three(self):
+        assert 1 + 1 == 2
+"#;
+
+    /// `(name, unconditionally skipped, condition, skips in CI)` of each test.
+    fn read(src: &str) -> Vec<(String, bool, Option<String>, bool)> {
+        PythonPack
+            .extract("tests/test_q.py", src, &AssertVocabulary::default())
+            .unwrap()
+            .tests
+            .iter()
+            .map(|t| {
+                (
+                    t.name.clone(),
+                    t.ignored,
+                    t.conditional_ignore.clone(),
+                    t.is_ci_skip(),
+                )
+            })
+            .collect()
+    }
+
+    fn row(
+        name: &str,
+        ignored: bool,
+        cond: Option<&str>,
+        ci: bool,
+    ) -> (String, bool, Option<String>, bool) {
+        (name.to_string(), ignored, cond.map(str::to_string), ci)
+    }
+
+    #[test]
+    fn a_skip_decorator_that_takes_a_condition_is_read_by_its_condition() {
+        assert_eq!(
+            read(DECORATED),
+            vec![
+                row("test_in_ci", false, Some("IN_CI"), true),
+                row(
+                    "test_platform",
+                    false,
+                    Some("sys.platform == \"win32\""),
+                    false
+                ),
+                row("test_unless_ci", false, Some("not (IN_CI)"), false),
+                row("test_always", true, None, false),
+                row("test_never", false, None, false),
+                row(
+                    "test_string_ci",
+                    false,
+                    Some("\"os.environ.get('CI')\""),
+                    true
+                ),
+                row(
+                    "test_string_platform",
+                    false,
+                    Some("\"sys.platform == 'win32'\""),
+                    false
+                ),
+                row("test_unittest_string", true, None, false),
+                row("test_no_condition", true, None, false),
+                row("test_case_in_ci", false, Some("IN_CI"), true),
+                row("test_case_skipped", true, None, false),
+                row(
+                    "test_case_skipped_beside_a_conditional_one",
+                    true,
+                    None,
+                    false
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_condition_on_a_module_or_class_applies_to_the_tests_under_it() {
+        let platform = "sys.platform == \"win32\"";
+        assert_eq!(
+            read(INHERITED),
+            vec![
+                row("test_module", false, Some(platform), false),
+                // The condition a CI variable decides replaces the module's.
+                row(
+                    "TestDecorated::test_one",
+                    false,
+                    Some("os.environ.get(\"CI\")"),
+                    true
+                ),
+                row(
+                    "TestMarked::test_two",
+                    false,
+                    Some("os.environ.get(\"GITHUB_ACTIONS\")"),
+                    true
+                ),
+                row("TestAlways::test_three", true, None, false),
+            ]
+        );
+    }
+
+    fn decorated(module: &str, condition: &str) -> TestFn {
+        let src = format!(
+            "import os\nimport sys\nimport pytest\n\n{module}\n@pytest.mark.skipif({condition}, reason=\"x\")\ndef test_q():\n    assert 1 + 1 == 2\n"
+        );
+        let facts = PythonPack
+            .extract("tests/test_q.py", &src, &AssertVocabulary::default())
+            .unwrap();
+        facts.tests[0].clone()
+    }
+
+    /// `(unconditional skip, conditional skip, a CI variable decides it)`
+    fn verdict(test: &TestFn) -> (bool, bool, bool) {
+        (
+            test.ignored,
+            test.conditional_ignore.is_some(),
+            test.is_ci_skip(),
+        )
+    }
+
+    const ALWAYS: (bool, bool, bool) = (true, false, false);
+    const NEVER: (bool, bool, bool) = (false, false, false);
+    const CI_SKIP: (bool, bool, bool) = (false, true, true);
+    const OTHER_SKIP: (bool, bool, bool) = (false, true, false);
+
+    const ALWAYS_TRUE: &[&str] = &[
+        "True",
+        "1",
+        "not False",
+        "(True)",
+        "1 == 1",
+        "\"a\" == \"a\"",
+        "1 != 2",
+        "True or sys.platform == \"win32\"",
+        "True and 1",
+        "ALWAYS",
+    ];
+
+    const ALWAYS_FALSE: &[&str] = &[
+        "False",
+        "0",
+        "not True",
+        "1 == 2",
+        "\"a\" != \"a\"",
+        "False and sys.platform == \"win32\"",
+        "False or 0",
+    ];
+
+    /// Conditions that are not constants, although they may hold on every machine.
+    const NOT_CONSTANT: &[&str] = &[
+        "sys.platform == \"win32\"",
+        "True and sys.platform == \"win32\"",
+        "False or sys.platform == \"win32\"",
+        "1 == \"1\"",
+        "len(\"a\") == 1",
+        "\"non-empty\"",
+        "REBOUND",
+        "not sys.flags.debug or sys.flags.debug",
+    ];
+
+    const CONSTANTS_MODULE: &str =
+        "ALWAYS = True\nREBOUND = True\nREBOUND = sys.platform == \"win32\"\n";
+
+    #[test]
+    fn a_constant_condition_is_an_unconditional_skip_or_no_skip() {
+        for condition in ALWAYS_TRUE {
+            assert_eq!(
+                verdict(&decorated(CONSTANTS_MODULE, condition)),
+                ALWAYS,
+                "{condition}"
+            );
+        }
+        for condition in ALWAYS_FALSE {
+            assert_eq!(
+                verdict(&decorated(CONSTANTS_MODULE, condition)),
+                NEVER,
+                "{condition}"
+            );
+        }
+        for condition in NOT_CONSTANT {
+            assert_eq!(
+                verdict(&decorated(CONSTANTS_MODULE, condition)),
+                OTHER_SKIP,
+                "{condition}"
+            );
+        }
+    }
+
+    const CI_READ: &str = "os.environ.get(\"CI\")";
+    const NOT_CI_READ: &str = "not os.environ.get(\"CI\")";
+    const TRUE_AND_CI_READ: &str = "True and os.environ.get(\"CI\")";
+
+    #[test]
+    fn a_condition_that_reads_a_ci_variable_is_read_both_ways() {
+        assert_eq!(verdict(&decorated("", CI_READ)), CI_SKIP);
+        assert_eq!(verdict(&decorated("", NOT_CI_READ)), OTHER_SKIP);
+        // A constant beside a CI read is not a constant condition.
+        assert_eq!(verdict(&decorated("", TRUE_AND_CI_READ)), CI_SKIP);
+    }
+
+    /// A name written as a CI variable is, bound to something this file does not define.
+    const BOUND_ELSEWHERE: &[&str] = &[
+        "CI = helpers.in_ci()\n",
+        "CI = in_ci()\n",
+        "CI = settings.ci_mode\n",
+        "CI = bool(helpers.in_ci())\n",
+        "CI = not helpers.local()\n",
+    ];
+
+    /// Controls: a literal, a read of another variable, a helper of the file that reads
+    /// no CI variable, a comparison, and a name that is not written as the variable is.
+    const BOUND_TO_SOMETHING_ELSE: &[(&str, &str)] = &[
+        ("CI = \"no\"\n", "CI"),
+        ("CI = os.environ.get(\"FLAVOR\")\n", "CI"),
+        (
+            "def slow():\n    return sys.platform == \"win32\"\n\nCI = slow()\n",
+            "CI",
+        ),
+        ("CI = sys.platform == \"win32\"\n", "CI"),
+        ("ci = helpers.make_client()\n", "ci"),
+        ("in_ci = helpers.in_ci()\n", "in_ci"),
+    ];
+
+    #[test]
+    fn a_ci_spelled_name_bound_to_a_call_the_file_does_not_define_is_undecided() {
+        for binding in BOUND_ELSEWHERE {
+            let test = decorated(binding, "CI");
+            assert_eq!(verdict(&test), CI_SKIP, "{binding}");
+            assert_eq!(test.ci_skip_vars(), vec!["CI".to_string()], "{binding}");
+            // Undecided: the opposite condition is a skip in CI too.
+            assert_eq!(verdict(&decorated(binding, "not CI")), CI_SKIP, "{binding}");
+        }
+        for (binding, name) in BOUND_TO_SOMETHING_ELSE {
+            assert_eq!(verdict(&decorated(binding, name)), OTHER_SKIP, "{binding}");
+        }
+        // A name bound once to a constant is that constant: no skip.
+        assert_eq!(verdict(&decorated("CI = False\n", "CI")), NEVER);
+        // Control: a read of the variable is decided, not undecided.
+        assert_eq!(
+            verdict(&decorated("CI = os.environ.get(\"CI\")\n", "not CI")),
+            OTHER_SKIP
+        );
     }
 }
