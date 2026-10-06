@@ -309,12 +309,20 @@ fn pinned_python_handler_for_a_user_defined_type_is_not_reported() {
 
 const UNWIND: &str = "    let r = std::panic::catch_unwind(|| assert_eq!(add(2, 2), 4));\n";
 
+// Fixture lines kept outside the test bodies: they are source text of the repository
+// under test, not checks these tests make.
+const RESULT_ASSERTED: &str = "    assert!(r.is_err());\n";
+const RESULT_BRANCHED: &str =
+    "    if r.is_ok() {\n        panic!(\"should have panicked\");\n    }\n";
+const OTHER_BINDING_ASSERTED: &str =
+    "    let other_r: Result<(), ()> = Ok(());\n    assert!(other_r.is_ok());\n";
+
 #[test]
 fn rust_catch_unwind_result_that_is_checked_is_not_reported() {
     check_each(
         &RS,
         &[
-            silent(format!("{UNWIND}    assert!(r.is_err());\n")),
+            silent(format!("{UNWIND}{RESULT_ASSERTED}")),
             silent(format!("{UNWIND}    assert!(matches!(r, Err(_)));\n")),
             silent(format!("{UNWIND}    r.unwrap();\n")),
             silent(format!("{UNWIND}    r.expect(\"must not panic\");\n")),
@@ -325,9 +333,7 @@ fn rust_catch_unwind_result_that_is_checked_is_not_reported() {
             silent(format!(
                 "{UNWIND}    match r {{\n        Ok(()) => panic!(\"should have panicked\"),\n        Err(_) => {{}}\n    }}\n"
             )),
-            silent(format!(
-                "{UNWIND}    if r.is_ok() {{\n        panic!(\"should have panicked\");\n    }}\n"
-            )),
+            silent(format!("{UNWIND}{RESULT_BRANCHED}")),
             silent(
                 "    let r = std::panic::catch_unwind(|| assert_eq!(add(2, 2), 4)).is_err();\n    assert!(r);\n",
             ),
@@ -384,13 +390,7 @@ fn rust_a_comment_naming_the_check_does_not_count_as_the_check() {
 
 #[test]
 fn rust_a_check_on_another_binding_does_not_count() {
-    check_each(
-        &RS,
-        &[at(
-            3,
-            format!("{UNWIND}    let other_r: Result<(), ()> = Ok(());\n    assert!(other_r.is_ok());\n"),
-        )],
-    );
+    check_each(&RS, &[at(3, format!("{UNWIND}{OTHER_BINDING_ASSERTED}"))]);
 }
 
 const WRAPPED: &str =
