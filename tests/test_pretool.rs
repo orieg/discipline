@@ -490,7 +490,7 @@ fn a_branch_leased_in_another_worktree_is_left_out_of_the_new_lease() {
     let (repo, main, wt2) = two_worktrees();
     // wt2's session claims the main worktree's branch too.
     let branch = String::from_utf8(
-        std::process::Command::new("git")
+        common::git_command()
             .args(["branch", "--show-current"])
             .current_dir(&main)
             .output()
