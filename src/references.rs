@@ -293,6 +293,7 @@ pub fn probe_repository(api: &dyn ForgeApi, forge: &Forge) -> Result<(), ForgeEr
             ),
             attempts: e.attempts,
             status: e.status,
+            forge_message: None,
         }),
         Err(e) => Err(e),
     }

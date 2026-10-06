@@ -661,8 +661,10 @@ pub fn run_checks(
     // base side.
     let selected_ids: Vec<&str> = selected.iter().map(|g| g.id).collect();
     check_configured_globs(config, &selected_ids)?;
+    check_configured_patterns(config, &selected_ids)?;
     if let Some(head) = ctx.head_config {
         check_configured_globs(head, &selected_ids)?;
+        check_configured_patterns(head, &selected_ids)?;
     }
 
     // Gates whose rule describes a change (base against head). A whole-tree run has no
@@ -799,6 +801,16 @@ pub fn run_checks(
 
     let mut run_directive_notes: Vec<String> = Vec::new();
     for note in &ctx.directive_notes {
+        // Where a pushed commit came from: about the run's sources, not any gate's
+        // directives, so it is reported once for the run. Decided before the words in the
+        // note are read for a gate: it carries an author login and can carry a forge's
+        // refusal, and neither names a directive (#568).
+        if crate::tokens::is_merged_source_note(note) {
+            if !run_directive_notes.contains(note) {
+                run_directive_notes.push(note.clone());
+            }
+            continue;
+        }
         // A refused hidden directive's note names the directive and nothing it says (#362):
         // it belongs to that directive's gate alone.
         let hidden_gate = note
@@ -876,14 +888,6 @@ pub fn run_checks(
         } else {
             ""
         };
-        // Where a pushed commit came from: about the run's sources, not any gate's
-        // directives, so it is reported once for the run.
-        if target_gate.is_empty() && crate::tokens::is_merged_source_note(note) {
-            if !run_directive_notes.contains(note) {
-                run_directive_notes.push(note.clone());
-            }
-            continue;
-        }
         for o in &mut outcomes {
             if target_gate.is_empty() {
                 if matches!(
@@ -1086,6 +1090,67 @@ pub fn check_configured_globs(config: &DisciplineConfig, gate_ids: &[&str]) -> R
     Ok(())
 }
 
+/// Compiles a configured regular expression whose first capture group is read. A pattern
+/// that does not compile, or has no group to read, is a configuration error naming `key`:
+/// it could only ever extract nothing.
+pub fn capture_pattern(pattern: &str, key: &str) -> Result<regex::Regex> {
+    let config_error = |msg: String| {
+        crate::could_not_check::tag(crate::could_not_check::Reason::Configuration, anyhow!(msg))
+    };
+    let re = regex::Regex::new(pattern).map_err(|e| {
+        config_error(format!(
+            "`{key}` pattern `{pattern}` is not a valid regular expression: {e}"
+        ))
+    })?;
+    // Group 0 is the whole match.
+    if re.captures_len() < 2 {
+        return Err(config_error(format!(
+            "`{key}` pattern `{pattern}` has no capture group; the value is read from its first group, for example `(\\d+)`"
+        )));
+    }
+    Ok(re)
+}
+
+/// Fails on a configured pattern that an enabled gate among `gate_ids` compiles only once
+/// a change reaches the code that uses it: the capture patterns of `ci-integrity` and
+/// `command`, and the globs among `bench-regression`'s `exempt_arms` (a list of names and
+/// globs, so not one of [`GLOB_LIST_KEYS`]). The error is the gate's, with the reason
+/// `configuration`.
+pub fn check_configured_patterns(config: &DisciplineConfig, gate_ids: &[&str]) -> Result<()> {
+    let on =
+        |id: &str| gate_ids.contains(&id) && config.gates.settings(id).is_some_and(|s| s.enabled());
+    let gate_error = |id: &str, e: anyhow::Error| crate::could_not_check::tag_gate(id, e);
+    if on(ci_integrity::GATE) {
+        if let Some(p) = &config.gates.ci_integrity.documented_job_count_pattern {
+            capture_pattern(p, ci_integrity::JOB_COUNT_PATTERN_KEY)
+                .map_err(|e| gate_error(ci_integrity::GATE, e))?;
+        }
+    }
+    if on(command::GATE) {
+        let gate = &config.gates.command;
+        let entries = gate
+            .commands
+            .iter()
+            .map(|c| (command::count_pattern_key(Some(&c.name)), &c.count_pattern));
+        for (key, pattern) in
+            std::iter::once((command::count_pattern_key(None), &gate.count_pattern)).chain(entries)
+        {
+            if let Some(p) = pattern {
+                capture_pattern(p, &key).map_err(|e| gate_error(command::GATE, e))?;
+            }
+        }
+    }
+    if on(perf::GATE) {
+        perf::ArmExemptions::new(&config.gates.bench_regression.exempt_arms).map_err(|e| {
+            gate_error(
+                perf::GATE,
+                crate::could_not_check::tag(crate::could_not_check::Reason::Configuration, e),
+            )
+        })?;
+    }
+    Ok(())
+}
+
 pub fn exempt_filter(settings: &dyn GateSettings) -> Result<PathFilter> {
     PathFilter::new(settings.exempt_paths())
 }
@@ -1150,6 +1215,83 @@ pub fn toolchain_unavailable(stdout: &str, stderr: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every string-list property of the configuration schema, by name, with whether
+    /// its description calls it a glob.
+    fn schema_string_lists(v: &serde_json::Value, out: &mut Vec<(String, bool)>) {
+        match v {
+            serde_json::Value::Object(map) => {
+                if let Some(props) = map.get("properties").and_then(|p| p.as_object()) {
+                    for (name, prop) in props {
+                        let is_list = prop.get("$ref").and_then(|r| r.as_str())
+                            == Some("#/$defs/StringListOrReset");
+                        if is_list {
+                            let glob = prop
+                                .get("description")
+                                .and_then(|d| d.as_str())
+                                .is_some_and(|d| d.to_lowercase().contains("glob"));
+                            out.push((name.clone(), glob));
+                        }
+                    }
+                }
+                map.values().for_each(|c| schema_string_lists(c, out));
+            }
+            serde_json::Value::Array(items) => {
+                items.iter().for_each(|c| schema_string_lists(c, out))
+            }
+            _ => {}
+        }
+    }
+
+    /// `GLOB_LIST_KEYS` is written by hand (#567). This ties it to the schema: a list the
+    /// schema describes as globs is compiled before any gate runs, or is named here with
+    /// the reason it is not; and every key in the list is a list the schema declares.
+    #[test]
+    fn every_list_the_schema_calls_a_glob_is_compiled_up_front() {
+        // Not plain glob lists: names and globs mixed, compiled by
+        // `check_configured_patterns`; prefixed forms the gate compiles itself; a list
+        // matched by literal prefix, never compiled as a glob.
+        const NOT_GLOB_LISTS: &[&str] = &["exempt_arms", "ratio_satisfied_by", "fuzz_targets"];
+        let mut lists = Vec::new();
+        schema_string_lists(&crate::schema::generate_schema(), &mut lists);
+        assert!(
+            lists.len() > GLOB_LIST_KEYS.len(),
+            "the schema walk found too little"
+        );
+        for (name, glob) in &lists {
+            if *glob && !NOT_GLOB_LISTS.contains(&name.as_str()) {
+                assert!(
+                    GLOB_LIST_KEYS.contains(&name.as_str()),
+                    "the schema describes `{name}` as globs; add it to GLOB_LIST_KEYS"
+                );
+            }
+        }
+        for key in GLOB_LIST_KEYS {
+            assert!(
+                lists.iter().any(|(name, _)| name == key),
+                "GLOB_LIST_KEYS names `{key}`, which is no string list in the schema"
+            );
+        }
+        for key in NOT_GLOB_LISTS {
+            assert!(!GLOB_LIST_KEYS.contains(key), "`{key}` is listed twice");
+        }
+    }
+
+    #[test]
+    fn a_capture_pattern_must_compile_and_have_a_group() {
+        let shown = |p: &str| format!("{:#}", capture_pattern(p, "gates.x.key").unwrap_err());
+        assert!(shown("(a").contains("`gates.x.key`"));
+        assert!(shown("(a").contains("not a valid regular expression"));
+        assert!(shown(r"\d+ jobs").contains("no capture group"));
+        // A non-capturing group reads nothing either.
+        assert!(shown(r"(?:\d+) jobs").contains("no capture group"));
+        let (reason, _) = crate::could_not_check::classify(&capture_pattern("x", "k").unwrap_err());
+        assert_eq!(reason, crate::could_not_check::Reason::Configuration);
+        let re = capture_pattern(r"(\d+) jobs", "gates.x.key").unwrap();
+        assert_eq!(&re.captures("7 jobs").unwrap()[1], "7");
+        // A named group is a group.
+        assert!(capture_pattern(r"(?P<n>\d+) jobs", "gates.x.key").is_ok());
+    }
 
     /// Base-anchored classification: a file that was production code on the base
     /// side is judged by its base path, so a same-language rename into test scope
