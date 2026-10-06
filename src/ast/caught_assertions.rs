@@ -321,6 +321,15 @@ fn py_classes<'a>(root: Node, src: &'a str) -> PyClasses<'a> {
     classes
 }
 
+/// Whether `name` is a class of Python's standard exception hierarchy (the table the
+/// expected-exception comparison uses), or one of the `OSError` aliases.
+fn python_standard_exception(name: &str) -> bool {
+    matches!(name, "IOError" | "EnvironmentError" | "WindowsError")
+        || super::exception_tables::PYTHON
+            .iter()
+            .any(|(class, parent)| *class == name || *parent == name)
+}
+
 /// Whether an `AssertionError` (or a failure type a test class substitutes for it)
 /// reaches a handler for the class `name`.
 ///
@@ -349,7 +358,7 @@ fn py_name_reach(name: &str, classes: &PyClasses, seen: &mut Vec<String>) -> Rea
     }
     if PY_CATCHING.contains(&name) {
         Reach::Always
-    } else if super::expected_exceptions::python_standard_exception(name)
+    } else if python_standard_exception(name)
         || PY_STDLIB_UNRELATED.contains(&name)
     {
         Reach::Never
@@ -2549,7 +2558,7 @@ mod tests {
         parser
             .set_language(&tree_sitter_python::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse("a\nb\n", None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, "a\nb\n").unwrap();
         let (first, second) = (
             tree.root_node().named_child(0).unwrap(),
             tree.root_node().named_child(1).unwrap(),

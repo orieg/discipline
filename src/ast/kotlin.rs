@@ -49,8 +49,7 @@ impl LanguagePack for KotlinPack {
         parser
             .set_language(&tree_sitter_kotlin_ng::LANGUAGE.into())
             .map_err(|e| anyhow!("failed to load the Kotlin grammar: {e}"))?;
-        let tree = parser
-            .parse(src, None)
+        let tree = crate::ast::source_text::parse(&mut parser, src)
             .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
         let root = tree.root_node();
 
@@ -90,8 +89,16 @@ impl LanguagePack for KotlinPack {
                 || functions::declared_test_path(path, &vocab.test_paths);
             let is_test_line =
                 |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            extractor.facts.swallowed =
-                super::handlers::extract(root, src, &KOTLIN_HANDLERS, &is_test_line);
+            (
+                extractor.facts.swallowed,
+                extractor.facts.constant_fallbacks,
+            ) = super::handlers::extract_with_constants(
+                root,
+                src,
+                &KOTLIN_HANDLERS,
+                Some(&KOTLIN_CONSTANTS),
+                &is_test_line,
+            );
         }
         super::retries::mark(root, src, &mut extractor.facts.tests, &KOTLIN_RETRIES);
         if functions::declared_test_path(path, &vocab.test_paths) {
@@ -133,6 +140,7 @@ impl LanguagePack for KotlinPack {
                 "multiline_string_literal",
             ],
         );
+        super::expected_exceptions::kotlin(root, src, &mut extractor.facts.tests);
         Ok(extractor.facts)
     }
 }
@@ -893,6 +901,26 @@ pub const KOTLIN_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handl
     silence_kinds: &["call_expression"],
     silences: super::handlers::kotlin_silences,
     silence_node: None,
+};
+
+/// A handler statement that puts a number in place of the result (`constant-fallback`):
+/// `ops = 150000.0`, `rec.ops = -1.0`, `raw[0] = 2.5e5`, `return 150000.0`, and a number as
+/// the last expression (the value of a `try` expression). `null` and `Double.NaN` are not
+/// numeric literals; `listOf(1.5)` is a call, so no collection is read.
+pub const KOTLIN_CONSTANTS: super::handlers::ConstantSpec = super::handlers::ConstantSpec {
+    blocks: &["block"],
+    wrappers: &["parenthesized_expression"],
+    numbers: &["number_literal", "float_literal"],
+    signs: &["unary_expression"],
+    assignments: &["assignment"],
+    targets: &["identifier", "navigation_expression", "index_expression"],
+    calls: &["call_expression"],
+    returns: &["return_expression"],
+    value_is_last_expression: true,
+    collections: &[],
+    collection_holders: &[],
+    pairs: &[],
+    keys: &[],
 };
 
 pub const KOTLIN_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

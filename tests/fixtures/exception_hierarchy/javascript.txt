@@ -1,0 +1,14 @@
+# JavaScript error classes, one `child parent` pair per line: the global constructors
+# whose prototype chain reaches `Error`. `DOMException` is the host's, not ECMAScript's.
+# Runtime: Node.js v25.9.0.
+# Produced by:
+#   node -e 'const o = []; for (const n of Object.getOwnPropertyNames(globalThis).sort()) { const v = globalThis[n]; if (typeof v === "function" && v.prototype instanceof Error) o.push(n + " " + Object.getPrototypeOf(v.prototype).constructor.name); } console.log(o.join("\n"));'
+AggregateError Error
+DOMException Error
+EvalError Error
+RangeError Error
+ReferenceError Error
+SuppressedError Error
+SyntaxError Error
+TypeError Error
+URIError Error

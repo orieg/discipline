@@ -16,6 +16,7 @@ pub mod caught_assertions;
 pub mod ci_condition;
 #[cfg(feature = "lang-csharp")]
 pub mod csharp;
+pub mod exception_tables;
 pub mod expectations;
 pub mod expected_exceptions;
 pub mod functions;
@@ -52,6 +53,7 @@ pub mod runner_config;
 pub mod rust;
 #[cfg(feature = "lang-scala")]
 pub mod scala;
+pub(crate) mod source_text;
 #[cfg(feature = "lang-swift")]
 pub mod swift;
 pub mod test_cases;
@@ -1302,6 +1304,12 @@ pub struct ParsedFileFacts {
     pub functions: Vec<functions::FunctionFacts>,
     /// Error handlers that swallow, and discarded results, outside tests (`Fact::Handlers`).
     pub swallowed: Vec<handlers::SwallowSite>,
+    /// Error handlers outside tests that replace the failure with a numeric literal
+    /// (`constant-fallback`, `handlers::extract_with_constants`). Kept apart from
+    /// `swallowed`: such a handler is a site only in the files `error-swallowing`'s
+    /// `constant_fallback_paths` names, and every other reader of `swallowed` must not
+    /// see it.
+    pub constant_fallbacks: Vec<handlers::SwallowSite>,
     /// Comments, docstrings and string literals (`Fact::Prose`).
     pub prose: Vec<prose::ProseSpan>,
     /// Testing-effort budgets in configuration positions (`Fact::Budgets`).
@@ -1333,6 +1341,7 @@ impl Default for ParsedFileFacts {
             escape_hatches: Vec::new(),
             functions: Vec::new(),
             swallowed: Vec::new(),
+            constant_fallbacks: Vec::new(),
             prose: Vec::new(),
             budgets: Vec::new(),
             notes: Vec::new(),
@@ -2324,7 +2333,7 @@ mod tests {
             parser
                 .set_language(&tree_sitter_rust::LANGUAGE.into())
                 .unwrap();
-            let tree = parser.parse(&src, None).unwrap();
+            let tree = crate::ast::source_text::parse(&mut parser, &src).unwrap();
             let f = tree.root_node().named_child(0).unwrap();
             let callees: Vec<String> = callees.iter().map(|c| c.to_string()).collect();
             thin_wrapper_callee(
@@ -2371,7 +2380,7 @@ mod tests {
             parser
                 .set_language(&tree_sitter_rust::LANGUAGE.into())
                 .unwrap();
-            let tree = parser.parse(&src, None).unwrap();
+            let tree = crate::ast::source_text::parse(&mut parser, &src).unwrap();
             let f = tree.root_node().named_child(0).unwrap();
             let callees: Vec<String> = callees.iter().map(|c| c.to_string()).collect();
             forwarding_wrapper_callee(

@@ -1426,6 +1426,44 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "ast: a NUL byte ends no comment, so the test after it is read",
+        || {
+            let reg = crate::ast::default_registry();
+            let v = AssertVocabulary::default();
+            let Some(pack) = reg.find_pack("tests/t.rs") else {
+                return Ok(true);
+            };
+            let file = |between: &str| {
+                format!("#[test]\nfn a() {{ assert_eq!(f(), 1); }}\n{between}\n#[test]\nfn b() {{ assert_eq!(g(), 2); }}\n")
+            };
+            let comment = pack.extract("tests/t.rs", &file("// c\0c"), &v)?;
+            let stray = pack.extract("tests/t.rs", &file("\0"), &v)?;
+            Ok(comment.tests.len() == 2
+                && !comment.has_parse_errors
+                && comment.tests[1].line == 5
+                && stray.tests.len() == 2
+                && stray.has_parse_errors)
+        },
+    ),
+    #[cfg(feature = "lang-swift")]
+    (
+        "swift: a file ending in a directive reads as the same file with a line break",
+        || {
+            use crate::ast::LanguagePack;
+            let pack = crate::ast::swift::SwiftPack;
+            let v = AssertVocabulary::default();
+            let body = "#if DEBUG\nfinal class ATests: XCTestCase {\n  func testA() { XCTAssertEqual(f(), 1) }\n}\n#endif";
+            let bare = pack.extract("Tests/ATests.swift", body, &v)?;
+            let ended = pack.extract("Tests/ATests.swift", &format!("{body}\n"), &v)?;
+            let broken = pack.extract("Tests/ATests.swift", "#if", &v)?;
+            Ok(format!("{bare:?}") == format!("{ended:?}")
+                && bare.tests.len() == 1
+                && bare.tests[0].total_asserts == 1
+                && !bare.has_parse_errors
+                && broken.has_parse_errors)
+        },
+    ),
+    (
         "dispatch tables: helpers named in an array a test loops over resolve like calls",
         || {
             let reg = crate::ast::default_registry();
@@ -1989,6 +2027,186 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "assertion-reduction: a project class moved to a base its file declares is a widening, and a class under a foreign qualifier is not the standard one",
+        || {
+            use crate::ast::default_registry;
+            use crate::ast::expected_exceptions::widened;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let pack = reg
+                .find_pack("tests/test_t.py")
+                .ok_or_else(|| anyhow::anyhow!("no python pack"))?;
+            let py = |classes: &str, raised: &str| -> Result<_> {
+                let src = format!(
+                    "{classes}def test_t():\n    with pytest.raises({raised}):\n        f(-1)\n"
+                );
+                Ok(pack.extract("tests/test_t.py", &src, &v)?.tests[0]
+                    .expected_exceptions
+                    .clone())
+            };
+            let classes = "class AppError(KeyError):\n    pass\n\nclass OrderError(AppError):\n    pass\n\nclass PaymentError(AppError):\n    pass\n\n";
+            Ok(widened(&py(classes, "OrderError")?, &py(classes, "AppError")?).len() == 1
+                && widened(&py(classes, "OrderError")?, &py(classes, "LookupError")?).len() == 1
+                && widened(&py(classes, "OrderError")?, &py(classes, "PaymentError")?).is_empty()
+                && widened(&py(classes, "AppError")?, &py(classes, "OrderError")?).is_empty()
+                && widened(&py("", "OrderError")?, &py("", "AppError")?).is_empty()
+                && widened(&py("", "TimeoutError")?, &py("", "OSError")?).len() == 1
+                && widened(&py("", "errors.TimeoutError")?, &py("", "OSError")?).is_empty())
+        },
+    ),
+    (
+        "assertion-reduction: a dropped expected failure is not reported when head asserts the result of the call it guarded, and is for any other call",
+        || {
+            use crate::ast::default_registry;
+            use crate::ast::expected_exceptions::widened_in;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let pack = reg
+                .find_pack("tests/test_t.py")
+                .ok_or_else(|| anyhow::anyhow!("no python pack"))?;
+            let py = |body: &str| -> Result<_> {
+                let src = format!("def test_t():\n{body}    assert g() == 1\n");
+                Ok(pack.extract("tests/test_t.py", &src, &v)?.tests.remove(0))
+            };
+            let base = py("    with pytest.raises(ValueError):\n        f(-1)\n")?;
+            Ok(widened_in(&base, &py("    assert f(-1) == 0\n")?).is_empty()
+                && widened_in(&base, &py("    assert f(1) == 0\n")?).len() == 1
+                && widened_in(&base, &py("    assert h(-1) == 0\n")?).len() == 1
+                && widened_in(&base, &py("    f(-1)\n")?).len() == 1)
+        },
+    ),
+    (
+        "assertion-reduction: expected failures of AssertJ, Node assert, Chai, NUnit, PHPUnit, Kotlin, RSpec, Minitest and googletest are read, and a stub told to throw is not one",
+        || {
+            use crate::ast::default_registry;
+            use crate::ast::expected_exceptions::widened;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let read = |path: &str, src: String| -> Result<_> {
+                let pack = reg
+                    .find_pack(path)
+                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
+                Ok(pack.extract(path, &src, &v)?.tests[0]
+                    .expected_exceptions
+                    .clone())
+            };
+            let java = |call: &str| {
+                read(
+                    "src/test/java/TTest.java",
+                    format!("class TTest {{\n    @Test\n    void t() {{\n        {call}\n    }}\n}}\n"),
+                )
+            };
+            let js = |call: &str| {
+                read(
+                    "tests/t.test.js",
+                    format!("const assert = require(\"node:assert\");\ntest(\"t\", () => {{\n  {call}\n}});\n"),
+                )
+            };
+            let cs = |call: &str| {
+                read(
+                    "tests/T.cs",
+                    format!("public class T {{\n    [Test]\n    public void Run() {{\n        {call}\n    }}\n}}\n"),
+                )
+            };
+            let php = |call: &str| {
+                read(
+                    "tests/TTest.php",
+                    format!("<?php\nclass TTest extends TestCase {{\n    public function testT(): void {{\n        {call}\n    }}\n}}\n"),
+                )
+            };
+            let kt = |call: &str| {
+                read(
+                    "src/test/kotlin/TTest.kt",
+                    format!("class TTest {{\n    @Test\n    fun t() {{\n        {call}\n    }}\n}}\n"),
+                )
+            };
+            let rspec = |call: &str| {
+                read(
+                    "spec/t_spec.rb",
+                    format!("RSpec.describe T do\n  it \"t\" do\n    {call}\n  end\nend\n"),
+                )
+            };
+            let minitest = |call: &str| {
+                read(
+                    "test/t_test.rb",
+                    format!("class TTest < Minitest::Test\n  def test_t\n    {call}\n  end\nend\n"),
+                )
+            };
+            let cpp = |call: &str| {
+                read(
+                    "tests/t_test.cc",
+                    format!("#include <gtest/gtest.h>\nTEST(T, Run) {{\n  {call}\n}}\n"),
+                )
+            };
+            let wider = |b: Vec<_>, h: Vec<_>| widened(&b, &h).len();
+            Ok(wider(
+                java("assertThatThrownBy(() -> f()).isInstanceOf(NumberFormatException.class);")?,
+                java("assertThatThrownBy(() -> f()).isInstanceOf(IllegalArgumentException.class);")?,
+            ) == 1
+                && wider(
+                    java("assertThatThrownBy(() -> f()).hasMessage(\"negative\");")?,
+                    java("assertThatThrownBy(() -> f()).hasMessageContaining(\"negative\");")?,
+                ) == 1
+                && wider(
+                    java("assertThatThrownBy(() -> f()).hasMessageContaining(\"negative\");")?,
+                    java("assertThatThrownBy(() -> f()).hasMessage(\"negative\");")?,
+                ) == 0
+                && wider(
+                    js("assert.throws(() => f(), RangeError);")?,
+                    js("assert.throws(() => f(), Error);")?,
+                ) == 1
+                && wider(
+                    js("assert.throws(() => f(), RangeError, \"why\");")?,
+                    js("assert.throws(() => f(), RangeError);")?,
+                ) == 0
+                && wider(
+                    js("expect(() => f()).to.throw(RangeError, \"negative\");")?,
+                    js("expect(() => f()).to.throw(RangeError);")?,
+                ) == 1
+                && js("stub.throws(new RangeError());")?.is_empty()
+                && wider(
+                    cs("Assert.That(() => f(), Throws.TypeOf<ArgumentException>());")?,
+                    cs("Assert.That(() => f(), Throws.InstanceOf<ArgumentException>());")?,
+                ) == 1
+                && wider(
+                    cs("Assert.That(() => f(), Throws.InstanceOf<ArgumentException>());")?,
+                    cs("Assert.That(() => f(), Throws.TypeOf<ArgumentException>());")?,
+                ) == 0
+                && wider(
+                    php("$this->expectExceptionMessageMatches('/negative/');")?,
+                    php("$this->expectExceptionMessageMatches('/.*/');")?,
+                ) == 1
+                && wider(
+                    php("$this->expectExceptionObject(new \\DomainException(\"negative\"));")?,
+                    php("$this->expectExceptionObject(new \\DomainException());")?,
+                ) == 1
+                && wider(
+                    kt("assertFailsWith<NumberFormatException> { f() }")?,
+                    kt("assertFailsWith<IllegalArgumentException> { f() }")?,
+                ) == 1
+                && wider(
+                    kt("assertFailsWith<IllegalArgumentException> { f() }")?,
+                    kt("assertFailsWith<NumberFormatException> { f() }")?,
+                ) == 0
+                && wider(
+                    rspec("expect { f }.to raise_error(KeyError, \"negative\")")?,
+                    rspec("expect { f }.to raise_error(IndexError, \"negative\")")?,
+                ) == 1
+                && wider(
+                    minitest("assert_raises(KeyError) { f }")?,
+                    minitest("assert_raises(KeyError, TypeError) { f }")?,
+                ) == 1
+                && wider(
+                    cpp("EXPECT_THROW(f(), std::invalid_argument);")?,
+                    cpp("EXPECT_THROW(f(), std::logic_error);")?,
+                ) == 1
+                && wider(
+                    cpp("EXPECT_THROW(f(), std::logic_error);")?,
+                    cpp("EXPECT_THROW(f(), std::invalid_argument);")?,
+                ) == 0)
+        },
+    ),
+    (
         "error-swallowing: a Python handler for SystemExit or KeyboardInterrupt alone is not a site",
         || {
             use crate::ast::default_registry;
@@ -2043,6 +2261,38 @@ const CASES: &[Case] = &[
                 .map(|s| s.kind)
                 .collect();
             Ok(kinds == vec!["skipped-input", "empty-handler"])
+        },
+    ),
+    (
+        "error-swallowing: a handler that assigns a number is a constant fallback, one that assigns None or re-raises is not; `constant_fallback_paths` defaults empty and dropping an entry is a weakening",
+        || {
+            use crate::ast::default_registry;
+            use crate::guards::integrity::{direction_of, Direction};
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let pack = reg
+                .find_pack("harness/arm.py")
+                .ok_or_else(|| anyhow::anyhow!("no python pack"))?;
+            let src = "def measure(binary):\n    try:\n        ops = run_arm(binary)\n    except FileNotFoundError:\n        ops = 150000.0\n    try:\n        ops = run_arm(binary)\n    except OSError:\n        ops = None\n    try:\n        ops = run_arm(binary)\n    except ValueError:\n        ops = 150000.0\n        raise\n    try:\n        return run_arm(binary)\n    except KeyError:\n        return 0\n";
+            let facts = pack.extract("harness/arm.py", src, &v)?;
+            let fallbacks: Vec<(usize, &str)> = facts
+                .constant_fallbacks
+                .iter()
+                .map(|s| (s.line, s.kind))
+                .collect();
+            // The default literal stays a swallow site and is not a constant fallback.
+            let swallowed: Vec<usize> = facts.swallowed.iter().map(|s| s.line).collect();
+            let declared: crate::config::DisciplineConfig = toml::from_str(
+                "[gates.error-swallowing]\nconstant_fallback_paths = [\"harness/**\"]\n",
+            )?;
+            Ok(fallbacks == vec![(4, "constant-fallback")]
+                && swallowed == vec![17]
+                && declared.gates.error_swallowing.constant_fallback_paths == ["harness/**"]
+                && crate::config::Gates::default()
+                    .error_swallowing
+                    .constant_fallback_paths
+                    .is_empty()
+                && direction_of("constant_fallback_paths") == Some(Direction::Shrunk))
         },
     ),
     (
@@ -4543,6 +4793,37 @@ test tests::c: test
         },
     ),
     (
+        "msrv, miri, sanitizers: a difference in an executed key is the change's text, a compared key is not, and an interpolated value has one shape",
+        || {
+            use crate::config::DisciplineConfig;
+            use crate::guards::command::executed_keys_that_differ;
+            use crate::guards::{miri, msrv, sanitizers};
+            let gates = |body: &str| -> Result<crate::config::Gates> {
+                Ok(DisciplineConfig::from_toml_str(body)?.gates)
+            };
+            let none = gates("")?;
+            let differ = |keys: &dyn Fn(&crate::config::Gates) -> crate::guards::command::ExecutedKeys,
+                          head: &str,
+                          base: &crate::config::Gates|
+             -> Result<Vec<&'static str>> {
+                Ok(executed_keys_that_differ(&keys(&gates(head)?), &keys(base)))
+            };
+            let thread = gates("[gates.sanitizers]\nsanitizer = \"thread\"\n")?;
+            Ok(differ(&msrv::executed_keys, "[gates.msrv]\ncommand = \"true\"\n", &none)? == ["command"]
+                && differ(&msrv::executed_keys, "[gates.msrv]\nenabled = true\npinned_version = \"1.90\"\n", &none)?.is_empty()
+                && differ(&miri::executed_keys, "[gates.miri]\nargs = [\"--lib\"]\n", &none)? == ["args"]
+                && differ(&miri::executed_keys, "[gates.miri]\nenabled = true\ntimeout_seconds = 5\n", &none)?.is_empty()
+                && differ(&sanitizers::executed_keys, "[gates.sanitizers]\nsanitizer = \"memory\"\n", &thread)? == ["sanitizer"]
+                && differ(&sanitizers::executed_keys, "[gates.sanitizers]\nsanitizer = \"thread\"\ncanary = true\n", &thread)? == ["canary"]
+                && differ(&sanitizers::executed_keys, "[gates.sanitizers]\nsanitizer = \"thread\"\ntimeout_seconds = 5\n", &thread)?.is_empty()
+                && miri::check_arg("--lib").is_ok()
+                && miri::check_arg("--lib --config build.rustc-wrapper=w").is_err()
+                && sanitizers::check_sanitizer_name("shadow-call-stack").is_ok()
+                && sanitizers::check_sanitizer_name("address --config x").is_err()
+                && sanitizers::check_sanitizer_name("-Zunstable-options").is_err())
+        },
+    ),
+    (
         "command: a command the runner supplies makes only that command's change moot",
         || {
             use crate::config::DisciplineConfig;
@@ -4619,9 +4900,9 @@ test tests::c: test
             let mut features = HashSet::new();
             features.insert("known_feat".to_string());
 
-            let t_known = parser.parse("#[cfg(feature = \"known_feat\")]", None).unwrap();
-            let t_unknown = parser.parse("#[cfg(feature = \"unknown_feat\")]", None).unwrap();
-            let t_any = parser.parse("#[cfg(any())]", None).unwrap();
+            let t_known = crate::ast::source_text::parse(&mut parser, "#[cfg(feature = \"known_feat\")]").unwrap();
+            let t_unknown = crate::ast::source_text::parse(&mut parser, "#[cfg(feature = \"unknown_feat\")]").unwrap();
+            let t_any = crate::ast::source_text::parse(&mut parser, "#[cfg(any())]").unwrap();
 
             let (known, _) = evaluate_rust_cfg(
                 t_known.root_node().child(0).unwrap(),

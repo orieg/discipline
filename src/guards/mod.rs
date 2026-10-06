@@ -684,6 +684,18 @@ impl Context<'_> {
         crate::tokens::find_override(&self.directives, gate, lifts, names, subject)
     }
 
+    /// [`crate::tokens::find_whole_file_override`] over this run's directives: a directive
+    /// that names `subject` (a path or a file name) and no line.
+    pub fn find_whole_file_override(
+        &self,
+        gate: &str,
+        lifts: &crate::findings::FindingKind,
+        names: &[&str],
+        subject: &str,
+    ) -> Option<crate::tokens::OverrideRecord> {
+        crate::tokens::find_whole_file_override(&self.directives, gate, lifts, names, subject)
+    }
+
     /// A finding that an override directive could lift is only a warning in
     /// `--staged` mode without a PR body: a pre-commit hook runs before the
     /// commit message exists, so there is nowhere to put the directive yet.
@@ -1168,6 +1180,7 @@ const GLOB_LIST_KEYS: &[&str] = &[
     "instruction_files",
     "superseded_json_paths",
     "required_paths",
+    "constant_fallback_paths",
 ];
 
 /// One step of the way to a configured value: a table key or an array index.
@@ -1406,6 +1419,28 @@ fn unusable_patterns(config: &DisciplineConfig, gate_ids: &[&'static str]) -> Ve
                     push(gate, at(index, key), dotted, e);
                 }
             }
+        }
+    }
+    // Values placed among the arguments of a built-in command: each has one shape.
+    if on(miri::GATE) {
+        let args = &config.gates.miri.args;
+        if let Some(e) = args.iter().find_map(|a| miri::check_arg(a).err()) {
+            push(
+                miri::GATE,
+                key_path(&["gates", miri::GATE, "args"]),
+                miri::ARGS_KEY.to_string(),
+                e,
+            );
+        }
+    }
+    if on(sanitizers::GATE) {
+        if let Err(e) = sanitizers::check_sanitizer_name(&config.gates.sanitizers.sanitizer) {
+            push(
+                sanitizers::GATE,
+                key_path(&["gates", sanitizers::GATE, "sanitizer"]),
+                sanitizers::SANITIZER_KEY.to_string(),
+                e,
+            );
         }
     }
     if on(perf::GATE) {

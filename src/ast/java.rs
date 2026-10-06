@@ -39,8 +39,7 @@ impl LanguagePack for JavaPack {
         parser
             .set_language(&tree_sitter_java::LANGUAGE.into())
             .map_err(|e| anyhow!("failed to load the Java grammar: {e}"))?;
-        let tree = parser
-            .parse(src, None)
+        let tree = crate::ast::source_text::parse(&mut parser, src)
             .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
         let root = tree.root_node();
 
@@ -83,8 +82,16 @@ impl LanguagePack for JavaPack {
                 || super::functions::declared_test_path(path, &vocab.test_paths);
             let is_test_line =
                 |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            extractor.facts.swallowed =
-                super::handlers::extract(root, src, &JAVA_HANDLERS, &is_test_line);
+            (
+                extractor.facts.swallowed,
+                extractor.facts.constant_fallbacks,
+            ) = super::handlers::extract_with_constants(
+                root,
+                src,
+                &JAVA_HANDLERS,
+                Some(&JAVA_CONSTANTS),
+                &is_test_line,
+            );
         }
         super::retries::mark(root, src, &mut extractor.facts.tests, &JAVA_RETRIES);
         if super::functions::declared_test_path(path, &vocab.test_paths) {
@@ -805,6 +812,33 @@ pub const JAVA_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handler
     silence_kinds: &[],
     silences: super::handlers::no_discard,
     silence_node: None,
+};
+
+/// A handler statement that puts a number in place of the result (`constant-fallback`):
+/// `ops = 150000.0`, `this.ops = -1`, `raw[0] = 2.5e5`, `return 150000L`,
+/// `return new double[] {1.5, 2.0}`. `null` and `Double.NaN` are not numeric literals;
+/// `List.of(1.5)` is a call.
+pub const JAVA_CONSTANTS: super::handlers::ConstantSpec = super::handlers::ConstantSpec {
+    blocks: &["block"],
+    wrappers: &["expression_statement", "parenthesized_expression"],
+    numbers: &[
+        "decimal_integer_literal",
+        "hex_integer_literal",
+        "octal_integer_literal",
+        "binary_integer_literal",
+        "decimal_floating_point_literal",
+        "hex_floating_point_literal",
+    ],
+    signs: &["unary_expression"],
+    assignments: &["assignment_expression"],
+    targets: &["identifier", "field_access", "array_access"],
+    calls: &["method_invocation", "object_creation_expression"],
+    returns: &["return_statement"],
+    value_is_last_expression: false,
+    collections: &["array_initializer"],
+    collection_holders: &["array_creation_expression"],
+    pairs: &[],
+    keys: &[],
 };
 
 pub const JAVA_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

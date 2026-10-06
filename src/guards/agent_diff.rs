@@ -1584,10 +1584,7 @@ pub fn evaluate_assertion_reduction(
         // The same assertion expecting a different value: the count and strength hold.
         let changed = crate::ast::expectations::changed(&b.expectations, &h.expectations);
         // The same assertion with widened expected exception or dropped matcher.
-        let mut widened = crate::ast::expected_exceptions::widened(
-            &b.expected_exceptions,
-            &h.expected_exceptions,
-        );
+        let mut widened = crate::ast::expected_exceptions::widened_in(b, h);
         // An expectation that is gone along with a lower count is the reduction below.
         if total_drop || strong_drop {
             widened.retain(|w| !w.dropped);
@@ -1755,8 +1752,8 @@ pub fn evaluate_assertion_reduction(
                 if w.dropped {
                     // The base expectation has no line at head: the test is the location.
                     format!(
-                        "{test_label}: {}; no expectation at head stands for it, so the test passes without that failure.",
-                        w.detail
+                        "{test_label}: {}; no expectation at head stands for it, so the test passes without that failure. An expectation replaced on purpose is lifted with `allow-assertion-drop: {} <reason>`.",
+                        w.detail, directive_name
                     )
                 } else {
                     format!(

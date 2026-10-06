@@ -5,10 +5,15 @@
 //! tests pass because nothing surfaces. The sites come from the language packs
 //! (`Fact::Handlers`) and are a base-versus-head delta per file, as `suppression-delta`
 //! does: a handler that moved is not new.
+//!
+//! In the files `constant_fallback_paths` names (a benchmark or evaluation harness), a
+//! handler that puts a numeric literal in place of the result is a site too
+//! (`constant-fallback`, `except FileNotFoundError: ops_per_sec = 150000.0`): the number
+//! flows on as if the guarded code had produced it. It is reported at `warning` at most.
 
 use super::{Context, GateOutcome, PathFilter};
 use crate::ast::handlers::SwallowSite;
-use crate::ast::{default_registry, Fact};
+use crate::ast::{default_registry, Fact, ParsedFileFacts};
 use crate::config::GateSettings;
 use crate::gitctx::ChangeKind;
 use crate::tokens;
@@ -42,10 +47,23 @@ pub fn new_sites(base: &[SwallowSite], head: &[SwallowSite]) -> Vec<SwallowSite>
         .collect()
 }
 
+/// The sites of one side of a file, in source order: the handlers that swallow, and, when
+/// `constant_fallbacks` (the file is one `constant_fallback_paths` names), the handlers
+/// that replace the failure with a numeric literal. A handler is in one list at most.
+fn sites_of(facts: ParsedFileFacts, constant_fallbacks: bool) -> Vec<SwallowSite> {
+    let mut sites = facts.swallowed;
+    if constant_fallbacks {
+        sites.extend(facts.constant_fallbacks);
+        sites.sort_by_key(|s| s.line);
+    }
+    sites
+}
+
 pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.error_swallowing;
     let mut out = GateOutcome::new(GATE);
     let exempt = PathFilter::new(&settings.exempt_paths)?;
+    let harness = PathFilter::new(&settings.constant_fallback_paths)?;
     let registry = default_registry();
     let vocab = super::agent_diff::assert_vocabulary(ctx.config);
     let mut unsupported: Vec<String> = Vec::new();
@@ -74,8 +92,10 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
         // skips it. Paths only, no contents.
         let mut lifted_reclassification = false;
         if anchored.reclassified {
+            // The finding has no line: a directive written as `path:line` names a
+            // handler, not the move.
             let lift = |subject: &str| {
-                ctx.find_override(
+                ctx.find_whole_file_override(
                     GATE,
                     &crate::findings::TEST_PATH_RECLASSIFIED,
                     tokens::ALLOW_SWALLOW,
@@ -114,6 +134,9 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
                 .into_iter()
                 .chain(anchored.declared_scope_note),
         );
+        // Judged by the head path on both sides, so a handler the base already had is not
+        // new on the day the repository names the path.
+        let constant_fallbacks = harness.matches(&file.path);
         let head = match pack.extract(&anchored.classify_path, &head_src, &vocab) {
             Ok(f) => {
                 // A deleted production file added again under a test name, with no test.
@@ -134,7 +157,8 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
                         let facts = pack
                             .extract(&replaced.classify_path, &head_src, &vocab)
                             .ok()?;
-                        (!facts.swallowed.is_empty()).then_some((replaced, facts))
+                        let sites = sites_of(facts, constant_fallbacks);
+                        (!sites.is_empty()).then_some((replaced, sites))
                     });
                 match as_production {
                     Some((replaced, production)) => {
@@ -142,9 +166,9 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
                             &file.path,
                             &replaced.deleted,
                         ));
-                        production.swallowed
+                        production
                     }
-                    None => f.swallowed,
+                    None => sites_of(f, constant_fallbacks),
                 }
             }
             Err(e) => {
@@ -158,7 +182,7 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
         let base = match ctx.git.base_content(&file.old_path)? {
             Some(src) => pack
                 .extract(&file.old_path, &src, &vocab)
-                .map(|f| f.swallowed)
+                .map(|f| sites_of(f, constant_fallbacks))
                 .unwrap_or_default(),
             None => Vec::new(),
         };
@@ -213,16 +237,34 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
                     &crate::findings::ERROR_SILENCED,
                     "replaces every error it raises with nothing",
                 ),
+                "constant-fallback" => (
+                    &crate::findings::ERROR_REPLACED_BY_CONSTANT,
+                    "replaces the failure with a numeric literal: what reads the value next takes the number as a result the guarded code produced; `constant_fallback_paths` names this file, and this is reported at `warning` at most",
+                ),
                 _ => (
                     &crate::findings::EMPTY_ERROR_HANDLER_ADDED,
                     "catches an error and does nothing with it",
                 ),
             };
-            let lift =
-                |subject: &str| ctx.find_override(GATE, title, tokens::ALLOW_SWALLOW, subject);
-            if let Some(ov) = lift(&file.path)
+            // The finding's own `path:line` first, written in full. Then the file, by
+            // its path or its name, from a directive that names no line: one that does
+            // (`pkg/io.py:9`) lifts the finding on that line and no other.
+            let lift = |subject: &str| {
+                ctx.find_whole_file_override(GATE, title, tokens::ALLOW_SWALLOW, subject)
+            };
+            let own = [
+                format!("{}:{}", file.path, site.line),
+                format!(
+                    "{}:{}",
+                    file.path.rsplit('/').next().unwrap_or(&file.path),
+                    site.line
+                ),
+            ];
+            if let Some(ov) = own
+                .iter()
+                .find_map(|s| ctx.find_override(GATE, title, tokens::ALLOW_SWALLOW, s))
+                .or_else(|| lift(&file.path))
                 .or_else(|| file.path.rsplit('/').next().and_then(lift))
-                .or_else(|| lift(&format!("{}:{}", file.path, site.line)))
             {
                 out.overrides.push(ov);
                 continue;
@@ -233,8 +275,17 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
                 && settings.severity() == crate::config::Severity::Error
             {
                 crate::config::Severity::Warning
+            } else if site.kind == "constant-fallback" {
+                // A number in a handler is a defect only where it is recorded as an
+                // observation, which the path says and the tree does not.
+                settings.severity().capped_at_warning()
             } else {
                 settings.severity()
+            };
+            let fix = if site.kind == "constant-fallback" {
+                "Let the failure show: re-raise it, or record a value that marks the result as absent (`None`, `null`, NaN) instead of a number"
+            } else {
+                "Handle or propagate the error"
             };
             out.push(
                 ctx.overridable(severity),
@@ -243,7 +294,7 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
                 Some(site.line),
                 format!("`{}` {what} in `{}`.", site.snippet, file.path),
                 &format!(
-                    "Handle or propagate the error, or justify it on its own line in the PR body or a commit message: `allow-swallow: {} <reason>` (or `discipline:allow(error-swallowing)` on the line).",
+                    "{fix}, or justify it on its own line in the PR body or a commit message: `allow-swallow: {} <reason>` (or `discipline:allow(error-swallowing)` on the line).",
                     file.path
                 ),
             );

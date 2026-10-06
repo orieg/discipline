@@ -10,7 +10,9 @@ use tree_sitter::Node;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SwallowSite {
     pub line: usize,
-    /// `empty-handler` or `discarded-result`.
+    /// `empty-handler`, `logging-handler`, `skipped-input`, `discarded-result`,
+    /// `discarded-value`, `silenced-error`, or `constant-fallback` (kept apart from the
+    /// others, in `ParsedFileFacts::constant_fallbacks`).
     pub kind: &'static str,
     /// The handler's first line, trimmed.
     pub snippet: String,
@@ -175,6 +177,279 @@ fn body_swallows(body: Node, src: &str, spec: &HandlerSpec) -> Option<&'static s
     }
 }
 
+/// How a pack's syntax tree spells a handler statement that puts a number in place of the
+/// result: `except FileNotFoundError: ops_per_sec = 150000.0`. Every field is a list of
+/// node kinds; nothing here is matched against source text.
+pub struct ConstantSpec {
+    /// A handler body whose named children are its statements. A body of any other kind
+    /// is one statement itself (a Scala arm: `case e: E => 150000.0`).
+    pub blocks: &'static [&'static str],
+    /// Nodes that stand for their only named child: an expression statement, parentheses,
+    /// Ruby's `return` argument list, Swift's assignable expression.
+    pub wrappers: &'static [&'static str],
+    /// Numeric literals.
+    pub numbers: &'static [&'static str],
+    /// A unary expression. It is a numeric literal when its operator token is `-` or `+`
+    /// and its operand is one of `numbers`.
+    pub signs: &'static [&'static str],
+    /// A plain assignment. A grammar that uses the same kind for `+=` is told apart by
+    /// the operator token, which must be `=`.
+    pub assignments: &'static [&'static str],
+    /// What an assignment may store into: a name, an attribute, a subscript.
+    pub targets: &'static [&'static str],
+    /// Calls. A target, or a collection key, with one of these below it runs other code
+    /// and is not read as a constant fallback.
+    pub calls: &'static [&'static str],
+    /// A `return` with a value. Its first token must be `return` (Swift uses one kind
+    /// for `return`, `throw` and `break`).
+    pub returns: &'static [&'static str],
+    /// The handler's value is its last expression (Ruby, Kotlin, Scala): a number there
+    /// is what `return <number>` is elsewhere.
+    pub value_is_last_expression: bool,
+    /// Collection literals, read one level deep.
+    pub collections: &'static [&'static str],
+    /// Nodes holding one of `collections` beside a type (`new double[] {1.0, 2.0}`).
+    pub collection_holders: &'static [&'static str],
+    /// A `key: value` entry of a collection; its value is its last named child.
+    pub pairs: &'static [&'static str],
+    /// Literal keys of an entry.
+    pub keys: &'static [&'static str],
+}
+
+/// The pack's own named children of `node`: its ignored kinds (comments) left out.
+fn own_children<'t>(node: Node<'t>, spec: &HandlerSpec) -> Vec<Node<'t>> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .filter(|c| !spec.ignored_kinds.contains(&c.kind()))
+        .collect()
+}
+
+/// `node`, or what it wraps when it is one of the pack's wrappers around one child.
+fn unwrapped<'t>(mut node: Node<'t>, spec: &HandlerSpec, c: &ConstantSpec) -> Node<'t> {
+    while c.wrappers.contains(&node.kind()) {
+        let [only] = own_children(node, spec)[..] else {
+            break;
+        };
+        node = only;
+    }
+    node
+}
+
+/// Whether a call sits anywhere below `node`.
+fn has_call_below(node: Node, c: &ConstantSpec) -> bool {
+    let mut cursor = node.walk();
+    let children: Vec<Node> = node.children(&mut cursor).collect();
+    children
+        .into_iter()
+        .any(|child| c.calls.contains(&child.kind()) || has_call_below(child, c))
+}
+
+/// Whether the text of a numeric literal node is a zero, whatever its spelling: `0`,
+/// `0.0`, `0.`, `.0`, `0e0`, `0x0`, `0b0`, `0o0`, `00`, with digit separators (`0_0`,
+/// C++ `0'0`), with a type suffix (`0L`, `0f`, `0.0f`, `0u`, `0m`, `0d`, `0n`, `0r`,
+/// `0j`), under a sign the grammar keeps inside the literal (`-0`, `-0.0`). The value is
+/// read from the digits: after a `0x` / `0b` / `0o` prefix the digits of that radix, else
+/// the decimal digits before any exponent or suffix; it is zero when there is a digit and
+/// none is other than `0`. `0x0f` is fifteen (`f` is a hex digit there), `1e-9`, `0.1`
+/// and `007` are not zero.
+///
+/// The caller has already established from the node's kind that this is a numeric
+/// literal; the text is read only for its value.
+fn is_zero_literal(literal: &str) -> bool {
+    let t: String = literal
+        .trim()
+        .trim_start_matches(['-', '+'])
+        .chars()
+        .filter(|c| !matches!(c, '_' | '\'') && !c.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let (digits, radix) = match t.get(..2) {
+        Some("0x") => (&t[2..], 16),
+        Some("0b") => (&t[2..], 2),
+        Some("0o") => (&t[2..], 8),
+        _ => (t.as_str(), 10),
+    };
+    let mantissa: Vec<char> = digits
+        .chars()
+        .take_while(|c| *c == '.' || c.is_digit(radix))
+        .collect();
+    mantissa.contains(&'0') && mantissa.iter().all(|c| matches!(c, '0' | '.'))
+}
+
+/// `Some(true)` for a numeric literal, signed or not, that is not a zero, `Some(false)`
+/// for one that is, `None` for anything else.
+fn number(node: Node, src: &str, spec: &HandlerSpec, c: &ConstantSpec) -> Option<bool> {
+    let node = unwrapped(node, spec, c);
+    let literal = if c.numbers.contains(&node.kind()) {
+        node
+    } else if c.signs.contains(&node.kind())
+        && node
+            .child(0)
+            .is_some_and(|op| !op.is_named() && matches!(op.kind(), "-" | "+"))
+    {
+        let [operand] = own_children(node, spec)[..] else {
+            return None;
+        };
+        if !c.numbers.contains(&operand.kind()) {
+            return None;
+        }
+        operand
+    } else {
+        return None;
+    };
+    Some(!is_zero_literal(text(literal, src)))
+}
+
+/// A numeric literal that is not a zero: a number invented in place of a result. A zero
+/// is a default, in every pack, and is not one.
+fn is_fallback_number(node: Node, src: &str, spec: &HandlerSpec, c: &ConstantSpec) -> bool {
+    number(node, src, spec, c) == Some(true)
+}
+
+/// A number as `is_fallback_number` reads it, or a collection literal whose every value
+/// is a numeric literal, at least one of them not a zero, its keys being literals. A
+/// collection of zeros only is a default, like a zero.
+fn is_fallback_value(node: Node, src: &str, spec: &HandlerSpec, c: &ConstantSpec) -> bool {
+    let node = unwrapped(node, spec, c);
+    if is_fallback_number(node, src, spec, c) {
+        return true;
+    }
+    let collection = if c.collections.contains(&node.kind()) {
+        node
+    } else if c.collection_holders.contains(&node.kind()) {
+        let held: Vec<Node> = own_children(node, spec)
+            .into_iter()
+            .filter(|n| c.collections.contains(&n.kind()))
+            .collect();
+        let [held] = held[..] else {
+            return false;
+        };
+        held
+    } else {
+        return false;
+    };
+    let literal_key = |k: Node| {
+        let k = unwrapped(k, spec, c);
+        c.keys.contains(&k.kind()) && !has_call_below(k, c)
+    };
+    let mut non_zero = 0usize;
+    let mut value = |v: Node| {
+        let read = number(v, src, spec, c);
+        non_zero += usize::from(read == Some(true));
+        read.is_some()
+    };
+    let mut cursor = collection.walk();
+    if !cursor.goto_first_child() {
+        return false;
+    }
+    loop {
+        let child = cursor.node();
+        if !child.is_named() && cursor.field_name().is_some() {
+            // A value the grammar spells as a bare token (Swift's `nil`), not punctuation.
+            return false;
+        }
+        if child.is_named() && !spec.ignored_kinds.contains(&child.kind()) {
+            if c.pairs.contains(&child.kind()) {
+                let ok = match own_children(child, spec)[..] {
+                    [v] => value(v),
+                    [key, v] => literal_key(key) && value(v),
+                    _ => false,
+                };
+                if !ok {
+                    return false;
+                }
+            } else if cursor.field_name() == Some("key") {
+                if !literal_key(child) {
+                    return false;
+                }
+            } else if !value(child) {
+                return false;
+            }
+        }
+        if !cursor.goto_next_sibling() {
+            break;
+        }
+    }
+    non_zero > 0
+}
+
+/// Whether `stmt` stores or returns a number in place of the result: an assignment of one
+/// to a name, attribute or subscript, a `return` of one or of a collection of them, or,
+/// where the handler's value is its last expression, that expression (`last`).
+fn is_fallback_statement(
+    stmt: Node,
+    src: &str,
+    spec: &HandlerSpec,
+    c: &ConstantSpec,
+    last: bool,
+) -> bool {
+    let node = unwrapped(stmt, spec, c);
+    let field = |names: &[&str]| names.iter().find_map(|f| node.child_by_field_name(f));
+    if c.assignments.contains(&node.kind()) {
+        let mut cursor = node.walk();
+        let plain = node
+            .children(&mut cursor)
+            .any(|t| !t.is_named() && t.kind() == "=");
+        let (Some(left), Some(right)) = (field(&["left", "target"]), field(&["right", "result"]))
+        else {
+            return false;
+        };
+        let target = unwrapped(left, spec, c);
+        plain
+            && c.targets.contains(&target.kind())
+            && !has_call_below(target, c)
+            && is_fallback_number(right, src, spec, c)
+    } else if c.returns.contains(&node.kind()) {
+        node.child(0).is_some_and(|t| t.kind() == "return")
+            && matches!(own_children(node, spec)[..], [value] if is_fallback_value(value, src, spec, c))
+    } else {
+        last && c.value_is_last_expression && is_fallback_value(node, src, spec, c)
+    }
+}
+
+/// Every node the pack names as the handler's body: one block, or, for a Scala arm
+/// written without braces, each of its statements.
+fn handler_bodies<'t>(handler: Node<'t>, spec: &HandlerSpec) -> Vec<Node<'t>> {
+    for f in spec.body_fields {
+        let mut cursor = handler.walk();
+        let by_field: Vec<Node> = handler.children_by_field_name(f, &mut cursor).collect();
+        if !by_field.is_empty() {
+            return by_field;
+        }
+        let mut cursor = handler.walk();
+        let by_kind: Vec<Node> = handler
+            .children(&mut cursor)
+            .filter(|c| c.kind() == *f)
+            .collect();
+        if !by_kind.is_empty() {
+            return by_kind;
+        }
+    }
+    Vec::new()
+}
+
+/// Whether a handler replaces the failure with a number: every statement of its body,
+/// logging calls aside, is one `is_fallback_statement` accepts, and at least one is. A
+/// re-raise, a call, a store or return of the error, a value that marks absence (`None`,
+/// `null`, a NaN however it is spelled: none of them is a numeric literal node) or a
+/// zero is some other statement, and the handler is then not one.
+fn is_constant_fallback(handler: Node, src: &str, spec: &HandlerSpec, c: &ConstantSpec) -> bool {
+    let bodies = handler_bodies(handler, spec);
+    let stmts: Vec<Node> = match bodies[..] {
+        [block] if c.blocks.contains(&block.kind()) => own_children(block, spec),
+        _ => bodies,
+    };
+    let mut fallbacks = 0usize;
+    for (i, stmt) in stmts.iter().enumerate() {
+        if is_fallback_statement(*stmt, src, spec, c, i + 1 == stmts.len()) {
+            fallbacks += 1;
+        } else if !is_logging_statement(text(*stmt, src)) {
+            return false;
+        }
+    }
+    fallbacks > 0
+}
+
 /// Sites in `root`, in source order. `is_test_line` excludes handlers inside tests.
 pub fn extract(
     root: Node,
@@ -182,7 +457,23 @@ pub fn extract(
     spec: &HandlerSpec,
     is_test_line: &dyn Fn(usize) -> bool,
 ) -> Vec<SwallowSite> {
+    extract_with_constants(root, src, spec, None, is_test_line).0
+}
+
+/// The sites of [`extract`], and beside them the handlers that replace the failure with a
+/// numeric literal (`constant-fallback`), read when the pack passes its [`ConstantSpec`].
+/// The two lists share no handler: a body the first list holds (empty, default literal,
+/// logging only) is never in the second. `error-swallowing` reads the second only in the
+/// files `constant_fallback_paths` names.
+pub fn extract_with_constants(
+    root: Node,
+    src: &str,
+    spec: &HandlerSpec,
+    constants: Option<&ConstantSpec>,
+    is_test_line: &dyn Fn(usize) -> bool,
+) -> (Vec<SwallowSite>, Vec<SwallowSite>) {
     let mut out = Vec::new();
+    let mut fallbacks = Vec::new();
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
         let line = node.start_position().row + 1;
@@ -228,6 +519,17 @@ pub fn extract(
                     }
                 }
             };
+            if swallows.is_none()
+                && constants.is_some_and(|c| is_constant_fallback(node, src, spec, c))
+                && !expects_the_error(node, src)
+                && !catches_only_signals(node, src)
+            {
+                fallbacks.push(SwallowSite {
+                    line,
+                    kind: "constant-fallback",
+                    snippet: first_line(text(node, src)),
+                });
+            }
             if let Some(kind) = swallows
                 .filter(|_| !expects_the_error(node, src) && !catches_only_signals(node, src))
                 .map(|k| {
@@ -285,7 +587,7 @@ pub fn extract(
             stack.push(child);
         }
     }
-    out
+    (out, fallbacks)
 }
 
 /// The expect-this-to-raise idiom: the handler is the passing path and the code around it
@@ -1442,5 +1744,757 @@ mod pack_tests {
             "int f() {\n  try { g(); } catch (...) { return 0; }\n  try { g(); } catch (...) { return 1; }\n  try { g(); } catch (const E& e) { return code(e); }\n  return 2;\n}\n",
         );
         assert_eq!(cpp, vec![(2, "empty-handler")]);
+    }
+}
+
+/// `constant-fallback` (#535): the handlers that put a numeric literal in place of the
+/// result, per pack. Each case is one handler body between the pack's `OPEN` and `CLOSE`.
+#[cfg(all(
+    test,
+    feature = "lang-python",
+    feature = "lang-javascript",
+    feature = "lang-java",
+    feature = "lang-php",
+    feature = "lang-ruby",
+    feature = "lang-c",
+    feature = "lang-cpp",
+    feature = "lang-kotlin",
+    feature = "lang-csharp",
+    feature = "lang-scala",
+    feature = "lang-swift",
+    feature = "lang-objc"
+))]
+mod constant_tests {
+    use super::ConstantSpec;
+    use crate::ast::{default_registry, AssertVocabulary};
+
+    /// One pack's cases: a production path, the text around a handler body, the bodies
+    /// that are a constant fallback and the bodies that are not.
+    struct Cases {
+        path: &'static str,
+        open: &'static str,
+        close: &'static str,
+        fallback: &'static [&'static str],
+        other: &'static [&'static str],
+        /// The text before and after a literal in a statement that assigns it to `x`.
+        assign: (&'static str, &'static str),
+        /// Spellings of zero in the language: assigned, none is a constant fallback.
+        zeros: &'static [&'static str],
+        /// Numbers close to those spellings that are not zero: each is one.
+        near_zeros: &'static [&'static str],
+    }
+
+    const PYTHON: Cases = Cases {
+        path: "pkg/a.py",
+        open: "def f(rec, log):\n    try:\n        x = g()\n    except E as e:\n",
+        close: "\n    return x\n",
+        fallback: &[
+            "        x = 150000.0",
+            "        rec.ops = -1",
+            "        rec.raw[\"ops\"] = 2.5e5",
+            "        x: float = 150000.0",
+            "        x = (3)",
+            "        x = -1",
+            "        x = 0x10",
+            "        return 1",
+            "        return -2.5",
+            "        return {\"error\": 1}",
+            "        return [1, 2.5]",
+            "        return [1, 0]",
+            "        return (1, 2)",
+            "        return 1, 2",
+            "        return {1, 2}",
+            "        log.warning(e)\n        x = 150000.0",
+            "        x = 150000.0\n        print(e)\n        rec.ops = 2",
+            "        # the arm is missing\n        x = 150000.0",
+        ],
+        other: &[
+            "        x = 0",
+            "        return 0",
+            "        x = None",
+            "        x = float(\"nan\")",
+            "        x = float('inf')",
+            "        x = math.nan",
+            "        x = True",
+            "        x = \"150000\"",
+            "        x = 150000.0\n        raise",
+            "        raise RuntimeError(150000.0)",
+            "        rec.error = e",
+            "        return e",
+            "        x = estimate()",
+            "        mark_failed()\n        x = 150000.0",
+            "        x = 150000.0 * 2",
+            "        x = FALLBACK",
+            "        x += 5",
+            "        x, y = 1, 2",
+            "        x = y = 5",
+            "        rec.raw[slot()] = 5",
+            "        slot().ops = 5",
+            "        return [0, 0.0]",
+            "        return {\"ops\": 0}",
+            "        return [1, None]",
+            "        return {\"ops\": e}",
+            "        return {key(): 1}",
+            "        return []",
+            "        return [[1, 2]]",
+            "        log.warning(e)",
+            "        pass",
+            "        x = 150000.0\n        return None",
+        ],
+        assign: ("        x = ", ""),
+        zeros: &[
+            "0", "0.0", "0.", ".0", "0e0", "0E0", "0x0", "0X0", "0b0", "0o0", "00", "0_0", "0.0_0",
+            "0j",
+        ],
+        near_zeros: &[
+            "0.1", "1e-9", "0x1", "0xf", "0b1", "0o7", "1_0", ".5", "1j", "-1",
+        ],
+    };
+
+    const JS: Cases = Cases {
+        path: "src/a.ts",
+        open: "function f(rec) {\n  let x;\n  try { x = g(); } catch (e) {\n",
+        close: "\n  }\n  return x;\n}\n",
+        fallback: &[
+            "    x = 150000.0;",
+            "    rec.ops = -1;",
+            "    rec.raw[\"ops\"] = 2.5e5;",
+            "    x = (3);",
+            "    return 1;",
+            "    return 10n;",
+            "    return [1, 0];",
+            "    return { ops: 1, \"p99\": 2.5 };",
+            "    return [1, -2];",
+            "    console.error(e);\n    x = 150000.0;",
+            "    // the arm is missing\n    x = 150000.0;",
+        ],
+        other: &[
+            "    x = 0;",
+            "    return 0;",
+            "    x = null;",
+            "    x = undefined;",
+            "    x = NaN;",
+            "    x = Number.NaN;",
+            "    x = Infinity;",
+            "    x = 150000.0;\n    throw e;",
+            "    rec.error = e;",
+            "    return e;",
+            "    x = estimate();",
+            "    markFailed();\n    x = 150000.0;",
+            "    x = 150000.0 * 2;",
+            "    x = FALLBACK;",
+            "    x += 5;",
+            "    let local = 5;",
+            "    rec.raw[slot()] = 5;",
+            "    return [0, 0];",
+            "    return { error: e };",
+            "    return { ...rec, ops: 1 };",
+            "    return { [key()]: 1 };",
+            "    return [];",
+            "    console.error(e);",
+        ],
+        assign: ("    x = ", ";"),
+        zeros: &[
+            "0", "0.0", "0.", ".0", "0e0", "0x0", "0b0", "0o0", "0.0_0", "0n",
+        ],
+        near_zeros: &["0.1", "1e-9", "0x1", "0xf", "0b1", "0o7", ".5", "1n", "-1"],
+    };
+
+    const JAVA: Cases = Cases {
+        path: "src/main/java/A.java",
+        open: "class A {\n  double f() {\n    try { x = g(); } catch (IOException e) {\n",
+        close: "\n    }\n    return x;\n  }\n}\n",
+        fallback: &[
+            "      x = 150000.0;",
+            "      this.ops = -1;",
+            "      raw[0] = 2.5e5;",
+            "      return 1;",
+            "      return 5L;",
+            "      return 1.5f;",
+            "      return 0x1F;",
+            "      return new double[] {1.0, 2.5};",
+            "      return new double[] {1.0, 0};",
+            "      System.err.println(e);\n      x = 150000.0;",
+        ],
+        other: &[
+            "      x = 0;",
+            "      return 0;",
+            "      boxed = null;",
+            "      x = Double.NaN;",
+            "      x = 150000.0;\n      throw new IllegalStateException(e);",
+            "      lastError = e;",
+            "      x = estimate();",
+            "      markFailed();\n      x = 150000.0;",
+            "      x = 150000.0 * 2;",
+            "      x = FALLBACK;",
+            "      x += 5;",
+            "      double local = 5;",
+            "      raw[slot()] = 5;",
+            "      return new double[] {0, 0.0};",
+            "      return new double[2];",
+            "      return List.of(1.0, 2.5);",
+        ],
+        assign: ("      x = ", ";"),
+        zeros: &[
+            "0", "0.0", "0.", ".0", "0e0", "0x0", "0b0", "00", "0_0", "0L", "0l", "0f", "0.0f",
+            "0d", "0D", "0x0L",
+        ],
+        near_zeros: &[
+            "0.1", "1e-9", "0x1", "0xf", "0x0d", "0b1", "01", "1L", "0.1f", "1d", "-1",
+        ],
+    };
+
+    const PHP: Cases = Cases {
+        path: "src/a.php",
+        open: "<?php\nfunction f($rec) {\n  try { $x = g(); } catch (E $e) {\n",
+        close: "\n  }\n  return $x;\n}\n",
+        fallback: &[
+            "    $x = 150000.0;",
+            "    $rec->ops = -1;",
+            "    $rec->raw['ops'] = 2.5e5;",
+            "    self::$ops = 5;",
+            "    return 1;",
+            "    return ['ops' => 1, 2.5];",
+            "    return array(1, -2);",
+            "    return [1, 0];",
+            "    error_log($e);\n    $x = 150000.0;",
+        ],
+        other: &[
+            "    $x = 0;",
+            "    return 0;",
+            "    $x = null;",
+            "    $x = NAN;",
+            "    $x = 150000.0;\n    throw $e;",
+            "    $rec->error = $e;",
+            "    return $e;",
+            "    $x = estimate();",
+            "    mark_failed();\n    $x = 150000.0;",
+            "    $x = 150000.0 * 2;",
+            "    $x = FALLBACK;",
+            "    $x += 5;",
+            "    $rec->raw[slot()] = 5;",
+            "    return [0, 0.0];",
+            "    return [key() => 1];",
+            "    return [];",
+        ],
+        assign: ("    $x = ", ";"),
+        zeros: &[
+            "0", "0.0", "0.", ".0", "0e0", "0x0", "0b0", "0o0", "00", "0_0",
+        ],
+        near_zeros: &["0.1", "1e-9", "0x1", "0xf", "0b1", "01", "-1"],
+    };
+
+    const RUBY: Cases = Cases {
+        path: "lib/a.rb",
+        open: "def f(rec)\n  begin\n    x = g\n  rescue E => e\n",
+        close: "\n  end\n  x\nend\n",
+        fallback: &[
+            "    x = 150000.0",
+            "    rec.ops = -1",
+            "    @raw[:ops] = 2.5e5",
+            "    @last = 3",
+            "    $last = 3",
+            "    return 1",
+            "    return { ops: 1, \"p99\" => 2.5 }",
+            "    return [1, -2]",
+            "    150000.0",
+            "    [1, 2.5]",
+            "    puts e\n    x = 150000.0",
+        ],
+        other: &[
+            "    x = nil",
+            "    x = Float::NAN",
+            "    nil",
+            "    x = 150000.0\n    raise",
+            "    @error = e",
+            "    return e",
+            "    x = estimate(1)",
+            "    mark_failed(1)\n    x = 150000.0",
+            "    x = 150000.0 * 2",
+            "    x = FALLBACK",
+            "    x += 5",
+            "    @raw[slot(1)] = 5",
+            "    return [1, nil]",
+            "    return 1, 2",
+            "    return []",
+            // A number that is not the handler's value does nothing.
+            "    150000.0\n    x = nil",
+        ],
+        assign: ("    x = ", ""),
+        zeros: &[
+            "0", "0.0", "0e0", "0x0", "0b0", "0o0", "00", "0_0", "0r", "0i",
+        ],
+        near_zeros: &["0.1", "1e-9", "0x1", "0xf", "0b1", "01", "1r", "-1"],
+    };
+
+    const CPP: Cases = Cases {
+        path: "src/a.cpp",
+        open: "double f(Rec& rec, Rec* out) {\n  double x = 0;\n  try { x = g(); } catch (const E& e) {\n",
+        close: "\n  }\n  return x;\n}\n",
+        fallback: &[
+            "    x = 150000.0;",
+            "    rec.ops = -1;",
+            "    out->raw[0] = 2.5e5;",
+            "    ns::ops = 5;",
+            "    x = - 1;",
+            "    return 1;",
+            "    return 1.5f;",
+            "    return {1.0, 2.5};",
+            "    return {1.0, 0};",
+            "    std::cerr << \"failed\";\n    x = 150000.0;",
+        ],
+        other: &[
+            "    x = 0;",
+            "    return 0;",
+            "    out = nullptr;",
+            "    x = NAN;",
+            "    x = std::nan(\"\");",
+            "    x = 150000.0;\n    throw;",
+            "    rec.error = e;",
+            "    x = estimate();",
+            "    mark_failed();\n    x = 150000.0;",
+            "    x = 150000.0 * 2;",
+            "    x = kFallback;",
+            "    x += 5;",
+            "    double local = 5;",
+            "    out->raw[slot()] = 5;",
+            "    return {0, 0.0};",
+            "    return {};",
+        ],
+        assign: ("    x = ", ";"),
+        zeros: &["0", "0.0", "0.", ".0", "0e0", "0x0", "0b0", "00", "0'0", "0L", "0u", "0ULL", "0.0f", "0.f", "0x0p0"],
+        near_zeros: &["0.1", "1e-9", "0x1", "0xf", "0x0f", "0b1", "01", "1u", "0.1f", "0x1p0", "-1"],
+    };
+
+    const KOTLIN: Cases = Cases {
+        path: "src/main/kotlin/A.kt",
+        open: "fun f(rec: Rec): Double {\n    var x = 0.0\n    try { x = g() } catch (e: E) {\n",
+        close: "\n    }\n    return x\n}\n",
+        fallback: &[
+            "        x = 150000.0",
+            "        rec.ops = -1.0",
+            "        rec.raw[0] = 2.5e5",
+            "        return 1.0",
+            "        return 5L",
+            "        150000.0",
+            "        println(e)\n        x = 150000.0",
+        ],
+        other: &[
+            "        boxed = null",
+            "        x = Double.NaN",
+            "        null",
+            "        x = 150000.0\n        throw e",
+            "        rec.error = e",
+            "        x = estimate()",
+            "        markFailed()\n        x = 150000.0",
+            "        x = 150000.0 * 2",
+            "        x = FALLBACK",
+            "        x += 5.0",
+            "        val local = 5.0",
+            "        rec.raw[slot()] = 5.0",
+            "        return listOf(1.0, 2.5)",
+        ],
+        assign: ("        x = ", ""),
+        zeros: &[
+            "0", "0.0", "0e0", "0x0", "0b0", "0_0", "0L", "0f", "0.0f", "0u", "0UL",
+        ],
+        near_zeros: &["0.1", "1e-9", "0x1", "0xf", "0b1", "1L", "0.1f", "1u", "-1"],
+    };
+
+    const CSHARP: Cases = Cases {
+        path: "src/A.cs",
+        open: "class A {\n  double F() {\n    try { x = G(); } catch (Exception e) {\n",
+        close: "\n    }\n    return x;\n  }\n}\n",
+        fallback: &[
+            "      x = 150000.0;",
+            "      this.ops = -1;",
+            "      raw[0] = 2.5e5;",
+            "      return 1;",
+            "      return 1.5m;",
+            "      return new double[] {1.0, 2.5};",
+            "      return new[] {1.0, 2.5};",
+            "      return [1.0, 2.5];",
+            "      return new double[] {1.0, 0};",
+            "      Console.WriteLine(e);\n      x = 150000.0;",
+        ],
+        other: &[
+            "      x = 0;",
+            "      return 0;",
+            "      boxed = null;",
+            "      x = double.NaN;",
+            "      x = 150000.0;\n      throw;",
+            "      lastError = e;",
+            "      x = Estimate();",
+            "      MarkFailed();\n      x = 150000.0;",
+            "      x = 150000.0 * 2;",
+            "      x = Fallback;",
+            "      x += 5;",
+            "      double local = 5;",
+            "      raw[Slot()] = 5;",
+            "      return new double[] {0, 0.0};",
+            "      return new Rec { Ops = 1.0 };",
+            "      return default;",
+        ],
+        assign: ("      x = ", ";"),
+        zeros: &[
+            "0", "0.0", ".0", "0e0", "0x0", "0b0", "0_0", "0L", "0f", "0.0f", "0u", "0m", "0d",
+            "0UL",
+        ],
+        near_zeros: &[
+            "0.1", "1e-9", "0x1", "0xf", "0x0d", "0b1", "1L", "0.1f", "1m", "-1",
+        ],
+    };
+
+    const SCALA: Cases = Cases {
+        path: "src/main/scala/A.scala",
+        open: "object A {\n  def f(rec: Rec): Double = {\n    var x = 0.0\n    try { x = g() } catch {\n      case e: E =>\n",
+        close: "\n    }\n    x\n  }\n}\n",
+        fallback: &[
+            "        x = 150000.0",
+            "        rec.ops = -1",
+            "        150000.0",
+            "        -1",
+            "        return 1.5",
+            "        (1.5, 2.5)",
+            "        (1.5, 0)",
+            "        { x = 150000.0 }",
+            "        println(e)\n        x = 150000.0",
+        ],
+        other: &[
+            "        x = 0",
+            "        0",
+            "        None",
+            "        x = Double.NaN",
+            "        throw e",
+            "        x = 150000.0\n        throw e",
+            "        rec.error = e",
+            "        x = estimate()",
+            "        markFailed()\n        x = 150000.0",
+            "        x = 150000.0 * 2",
+            "        x = Fallback",
+            "        x += 5",
+            "        d(0) = 3",
+            "        List(1.5, 2.5)",
+            "        (0, 0.0)",
+        ],
+        assign: ("        x = ", ""),
+        zeros: &["0", "0.0", "0e0", "0x0", "0L", "0f", "0.0f", "0d", "0_0", "-0", "-0.0"],
+        near_zeros: &["0.1", "1e-9", "0x1", "0xf", "1L", "0.1f", "-1"],
+    };
+
+    const SWIFT: Cases = Cases {
+        path: "Sources/App/A.swift",
+        open: "func f(rec: Rec) -> Double {\n    var x = 0.0\n    do { x = try g() } catch {\n",
+        close: "\n    }\n    return x\n}\n",
+        fallback: &[
+            "        x = 150000.0",
+            "        rec.ops = -1",
+            "        self.ops = 0x10",
+            "        return 1.5",
+            "        return [1.5, 2.5]",
+            "        return [1.5, 0]",
+            "        return [\"ops\": 1.5, \"p99\": 2.5]",
+            "        print(error)\n        x = 150000.0",
+        ],
+        other: &[
+            "        boxed = nil",
+            "        x = Double.nan",
+            "        x = .nan",
+            "        x = 150000.0\n        throw error",
+            "        throw error",
+            "        rec.error = error",
+            "        x = estimate()",
+            "        markFailed()\n        x = 150000.0",
+            "        x = 150000.0 * 2",
+            "        x = fallback",
+            "        x += 5",
+            "        let local = 5.0",
+            "        raw[0] = 5.0",
+            "        return [1.5, nil]",
+            "        return [0, 0.0]",
+            "        return [key(): 1.5]",
+            "        return []",
+        ],
+        assign: ("        x = ", ""),
+        zeros: &["0", "0.0", "0e0", "0x0", "0b0", "0o0", "0_0", "00"],
+        near_zeros: &["0.1", "1e-9", "0x1", "0xf", "0b1", "0o7", "01", "-1"],
+    };
+
+    const OBJC: Cases = Cases {
+        path: "Sources/a.m",
+        open:
+            "double f(Rec *rec) {\n  double x = 0;\n  @try { x = g(); } @catch (NSException *e) {\n",
+        close: "\n  }\n  return x;\n}\n",
+        fallback: &[
+            "    x = 150000.0;",
+            "    rec.ops = -1;",
+            "    rec->raw[0] = 2.5e5;",
+            "    return 1;",
+            "    return @5;",
+            "    return @[@1, @2.5];",
+            "    return @[@1, @0];",
+            "    NSLog(@\"failed\");\n    x = 150000.0;",
+        ],
+        other: &[
+            "    x = 0;",
+            "    return 0;",
+            "    boxed = nil;",
+            "    x = NAN;",
+            "    x = 150000.0;\n    @throw e;",
+            "    rec.error = e;",
+            "    x = estimate();",
+            "    [rec markFailed];\n    x = 150000.0;",
+            "    x = 150000.0 * 2;",
+            "    x = kFallback;",
+            "    x += 5;",
+            "    rec->raw[slot()] = 5;",
+            "    return @[@0, @0.0];",
+            "    return @(estimate());",
+        ],
+        assign: ("    x = ", ";"),
+        zeros: &[
+            "0", "0.0", "0.", ".0", "0e0", "0x0", "00", "0L", "0u", "0.0f", "@0",
+        ],
+        near_zeros: &["0.1", "1e-9", "0x1", "0xf", "01", "1u", "0.1f", "@1", "-1"],
+    };
+
+    const ALL: &[&Cases] = &[
+        &PYTHON, &JS, &JAVA, &PHP, &RUBY, &CPP, &KOTLIN, &CSHARP, &SCALA, &SWIFT, &OBJC,
+    ];
+
+    /// The constant-fallback lines and the number of swallow sites of `src`.
+    fn read(path: &str, src: &str) -> (Vec<usize>, usize) {
+        let reg = default_registry();
+        let pack = reg.find_pack(path).unwrap();
+        let facts = pack
+            .extract(path, src, &AssertVocabulary::default())
+            .unwrap();
+        assert!(
+            facts
+                .constant_fallbacks
+                .iter()
+                .all(|s| s.kind == "constant-fallback"),
+            "{:?}",
+            facts.constant_fallbacks
+        );
+        (
+            facts.constant_fallbacks.iter().map(|s| s.line).collect(),
+            facts.swallowed.len(),
+        )
+    }
+
+    #[test]
+    fn a_handler_that_stores_or_returns_a_number_is_a_constant_fallback_in_every_pack() {
+        for cases in ALL {
+            let handler_line = cases.open.lines().count();
+            for body in cases.fallback {
+                let src = format!("{}{body}{}", cases.open, cases.close);
+                let (lines, swallowed) = read(cases.path, &src);
+                assert_eq!(lines, vec![handler_line], "{}:\n{src}", cases.path);
+                // Never also one of the gate's other sites.
+                assert_eq!(swallowed, 0, "{}:\n{src}", cases.path);
+            }
+        }
+    }
+
+    #[test]
+    fn a_handler_that_handles_or_marks_absence_is_not_a_constant_fallback_in_any_pack() {
+        for cases in ALL {
+            for body in cases.other {
+                let src = format!("{}{body}{}", cases.open, cases.close);
+                let (lines, _) = read(cases.path, &src);
+                assert!(lines.is_empty(), "{}: {lines:?}\n{src}", cases.path);
+            }
+        }
+    }
+
+    /// A zero is a default in every pack, whatever its spelling, plain or under a minus;
+    /// a number near one of those spellings is not, and `-1` is a number like any other.
+    #[test]
+    fn a_zero_in_any_spelling_is_not_a_constant_fallback_and_a_number_near_it_is() {
+        for cases in ALL {
+            let handler_line = cases.open.lines().count();
+            let assigned = |literal: &str| {
+                let src = format!(
+                    "{}{}{literal}{}{}",
+                    cases.open, cases.assign.0, cases.assign.1, cases.close
+                );
+                read(cases.path, &src).0
+            };
+            for zero in cases.zeros {
+                for literal in [zero.to_string(), format!("-{zero}")] {
+                    assert!(
+                        assigned(&literal).is_empty(),
+                        "{}: `{literal}` is a zero",
+                        cases.path
+                    );
+                }
+            }
+            for near in cases.near_zeros {
+                assert_eq!(
+                    assigned(near),
+                    vec![handler_line],
+                    "{}: `{near}` is not a zero",
+                    cases.path
+                );
+            }
+        }
+    }
+
+    const ZERO_TEXTS: &[&str] = &[
+        "0", "0.0", "0.", ".0", "0e0", "0E5", "0x0", "0X0", "0b0", "0o0", "00", "0_0", "0'0", "0L",
+        "0f", "0.0f", "0u", "0m", "0d", "0n", "0r", "0j", "0UL", "0x0L", "0x0p0", "-0", "-0.0",
+        "+0", "- 0",
+    ];
+    const NON_ZERO_TEXTS: &[&str] = &[
+        "1", "-1", "0.1", ".5", "1e-9", "0x1", "0xf", "0x0f", "0x0d", "0b1", "0o7", "007", "1L",
+        "0.1f", "10", "1_0", "150000.0", "0x1p0", "",
+    ];
+
+    #[test]
+    fn a_zero_is_read_by_its_value_not_by_its_text() {
+        for t in ZERO_TEXTS {
+            assert!(super::is_zero_literal(t), "`{t}` is a zero");
+        }
+        for t in NON_ZERO_TEXTS {
+            assert!(!super::is_zero_literal(t), "`{t}` is not a zero");
+        }
+    }
+
+    const RUBY_ZERO: &str = "def f\n  begin\n    x = g\n  rescue E\n    x = 0\n  end\n  x\nend\n";
+    const KOTLIN_ZERO: &str =
+        "fun f(): Double {\n    try { return g() } catch (e: E) {\n        return 0\n    }\n}\n";
+    const SWIFT_ZERO: &str =
+        "func f() -> Double {\n    do { return try g() } catch {\n        return 0.0\n    }\n}\n";
+    const PYTHON_ZERO: &str =
+        "def f():\n    try:\n        return g()\n    except E:\n        return 0\n";
+
+    /// A zero the gate's existing default list does not hold is reported by neither
+    /// finding; one it holds stays the existing finding's and is not a constant fallback.
+    #[test]
+    fn a_zero_is_left_to_the_existing_finding_or_to_nothing() {
+        assert_eq!(read("lib/a.rb", RUBY_ZERO), (vec![], 0));
+        assert_eq!(read("src/main/kotlin/A.kt", KOTLIN_ZERO), (vec![], 0));
+        assert_eq!(read("Sources/App/A.swift", SWIFT_ZERO), (vec![], 0));
+        assert_eq!(read("pkg/a.py", PYTHON_ZERO), (vec![], 1));
+    }
+
+    /// The source of `python_default_literal_returns_swallow_and_a_computed_value_does_not`.
+    const PYTHON_BOUNDARY: &str = "def f():\n    try:\n        g()\n    except A:\n        return []\n    try:\n        g()\n    except B:\n        return {}\n    try:\n        g()\n    except C:\n        return 0\n    try:\n        g()\n    except D:\n        return \"\"\n    try:\n        g()\n    except E:\n        return False\n    try:\n        g()\n    except F:\n        return  ''\n    try:\n        g()\n    except G:\n        return compute(1)\n    try:\n        g()\n    except H:\n        return {\"error\": 1}\n    try:\n        g()\n    except I:\n        return 1\n    try:\n        g()\n    except J as e:\n        return str(e)\n";
+
+    /// `return 1` and `return {"error": 1}` stay out of `swallowed` (the existing test
+    /// pins that) and are the two constant fallbacks; the default literals stay swallow
+    /// sites and are not constant fallbacks.
+    #[test]
+    fn the_two_lists_split_the_python_default_literal_cases_between_them() {
+        let (fallbacks, swallowed) = read("pkg/a.py", PYTHON_BOUNDARY);
+        assert_eq!(fallbacks, vec![32, 36]);
+        assert_eq!(swallowed, 6);
+    }
+
+    const PYTHON_IN_A_TEST: &str = "def test_f():\n    try:\n        x = g()\n    except E:\n        x = 150000.0\n\n\ndef f():\n    try:\n        x = g()\n    except E:\n        x = 150000.0\n";
+    const PYTHON_EXPECTED_ERROR: &str = "def check():\n    try:\n        g()\n        raise AssertionError(\"no error\")\n    except E:\n        seen = 1\n    try:\n        loop()\n    except KeyboardInterrupt:\n        code = 130\n";
+
+    #[test]
+    fn test_scope_and_the_expected_error_idiom_hold_for_a_constant_fallback() {
+        // A handler in a test function is not read; the same one outside it is.
+        assert_eq!(read("pkg/a.py", PYTHON_IN_A_TEST).0, vec![11]);
+        // A whole test file is not read.
+        assert!(read("tests/test_a.py", PYTHON_IN_A_TEST).0.is_empty());
+        // A `try` that fails when nothing is raised, and a handler for a stop request.
+        assert!(read("pkg/check.py", PYTHON_EXPECTED_ERROR).0.is_empty());
+    }
+
+    /// Every node kind a pack's `ConstantSpec` names exists in that pack's grammar: a
+    /// misspelled kind would silently never match.
+    #[test]
+    fn every_kind_a_constant_spec_names_is_a_kind_of_its_grammar() {
+        use tree_sitter::Language;
+        let grammars: Vec<(&str, &ConstantSpec, Vec<Language>)> = vec![
+            (
+                "python",
+                &crate::ast::python::PYTHON_CONSTANTS,
+                vec![tree_sitter_python::LANGUAGE.into()],
+            ),
+            (
+                "javascript",
+                &crate::ast::javascript::JS_CONSTANTS,
+                vec![
+                    tree_sitter_javascript::LANGUAGE.into(),
+                    tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+                    tree_sitter_typescript::LANGUAGE_TSX.into(),
+                ],
+            ),
+            (
+                "java",
+                &crate::ast::java::JAVA_CONSTANTS,
+                vec![tree_sitter_java::LANGUAGE.into()],
+            ),
+            (
+                "php",
+                &crate::ast::php::PHP_CONSTANTS,
+                vec![tree_sitter_php::LANGUAGE_PHP.into()],
+            ),
+            (
+                "ruby",
+                &crate::ast::ruby::RUBY_CONSTANTS,
+                vec![tree_sitter_ruby::LANGUAGE.into()],
+            ),
+            (
+                "c++",
+                &crate::ast::c_cpp::C_CONSTANTS,
+                vec![tree_sitter_cpp::LANGUAGE.into()],
+            ),
+            (
+                "kotlin",
+                &crate::ast::kotlin::KOTLIN_CONSTANTS,
+                vec![tree_sitter_kotlin_ng::LANGUAGE.into()],
+            ),
+            (
+                "c#",
+                &crate::ast::csharp::CSHARP_CONSTANTS,
+                vec![tree_sitter_c_sharp::LANGUAGE.into()],
+            ),
+            (
+                "scala",
+                &crate::ast::scala::SCALA_CONSTANTS,
+                vec![tree_sitter_scala::LANGUAGE.into()],
+            ),
+            (
+                "swift",
+                &crate::ast::swift::SWIFT_CONSTANTS,
+                vec![crate::ast::swift::grammar_for_node_kinds()],
+            ),
+            (
+                "objective-c",
+                &crate::ast::objc::OBJC_CONSTANTS,
+                vec![tree_sitter_objc::LANGUAGE.into()],
+            ),
+        ];
+        for (name, spec, languages) in grammars {
+            let lists = [
+                spec.blocks,
+                spec.wrappers,
+                spec.numbers,
+                spec.signs,
+                spec.assignments,
+                spec.targets,
+                spec.calls,
+                spec.returns,
+                spec.collections,
+                spec.collection_holders,
+                spec.pairs,
+                spec.keys,
+            ];
+            for language in &languages {
+                for kind in lists.iter().flat_map(|l| l.iter()) {
+                    assert_ne!(
+                        language.id_for_node_kind(kind, true),
+                        0,
+                        "{name}: `{kind}` is not a named node kind of the grammar"
+                    );
+                }
+            }
+        }
     }
 }

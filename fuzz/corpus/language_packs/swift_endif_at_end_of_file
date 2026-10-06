@@ -1,0 +1,6 @@
+/import XCTest
+#if DEBUG
+final class ATests: XCTestCase {
+  func testA() { XCTAssertEqual(f(), 1) }
+}
+#endif

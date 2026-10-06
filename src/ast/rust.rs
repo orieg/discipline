@@ -44,8 +44,7 @@ impl LanguagePack for RustPack {
         parser
             .set_language(&tree_sitter_rust::LANGUAGE.into())
             .map_err(|e| anyhow!("failed to load the Rust grammar: {e}"))?;
-        let tree = parser
-            .parse(src, None)
+        let tree = crate::ast::source_text::parse(&mut parser, src)
             .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
         let root = tree.root_node();
 
@@ -1062,7 +1061,7 @@ impl<'a> Extractor<'a> {
         if p.set_language(&tree_sitter_rust::LANGUAGE.into()).is_err() {
             return;
         }
-        let Some(tree) = p.parse(&fake_fn, None) else {
+        let Some(tree) = crate::ast::source_text::parse(&mut p, &fake_fn) else {
             return;
         };
         let root = tree.root_node();
@@ -2096,7 +2095,7 @@ fn reparsed_expression<R>(arg: &str, read: impl FnOnce(Node, &str) -> R) -> Opti
     parser
         .set_language(&tree_sitter_rust::LANGUAGE.into())
         .ok()?;
-    let tree = parser.parse(&code, None)?;
+    let tree = crate::ast::source_text::parse(&mut parser, &code)?;
     let root = tree.root_node();
     if root.has_error() {
         return None;
@@ -2495,7 +2494,7 @@ mod tests {
         parser
             .set_language(&tree_sitter_rust::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse(&src, None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, &src).unwrap();
         let mut found = None;
         let mut stack = vec![tree.root_node()];
         while let Some(n) = stack.pop() {
@@ -4008,7 +4007,7 @@ mod cfg_predicate_tests {
         parser
             .set_language(&tree_sitter_rust::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse(src, None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, src).unwrap();
         let attr = tree.root_node().named_child(0).unwrap();
         is_cfg_test_suppression(attr, src.as_bytes())
     }

@@ -14853,11 +14853,21 @@ fn msrv_command_exit_codes_follow_the_contract() {
         "[package]\nname = \"t\"\nversion = \"0.1.0\"\nedition = \"2021\"\nrust-version = \"1.90\"\n",
     );
     repo.commit("chore: crate");
+    // The command comes from an override the base does not have, so the runner
+    // authorises it; without the switch it is refused and nothing runs.
     let with = |command: &str| {
-        repo.check(&[
-            "--config-override",
-            &format!("[gates.msrv]\nenabled = true\ncommand = \"{command}\""),
-        ])
+        repo.run(
+            &[
+                "check",
+                "--format",
+                "json",
+                "--base",
+                "main",
+                "--config-override",
+                &format!("[gates.msrv]\nenabled = true\ncommand = \"{command}\""),
+            ],
+            &[("DISCIPLINE_ALLOW_COMMAND_CHANGE", "1")],
+        )
     };
 
     // 0: the command ran and passed.
