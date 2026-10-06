@@ -13,6 +13,7 @@ pub mod c_cpp;
 pub mod c_macros;
 pub mod calls;
 pub mod caught_assertions;
+pub mod ci_condition;
 #[cfg(feature = "lang-csharp")]
 pub mod csharp;
 pub mod expectations;
@@ -245,6 +246,10 @@ pub struct TestFn {
     pub ignored: bool,
     /// Specific conditional predicate (e.g. `miri`, `target_os = "..."`), or `None` if unconditionally ignored.
     pub conditional_ignore: Option<String>,
+    /// Whether a CI variable decides `conditional_ignore`, where the language pack read
+    /// the condition from the syntax tree (`ci_condition`). `None` leaves the question to
+    /// the condition's text.
+    pub ci_verdict: Option<ci_condition::CiVerdict>,
     /// Fatal assertions that abort execution on failure (e.g. `require.*`, `ASSERT_*`).
     pub fatal_asserts: usize,
     pub should_panic: Option<expected_exceptions::ExpectedException>,
@@ -299,9 +304,60 @@ impl TestFn {
 
     /// Whether this test is conditionally skipped under a CI environment check.
     pub fn is_ci_skip(&self) -> bool {
-        self.conditional_ignore
-            .as_deref()
-            .is_some_and(is_ci_condition)
+        if self.conditional_ignore.is_none() {
+            return false;
+        }
+        match &self.ci_verdict {
+            Some(ci_condition::CiVerdict::Skips(_)) => true,
+            Some(ci_condition::CiVerdict::NotCi) => false,
+            None => self
+                .conditional_ignore
+                .as_deref()
+                .is_some_and(is_ci_condition),
+        }
+    }
+
+    /// The CI variables that decide this test's conditional skip.
+    pub fn ci_skip_vars(&self) -> Vec<String> {
+        match &self.ci_verdict {
+            Some(ci_condition::CiVerdict::Skips(vars)) => vars.clone(),
+            Some(ci_condition::CiVerdict::NotCi) => Vec::new(),
+            None => self
+                .conditional_ignore
+                .as_deref()
+                .map(ci_vars_in_condition)
+                .unwrap_or_default()
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        }
+    }
+
+    /// Records a conditional skip the pack read from the syntax tree. A test keeps one
+    /// condition: the first, unless a later one is what makes it skip in CI. A second
+    /// CI-conditional skip adds its variables.
+    pub fn record_conditional_skip(&mut self, text: String, verdict: ci_condition::CiVerdict) {
+        use ci_condition::CiVerdict;
+        if self.conditional_ignore.is_none() {
+            self.conditional_ignore = Some(text);
+            self.ci_verdict = Some(verdict);
+            return;
+        }
+        let CiVerdict::Skips(new_vars) = verdict else {
+            return;
+        };
+        if self.is_ci_skip() {
+            let mut vars = self.ci_skip_vars();
+            for var in new_vars {
+                if !vars.contains(&var) {
+                    vars.push(var);
+                }
+            }
+            self.ci_verdict = Some(CiVerdict::Skips(vars));
+        } else {
+            self.conditional_ignore = Some(text);
+            self.ci_verdict = Some(CiVerdict::Skips(new_vars));
+        }
     }
 }
 
@@ -1047,6 +1103,7 @@ impl Default for ParsedFileFacts {
                 tautologies: 0,
                 ignored: false,
                 conditional_ignore: None,
+                ci_verdict: None,
                 fatal_asserts: 0,
                 should_panic: None,
                 mock_setups: 0,
@@ -1083,6 +1140,7 @@ impl ParsedFileFacts {
             tautologies: 0,
             ignored: false,
             conditional_ignore: None,
+            ci_verdict: None,
             fatal_asserts: 0,
             should_panic: None,
             mock_setups: 0,

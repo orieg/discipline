@@ -428,6 +428,7 @@ impl<'a> Extractor<'a> {
             .is_some_and(|name| self.vocab.test_functions.iter().any(|f| f == name));
         let mut ignored = false;
         let mut conditional_ignore = None;
+        let mut ci_verdict = None;
         let mut should_panic = None;
         let mut has_commented_out_test = false;
         let mut prev = node.prev_sibling();
@@ -459,12 +460,14 @@ impl<'a> Extractor<'a> {
                                 ) {
                                     is_test = true;
                                 } else if sub_name == "ignore" {
-                                    self.apply_cfg_attr_ignore(
+                                    if let Some(verdict) = self.apply_cfg_attr_ignore(
                                         p,
                                         &cond,
                                         &mut ignored,
                                         &mut conditional_ignore,
-                                    );
+                                    ) {
+                                        ci_verdict = Some(verdict);
+                                    }
                                 } else if sub_name == "should_panic" {
                                     should_panic =
                                         Some(super::expected_exceptions::parse_rust_should_panic(
@@ -524,6 +527,7 @@ impl<'a> Extractor<'a> {
             strong_asserts: 0,
             tautologies: 0,
             ignored,
+            ci_verdict: ci_verdict.filter(|_| conditional_ignore.is_some()),
             conditional_ignore,
             fatal_asserts: 0,
             should_panic: should_panic.clone(),
@@ -552,16 +556,39 @@ impl<'a> Extractor<'a> {
             self.count_asserts(body, &mut test, is_fallible_return, direct_calls);
             self.macro_argument_calls(body, &mut test, direct_calls);
             super::dispatch_calls(body, self.src, &RS_DISPATCH, direct_calls);
-            if test.conditional_ignore.is_none() && !test.ignored {
-                if let Some(cond) = self.detect_conditional_early_exit(body) {
-                    test.conditional_ignore = Some(cond);
-                }
+            if !test.ignored {
+                self.record_conditional_early_exits(body, &mut test);
             }
         }
         Some(test)
     }
 
-    fn detect_conditional_early_exit(&self, body: Node) -> Option<String> {
+    /// Early exits under a condition: the first `if` the text rule below accepts, then
+    /// every `return` under an `if` (nested and `else` branches included) that a CI
+    /// variable is involved in, through a variable, constant or helper of this file.
+    fn record_conditional_early_exits(&self, body: Node, test: &mut TestFn) {
+        use super::ci_condition::{self, CiVerdict, Lang};
+        if let Some((cond, consequence)) = self.detect_conditional_early_exit(body) {
+            let verdict = ci_condition::site(Lang::Rust, consequence, self.src)
+                .map_or(CiVerdict::NotCi, |s| s.verdict);
+            test.record_conditional_skip(cond, verdict);
+        }
+        let is_return = |n: Node| {
+            n.kind() == "return_expression"
+                || (n.kind() == "expression_statement"
+                    && n.named_child(0)
+                        .is_some_and(|c| c.kind() == "return_expression"))
+        };
+        for exit in ci_condition::exits_under_if(body, &is_return) {
+            if let Some(site) = ci_condition::site(Lang::Rust, exit, self.src) {
+                if site.related {
+                    test.record_conditional_skip(site.text, site.verdict);
+                }
+            }
+        }
+    }
+
+    fn detect_conditional_early_exit<'t>(&self, body: Node<'t>) -> Option<(String, Node<'t>)> {
         let mut cursor = body.walk();
         let mut env_bindings = std::collections::HashSet::new();
 
@@ -600,7 +627,7 @@ impl<'a> Extractor<'a> {
                 if is_env_check {
                     let consequence = stmt.child_by_field_name("consequence")?;
                     if rust_block_returns_early(consequence) {
-                        return Some(cond_text.to_string());
+                        return Some((cond_text.to_string(), consequence));
                     }
                 }
             }
@@ -659,7 +686,7 @@ impl<'a> Extractor<'a> {
         fallback_cond_str: &str,
         ignored: &mut bool,
         conditional_ignore: &mut Option<String>,
-    ) {
+    ) -> Option<super::ci_condition::CiVerdict> {
         let (val, desc) = super::runner_collection::evaluate_rust_cfg(
             attr_node,
             self.src,
@@ -678,10 +705,13 @@ impl<'a> Extractor<'a> {
             super::runner_collection::CfgValue::Unknown => {
                 if !*ignored && conditional_ignore.is_none() {
                     *conditional_ignore = Some(cond_str);
+                    // `cfg_attr(not(ci), ignore)` ignores the test outside CI only.
+                    return super::runner_collection::rust_cfg_ci_verdict(attr_node, self.src);
                 }
             }
             super::runner_collection::CfgValue::False => {}
         }
+        None
     }
 
     fn eval_parent_mod_cfgs(&self, node: Node) -> (bool, Option<String>) {
@@ -854,6 +884,7 @@ impl<'a> Extractor<'a> {
 
                 let mut ignored = false;
                 let mut conditional_ignore = None;
+                let mut ci_verdict = None;
                 let mut should_panic = None;
 
                 let (mod_ign, mod_cond) = self.eval_parent_mod_cfgs(node);
@@ -879,12 +910,14 @@ impl<'a> Extractor<'a> {
                             for sub in subs {
                                 let sub_name = attribute_name(&sub);
                                 if sub_name == "ignore" {
-                                    self.apply_cfg_attr_ignore(
+                                    if let Some(verdict) = self.apply_cfg_attr_ignore(
                                         attr_node,
                                         &cond,
                                         &mut ignored,
                                         &mut conditional_ignore,
-                                    );
+                                    ) {
+                                        ci_verdict = Some(verdict);
+                                    }
                                 } else if sub_name == "should_panic" {
                                     should_panic =
                                         Some(super::expected_exceptions::parse_rust_should_panic(
@@ -902,6 +935,7 @@ impl<'a> Extractor<'a> {
                     line: fn_line,
                     end_line,
                     ignored,
+                    ci_verdict: ci_verdict.filter(|_| conditional_ignore.is_some()),
                     conditional_ignore,
                     should_panic,
                     ..Default::default()

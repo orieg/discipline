@@ -3180,6 +3180,58 @@ command = "cargo test"
         },
     ),
     (
+        "ignored-tests: a CI read through a constant or helper of the file is a CI skip, a skip outside CI is not",
+        || {
+            use crate::ast::default_registry;
+            use crate::config::{IgnoredTestsGate, Severity};
+            use crate::guards::agent_diff::{evaluate_ignored_tests, Located};
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let severity_of = |path: &str, src: &str| -> anyhow::Result<Option<Severity>> {
+                let pack = reg
+                    .find_pack(path)
+                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
+                let tests = pack.extract(path, src, &v)?.tests;
+                let test = tests
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("no test in {path}"))?;
+                let added = [Located {
+                    path,
+                    file_survives: true,
+                    test,
+                }];
+                let out =
+                    evaluate_ignored_tests(&[], &added, &IgnoredTestsGate::default(), &[], false)?;
+                Ok(out.violations.first().map(|v| v.severity))
+            };
+            let through_constant = severity_of(
+                "test_q.py",
+                "import os\nimport pytest\n\nIN_CI = os.environ.get(\"CI\")\n\ndef test_q():\n    if IN_CI:\n        pytest.skip()\n    assert 1 + 1 == 2\n",
+            )?;
+            let through_helper = severity_of(
+                "p_test.go",
+                "package p\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc isCI() bool {\n\treturn os.Getenv(\"CI\") != \"\"\n}\n\nfunc TestA(t *testing.T) {\n\tif isCI() {\n\t\tt.Skip()\n\t}\n}\n",
+            )?;
+            let outside_ci = severity_of(
+                "p_test.go",
+                "package p\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestA(t *testing.T) {\n\tif os.Getenv(\"CI\") == \"\" {\n\t\tt.Skip()\n\t}\n}\n",
+            )?;
+            let cfg_outside_ci = severity_of(
+                "tests/q.rs",
+                "#[cfg_attr(not(ci), ignore)]\n#[test]\nfn adds() {\n    assert_eq!(1 + 1, 2);\n}\n",
+            )?;
+            let run_if = severity_of(
+                "a.test.js",
+                "test.runIf(!process.env.CI)('adds', () => {\n  expect(1 + 1).toBe(2);\n});\n",
+            )?;
+            Ok(through_constant == Some(Severity::Error)
+                && through_helper == Some(Severity::Error)
+                && run_if == Some(Severity::Error)
+                && outside_ci == Some(Severity::Note)
+                && cfg_outside_ci == Some(Severity::Note))
+        },
+    ),
+    (
         "hygiene: terms of art and historical narration exempt from time-estimates",
         || {
             let banned = crate::guards::hygiene::time_estimate_patterns()

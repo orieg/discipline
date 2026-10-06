@@ -534,10 +534,8 @@ impl<'a> PythonExtractor<'a> {
         if let Some(body) = node.child_by_field_name("body") {
             self.scan_test_body(body, &mut test_fn, BodyMode::Test);
             self.collect_calls(body, scope, &mut calls);
-            if test_fn.conditional_ignore.is_none() && !test_fn.ignored {
-                if let Some(cond) = self.detect_python_conditional_early_exit(body) {
-                    test_fn.conditional_ignore = Some(cond);
-                }
+            if !test_fn.ignored {
+                self.record_conditional_early_exits(body, &mut test_fn);
             }
         }
 
@@ -545,7 +543,29 @@ impl<'a> PythonExtractor<'a> {
         self.test_calls.push(calls);
     }
 
-    fn detect_python_conditional_early_exit(&self, body: Node) -> Option<String> {
+    /// Early exits under a condition: the first `if` the text rule below accepts, then
+    /// every `return` under an `if` (nested and `else` branches included) that a CI
+    /// variable is involved in, through a variable, constant or helper of this file.
+    fn record_conditional_early_exits(&self, body: Node, test: &mut TestFn) {
+        use super::ci_condition::{self, CiVerdict, Lang};
+        if let Some((cond, consequence)) = self.detect_python_conditional_early_exit(body) {
+            let verdict = ci_condition::site(Lang::Python, consequence, self.src)
+                .map_or(CiVerdict::NotCi, |s| s.verdict);
+            test.record_conditional_skip(cond, verdict);
+        }
+        for exit in ci_condition::exits_under_if(body, &|n| n.kind() == "return_statement") {
+            if let Some(site) = ci_condition::site(Lang::Python, exit, self.src) {
+                if site.related {
+                    test.record_conditional_skip(site.text, site.verdict);
+                }
+            }
+        }
+    }
+
+    fn detect_python_conditional_early_exit<'t>(
+        &self,
+        body: Node<'t>,
+    ) -> Option<(String, Node<'t>)> {
         let mut cursor = body.walk();
         let mut env_bindings = std::collections::HashSet::new();
 
@@ -582,11 +602,11 @@ impl<'a> PythonExtractor<'a> {
                 let calls_skip = python_block_calls_skip(consequence, self.src);
 
                 if calls_skip {
-                    return Some(cond_text.to_string());
+                    return Some((cond_text.to_string(), consequence));
                 }
 
                 if is_env_check && python_block_returns_early(consequence) {
-                    return Some(cond_text.to_string());
+                    return Some((cond_text.to_string(), consequence));
                 }
             }
         }
@@ -850,11 +870,16 @@ impl<'a> PythonExtractor<'a> {
                         || func_name == "pytest.xfail"
                         || func_name == "self.skipTest"
                     {
-                        match enclosing_python_if_condition(node, self.src) {
-                            Some(cond) if cond != "True" && cond != "1" => {
-                                if test.conditional_ignore.is_none() {
-                                    test.conditional_ignore = Some(cond);
-                                }
+                        let legacy = enclosing_python_if_condition(node, self.src);
+                        let constant = matches!(legacy.as_deref(), Some("True" | "1"));
+                        let site = super::ci_condition::site(
+                            super::ci_condition::Lang::Python,
+                            node,
+                            self.src,
+                        );
+                        match super::ci_condition::conditional(legacy, site) {
+                            Some((cond, verdict)) if !constant => {
+                                test.record_conditional_skip(cond, verdict);
                             }
                             _ => test.ignored = true,
                         }

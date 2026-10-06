@@ -1026,6 +1026,12 @@ pub fn evaluate_rust_cfg(
     eval_predicate(&pred_nodes, src, declared_features)
 }
 
+/// Whether a CI cfg decides the predicate of a `#[cfg_attr(<predicate>, ignore)]`
+/// attribute node, and which way. `None` when the predicate names no CI cfg.
+pub fn rust_cfg_ci_verdict(node: Node, src: &[u8]) -> Option<super::ci_condition::CiVerdict> {
+    super::ci_condition::rust_cfg_predicate(&get_predicate_nodes(node, src), src)
+}
+
 /// Combined collection rules across supported runners.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunnerCollectionRules {
