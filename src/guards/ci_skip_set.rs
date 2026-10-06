@@ -901,8 +901,9 @@ impl Env<'_> {
     }
 }
 
-/// Evaluate an expression with no job context (used by `self-test` and tests):
+/// Evaluate an expression with no job context (used by the unit tests):
 /// returns its truthiness and the terms the evaluator did not model.
+#[cfg(test)]
 pub fn eval_standalone(src: &str, github: &BTreeMap<String, String>) -> (bool, Vec<String>) {
     let expr = match parse_if(src) {
         Ok(e) => e,

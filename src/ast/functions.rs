@@ -497,11 +497,6 @@ pub fn skip_none(_: Node, _: &str) -> bool {
     false
 }
 
-/// Not a test.
-pub fn test_none(_: Node, _: &str, _: &str) -> bool {
-    false
-}
-
 /// Whether `path` matches one of the repository's declared test-scope globs.
 pub fn declared_test_path(path: &str, globs: &[String]) -> bool {
     globs.iter().any(|g| {

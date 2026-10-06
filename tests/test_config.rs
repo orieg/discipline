@@ -714,6 +714,15 @@ fn schema_severity_enum_matches_accepted_severities() {
     }
 }
 
+/// `capped_at_warning` lowers an error to a warning and leaves the two lower severities
+/// as they are: a gate uses it for a finding that must not fail the run on its own.
+#[test]
+fn capped_at_warning_lowers_only_an_error() {
+    assert_eq!(Severity::Error.capped_at_warning(), Severity::Warning);
+    assert_eq!(Severity::Warning.capped_at_warning(), Severity::Warning);
+    assert_eq!(Severity::Note.capped_at_warning(), Severity::Note);
+}
+
 /// Every environment variable the binary reads must be isolated by the test harness, or a
 /// developer's shell (or a CI runner's own variables) could decide a test's verdict.
 #[test]

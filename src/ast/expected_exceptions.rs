@@ -1054,9 +1054,6 @@ fn parse_rust_matcher(text: &str) -> Option<String> {
     }
 }
 
-/// Rust: attribute-level `#[should_panic]` is handled directly by `rust.rs`.
-pub fn rust(_root: Node, _src: &str, _tests: &mut [TestFn]) {}
-
 /// Python: `pytest.raises(...)` (in `with` statement or call) and `self.assertRaises(...)` / `assertRaisesRegex`.
 pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
