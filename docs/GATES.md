@@ -695,8 +695,8 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - A file that instructs agents only in this repository (an MCP server's `CONTEXT.md`, a prompt directory) until it is declared in `instruction_files`.
   - A pre-existing line; only added lines are read.
   - Directional marks that a right-to-left localisation table needs: exempt the path.
-- **Baseline:** a finding about the change description has no file and no line. Its fingerprint is anchored on where the text is (`pr-title`, `pr-body`, `commit:<short sha>`), so a baseline entry for one does not match another.
-- **Lifting directive:** `allow-agent-instructions: <path-or-path:line> <reason>`.
+- **Baseline:** a finding about the change description has no file and no line. Its fingerprint is anchored on where the text is: `commit:<short sha>` for a commit message, and for the title and the body `pr-title:<hash>` and `pr-body:<hash>`, a SHA-256 of the text (never the text). A baseline entry for one does not match another, and an entry for one pull request's title or body does not match the next pull request's unless it says the same.
+- **Lifting directive:** `allow-agent-instructions: <path-or-path:line> <reason>`. A path, a file name or a directory prefix lifts every finding of the gate in the file; `path:line` (or `name:line`) lifts the finding on that line and no other, a line with no finding lifts nothing and the directive is then listed as unused, and it does not lift `Agent Instructions Changed`, which has no line.
 - **Default:** on, `error`; the phrase and blob findings are reported at `warning`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `instruction_files` (globs of the repository's own agent-instruction files, such as a runtime prompt an MCP server loads: `instruction_files = ["CONTEXT.md", "prompts/**"]`; each is reported like `AGENTS.md`, and removing an entry is a `config-integrity` weakening).
 
@@ -942,7 +942,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Finding Severity Breakdown:**
   - Gate severity (`error` by default): structured secret tokens (`SECRET-TOKEN-GITHUB` `ghp_` / `github_pat_`, `SECRET-TOKEN-AWS` `AKIA...` or a literal `AWS_SECRET_ACCESS_KEY=`, `SECRET-TOKEN-SLACK` `xox[baprs]-`, `SECRET-TOKEN-OPENAI` OpenAI and Anthropic keys, `SECRET-KEY-BLOCK` PEM private-key headers).
   - `warning`: heuristic argument, piping and literal patterns (`ARGV-ENV`, `ARGV-DOCKER`, `ARGV-INLINE`, `INJECT-PIPE`, `INJECT-XARGS`, `SECRET-ARGV-PASSWORD`, `SECRET-LITERAL-BEARER`, `SECRET-LITERAL-ENV`).
-- **Lifting directive:** `secrets-argv-ok: <file-or-line> <reason>` in PR body or commit, or inline `discipline:allow(shell-secrets)`.
+- **Lifting directive:** `secrets-argv-ok: <file-or-line> <reason>` in PR body or commit, or inline `discipline:allow(shell-secrets)`. A path lifts every finding in the file; `path:line` lifts the finding on that line only.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `extra_secret_patterns`, `allow_patterns`, `diff_only`.
 
 #### `commit-provenance`
@@ -1652,6 +1652,7 @@ Configuring `test_report` closes these gaps by ratcheting the set of executed te
   - Untracked or gitignored files in the workspace.
   - Files outside declared `watched_paths`.
 - **Lifting directive:** `allow-manifest-drift: <manifest-path> <reason>` in PR description or commit message.
+- **Baseline:** the finding has no line and is located at the manifest. The first rule that names a manifest is identified by its code and that path; a later rule naming the same manifest is anchored on a hash of what it extracts and watches (`rule:<sha256>` over `extract_regex`, `watched_paths` and `exclude_paths`), so an entry for one rule does not match another rule of the same manifest.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `rules` (`manifest`, `extract_regex`, `watched_paths`, `exclude_paths`).
 
 #### `version-lockstep`
@@ -1884,8 +1885,8 @@ Notes for adapting it:
   - Uncommitted benchmark results (benchmark files must be committed or generated in CI workspace).
   - Wall-clock variance from co-resident CPU contention without sample distribution statistics.
 - **Baseline:** a finding about an arm has no line. Its fingerprint is anchored on the arm name (a regression, a removed arm, an arm with no baseline entry), on the entry as written for a stale `exempt_arms` entry (`exempt_arms:<entry>`), and in paired-ratio mode on the cell (`cell:<axis>/<id>`) or on what could not be compared (`baseline`, `platform`, `twin`, `runner-class`, `axis:<name>`, a cell), so an entry for one arm or cell does not match another of the same artifact.
-- **Lifting directive:** `allow-regression: <benchmark-name-or-path> <reason>`.
-- **Sourced overrides and citation freshness (`require_sourced_override = true`):** the reason must cite a CI run URL or a committed artifact path, and the directive must start with the arm it approves: the arm in full, its tail after `::`, or its stem before `/` (which approves every regressed arm of that stem). An arm mentioned later in the reason is not approved. Every citation in the reason is then checked, not only the first, because a reason with two citations rests on both:
+- **Lifting directive:** `allow-regression: <benchmark-name-or-path> <reason>`. Every such line of a change is read, each for the subject it names: two regressed arms with different stems are approved by two lines.
+- **Sourced overrides and citation freshness (`require_sourced_override = true`):** the reason must cite a CI run URL or a committed artifact path, and the directive must start with the arm it approves: the arm in full, its tail after `::`, or its stem before `/` (which approves every regressed arm of that stem). An arm mentioned later in the reason is not approved. Every `allow-regression` line is read for the arms it names: a line whose citation is verified approves them, a line with no citation or an unverified one is void and is reported with the arms it names that no other line approves, and a line that names no regressed arm grants nothing (when no line names one, the first is reported as naming none). Every citation in the reason is then checked, not only the first, because a reason with two citations rests on both:
   - a cited run whose conclusion is `cancelled`, `timed_out`, `action_required`, `startup_failure`, `stale` or `skipped` voids the override: it may have skipped the job whose numbers are quoted;
   - a cited run that concluded `failure` counts only if every job listed in `citation_measurement_jobs` that it started reached its guard step with every earlier step green. A regression trips the guard on numbers it measured; a crashed benchmark leaves none, and both conclude `failure`;
   - the cited run's head must be reachable from the head under review (`ahead` or `identical` in the compare API); a run at a head a force-push rewrote away measured other code;

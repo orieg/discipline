@@ -30,7 +30,7 @@ pub fn evaluate_manifest_sync(ctx: &Context) -> Result<GateOutcome> {
     let root = ctx.git.root();
     let mut total_examined = 0;
 
-    for rule in &settings.rules {
+    for (position, rule) in settings.rules.iter().enumerate() {
         let manifest_path = root.join(&rule.manifest);
         if !manifest_path.is_file() {
             if ctx.predates_config(&rule.manifest)? {
@@ -172,11 +172,40 @@ pub fn evaluate_manifest_sync(ctx: &Context) -> Result<GateOutcome> {
                 ),
                 "update the packaging manifest to match git-tracked files or justify with `allow-manifest-drift: <manifest> <reason>`",
             );
+            if let Some(anchor) = later_rule_anchor(&settings.rules, position) {
+                out.anchor_last(anchor);
+            }
         }
     }
 
     out.examined = total_examined;
     Ok(out)
+}
+
+/// What tells the finding of the rule at `position` from that of an earlier rule naming
+/// the same manifest: a hash of what the rule extracts and watches. `None` for the first
+/// rule that names a manifest, whose finding is identified by its code and path as it
+/// always was. The hash, not the position, so a rule added or removed elsewhere in the
+/// list changes nothing.
+pub(crate) fn later_rule_anchor(
+    rules: &[crate::config::ManifestSyncRule],
+    position: usize,
+) -> Option<String> {
+    let rule = &rules[position];
+    if !rules[..position]
+        .iter()
+        .any(|r| r.manifest == rule.manifest)
+    {
+        return None;
+    }
+    let mut patterns = vec![rule.extract_regex.as_str(), "watched"];
+    patterns.extend(rule.watched_paths.iter().map(String::as_str));
+    patterns.push("exclude");
+    patterns.extend(rule.exclude_paths.iter().map(String::as_str));
+    Some(format!(
+        "rule:{}",
+        crate::report::gitlab::sha256_hex(patterns.join("\u{1f}").as_bytes())
+    ))
 }
 
 #[cfg(test)]
