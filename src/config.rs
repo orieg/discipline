@@ -1615,7 +1615,7 @@ pub struct CommitProvenanceGate {
     pub review_trailer: String,
     /// Whether an agent-produced commit must carry `review_trailer`. The trailer is the
     /// change's own claim; separating reviewer from author is the forge's required
-    /// review (and `directives.require_approval`), which `discipline doctor` reports.
+    /// review, which `discipline doctor` reports.
     pub require_agent_review: bool,
 }
 

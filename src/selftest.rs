@@ -815,6 +815,21 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "commit-provenance: the trailers of every entry of a multi-commit squash are read, an indented quote is not",
+        || {
+            use crate::guards::commit_provenance::trailers;
+            let keys = |m: &str| -> Vec<String> { trailers(m).into_iter().map(|(k, _)| k).collect() };
+            let squash = "feat: x (#7)\n\n* feat: x\n\nBody.\n\nReviewed-by: A <a@x>\n\n* test: x\n\nAgent-Tool: t\n\n---------\n\nCo-authored-by: B <b@x>\n";
+            let prose = "feat: x (#7)\n\n* feat: x\n\nReviewed-by: A <a@x>\n\nprose\n\n* test: x\n";
+            let quoted = "fix: x\n\nIt ended with:\n\n    Reviewed-by: A <a@x>\n";
+            let picked = "fix: x\r\n\r\nReviewed-by: A <a@x>\r\n(cherry picked from commit 0123456)\r\n";
+            Ok(keys(squash) == ["Reviewed-by", "Agent-Tool", "Co-authored-by"]
+                && keys(prose).is_empty()
+                && keys(quoted).is_empty()
+                && keys(picked) == ["Reviewed-by"])
+        },
+    ),
+    (
         "build-hooks: a lifecycle script gaining curl is reported, an unchanged one is not",
         || {
             use crate::gitctx::{ChangeKind, ChangedFile};
