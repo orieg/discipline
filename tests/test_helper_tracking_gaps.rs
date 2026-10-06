@@ -382,7 +382,7 @@ fn reported(run: &Run) -> Vec<(String, String)> {
 }
 
 /// Collects one line per language whose verdict is not the expected one, so one run
-/// names every language a shape fails in.
+/// names every language a shape fails in. Each test asserts the list is empty itself.
 #[derive(Default)]
 struct Verdicts(Vec<String>);
 
@@ -407,10 +407,6 @@ impl Verdicts {
             ));
         }
     }
-
-    fn done(self) {
-        assert!(self.0.is_empty(), "\n{}\n", self.0.join("\n"));
-    }
 }
 
 // ---- pins: what already held -------------------------------------------------------------
@@ -428,7 +424,7 @@ fn a_helper_that_loses_its_checks_in_a_helper_file_is_reported() {
         );
         v.reports(l.name, &run, WEAKENED, l.helpers);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// Pin of the rule for a call whose helper was not read: three inline assertions are
@@ -445,7 +441,7 @@ fn a_call_to_a_helper_outside_the_change_stands_for_no_dropped_assertion() {
         );
         v.reports(l.name, &run, DECREASED, l.tests);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// Pin: assertions moved into a helper of another changed file that holds as many are a
@@ -475,7 +471,7 @@ fn assertions_moved_into_a_changed_helper_file_count_what_the_helper_holds() {
             }
         }
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 // ---- passes unreported -------------------------------------------------------------------
@@ -491,7 +487,7 @@ fn a_helper_that_loses_its_checks_beside_an_unrelated_test_is_reported() {
         let run = change(&[(l.helpers, &held)], &[(l.helpers, &gutted)], "");
         v.reports(l.name, &run, WEAKENED, l.helpers);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// Control: a comment added to such a file loses nothing.
@@ -505,7 +501,7 @@ fn a_comment_added_beside_a_helper_and_a_test_reports_nothing() {
         let run = change(&[(l.helpers, &held)], &[(l.helpers, &commented)], "");
         v.clean(l.name, &run);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// `conftest.py` with a fixture named `test_*`: the pack reads the fixture as a test, so
@@ -546,7 +542,7 @@ fn a_method_helper_that_loses_its_checks_is_reported() {
         );
         v.reports(l.name, &run, WEAKENED, l.helpers);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// Control: a comment above a method helper loses nothing.
@@ -563,7 +559,7 @@ fn a_comment_added_above_a_method_helper_reports_nothing() {
         );
         v.clean(l.name, &run);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// `check` holds one assertion and calls `check_body`, which holds two.
@@ -593,7 +589,7 @@ fn a_helper_that_stops_calling_a_checking_helper_is_reported() {
         );
         v.reports(l.name, &run, WEAKENED, l.helpers);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// The same reading reported a lossless extraction: three assertions become one and a
@@ -609,7 +605,7 @@ fn checks_extracted_into_a_helper_the_helper_calls_report_nothing() {
         );
         v.clean(l.name, &run);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// Control: an extraction that keeps two of the three assertions is a drop.
@@ -624,7 +620,7 @@ fn an_extraction_that_loses_a_check_is_reported() {
         );
         v.reports(l.name, &run, WEAKENED, l.helpers);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// A helper reached through a second helper, in a file that holds a test: `check_all`
@@ -653,7 +649,7 @@ fn a_helper_reached_through_a_second_helper_that_loses_its_checks_is_reported() 
             v.0.push(format!("{}: {message}", l.name));
         }
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// A directive that names a weakened helper lifted an unrelated drop in a test that calls
@@ -672,7 +668,7 @@ fn a_directive_naming_a_helper_does_not_lift_the_calling_tests_own_drop() {
         );
         v.reports(l.name, &run, DECREASED, l.tests);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// Control: with the test's own assertions kept, the directive lifts the helper's finding
@@ -692,7 +688,7 @@ fn a_directive_naming_a_helper_lifts_the_helpers_finding() {
         );
         v.clean(l.name, &run);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// The same block cleared a strength drop with no strength check: the helper loses a
@@ -739,7 +735,7 @@ fn a_renamed_helper_reports_nothing() {
         );
         v.clean(l.name, &run);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// Control: a rename that also drops two of three checks is reported.
@@ -757,7 +753,7 @@ fn a_renamed_helper_that_loses_checks_is_reported() {
         );
         v.reports(l.name, &run, WEAKENED, l.helpers);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// A helper deleted from one file was paired with the unchanged helper of the same name
@@ -779,7 +775,7 @@ fn a_deleted_helper_is_reported_in_its_own_file() {
         );
         v.reports(l.name, &run, WEAKENED, l.helpers);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// Control: a helper that moves to another changed file with its checks is not deleted.
@@ -807,7 +803,7 @@ fn a_helper_moved_to_another_changed_file_reports_nothing() {
         );
         v.clean(l.name, &run);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// Two helpers of one name in one file, each of which asserts: a comment added to the
@@ -877,7 +873,7 @@ fn a_comment_beside_two_helpers_of_one_name_reports_nothing() {
         let run = change(&[(path, file)], &[(path, &format!("{comment}{file}"))], "");
         v.clean(path, &run);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// Control: one of the two losing an assertion is reported.
@@ -892,7 +888,7 @@ fn one_of_two_helpers_of_one_name_losing_a_check_is_reported() {
         );
         v.reports(path, &run, WEAKENED, path);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// Cargo's `examples/` and `benches/` are test paths for other gates, but no test calls
@@ -925,7 +921,7 @@ fn a_function_under_examples_or_benches_is_not_an_assertion_helper() {
             v.clean(&path, &run);
         }
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// Control, and the part of that item left as it was: a function of a file under `tests/`
@@ -960,7 +956,7 @@ fn assertions_moved_into_a_new_helper_file_report_nothing() {
         );
         v.clean(l.name, &run);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// Control: the new helper holds one of the three assertions.
@@ -975,7 +971,7 @@ fn assertions_moved_into_a_new_helper_that_holds_fewer_are_reported() {
         );
         v.reports(l.name, &run, DECREASED, l.tests);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// Assertions moved into a helper of a changed file that also holds a test were reported:
@@ -1001,7 +997,7 @@ fn assertions_moved_into_a_helper_beside_a_test_report_nothing() {
         );
         v.clean(l.name, &run);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// Control: that helper holds one of the three assertions.
@@ -1026,7 +1022,7 @@ fn assertions_moved_into_a_helper_beside_a_test_that_holds_fewer_are_reported() 
         );
         v.reports(l.name, &run, DECREASED, l.tests);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// A test that follows a renamed helper while dropping its own assertions: the helper is
@@ -1051,7 +1047,7 @@ fn a_renamed_helper_the_test_already_called_stands_for_no_dropped_assertion() {
         );
         v.reports(l.name, &run, DECREASED, l.tests);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
 /// Go: assertions that abort the test moved into a helper that aborts too were reported
@@ -1191,5 +1187,5 @@ fn a_move_behind_a_qualified_call_is_reported_where_the_pack_does_not_resolve_it
         );
         v.reports(l.name, &run, DECREASED, l.tests);
     }
-    v.done();
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
