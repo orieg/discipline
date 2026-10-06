@@ -129,16 +129,45 @@ mod tests {
         assert!(gate.forbidden_paths.is_empty());
     }
 
+    /// Calls the gate over a change to `src/lib.rs` with `body` as its table.
+    fn evaluate(body: &str) -> anyhow::Result<crate::guards::GateOutcome> {
+        let config = crate::config::DisciplineConfig::from_toml_str(&format!(
+            "[meta]\nversion = 1\nname = \"t\"\n[gates.scope-confinement]\nenabled = true\n{body}\n"
+        ))?;
+        let (_dir, git) = crate::gitctx::test_support::repo_with_changed_file(
+            "src/lib.rs",
+            "pub fn a() {}\n",
+            "pub fn a() {}\npub fn b() {}\n",
+        );
+        super::evaluate_scope_confinement(&crate::guards::test_support::context(&config, &git))
+    }
+
+    /// `run_checks` compiles every glob before a gate runs, so the binary never brings
+    /// an invalid one this far; the gate is called directly to reach its own refusal.
     #[test]
     fn invalid_glob_is_an_error_not_a_silently_skipped_pattern() {
-        let bad = ScopeConfinementGate {
-            enabled: true,
-            forbidden_paths: vec!["[".to_string()],
-            ..Default::default()
-        };
-        assert!(PathFilter::new(&bad.exempt_paths).is_ok());
-        assert!(PathFilter::new(&bad.allowed_paths).is_ok());
-        assert!(PathFilter::new(&bad.forbidden_paths).is_err());
+        for key in ["exempt_paths", "allowed_paths", "forbidden_paths"] {
+            let err = evaluate(&format!("{key} = [\"[\"]"))
+                .err()
+                .unwrap_or_else(|| panic!("`{key}` with an invalid glob was accepted"));
+            let text = format!("{err:#}");
+            assert!(
+                text.contains("invalid glob `[` in configuration"),
+                "{key}: {text}"
+            );
+        }
+    }
+
+    /// Control: the same change under globs that compile is judged, not refused.
+    #[test]
+    fn the_gate_judges_the_change_when_its_globs_compile() {
+        let forbidden = evaluate("forbidden_paths = [\"src/**\"]").unwrap();
+        assert_eq!(forbidden.examined, 1);
+        assert_eq!(forbidden.violations.len(), 1, "{:?}", forbidden.notes);
+        let allowed =
+            evaluate("allowed_paths = [\"src/**\"]\nexempt_paths = [\"docs/**\"]").unwrap();
+        assert_eq!(allowed.examined, 1);
+        assert!(allowed.violations.is_empty(), "{:?}", allowed.notes);
     }
 
     #[test]

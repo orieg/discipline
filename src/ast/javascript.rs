@@ -101,6 +101,7 @@ impl LanguagePack for JavaScriptPack {
                 f.is_test = true;
             }
         }
+        super::method_checks::count(root, src, &mut extractor.facts, &JS_RECEIVER_CALLS);
         super::calls::count(
             root,
             src,
@@ -872,7 +873,14 @@ impl<'a> JsExtractor<'a> {
         None
     }
 
+    /// Records where the tautologies counted under `call` are (`TestFn::mark_tautologies`).
     fn check_assertion_call(&self, call: Node, test: &mut TestFn) {
+        let mark = test.tautology_mark();
+        self.check_assertion_call_unmarked(call, test);
+        test.mark_tautologies(mark, call);
+    }
+
+    fn check_assertion_call_unmarked(&self, call: Node, test: &mut TestFn) {
         let text = self.text(call);
         if let Some(func) = call.child_by_field_name("function") {
             let func_text = self.text(func);
@@ -1084,6 +1092,18 @@ pub const JS_FUNCTIONS: FunctionSpec = FunctionSpec {
     is_test: js_fn_is_test,
     classify: functions::classify_javascript,
 };
+
+/// A method called on a receiver (`method_checks`).
+pub const JS_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
+    super::method_checks::ReceiverCalls {
+        member: &[(
+            "call_expression",
+            "function",
+            "member_expression",
+            "property",
+        )],
+        direct: &[],
+    };
 
 pub const JS_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
     call_kinds: &["call_expression"],

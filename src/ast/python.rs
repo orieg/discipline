@@ -109,6 +109,7 @@ impl LanguagePack for PythonPack {
                 f.is_test = true;
             }
         }
+        super::method_checks::count(root, src, &mut extractor.facts, &PYTHON_RECEIVER_CALLS);
         super::calls::count(
             root,
             src,
@@ -1048,7 +1049,14 @@ impl<'a> PythonExtractor<'a> {
         }
     }
 
+    /// Records where the tautologies counted under `node` are (`TestFn::mark_tautologies`).
     fn visit_body_node(&self, node: Node, test: &mut TestFn, mode: BodyMode) {
+        let mark = test.tautology_mark();
+        self.visit_body_node_unmarked(node, test, mode);
+        test.mark_tautologies(mark, node);
+    }
+
+    fn visit_body_node_unmarked(&self, node: Node, test: &mut TestFn, mode: BodyMode) {
         if super::reach::is_dead(&self.dead, node.start_byte()) {
             return;
         }
@@ -1450,6 +1458,13 @@ pub const PYTHON_FUNCTIONS: FunctionSpec = FunctionSpec {
     is_test: python_fn_is_test,
     classify: functions::classify_python,
 };
+
+/// A method called on a receiver (`method_checks`).
+pub const PYTHON_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
+    super::method_checks::ReceiverCalls {
+        member: &[("call", "function", "attribute", "attribute")],
+        direct: &[],
+    };
 
 pub const PYTHON_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
     call_kinds: &["call"],

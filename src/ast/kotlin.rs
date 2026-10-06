@@ -99,6 +99,7 @@ impl LanguagePack for KotlinPack {
                 f.is_test = true;
             }
         }
+        super::method_checks::count(root, src, &mut extractor.facts, &KOTLIN_RECEIVER_CALLS);
         super::calls::count(
             root,
             src,
@@ -671,7 +672,14 @@ impl<'a> KotlinExtractor<'a> {
             .collect()
     }
 
+    /// Records where the tautologies counted under `node` are (`TestFn::mark_tautologies`).
     fn scan_node(&self, node: Node, test_fn: &mut TestFn, direct_calls: &mut Vec<String>) {
+        let mark = test_fn.tautology_mark();
+        self.scan_node_unmarked(node, test_fn, direct_calls);
+        test_fn.mark_tautologies(mark, node);
+    }
+
+    fn scan_node_unmarked(&self, node: Node, test_fn: &mut TestFn, direct_calls: &mut Vec<String>) {
         if super::reach::is_dead(&self.dead, node.start_byte()) {
             return;
         }
@@ -842,6 +850,13 @@ pub const KOTLIN_FUNCTIONS: FunctionSpec = FunctionSpec {
     is_test: kotlin_fn_is_test,
     classify: functions::classify_kotlin,
 };
+
+/// A method called on a receiver (`method_checks`).
+pub const KOTLIN_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
+    super::method_checks::ReceiverCalls {
+        member: &[("call_expression", "", "navigation_expression", "")],
+        direct: &[],
+    };
 
 pub const KOTLIN_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
     // The grammar has no callee field; the call's own text, cut at `(` or `{`, is judged.

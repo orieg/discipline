@@ -87,6 +87,7 @@ impl LanguagePack for PhpPack {
                 f.is_test = true;
             }
         }
+        super::method_checks::count(root, src, &mut extractor.facts, &PHP_RECEIVER_CALLS);
         super::calls::count(
             root,
             src,
@@ -134,6 +135,17 @@ pub const PHP_FUNCTIONS: FunctionSpec = FunctionSpec {
     is_test: php_fn_is_test,
     classify: functions::classify_php,
 };
+
+/// A method called on a receiver (`method_checks`).
+pub const PHP_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
+    super::method_checks::ReceiverCalls {
+        member: &[],
+        direct: &[
+            ("member_call_expression", "object", "name"),
+            ("nullsafe_member_call_expression", "object", "name"),
+            ("scoped_call_expression", "scope", "name"),
+        ],
+    };
 
 pub const PHP_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
     call_kinds: &[

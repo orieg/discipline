@@ -400,7 +400,6 @@ pub fn extract_suppression_rules(snippet: &str, pat: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use crate::config::{Severity, SuppressionDeltaGate};
-    use crate::guards::PathFilter;
 
     #[test]
     fn test_suppression_delta_defaults() {
@@ -412,16 +411,37 @@ mod tests {
         assert_eq!(gate.max_increase, 0);
     }
 
-    #[test]
-    fn invalid_exempt_glob_is_an_error_not_a_silently_skipped_pattern() {
-        assert!(PathFilter::new(&["[".to_string()]).is_err());
+    /// Calls the gate over a change to `generated/bindings.rs` with `body` as its table.
+    fn evaluate(body: &str) -> anyhow::Result<crate::guards::GateOutcome> {
+        let config = crate::config::DisciplineConfig::from_toml_str(&format!(
+            "[meta]\nversion = 1\nname = \"t\"\n[gates.suppression-delta]\nenabled = true\n{body}\n"
+        ))?;
+        let (_dir, git) = crate::gitctx::test_support::repo_with_changed_file(
+            "generated/bindings.rs",
+            "pub fn a() {}\n",
+            "pub fn a() {}\n#[allow(dead_code)]\nfn b() {}\n",
+        );
+        super::evaluate_suppression_delta(&crate::guards::test_support::context(&config, &git))
     }
 
+    /// `run_checks` compiles every glob before a gate runs, so the binary never brings
+    /// an invalid one this far; the gate is called directly to reach its own refusal.
+    #[test]
+    fn invalid_exempt_glob_is_an_error_not_a_silently_skipped_pattern() {
+        let Err(err) = evaluate("exempt_paths = [\"[\"]") else {
+            panic!("an invalid exempt glob was accepted");
+        };
+        let text = format!("{err:#}");
+        assert!(text.contains("invalid glob `[` in configuration"), "{text}");
+    }
+
+    /// Control: a glob that compiles exempts the file it matches, and only that file.
     #[test]
     fn valid_exempt_glob_still_matches() {
-        let exempt = PathFilter::new(&["generated/**".to_string()]).unwrap();
-        assert!(exempt.matches("generated/bindings.rs"));
-        assert!(!exempt.matches("src/lib.rs"));
+        let reported = evaluate("exempt_paths = [\"vendor/**\"]").unwrap();
+        assert_eq!(reported.violations.len(), 1, "{:?}", reported.notes);
+        let exempted = evaluate("exempt_paths = [\"generated/**\"]").unwrap();
+        assert!(exempted.violations.is_empty(), "{:?}", exempted.notes);
     }
 
     #[test]

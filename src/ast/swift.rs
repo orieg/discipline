@@ -92,6 +92,7 @@ impl LanguagePack for SwiftPack {
                 f.is_test = true;
             }
         }
+        super::method_checks::count(root, src, &mut extractor.facts, &SWIFT_RECEIVER_CALLS);
         super::calls::count(
             root,
             src,
@@ -554,6 +555,13 @@ pub const SWIFT_FUNCTIONS: FunctionSpec = FunctionSpec {
     is_test: swift_fn_is_test,
     classify: functions::classify_swift,
 };
+
+/// A method called on a receiver (`method_checks`).
+pub const SWIFT_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
+    super::method_checks::ReceiverCalls {
+        member: &[("call_expression", "", "navigation_expression", "suffix")],
+        direct: &[],
+    };
 
 pub const SWIFT_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
     call_kinds: &["call_expression"],

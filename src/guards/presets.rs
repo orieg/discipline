@@ -374,4 +374,34 @@ mod tests {
         assert_eq!(cargo_deny.category, "supply-chain");
         assert_eq!(cargo_deny.policy_files, &["deny.toml"]);
     }
+    /// `forbid_output`, `zero_items_pattern` and `canary_expected_diagnostic` are regular
+    /// expressions with no literal fallback (#600). Every built-in default must compile,
+    /// and none may depend on being read as text: each matches its own text.
+    #[test]
+    fn every_preset_output_pattern_compiles_and_matches_its_own_text() {
+        let mut checked = 0;
+        for preset in PRESETS {
+            let patterns = preset
+                .forbid_output
+                .iter()
+                .copied()
+                .chain(preset.zero_items_pattern)
+                .chain(preset.canary_expected_diagnostic);
+            for pattern in patterns {
+                let re = crate::guards::command::output_pattern(pattern, preset.id)
+                    .unwrap_or_else(|e| panic!("preset `{}`: {e:#}", preset.id));
+                // The text a literal match would have looked for. The one default written
+                // as an expression is `lcov`'s, whose text is its unescaped form.
+                let text = pattern.replace('\\', "");
+                assert!(re.is_match(&text), "preset `{}`: `{pattern}`", preset.id);
+                assert!(
+                    !re.is_match("nothing of the kind"),
+                    "preset `{}`: `{pattern}`",
+                    preset.id
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 15, "{checked} patterns checked");
+    }
 }
