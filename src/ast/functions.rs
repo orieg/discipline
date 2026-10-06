@@ -667,10 +667,46 @@ pub fn stems_without_test_word(name: &str) -> Vec<String> {
     found.into_iter().map(str::to_string).collect()
 }
 
-/// Whether the toolchain itself keeps the file out of a production build, whatever it
-/// holds: Go compiles a `_test.go` file into test binaries only.
-pub fn toolchain_test_file(path: &str) -> bool {
+/// Whether a build tool or test runner makes the file test code by construction,
+/// whatever it holds, so that the path is more than a naming heuristic:
+/// - Go compiles a `_test.go` file into test binaries only;
+/// - Cargo builds a `tests/`, `benches/` or `examples/` directory as test, bench and
+///   example targets (Rust files only);
+/// - pytest loads a file named `conftest.py` and nothing else by that name;
+/// - Maven and Gradle compile the `src/test/`, `src/androidTest/` and `src/it/` source
+///   sets onto the test classpath (Java, Kotlin, Scala);
+/// - the Swift Package Manager builds a `Tests/` directory as test targets (Swift files
+///   only).
+///
+/// Every other test path ([`test_path`], a pack's own convention) is a name or a
+/// directory a project chose: `tests/support/helpers.py`, `TestDataBuilder.cs`,
+/// `__tests__/setup.js`, `testutil/files.go`.
+pub fn test_by_construction(path: &str) -> bool {
+    let name = file_name(path);
+    let ext = name.rsplit_once('.').map_or("", |(_, ext)| ext);
+    go_test_file(path)
+        || name == "conftest.py"
+        || (ext == "rs"
+            && ["tests", "benches", "examples"]
+                .iter()
+                .any(|dir| has_dir(path, dir, true)))
+        || (ext == "swift" && has_dir(path, "Tests", true))
+        || (["java", "kt", "kts", "scala"].contains(&ext) && in_test_source_set(path))
+}
+
+/// A Go `_test.go` file.
+pub fn go_test_file(path: &str) -> bool {
     path.to_ascii_lowercase().ends_with("_test.go")
+}
+
+/// Whether a directory `src` of `path` is followed by a test source set of Maven or
+/// Gradle: `src/test/`, `src/androidTest/` or `src/it/`.
+fn in_test_source_set(path: &str) -> bool {
+    let mut components: Vec<&str> = path.split('/').collect();
+    components.pop();
+    components
+        .windows(2)
+        .any(|pair| pair[0] == "src" && ["test", "androidTest", "it"].contains(&pair[1]))
 }
 
 /// Whether the file of `p` is named `name`, alone or after a separator
@@ -811,6 +847,45 @@ mod tests {
     }
 
     /// #598: a directory rule names a whole component at any depth, the first included.
+    #[test]
+    fn test_code_by_construction_is_a_build_tool_rule_not_a_name() {
+        for path in [
+            "pkg/repo_test.go",
+            "pkg/REPO_TEST.GO",
+            "tests/common/mod.rs",
+            "crates/a/benches/support.rs",
+            "examples/demo.rs",
+            "conftest.py",
+            "tests/unit/conftest.py",
+            "svc/src/test/java/com/x/Fixtures.java",
+            "app/src/androidTest/kotlin/Fixtures.kt",
+            "src/it/scala/Fixtures.scala",
+            "Tests/AppTests/Support.swift",
+        ] {
+            assert!(test_by_construction(path), "{path}");
+        }
+        for path in [
+            "tests/support/helpers.py",
+            "app/test_runner.py",
+            "app/myconftest.py",
+            "src/Core/TestDataBuilder.cs",
+            "web/__tests__/setup.js",
+            "pkg/testutil/files.go",
+            "pkg/test/files.go",
+            "src/testutil/files.rs",
+            "Tests/support.rs",
+            "tests/Support.swift",
+            "tests/Fixtures.java",
+            "test/java/Fixtures.java",
+            "app/test/java/Fixtures.java",
+            "src/main/test/Fixtures.java",
+            "src/main/java/TestFixtures.java",
+            "src/test",
+        ] {
+            assert!(!test_by_construction(path), "{path}");
+        }
+    }
+
     #[test]
     fn a_directory_rule_names_a_whole_component_at_any_depth() {
         assert!(has_dir("__tests__/a.js", "__tests__", false));

@@ -9,6 +9,7 @@ use common::{Repo, Run};
 const HANDLER: &str = "error-swallowing/empty-error-handler-added";
 const RECLASSIFIED: &str = "error-swallowing/test-path-reclassification";
 const STUB_ADDED: &str = "stub-bodies/stub-body-added";
+const DISCARDED: &str = "error-swallowing/result-discarded";
 
 const JAVA_BASE: &str = "class Repo {\n  int m() {\n    return g() * 2;\n  }\n}\n";
 const JAVA_HEAD: &str = "class Repo {\n  int m() {\n    try {\n      g();\n    } catch (Exception e) {}\n    return 1;\n  }\n\n  int n() {\n    throw new UnsupportedOperationException(\"not implemented\");\n  }\n}\n";
@@ -24,7 +25,7 @@ const PY_BASE: &str = "def load(p):\n    return open(p).read()\n";
 const PY_HEAD: &str = "def load(p):\n    try:\n        return open(p).read()\n    except Exception:\n        pass\n\n\ndef save(p):\n    raise NotImplementedError\n";
 const JS_BASE: &str = "export function load(x) {\n  return fetch(x);\n}\n";
 const JS_HEAD: &str = "export function load(x) {\n  try { return fetch(x); } catch (e) {}\n}\n\nexport function save(x) {\n  throw new Error(\"not implemented\");\n}\n";
-const GO_HEAD: &str = "package pkg\n\nimport \"os\"\n\nfunc Cleanup(p string) {\n\t_ = os.Remove(p)\n}\n\nfunc Load(p string) int {\n\tpanic(\"not implemented\")\n}\n";
+const GO_HEAD: &str = "package pkg\n\nimport \"os\"\n\nfunc Flush(f *os.File) {\n\t_, _ = f.Write(nil)\n}\n\nfunc Load(p string) int {\n\tpanic(\"not implemented\")\n}\n";
 
 /// A production file that was deleted, and the unrelated content of the test-named
 /// file added in its place: too different for git to pair the two as a rename.
@@ -130,6 +131,22 @@ fn both(run: &Run) -> (Vec<String>, Vec<String>) {
 
 fn production() -> (Vec<String>, Vec<String>) {
     (vec![HANDLER.to_string()], vec![STUB_ADDED.to_string()])
+}
+
+/// What a Go production file holding `GO_HEAD` gives: Go has no handler to leave empty.
+fn go_production() -> (Vec<String>, Vec<String>) {
+    (vec![DISCARDED.to_string()], vec![STUB_ADDED.to_string()])
+}
+
+/// Whether a gate's notes say that a file was judged as production code for its lack
+/// of tests.
+fn judged_for_its_tests(run: &Run, gate: &str) -> bool {
+    notes(run, gate).contains("judged as production code")
+}
+
+/// `[tests] paths` naming `path` alone.
+fn declaring(path: &str) -> String {
+    format!("[tests]\npaths = [\"{path}\"]\n")
 }
 
 fn test_code() -> (Vec<String>, Vec<String>) {
@@ -368,70 +385,146 @@ fn a_deleted_production_file_added_again_under_a_test_name_is_production_code() 
     }
 }
 
-/// Control: the same added file with nothing deleted beside it is a support file and
-/// stays test code.
+/// The same added file with nothing deleted beside it holds no test either: a name
+/// cannot make it test code, so it is judged as production code, and the note names it
+/// alone (#630). Beside each row, the same file under a `[tests] paths` glob stays test
+/// code.
 #[test]
-fn control_an_added_test_named_file_with_no_deleted_counterpart_is_test_code() {
+fn an_added_test_named_file_with_no_test_is_production_code_with_nothing_deleted() {
     for (path, src) in [
         ("app/test_loader.py", PY_HEAD),
         ("src/main/java/TestLoader.java", JAVA_HEAD),
         ("web/loader.test.js", JS_HEAD),
-        ("pkg/helpers_test.go", GO_HEAD),
     ] {
         let run = added(&[(path, src)], None, None);
-        assert_eq!(both(&run), test_code(), "{path}: {}", run.stdout);
+        assert_eq!(both(&run), production(), "{path}: {}", run.stdout);
+        for gate in ["error-swallowing", "stub-bodies"] {
+            let notes = notes(&run, gate);
+            assert!(
+                notes.contains(path)
+                    && notes.contains("holds no test")
+                    && !notes.contains("deletes the production file"),
+                "{path}: {gate}: {notes}"
+            );
+        }
+        let declared = added(&[(path, src)], None, Some(&declaring(path)));
+        assert_eq!(both(&declared), test_code(), "{path}: {}", declared.stdout);
         assert!(
-            !notes(&run, "error-swallowing").contains("holds no test"),
+            !judged_for_its_tests(&declared, "error-swallowing"),
             "{path}: {}",
-            run.stdout
+            declared.stdout
         );
     }
 }
 
-/// Control: a deleted production file whose stem is another one is not paired.
+/// Control: Go compiles a `_test.go` file into test binaries only, so with nothing
+/// deleted beside it a new one is test code with no test in it. The same source under
+/// a production name is reported by both gates.
 #[test]
-fn control_a_deleted_file_with_another_stem_does_not_pair() {
-    let run = added(
-        &[("app/test_loader.py", PY_HEAD)],
-        Some(("app/reader.py", PY_DELETED)),
-        None,
+fn control_an_added_go_test_file_with_no_deleted_counterpart_is_test_code() {
+    let run = added(&[("pkg/helpers_test.go", GO_HEAD)], None, None);
+    assert_eq!(both(&run), test_code(), "{}", run.stdout);
+    assert!(
+        !judged_for_its_tests(&run, "error-swallowing"),
+        "{}",
+        run.stdout
     );
-    assert_eq!(both(&run), test_code(), "{}", run.stdout);
+    let reported = added(&[("pkg/helpers.go", GO_HEAD)], None, None);
+    assert_eq!(both(&reported), go_production(), "{}", reported.stdout);
 }
 
-/// Control: the production file of the matching stem is still there, changed in the
-/// same change: a support file added beside the code it serves is not paired.
+/// A deleted production file whose stem is another one is not paired: the added file
+/// is judged as production code for holding no test, and the note does not name the
+/// deleted file. Control: declared under `[tests] paths`, it stays test code.
 #[test]
-fn control_a_changed_file_that_is_not_deleted_does_not_pair() {
-    let repo = Repo::new();
-    repo.git(&["checkout", "-q", "main"]);
-    repo.write("app/loader.py", PY_DELETED);
-    repo.commit("feat: base");
-    repo.git(&["checkout", "-q", "-B", "work"]);
-    repo.write("app/loader.py", PY_BASE);
-    repo.write("app/test_loader.py", PY_HEAD);
-    repo.commit("feat: add");
-    let run = repo.check(&[]);
-    assert_eq!(both(&run), test_code(), "{}", run.stdout);
+fn a_deleted_file_with_another_stem_does_not_pair_and_the_added_file_is_production_code() {
+    let gone = Some(("app/reader.py", PY_DELETED));
+    let run = added(&[("app/test_loader.py", PY_HEAD)], gone, None);
+    assert_eq!(both(&run), production(), "{}", run.stdout);
+    for gate in ["error-swallowing", "stub-bodies"] {
+        let notes = notes(&run, gate);
+        assert!(
+            notes.contains("app/test_loader.py") && !notes.contains("app/reader.py"),
+            "{gate}: {notes}"
+        );
+    }
+    let config = declaring("app/test_loader.py");
+    let declared = added(&[("app/test_loader.py", PY_HEAD)], gone, Some(&config));
+    assert_eq!(both(&declared), test_code(), "{}", declared.stdout);
 }
 
-/// Control: a deleted TEST file of the matching stem is not paired: the base side
-/// was not production code.
+/// The production file of the matching stem is still there, changed in the same
+/// change, so nothing is paired: the added file is judged as production code for
+/// holding no test, and the note does not say a file was deleted. Control: the same
+/// added file with a test that checks something stays test code.
 #[test]
-fn control_a_deleted_test_file_with_the_matching_stem_does_not_pair() {
+fn a_changed_file_that_is_not_deleted_does_not_pair_and_the_added_file_is_production_code() {
+    let beside_a_changed_file = |added_src: &str| {
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write("app/loader.py", PY_DELETED);
+        repo.commit("feat: base");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+        repo.write("app/loader.py", PY_BASE);
+        repo.write("app/test_loader.py", added_src);
+        repo.commit("feat: add");
+        repo.check(&[])
+    };
+    let run = beside_a_changed_file(PY_HEAD);
+    assert_eq!(both(&run), production(), "{}", run.stdout);
+    for gate in ["error-swallowing", "stub-bodies"] {
+        let notes = notes(&run, gate);
+        assert!(
+            notes.contains("app/test_loader.py") && !notes.contains("deletes the production file"),
+            "{gate}: {notes}"
+        );
+    }
+    let with_a_test = beside_a_changed_file(PY_WITH_A_TEST);
+    assert_eq!(both(&with_a_test), test_code(), "{}", with_a_test.stdout);
+}
+
+/// A deleted TEST file of the matching stem is not paired, the base side not being
+/// production code: the added file is judged as production code for holding no test,
+/// and the note does not name the deleted file. Control: with the added file declared
+/// as well, it stays test code.
+#[test]
+fn a_deleted_test_file_with_the_matching_stem_does_not_pair_and_the_added_file_is_production_code()
+{
+    let unpaired = |run: &Run, gone: &str| {
+        assert_eq!(both(run), production(), "{gone}: {}", run.stdout);
+        for gate in ["error-swallowing", "stub-bodies"] {
+            let notes = notes(run, gate);
+            assert!(
+                notes.contains("app/test_loader.py") && !notes.contains(gone),
+                "{gone}: {gate}: {notes}"
+            );
+        }
+    };
     let in_directory = added(
         &[("app/test_loader.py", PY_HEAD)],
         Some(("tests/loader.py", PY_DELETED)),
         None,
     );
-    assert_eq!(both(&in_directory), test_code(), "{}", in_directory.stdout);
+    unpaired(&in_directory, "tests/loader.py");
     let config = "[tests]\npaths = [\"qa/**\"]\n";
     let declared = added(
         &[("app/test_loader.py", PY_HEAD)],
         Some(("qa/loader.py", PY_DELETED)),
         Some(config),
     );
-    assert_eq!(both(&declared), test_code(), "{}", declared.stdout);
+    unpaired(&declared, "qa/loader.py");
+    let config = "[tests]\npaths = [\"qa/**\", \"app/test_*.py\"]\n";
+    let both_declared = added(
+        &[("app/test_loader.py", PY_HEAD)],
+        Some(("qa/loader.py", PY_DELETED)),
+        Some(config),
+    );
+    assert_eq!(
+        both(&both_declared),
+        test_code(),
+        "{}",
+        both_declared.stdout
+    );
 }
 
 /// Control: one test in the added file and it is left alone. This is the stated limit
@@ -445,40 +538,66 @@ fn control_an_added_test_named_file_with_a_test_is_test_code() {
     );
     assert_eq!(both(&run), test_code(), "{}", run.stdout);
     assert!(
-        !notes(&run, "error-swallowing").contains("holds no test"),
+        !judged_for_its_tests(&run, "error-swallowing"),
         "{}",
         run.stdout
     );
 }
 
-/// Control: with the production file deleted, an added file under a test directory, or
-/// one `[tests] paths` declares, is test code whether or not it holds a test.
+/// With the production file deleted, an added file under a test directory holds no
+/// test and is judged as production code: a directory name does not make it test code,
+/// and it is not paired with the deleted file. Control: one `[tests] paths` declares is
+/// test code whether or not it holds a test, under a test directory or outside one.
 #[test]
-fn control_an_added_file_in_a_test_directory_or_a_declared_path_is_test_code() {
+fn an_added_file_in_a_test_directory_is_production_code_and_a_declared_one_is_test_code() {
     let gone = Some(("app/loader.py", PY_DELETED));
-    let in_directory = added(&[("tests/loader.py", PY_HEAD)], gone, None);
-    assert_eq!(both(&in_directory), test_code(), "{}", in_directory.stdout);
-    let nested = added(&[("tests/test_loader.py", PY_HEAD)], gone, None);
-    assert_eq!(both(&nested), test_code(), "{}", nested.stdout);
+    for path in ["tests/loader.py", "tests/test_loader.py"] {
+        let run = added(&[(path, PY_HEAD)], gone, None);
+        assert_eq!(both(&run), production(), "{path}: {}", run.stdout);
+        for gate in ["error-swallowing", "stub-bodies"] {
+            let notes = notes(&run, gate);
+            assert!(
+                notes.contains(path) && !notes.contains("app/loader.py"),
+                "{path}: {gate}: {notes}"
+            );
+        }
+        let declared = added(&[(path, PY_HEAD)], gone, Some(&declaring("tests/**")));
+        assert_eq!(both(&declared), test_code(), "{path}: {}", declared.stdout);
+    }
     let config = "[tests]\npaths = [\"app/test_*.py\"]\n";
     let declared = added(&[("app/test_loader.py", PY_HEAD)], gone, Some(config));
     assert_eq!(both(&declared), test_code(), "{}", declared.stdout);
 }
 
-/// Control: Go compiles a `_test.go` file into test binaries only, so the name is the
-/// toolchain's own rule: `repo.go` deleted and a `repo_test.go` without a test added
-/// stays test code.
+/// `repo.go` is deleted and a `repo_test.go` without a test is added in the same
+/// directory: the Go toolchain's rule for the name does not exempt it, and it is judged
+/// as production code with both paths in the notes (#630). Control: the deleted file
+/// is in another directory, which is another Go package, and the added file stays test
+/// code.
 #[test]
-fn control_a_go_test_file_is_test_code_whatever_was_deleted() {
+fn a_go_file_deleted_and_added_again_as_a_test_file_is_production_code() {
+    let go_deleted = "package pkg\n\nfunc Run(p string) int {\n\treturn len(p) * 2\n}\n";
     let run = added(
         &[("pkg/repo_test.go", GO_HEAD)],
-        Some((
-            "pkg/repo.go",
-            "package pkg\n\nfunc Run(p string) int {\n\treturn len(p) * 2\n}\n",
-        )),
+        Some(("pkg/repo.go", go_deleted)),
         None,
     );
-    assert_eq!(both(&run), test_code(), "{}", run.stdout);
+    assert_eq!(both(&run), go_production(), "{}", run.stdout);
+    for gate in ["error-swallowing", "stub-bodies"] {
+        let notes = notes(&run, gate);
+        assert!(
+            notes.contains("pkg/repo_test.go")
+                && notes.contains("pkg/repo.go")
+                && notes.contains("holds no test"),
+            "{gate}: {notes}"
+        );
+    }
+    let elsewhere = added(
+        &[("pkg/repo_test.go", GO_HEAD)],
+        Some(("other/repo.go", go_deleted)),
+        None,
+    );
+    assert_eq!(both(&elsewhere), test_code(), "{}", elsewhere.stdout);
 }
 
 /// Control: an added production file is reported as before, with no note about test
@@ -488,7 +607,7 @@ fn control_an_added_production_file_is_reported_without_the_note() {
     let run = added(&[("app/loader.py", PY_HEAD)], None, None);
     assert_eq!(both(&run), production(), "{}", run.stdout);
     assert!(
-        !notes(&run, "error-swallowing").contains("holds no test"),
+        !judged_for_its_tests(&run, "error-swallowing"),
         "{}",
         run.stdout
     );

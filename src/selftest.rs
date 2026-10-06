@@ -499,6 +499,77 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "ast: an added file in test scope by its name or directory only is judged as production code when it holds no test that checks; a declared file, a file a build tool makes test code and a production file are not",
+        || {
+            use crate::gitctx::{ChangeKind, ChangedFile};
+            let reg = crate::ast::default_registry();
+            let v = AssertVocabulary::default();
+            let file = |path: &str, kind: ChangeKind| ChangedFile {
+                path: path.to_string(),
+                old_path: path.to_string(),
+                kind,
+                added_lines: std::collections::BTreeSet::new(),
+            };
+            let judged = |path: &str, kind: ChangeKind, gone: &[&str], declared: &[String]| {
+                let f = file(path, kind);
+                let mut changed: Vec<ChangedFile> =
+                    gone.iter().map(|p| file(p, ChangeKind::Deleted)).collect();
+                changed.push(f.clone());
+                let pack = reg.find_pack(path)?;
+                crate::guards::test_scope_by_name_only(&f, &changed, pack, &reg, declared, 0)
+                    .and_then(|by_name| by_name.classify_path)
+            };
+            let added = |path: &str| judged(path, ChangeKind::Added, &[], &[]);
+            let note_for = |tests: usize| {
+                let f = file("app/test_runner.py", ChangeKind::Added);
+                reg.find_pack(&f.path)
+                    .and_then(|pack| {
+                        crate::guards::test_scope_by_name_only(
+                            &f,
+                            std::slice::from_ref(&f),
+                            pack,
+                            &reg,
+                            &[],
+                            tests,
+                        )
+                    })
+                    .map(|by_name| by_name.note)
+                    .unwrap_or_default()
+            };
+            let as_path = |path: &str| Some(path.to_string());
+            let declared = ["tests/support/**".to_string()];
+            let checks = |src: &str| -> Result<bool> {
+                let path = "app/test_runner.py";
+                let Some(python) = reg.find_pack(path) else {
+                    bail!("no pack reads {path}");
+                };
+                Ok(crate::guards::holds_a_checking_test(
+                    &python.extract(path, src, &v)?,
+                ))
+            };
+            Ok(added("src/Core/TestDataBuilder.cs") == as_path("src/Core/renamed.cs")
+                && added("app/test_runner.py") == as_path("app/renamed.py")
+                && added("tests/support/helpers.py") == as_path("renamed.py")
+                && added("pkg/testutil/files.go") == as_path("renamed.go")
+                && added("app/runner.py").is_none()
+                && added("pkg/helpers_test.go").is_none()
+                && added("tests/common/mod.rs").is_none()
+                && added("tests/conftest.py").is_none()
+                && added("svc/src/test/java/Fixtures.java").is_none()
+                && added("Tests/AppTests/Support.swift").is_none()
+                && judged("tests/support/helpers.py", ChangeKind::Added, &[], &declared).is_none()
+                && judged("tests/support/helpers.py", ChangeKind::Modified, &[], &[]).is_none()
+                && judged("pkg/repo_test.go", ChangeKind::Added, &["pkg/repo.go"], &[])
+                    == as_path("pkg/renamed.go")
+                && judged("pkg/repo_test.go", ChangeKind::Added, &["other/repo.go"], &[]).is_none()
+                && note_for(0).contains("and holds no test;")
+                && note_for(2).contains("and holds 2 test(s), none of which checks anything;")
+                && !checks("def load():\n    return 1\n")?
+                && !checks("def test_placeholder():\n    pass\n")?
+                && checks("def test_load():\n    assert load() == 1\n")?)
+        },
+    ),
+    (
         "ast: SAFETY comment above documents, prose about it does not",
         || {
             let v = AssertVocabulary::default();
