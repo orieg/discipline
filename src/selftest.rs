@@ -1817,6 +1817,186 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "assertion-reduction: a project class moved to a base its file declares is a widening, and a class under a foreign qualifier is not the standard one",
+        || {
+            use crate::ast::default_registry;
+            use crate::ast::expected_exceptions::widened;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let pack = reg
+                .find_pack("tests/test_t.py")
+                .ok_or_else(|| anyhow::anyhow!("no python pack"))?;
+            let py = |classes: &str, raised: &str| -> Result<_> {
+                let src = format!(
+                    "{classes}def test_t():\n    with pytest.raises({raised}):\n        f(-1)\n"
+                );
+                Ok(pack.extract("tests/test_t.py", &src, &v)?.tests[0]
+                    .expected_exceptions
+                    .clone())
+            };
+            let classes = "class AppError(KeyError):\n    pass\n\nclass OrderError(AppError):\n    pass\n\nclass PaymentError(AppError):\n    pass\n\n";
+            Ok(widened(&py(classes, "OrderError")?, &py(classes, "AppError")?).len() == 1
+                && widened(&py(classes, "OrderError")?, &py(classes, "LookupError")?).len() == 1
+                && widened(&py(classes, "OrderError")?, &py(classes, "PaymentError")?).is_empty()
+                && widened(&py(classes, "AppError")?, &py(classes, "OrderError")?).is_empty()
+                && widened(&py("", "OrderError")?, &py("", "AppError")?).is_empty()
+                && widened(&py("", "TimeoutError")?, &py("", "OSError")?).len() == 1
+                && widened(&py("", "errors.TimeoutError")?, &py("", "OSError")?).is_empty())
+        },
+    ),
+    (
+        "assertion-reduction: a dropped expected failure is not reported when head asserts the result of the call it guarded, and is for any other call",
+        || {
+            use crate::ast::default_registry;
+            use crate::ast::expected_exceptions::widened_in;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let pack = reg
+                .find_pack("tests/test_t.py")
+                .ok_or_else(|| anyhow::anyhow!("no python pack"))?;
+            let py = |body: &str| -> Result<_> {
+                let src = format!("def test_t():\n{body}    assert g() == 1\n");
+                Ok(pack.extract("tests/test_t.py", &src, &v)?.tests.remove(0))
+            };
+            let base = py("    with pytest.raises(ValueError):\n        f(-1)\n")?;
+            Ok(widened_in(&base, &py("    assert f(-1) == 0\n")?).is_empty()
+                && widened_in(&base, &py("    assert f(1) == 0\n")?).len() == 1
+                && widened_in(&base, &py("    assert h(-1) == 0\n")?).len() == 1
+                && widened_in(&base, &py("    f(-1)\n")?).len() == 1)
+        },
+    ),
+    (
+        "assertion-reduction: expected failures of AssertJ, Node assert, Chai, NUnit, PHPUnit, Kotlin, RSpec, Minitest and googletest are read, and a stub told to throw is not one",
+        || {
+            use crate::ast::default_registry;
+            use crate::ast::expected_exceptions::widened;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let read = |path: &str, src: String| -> Result<_> {
+                let pack = reg
+                    .find_pack(path)
+                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
+                Ok(pack.extract(path, &src, &v)?.tests[0]
+                    .expected_exceptions
+                    .clone())
+            };
+            let java = |call: &str| {
+                read(
+                    "src/test/java/TTest.java",
+                    format!("class TTest {{\n    @Test\n    void t() {{\n        {call}\n    }}\n}}\n"),
+                )
+            };
+            let js = |call: &str| {
+                read(
+                    "tests/t.test.js",
+                    format!("const assert = require(\"node:assert\");\ntest(\"t\", () => {{\n  {call}\n}});\n"),
+                )
+            };
+            let cs = |call: &str| {
+                read(
+                    "tests/T.cs",
+                    format!("public class T {{\n    [Test]\n    public void Run() {{\n        {call}\n    }}\n}}\n"),
+                )
+            };
+            let php = |call: &str| {
+                read(
+                    "tests/TTest.php",
+                    format!("<?php\nclass TTest extends TestCase {{\n    public function testT(): void {{\n        {call}\n    }}\n}}\n"),
+                )
+            };
+            let kt = |call: &str| {
+                read(
+                    "src/test/kotlin/TTest.kt",
+                    format!("class TTest {{\n    @Test\n    fun t() {{\n        {call}\n    }}\n}}\n"),
+                )
+            };
+            let rspec = |call: &str| {
+                read(
+                    "spec/t_spec.rb",
+                    format!("RSpec.describe T do\n  it \"t\" do\n    {call}\n  end\nend\n"),
+                )
+            };
+            let minitest = |call: &str| {
+                read(
+                    "test/t_test.rb",
+                    format!("class TTest < Minitest::Test\n  def test_t\n    {call}\n  end\nend\n"),
+                )
+            };
+            let cpp = |call: &str| {
+                read(
+                    "tests/t_test.cc",
+                    format!("#include <gtest/gtest.h>\nTEST(T, Run) {{\n  {call}\n}}\n"),
+                )
+            };
+            let wider = |b: Vec<_>, h: Vec<_>| widened(&b, &h).len();
+            Ok(wider(
+                java("assertThatThrownBy(() -> f()).isInstanceOf(NumberFormatException.class);")?,
+                java("assertThatThrownBy(() -> f()).isInstanceOf(IllegalArgumentException.class);")?,
+            ) == 1
+                && wider(
+                    java("assertThatThrownBy(() -> f()).hasMessage(\"negative\");")?,
+                    java("assertThatThrownBy(() -> f()).hasMessageContaining(\"negative\");")?,
+                ) == 1
+                && wider(
+                    java("assertThatThrownBy(() -> f()).hasMessageContaining(\"negative\");")?,
+                    java("assertThatThrownBy(() -> f()).hasMessage(\"negative\");")?,
+                ) == 0
+                && wider(
+                    js("assert.throws(() => f(), RangeError);")?,
+                    js("assert.throws(() => f(), Error);")?,
+                ) == 1
+                && wider(
+                    js("assert.throws(() => f(), RangeError, \"why\");")?,
+                    js("assert.throws(() => f(), RangeError);")?,
+                ) == 0
+                && wider(
+                    js("expect(() => f()).to.throw(RangeError, \"negative\");")?,
+                    js("expect(() => f()).to.throw(RangeError);")?,
+                ) == 1
+                && js("stub.throws(new RangeError());")?.is_empty()
+                && wider(
+                    cs("Assert.That(() => f(), Throws.TypeOf<ArgumentException>());")?,
+                    cs("Assert.That(() => f(), Throws.InstanceOf<ArgumentException>());")?,
+                ) == 1
+                && wider(
+                    cs("Assert.That(() => f(), Throws.InstanceOf<ArgumentException>());")?,
+                    cs("Assert.That(() => f(), Throws.TypeOf<ArgumentException>());")?,
+                ) == 0
+                && wider(
+                    php("$this->expectExceptionMessageMatches('/negative/');")?,
+                    php("$this->expectExceptionMessageMatches('/.*/');")?,
+                ) == 1
+                && wider(
+                    php("$this->expectExceptionObject(new \\DomainException(\"negative\"));")?,
+                    php("$this->expectExceptionObject(new \\DomainException());")?,
+                ) == 1
+                && wider(
+                    kt("assertFailsWith<NumberFormatException> { f() }")?,
+                    kt("assertFailsWith<IllegalArgumentException> { f() }")?,
+                ) == 1
+                && wider(
+                    kt("assertFailsWith<IllegalArgumentException> { f() }")?,
+                    kt("assertFailsWith<NumberFormatException> { f() }")?,
+                ) == 0
+                && wider(
+                    rspec("expect { f }.to raise_error(KeyError, \"negative\")")?,
+                    rspec("expect { f }.to raise_error(IndexError, \"negative\")")?,
+                ) == 1
+                && wider(
+                    minitest("assert_raises(KeyError) { f }")?,
+                    minitest("assert_raises(KeyError, TypeError) { f }")?,
+                ) == 1
+                && wider(
+                    cpp("EXPECT_THROW(f(), std::invalid_argument);")?,
+                    cpp("EXPECT_THROW(f(), std::logic_error);")?,
+                ) == 1
+                && wider(
+                    cpp("EXPECT_THROW(f(), std::logic_error);")?,
+                    cpp("EXPECT_THROW(f(), std::invalid_argument);")?,
+                ) == 0)
+        },
+    ),
+    (
         "error-swallowing: a Python handler for SystemExit or KeyboardInterrupt alone is not a site",
         || {
             use crate::ast::default_registry;

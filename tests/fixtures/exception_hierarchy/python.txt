@@ -1,0 +1,81 @@
+# Python built-in exception classes, one `child parent` pair per line.
+# A class with two bases has two lines. Names with a leading underscore are left out.
+# Runtime: CPython 3.14.5.
+# `IOError` and `EnvironmentError` are `OSError` itself in this runtime, and are not listed.
+# Produced by running this program with python3:
+#   import builtins
+#   def walk(c, out):
+#       for s in c.__subclasses__():
+#           if s.__module__ == "builtins" and not s.__name__.startswith("_"):
+#               out.update((s.__name__, b.__name__) for b in s.__bases__)
+#               walk(s, out)
+#       return out
+#   print("\n".join(f"{c} {p}" for c, p in sorted(walk(BaseException, set()))))
+ArithmeticError Exception
+AssertionError Exception
+AttributeError Exception
+BaseExceptionGroup BaseException
+BlockingIOError OSError
+BrokenPipeError ConnectionError
+BufferError Exception
+BytesWarning Warning
+ChildProcessError OSError
+ConnectionAbortedError ConnectionError
+ConnectionError OSError
+ConnectionRefusedError ConnectionError
+ConnectionResetError ConnectionError
+DeprecationWarning Warning
+EOFError Exception
+EncodingWarning Warning
+Exception BaseException
+ExceptionGroup BaseExceptionGroup
+ExceptionGroup Exception
+FileExistsError OSError
+FileNotFoundError OSError
+FloatingPointError ArithmeticError
+FutureWarning Warning
+GeneratorExit BaseException
+ImportError Exception
+ImportWarning Warning
+IndentationError SyntaxError
+IndexError LookupError
+InterruptedError OSError
+IsADirectoryError OSError
+KeyError LookupError
+KeyboardInterrupt BaseException
+LookupError Exception
+MemoryError Exception
+ModuleNotFoundError ImportError
+NameError Exception
+NotADirectoryError OSError
+NotImplementedError RuntimeError
+OSError Exception
+OverflowError ArithmeticError
+PendingDeprecationWarning Warning
+PermissionError OSError
+ProcessLookupError OSError
+PythonFinalizationError RuntimeError
+RecursionError RuntimeError
+ReferenceError Exception
+ResourceWarning Warning
+RuntimeError Exception
+RuntimeWarning Warning
+StopAsyncIteration Exception
+StopIteration Exception
+SyntaxError Exception
+SyntaxWarning Warning
+SystemError Exception
+SystemExit BaseException
+TabError IndentationError
+TimeoutError OSError
+TypeError Exception
+UnboundLocalError NameError
+UnicodeDecodeError UnicodeError
+UnicodeEncodeError UnicodeError
+UnicodeError ValueError
+UnicodeTranslateError UnicodeError
+UnicodeWarning Warning
+UserWarning Warning
+ValueError Exception
+Warning Exception
+ZeroDivisionError ArithmeticError
