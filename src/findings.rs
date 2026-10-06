@@ -201,6 +201,7 @@ findings! {
     ERROR_LOGGED_AND_DROPPED = ["error-swallowing"], "error-logged-and-dropped", "Error Logged And Dropped", Was("Empty Error Handler Added");
     UNPARSEABLE_INPUT_SKIPPED = ["error-swallowing"], "unparseable-input-skipped", "Unparseable Input Skipped", Same;
     ERROR_SILENCED = ["error-swallowing"], "error-silenced", "Error Silenced", Same;
+    ERROR_REPLACED_BY_CONSTANT = ["error-swallowing"], "error-replaced-by-constant", "Error Replaced By Constant", Same;
     TEST_PATH_RECLASSIFIED = ["error-swallowing"], "test-path-reclassification", "File Renamed Into Test Scope", Same;
 
     // instruction-smuggling
@@ -352,14 +353,17 @@ findings! {
     // sanitizers
     SANITIZER_CANARY_DIAGNOSTIC_MISSING = ["sanitizers"], "canary-diagnostic-missing", "Canary Diagnostic Missing", Message;
     SANITIZER_VIOLATION_DETECTED = ["sanitizers"], "violation-detected", "Sanitizer Violation Detected", Message;
+    SANITIZERS_UNTRUSTED_COMMAND_MODIFICATION = ["sanitizers"], "untrusted-command-modification", "Untrusted Command Modification", Same;
 
     // msrv
     MSRV_DECLARATION_MISSING = ["msrv"], "msrv-declaration-missing", "MSRV Declaration Missing", Message;
     MSRV_COMMAND_FAILED = ["msrv"], "msrv-command-failed", "MSRV Command Failed", Message;
+    MSRV_UNTRUSTED_COMMAND_MODIFICATION = ["msrv"], "untrusted-command-modification", "Untrusted Command Modification", Same;
 
     // miri
     MIRI_ZERO_TESTS_EXECUTED = ["miri"], "zero-tests-executed", "Zero Tests Executed", Message;
     MIRI_UNDEFINED_BEHAVIOR = ["miri"], "undefined-behavior-detected", "Undefined Behavior Detected", Message;
+    MIRI_UNTRUSTED_COMMAND_MODIFICATION = ["miri"], "untrusted-command-modification", "Untrusted Command Modification", Same;
 
     // unsafe-budget
     UNSAFE_BUDGET_EXCEEDED = ["unsafe-budget"], "budget-exceeded", "Unsafe Budget Exceeded", Message;

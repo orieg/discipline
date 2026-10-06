@@ -24,6 +24,10 @@ pub struct Expectation {
     pub skeleton: String,
     /// The literal as written.
     pub literal: String,
+    /// The calls the assertion makes, each as `expected_exceptions::call_text` writes it.
+    /// `assertion-reduction` reads them when an expected exception is dropped: the call
+    /// that had to fail may now be asserted to return a value.
+    pub calls: Vec<String>,
 }
 
 fn attribute(tests: &mut [TestFn], e: Expectation) {
@@ -46,6 +50,7 @@ fn record(tests: &mut [TestFn], whole: Node, lit: Node, src: &str) {
             line: lit.start_position().row + 1,
             skeleton: skeleton(whole, lit, src),
             literal: text(lit, src).to_string(),
+            calls: super::expected_exceptions::calls_in(whole, src),
         },
     );
 }
@@ -519,6 +524,7 @@ mod tests {
             line,
             skeleton: skeleton.to_string(),
             literal: literal.to_string(),
+            calls: Vec::new(),
         }
     }
 

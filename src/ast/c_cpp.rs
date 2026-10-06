@@ -86,8 +86,7 @@ impl CPack {
         let src = masked.as_deref().unwrap_or(src);
         let guarded = super::c_macros::mask_cplusplus_guards(src);
         let src = guarded.as_deref().unwrap_or(src);
-        let tree = parser
-            .parse(src, None)
+        let tree = crate::ast::source_text::parse(&mut parser, src)
             .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
         let root = tree.root_node();
 
@@ -153,8 +152,7 @@ impl LanguagePack for CppPack {
             .map_err(|e| anyhow!("failed to load the C++ grammar: {e}"))?;
         let masked = mask_macros(src, vocab);
         let src = masked.as_deref().unwrap_or(src);
-        let tree = parser
-            .parse(src, None)
+        let tree = crate::ast::source_text::parse(&mut parser, src)
             .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
         let root = tree.root_node();
 
@@ -179,6 +177,7 @@ impl LanguagePack for CppPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         shared_facts(root, src, path, vocab, &mut extractor.facts);
+        super::expected_exceptions::cpp(root, src, &mut extractor.facts.tests);
         Ok(extractor.facts)
     }
 }
@@ -220,7 +219,13 @@ fn shared_facts(
         let whole_file = functions::is_test_file(path, Some(is_c_cpp_test_path))
             || functions::declared_test_path(path, &vocab.test_paths);
         let is_test_line = |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-        facts.swallowed = super::handlers::extract(root, src, &C_HANDLERS, &is_test_line);
+        (facts.swallowed, facts.constant_fallbacks) = super::handlers::extract_with_constants(
+            root,
+            src,
+            &C_HANDLERS,
+            Some(&C_CONSTANTS),
+            &is_test_line,
+        );
     }
     super::retries::mark(root, src, &mut facts.tests, &C_RETRIES);
     if functions::declared_test_path(path, &vocab.test_paths) {
@@ -332,6 +337,31 @@ pub const C_HANDLERS: super::handlers::HandlerSpec = super::handlers::HandlerSpe
     silence_kinds: &[],
     silences: super::handlers::no_discard,
     silence_node: None,
+};
+
+/// A handler statement that puts a number in place of the result (`constant-fallback`):
+/// C++ (C has no handler): `ops = 150000.0`, `rec.ops = -1` (the grammar reads `-1` as one
+/// literal), `out->raw[0] = 2.5e5`, `return 150000`, `return {1.5, 2.0}`. `nullptr`, `NAN`
+/// and `std::nan("")` are not numeric literals.
+pub const C_CONSTANTS: super::handlers::ConstantSpec = super::handlers::ConstantSpec {
+    blocks: &["compound_statement"],
+    wrappers: &["expression_statement", "parenthesized_expression"],
+    numbers: &["number_literal"],
+    signs: &["unary_expression"],
+    assignments: &["assignment_expression"],
+    targets: &[
+        "identifier",
+        "field_expression",
+        "subscript_expression",
+        "qualified_identifier",
+    ],
+    calls: &["call_expression", "new_expression"],
+    returns: &["return_statement"],
+    value_is_last_expression: false,
+    collections: &["initializer_list"],
+    collection_holders: &[],
+    pairs: &[],
+    keys: &[],
 };
 
 pub const C_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

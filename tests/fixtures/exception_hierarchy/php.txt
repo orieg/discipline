@@ -1,0 +1,34 @@
+# PHP predefined, SPL and JSON exception classes, one `child parent` pair per line: the
+# internal `Throwable` classes of the Core, standard, SPL and json extensions.
+# Runtime: PHP 8.5.8.
+# Produced by:
+#   php -r '$o = []; foreach (get_declared_classes() as $c) { $r = new ReflectionClass($c); if ($r->isInternal() && $r->implementsInterface("Throwable") && in_array($r->getExtensionName(), ["Core", "standard", "SPL", "json"])) { $o[] = $c . " " . (get_parent_class($c) ?: "Throwable"); } } sort($o); echo implode(PHP_EOL, $o), PHP_EOL;'
+ArgumentCountError TypeError
+ArithmeticError Error
+AssertionError Error
+BadFunctionCallException LogicException
+BadMethodCallException BadFunctionCallException
+ClosedGeneratorException Exception
+CompileError Error
+DivisionByZeroError ArithmeticError
+DomainException LogicException
+Error Throwable
+ErrorException Exception
+Exception Throwable
+FiberError Error
+InvalidArgumentException LogicException
+JsonException Exception
+LengthException LogicException
+LogicException Exception
+OutOfBoundsException RuntimeException
+OutOfRangeException LogicException
+OverflowException RuntimeException
+ParseError CompileError
+RangeException RuntimeException
+RequestParseBodyException Exception
+RuntimeException Exception
+TypeError Error
+UnderflowException RuntimeException
+UnexpectedValueException RuntimeException
+UnhandledMatchError Error
+ValueError Error

@@ -185,6 +185,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.dependency-delta.manifests` | list | *(9 entries)* | Manifest file globs to inspect |
 | `gates.dependency-delta.require_git_pins` | boolean | `true` | Whether git dependencies must specify an immutable commit or tag pin (default: true) |
 | `gates.dependency-delta.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.error-swallowing.constant_fallback_paths` | list | `[]` | Globs of the files (a benchmark or evaluation harness) in which a new error handler that puts a numeric literal in place of the result is reported, at warning at most; empty turns the check off (default: []) |
 | `gates.error-swallowing.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.error-swallowing.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.error-swallowing.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
@@ -220,12 +221,12 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.manifest-sync.rules[].manifest` | string | *(required)* | Path to packaging manifest (e.g. package.xml) |
 | `gates.manifest-sync.rules[].watched_paths` | list | *(required)* | Git file globs that must be registered in the manifest |
 | `gates.manifest-sync.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
-| `gates.miri.args` | list | `[]` | Additional CLI arguments passed to cargo miri test |
+| `gates.miri.args` | list | `[]` | Additional CLI arguments passed to cargo miri test, one argument per item (ASCII letters, digits and _ . / : = , @ + -). They are executed, so a change under review cannot add or alter them |
 | `gates.miri.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.miri.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.miri.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.miri.timeout_seconds` | integer | `600` | Maximum execution time in seconds before failing closed (default: 600) |
-| `gates.msrv.command` | string or null | *(unset)* | Command to run to verify MSRV compatibility |
+| `gates.msrv.command` | string or null | *(unset)* | Command to run to verify MSRV compatibility. It is executed, so a change under review cannot add or alter it |
 | `gates.msrv.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.msrv.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.msrv.pinned_version` | string or null | *(unset)* | Explicit MSRV version string (e.g. "1.90.0") |
@@ -286,10 +287,10 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.sandbox-config.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.sandbox-config.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.sandbox-config.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
-| `gates.sanitizers.canary` | boolean | `false` | Whether to verify a negative-control race canary before main tests |
+| `gates.sanitizers.canary` | boolean | `false` | Whether to verify a negative-control race canary before main tests. It selects a command that runs, so a change under review cannot alter it |
 | `gates.sanitizers.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.sanitizers.exempt_paths` | list | `[]` | File path globs exempted from this gate |
-| `gates.sanitizers.sanitizer` | string | `"address"` | Sanitizer name to activate (e.g. "address", "thread") |
+| `gates.sanitizers.sanitizer` | string | `"address"` | Sanitizer name to activate (e.g. "address", "thread"): a lower-case letter, then lower-case letters, digits and -. It reaches the command that runs, so a change under review cannot alter it |
 | `gates.sanitizers.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.sanitizers.timeout_seconds` | integer | `300` | Maximum execution time in seconds (default: 300) |
 | `gates.scope-confinement.allowed_paths` | list | `[]` | Glob patterns of paths agents are authorized to modify |
