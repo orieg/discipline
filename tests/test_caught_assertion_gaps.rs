@@ -898,18 +898,18 @@ fn pinned_assertion_in_a_callback_inside_the_try_is_not_reported() {
     );
 }
 
-/// Left: a swallowed assertion that is also a tautology is subtracted from the effective
-/// count twice, so a test the change adds with one real assertion beside it reads as
-/// vacuous.
+/// A swallowed assertion that is also a tautology is taken out of the effective count
+/// once (#602), so a test the change adds with one real assertion beside it is not
+/// vacuous. The swallowed assertion is still reported.
 #[test]
-fn pinned_a_swallowed_tautology_is_subtracted_twice() {
+fn a_swallowed_tautology_is_subtracted_once() {
     let base = format!("{}{}{}", PY.before, PY.plain, PY.after);
     let added = format!(
         "{base}\n\ndef test_b():\n    assert g() == 2\n    try:\n        assert True\n    except AssertionError:\n        pass\n"
     );
     let run = run_files(&PY, &base, &added);
     assert_eq!(caught_in(&run), vec![8]);
-    assert_eq!(run.violations("vacuous-tests").len(), 1, "{}", run.stdout);
+    assert_eq!(run.violations("vacuous-tests").len(), 0, "{}", run.stdout);
 }
 
 /// The gate counts a test the change adds among what it examined.

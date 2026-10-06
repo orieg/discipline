@@ -973,6 +973,88 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "calls: a delay or a trivial assertion spelled in a string literal or a comment is not counted",
+        || {
+            let v = AssertVocabulary::default();
+            let reg = crate::ast::default_registry();
+            let text = analyze(
+                "#[test]\nfn t() {\n    let s = format!(\"std::thread::sleep(d) {}\", 1 /* r.is_ok() */);\n    assert_eq!(render(), \"assert!(r.is_ok())\");\n    assert_eq!(n(), 3, \"ok={}\", r.is_ok());\n}",
+                &v,
+            )?;
+            let code = analyze(
+                "#[test]\nfn t() {\n    select! { _ = tokio::time::sleep(d) => {} }\n    assert!(run().is_ok(), \"left\");\n}",
+                &v,
+            )?;
+            let py = reg.find_pack("test.py").unwrap();
+            let py_text = py.extract(
+                "test.py",
+                "def test_x():\n    src = \"time.sleep(1)\".strip()\n    assert render() == \"x is not None\"\n",
+                &v,
+            )?;
+            let py_code = py.extract(
+                "test.py",
+                "def test_x():\n    time.sleep(1)\n    assert render() is not None\n",
+                &v,
+            )?;
+            let counts = |f: &crate::ast::ParsedFileFacts| (f.tests[0].sleeps, f.tests[0].trivial_asserts);
+            Ok(counts(&text) == (0, 0)
+                && counts(&code) == (1, 1)
+                && counts(&py_text) == (0, 0)
+                && counts(&py_code) == (1, 1))
+        },
+    ),
+    (
+        "ast: a method that asserts, called on a receiver, keeps a test from being vacuous; the least of several counts",
+        || {
+            let v = AssertVocabulary::default();
+            let file = |methods: &str| {
+                format!("struct A(Vec<u8>);\nstruct B(Vec<u8>);\n{methods}\n#[test]\nfn t() {{\n    let v = make();\n    v.done();\n}}\n")
+            };
+            let asserts = "fn done(self) { assert_eq!(self.0.len(), 0); }";
+            let nothing = "fn done(self) { drop(self.0); }";
+            let one = analyze(&file(&format!("impl A {{ {asserts} }}")), &v)?;
+            let none = analyze(&file(&format!("impl A {{ {nothing} }}")), &v)?;
+            let mixed = analyze(
+                &file(&format!("impl A {{ {asserts} }}\nimpl B {{ {nothing} }}")),
+                &v,
+            )?;
+            let both = analyze(
+                &file(&format!("impl A {{ {asserts} }}\nimpl B {{ {asserts} }}")),
+                &v,
+            )?;
+            Ok(!one.tests[0].is_vacuous()
+                // What `assertion-reduction` reads is as the pack counted it.
+                && one.tests[0].total_asserts == 0
+                && one.tests[0].helper_checks == 0
+                && none.tests[0].is_vacuous()
+                && mixed.tests[0].is_vacuous()
+                && !both.tests[0].is_vacuous())
+        },
+    ),
+    (
+        "ast: a swallowed tautology counts against a test once, and two swallowed assertions on one line are two",
+        || {
+            let v = AssertVocabulary::default();
+            let reg = crate::ast::default_registry();
+            let py = reg.find_pack("test.py").unwrap();
+            let extract = |src: &str| py.extract("test.py", src, &v);
+            let beside = extract(
+                "def test_x():\n    assert g() == 2\n    try:\n        assert True\n    except AssertionError:\n        pass\n",
+            )?;
+            let alone = extract(
+                "def test_x():\n    try:\n        assert g() == 2\n    except AssertionError:\n        pass\n",
+            )?;
+            let two = extract(
+                "def test_x():\n    try:\n        assert g() == 2; assert h() == 3\n    except AssertionError:\n        pass\n",
+            )?;
+            Ok(beside.tests[0].effective_asserts() == 1
+                && !beside.tests[0].is_vacuous()
+                && alone.tests[0].is_vacuous()
+                && two.tests[0].caught_assertions.len() == 2
+                && two.tests[0].is_vacuous())
+        },
+    ),
+    (
         "error-swallowing: a tuple binding is not a discarded call, a call is",
         || {
             let v = AssertVocabulary::default();

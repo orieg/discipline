@@ -1819,17 +1819,17 @@ pub fn evaluate_vacuous_tests(
         // The finding this test would raise, in the order the checks below report it;
         // a sound test raises none, and a directive naming it lifts nothing.
         let mocks_only = a.test.mock_asserts > 0
-            && a.test.mock_asserts >= a.test.effective_asserts()
+            && a.test.mock_asserts >= a.test.checks()
             && a.test.strong_asserts == 0
             && a.test.should_panic.is_none()
             && a.test.expected_exceptions.is_empty();
         let trivial_only = a.test.trivial_asserts > 0
-            && a.test.trivial_asserts >= a.test.effective_asserts()
+            && a.test.trivial_asserts >= a.test.checks()
             && a.test.should_panic.is_none()
             && a.test.expected_exceptions.is_empty();
         let below_floor = settings
             .min_assertions_per_test
-            .is_some_and(|min| a.test.effective_asserts() < min);
+            .is_some_and(|min| a.test.checks() < min);
         let lifts = if mocks_only {
             &crate::findings::ASSERTS_ONLY_ON_MOCKS
         } else if trivial_only {
@@ -1855,7 +1855,7 @@ pub fn evaluate_vacuous_tests(
         // Every assertion is on a double's interactions: the test checks that the mock
         // was called, and nothing about what the code produced.
         if a.test.mock_asserts > 0
-            && a.test.mock_asserts >= a.test.effective_asserts()
+            && a.test.mock_asserts >= a.test.checks()
             && a.test.strong_asserts == 0
             && a.test.should_panic.is_none()
             && a.test.expected_exceptions.is_empty()
@@ -1878,7 +1878,7 @@ pub fn evaluate_vacuous_tests(
         // (`is not None` is a comparison, so the pack may count it as strong; the
         // trivial count decides.)
         if a.test.trivial_asserts > 0
-            && a.test.trivial_asserts >= a.test.effective_asserts()
+            && a.test.trivial_asserts >= a.test.checks()
             && a.test.should_panic.is_none()
             && a.test.expected_exceptions.is_empty()
         {
@@ -1916,7 +1916,7 @@ pub fn evaluate_vacuous_tests(
             );
             out.anchor_last(a.test.name.clone());
         } else if let Some(min) = settings.min_assertions_per_test {
-            if a.test.effective_asserts() < min {
+            if a.test.checks() < min {
                 out.push(
                     settings.severity(),
                     &crate::findings::ASSERTION_DENSITY_BELOW_FLOOR,
@@ -1925,7 +1925,7 @@ pub fn evaluate_vacuous_tests(
                     format!(
                         "New test `{}` contains {} effective assertion(s), failing minimum assertion density floor of {min}.",
                         a.test.name,
-                        a.test.effective_asserts()
+                        a.test.checks()
                     ),
                     "Add additional discriminating assertions to meet the configured assertion density floor.",
                 );

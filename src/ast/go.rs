@@ -90,6 +90,7 @@ impl LanguagePack for GoPack {
                 f.is_test = true;
             }
         }
+        super::method_checks::count(root, src, &mut extractor.facts, &GO_RECEIVER_CALLS);
         super::calls::count(
             root,
             src,
@@ -406,7 +407,20 @@ impl<'a> GoExtractor<'a> {
         }
     }
 
+    /// Records where the tautologies counted under `node` are (`TestFn::mark_tautologies`).
     fn scan_node(
+        &mut self,
+        node: Node,
+        test_fn: &mut TestFn,
+        parent_name: &str,
+        direct_calls: &mut Vec<String>,
+    ) {
+        let mark = test_fn.tautology_mark();
+        self.scan_node_unmarked(node, test_fn, parent_name, direct_calls);
+        test_fn.mark_tautologies(mark, node);
+    }
+
+    fn scan_node_unmarked(
         &mut self,
         node: Node,
         test_fn: &mut TestFn,
@@ -824,6 +838,18 @@ pub const GO_FUNCTIONS: FunctionSpec = FunctionSpec {
     is_test: go_fn_is_test,
     classify: functions::classify_go,
 };
+
+/// A method called on a receiver (`method_checks`).
+pub const GO_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
+    super::method_checks::ReceiverCalls {
+        member: &[(
+            "call_expression",
+            "function",
+            "selector_expression",
+            "field",
+        )],
+        direct: &[],
+    };
 
 pub const GO_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
     call_kinds: &["call_expression"],

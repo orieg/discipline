@@ -93,6 +93,7 @@ impl LanguagePack for CSharpPack {
                 f.is_test = true;
             }
         }
+        super::method_checks::count(root, src, &mut extractor.facts, &CSHARP_RECEIVER_CALLS);
         super::calls::count(
             root,
             src,
@@ -445,7 +446,19 @@ impl<'a> CSharpExtractor<'a> {
         Some((test_fn, direct_calls))
     }
 
+    /// Records where the tautologies counted under `node` are (`TestFn::mark_tautologies`).
     fn extract_assertions_in_body(
+        &self,
+        node: Node,
+        test_fn: &mut TestFn,
+        direct_calls: &mut Vec<String>,
+    ) {
+        let mark = test_fn.tautology_mark();
+        self.extract_assertions_in_body_unmarked(node, test_fn, direct_calls);
+        test_fn.mark_tautologies(mark, node);
+    }
+
+    fn extract_assertions_in_body_unmarked(
         &self,
         node: Node,
         test_fn: &mut TestFn,
@@ -715,6 +728,18 @@ pub const CSHARP_FUNCTIONS: FunctionSpec = FunctionSpec {
     is_test: csharp_fn_is_test,
     classify: functions::classify_jvm,
 };
+
+/// A method called on a receiver (`method_checks`).
+pub const CSHARP_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
+    super::method_checks::ReceiverCalls {
+        member: &[(
+            "invocation_expression",
+            "function",
+            "member_access_expression",
+            "name",
+        )],
+        direct: &[],
+    };
 
 pub const CSHARP_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
     call_kinds: &["invocation_expression", "object_creation_expression"],
