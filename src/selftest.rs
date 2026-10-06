@@ -4583,6 +4583,37 @@ test tests::c: test
         },
     ),
     (
+        "msrv, miri, sanitizers: a difference in an executed key is the change's text, a compared key is not, and an interpolated value has one shape",
+        || {
+            use crate::config::DisciplineConfig;
+            use crate::guards::command::executed_keys_that_differ;
+            use crate::guards::{miri, msrv, sanitizers};
+            let gates = |body: &str| -> Result<crate::config::Gates> {
+                Ok(DisciplineConfig::from_toml_str(body)?.gates)
+            };
+            let none = gates("")?;
+            let differ = |keys: &dyn Fn(&crate::config::Gates) -> crate::guards::command::ExecutedKeys,
+                          head: &str,
+                          base: &crate::config::Gates|
+             -> Result<Vec<&'static str>> {
+                Ok(executed_keys_that_differ(&keys(&gates(head)?), &keys(base)))
+            };
+            let thread = gates("[gates.sanitizers]\nsanitizer = \"thread\"\n")?;
+            Ok(differ(&msrv::executed_keys, "[gates.msrv]\ncommand = \"true\"\n", &none)? == ["command"]
+                && differ(&msrv::executed_keys, "[gates.msrv]\nenabled = true\npinned_version = \"1.90\"\n", &none)?.is_empty()
+                && differ(&miri::executed_keys, "[gates.miri]\nargs = [\"--lib\"]\n", &none)? == ["args"]
+                && differ(&miri::executed_keys, "[gates.miri]\nenabled = true\ntimeout_seconds = 5\n", &none)?.is_empty()
+                && differ(&sanitizers::executed_keys, "[gates.sanitizers]\nsanitizer = \"memory\"\n", &thread)? == ["sanitizer"]
+                && differ(&sanitizers::executed_keys, "[gates.sanitizers]\nsanitizer = \"thread\"\ncanary = true\n", &thread)? == ["canary"]
+                && differ(&sanitizers::executed_keys, "[gates.sanitizers]\nsanitizer = \"thread\"\ntimeout_seconds = 5\n", &thread)?.is_empty()
+                && miri::check_arg("--lib").is_ok()
+                && miri::check_arg("--lib --config build.rustc-wrapper=w").is_err()
+                && sanitizers::check_sanitizer_name("shadow-call-stack").is_ok()
+                && sanitizers::check_sanitizer_name("address --config x").is_err()
+                && sanitizers::check_sanitizer_name("-Zunstable-options").is_err())
+        },
+    ),
+    (
         "command: a command the runner supplies makes only that command's change moot",
         || {
             use crate::config::DisciplineConfig;
