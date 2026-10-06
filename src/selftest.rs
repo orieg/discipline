@@ -5010,9 +5010,27 @@ smoke_cost::set_contains
     (
         "scope-confinement: a malformed glob is a configuration error, never a skipped pattern",
         || {
-            use crate::guards::PathFilter;
-            Ok(PathFilter::new(&["[".to_string()]).is_err()
-                && PathFilter::new(&["src/**".to_string()]).is_ok())
+            use crate::config::DisciplineConfig;
+            use crate::guards::check_configured_globs;
+            let load = |key: &str, glob: &str| {
+                DisciplineConfig::from_toml_str(&format!(
+                    "[meta]\nversion = 1\nname = \"t\"\n[gates.scope-confinement]\nenabled = true\n{key} = [\"{glob}\"]\n"
+                ))
+            };
+            let ids = ["scope-confinement"];
+            for key in ["exempt_paths", "allowed_paths", "forbidden_paths"] {
+                let refused = check_configured_globs(&load(key, "[")?, &ids)
+                    .err()
+                    .is_some_and(|e| {
+                        let text = format!("{e:#}");
+                        text.contains("invalid glob `[`")
+                            && text.contains(&format!("gates.scope-confinement.{key}"))
+                    });
+                if !refused || check_configured_globs(&load(key, "src/**")?, &ids).is_err() {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
         },
     ),
     (

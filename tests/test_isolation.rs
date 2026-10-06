@@ -5,25 +5,12 @@ mod common;
 
 use common::Repo;
 
-/// Removes parent-process variables on drop, so a failure cannot pollute the
-/// rest of this test binary.
-struct EnvGuard {
-    vars: Vec<&'static str>,
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        for v in &self.vars {
-            std::env::remove_var(v);
-        }
-    }
-}
-
 /// The parent process forges CI state that would waive the weakened test below:
-/// a `PR_BODY` waiver, a `GITHUB_EVENT_PATH` file carrying the same waiver, and
-/// a token. The isolated helper scrubs all three, so the run still reports the
-/// dropped assertion with no override.
-/// Killed mutant: the scrub loop removed from `common::discipline_cmd`.
+/// a `PR_BODY` waiver and a `GITHUB_EVENT_PATH` file carrying the same waiver. The
+/// isolated helper scrubs both, so the run still reports the dropped assertion with no
+/// override.
+/// Killed mutants: `PR_BODY` left in the spawned environment by `common::isolate_env`,
+/// and `GITHUB_EVENT_PATH` left in it.
 #[test]
 fn spawned_binary_does_not_inherit_forge_env_from_the_parent_process() {
     let repo = Repo::new();
@@ -44,12 +31,11 @@ fn spawned_binary_does_not_inherit_forge_env_from_the_parent_process() {
         .to_string(),
     )
     .unwrap();
-    std::env::set_var("PR_BODY", "allow-assertion-drop: adds covered elsewhere");
-    std::env::set_var("GITHUB_EVENT_PATH", tmp.path().join("event.json"));
-    std::env::set_var("GH_TOKEN", "parent-process-token");
-    let _guard = EnvGuard {
-        vars: vec!["PR_BODY", "GITHUB_EVENT_PATH", "GH_TOKEN"],
-    };
+    let event = tmp.path().join("event.json");
+    let _ambient = Ambient::set(&[
+        ("PR_BODY", "allow-assertion-drop: adds covered elsewhere"),
+        ("GITHUB_EVENT_PATH", event.to_str().unwrap()),
+    ]);
     let run = repo.check(&[]);
     assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
     assert_eq!(run.json()["overrides"], 0, "{}", run.stdout);
@@ -57,6 +43,72 @@ fn spawned_binary_does_not_inherit_forge_env_from_the_parent_process() {
         !run.titles("assertion-reduction").is_empty(),
         "the dropped assertion must still be reported: {}",
         run.stdout
+    );
+}
+
+/// Every token variable the forge client reads, for any forge kind.
+const TOKEN_VARIABLES: &[&str] = &[
+    "DISCIPLINE_FORGE_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GITLAB_TOKEN",
+    "GITEA_TOKEN",
+    "FORGEJO_TOKEN",
+];
+
+/// The `Authorization` values the loopback forge received from one `doctor` run as
+/// `forge`, with `env` given to the spawn by the test itself.
+fn authorizations_sent(forge: &str, env: &[(&str, &str)]) -> Vec<String> {
+    let repo = Repo::new();
+    let api = common::FakeForge::start();
+    api.serve("repos/o/r", serde_json::json!({"default_branch": "main"}));
+    repo.git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://forge.example.com/o/r.git",
+    ]);
+    let url = api.url();
+    let mut env = env.to_vec();
+    env.push(("DISCIPLINE_FORGE", forge));
+    env.push(("DISCIPLINE_FORGE_API_URL", url.as_str()));
+    repo.run(&["doctor", "--format", "json"], &env);
+    let requests = api.requests();
+    assert!(
+        !requests.is_empty(),
+        "{forge}: the loopback forge was not asked"
+    );
+    requests
+        .into_iter()
+        .flat_map(|(_, headers)| headers)
+        .filter(|(name, _)| name == "authorization")
+        .map(|(_, value)| value)
+        .collect()
+}
+
+/// A token of the parent process is a credential of whoever runs the tests: no spawn
+/// may send it, to the loopback forge or anywhere. Each token variable is set alone, so
+/// one that leaks is named, for every forge kind that reads it.
+/// Killed mutants: each of the six names left in the spawned environment by
+/// `common::isolate_env`, one at a time.
+#[test]
+fn a_token_of_the_parent_process_is_not_sent_to_the_forge() {
+    for name in TOKEN_VARIABLES {
+        let _ambient = Ambient::set(&[(name, "parent-process-token")]);
+        for forge in ["github", "gitlab", "gitea", "forgejo"] {
+            assert_eq!(
+                authorizations_sent(forge, &[]),
+                Vec::<String>::new(),
+                "{name} of the parent process, as {forge}"
+            );
+        }
+    }
+    // Control: a token the test itself gives the spawn is sent, so the header would be
+    // seen above had a parent's token got through.
+    let sent = authorizations_sent("github", &[("GH_TOKEN", "test-token")]);
+    assert!(
+        !sent.is_empty() && sent.iter().all(|v| v == "Bearer test-token"),
+        "{sent:?}"
     );
 }
 

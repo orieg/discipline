@@ -918,34 +918,38 @@ end
         assert_eq!(facts.tests[2].total_asserts, 0);
     }
 
+    /// The helper is defined in no file the pack reads, so only the configured
+    /// vocabulary can make its call count.
     #[test]
     fn test_ruby_escape_hatches_and_custom_vocab() {
         let src = r#"
 # rubocop:disable Metrics/MethodLength
-class CustomTest < Minitest::Test
-  def custom_check_ok(r)
-    assert_equal(1, r)
-  end
-
+class CustomTest < SharedChecks
   # rubocop:todo Style/FrozenStringLiteralComment
   def test_custom_helper
     custom_check_ok(result)
   end
 end
 "#;
+        let extract = |vocab: &AssertVocabulary| {
+            RubyPack
+                .extract("test/custom_test.rb", src, vocab)
+                .expect("extract succeeds")
+        };
         let mut vocab = AssertVocabulary::default();
         vocab.helper_fns.push("custom_check_ok".to_string());
 
-        let pack = RubyPack;
-        let facts = pack
-            .extract("test/custom_test.rb", src, &vocab)
-            .expect("extract succeeds");
-
+        let facts = extract(&vocab);
         assert_eq!(facts.escape_hatches.len(), 2);
         assert_eq!(facts.tests.len(), 1);
+        // A configured helper adds one to the total and none to the strong count.
         assert_eq!(facts.tests[0].total_asserts, 1);
-        assert_eq!(facts.tests[0].strong_asserts, 1);
-        assert!(!facts.tests[0].is_vacuous());
+        assert_eq!(facts.tests[0].strong_asserts, 0);
+
+        // Control: without the vocabulary the helper call is not an assertion.
+        let plain = extract(&AssertVocabulary::default());
+        assert_eq!(plain.tests.len(), 1);
+        assert_eq!(plain.tests[0].total_asserts, 0);
     }
 
     #[test]
