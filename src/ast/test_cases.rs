@@ -1315,7 +1315,7 @@ def test_add(a, b, s):
         parser
             .set_language(&tree_sitter_python::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse(code, None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, code).unwrap();
         let root = tree.root_node();
         let fn_node = root.child(0).unwrap();
         let mut decorators = Vec::new();
@@ -1345,7 +1345,7 @@ def test_x(x):
         parser
             .set_language(&tree_sitter_python::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse(code, None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, code).unwrap();
         let root = tree.root_node();
         let fn_node = root.child(0).unwrap();
         let mut decorators = Vec::new();
@@ -1376,7 +1376,7 @@ def test_xy(x, y):
         parser
             .set_language(&tree_sitter_python::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse(code, None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, code).unwrap();
         let root = tree.root_node();
         let fn_node = root.child(0).unwrap();
         let mut decorators = Vec::new();
@@ -1406,7 +1406,7 @@ def test_dynamic(x):
         parser
             .set_language(&tree_sitter_python::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse(code, None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, code).unwrap();
         let root = tree.root_node();
         let fn_node = root.child(0).unwrap();
         let mut decorators = Vec::new();
@@ -1436,7 +1436,7 @@ test.each([[1, 2, 3], [2, 2, 4], [-1, 1, 0]])("add %i %i", (a, b, s) => {
         parser
             .set_language(&tree_sitter_javascript::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse(code, None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, code).unwrap();
         let root = tree.root_node();
         let expr_stmt = root.child(0).unwrap();
         let outer_call = expr_stmt.child(0).unwrap();
@@ -1461,7 +1461,7 @@ test.each(getCases())("add %i %i", (a, b, s) => {
         parser
             .set_language(&tree_sitter_javascript::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse(code, None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, code).unwrap();
         let root = tree.root_node();
         let expr_stmt = root.child(0).unwrap();
         let outer_call = expr_stmt.child(0).unwrap();
@@ -1490,7 +1490,7 @@ test.each`
         parser
             .set_language(&tree_sitter_javascript::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse(code, None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, code).unwrap();
         let root = tree.root_node();
         let expr_stmt = root.child(0).unwrap();
         let outer_call = expr_stmt.child(0).unwrap();
@@ -1534,7 +1534,7 @@ func TestAdd(t *testing.T) {
         parser
             .set_language(&tree_sitter_go::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse(code, None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, code).unwrap();
         let root = tree.root_node();
         let fn_node = root.child(1).unwrap();
         let body = fn_node.child_by_field_name("body").unwrap();
@@ -1563,7 +1563,7 @@ func TestAdd(t *testing.T) {
         parser
             .set_language(&tree_sitter_go::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse(code, None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, code).unwrap();
         let root = tree.root_node();
         let fn_node = root.child(1).unwrap();
         let body = fn_node.child_by_field_name("body").unwrap();
@@ -1591,7 +1591,7 @@ class TestExample {
         parser
             .set_language(&tree_sitter_java::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse(code, None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, code).unwrap();
         let root = tree.root_node();
         let class_decl = root.child(0).unwrap();
         let class_body = class_decl.child_by_field_name("body").unwrap();
@@ -1629,7 +1629,7 @@ class TestExample {
         parser
             .set_language(&tree_sitter_java::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse(code, None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, code).unwrap();
         let root = tree.root_node();
         let class_decl = root.child(0).unwrap();
         let class_body = class_decl.child_by_field_name("body").unwrap();
@@ -1667,7 +1667,7 @@ class TestExample {
         parser
             .set_language(&tree_sitter_java::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse(code, None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, code).unwrap();
         let root = tree.root_node();
         let class_decl = root.child(0).unwrap();
         let class_body = class_decl.child_by_field_name("body").unwrap();
@@ -1707,7 +1707,7 @@ public class TestClass {
         parser
             .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse(code, None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, code).unwrap();
         let root = tree.root_node();
         let class_decl = root.child(0).unwrap();
         let class_body = class_decl.child_by_field_name("body").unwrap();
@@ -1740,7 +1740,7 @@ public class TestClass {
         parser
             .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse(code, None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, code).unwrap();
         let root = tree.root_node();
         let class_decl = root.child(0).unwrap();
         let class_body = class_decl.child_by_field_name("body").unwrap();
@@ -1773,7 +1773,7 @@ fn test_add(#[case] a: i32, #[case] b: i32, #[case] s: i32) {
         parser
             .set_language(&tree_sitter_rust::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse(code, None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, code).unwrap();
         let root = tree.root_node();
         let mut cursor = root.walk();
         let fn_node = root
@@ -1801,7 +1801,7 @@ fn test_matrix(#[values(1, 2)] a: i32, #[values(10, 20, 30)] b: i32) {
         parser
             .set_language(&tree_sitter_rust::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse(code, None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, code).unwrap();
         let root = tree.root_node();
         let mut cursor = root.walk();
         let fn_node = root

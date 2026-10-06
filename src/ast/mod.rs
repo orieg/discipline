@@ -53,6 +53,7 @@ pub mod runner_config;
 pub mod rust;
 #[cfg(feature = "lang-scala")]
 pub mod scala;
+pub(crate) mod source_text;
 #[cfg(feature = "lang-swift")]
 pub mod swift;
 pub mod test_cases;
@@ -2332,7 +2333,7 @@ mod tests {
             parser
                 .set_language(&tree_sitter_rust::LANGUAGE.into())
                 .unwrap();
-            let tree = parser.parse(&src, None).unwrap();
+            let tree = crate::ast::source_text::parse(&mut parser, &src).unwrap();
             let f = tree.root_node().named_child(0).unwrap();
             let callees: Vec<String> = callees.iter().map(|c| c.to_string()).collect();
             thin_wrapper_callee(
@@ -2379,7 +2380,7 @@ mod tests {
             parser
                 .set_language(&tree_sitter_rust::LANGUAGE.into())
                 .unwrap();
-            let tree = parser.parse(&src, None).unwrap();
+            let tree = crate::ast::source_text::parse(&mut parser, &src).unwrap();
             let f = tree.root_node().named_child(0).unwrap();
             let callees: Vec<String> = callees.iter().map(|c| c.to_string()).collect();
             forwarding_wrapper_callee(

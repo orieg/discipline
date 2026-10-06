@@ -1832,7 +1832,7 @@ mod tests {
         parser
             .set_language(&tree_sitter_python::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse("a\nb\n", None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, "a\nb\n").unwrap();
         let (first, second) = (
             tree.root_node().named_child(0).unwrap(),
             tree.root_node().named_child(1).unwrap(),
