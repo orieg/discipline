@@ -46,14 +46,20 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     // change supplies. Under `--policy-from base` the copy in force is the base's and the
     // two are equal. A base configuration that is absent, or does not load, vouches for
     // no command, as in the `command` gate.
-    let untrusted_test_command = ctx.git.has_base()
-        && test_command_supplied_by_change(
+    // With no base at all (`--staged` before the first commit) nothing vouches for it
+    // either: on a CI runner it is not run, on a developer's machine it is their own.
+    let unvouched = if ctx.git.has_base() {
+        test_command_supplied_by_change(
             settings.test_command.as_deref(),
             base_cfg
                 .as_ref()
                 .and_then(|c| c.gates.test_floor.test_command.as_deref()),
         )
-        && !crate::guards::command::runner_authorises_command_change();
+    } else {
+        settings.test_command.is_some() && crate::gitctx::is_ci_environment()
+    };
+    let untrusted_test_command =
+        unvouched && !crate::guards::command::runner_authorises_command_change();
     let head_min_tests = settings.min_tests;
 
     // 1. Resolve base floor constant from constant_file if configured.
@@ -473,8 +479,12 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
             &crate::findings::UNTRUSTED_TEST_COMMAND,
             Some(ctx.config_path),
             None,
-            "The change adds or alters `test_command` in `[gates.test-floor]` without runner environment authorization; a command cannot be introduced or altered by the change it judges, so it was not run and the test count was not taken."
-                .to_string(),
+            if ctx.git.has_base() {
+                "The change adds or alters `test_command` in `[gates.test-floor]` without runner environment authorization; a command cannot be introduced or altered by the change it judges, so it was not run and the test count was not taken."
+            } else {
+                "This CI run has no base ref to compare `test_command` in `[gates.test-floor]` with, and no runner environment authorization; a command cannot be introduced by the change it judges, so it was not run and the test count was not taken."
+            }
+            .to_string(),
             "Configure `test_command` in the merge base ref's discipline.toml, or set DISCIPLINE_ALLOW_COMMAND_CHANGE on the runner to accept the change.",
         );
         return Ok(out);
@@ -904,29 +914,44 @@ pub(crate) fn test_command_supplied_by_change(in_force: Option<&str>, base: Opti
     in_force.is_some() && in_force != base
 }
 
-/// Executes an external test listing command and counts tests from output lines.
-pub fn count_tests_via_command(cmd: &str, cwd: &Path) -> Result<usize> {
-    let parts = crate::guards::command::split_command_line(cmd)?;
-    if parts.is_empty() {
-        bail!("test_command is empty");
-    }
-    let mut process = std::process::Command::new(&parts[0]);
-    process.args(&parts[1..]);
-    process.current_dir(cwd);
+/// How long a `test_command` may run. `[gates.test-floor]` has no `timeout_seconds`, and
+/// a listing may have to build the tests first, so this is the longest limit a built-in
+/// gate gives a command (`miri`'s default).
+pub const TEST_COMMAND_TIMEOUT_SECONDS: u64 = 600;
 
-    let output = process
-        .output()
-        .with_context(|| format!("Failed to execute test listing command: '{cmd}'"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+/// Executes an external test listing command and counts tests from output lines, under
+/// the bounds of the `command` gate's runner: [`TEST_COMMAND_TIMEOUT_SECONDS`] and the
+/// same capture limit. A command that times out, cannot be started, fails, or prints past
+/// the capture limit is an error (exit 2), never a count of zero or of the part captured.
+pub fn count_tests_via_command(cmd: &str, cwd: &Path) -> Result<usize> {
+    count_tests_via_command_within(cmd, cwd, TEST_COMMAND_TIMEOUT_SECONDS)
+}
+
+/// [`count_tests_via_command`] with the time limit given.
+pub fn count_tests_via_command_within(
+    cmd: &str,
+    cwd: &Path,
+    timeout_seconds: u64,
+) -> Result<usize> {
+    use crate::could_not_check::{tag, Reason};
+    use crate::guards::command::{run_command_bounded, MAX_CAPTURE_BYTES};
+    let run = run_command_bounded("test_command", cmd, timeout_seconds, cwd)?;
+    if !run.status.success() {
         bail!(
             "Test listing command failed with exit code {:?}:\n{}",
-            output.status.code(),
-            stderr
+            run.status.code(),
+            run.stderr
         );
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(parse_test_count_output(&stdout))
+    if run.stdout_truncated {
+        return Err(tag(
+            Reason::Gate,
+            anyhow::anyhow!(
+                "`test_command` output went past the {MAX_CAPTURE_BYTES}-byte capture limit or could not be read, so the tests it lists cannot be counted; make the command print the count, or one line per test and nothing else"
+            ),
+        ));
+    }
+    Ok(parse_test_count_output(&run.stdout))
 }
 
 /// Parses test count from output (e.g. `cargo test -- --list` lines ending in `: test`).
@@ -1387,6 +1412,66 @@ test_blob_compact: test
         assert!(
             violations.is_empty(),
             "Test that passed on retry is considered passed on head"
+        );
+    }
+
+    // ---- #592: `test_command` runs under the command gate's bounds ----
+
+    const LISTING_OF_TWO: &str = "printf 'a: test\\nb: test\\n'";
+    const NEVER_ENDS: &str = "sleep 30";
+    const FLOOD: &str = "head -c 26214401 /dev/zero";
+    const FAILS_AFTER_A_COUNT: &str = "sh -c 'echo 99999; exit 3'";
+
+    fn reason(e: &anyhow::Error) -> crate::could_not_check::Reason {
+        crate::could_not_check::classify(e).0
+    }
+
+    #[test]
+    fn a_test_command_is_counted_within_its_bounds() {
+        let cwd = std::env::temp_dir();
+        assert_eq!(count_tests_via_command(LISTING_OF_TWO, &cwd).unwrap(), 2);
+    }
+
+    #[test]
+    fn a_test_command_that_does_not_end_is_stopped_and_is_not_a_count() {
+        let cwd = std::env::temp_dir();
+        let started = std::time::Instant::now();
+        let err = count_tests_via_command_within(NEVER_ENDS, &cwd, 1).unwrap_err();
+        assert_eq!(
+            reason(&err),
+            crate::could_not_check::Reason::ToolTimeout,
+            "{err:#}"
+        );
+        assert!(format!("{err:#}").contains("timed out after 1s"), "{err:#}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    }
+
+    #[test]
+    fn a_test_command_past_the_capture_limit_is_not_a_count() {
+        let cwd = std::env::temp_dir();
+        let err = count_tests_via_command(FLOOD, &cwd).unwrap_err();
+        assert_eq!(
+            reason(&err),
+            crate::could_not_check::Reason::Gate,
+            "{err:#}"
+        );
+        assert!(format!("{err:#}").contains("capture limit"), "{err:#}");
+    }
+
+    #[test]
+    fn a_failed_or_missing_test_command_is_not_a_count() {
+        let cwd = std::env::temp_dir();
+        let failed = count_tests_via_command(FAILS_AFTER_A_COUNT, &cwd).unwrap_err();
+        assert!(
+            format!("{failed:#}").contains("exit code Some(3)"),
+            "{failed:#}"
+        );
+        let missing =
+            count_tests_via_command("discipline-no-such-test-lister --list", &cwd).unwrap_err();
+        assert_eq!(
+            reason(&missing),
+            crate::could_not_check::Reason::ToolMissing,
+            "{missing:#}"
         );
     }
 }

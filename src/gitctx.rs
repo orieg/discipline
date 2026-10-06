@@ -1205,7 +1205,8 @@ impl GitCtx {
     }
 }
 
-fn is_ci_environment() -> bool {
+/// Whether the run is on a CI runner, by the markers the forges set.
+pub(crate) fn is_ci_environment() -> bool {
     std::env::var("CI").is_ok()
         || std::env::var("GITHUB_ACTIONS").is_ok()
         || std::env::var("GITLAB_CI").is_ok()

@@ -286,6 +286,18 @@ impl PresetDefinition {
             _ => None,
         }
     }
+
+    /// The value this preset supplies for `key` when the configuration leaves it unset,
+    /// for every key where a configured value takes the preset's place: the three of
+    /// [`Self::replaced_default`], and the two that are executed, `command` and
+    /// `canary_command`.
+    pub fn supplied_default(&self, key: &str) -> Option<&'static str> {
+        match key {
+            "command" => Some(self.default_command),
+            "canary_command" => self.canary_command,
+            _ => self.replaced_default(key),
+        }
+    }
 }
 
 /// Resolves a preset by its unique identifier.
