@@ -39,8 +39,7 @@ impl LanguagePack for JavaPack {
         parser
             .set_language(&tree_sitter_java::LANGUAGE.into())
             .map_err(|e| anyhow!("failed to load the Java grammar: {e}"))?;
-        let tree = parser
-            .parse(src, None)
+        let tree = crate::ast::source_text::parse(&mut parser, src)
             .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
         let root = tree.root_node();
 

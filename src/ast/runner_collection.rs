@@ -1611,7 +1611,7 @@ fn scan_rust_modules(source: &str) -> ModuleScan {
         scan.open = true;
         return scan;
     }
-    let Some(tree) = parser.parse(source, None) else {
+    let Some(tree) = crate::ast::source_text::parse(&mut parser, source) else {
         scan.open = true;
         return scan;
     };
@@ -3421,7 +3421,7 @@ python_files = test_*.py
         parser
             .set_language(&tree_sitter_rust::LANGUAGE.into())
             .unwrap();
-        let tree = parser.parse(code, None).unwrap();
+        let tree = crate::ast::source_text::parse(&mut parser, code).unwrap();
         let attr = tree.root_node().child(0).unwrap();
         evaluate_rust_cfg(attr, code.as_bytes(), features)
     }
