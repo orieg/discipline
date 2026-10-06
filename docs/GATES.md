@@ -935,6 +935,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - A `Key: value` paragraph in an ordinary commit body that happens to sit directly before a paragraph starting with `* `: it is read as a trailer.
   - Anything in a `--staged` check, which has no commit range: reported as not evaluated.
 - **Lifting directive:** `allow-commit-provenance: <sha> <reason>` (7 or 40 characters).
+- **Baseline:** a finding is fingerprinted by its commit id (and, for a missing trailer, the trailer key), so a baseline entry covers that commit only and stops matching once the commit is rewritten. The directive is the waiver that fits one commit.
 - **Default:** off (which trailers a repository requires is its own policy), severity `error`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `required_trailers`, `agent_markers`, `review_trailer`, `require_agent_review` (default `true`; `false` is a weakening under `config-integrity`).
 
