@@ -96,6 +96,7 @@ impl LanguagePack for PhpPack {
             }
         }
         super::method_checks::count(root, src, &mut extractor.facts, &PHP_RECEIVER_CALLS);
+        super::expected_exceptions::php_declared(root, src, &mut extractor.facts.tests);
         super::helper_loops::count(root, src, &mut extractor.facts, &super::helper_loops::PHP);
         super::calls::count(
             root,
@@ -709,20 +710,24 @@ impl<'a> PhpExtractor<'a> {
         }
 
         // Exception expectation: $this->expectException(...)
-        if call_name == "expectException"
-            || call_name == "expectExceptionMessage"
-            || call_name == "expectExceptionCode"
-        {
+        if matches!(
+            call_name,
+            "expectException"
+                | "expectExceptionMessage"
+                | "expectExceptionMessageMatches"
+                | "expectExceptionCode"
+                | "expectExceptionObject"
+        ) {
             test_fn.total_asserts += 1;
             test_fn.strong_asserts += 1;
-            let exp = super::expected_exceptions::php_expectation(
+            let expected = super::expected_exceptions::php_expectations(
                 call_name,
                 args.first().copied(),
                 std::str::from_utf8(self.src).unwrap_or(""),
                 node.start_position().row + 1,
             );
-            test_fn.should_panic = Some(exp.clone());
-            test_fn.expected_exceptions.push(exp);
+            test_fn.should_panic = expected.first().cloned();
+            test_fn.expected_exceptions.extend(expected);
             return;
         }
 
