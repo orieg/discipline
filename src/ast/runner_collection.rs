@@ -1886,6 +1886,7 @@ pub struct RunnerCollectionRules {
 }
 
 impl RunnerCollectionRules {
+    #[cfg(test)]
     pub fn from_files<F>(reader: F) -> Self
     where
         F: FnMut(&str) -> Option<String>,
@@ -1893,7 +1894,7 @@ impl RunnerCollectionRules {
         Self::from_files_with_manifests(reader, &["Cargo.toml".to_string()])
     }
 
-    /// As [`Self::from_files`], with every tracked path of the side being read: each
+    /// As `Self::from_files`, with every tracked path of the side being read: each
     /// `Cargo.toml` and nested JavaScript manifest is read, test modules are followed
     /// from their targets, and a language with no manifest anywhere is known as such.
     pub fn from_tree<F>(mut reader: F, tracked: &[String]) -> Self
@@ -1935,7 +1936,7 @@ impl RunnerCollectionRules {
         rules
     }
 
-    /// As [`Self::from_files`], also reading each `Cargo.toml` in `manifest_paths` so
+    /// As `Self::from_files`, also reading each `Cargo.toml` in `manifest_paths` so
     /// feature-gated tests resolve against their own crate.
     pub fn from_files_with_manifests<F>(mut reader: F, manifest_paths: &[String]) -> Self
     where

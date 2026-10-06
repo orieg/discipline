@@ -3,7 +3,6 @@
 //! Validates built distribution archives before publishing, asserting that
 //! required files exist and developer tooling / private artifacts do not leak.
 
-use crate::config::Severity;
 use crate::guards::archive_formats::{self, EntryData};
 use crate::guards::archive_presets;
 use crate::guards::source_maps::{self, MapRef, MapVerdict};
@@ -341,11 +340,7 @@ fn report_scan(
         }
     }
     if !shipped.is_empty() {
-        let severity = if settings.severity == Severity::Note {
-            Severity::Note
-        } else {
-            Severity::Warning
-        };
+        let severity = settings.severity.capped_at_warning();
         out.push(
             severity,
             &crate::findings::SOURCE_MAP_SHIPPED,

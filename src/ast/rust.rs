@@ -133,7 +133,6 @@ impl LanguagePack for RustPack {
         super::bounds::rust(root, src, &mut cx.facts.tests);
         super::expectations::rust(root, src, &mut cx.facts.tests);
         super::caught_assertions::rust(root, src, &mut cx.facts.tests);
-        super::expected_exceptions::rust(root, src, &mut cx.facts.tests);
         cx.facts.prose = super::prose::extract(
             root,
             src,

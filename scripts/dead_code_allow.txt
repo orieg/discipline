@@ -1,0 +1,26 @@
+# Items `scripts/check_dead_code.py` reports and the repository keeps on purpose.
+# One per line: <file> <item> | <reason>. A stale entry fails the check.
+
+# Library API read from outside `src/`: an integration test or a fuzz target.
+src/lib.rs config::DisciplineConfig | re-export used by fuzz/fuzz_targets/config_toml.rs
+src/config.rs from_toml_str_with_aliases | the key-rename mechanism, driven by tests/test_config.rs
+src/doctor.rs DOCTOR_FINDINGS | the doctor finding codes frozen by tests/test_stability_contract.rs
+src/hook.rs config_for_mode | generated hook files compared by tests/test_agent_hooks.rs
+src/tokens.rs KNOWN_DIRECTIVES | the directive list walked by tests/test_directive_scoping.rs
+src/tokens.rs WORKFLOW_MARKERS | the workflow markers frozen by tests/test_stability_contract.rs
+src/tokens.rs WorkflowJobOrStep | subject kind matched by tests/test_directive_scoping.rs; no directive declares it
+
+# Reached only when a language pack is compiled out.
+src/guards/build_flags.rs GrammarAbsent | constructed under cfg(not(feature = "lang-python")) and cfg(not(feature = "lang-rust"))
+
+# Reached only by unit tests; kept rather than deleted, see issue 493.
+src/ast/mod.rs name | LanguagePack display name: implemented by every pack, asserted by their unit tests, shown nowhere
+src/ast/mod.rs Tests | Fact vocabulary every pack lists in `supplies`; no gate asks for it
+src/ast/mod.rs EscapeHatches | Fact vocabulary every pack lists in `supplies`; no gate asks for it
+src/forge.rs log | CannedApi request log, read by the unit tests of the forge readers
+src/forge.rs was_called | CannedApi request log, read by the unit tests of the forge readers
+src/gitctx.rs Sides | both sides of one file; only its unit test reads it
+src/gitctx.rs sides | both sides of one file; only its unit test reads it
+src/guards/perf/bounds.rs with_ci | builds the estimates of the interval-comparison unit tests; production sets `ci` directly
+src/guards/perf/bounds.rs regressed | exact-counter threshold; the gate compares `delta_pct` itself
+src/guards/perf/bounds.rs wilson_score_interval | reference-pinned bound with no caller yet

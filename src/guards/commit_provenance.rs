@@ -167,6 +167,10 @@ pub struct Finding {
     pub kind: &'static crate::findings::FindingKind,
     pub sha: String,
     pub what: String,
+    /// What tells this finding apart from another of its code in the run, for the
+    /// baseline fingerprint ([`crate::guards::Violation::anchor`]): the commit, and for a
+    /// missing trailer the key too, since one commit can lack several.
+    pub anchor: String,
 }
 
 pub fn judge(
@@ -190,6 +194,8 @@ pub fn judge(
                     kind: &crate::findings::COMMIT_TRAILER_MISSING,
                     sha: c.sha.clone(),
                     what: format!("commit {short} has no `{key}:` trailer"),
+                    // Keys match without regard to case, so the anchor does too.
+                    anchor: format!("commit:{}:{}", c.sha, key.to_ascii_lowercase()),
                 });
             }
         }
@@ -201,6 +207,7 @@ pub fn judge(
                     what: format!(
                         "commit {short} identifies itself as agent-produced and carries no `{review_key}:` trailer"
                     ),
+                    anchor: format!("commit:{}", c.sha),
                 });
             } else if !reviewed_by_someone_else(c, &t, review_key) {
                 out.push(Finding {
@@ -209,6 +216,7 @@ pub fn judge(
                     what: format!(
                         "commit {short} is agent-produced and its `{review_key}:` trailer names its own author"
                     ),
+                    anchor: format!("commit:{}", c.sha),
                 });
             }
         }
@@ -280,6 +288,9 @@ pub fn commit_provenance(ctx: &Context) -> Result<GateOutcome> {
                 "Amend the commit with the trailer, or justify it on its own line in the PR body: `allow-commit-provenance: {short} <reason>`."
             ),
         );
+        // No file and no line: without the anchor every finding of one code would share a
+        // fingerprint, and one baseline entry would hide a finding on any other commit.
+        out.anchor_last(f.anchor);
     }
     Ok(out)
 }
@@ -287,6 +298,8 @@ pub fn commit_provenance(ctx: &Context) -> Result<GateOutcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Severity;
+    use crate::guards::Violation;
 
     fn commit(author: &str, email: &str, message: &str) -> CommitDetail {
         CommitDetail {
@@ -523,6 +536,104 @@ mod tests {
         );
         // Control: the subject of a CRLF message is still never a trailer.
         assert!(trailers("fix: x\r\n").is_empty());
+    }
+
+    /// The findings of `commits` as the gate reports them: no file, no line, anchored.
+    fn reported(commits: &[CommitDetail], required: &[&str], anchored: bool) -> Vec<Violation> {
+        let mut out = GateOutcome::new(GATE);
+        for f in judge(commits, &v(required), &v(&["Agent-Tool:"]), "Reviewed-by") {
+            out.push(
+                Severity::Error,
+                f.kind,
+                None,
+                None,
+                format!("{}.", f.what),
+                "",
+            );
+            if anchored {
+                out.anchor_last(f.anchor);
+            }
+        }
+        out.violations
+    }
+
+    fn fingerprints(mut found: Vec<Violation>) -> Vec<String> {
+        let mut refs: Vec<&mut Violation> = found.iter_mut().collect();
+        crate::baseline::fill_fingerprints(&mut refs, |_| None);
+        found.into_iter().map(|f| f.fingerprint).collect()
+    }
+
+    #[test]
+    fn each_finding_is_anchored_by_its_commit_and_a_missing_trailer_by_its_key_too() {
+        let mut one = commit("Ada", "ada@x", "feat: one\n");
+        one.sha = "1111111111111111111111111111111111111111".into();
+        let mut two = commit("Ada", "ada@x", "feat: two\n\nAgent-Tool: coder 1.2\n");
+        two.sha = "2222222222222222222222222222222222222222".into();
+        let f = judge(
+            &[one.clone(), two.clone()],
+            &v(&["Signed-off-by", "Ticket"]),
+            &v(&["Agent-Tool:"]),
+            "Reviewed-by",
+        );
+        let anchors: Vec<&str> = f.iter().map(|f| f.anchor.as_str()).collect();
+        assert_eq!(
+            anchors,
+            [
+                "commit:1111111111111111111111111111111111111111:signed-off-by",
+                "commit:1111111111111111111111111111111111111111:ticket",
+                "commit:2222222222222222222222222222222222222222:signed-off-by",
+                "commit:2222222222222222222222222222222222222222:ticket",
+                "commit:2222222222222222222222222222222222222222",
+            ]
+        );
+        // The key is matched without regard to case, and anchored the same way.
+        let upper = judge(std::slice::from_ref(&one), &v(&["SIGNED-OFF-BY"]), &[], "");
+        assert_eq!(upper[0].anchor, anchors[0]);
+
+        // Five findings, three of one code on two commits: every fingerprint is its own,
+        // and a debug build does not stop on a repeat (#599).
+        let all = fingerprints(reported(
+            &[one.clone(), two.clone()],
+            &["Signed-off-by", "Ticket"],
+            true,
+        ));
+        let distinct: std::collections::HashSet<&String> = all.iter().collect();
+        assert_eq!(distinct.len(), 5, "{all:?}");
+        // A finding keeps its fingerprint whatever else the run reports, in any order.
+        let alone = fingerprints(reported(
+            std::slice::from_ref(&one),
+            &["Signed-off-by"],
+            true,
+        ));
+        assert_eq!(alone[0], all[0]);
+        let reversed = fingerprints(reported(&[two, one], &["Ticket", "Signed-off-by"], true));
+        assert_eq!(reversed[4], all[0]);
+    }
+
+    /// What the anchor changes in a version-2 baseline, and what it leaves alone.
+    #[test]
+    fn the_anchor_changes_the_version_two_fingerprint_and_not_the_version_one() {
+        let mut one = commit("Ada", "ada@x", "feat: one\n");
+        one.sha = "1111111111111111111111111111111111111111".into();
+        let mut two = commit("Ada", "ada@x", "feat: two\n");
+        two.sha = "2222222222222222222222222222222222222222".into();
+        let none = |_: &str| None;
+        let fp = |c: &CommitDetail, anchored: bool, version: u32| {
+            let found = reported(std::slice::from_ref(c), &["Signed-off-by"], anchored);
+            crate::baseline::fingerprint_for_version(&found[0], none, version)
+        };
+        // Control, the fingerprint before #599: a lone finding hashed its code and nothing
+        // else, so it was one value for every commit. This is the value a release build of
+        // the parent commit printed for two unrelated commits.
+        const UNANCHORED: &str = "91d0d430d82518c8483b6ff7a74d00df81d460213fdca7f5460da11a3d9cd93d";
+        assert_eq!(fp(&one, false, 2), UNANCHORED);
+        assert_eq!(fp(&two, false, 2), UNANCHORED);
+        // Anchored, it is the commit's own, so an entry written before no longer matches.
+        assert_ne!(fp(&one, true, 2), UNANCHORED);
+        assert_ne!(fp(&one, true, 2), fp(&two, true, 2));
+        // Version 1 hashes the message and never the anchor.
+        assert_eq!(fp(&one, true, 1), fp(&one, false, 1));
+        assert_ne!(fp(&one, true, 1), fp(&two, true, 1));
     }
 
     #[test]
