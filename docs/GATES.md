@@ -1234,7 +1234,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it catches:**
   - Wildcard or unconstrained dependency version specifications (`*`, `latest`, empty version string).
   - Unpinned git dependencies (floating branches like `branch = "main"` without explicit commit SHA or tag).
-  - Newly introduced dependencies that violate repository `deny.toml` `[bans]` or `[sources]`.
+  - Newly introduced dependencies that violate repository `deny.toml` `[bans]` or `[sources]`. A `deny_file` that exists and does not parse as TOML stops the run (exit 2): it is not read as an empty policy, which would lift every ban in it.
   - Dependencies listed in configured `deny_dependencies`.
   - `Direct Dependency Added`: every new direct dependency, unless it is in `allow_dependencies` or the `deny.toml` allow list; with `allow_dependencies` set, a dependency outside it is also `Dependency Outside Allowlist`. `Dependency Constraint Loosened` and `Dependency Source Changed` judge a changed one. A `go.mod` requirement marked `// indirect` is a transitive module `go mod tidy` wrote, not a new direct dependency; bans, wildcards and source changes still apply to it.
   - **Lockfile integrity** (offline; `Cargo.lock`, `package-lock.json`, `yarn.lock` v1 and 2+, `pnpm-lock.yaml`, `poetry.lock`, `uv.lock`, `composer.lock` and `Gemfile.lock` are read entry by entry, base side against head side):
@@ -1313,7 +1313,8 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - In a GitLab pipeline, against its base side: a deleted verification job, a job gaining `allow_failure` (boolean or `exit_codes` form), an existing verification job changed to `when: manual`, a script line gaining `|| true` / `|| :` / `set +e` (hidden `.template` jobs included, comment lines excluded), a `discipline check` line gaining `--advisory`, a pipeline file that no longer parses, and a deleted pipeline that defined verification jobs (`include:` and `rules:` / `only:` / `except:` are covered below).
   - The discipline step moved off the base policy: `policy_from: base` changed, removed, or its whole `with:` block dropped.
   - The discipline step made non-blocking: `advisory: true` added to the action's `with:`, or `--advisory` added to a `discipline check` / `discipline diff` run line (comment lines do not count).
-  - Documented job count mismatches when `documented_job_count_path` is configured.
+  - Documented job count mismatches when `documented_job_count_path` and `documented_job_count_pattern` are configured and the workflow has the `rollup_job`. The count is read from the pattern's first capture group, so the pattern must have one (`'CI runs (\d+) jobs'`): a pattern that does not compile or has no capture group is a configuration error (exit 2), found before any gate runs. A document that cannot be read as text, that the pattern does not match, or whose captured text is not a number is named in the notes as not compared.
+  - `Pipeline File Unreadable` (`ci-integrity/pipeline-file-unreadable`): a workflow or GitLab pipeline that existed on the base side and whose head side does not parse as YAML. Such a file runs none of its jobs and cannot be compared, so the checks that read it are skipped and say so in the notes; the finding and the notes give the position of the parse error, never the text near it. A new file that does not parse has nothing to be compared with and is named in the notes only, and is not counted in `examined`.
   - Deleted verification jobs and steps (`Verification Step Removed`). A base step is found in head by id, name, action, or first `run:` line; failing that, it is paired as a **rename** with an otherwise unmatched head step whose body (`run:` script without its full-line `#` comments, or action and `with:` inputs) has token Dice similarity of at least 0.60 (`STEP_RENAME_SIMILARITY`) and still carries every verification marker (`test`, `clippy`, `lint`, ...) the base body carried; ties go to the nearest position. A rename is reported in the gate notes, not as a violation, and the renamed step is still checked against its base form (dropped flags, `continue-on-error`). A step whose name and body both changed past the threshold, or whose body stopped verifying, is reported as deleted, with the closest candidate and its similarity in the message. A deleted verification job (`Verification Job Removed`), or a deleted workflow that held one (`Verification Workflow Deleted`), is a **move** when every verification step it had (every step, when none verifies) pairs by body, never by name, with a step of a job this change added, in any workflow file: a rename, a split, or a fold into another file is a note. A job whose steps survive only in a job that was already there is still reported.
   - `Frozen Install Flag Removed`: a `run:` step that carried `--frozen-lockfile`, `--immutable`, `--require-hashes`, `--frozen` or `--no-update` no longer does (the `--locked` case has its own title), so the install may resolve past the lockfile.
   - `Install Command Weakened`: `npm ci` became `npm install`, which may rewrite the lockfile instead of honouring it.
@@ -1367,7 +1368,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Test dropped, missing, skipped, or failed relative to the base test report (`test-dropped-from-suite`), even if the total count is preserved.
   - Workspace test count dropping below configured `min_tests` or base floor constant.
   - Complete deletion of test files causing total test count reduction.
-  - Lowering of floor constant value in `constant_file` below merge base ref.
+  - Lowering of floor constant value in `constant_file` below merge base ref, and a floor constant the head side no longer defines (the file is gone or is not text, the name is gone, or its value is not a number), which lifts the floor altogether: both are `Floor Constant Decreased`.
   - Lowering or removal of `min_tests` in `discipline.toml` below merge base ref.
   - Missing `required_suites` files.
   - Missing floor constant file on base ref (fails closed).
@@ -1663,7 +1664,7 @@ Notes for adapting it:
   - Missing binaries in `PATH` (fails closed with exit 2).
   - Command timeouts exceeding `timeout_seconds` (fails closed with exit 2).
   - Forbidden strings or regexes detected in stdout or stderr.
-  - Zero tests or items executed when `allow_zero = false`.
+  - Zero tests or items executed when `allow_zero = false`. The count is read from the first capture group of `count_pattern` (`'(\d+) passed'`): a `count_pattern` that does not compile or has no capture group is a configuration error (exit 2), found before any gate runs.
   - Stealth deletion of preset policy files (e.g. `deny.toml`, `api.snapshot`) and of a configured `snapshot`.
   - Command output that differs from its committed snapshot (`command/snapshot-mismatch`).
   - Extracted count dropping below the `min_count` ratchet floor established on the merge base ref.

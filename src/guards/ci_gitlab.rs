@@ -97,8 +97,11 @@ pub fn is_gitlab_ci_path(path: &str) -> bool {
 fn jobs(content: &str) -> Result<BTreeMap<String, Value>, String> {
     let mut found = BTreeMap::new();
     for doc in serde_yaml::Deserializer::from_str(content) {
-        let doc: Value =
-            serde::Deserialize::deserialize(doc).map_err(|e| format!("not valid YAML: {e}"))?;
+        // Location only: the parser's message can quote the text near the error.
+        let doc: Value = serde::Deserialize::deserialize(doc).map_err(|e| match e.location() {
+            Some(l) => format!("not valid YAML (line {}, column {})", l.line(), l.column()),
+            None => "not valid YAML".to_string(),
+        })?;
         let Some(map) = doc.as_mapping() else {
             continue;
         };

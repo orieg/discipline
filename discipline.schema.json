@@ -239,7 +239,7 @@
           "type": "string"
         },
         "documented_job_count_pattern": {
-          "description": "Regex pattern to extract job count from documentation",
+          "description": "Regex pattern to extract job count from documentation, from its first capture group; a pattern that does not compile or has no capture group is a configuration error",
           "type": "string"
         },
         "enabled": {
@@ -347,7 +347,7 @@
           "type": "string"
         },
         "count_pattern": {
-          "description": "Regex pattern to extract an integer count",
+          "description": "Regex pattern to extract an integer count from its first capture group; a pattern that does not compile or has no capture group is a configuration error",
           "type": "string"
         },
         "forbid_output": {
@@ -415,7 +415,7 @@
           "type": "array"
         },
         "count_pattern": {
-          "description": "Regex pattern to extract an integer count",
+          "description": "Regex pattern to extract an integer count from its first capture group; a pattern that does not compile or has no capture group is a configuration error",
           "type": "string"
         },
         "enabled": {

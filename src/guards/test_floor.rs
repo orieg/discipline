@@ -144,48 +144,51 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         &settings.constant_name,
         base_floor_const,
     ) {
-        let head_path = Path::new(ctx.git.root()).join(const_file);
-        if head_path.is_file() {
-            if let Ok(head_src) = std::fs::read_to_string(&head_path) {
-                let pat = format!(
-                    r"(?m)^[ \t]*(?:(?:pub|export)\s+)?(?:const\s+)?{}(?:\s*:\s*[a-zA-Z0-9_]+)?\s*=\s*(\d+)",
-                    regex::escape(const_name)
-                );
-                if let Ok(re) = Regex::new(&pat) {
-                    if let Some(caps) = re.captures(&head_src) {
-                        if let Ok(head_val) = caps[1].parse::<usize>() {
-                            if head_val < base_floor {
-                                if let Some(ov) = ctx.find_override(
-                                    GATE,
-                                    &crate::findings::FLOOR_CONSTANT_DECREASED,
-                                    tokens::ALLOW_TEST_SHRINK,
-                                    const_name,
-                                ) {
-                                    out.overrides.push(ov);
-                                } else {
-                                    out.violations.push(Violation {
-                                        gate: GATE,
-                                        severity: ctx.overridable(settings.severity),
-                                        code: crate::findings::full_code(GATE, &crate::findings::FLOOR_CONSTANT_DECREASED),
-                                        fingerprint: String::new(),
-                                        title: crate::findings::FLOOR_CONSTANT_DECREASED.title.to_string(),
-                                        anchor: None,
-                                        legacy_title: crate::findings::FLOOR_CONSTANT_DECREASED.was_title(),
-                                        file: Some(const_file.clone()),
-                                        line: None,
-                                        message: format!(
-                                            "Floor constant '{const_name}' ({head_val}) was decreased below base ref ({base_floor})."
-                                        ),
-                                        remediation: Some(
-                                            "Restore the floor constant or provide an allow-test-shrink: <reason> directive in the PR description."
-                                                .to_string(),
-                                        ),
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
+        // A constant the head side no longer defines (the file is gone or is not text, the
+        // name is gone, the value is not a number) lifts the floor altogether: the same
+        // finding as a lowered one, never a skipped comparison.
+        let pat = format!(
+            r"(?m)^[ \t]*(?:(?:pub|export)\s+)?(?:const\s+)?{}(?:\s*:\s*[a-zA-Z0-9_]+)?\s*=\s*(\d+)",
+            regex::escape(const_name)
+        );
+        let re = Regex::new(&pat)?;
+        let head_val: Option<usize> = ctx.git.head_content(const_file)?.and_then(|src| {
+            re.captures(&src)
+                .and_then(|caps| caps.get(1))
+                .and_then(|m| m.as_str().parse().ok())
+        });
+        if head_val.is_none_or(|v| v < base_floor) {
+            if let Some(ov) = ctx.find_override(
+                GATE,
+                &crate::findings::FLOOR_CONSTANT_DECREASED,
+                tokens::ALLOW_TEST_SHRINK,
+                const_name,
+            ) {
+                out.overrides.push(ov);
+            } else {
+                out.violations.push(Violation {
+                    gate: GATE,
+                    severity: ctx.overridable(settings.severity),
+                    code: crate::findings::full_code(GATE, &crate::findings::FLOOR_CONSTANT_DECREASED),
+                    fingerprint: String::new(),
+                    title: crate::findings::FLOOR_CONSTANT_DECREASED.title.to_string(),
+                    anchor: None,
+                    legacy_title: crate::findings::FLOOR_CONSTANT_DECREASED.was_title(),
+                    file: Some(const_file.clone()),
+                    line: None,
+                    message: match head_val {
+                        Some(head_val) => format!(
+                            "Floor constant '{const_name}' ({head_val}) was decreased below base ref ({base_floor})."
+                        ),
+                        None => format!(
+                            "Floor constant '{const_name}' ({base_floor} on the base ref) is no longer defined as a number in '{const_file}'."
+                        ),
+                    },
+                    remediation: Some(
+                        "Restore the floor constant or provide an allow-test-shrink: <reason> directive in the PR description."
+                            .to_string(),
+                    ),
+                });
             }
         }
     }
