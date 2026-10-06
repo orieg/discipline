@@ -693,7 +693,8 @@ fn setup_py_flags(src: &str) -> Result<Vec<FlagUse>, ExtractError> {
     parser
         .set_language(&tree_sitter_python::LANGUAGE.into())
         .map_err(|_| ExtractError::Unparsed)?;
-    let tree = crate::ast::source_text::parse(&mut parser, src).ok_or(ExtractError::Unparsed)?;
+    let tree =
+        crate::ast::source_text::parse(&mut parser, src).map_err(|_| ExtractError::Unparsed)?;
     let root = tree.root_node();
     if root.has_error() {
         return Err(ExtractError::Unparsed);
@@ -785,7 +786,8 @@ fn build_rs_flags(src: &str) -> Result<Vec<FlagUse>, ExtractError> {
     parser
         .set_language(&tree_sitter_rust::LANGUAGE.into())
         .map_err(|_| ExtractError::Unparsed)?;
-    let tree = crate::ast::source_text::parse(&mut parser, src).ok_or(ExtractError::Unparsed)?;
+    let tree =
+        crate::ast::source_text::parse(&mut parser, src).map_err(|_| ExtractError::Unparsed)?;
     let root = tree.root_node();
     if root.has_error() {
         return Err(ExtractError::Unparsed);
