@@ -5114,6 +5114,79 @@ fn commit_provenance_reads_a_trailer_block_a_squash_merge_split_into_paragraphs(
     );
 }
 
+/// #599: the findings carry no file and no line, so the commit is what keeps two of one
+/// code apart. Without it a debug build stopped (exit 101) on the second finding, and a
+/// baseline entry for one commit hid the finding on any other.
+#[test]
+fn commit_provenance_findings_are_fingerprinted_by_their_commit() {
+    const CFG: &str =
+        "[gates.commit-provenance]\nenabled = true\nrequired_trailers = [\"Signed-off-by\"]\n";
+    const SIGNED: &str = "Signed-off-by: Owner <owner@example.test>";
+    let fingerprints = |run: &Run| -> Vec<(String, String)> {
+        run.violations("commit-provenance")
+            .iter()
+            .map(|v| {
+                (
+                    v["message"].as_str().unwrap().to_string(),
+                    v["fingerprint"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    };
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("discipline.toml", &format!("{CONFIG_HEAD}{CFG}"));
+    repo.commit(&format!("chore: policy\n\n{SIGNED}"));
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    repo.write("a.txt", "a\n");
+    repo.commit("feat: a");
+    let one = repo.check(&[]);
+    assert_eq!(one.code, 1, "{}", one.stderr);
+    let first = fingerprints(&one);
+    assert_eq!(first.len(), 1, "{first:?}");
+
+    // A second commit of the same kind: two findings, each with its own fingerprint, and
+    // the first keeps the one it had alone.
+    repo.write("b.txt", "b\n");
+    repo.commit("feat: b");
+    let two = repo.check(&[]);
+    assert_eq!(two.code, 1, "{}", two.stderr);
+    let both = fingerprints(&two);
+    assert_eq!(both.len(), 2, "{both:?}");
+    assert_ne!(both[0].1, both[1].1);
+    assert!(both.contains(&first[0]), "{first:?} not in {both:?}");
+    assert_eq!(two.outcome("commit-provenance")["examined"], 2);
+
+    // A baseline entry for the first commit does not cover another commit.
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "discipline-baseline.toml",
+        &format!(
+            "version = 2\n\n[[findings]]\ngate = \"commit-provenance\"\nrule = \"commit-provenance/commit-trailer-missing\"\npath = \"\"\nfingerprint = \"{}\"\n",
+            first[0].1
+        ),
+    );
+    repo.commit(&format!("chore: baseline\n\n{SIGNED}"));
+    repo.git(&["checkout", "-q", "-B", "other"]);
+    repo.write("c.txt", "c\n");
+    repo.commit("feat: c");
+    let other = repo.check(&[]);
+    assert_eq!(other.code, 1, "{}", other.stderr);
+    assert_eq!(fingerprints(&other).len(), 1);
+    assert_eq!(other.outcome("commit-provenance")["baselined"], 0);
+
+    // Control: the entry does cover the commit it was written for.
+    repo.git(&["checkout", "-q", "work"]);
+    repo.git(&["checkout", "-q", "main", "--", "discipline-baseline.toml"]);
+    repo.commit(&format!("chore: take the baseline\n\n{SIGNED}"));
+    let covered = repo.check(&[]);
+    let left = fingerprints(&covered);
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert_ne!(left[0], first[0]);
+    assert_eq!(covered.outcome("commit-provenance")["baselined"], 1);
+}
+
 #[test]
 fn commit_provenance_reads_trailers_and_authorship_of_every_commit_in_the_range() {
     const CFG: &str =
