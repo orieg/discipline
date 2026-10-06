@@ -3,6 +3,7 @@
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
+use super::ci_condition::{read_skip, Grammar, SkipRead};
 use super::functions::{self, FunctionSpec};
 use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
@@ -123,7 +124,7 @@ impl LanguagePack for CSharpPack {
             super::calls::TRIVIAL_ASSERT_VOCAB,
             super::calls::trivial_asserts,
         );
-        super::caught_assertions::csharp(root, src, &mut extractor.facts.tests);
+        super::caught_assertions::csharp(root, src, &mut extractor.facts.tests, vocab);
         super::expected_exceptions::csharp(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
@@ -344,6 +345,74 @@ impl<'a> CSharpExtractor<'a> {
         false
     }
 
+    /// What an xUnit attribute with `Skip = ".."` and `SkipWhen = nameof(X)` or
+    /// `SkipUnless = nameof(X)` does: a skip under the member of this file it names.
+    /// `None` when the attribute carries no such pair.
+    fn attribute_skip_condition(&self, attr: Node) -> Option<SkipRead> {
+        let mut cursor = attr.walk();
+        let list = attr
+            .children(&mut cursor)
+            .find(|c| c.kind() == "attribute_argument_list")?;
+        let mut skips = false;
+        let mut condition = None;
+        let mut cursor = list.walk();
+        for arg in list.named_children(&mut cursor) {
+            let name = arg
+                .child_by_field_name("name")
+                .map(|n| self.text(n))
+                .unwrap_or("");
+            let mut inner = arg.walk();
+            let value = arg.named_children(&mut inner).last();
+            match (name, value) {
+                ("Skip", _) => skips = true,
+                ("SkipWhen", Some(value)) => condition = Some((value, false)),
+                ("SkipUnless", Some(value)) => condition = Some((value, true)),
+                _ => {}
+            }
+        }
+        let condition = condition.filter(|_| skips)?;
+        Some(read_skip(Grammar::CSharp, attr, Some(condition), self.src))
+    }
+
+    /// The condition a call that skips under one takes, with whether the test runs when
+    /// it holds: NUnit `Assume.That(c)`, xUnit `Assert.SkipWhen(c, ..)` and
+    /// `Assert.SkipUnless(c, ..)`, `Skip.If(c)` and `Skip.IfNot(c)`. An `Assume.That`
+    /// with a constraint is read through its whole argument list: a CI variable in it
+    /// decides the skip in a way that is not read further.
+    fn condition_taking_skip<'n>(
+        &self,
+        call: Node<'n>,
+        class_name: &str,
+        method_name: &str,
+    ) -> Option<(Node<'n>, bool)> {
+        let list = call.child_by_field_name("arguments")?;
+        let mut cursor = list.walk();
+        let args: Vec<Node<'n>> = list
+            .named_children(&mut cursor)
+            .filter(|c| c.kind() == "argument")
+            .collect();
+        let first = *args.first()?;
+        match (class_name, method_name) {
+            ("Assume", "That") => {
+                let plain = args.get(1).is_none_or(|second| {
+                    second
+                        .named_child(0)
+                        .is_some_and(|v| v.kind() == "string_literal")
+                });
+                let constraint = args.get(1).map(|a| self.text(*a).trim()).unwrap_or("");
+                match constraint {
+                    _ if plain => Some((first, true)),
+                    "Is.True" | "Is.Not.Null" => Some((first, true)),
+                    "Is.False" | "Is.Null" => Some((first, false)),
+                    _ => Some((list, false)),
+                }
+            }
+            ("Assert", "SkipWhen") | ("Skip", "If") => Some((first, false)),
+            ("Assert", "SkipUnless") | ("Skip", "IfNot") => Some((first, true)),
+            _ => None,
+        }
+    }
+
     fn try_extract_method_test(
         &self,
         node: Node,
@@ -354,6 +423,7 @@ impl<'a> CSharpExtractor<'a> {
 
         let mut is_test = false;
         let mut is_ignored = class_ignored;
+        let mut attribute_skips = Vec::new();
 
         // Inspect attributes on the method
         let mut cursor = node.walk();
@@ -381,22 +451,18 @@ impl<'a> CSharpExtractor<'a> {
                                 | "DataTestMethod"
                         ) {
                             is_test = true;
-                            // Check for xUnit Skip = "..." in attribute arguments
-                            if let Some(args) = attr.child_by_field_name("parameters") {
-                                let mut arg_cursor = args.walk();
-                                for arg in args.children(&mut arg_cursor) {
-                                    let txt = self.text(arg);
-                                    if txt.contains("Skip") {
-                                        is_ignored = true;
-                                    }
-                                }
-                            } else {
-                                // Sometimes arguments are children without field name
-                                let mut arg_cursor = attr.walk();
-                                for arg in attr.children(&mut arg_cursor) {
-                                    if arg.kind() == "attribute_argument_list" {
-                                        let txt = self.text(arg);
-                                        if txt.contains("Skip") {
+                            // xUnit `Skip = "..."` skips the test; with `SkipWhen` or
+                            // `SkipUnless` beside it, under the condition they name.
+                            match self.attribute_skip_condition(attr) {
+                                Some(read) => attribute_skips.push(read),
+                                None => {
+                                    let mut arg_cursor = attr.walk();
+                                    for arg in attr.children(&mut arg_cursor) {
+                                        if matches!(
+                                            arg.kind(),
+                                            "attribute_argument_list" | "attribute_argument"
+                                        ) && self.text(arg).contains("Skip")
+                                        {
                                             is_ignored = true;
                                         }
                                     }
@@ -439,6 +505,9 @@ impl<'a> CSharpExtractor<'a> {
             case_rows,
             ..Default::default()
         };
+        for read in attribute_skips {
+            test_fn.record_skip(read);
+        }
 
         let mut direct_calls = Vec::new();
         if let Some(body) = node.child_by_field_name("body") {
@@ -493,7 +562,11 @@ impl<'a> CSharpExtractor<'a> {
                 if (class_name == "Assert" || class_name == "ClassicAssert")
                     && (method_name == "Skip" || method_name == "Ignore")
                 {
-                    test_fn.ignored = true;
+                    test_fn.record_skip(read_skip(Grammar::CSharp, node, None, self.src));
+                    return;
+                }
+                if let Some(own) = self.condition_taking_skip(node, class_name, method_name) {
+                    test_fn.record_skip(read_skip(Grammar::CSharp, node, Some(own), self.src));
                     return;
                 }
 
@@ -751,6 +824,8 @@ pub const CSHARP_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
             "name",
         )],
         direct: &[],
+        bare: &[],
+        tokens: &[],
     };
 
 pub const CSHARP_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
