@@ -138,15 +138,12 @@ pub fn is_kotlin_test_path(path: &str) -> bool {
         .strip_suffix(".kt")
         .or_else(|| filename.strip_suffix(".kts"))
         .unwrap_or(filename);
-    stem.ends_with("Test")
-        || stem.ends_with("Tests")
-        || stem.ends_with("Spec")
-        || stem.ends_with("IT")
-        || path.starts_with("test/")
-        || path.contains("/test/")
-        || path.starts_with("tests/")
-        || path.contains("/tests/")
-        || path.contains("/androidTest/")
+    ["Test", "Tests", "Spec", "IT"]
+        .iter()
+        .any(|word| functions::ends_with_word(stem, word))
+        || ["test", "tests", "androidTest"]
+            .iter()
+            .any(|dir| functions::has_dir(path, dir, true))
 }
 
 /// Test-defining calls of the Kotest spec styles, and the containers that nest them.
