@@ -13,7 +13,7 @@
 
 use super::toolchain_config::{classify_with, diff_trees, load, Classified, Judge, Rule};
 use super::{Context, GateOutcome, PathFilter};
-use crate::config::{GateSettings, Severity};
+use crate::config::GateSettings;
 use crate::gitctx::ChangeKind;
 use crate::tokens;
 use anyhow::Result;
@@ -689,10 +689,7 @@ pub fn sandbox_config(ctx: &Context) -> Result<GateOutcome> {
                     out.overrides.push(ov);
                     continue;
                 }
-                let sev = match settings.severity() {
-                    Severity::Error => Severity::Warning,
-                    other => other,
-                };
+                let sev = settings.severity().capped_at_warning();
                 out.push(
                     ctx.overridable(sev),
                     &crate::findings::SANDBOX_CHANGE_NOT_ANALYSED,

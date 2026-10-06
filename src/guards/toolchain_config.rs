@@ -1884,10 +1884,7 @@ pub fn toolchain_config(ctx: &Context) -> Result<GateOutcome> {
                     out.overrides.push(ov);
                     continue;
                 }
-                let sev = match settings.severity() {
-                    Severity::Error => Severity::Warning,
-                    other => other,
-                };
+                let sev = settings.severity().capped_at_warning();
                 out.push(
                     ctx.overridable(sev),
                     &crate::findings::TOOLCHAIN_CHANGE_NOT_ANALYSED,
@@ -1946,10 +1943,7 @@ pub fn toolchain_config(ctx: &Context) -> Result<GateOutcome> {
                         out.overrides.push(ov);
                         continue;
                     }
-                    let sev = match settings.severity() {
-                        Severity::Error => Severity::Warning,
-                        other => other,
-                    };
+                    let sev = settings.severity().capped_at_warning();
                     out.push(
                         ctx.overridable(sev),
                         &crate::findings::TOOLCHAIN_CHANGE_NOT_ANALYSED,

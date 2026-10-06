@@ -46,24 +46,6 @@ pub enum ShellRuleId {
 }
 
 impl ShellRuleId {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ShellRuleId::ArgvEnv => "ARGV-ENV",
-            ShellRuleId::ArgvDocker => "ARGV-DOCKER",
-            ShellRuleId::ArgvInline => "ARGV-INLINE",
-            ShellRuleId::InjectXargs => "INJECT-XARGS",
-            ShellRuleId::InjectPipe => "INJECT-PIPE",
-            ShellRuleId::TokenGitHub => "SECRET-TOKEN-GITHUB",
-            ShellRuleId::TokenAws => "SECRET-TOKEN-AWS",
-            ShellRuleId::TokenSlack => "SECRET-TOKEN-SLACK",
-            ShellRuleId::TokenOpenAi => "SECRET-TOKEN-OPENAI",
-            ShellRuleId::PrivateKeyBlock => "SECRET-KEY-BLOCK",
-            ShellRuleId::LiteralBearer => "SECRET-LITERAL-BEARER",
-            ShellRuleId::LiteralPassword => "SECRET-ARGV-PASSWORD",
-            ShellRuleId::LiteralSecretEnv => "SECRET-LITERAL-ENV",
-        }
-    }
-
     pub fn kind(self) -> &'static crate::findings::FindingKind {
         match self {
             ShellRuleId::ArgvEnv => &crate::findings::SHELL_ARGV_ENV,

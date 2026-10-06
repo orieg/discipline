@@ -87,16 +87,14 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
         check_banned(ctx, &filter, &workflow_filter, &mut out)?;
     }
 
-    let (workflow_files, added_lines_map) = if settings.diff_only {
+    let workflow_files = if settings.diff_only {
         let changed = ctx.git.changed_files()?;
         let mut files = Vec::new();
-        let mut line_map = std::collections::HashMap::new();
         for f in changed {
             if filter.matches(&f.path) || !workflow_filter.matches(&f.path) {
                 continue;
             }
-            files.push(f.path.clone());
-            line_map.insert(f.path, f.added_lines);
+            files.push(f.path);
         }
         // A change to a file the pipeline pulls in through `include: local:` is a change
         // to the pipeline: analyse the (unchanged) pipeline file against its base.
@@ -121,14 +119,14 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                 .push("no workflow files modified in this diff".to_string());
             return Ok(out);
         }
-        (files, Some(line_map))
+        files
     } else {
         let tracked = ctx.git.tracked_files()?;
         let files: Vec<_> = tracked
             .into_iter()
             .filter(|p| !filter.matches(p) && workflow_filter.matches(p))
             .collect();
-        (files, None)
+        files
     };
 
     // Steps of the jobs this change added, read once and only when a job or workflow
@@ -278,8 +276,6 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                 .unwrap_or_default();
             report_exposures(ctx, path, &head_content, head_x, &base_x, &mut out);
         }
-
-        let _added_lines = added_lines_map.as_ref().and_then(|m| m.get(path));
 
         // 1. Rollup job checks
         let (jobs, rollup_needs) =
