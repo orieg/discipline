@@ -98,25 +98,28 @@ impl Report {
     }
 
     pub fn render_text(&self) -> String {
+        // A summary quotes the forge (a branch, a check name, a refusal) and the
+        // repository's workflows: each stays on its own line.
+        let line = crate::report::text::terminal_line;
         let mut out = format!(
             "platform: {}{}   repository: {}   branch: {}\n\n",
             self.platform,
             self.forge_url
                 .as_deref()
-                .map(|u| format!(" ({u})"))
+                .map(|u| format!(" ({})", line(u)))
                 .unwrap_or_default(),
-            self.repository.as_deref().unwrap_or("-"),
-            self.branch.as_deref().unwrap_or("-")
+            line(self.repository.as_deref().unwrap_or("-")),
+            line(self.branch.as_deref().unwrap_or("-"))
         );
         for f in &self.findings {
             out.push_str(&format!(
                 "{:<8} {:<22} {}\n",
                 f.status.label(),
                 f.id,
-                f.summary
+                line(&f.summary)
             ));
             if let Some(r) = &f.remediation {
-                out.push_str(&format!("{:<8} {:<22} fix: {r}\n", "", ""));
+                out.push_str(&format!("{:<8} {:<22} fix: {}\n", "", "", line(r)));
             }
         }
         out
@@ -2978,6 +2981,47 @@ pub(crate) fn access_hint(kind: ForgeKind, error: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A branch name and a forge's reason that try to write the report.
+    const BRANCH_WITH_A_LINE: &str = "main\nfail     branch-protection      forged";
+    const SUMMARY_WITH_AN_ESCAPE: &str = "the forge said: no\r\u{1b}[2Jpass\u{7}";
+
+    #[test]
+    fn the_text_report_keeps_forge_text_on_its_line() {
+        let mut finding =
+            Finding::new("branch-protection", Status::Unknown, SUMMARY_WITH_AN_ESCAPE);
+        finding.remediation = Some("set a token\nok       everything".into());
+        let report = Report {
+            platform: "gitea".into(),
+            forge_url: Some("https://forge.example\u{1b}[1m".into()),
+            repository: Some("o/r\nrepository: other".into()),
+            branch: Some(BRANCH_WITH_A_LINE.into()),
+            findings: vec![finding],
+        };
+        let text = report.render_text();
+        // The header, a blank line, the finding and its fix: four lines and no more.
+        assert_eq!(text.lines().count(), 4, "{text:?}");
+        assert!(
+            !text.chars().any(|c| c.is_control() && c != '\n'),
+            "{text:?}"
+        );
+        assert!(
+            text.contains("the forge said: no\u{fffd}\u{fffd}[2Jpass\u{fffd}\n"),
+            "{text:?}"
+        );
+        // A report with nothing to neutralise is written as before.
+        let plain = Report {
+            platform: "github".into(),
+            forge_url: None,
+            repository: Some("o/r".into()),
+            branch: Some("main".into()),
+            findings: vec![Finding::new("ci-gate", Status::Pass, "`ci` is required")],
+        };
+        assert_eq!(
+            plain.render_text(),
+            "platform: github   repository: o/r   branch: main\n\npass     ci-gate                `ci` is required\n"
+        );
+    }
     use crate::forge::{CannedApi, NoApi};
 
     #[test]
