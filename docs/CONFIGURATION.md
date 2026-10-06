@@ -111,7 +111,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.ci-integrity.banned_actions[].uses` | string | *(required)* | `owner/repo`, `owner/repo/path`, optionally `@ref`; without a ref every ref is banned |
 | `gates.ci-integrity.diff_only` | boolean | `true` | When true, scans only modified workflow files rather than all workflows, and pins only references new relative to the base; false reports every unpinned reference, pre-existing ones included |
 | `gates.ci-integrity.documented_job_count_path` | string | *(unset)* | Path to catalog documentation stating job count |
-| `gates.ci-integrity.documented_job_count_pattern` | string | *(unset)* | Regex pattern to extract job count from documentation |
+| `gates.ci-integrity.documented_job_count_pattern` | string | *(unset)* | Regex pattern to extract job count from documentation, from its first capture group; a pattern that does not compile or has no capture group is a configuration error |
 | `gates.ci-integrity.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.ci-integrity.excluded_jobs` | list | `["detect-changes"]` | Job names excluded from rollup dependency requirements |
 | `gates.ci-integrity.exempt_paths` | list | `[]` | File path globs exempted from this gate |
@@ -140,7 +140,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.command.commands[].canary_command` | string | *(per entry)* | Optional negative-control canary command |
 | `gates.command.commands[].canary_expected_diagnostic` | string | *(per entry)* | Expected diagnostic string that canary must produce |
 | `gates.command.commands[].command` | string | *(per entry)* | Command string to execute |
-| `gates.command.commands[].count_pattern` | string | *(per entry)* | Regex pattern to extract an integer count |
+| `gates.command.commands[].count_pattern` | string | *(per entry)* | Regex pattern to extract an integer count from its first capture group; a pattern that does not compile or has no capture group is a configuration error |
 | `gates.command.commands[].forbid_output` | list | *(per entry)* | Output patterns that must not appear in stdout or stderr |
 | `gates.command.commands[].min_count` | integer | *(per entry)* | Minimum count required |
 | `gates.command.commands[].name` | string | *(required)* | Name or identifier of the command |
@@ -149,7 +149,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.command.commands[].snapshot_ignore` | list | *(per entry)* | Regexes for lines left out of the snapshot comparison, on both sides |
 | `gates.command.commands[].timeout_seconds` | integer | *(per entry)* | Execution timeout in seconds |
 | `gates.command.commands[].zero_items_pattern` | string | *(per entry)* | Pattern that indicates zero items were executed |
-| `gates.command.count_pattern` | string | *(unset)* | Regex pattern to extract an integer count |
+| `gates.command.count_pattern` | string | *(unset)* | Regex pattern to extract an integer count from its first capture group; a pattern that does not compile or has no capture group is a configuration error |
 | `gates.command.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.command.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.command.forbid_output` | list | `[]` | Output patterns that must not appear in stdout or stderr |

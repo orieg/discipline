@@ -25,6 +25,15 @@ use std::time::{Duration, Instant};
 
 pub const GATE: &str = "command";
 
+/// The configuration key of a `count_pattern`: the gate's own, or that of the `commands`
+/// entry named `entry`.
+pub fn count_pattern_key(entry: Option<&str>) -> String {
+    match entry {
+        Some(name) => format!("gates.command.commands[{name}].count_pattern"),
+        None => "gates.command.count_pattern".to_string(),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CommandRunResult {
     pub status: ExitStatus,
@@ -856,18 +865,14 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             }
         }
 
-        let extracted_count = if let Some(ref cpat) = item.count_pattern {
-            if let Ok(re) = regex::Regex::new(cpat) {
-                if let Some(caps) = re.captures(&combined_output) {
-                    caps.get(1).and_then(|m| m.as_str().parse::<u64>().ok())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
+        // Checked with the configuration before any gate runs; compiled the same way here
+        // so a caller that skips that check gets the error, not a count that is never read.
+        let extracted_count = match item.count_pattern {
+            Some(ref cpat) => super::capture_pattern(cpat, &count_pattern_key(None))?
+                .captures(&combined_output)
+                .and_then(|caps| caps.get(1))
+                .and_then(|m| m.as_str().parse::<u64>().ok()),
+            None => None,
         };
 
         if item.count_pattern.is_some() && extracted_count == Some(0) {
