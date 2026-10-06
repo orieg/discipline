@@ -117,6 +117,7 @@ impl LanguagePack for RubyPack {
         );
         extractor.facts.prose =
             super::prose::extract(root, src, &["comment", "string", "heredoc_body"]);
+        super::expected_exceptions::ruby(root, src, &mut extractor.facts.tests);
         Ok(extractor.facts)
     }
 }

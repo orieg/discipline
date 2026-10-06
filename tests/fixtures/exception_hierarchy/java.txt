@@ -1,0 +1,178 @@
+# Java exception classes, one `child parent` pair per line, by simple name: the public
+# `Throwable` subclasses of these packages of the `java.base` module:
+#   java.lang java.lang.reflect java.io java.net java.nio java.nio.charset java.nio.file java.util java.util.concurrent java.util.regex java.util.zip java.time java.time.format
+# Runtime: Java(TM) SE Runtime Environment (build 17.0.1+12-LTS-39).
+# Produced by `java Hierarchy.java <the packages above>`, with Hierarchy.java:
+#   import java.lang.reflect.Modifier;
+#   import java.net.URI;
+#   import java.nio.file.*;
+#   import java.util.TreeSet;
+#   public class Hierarchy {
+#       public static void main(String[] packages) throws Exception {
+#           FileSystem fs = FileSystems.getFileSystem(URI.create("jrt:/"));
+#           TreeSet<String> out = new TreeSet<>();
+#           for (String pkg : packages) {
+#               try (var files = Files.list(fs.getPath("/modules/java.base/" + pkg.replace('.', '/')))) {
+#                   for (Path p : (Iterable<Path>) files::iterator) {
+#                       String f = p.getFileName().toString();
+#                       if (!f.endsWith(".class") || f.contains("$")) continue;
+#                       Class<?> c = Class.forName(pkg + "." + f.substring(0, f.length() - 6));
+#                       if (Modifier.isPublic(c.getModifiers()) && Throwable.class.isAssignableFrom(c) && c != Throwable.class)
+#                           out.add(c.getSimpleName() + " " + c.getSuperclass().getSimpleName());
+#                   }
+#               }
+#           }
+#           out.forEach(System.out::println);
+#       }
+#   }
+AbstractMethodError IncompatibleClassChangeError
+AccessDeniedException FileSystemException
+ArithmeticException RuntimeException
+ArrayIndexOutOfBoundsException IndexOutOfBoundsException
+ArrayStoreException RuntimeException
+AssertionError Error
+AtomicMoveNotSupportedException FileSystemException
+BindException SocketException
+BootstrapMethodError LinkageError
+BrokenBarrierException Exception
+BufferOverflowException RuntimeException
+BufferUnderflowException RuntimeException
+CancellationException IllegalStateException
+CharConversionException IOException
+CharacterCodingException IOException
+ClassCastException RuntimeException
+ClassCircularityError LinkageError
+ClassFormatError LinkageError
+ClassNotFoundException ReflectiveOperationException
+CloneNotSupportedException Exception
+ClosedDirectoryStreamException IllegalStateException
+ClosedFileSystemException IllegalStateException
+ClosedWatchServiceException IllegalStateException
+CoderMalfunctionError Error
+CompletionException RuntimeException
+ConcurrentModificationException RuntimeException
+ConnectException SocketException
+DataFormatException Exception
+DateTimeException RuntimeException
+DateTimeParseException DateTimeException
+DirectoryIteratorException ConcurrentModificationException
+DirectoryNotEmptyException FileSystemException
+DuplicateFormatFlagsException IllegalFormatException
+EOFException IOException
+EmptyStackException RuntimeException
+EnumConstantNotPresentException RuntimeException
+Error Throwable
+Exception Throwable
+ExceptionInInitializerError LinkageError
+ExecutionException Exception
+FileAlreadyExistsException FileSystemException
+FileNotFoundException IOException
+FileSystemAlreadyExistsException RuntimeException
+FileSystemException IOException
+FileSystemLoopException FileSystemException
+FileSystemNotFoundException RuntimeException
+FormatFlagsConversionMismatchException IllegalFormatException
+FormatterClosedException IllegalStateException
+GenericSignatureFormatError ClassFormatError
+HttpRetryException IOException
+IOError Error
+IOException Exception
+IllegalAccessError IncompatibleClassChangeError
+IllegalAccessException ReflectiveOperationException
+IllegalArgumentException RuntimeException
+IllegalCallerException RuntimeException
+IllegalCharsetNameException IllegalArgumentException
+IllegalFormatCodePointException IllegalFormatException
+IllegalFormatConversionException IllegalFormatException
+IllegalFormatException IllegalArgumentException
+IllegalFormatFlagsException IllegalFormatException
+IllegalFormatPrecisionException IllegalFormatException
+IllegalFormatWidthException IllegalFormatException
+IllegalMonitorStateException RuntimeException
+IllegalStateException RuntimeException
+IllegalThreadStateException IllegalArgumentException
+IllformedLocaleException RuntimeException
+InaccessibleObjectException RuntimeException
+IncompatibleClassChangeError LinkageError
+IndexOutOfBoundsException RuntimeException
+InputMismatchException NoSuchElementException
+InstantiationError IncompatibleClassChangeError
+InstantiationException ReflectiveOperationException
+InternalError VirtualMachineError
+InterruptedException Exception
+InterruptedIOException IOException
+InvalidClassException ObjectStreamException
+InvalidMarkException IllegalStateException
+InvalidObjectException ObjectStreamException
+InvalidPathException IllegalArgumentException
+InvalidPropertiesFormatException IOException
+InvocationTargetException ReflectiveOperationException
+LayerInstantiationException RuntimeException
+LinkageError Error
+MalformedInputException CharacterCodingException
+MalformedParameterizedTypeException RuntimeException
+MalformedParametersException RuntimeException
+MalformedURLException IOException
+MissingFormatArgumentException IllegalFormatException
+MissingFormatWidthException IllegalFormatException
+MissingResourceException RuntimeException
+NegativeArraySizeException RuntimeException
+NoClassDefFoundError LinkageError
+NoRouteToHostException SocketException
+NoSuchElementException RuntimeException
+NoSuchFieldError IncompatibleClassChangeError
+NoSuchFieldException ReflectiveOperationException
+NoSuchFileException FileSystemException
+NoSuchMethodError IncompatibleClassChangeError
+NoSuchMethodException ReflectiveOperationException
+NotActiveException ObjectStreamException
+NotDirectoryException FileSystemException
+NotLinkException FileSystemException
+NotSerializableException ObjectStreamException
+NullPointerException RuntimeException
+NumberFormatException IllegalArgumentException
+ObjectStreamException IOException
+OptionalDataException ObjectStreamException
+OutOfMemoryError VirtualMachineError
+PatternSyntaxException IllegalArgumentException
+PortUnreachableException SocketException
+ProtocolException IOException
+ProviderMismatchException IllegalArgumentException
+ProviderNotFoundException RuntimeException
+ReadOnlyBufferException UnsupportedOperationException
+ReadOnlyFileSystemException UnsupportedOperationException
+ReflectiveOperationException Exception
+RejectedExecutionException RuntimeException
+RuntimeException Exception
+SecurityException RuntimeException
+ServiceConfigurationError Error
+SocketException IOException
+SocketTimeoutException InterruptedIOException
+StackOverflowError VirtualMachineError
+StreamCorruptedException ObjectStreamException
+StringIndexOutOfBoundsException IndexOutOfBoundsException
+SyncFailedException IOException
+ThreadDeath Error
+TimeoutException Exception
+TooManyListenersException Exception
+TypeNotPresentException RuntimeException
+URISyntaxException Exception
+UTFDataFormatException IOException
+UncheckedIOException RuntimeException
+UndeclaredThrowableException RuntimeException
+UnknownError VirtualMachineError
+UnknownFormatConversionException IllegalFormatException
+UnknownFormatFlagsException IllegalFormatException
+UnknownHostException IOException
+UnknownServiceException IOException
+UnmappableCharacterException CharacterCodingException
+UnsatisfiedLinkError LinkageError
+UnsupportedCharsetException IllegalArgumentException
+UnsupportedClassVersionError ClassFormatError
+UnsupportedEncodingException IOException
+UnsupportedOperationException RuntimeException
+VerifyError LinkageError
+VirtualMachineError Error
+WriteAbortedException ObjectStreamException
+ZipError InternalError
+ZipException IOException

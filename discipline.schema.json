@@ -768,7 +768,7 @@
       "properties": {
         "args": {
           "$ref": "#/$defs/StringListOrReset",
-          "description": "Additional CLI arguments passed to cargo miri test"
+          "description": "Additional CLI arguments passed to cargo miri test, one argument per item (ASCII letters, digits and _ . / : = , @ + -). They are executed, so a change under review cannot add or alter them"
         },
         "enabled": {
           "description": "Whether this gate is active",
@@ -791,7 +791,7 @@
       "additionalProperties": false,
       "properties": {
         "command": {
-          "description": "Command to run to verify MSRV compatibility",
+          "description": "Command to run to verify MSRV compatibility. It is executed, so a change under review cannot add or alter it",
           "type": [
             "string",
             "null"
@@ -1068,7 +1068,7 @@
       "additionalProperties": false,
       "properties": {
         "canary": {
-          "description": "Whether to verify a negative-control race canary before main tests",
+          "description": "Whether to verify a negative-control race canary before main tests. It selects a command that runs, so a change under review cannot alter it",
           "type": "boolean"
         },
         "enabled": {
@@ -1079,7 +1079,7 @@
           "$ref": "#/$defs/StringListOrReset"
         },
         "sanitizer": {
-          "description": "Sanitizer name to activate (e.g. \"address\", \"thread\")",
+          "description": "Sanitizer name to activate (e.g. \"address\", \"thread\"): a lower-case letter, then lower-case letters, digits and -. It reaches the command that runs, so a change under review cannot alter it",
           "type": "string"
         },
         "severity": {

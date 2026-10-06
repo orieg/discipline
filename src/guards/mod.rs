@@ -1437,6 +1437,28 @@ fn unusable_patterns(config: &DisciplineConfig, gate_ids: &[&'static str]) -> Ve
             }
         }
     }
+    // Values placed among the arguments of a built-in command: each has one shape.
+    if on(miri::GATE) {
+        let args = &config.gates.miri.args;
+        if let Some(e) = args.iter().find_map(|a| miri::check_arg(a).err()) {
+            push(
+                miri::GATE,
+                key_path(&["gates", miri::GATE, "args"]),
+                miri::ARGS_KEY.to_string(),
+                e,
+            );
+        }
+    }
+    if on(sanitizers::GATE) {
+        if let Err(e) = sanitizers::check_sanitizer_name(&config.gates.sanitizers.sanitizer) {
+            push(
+                sanitizers::GATE,
+                key_path(&["gates", sanitizers::GATE, "sanitizer"]),
+                sanitizers::SANITIZER_KEY.to_string(),
+                e,
+            );
+        }
+    }
     if on(perf::GATE) {
         if let Err(e) = perf::ArmExemptions::new(&config.gates.bench_regression.exempt_arms) {
             push(
