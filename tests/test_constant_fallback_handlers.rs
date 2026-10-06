@@ -1417,9 +1417,12 @@ fn a_file_outside_the_paths_and_a_test_file_inside_them_are_not_judged() {
     // Outside `harness/**`: a numeric fallback is ordinary in application code.
     repo.write("src/arm.py", ISSUE_EXAMPLE);
     // Inside, but test code by its file name and by its directory: the gate's test-scope
-    // rule holds for this finding as for the others.
-    repo.write("harness/test_arm.py", ISSUE_EXAMPLE);
-    repo.write("harness/tests/arm.py", ISSUE_EXAMPLE);
+    // rule holds for this finding as for the others. Each holds a test that checks
+    // something, which a new file under a test name needs to be test code.
+    let test_file =
+        format!("{ISSUE_EXAMPLE}\n\ndef test_measure():\n    assert measure(\"arm\") > 0\n");
+    repo.write("harness/test_arm.py", &test_file);
+    repo.write("harness/tests/arm.py", &test_file);
     // Positive control: the same text in a production file inside the paths.
     repo.write("harness/arm.py", ISSUE_EXAMPLE);
     repo.commit("feat: arms");
