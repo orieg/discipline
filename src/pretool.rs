@@ -550,29 +550,105 @@ const GIT_READ_ONLY: &[&str] = &[
     "config",
 ];
 
+/// The shell parser, reachable only through an ASCII copy of the command.
+///
+/// tree-sitter-bash 0.25.1 hands the character it is looking at, a Unicode code point,
+/// to `isdigit` in its brace-range scan (`src/scanner.c`, after `{` and after
+/// `{<digits>..`). `isdigit` is defined for `unsigned char` values and `EOF` only, and
+/// on glibc it indexes a table: a code point above 255 reads outside it (#618). So the
+/// parser is never given a character above 127. It parses a copy of the command in
+/// which every byte of a non-ASCII character is a placeholder; the copy has the
+/// command's length and every byte offset in it is the command's, so a node's text is
+/// read from the command by the node's byte range.
+///
+/// The compiler holds this: `AsciiParseText` has a private field, so outside this
+/// module the only way to make one is `ascii_copy_with_unchanged_offsets`, and
+/// `parse`, the only function that names the grammar, takes nothing else.
+mod shell_tree {
+    /// What stands for each byte of a non-ASCII character in the parse copy. It is a
+    /// control character because the grammar reads one the way it reads a non-ASCII
+    /// character: as part of a word, and as neither a letter (which would make `é=1` an
+    /// assignment and `$é` a variable), a digit (which would make `{é..3}` a brace
+    /// range), whitespace, a quote nor an operator.
+    pub(super) const PLACEHOLDER: u8 = 0x01;
+
+    /// A command with every non-ASCII byte replaced: ASCII, and as long as the command.
+    pub(super) struct AsciiParseText(String);
+
+    impl AsciiParseText {
+        #[cfg(test)]
+        pub(super) fn as_str(&self) -> &str {
+            &self.0
+        }
+    }
+
+    /// `cmd` with each non-ASCII character replaced by as many placeholder bytes as its
+    /// UTF-8 encoding has, so the result is ASCII and no byte offset moves.
+    pub(super) fn ascii_copy_with_unchanged_offsets(cmd: &str) -> AsciiParseText {
+        AsciiParseText(
+            cmd.bytes()
+                .map(|b| char::from(if b.is_ascii() { b } else { PLACEHOLDER }))
+                .collect(),
+        )
+    }
+
+    /// The syntax tree of the copy, or why there is none (the reason a caller refuses
+    /// the command with).
+    pub(super) fn parse(text: &AsciiParseText) -> Result<tree_sitter::Tree, &'static str> {
+        debug_assert!(
+            text.0.is_ascii(),
+            "the bash scanner must not be given a character above 127"
+        );
+        let mut parser = tree_sitter::Parser::new();
+        if parser
+            .set_language(&tree_sitter_bash::LANGUAGE.into())
+            .is_err()
+        {
+            return Err("discipline could not load its shell parser; the command is refused");
+        }
+        parser
+            .parse(&text.0, None)
+            .ok_or("discipline could not parse this shell command, so it is refused")
+    }
+}
+
+/// Whether `node` starts or ends inside a character of `cmd`. The tree comes from the
+/// ASCII copy, where a character of several bytes is several placeholders: a node that
+/// took only some of them has no text in the command, so the command is refused.
+fn splits_a_character(node: tree_sitter::Node, cmd: &str) -> bool {
+    !cmd.is_char_boundary(node.start_byte()) || !cmd.is_char_boundary(node.end_byte())
+}
+
+/// Whether `node` is a here-document's delimiter with a non-ASCII character in it. In
+/// the copy two different delimiters of the same byte length are the same placeholders,
+/// so the parser could end a here-document at a line the shell reads as its body. The
+/// grammar keeps one byte of each character of a delimiter and compares it with a whole
+/// character, so where `char` is signed it never matched such a delimiter and the
+/// command did not parse; it stays refused.
+fn is_non_ascii_heredoc_delimiter(node: tree_sitter::Node, cmd: &str) -> bool {
+    node.kind() == "heredoc_start" && !node.utf8_text(cmd.as_bytes()).is_ok_and(|t| t.is_ascii())
+}
+
 /// Decide whether a shell command may run: it must not `cd` into another worktree, run
 /// git against one (`-C`, `--git-dir`, `--work-tree`) other than to read, redirect output
 /// into one, or force-push a branch another worktree leases. A command that does not
-/// parse, or whose path in one of those positions expands at run time, is refused.
+/// parse, or whose path in one of those positions expands at run time, is refused. The
+/// parser reads an ASCII copy of the command (`shell_tree`); every word judged here is
+/// the command's own text.
 pub fn judge_shell(cmd: &str, cwd: &Path, scene: &Scene) -> Verdict {
-    let mut parser = tree_sitter::Parser::new();
-    if parser
-        .set_language(&tree_sitter_bash::LANGUAGE.into())
-        .is_err()
-    {
-        return Verdict::Deny(
-            "discipline could not load its shell parser; the command is refused".into(),
-        );
-    }
-    let Some(tree) = parser.parse(cmd, None) else {
-        return Verdict::Deny(
-            "discipline could not parse this shell command, so it is refused".into(),
-        );
+    // The tree's byte ranges are the command's own (the copy changes no offset), so the
+    // text of every node below is read from `cmd`, never from the copy.
+    let tree = match shell_tree::parse(&shell_tree::ascii_copy_with_unchanged_offsets(cmd)) {
+        Ok(tree) => tree,
+        Err(reason) => return Verdict::Deny(reason.into()),
+    };
+    let unparsed = || {
+        Verdict::Deny(
+            "discipline could not parse this shell command, so it cannot tell where it acts; it is refused".into(),
+        )
     };
     if tree.root_node().has_error() {
-        return Verdict::Deny(
-            "discipline could not parse this shell command, so it cannot tell where it acts; it is refused".into(),
-        );
+        return unparsed();
     }
     let here = scene
         .worktrees
@@ -607,6 +683,12 @@ pub fn judge_shell(cmd: &str, cwd: &Path, scene: &Scene) -> Verdict {
         let mut c = n.walk();
         let children: Vec<_> = n.named_children(&mut c).collect();
         stack.extend(children.into_iter().rev());
+    }
+    if nodes
+        .iter()
+        .any(|n| splits_a_character(*n, cmd) || is_non_ascii_heredoc_delimiter(*n, cmd))
+    {
+        return unparsed();
     }
     for n in nodes {
         match n.kind() {
@@ -1211,6 +1293,421 @@ mod tests {
             agy.cwd.as_deref(),
             Some(Path::new("/r/sub")),
             "agy runs the command in its Cwd"
+        );
+    }
+
+    fn shell_placeholder() -> u8 {
+        shell_tree::PLACEHOLDER
+    }
+
+    /// The input of the fuzz run that found #618 (the `crash_wide_char_after_brace` seed
+    /// of the `pretool_payload` target, which `tests/test_pretool.rs` reads): the
+    /// target's selector byte, then `{`, U+8E753, four bytes that are not UTF-8, and
+    /// `me \n}\n`.
+    const CRASH_618: &[u8] = b"\x05{\xf2\x8e\x9d\x93\x9a\xa0\x91\x9eme \n}\n";
+
+    /// Strings with non-ASCII characters where the grammar's scanner looks at them.
+    fn non_ascii_commands() -> Vec<String> {
+        let mut all: Vec<String> = [
+            // Directly after `{`: the first `isdigit` of the brace-range scan.
+            "echo {\u{8e753}",
+            "{\u{8e753}",
+            "echo {\u{100}}",
+            // After `{<digits>..`, with or without digits: the second.
+            "echo {..\u{8e753}",
+            "echo {1..\u{8e753}",
+            "echo {1..\u{8e753}}",
+            "echo {12..\u{663}}",
+            "{1..\u{65e5}",
+            // Elsewhere.
+            "echo fo\u{e9}",
+            "e\u{301}cho a\u{300}\u{301}\u{302}",
+            "echo '\u{fffd}' \"\u{fffd}\u{fffd}\" \u{fffd}",
+            "cat <<EOF\n\u{1f389}\nEOF\n",
+            "# \u{65e5}\u{672c}\u{8a9e}\nls",
+            "\u{e9}",
+            "\u{a0}\u{3000}\u{2028}\u{ff5b}1..3}",
+        ]
+        .iter()
+        .map(|c| c.to_string())
+        .collect();
+        all.push(String::from_utf8_lossy(&CRASH_618[1..]).into_owned());
+        all.push("\u{10ffff}".repeat(20_000));
+        all.push(format!(
+            "echo {{{}",
+            "\u{e9}\u{65e5}\u{1f389}".repeat(5_000)
+        ));
+        all
+    }
+
+    #[test]
+    fn the_parse_copy_is_ascii_and_moves_no_byte_offset() {
+        for ascii in ["", "echo {1..3} > 'a b' && cd \"$X\"\n", "\x01\t\x7f"] {
+            assert_eq!(
+                shell_tree::ascii_copy_with_unchanged_offsets(ascii).as_str(),
+                ascii
+            );
+        }
+        let p = shell_placeholder();
+        assert!(
+            p.is_ascii_control() && !p.is_ascii_whitespace(),
+            "a letter, a digit, whitespace, a quote or an operator would change the tree"
+        );
+        for cmd in non_ascii_commands() {
+            let copy = shell_tree::ascii_copy_with_unchanged_offsets(&cmd);
+            let copy = copy.as_str().as_bytes();
+            assert!(copy.is_ascii(), "{cmd:?}");
+            assert_eq!(copy.len(), cmd.len(), "{cmd:?}");
+            for (at, ch) in cmd.char_indices() {
+                let bytes = &copy[at..at + ch.len_utf8()];
+                if ch.is_ascii() {
+                    assert_eq!(bytes, [ch as u8], "{cmd:?} at {at}");
+                } else {
+                    assert!(bytes.iter().all(|b| *b == p), "{cmd:?} at {at}");
+                }
+            }
+        }
+    }
+
+    /// The out-of-bounds read of #618 cannot be seen here: it faults under glibc's
+    /// `isdigit` only. What is asserted is what prevents it (the text the parser gets
+    /// is ASCII: `shell_tree::parse` has a `debug_assert!` that these calls go through)
+    /// and that each input is still judged.
+    #[test]
+    fn the_crash_input_of_618_and_both_scanner_sites_are_judged_from_an_ascii_copy() {
+        let worktrees = Worktrees {
+            all: vec![
+                ("main".to_string(), "/repo".into()),
+                ("other".to_string(), "/repo/.worktrees/other".into()),
+            ],
+            here: "main".to_string(),
+        };
+        let scene = Scene {
+            worktrees: &worktrees,
+            leases: &[],
+            forbidden: None,
+            branch: Some("main"),
+        };
+        // The calls of the `pretool_payload` fuzz target, on its crash input.
+        let text = String::from_utf8_lossy(&CRASH_618[1..]);
+        assert_eq!(text, "{\u{8e753}\u{fffd}\u{fffd}\u{fffd}\u{fffd}me \n}\n");
+        assert_eq!(parse(Agent::Copilot, &text), None);
+        assert_eq!(parse_session_start(Agent::Copilot, &text), None);
+        assert_eq!(patch_targets(&text), Vec::<String>::new());
+        // `{<word>` and `}` are two words to the grammar, as they were before the copy.
+        assert_eq!(
+            judge_shell(&text, Path::new("/repo"), &scene),
+            Verdict::Allow
+        );
+        for (cmd, allowed) in [
+            ("echo {\u{8e753}", true),
+            ("echo {\u{100}} > /repo/own.txt", true),
+            ("echo {1..\u{8e753}", true),
+            ("echo {..\u{8e753}", true),
+            ("echo {1..\u{8e753}} {1..3}", true),
+            ("echo {\u{8e753} > /repo/.worktrees/other/x", false),
+            ("echo {1..\u{8e753} > /repo/.worktrees/other/x", false),
+            ("cd /repo/.worktrees/other/{1..\u{8e753}}", false),
+        ] {
+            let copy = shell_tree::ascii_copy_with_unchanged_offsets(cmd);
+            assert!(copy.as_str().is_ascii(), "{cmd}");
+            assert!(shell_tree::parse(&copy).is_ok(), "{cmd}");
+            let v = judge_shell(cmd, Path::new("/repo"), &scene);
+            assert_eq!(v == Verdict::Allow, allowed, "{cmd}: {v:?}");
+        }
+        for cmd in non_ascii_commands() {
+            // Judged without a panic, whatever the verdict.
+            let v = judge_shell(&cmd, Path::new("/repo"), &scene);
+            assert!(matches!(v, Verdict::Allow | Verdict::Deny(_)));
+        }
+    }
+
+    /// `shell_tree::parse` takes an `AsciiParseText`, whose field is private to that
+    /// module, so the compiler refuses any other text. What it cannot refuse is a
+    /// second parser built somewhere else: the grammar and the parser type are named
+    /// once in `src/`, inside `shell_tree`.
+    #[test]
+    fn the_bash_grammar_is_named_only_inside_the_guarded_parser() {
+        let grammar = ["tree_sitter", "_bash"].concat();
+        let parser = ["Parser", "::new"].concat();
+        let mut named = Vec::new();
+        let mut dirs = vec![PathBuf::from(format!("{}/src", env!("CARGO_MANIFEST_DIR")))];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    named.extend(
+                        text.match_indices(&grammar)
+                            .map(|(at, _)| (path.clone(), text[..at].lines().count())),
+                    );
+                }
+            }
+        }
+        assert_eq!(named.len(), 1, "{named:?}");
+        let here = std::fs::read_to_string(&named[0].0).unwrap();
+        assert!(named[0].0.ends_with("src/pretool.rs"), "{named:?}");
+        let module = here
+            .split_once("\nmod shell_tree {\n")
+            .and_then(|(_, rest)| rest.split_once("\n}\n"))
+            .map(|(body, _)| body)
+            .expect("the module");
+        assert!(module.contains(&grammar));
+        assert!(module.contains("fn parse(text: &AsciiParseText)"));
+        assert!(module.contains("pub(super) struct AsciiParseText(String);"));
+        // The only parser this file builds is that one.
+        assert_eq!(here.matches(&parser).count(), 1);
+        assert_eq!(module.matches(&parser).count(), 1);
+    }
+
+    #[test]
+    fn a_node_that_splits_a_character_has_no_text_to_judge() {
+        let copy = shell_tree::ascii_copy_with_unchanged_offsets("echo ab");
+        let tree = shell_tree::parse(&copy).unwrap();
+        let word = tree
+            .root_node()
+            .descendant_for_byte_range(5, 7)
+            .expect("the argument");
+        assert_eq!((word.kind(), word.byte_range()), ("word", 5..7));
+        assert!(!splits_a_character(word, "echo ab"));
+        assert!(!splits_a_character(word, "echo \u{e9}"));
+        // A command whose character starts or ends inside the node.
+        assert!(splits_a_character(word, "ech \u{e9}b"));
+        assert!(splits_a_character(word, "echo a\u{e9}"));
+        let heredoc = "cat <<\u{e9}\n\u{e9}\n";
+        let tree =
+            shell_tree::parse(&shell_tree::ascii_copy_with_unchanged_offsets(heredoc)).unwrap();
+        let start = tree.root_node().descendant_for_byte_range(6, 8).unwrap();
+        assert_eq!(start.kind(), "heredoc_start");
+        assert!(is_non_ascii_heredoc_delimiter(start, heredoc));
+        assert!(!is_non_ascii_heredoc_delimiter(start, "cat <<AB\nAB\n"));
+        assert!(!is_non_ascii_heredoc_delimiter(tree.root_node(), heredoc));
+    }
+
+    /// Two worktrees whose names are not ASCII, and a branch name that is not either.
+    /// `wt\u{e9}` and `wt\u{f1}` have the same length in bytes, as do the two branches.
+    #[test]
+    fn shell_commands_with_non_ascii_words_are_judged_by_their_own_text() {
+        let d = tempfile::tempdir().unwrap();
+        let main = d.path().join("main");
+        let other = main.join("wt\u{e9}");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::create_dir_all(main.join("s\u{e9}par\u{e9}")).unwrap();
+        let wts = scene_with(&[("main", &main), ("wt\u{e9}", &other)], "main");
+        let lease = Lease {
+            agent: "copilot".into(),
+            session: "s2".into(),
+            worktree: "/w".into(),
+            branches: vec!["feat/\u{e9}t\u{e9}".into()],
+            taken_at: 0,
+            heartbeat: 0,
+            ttl_secs: 60,
+        };
+        let leases = vec![("wt\u{e9}".to_string(), lease)];
+        let scene = Scene {
+            worktrees: &wts,
+            leases: &leases,
+            forbidden: None,
+            branch: Some("work"),
+        };
+        let cwd = main.canonicalize().unwrap();
+        let o = other.canonicalize().unwrap();
+        let o = o.to_str().unwrap();
+        // Refused, and for the reason given: the worktree or the branch is named as the
+        // command wrote it.
+        for (c, reason) in [
+            (
+                "cd wt\u{e9}".to_string(),
+                "changes into worktree `wt\u{e9}`",
+            ),
+            (
+                format!("cd '{o}' && ls"),
+                "changes into worktree `wt\u{e9}`",
+            ),
+            (
+                "true && (cd \"wt\u{e9}/\u{65e5}\u{672c}\")".to_string(),
+                "changes into worktree `wt\u{e9}`",
+            ),
+            (
+                "cd s\u{e9}par\u{e9} && cd ../wt\u{e9}".to_string(),
+                "changes into worktree `wt\u{e9}`",
+            ),
+            (
+                "git -C wt\u{e9} commit -m \u{1f389}".to_string(),
+                "runs `git commit` in worktree `wt\u{e9}`",
+            ),
+            (
+                format!("git -C \"{o}\" reset --hard"),
+                "runs `git reset` in worktree `wt\u{e9}`",
+            ),
+            (
+                "git --git-dir=wt\u{e9}/.git --work-tree=wt\u{e9} checkout -b x".to_string(),
+                "runs `git checkout` in worktree `wt\u{e9}`",
+            ),
+            (
+                "echo h\u{e9} > wt\u{e9}/\u{e9}chapp\u{e9}.txt".to_string(),
+                "writes into worktree `wt\u{e9}`",
+            ),
+            (
+                "echo hi >> 'wt\u{e9}/journal \u{1f389}'".to_string(),
+                "writes into worktree `wt\u{e9}`",
+            ),
+            (
+                "cd s\u{e9}par\u{e9} && echo x > ../wt\u{e9}/y".to_string(),
+                "writes into worktree `wt\u{e9}`",
+            ),
+            (
+                "git push --force origin feat/\u{e9}t\u{e9}".to_string(),
+                "force-pushes `feat/\u{e9}t\u{e9}`, which worktree `wt\u{e9}` has leased",
+            ),
+            (
+                "git push origin +feat/\u{e9}t\u{e9}".to_string(),
+                "force-pushes `feat/\u{e9}t\u{e9}`",
+            ),
+            (
+                "git push -f origin HEAD:refs/heads/feat/\u{e9}t\u{e9}".to_string(),
+                "force-pushes `feat/\u{e9}t\u{e9}`",
+            ),
+            (
+                "echo \u{e9} > \"$F\u{e9}\"".to_string(),
+                "redirect target in this command expands when it runs",
+            ),
+            (
+                "echo \u{e9} ( unbalanced".to_string(),
+                "could not parse this shell command",
+            ),
+        ] {
+            let v = judge_shell(&c, &cwd, &scene);
+            assert!(
+                matches!(&v, Verdict::Deny(r) if r.contains(reason)),
+                "`{c}`: {v:?}"
+            );
+            assert!(
+                !format!("{v:?}").contains(char::from(shell_placeholder())),
+                "`{c}` reports a placeholder: {v:?}"
+            );
+        }
+        for c in [
+            "ls wt\u{e9}",
+            "cat wt\u{e9}/LISEZ-MOI.md",
+            "git -C wt\u{e9} status",
+            "git -C wt\u{e9} log --oneline -3",
+            "cd s\u{e9}par\u{e9} && cargo test",
+            // The same length in bytes as the other worktree's name, and not it.
+            "cd wt\u{f1}",
+            "echo hi > wt\u{f1}/own.txt",
+            "git -C wt\u{f1} commit -m x",
+            "echo h\u{e9}llo > own-\u{e9}.txt 2>/dev/null",
+            "echo '\u{65e5}\u{672c}\u{8a9e}' >> \"notes \u{1f389}.md\"",
+            "git push origin feat/\u{e9}t\u{e9}",
+            // The same length in bytes as the leased branch, and not it.
+            "git push --force origin feat/\u{e8}t\u{e8}",
+            "grep -r 'cd wt\u{e9}' .",
+            "echo \u{fffd} # cd wt\u{e9}",
+            "\u{e9}=1 ls",
+        ] {
+            assert_eq!(judge_shell(c, &cwd, &scene), Verdict::Allow, "refused: {c}");
+        }
+    }
+
+    /// The parser sees `\u{e9}` and `\u{f1}` as the same two placeholders. Were the
+    /// delimiter matched in the copy, the here-document below would end at the `\u{f1}`
+    /// line, and the `cd` the shell runs would be read as the inside of a string.
+    #[test]
+    fn a_here_document_with_a_non_ascii_delimiter_stays_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let main = d.path().join("main");
+        let other = main.join("wt2");
+        std::fs::create_dir_all(&other).unwrap();
+        let wts = scene_with(&[("main", &main), ("wt2", &other)], "main");
+        let scene = Scene {
+            worktrees: &wts,
+            leases: &[],
+            forbidden: None,
+            branch: None,
+        };
+        let cwd = main.canonicalize().unwrap();
+        for c in [
+            "cat <<\u{e9}\nbody\n\u{e9}\n",
+            "cat <<-'\u{65e5}'\n\tbody\n\t\u{65e5}\n",
+            "cat <<\u{e9}\n\u{f1}\necho \"\n\u{e9}\ncd wt2 #\"\n",
+        ] {
+            let v = judge_shell(c, &cwd, &scene);
+            assert!(
+                matches!(&v, Verdict::Deny(r) if r.contains("could not parse this shell command")),
+                "{c:?}: {v:?}"
+            );
+        }
+        // An ASCII delimiter with a non-ASCII body is read as before: the body is not a
+        // command, and what follows the here-document is.
+        assert_eq!(
+            judge_shell("cat <<EOF\ncd wt2 \u{e9}\nEOF\nls \u{e9}\n", &cwd, &scene),
+            Verdict::Allow
+        );
+        let v = judge_shell("cat <<EOF\n\u{e9}\nEOF\ncd wt2\n", &cwd, &scene);
+        assert!(
+            matches!(&v, Verdict::Deny(r) if r.contains("changes into worktree `wt2`")),
+            "{v:?}"
+        );
+    }
+
+    /// The edit checks do not go through the shell parser; their targets with
+    /// non-ASCII names are judged, and reported, as written.
+    #[test]
+    fn edits_with_non_ascii_targets_are_judged_and_reported_as_written() {
+        let d = tempfile::tempdir().unwrap();
+        let main = d.path().join("main");
+        let other = main.join("wt\u{e9}");
+        std::fs::create_dir_all(&other).unwrap();
+        let wts = scene_with(&[("main", &main), ("wt\u{e9}", &other)], "main");
+        let f = crate::guards::PathFilter::new(&["d\u{e9}ploiement/**".to_string()]).unwrap();
+        let lease = Lease {
+            agent: "copilot".into(),
+            session: "s-other".into(),
+            worktree: "/w".into(),
+            branches: vec![],
+            taken_at: 0,
+            heartbeat: 0,
+            ttl_secs: 60,
+        };
+        let cwd = main.canonicalize().unwrap();
+        let scene = Scene {
+            worktrees: &wts,
+            leases: &[],
+            forbidden: Some(&f),
+            branch: None,
+        };
+        let v = judge(&edit("wt\u{e9}/r\u{e9}sum\u{e9}.txt", "s"), &cwd, &scene);
+        assert!(
+            matches!(&v, Verdict::Deny(r) if r.contains("r\u{e9}sum\u{e9}.txt` is in worktree `wt\u{e9}`")),
+            "{v:?}"
+        );
+        let v = judge(&edit("d\u{e9}ploiement/\u{65e5}.yml", "s"), &cwd, &scene);
+        assert!(
+            matches!(&v, Verdict::Deny(r) if r.contains("`d\u{e9}ploiement/\u{65e5}.yml` matches")),
+            "{v:?}"
+        );
+        assert_eq!(
+            judge(&edit("d\u{e8}ploiement/\u{65e5}.yml", "s"), &cwd, &scene),
+            Verdict::Allow
+        );
+        let leases = vec![("main".to_string(), lease)];
+        let leased = Scene {
+            worktrees: &wts,
+            leases: &leases,
+            forbidden: None,
+            branch: None,
+        };
+        let v = judge(&edit("r\u{e9}sum\u{e9}.txt", "s-me"), &cwd, &leased);
+        assert!(
+            matches!(&v, Verdict::Deny(r) if r.contains("leased by copilot session s-other")),
+            "{v:?}"
+        );
+        assert_eq!(
+            judge(&edit("r\u{e9}sum\u{e9}.txt", "s-other"), &cwd, &leased),
+            Verdict::Allow
         );
     }
 }
