@@ -514,7 +514,7 @@ pub fn evaluate_metrics_regression_with_directives(
 fn report_unfresh_override(
     report: &citation::FreshnessReport,
     directive: &crate::tokens::ParsedDirective,
-    regressions: &[(String, f64, u64, u64, String)],
+    regressions: &[CounterRegression],
     head_path: &str,
     severity: crate::config::Severity,
     out: &mut GateOutcome,
@@ -568,6 +568,220 @@ fn report_unfresh_override(
         out.anchor_last(arm.to_string());
     }
     true
+}
+
+/// One regressed deterministic counter: arm, delta in percent, base count, head count, unit.
+type CounterRegression = (String, f64, u64, u64, String);
+
+/// Judges the regressed counters of one artifact against every `allow-regression` line
+/// of the change (`lines` is not empty), under `require_sourced_override`.
+///
+/// Each line is read for the arms it names at its start. A line that cites a measurement
+/// verified fresh approves those arms and is recorded with them as its subject. A line
+/// with no citation, or with one that is not verified, is void: it is reported with the
+/// arms it names that no other line approved. A line that names no regressed arm of this
+/// artifact grants nothing here. When no line names a regressed arm, the first line is
+/// reported as the override that names none, as a single line is.
+fn sourced_overrides(
+    lines: &[&crate::tokens::ParsedDirective],
+    settings: &crate::config::BenchRegressionGate,
+    regressions: &[CounterRegression],
+    head_path: &str,
+    severity: crate::config::Severity,
+    instruments: &dyn citation::CitationInstruments,
+    out: &mut GateOutcome,
+) {
+    let names: Vec<String> = regressions.iter().map(|r| r.0.clone()).collect();
+    let counter = |arm: &str, tail: &str, fix: String, out: &mut GateOutcome| {
+        let Some((_, delta, base_c, head_c, unit)) = regressions.iter().find(|r| r.0 == arm) else {
+            return;
+        };
+        out.push(
+            severity,
+            &crate::findings::COUNTER_REGRESSED,
+            Some(head_path),
+            None,
+            format!(
+                "deterministic counter `{arm}` in `{head_path}` regressed by +{delta:.2}% ({base_c} -> {head_c} {unit}){tail}"
+            ),
+            &fix,
+        );
+        out.anchor_last(arm.to_string());
+    };
+    let void_no_citation = |d: &crate::tokens::ParsedDirective, out: &mut GateOutcome| {
+        out.push(
+            severity,
+            &crate::findings::OVERRIDE_VOID_NO_RESOLVABLE_CITATION,
+            Some(head_path),
+            None,
+            format!(
+                "regression override `{}` is void: reason cites no CI run URL and no committed artifact path (AGENTS.md §6)",
+                d.reason
+            ),
+            "include a CI run URL or committed artifact path in the override reason",
+        );
+    };
+
+    // The arms each line names.
+    let named: Vec<Vec<&str>> = lines
+        .iter()
+        .map(|d| {
+            let others = tokens::unapproved_regressed_arms(&d.reason, &names);
+            names
+                .iter()
+                .map(String::as_str)
+                .filter(|arm| !others.contains(arm))
+                .collect()
+        })
+        .collect();
+    if named.iter().all(Vec::is_empty) {
+        let d = lines[0];
+        if tokens::extract_citation(&d.reason).is_none() {
+            void_no_citation(d, out);
+            for arm in &names {
+                counter(
+                    arm,
+                    ", exceeding tolerance",
+                    format!("optimize `{arm}` or provide a valid sourced override"),
+                    out,
+                );
+            }
+        } else {
+            out.push(
+                severity,
+                &crate::findings::OVERRIDE_VOID_NAMES_NO_REGRESSED_ARM,
+                Some(head_path),
+                None,
+                format!(
+                    "regression override `{}` is void: reason names none of the regressed arms ({:?}) (AGENTS.md §6)",
+                    d.reason, names
+                ),
+                "explicitly name the regressed benchmark arm(s) in the override reason",
+            );
+            for arm in &names {
+                counter(arm, "", format!("name `{arm}` in the override reason"), out);
+            }
+        }
+        return;
+    }
+
+    // What each line that names an arm rests on: no citation, or its freshness report.
+    let reports: Vec<Option<citation::FreshnessReport>> = lines
+        .iter()
+        .zip(&named)
+        .map(|(d, arms)| {
+            if arms.is_empty() || tokens::extract_citation(&d.reason).is_none() {
+                return None;
+            }
+            Some(citation::check_citation_freshness(
+                &d.reason,
+                &citation::FreshnessPolicy {
+                    measurement_jobs: &settings.citation_measurement_jobs,
+                    source_paths: &settings.citation_source_paths,
+                },
+                instruments,
+            ))
+        })
+        .collect();
+    let admitted = |i: usize| reports[i].as_ref().is_some_and(|r| r.is_fresh());
+    let approved: Vec<&str> = (0..lines.len())
+        .filter(|i| admitted(*i))
+        .flat_map(|i| named[i].iter().copied())
+        .collect();
+    let any_admitted = (0..lines.len()).any(admitted);
+
+    // Arms a line already accounts for: approved by it, or reported with it.
+    let mut settled: Vec<&str> = Vec::new();
+    for (i, d) in lines.iter().enumerate() {
+        if named[i].is_empty() {
+            continue;
+        }
+        if admitted(i) {
+            let credited: Vec<&str> = named[i]
+                .iter()
+                .copied()
+                .filter(|arm| !settled.contains(arm))
+                .collect();
+            if credited.is_empty() {
+                continue;
+            }
+            settled.extend(&credited);
+            out.overrides.push(crate::tokens::OverrideRecord {
+                gate: GATE.to_string(),
+                code: Some(crate::findings::full_code(
+                    GATE,
+                    &crate::findings::COUNTER_REGRESSED,
+                )),
+                subject: credited.join(", "),
+                directive: d.directive.clone(),
+                reason: d.reason.clone(),
+                source: d.source.clone(),
+                hidden: d.hidden,
+            });
+            out.notes.push(format!(
+                "performance regression override acknowledged: {}",
+                d.reason
+            ));
+            continue;
+        }
+        // A void line: with it go the arms it names that no line approves, or, when no
+        // line is admitted at all, every regressed arm.
+        let with_it: Vec<&str> = names
+            .iter()
+            .map(String::as_str)
+            .filter(|arm| !any_admitted || named[i].contains(arm))
+            .filter(|arm| !approved.contains(arm) && !settled.contains(arm))
+            .collect();
+        if with_it.is_empty() {
+            continue;
+        }
+        settled.extend(&with_it);
+        match &reports[i] {
+            None => {
+                void_no_citation(d, out);
+                for arm in &with_it {
+                    counter(
+                        arm,
+                        ", exceeding tolerance",
+                        format!("optimize `{arm}` or provide a valid sourced override"),
+                        out,
+                    );
+                }
+            }
+            Some(report) => {
+                let theirs: Vec<CounterRegression> = regressions
+                    .iter()
+                    .filter(|r| with_it.contains(&r.0.as_str()))
+                    .cloned()
+                    .collect();
+                report_unfresh_override(report, d, &theirs, head_path, severity, out);
+            }
+        }
+    }
+
+    // Regressed arms no line names, beside at least one admitted line.
+    let admitted_reasons = (0..lines.len())
+        .filter(|i| admitted(*i))
+        .map(|i| lines[i].reason.as_str())
+        .collect::<Vec<_>>()
+        .join("`, `");
+    for (arm, delta, base_c, head_c, unit) in regressions {
+        if settled.contains(&arm.as_str()) {
+            continue;
+        }
+        out.push(
+            severity,
+            &crate::findings::COUNTER_REGRESSED_UNAPPROVED_ARM,
+            Some(head_path),
+            None,
+            format!(
+                "deterministic counter `{}` in `{}` regressed by +{:.2}% ({} -> {} {}), and is not named in override `{}` (AGENTS.md §6)",
+                arm, head_path, delta, base_c, head_c, unit, admitted_reasons
+            ),
+            &format!("name `{}` in the override reason or optimize the benchmark", arm),
+        );
+        out.anchor_last(arm.to_string());
+    }
 }
 
 /// Evaluates base and head metrics; a sourced override is admitted only when every
@@ -776,147 +990,40 @@ pub fn evaluate_metrics_regression_with_instruments(
         let is_violating = worst_delta > effective_tolerance || above_noise_count >= 2;
 
         if is_violating {
-            let regressed_arm_names: Vec<String> =
-                discrete_regressions.iter().map(|r| r.0.clone()).collect();
-
             if settings.require_sourced_override {
-                let regression_directive = directives.iter().find(|d| {
-                    tokens::ALLOW_REGRESSION
-                        .iter()
-                        .any(|n| n.eq_ignore_ascii_case(&d.directive))
-                });
-
-                match regression_directive {
-                    Some(d) => {
-                        let citation = tokens::extract_citation(&d.reason);
-                        if citation.is_none() {
-                            out.push(
-                                severity,
-                                &crate::findings::OVERRIDE_VOID_NO_RESOLVABLE_CITATION,
-                                Some(head_path),
-                                None,
-                                format!(
-                                    "regression override `{}` is void: reason cites no CI run URL and no committed artifact path (AGENTS.md §6)",
-                                    d.reason
-                                ),
-                                "include a CI run URL or committed artifact path in the override reason",
-                            );
-                            for (arm, delta, base_c, head_c, unit) in &discrete_regressions {
-                                out.push(
-                                    severity,
-                                    &crate::findings::COUNTER_REGRESSED,
-                                    Some(head_path),
-                                    None,
-                                    format!(
-                                        "deterministic counter `{}` in `{}` regressed by +{:.2}% ({} -> {} {}), exceeding tolerance",
-                                        arm, head_path, delta, base_c, head_c, unit
-                                    ),
-                                    &format!("optimize `{}` or provide a valid sourced override", arm),
-                                );
-                                out.anchor_last(arm.to_string());
-                            }
-                        } else {
-                            let unapproved =
-                                tokens::unapproved_regressed_arms(&d.reason, &regressed_arm_names);
-                            if unapproved.len() == regressed_arm_names.len() {
-                                out.push(
-                                    severity,
-                                    &crate::findings::OVERRIDE_VOID_NAMES_NO_REGRESSED_ARM,
-                                    Some(head_path),
-                                    None,
-                                    format!(
-                                        "regression override `{}` is void: reason names none of the regressed arms ({:?}) (AGENTS.md §6)",
-                                        d.reason, regressed_arm_names
-                                    ),
-                                    "explicitly name the regressed benchmark arm(s) in the override reason",
-                                );
-                                for (arm, delta, base_c, head_c, unit) in &discrete_regressions {
-                                    out.push(
-                                        severity,
-                                        &crate::findings::COUNTER_REGRESSED,
-                                        Some(head_path),
-                                        None,
-                                        format!(
-                                            "deterministic counter `{}` in `{}` regressed by +{:.2}% ({} -> {} {})",
-                                            arm, head_path, delta, base_c, head_c, unit
-                                        ),
-                                        &format!("name `{}` in the override reason", arm),
-                                    );
-                                    out.anchor_last(arm.to_string());
-                                }
-                            } else if report_unfresh_override(
-                                &citation::check_citation_freshness(
-                                    &d.reason,
-                                    &citation::FreshnessPolicy {
-                                        measurement_jobs: &settings.citation_measurement_jobs,
-                                        source_paths: &settings.citation_source_paths,
-                                    },
-                                    instruments,
-                                ),
-                                d,
-                                &discrete_regressions,
-                                head_path,
-                                severity,
-                                out,
-                            ) {
-                                // Stale or undecidable: the gate stays armed.
-                            } else {
-                                for (arm, delta, base_c, head_c, unit) in &discrete_regressions {
-                                    if unapproved.contains(&arm.as_str()) {
-                                        out.push(
-                                            severity,
-                                            &crate::findings::COUNTER_REGRESSED_UNAPPROVED_ARM,
-                                            Some(head_path),
-                                            None,
-                                            format!(
-                                                "deterministic counter `{}` in `{}` regressed by +{:.2}% ({} -> {} {}), and is not named in override `{}` (AGENTS.md §6)",
-                                                arm, head_path, delta, base_c, head_c, unit, d.reason
-                                            ),
-                                            &format!("name `{}` in the override reason or optimize the benchmark", arm),
-                                        );
-                                        out.anchor_last(arm.to_string());
-                                    }
-                                }
-                                out.overrides.push(crate::tokens::OverrideRecord {
-                                    gate: GATE.to_string(),
-                                    code: Some(crate::findings::full_code(
-                                        GATE,
-                                        &crate::findings::COUNTER_REGRESSED,
-                                    )),
-                                    subject: regressed_arm_names
-                                        .iter()
-                                        .filter(|a| !unapproved.contains(&a.as_str()))
-                                        .cloned()
-                                        .collect::<Vec<_>>()
-                                        .join(", "),
-                                    directive: d.directive.clone(),
-                                    reason: d.reason.clone(),
-                                    source: d.source.clone(),
-                                    hidden: d.hidden,
-                                });
-                                out.notes.push(format!(
-                                    "performance regression override acknowledged: {}",
-                                    d.reason
-                                ));
-                            }
-                        }
+                let lines: Vec<&crate::tokens::ParsedDirective> = directives
+                    .iter()
+                    .filter(|d| {
+                        tokens::ALLOW_REGRESSION
+                            .iter()
+                            .any(|n| n.eq_ignore_ascii_case(&d.directive))
+                    })
+                    .collect();
+                if lines.is_empty() {
+                    for (arm, delta, base_c, head_c, unit) in &discrete_regressions {
+                        out.push(
+                            severity,
+                            &crate::findings::COUNTER_REGRESSED,
+                            Some(head_path),
+                            None,
+                            format!(
+                                "deterministic counter `{}` in `{}` regressed by +{:.2}% ({} -> {} {}), exceeding threshold (worst: +{:.2}%, noise floor: {:.2}%)",
+                                arm, head_path, delta, base_c, head_c, unit, worst_delta, noise_floor
+                            ),
+                            &format!("optimize `{}` or add directive `allow-regression: {} <rationale>`", arm, arm),
+                        );
+                        out.anchor_last(arm.to_string());
                     }
-                    None => {
-                        for (arm, delta, base_c, head_c, unit) in &discrete_regressions {
-                            out.push(
-                                severity,
-                                &crate::findings::COUNTER_REGRESSED,
-                                Some(head_path),
-                                None,
-                                format!(
-                                    "deterministic counter `{}` in `{}` regressed by +{:.2}% ({} -> {} {}), exceeding threshold (worst: +{:.2}%, noise floor: {:.2}%)",
-                                    arm, head_path, delta, base_c, head_c, unit, worst_delta, noise_floor
-                                ),
-                                &format!("optimize `{}` or add directive `allow-regression: {} <rationale>`", arm, arm),
-                            );
-                            out.anchor_last(arm.to_string());
-                        }
-                    }
+                } else {
+                    sourced_overrides(
+                        &lines,
+                        settings,
+                        &discrete_regressions,
+                        head_path,
+                        severity,
+                        instruments,
+                        out,
+                    );
                 }
             } else {
                 for (arm, delta, base_c, head_c, unit) in &discrete_regressions {

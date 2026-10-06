@@ -440,40 +440,47 @@ fn not_comparable(out: &mut GateOutcome, opts: &EvalOptions<'_>, about: &str, re
 }
 
 /// Whether a regression in `cell` is approved by an `allow-regression:` directive that
-/// names it (and, under `require_sourced_override`, cites a fresh measurement).
+/// names it (and, under `require_sourced_override`, cites a fresh measurement). Every
+/// line that names the cell is read, in order: a void one does not stand in the way of a
+/// later one that is admitted.
 fn approve(cell: &str, opts: &EvalOptions<'_>, out: &mut GateOutcome) -> bool {
-    let Some(ov) = tokens::find_override(
-        opts.directives,
-        GATE,
-        &crate::findings::PAIRED_RATIO_REGRESSED,
-        tokens::ALLOW_REGRESSION,
-        cell,
-    ) else {
-        return false;
-    };
-    if opts.require_sourced_override {
-        if tokens::extract_citation(&ov.reason).is_none() {
-            out.notes.push(format!(
-                "paired-ratio: override for `{cell}` is void — its reason cites no CI run URL and no committed artifact path"
-            ));
-            return false;
-        }
-        let report = citation::check_citation_freshness(&ov.reason, &opts.policy, opts.instruments);
-        if !report.is_fresh() {
-            for p in &report.problems {
-                out.notes
-                    .push(format!("paired-ratio: override for `{cell}` is void — {p}"));
-            }
-            for u in &report.undecidable {
-                out.notes.push(format!(
-                    "allow-regression citation not verified — {u}; the gate stays armed"
+    let mut void_notes = Vec::new();
+    for d in opts.directives {
+        let Some(ov) = tokens::find_override(
+            std::slice::from_ref(d),
+            GATE,
+            &crate::findings::PAIRED_RATIO_REGRESSED,
+            tokens::ALLOW_REGRESSION,
+            cell,
+        ) else {
+            continue;
+        };
+        if opts.require_sourced_override {
+            if tokens::extract_citation(&ov.reason).is_none() {
+                void_notes.push(format!(
+                    "paired-ratio: override for `{cell}` is void — its reason cites no CI run URL and no committed artifact path"
                 ));
+                continue;
             }
-            return false;
+            let report =
+                citation::check_citation_freshness(&ov.reason, &opts.policy, opts.instruments);
+            if !report.is_fresh() {
+                for p in &report.problems {
+                    void_notes.push(format!("paired-ratio: override for `{cell}` is void — {p}"));
+                }
+                for u in &report.undecidable {
+                    void_notes.push(format!(
+                        "allow-regression citation not verified — {u}; the gate stays armed"
+                    ));
+                }
+                continue;
+            }
         }
+        out.overrides.push(ov);
+        return true;
     }
-    out.overrides.push(ov);
-    true
+    out.notes.extend(void_notes);
+    false
 }
 
 /// Evaluates one paired-ratio run against the baseline read from the base ref.
@@ -1613,6 +1620,67 @@ mod tests {
         let out = eval_with(&run, Some(&baseline_with(5.0, &["map_get"])), &dirs, None).unwrap();
         assert!(out.violations.is_empty());
         assert_eq!(out.overrides.len(), 1);
+    }
+
+    /// Under a sourced override every line that names the cell is read: a line with no
+    /// citation before one that cites a regenerated artifact does not void it, and
+    /// alone it approves nothing.
+    #[test]
+    fn a_void_line_does_not_stand_in_the_way_of_a_later_admitted_one() {
+        const ARTIFACT: &str = "results/map_get.json";
+        let run = run_with(&[("map_get", rounds(1.15, TIGHT, 1.0))], &[("ctl", 1.0)]);
+        let line = |reason: &str| ParsedDirective {
+            directive: "allow-regression".to_string(),
+            reason: reason.to_string(),
+            source: OverrideSource::PrBody,
+            hidden: false,
+        };
+        let void = line("map_get pays for the new bounds check");
+        let sourced = line(&format!(
+            "map_get pays for the bounds check, see {ARTIFACT}"
+        ));
+        let mut instruments = citation::CannedInstruments::default();
+        instruments.tracked.insert(ARTIFACT.to_string());
+        instruments.last_change.insert(ARTIFACT.to_string(), 300);
+        instruments.branch_change = Some(200);
+        let source_paths = vec!["src".to_string()];
+        let eval = |directives: &[ParsedDirective]| {
+            let mut out = GateOutcome::new(GATE);
+            let opts = EvalOptions {
+                severity: Severity::Error,
+                tolerance_pct: None,
+                allow_cross_runner: false,
+                require_sourced_override: true,
+                directives,
+                policy: citation::FreshnessPolicy {
+                    measurement_jobs: &[],
+                    source_paths: &source_paths,
+                },
+                instruments: &instruments,
+                location: "run.json",
+            };
+            evaluate_run(
+                &run,
+                Some(&baseline_with(5.0, &["map_get"])),
+                &opts,
+                &mut out,
+            )
+            .unwrap();
+            out
+        };
+        let both = eval(&[void.clone(), sourced.clone()]);
+        assert!(both.violations.is_empty(), "{:?}", both.notes);
+        assert_eq!(both.overrides.len(), 1);
+        assert_eq!(both.overrides[0].reason, sourced.reason);
+
+        let alone = eval(&[void]);
+        assert_eq!(titles(&alone), vec!["Paired Ratio Regressed"]);
+        assert!(alone.overrides.is_empty());
+        assert!(
+            alone.notes.iter().any(|n| n.contains("is void")),
+            "{:?}",
+            alone.notes
+        );
     }
 
     #[test]

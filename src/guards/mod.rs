@@ -53,6 +53,13 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::Serialize;
 
+/// Whether `path` is how a gate names the pull request body as the place of a finding
+/// (`time-estimates` and `pii` write `<PR body>`, `pr-checklist` and `provenance-tags`
+/// `PR body`).
+pub fn is_pr_body_label(path: &str) -> bool {
+    matches!(path, "<PR body>" | "PR body")
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Violation {
     pub gate: &'static str,
@@ -1088,7 +1095,16 @@ pub fn run_checks(
             .flat_map(|o| o.violations.iter_mut())
             .collect();
         let reads = crate::gitctx::ReadRecorder::new();
-        crate::baseline::fill_fingerprints(&mut all, reads.head(ctx.git));
+        let head = reads.head(ctx.git);
+        // A finding on the pull request body is on a line of the body, not of a file:
+        // read there, its fingerprint hashes that line like any other finding's. The
+        // body comes first, so a tracked file of the same name never stands in for it.
+        crate::baseline::fill_fingerprints(&mut all, |path: &str| {
+            match (is_pr_body_label(path), &ctx.pr_body) {
+                (true, Some(body)) => Some(body.clone()),
+                _ => head(path),
+            }
+        });
         reads.finish()?;
     }
 
