@@ -76,8 +76,7 @@ mod swift_tree {
         parser
             .set_language(&language())
             .map_err(|e| anyhow!("failed to load the Swift grammar: {e}"))?;
-        crate::ast::source_text::parse(&mut parser, &text.0)
-            .ok_or_else(|| anyhow!("tree-sitter returned no tree"))
+        crate::ast::source_text::parse(&mut parser, &text.0).map_err(anyhow::Error::from)
     }
 }
 
@@ -119,7 +118,8 @@ impl LanguagePack for SwiftPack {
         // Everything below reads the line-ended text: the tree's byte ranges are its own.
         let text = swift_tree::line_ended(src);
         let src = text.as_str();
-        let tree = swift_tree::parse(&text)?;
+        let tree = swift_tree::parse(&text)
+            .map_err(|why| anyhow::anyhow!("could not parse `{path}`: {why}"))?;
         let root = tree.root_node();
 
         let mut extractor = SwiftExtractor {

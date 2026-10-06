@@ -620,9 +620,10 @@ mod shell_tree {
         {
             return Err("discipline could not load its shell parser; the command is refused");
         }
-        parser
-            .parse(&text.0, None)
-            .ok_or("discipline could not parse this shell command, so it is refused")
+        // Within the step budget every parse has: a command the parser does not finish
+        // has no tree, and is refused like one it cannot read.
+        crate::ast::source_text::parse_within_budget(&mut parser, text.0.as_bytes())
+            .map_err(|_| "discipline could not parse this shell command, so it is refused")
     }
 }
 
@@ -1449,6 +1450,33 @@ mod tests {
             let v = judge_shell(&cmd, Path::new("/repo"), &scene);
             assert!(matches!(v, Verdict::Allow | Verdict::Deny(_)));
         }
+    }
+
+    /// A command whose parse is cut at its budget is refused with the reason of a
+    /// command that does not parse. The budget is counted in parser steps, so a command
+    /// long enough to take one step is cut with a budget of none, and read with its own.
+    #[test]
+    fn a_shell_command_whose_parse_is_cut_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        let wts = scene_with(&[("main", &main)], "main");
+        let scene = Scene {
+            worktrees: &wts,
+            leases: &[],
+            forbidden: None,
+            branch: None,
+        };
+        let cwd = main.canonicalize().unwrap();
+        let long = vec!["echo one two three"; 200].join(" && ");
+        assert_eq!(judge_shell(&long, &cwd, &scene), Verdict::Allow);
+        let cut = crate::ast::source_text::with_step_budget(0, || judge_shell(&long, &cwd, &scene));
+        assert_eq!(
+            cut,
+            Verdict::Deny("discipline could not parse this shell command, so it is refused".into())
+        );
+        // The budget of the next command is its own again.
+        assert_eq!(judge_shell(&long, &cwd, &scene), Verdict::Allow);
     }
 
     /// `shell_tree::parse` takes an `AsciiParseText`, whose field is private to that

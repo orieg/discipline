@@ -1489,6 +1489,38 @@ const CASES: &[Case] = &[
                 && stray.has_parse_errors)
         },
     ),
+    (
+        "ast: a parse the grammar does not finish is cut at its budget and names the file",
+        || {
+            let v = AssertVocabulary::default();
+            if crate::ast::default_registry().find_pack("src/m.rs").is_none() {
+                return Ok(true);
+            }
+            // On a thread of its own: a parse with no budget does not return, and this
+            // case then fails instead of waiting for it.
+            let (done, result) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let reg = crate::ast::default_registry();
+                let outcome = reg.find_pack("src/m.rs").map(|pack| {
+                    pack.extract("src/m.rs", "(>\u{fffd}t(0(.t();}", &v)
+                        .map(|_| ())
+                        .map_err(|e| e.to_string())
+                });
+                // The thread's own result: the receiver is gone only once the case has failed.
+                done.send(outcome)
+            });
+            let Ok(Some(Err(cut))) = result.recv_timeout(std::time::Duration::from_secs(240)) else {
+                return Ok(false);
+            };
+            let reg = crate::ast::default_registry();
+            let Some(pack) = reg.find_pack("src/m.rs") else {
+                return Ok(true);
+            };
+            let twin = pack.extract("src/m.rs", "(>\u{e9}t(0(.t();}", &AssertVocabulary::default())?;
+            Ok(cut == "could not parse `src/m.rs`: the parser did not finish within its budget of 316 steps for 15 bytes"
+                && twin.has_parse_errors)
+        },
+    ),
     #[cfg(feature = "lang-swift")]
     (
         "swift: a file ending in a directive reads as the same file with a line break",
