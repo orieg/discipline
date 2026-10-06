@@ -8,6 +8,8 @@
 //! name passes and is printed, and `DISCIPLINE_BLESS_SURFACE=1` adds it to the fixture.
 //! The JSON output fields are pinned field by field in `tests/test_output_schemas.rs`.
 
+mod common;
+
 use clap::CommandFactory;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -294,7 +296,7 @@ fn the_fixture_records_every_current_name() {
 fn a_signal_ends_the_run_by_the_signal_not_exit_2() {
     use std::io::{BufRead, Write};
     use std::os::unix::process::ExitStatusExt;
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_discipline"))
+    let mut child = common::discipline_cmd(root())
         .arg("mcp")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

@@ -88,21 +88,45 @@ impl Run {
 /// `COPILOT_HOME` for a test that does not set its own: a directory that does not exist.
 pub const NO_COPILOT_HOME: &str = "/nonexistent/discipline-test-copilot-home";
 
-/// A `discipline` binary invocation in `dir` with full process isolation: every
-/// CI/forge variable the hand-rolled scrub loops removed (the union of all copies),
-/// plus `DISCIPLINE_NO_NETWORK=1` and a hermetic `COPILOT_HOME`. Every test that
-/// spawns the binary builds on this; nothing reaches a real forge.
-pub fn discipline_cmd(dir: &Path) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_discipline"));
-    cmd.current_dir(dir);
+/// `HOME` for a test that does not set its own: a directory that does not exist, so
+/// neither the binary nor a `git` it runs reads this machine's `~/.gitconfig`,
+/// `~/.config/git/ignore` or `~/.ssh/config`.
+pub const NO_HOME: &str = "/nonexistent/discipline-test-home";
+
+/// Name families swept whole from a spawned command's environment, whatever follows the
+/// prefix: a name the binary builds at run time (`DISCIPLINE_COMMAND_<GATE>`), a variable
+/// a runner sets that no list names yet, git's own, and the locale categories (`LC_ALL`,
+/// `LC_MESSAGES`, ...).
+pub const ISOLATED_ENV_PREFIXES: &[&str] = &[
+    "DISCIPLINE_",
+    "GIT_",
+    "GITHUB_",
+    "GITEA_",
+    "FORGEJO_",
+    "GITLAB_",
+    "CI_",
+    "RUNNER_",
+    "LC_",
+];
+
+/// Path of the built `discipline` binary. A test spawns it through [`discipline_cmd`];
+/// this is for a test that puts its directory on a `PATH` (a git hook, a stub).
+pub fn discipline_bin() -> &'static Path {
+    Path::new(env!("CARGO_BIN_EXE_discipline"))
+}
+
+/// Removes from `cmd` every inherited variable that could change what the binary, or a
+/// program it runs, does, and sets the few the harness controls. Applied to every
+/// `discipline` and every `git` a test spawns.
+pub fn isolate_env(cmd: &mut Command) {
     // Inherit nothing that could change the verdict.
     for var in ISOLATED_ENV_VARS.iter().chain(GIT_REPOSITORY_ENV_VARS) {
         cmd.env_remove(var);
     }
-    // Prefix-built names too (`DISCIPLINE_COMMAND_<GATE>`, ...), and anything the
-    // looser historical copies swept (`GIT_*`, `DISCIPLINE_*`).
-    for (k, _) in std::env::vars() {
-        if k.starts_with("DISCIPLINE_") || k.starts_with("GIT_") {
+    for (k, _) in std::env::vars_os() {
+        if k.to_str()
+            .is_some_and(|k| ISOLATED_ENV_PREFIXES.iter().any(|p| k.starts_with(p)))
+        {
             cmd.env_remove(k);
         }
     }
@@ -110,6 +134,20 @@ pub fn discipline_cmd(dir: &Path) -> Command {
     cmd.env("DISCIPLINE_NO_NETWORK", "1");
     // Nor reads this machine's Copilot CLI configuration (trusted folders, hooks).
     cmd.env("COPILOT_HOME", NO_COPILOT_HOME);
+    // Nor this user's home directory, nor the machine's git configuration.
+    cmd.env("HOME", NO_HOME);
+    cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+}
+
+/// A `discipline` binary invocation in `dir` with full process isolation
+/// ([`isolate_env`]): `DISCIPLINE_NO_NETWORK=1`, a hermetic `HOME` and `COPILOT_HOME`,
+/// and no CI, forge, git, proxy, colour or locale variable of the parent process. Every
+/// test that spawns the binary builds on this; nothing reaches a real forge.
+/// `tests/test_isolation.rs` fails on a spawn that does not.
+pub fn discipline_cmd(dir: &Path) -> Command {
+    let mut cmd = Command::new(discipline_bin());
+    cmd.current_dir(dir);
+    isolate_env(&mut cmd);
     cmd
 }
 
@@ -149,12 +187,12 @@ pub const GIT_REPOSITORY_ENV_VARS: &[&str] = &[
     "GIT_PREFIX",
 ];
 
-/// `git` with [`GIT_REPOSITORY_ENV_VARS`] removed: every git command a test runs.
+/// Every `git` command a test runs, under [`isolate_env`]: [`GIT_REPOSITORY_ENV_VARS`] and
+/// every other `GIT_*` are gone, and with [`NO_HOME`] there is no global configuration,
+/// ignore file or identity to read.
 pub fn git_command() -> Command {
     let mut cmd = Command::new("git");
-    for var in GIT_REPOSITORY_ENV_VARS {
-        cmd.env_remove(var);
-    }
+    isolate_env(&mut cmd);
     cmd
 }
 
@@ -249,6 +287,24 @@ pub const ISOLATED_ENV_VARS: &[&str] = &[
     "CI_MERGE_REQUEST_IID",
     "CI_MERGE_REQUEST_SOURCE_BRANCH_SHA",
     "CI_COMMIT_SHA",
+    // Names without a family prefix, which `ISOLATED_ENV_PREFIXES` cannot sweep.
+    // A bare `CI` makes a missing pull request a configuration error and allows the
+    // base fetch.
+    "CI",
+    // Colour: the report honours `NO_COLOR`, and the argument parser `CLICOLOR_FORCE`
+    // (through `anstyle-query`) even when the output is a pipe.
+    "NO_COLOR",
+    "CLICOLOR_FORCE",
+    // The forge client reads its proxy from the environment, for a loopback address too.
+    "HTTP_PROXY",
+    "http_proxy",
+    // Where the user's configuration lives: `HOME` is set to `NO_HOME`, these are removed.
+    "USERPROFILE",
+    "XDG_CONFIG_HOME",
+    // Locale: `git` words its messages in the user's language, and the binary quotes
+    // them. With these and the `LC_` prefix gone, every program runs in the C locale.
+    "LANG",
+    "LANGUAGE",
 ];
 
 /// Configuration every harness git command runs with. No signing and no hooks, and no
