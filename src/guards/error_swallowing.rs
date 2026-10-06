@@ -139,33 +139,31 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
         let constant_fallbacks = harness.matches(&file.path);
         let head = match pack.extract(&anchored.classify_path, &head_src, &vocab) {
             Ok(f) => {
-                // A deleted production file added again under a test name, with no test.
-                let as_production = f
-                    .tests
-                    .is_empty()
+                // A file added in test scope by its name only, with no test that checks.
+                let by_name_only = (!super::holds_a_checking_test(&f))
                     .then(|| {
-                        super::replaced_production_file(
+                        super::test_scope_by_name_only(
                             &file,
                             &changed,
                             pack,
                             &registry,
                             &vocab.test_paths,
+                            f.tests.len(),
                         )
                     })
-                    .flatten()
-                    .and_then(|replaced| {
-                        let facts = pack
-                            .extract(&replaced.classify_path, &head_src, &vocab)
-                            .ok()?;
-                        let sites = sites_of(facts, constant_fallbacks);
-                        (!sites.is_empty()).then_some((replaced, sites))
-                    });
+                    .flatten();
+                let as_production = by_name_only.and_then(|by_name| {
+                    let Some(classify_path) = &by_name.classify_path else {
+                        out.notes.push(by_name.note);
+                        return None;
+                    };
+                    let facts = pack.extract(classify_path, &head_src, &vocab).ok()?;
+                    let sites = sites_of(facts, constant_fallbacks);
+                    (!sites.is_empty()).then_some((by_name.note, sites))
+                });
                 match as_production {
-                    Some((replaced, production)) => {
-                        out.notes.push(super::replaced_production_note(
-                            &file.path,
-                            &replaced.deleted,
-                        ));
+                    Some((note, production)) => {
+                        out.notes.push(note);
                         production
                     }
                     None => sites_of(f, constant_fallbacks),
@@ -204,10 +202,11 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
                 })
                 .count();
             out.notes.push(format!(
-                "`allow-swallow` lifted `{}` for `{}` (renamed from `{}` into test scope); a lift by path also covers the handlers of the file, each with its own override record: {handlers} handler finding(s) here",
+                "`allow-swallow` lifted `{}` for `{}` (renamed from `{}` into test scope); a lift by path also covers the handlers of the file, each with its own override record: {handlers} handler finding(s) here; `allow-swallow: {}:<line>` lifts one handler and not the move",
                 out.code_of(&crate::findings::TEST_PATH_RECLASSIFIED),
                 file.path,
-                file.old_path
+                file.old_path,
+                file.path
             ));
         }
         for site in new {

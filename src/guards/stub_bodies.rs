@@ -137,26 +137,33 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
                 .unwrap_or_default(),
             None => Vec::new(),
         };
-        // A deleted production file added again under a test name, with no test.
-        if let Some((replaced, production)) = head
-            .tests
-            .is_empty()
+        // A file added in test scope by its name only, with no test that checks.
+        let by_name_only = (!super::holds_a_checking_test(&head))
             .then(|| {
-                super::replaced_production_file(&file, &changed, pack, &registry, &vocab.test_paths)
+                super::test_scope_by_name_only(
+                    &file,
+                    &changed,
+                    pack,
+                    &registry,
+                    &vocab.test_paths,
+                    head.tests.len(),
+                )
             })
-            .flatten()
-            .and_then(|replaced| {
-                let facts = pack
-                    .extract(&replaced.classify_path, &head_src, &vocab)
-                    .ok()?;
-                (!judge(&base, &facts.functions).is_empty()).then_some((replaced, facts))
-            })
-        {
-            out.notes.push(super::replaced_production_note(
-                &file.path,
-                &replaced.deleted,
-            ));
-            head = production;
+            .flatten();
+        if let Some(by_name) = by_name_only {
+            match &by_name.classify_path {
+                None => out.notes.push(by_name.note),
+                Some(classify_path) => {
+                    if let Some(production) = pack
+                        .extract(classify_path, &head_src, &vocab)
+                        .ok()
+                        .filter(|facts| !judge(&base, &facts.functions).is_empty())
+                    {
+                        out.notes.push(by_name.note);
+                        head = production;
+                    }
+                }
+            }
         }
         out.examined += head.functions.iter().filter(|f| !f.is_test).count();
         for f in judge(&base, &head.functions) {

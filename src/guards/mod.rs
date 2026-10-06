@@ -262,14 +262,12 @@ pub fn base_anchored_classification(
 /// base side and whose stem is the added file's stem without its test word
 /// ([`crate::ast::functions::stems_without_test_word`]): `loader.py` and
 /// `test_loader.py`, `Repo.java` and `RepoTest.java`, `util.js` and `util.spec.mjs`.
-/// The directory may differ.
+/// The directory may differ, except for a Go `_test.go` file: a Go package is a
+/// directory, so `repo.go` and `repo_test.go` pair in the same directory only.
 ///
 /// `error-swallowing` and `stub-bodies` judge the added file by the returned path when
-/// it holds no test at all: git pairs a rename only when enough content is unchanged,
-/// so below that threshold there is no base path to anchor to. A new test-named file
-/// with nothing deleted beside it is a support file and is left alone, and so is a
-/// file Go compiles into test binaries only
-/// ([`crate::ast::functions::toolchain_test_file`]).
+/// it holds no test that checks anything: git pairs a rename only when enough content
+/// is unchanged, so below that threshold there is no base path to anchor to.
 pub struct ReplacedProduction {
     /// The deleted production file.
     pub deleted: String,
@@ -290,7 +288,6 @@ pub fn replaced_production_file(
     if file.kind != crate::gitctx::ChangeKind::Added
         || !pack.is_test_path(&file.path)
         || declared(&file.path)
-        || crate::ast::functions::toolchain_test_file(&file.path)
     {
         return None;
     }
@@ -305,6 +302,7 @@ pub fn replaced_production_file(
     if !same_pack(&neutral) || pack.is_test_path(&neutral) || declared(&neutral) {
         return None;
     }
+    let same_package_only = crate::ast::functions::go_test_file(&file.path);
     let stems = stems_without_test_word(name);
     let deleted = changed.iter().find(|other| {
         let other_name = file_name(&other.path);
@@ -316,6 +314,8 @@ pub fn replaced_production_file(
             && !pack.is_test_path(&other.path)
             && !declared(&other.path)
             && stems.iter().any(|stem| stem == other_stem)
+            && (!same_package_only
+                || other.path[..other.path.len() - other_name.len()] == *directory)
     })?;
     Some(ReplacedProduction {
         deleted: deleted.path.clone(),
@@ -325,10 +325,110 @@ pub fn replaced_production_file(
 
 /// The gate note for a file [`replaced_production_file`] names, once a gate judged it as
 /// production code.
-pub fn replaced_production_note(path: &str, deleted: &str) -> String {
+pub fn replaced_production_note(path: &str, deleted: &str, tests: usize) -> String {
     format!(
-        "`{path}` is added under a test file name and holds no test, and the change deletes the production file `{deleted}` of the same name; it is judged as production code"
+        "`{path}` is added under a test file name and {}, and the change deletes the production file `{deleted}` of the same name; it is judged as production code",
+        holds_no_checking_test(tests)
     )
+}
+
+/// How a note says that a file of `tests` tests holds none that checks anything: a file
+/// with tests in it is a real test file to its reader, so the note counts them.
+fn holds_no_checking_test(tests: usize) -> String {
+    match tests {
+        0 => "holds no test".to_string(),
+        n => format!("holds {n} test(s), none of which checks anything"),
+    }
+}
+
+/// A file the change adds that is test scope by a naming heuristic alone, for
+/// `error-swallowing` and `stub-bodies` to judge as production code when it holds no
+/// test that checks anything ([`holds_a_checking_test`]). `None` for every other file.
+///
+/// The file is one the change adds, whose path a pack's convention reads as test code,
+/// that `[tests] paths` does not declare and that no build tool makes test code by
+/// construction ([`crate::ast::functions::test_by_construction`]): a name or a
+/// directory cannot say whether `TestDataBuilder.cs`, `app/test_runner.py` or
+/// `tests/support/helpers.py` is test code, and the tests it holds can. A file
+/// [`replaced_production_file`] pairs is one of these whatever the build tool says.
+///
+/// A file the base already had is not one: it keeps its classification
+/// ([`base_anchored_classification`]).
+///
+/// `tests` is the number of tests the pack found in the file, for the note.
+pub struct TestScopeByNameOnly {
+    /// Path to pass to `pack.extract` so that the source is read as production code;
+    /// `None` when the pack reads no path of this extension as production code.
+    pub classify_path: Option<String>,
+    /// The gate note, once a gate judged the file as production code (or could not).
+    pub note: String,
+}
+
+pub fn test_scope_by_name_only(
+    file: &crate::gitctx::ChangedFile,
+    changed: &[crate::gitctx::ChangedFile],
+    pack: &dyn crate::ast::LanguagePack,
+    registry: &crate::ast::LanguageRegistry,
+    declared_test_paths: &[String],
+    tests: usize,
+) -> Option<TestScopeByNameOnly> {
+    if let Some(replaced) =
+        replaced_production_file(file, changed, pack, registry, declared_test_paths)
+    {
+        return Some(TestScopeByNameOnly {
+            note: replaced_production_note(&file.path, &replaced.deleted, tests),
+            classify_path: Some(replaced.classify_path),
+        });
+    }
+    let declared =
+        |path: &str| crate::ast::functions::declared_test_path(path, declared_test_paths);
+    if file.kind != crate::gitctx::ChangeKind::Added
+        || !pack.is_test_path(&file.path)
+        || declared(&file.path)
+        || crate::ast::functions::test_by_construction(&file.path)
+    {
+        return None;
+    }
+    // The file's own directory when the name alone made it test code, else no directory.
+    let name = crate::ast::functions::file_name(&file.path);
+    let directory = &file.path[..file.path.len() - name.len()];
+    let classify_path = crate::ast::extension(&file.path).and_then(|ext| {
+        [
+            format!("{directory}renamed.{ext}"),
+            format!("renamed.{ext}"),
+        ]
+        .into_iter()
+        .find(|candidate| {
+            registry
+                .find_pack(candidate)
+                .is_some_and(|p| p.id() == pack.id())
+                && !pack.is_test_path(candidate)
+                && !declared(candidate)
+        })
+    });
+    let note = match classify_path {
+        Some(_) => format!(
+            "`{}` is added in test scope by its name or directory only and {}; it is judged as production code (declare it under `[tests] paths` if it is test code)",
+            file.path,
+            holds_no_checking_test(tests)
+        ),
+        None => format!(
+            "`{}` is added in test scope by its name or directory only and {}; no path of its extension is production code here, so it is still judged as test code",
+            file.path,
+            holds_no_checking_test(tests)
+        ),
+    };
+    Some(TestScopeByNameOnly {
+        classify_path,
+        note,
+    })
+}
+
+/// Whether a file holds a test that checks something: at least one test the pack found
+/// that `vacuous-tests` would not report ([`crate::ast::TestFacts::is_vacuous`]). One
+/// empty test is not enough to keep a whole file test code.
+pub fn holds_a_checking_test(facts: &crate::ast::ParsedFileFacts) -> bool {
+    facts.tests.iter().any(|test| !test.is_vacuous())
 }
 
 impl GateOutcome {
