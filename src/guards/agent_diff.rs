@@ -854,6 +854,8 @@ pub fn evaluate_assertion_reduction(
     out.examined = pairs.len() + helpers.len();
 
     for a in added.iter().filter(|a| !exempt.matches(a.path)) {
+        // A test the change adds is read for swallowed assertions, so it is examined.
+        out.examined += 1;
         if a.test.caught_assertions.is_empty() {
             continue;
         }
