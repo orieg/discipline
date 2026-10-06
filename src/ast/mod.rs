@@ -1491,17 +1491,28 @@ mod tests {
             ("benches/a.c", super::c_cpp::is_c_cpp_test_path, true),
             ("src/foo_test.c", super::c_cpp::is_c_cpp_test_path, true),
             ("src/foo.c", super::c_cpp::is_c_cpp_test_path, false),
+            ("benches/a.cpp", super::c_cpp::is_c_cpp_test_path, true),
             ("src/BarTest.cpp", super::c_cpp::is_c_cpp_test_path, true),
+            ("src/Bar.cpp", super::c_cpp::is_c_cpp_test_path, false),
             ("benches/a.js", shared, true),
             ("src/a.js", shared, false),
             ("benches/a.rs", shared, true),
             ("src/a.rs", shared, false),
         ];
+        let reg = default_registry();
         for (path, own, expected) in cases {
             assert_eq!(
                 functions::is_test_file(path, Some(*own)),
                 *expected,
                 "{path}"
+            );
+            // The pack that owns the file answers the same: its `is_test_path` is the
+            // shared rule or its own convention, not either one alone.
+            let pack = reg.find_pack(path).expect(path);
+            assert_eq!(
+                pack.is_test_path(path),
+                *expected,
+                "{path} through its pack"
             );
         }
     }

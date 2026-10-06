@@ -1569,6 +1569,44 @@ pub fn is_binary_file(path: &str, bytes: &[u8]) -> bool {
     bytes[..check_len].contains(&0)
 }
 
+/// Repositories for unit tests that call a gate with a real [`GitCtx`].
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::GitCtx;
+    use git2::Repository;
+
+    /// A temporary repository whose base commit holds `path` with `base`, and whose
+    /// working tree holds it with `head`: one modified file, measured as a change.
+    pub(crate) fn repo_with_changed_file(
+        path: &str,
+        base: &str,
+        head: &str,
+    ) -> (tempfile::TempDir, GitCtx) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let file = dir.path().join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, base).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new(path)).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.invalid").unwrap();
+        let commit = repo
+            .commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+            .unwrap();
+        drop(tree);
+        std::fs::write(&file, head).unwrap();
+        let git = GitCtx {
+            repo,
+            base: Some(commit),
+            base_label: "base".to_string(),
+            staged: false,
+        };
+        (dir, git)
+    }
+}
+
 #[cfg(test)]
 mod tests {
 

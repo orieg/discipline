@@ -13,6 +13,8 @@ pub mod claim_registry;
 pub mod command;
 pub mod commit_provenance;
 pub mod confusables;
+#[cfg(test)]
+mod confusables_tests;
 pub mod dependency;
 pub mod error_swallowing;
 pub mod hygiene;
@@ -1539,6 +1541,39 @@ pub fn toolchain_unavailable(stdout: &str, stderr: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// A [`Context`] for unit tests that call a gate function directly.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::Context;
+    use crate::config::DisciplineConfig;
+    use crate::gitctx::GitCtx;
+
+    /// A local run over `git` under `config`: no pull request, no directives, no forge.
+    pub(crate) fn context<'a>(config: &'a DisciplineConfig, git: &'a GitCtx) -> Context<'a> {
+        Context {
+            config,
+            head_config: None,
+            git,
+            config_path: "discipline.toml",
+            baseline_path: None,
+            baseline: None,
+            staged: false,
+            pr_title: None,
+            pr_body: None,
+            directives: Vec::new(),
+            directive_notes: Vec::new(),
+            bench_provenance: None,
+            allow_cross_host_bench: false,
+            bench_base_file: None,
+            bench_head_file: None,
+            test_base_report: None,
+            test_head_report: None,
+            test_report: None,
+            forge: None,
+        }
+    }
 }
 
 #[cfg(test)]

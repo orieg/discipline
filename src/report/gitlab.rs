@@ -299,8 +299,11 @@ mod tests {
 
     #[test]
     fn gitlab_escaping_handles_special_characters_in_messages() {
-        // Violation messages may contain quotes, newlines, control chars, etc.
-        // The JSON output must remain valid regardless.
+        // A message with quotes, newlines, control and markup characters reaches the
+        // report unchanged: this module carries it into `description` and the
+        // fingerprint and leaves the escaping to the JSON writer.
+        const SUITE: &str = "Agent Guard";
+        const MESSAGE: &str = "Found /Users/test\ntab\tand \"quotes\" & <angle>"; // discipline:allow(pii)
         let mut outcome = GateOutcome::new("agents-md");
         outcome.violations.push(Violation {
             gate: "agents-md",
@@ -312,7 +315,7 @@ mod tests {
             title: "Agents markdown found".to_string(),
             file: Some("src/main.rs".to_string()),
             line: Some(42),
-            message: "Found /Users/test\ntab\tand \"quotes\" & <angle>".to_string(), // discipline:allow(pii)
+            message: MESSAGE.to_string(),
             remediation: None,
         });
 
@@ -338,13 +341,14 @@ mod tests {
         let parsed: Vec<GitlabCodeQualityIssue> =
             serde_json::from_str(&json).expect("valid code quality json with escaped chars");
         assert_eq!(parsed.len(), 1);
-        // Serde_json deserializes \n back into newline, but the raw JSON must contain escapes.
-        // Verify the JSON string itself contains escape sequences for special chars.
-        assert!(json.contains("\\n"));
-        assert!(json.contains("\\\""));
-        assert!(json.contains("\\t"));
+        assert_eq!(parsed[0].description, format!("{SUITE}: {MESSAGE}"));
+        assert_eq!(
+            parsed[0].fingerprint,
+            sha256_hex(format!("agents-md/fixture:src/main.rs:42:{MESSAGE}").as_bytes())
+        );
 
-        // Test with a message that would be problematic without escaping.
+        // A backslash and a NUL, on a finding with no file and no line.
+        const MESSAGE2: &str = "Message with backslash \\ and null byte escape \0";
         let mut outcome2 = GateOutcome::new("agents-md");
         outcome2.violations.push(Violation {
             gate: "agents-md",
@@ -356,7 +360,7 @@ mod tests {
             title: "Time estimate found".to_string(),
             file: None,
             line: None,
-            message: "Message with backslash \\ and null byte escape \0".to_string(),
+            message: MESSAGE2.to_string(),
             remediation: None,
         });
 
@@ -378,7 +382,15 @@ mod tests {
         };
 
         let json2 = format_gitlab(&summary2);
-        serde_json::from_str::<Vec<GitlabCodeQualityIssue>>(&json2)
+        let parsed2 = serde_json::from_str::<Vec<GitlabCodeQualityIssue>>(&json2)
             .expect("valid code quality json with backslash");
+        assert_eq!(parsed2.len(), 1);
+        assert_eq!(parsed2[0].description, format!("{SUITE}: {MESSAGE2}"));
+        assert_eq!(
+            parsed2[0].fingerprint,
+            sha256_hex(format!("agents-md/fixture:discipline.toml:1:{MESSAGE2}").as_bytes())
+        );
+        // A message that differs only in a special character is a different finding.
+        assert_ne!(parsed[0].fingerprint, parsed2[0].fingerprint);
     }
 }
