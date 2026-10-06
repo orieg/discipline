@@ -422,7 +422,10 @@ pub struct EvalOptions<'a> {
     pub location: &'a str,
 }
 
-fn not_comparable(out: &mut GateOutcome, opts: &EvalOptions<'_>, reason: String) {
+/// `about` names what could not be compared (the baseline, the twin, an axis, a cell):
+/// a run can be not comparable for several reasons at once, and the reason text carries
+/// measured figures, so the name is what tells the findings apart.
+fn not_comparable(out: &mut GateOutcome, opts: &EvalOptions<'_>, about: &str, reason: String) {
     out.notes
         .push(format!("paired-ratio: not comparable — {reason}"));
     out.push(
@@ -433,6 +436,7 @@ fn not_comparable(out: &mut GateOutcome, opts: &EvalOptions<'_>, reason: String)
         format!("not comparable — {reason}; this run asserts nothing, and is not a pass"),
         "fix the run so it can be compared (rounds, controls, provenance), or re-derive the baseline in a dedicated change",
     );
+    out.anchor_last(about.to_string());
 }
 
 /// Whether a regression in `cell` is approved by an `allow-regression:` directive that
@@ -486,6 +490,7 @@ pub fn evaluate_run(
         not_comparable(
             out,
             opts,
+            "baseline",
             "no ratio baseline at the base ref (bootstrap: derive one from repeated same-commit runs with `discipline bench derive` and commit it in a dedicated change)".to_string(),
         );
         return Ok(());
@@ -494,6 +499,7 @@ pub fn evaluate_run(
         not_comparable(
             out,
             opts,
+            "platform",
             format!("the baseline has no entry for platform `{}`", prov.platform),
         );
         return Ok(());
@@ -502,6 +508,7 @@ pub fn evaluate_run(
         not_comparable(
             out,
             opts,
+            "twin",
             format!(
                 "baseline invalidated by twin change: the baseline was derived against twin `{}` {} and this run measured against `{}` {}; ratios taken against different twins are never compared",
                 plat.twin.identity, plat.twin.version, prov.twin.identity, prov.twin.version
@@ -513,6 +520,7 @@ pub fn evaluate_run(
         not_comparable(
             out,
             opts,
+            "runner-class",
             format!(
                 "runner class `{}` differs from the baseline's `{}` (pass `--allow-cross-host-bench` or set `allow_cross_host = true` to compare across runner classes)",
                 prov.runner_class, plat.runner_class
@@ -526,6 +534,7 @@ pub fn evaluate_run(
             not_comparable(
                 out,
                 opts,
+                &format!("axis:{axis_name}"),
                 format!(
                     "the baseline for `{}` has no axis `{axis_name}`",
                     prov.platform
@@ -543,6 +552,7 @@ pub fn evaluate_run(
             not_comparable(
                 out,
                 opts,
+                &format!("axis:{axis_name}:adverse"),
                 format!(
                     "axis `{axis_name}` declares adverse direction {:?} but the baseline records {:?}",
                     axis.adverse, axis_base.adverse
@@ -581,6 +591,7 @@ pub fn evaluate_run(
             not_comparable(
                 out,
                 opts,
+                &format!("axis:{axis_name}:control"),
                 format!(
                     "axis `{axis_name}`: the in-situ control (two builds of identical source) did not read null — {}; a movement in this run cannot be told from runner noise, and is not a code regression",
                     moved.join("; ")
@@ -620,6 +631,7 @@ pub fn evaluate_run(
                         format!("baselined cell `{axis_name}/{id}` is absent from this run; a cell that stops being measured stops being gated"),
                         &format!("restore the cell, or justify its removal: `allow-regression: {id} <rationale>`"),
                     );
+                    out.anchor_last(format!("cell:{axis_name}/{id}"));
                 }
             }
         }
@@ -628,7 +640,12 @@ pub fn evaluate_run(
             let est = match estimate_cell(cell)? {
                 Ok(e) => e,
                 Err(why) => {
-                    not_comparable(out, opts, format!("cell `{axis_name}/{id}`: {why}"));
+                    not_comparable(
+                        out,
+                        opts,
+                        &format!("cell:{axis_name}/{id}"),
+                        format!("cell `{axis_name}/{id}`: {why}"),
+                    );
                     continue;
                 }
             };
@@ -645,6 +662,7 @@ pub fn evaluate_run(
                         ),
                         "drop the supplied `ratio` or emit it from the same rounds",
                     );
+                    out.anchor_last(format!("cell:{axis_name}/{id}"));
                 }
             }
             let Some(base) = axis_base.cells.get(id) else {
@@ -669,6 +687,7 @@ pub fn evaluate_run(
                 not_comparable(
                     out,
                     opts,
+                    &format!("cell:{axis_name}/{id}:twin"),
                     format!(
                         "cell `{axis_name}/{id}`: the twin moved outside its own historical band ({:+.2}% [{:+.2}, {:+.2}] against a {:.2}% floor); a ratio against a twin that moved says nothing about the subject",
                         twin.drift_pct, twin.drift_lo_pct, twin.drift_hi_pct, base.twin_floor_pct
@@ -723,6 +742,7 @@ pub fn evaluate_run(
                             ),
                             &format!("fix the regression or justify it: `allow-regression: {id} <rationale>`"),
                         );
+                        out.anchor_last(format!("cell:{axis_name}/{id}"));
                     }
                 }
                 RatioVerdict::Improvement => out.notes.push(format!(

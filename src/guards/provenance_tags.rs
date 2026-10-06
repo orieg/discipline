@@ -681,7 +681,7 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
                 continue;
             };
             swept += 1;
-            let hits: Vec<(Option<usize>, String)> = if is_doc {
+            let hits: Vec<(Option<usize>, String, Option<String>)> = if is_doc {
                 let stripped = strip_fences(&content.lines().collect::<Vec<_>>());
                 claim_registry::scan_superseded(&stripped, figures)?
                     .into_iter()
@@ -697,6 +697,7 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
                                 "`{}` is superseded figure `{}`, published without a retraction marker{replacement}",
                                 h.matched, h.figure_id
                             ),
+                            None,
                         )
                     })
                     .collect()
@@ -704,12 +705,16 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
                 let value: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
                     anyhow::anyhow!("provenance-tags: `{path}` is not valid JSON: {e}")
                 })?;
-                claim_registry::scan_superseded_json(&value, figures)?
+                // A JSON value has no line: its key path and the figure name the hit.
+                claim_registry::scan_superseded_json_by_figure(&value, figures)?
                     .into_iter()
-                    .map(|(key, msg)| (None, format!("{key}: {msg}")))
+                    .map(|(key, figure, msg)| {
+                        let anchor = format!("{key}:{figure}");
+                        (None, format!("{key}: {msg}"), Some(anchor))
+                    })
                     .collect()
             };
-            for (line, message) in hits {
+            for (line, message, anchor) in hits {
                 if let Some(ov) = ctx.find_override(
                     GATE,
                     &crate::findings::SUPERSEDED_FIGURE_REPUBLISHED,
@@ -726,6 +731,9 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
                         message,
                         "Replace the figure with its current value, or mark it retracted/superseded within three lines.",
                     );
+                    if let Some(anchor) = anchor {
+                        out.anchor_last(anchor);
+                    }
                 }
             }
         }

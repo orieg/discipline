@@ -1113,14 +1113,19 @@ fn evaluate_with(
     out.examined = report.examined;
     out.notes.extend(report.notes);
     for f in report.findings {
+        let line = job_line(&workflow_src, &f.job);
         out.push_site(
             settings.severity,
             registered(f.kind),
             title(f.kind, &f.job),
-            (Some(&workflow), job_line(&workflow_src, &f.job)),
+            (Some(&workflow), line),
             f.message,
             remediation(f.kind),
         );
+        // A job the workflow does not define has no line: its name tells it from another.
+        if line.is_none() {
+            out.anchor_last(format!("job:{}", f.job));
+        }
     }
     Ok(out)
 }
