@@ -254,6 +254,79 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "ast: a test file name is matched at a word boundary, a test directory at any depth",
+        || {
+            let reg = crate::ast::default_registry();
+            let scope = |path: &str| reg.find_pack(path).is_some_and(|p| p.is_test_path(path));
+            let test_files = [
+                "src/main/java/RepoTest.java",
+                "src/main/java/TestRepo.java",
+                "src/main/java/HTTPTest.java",
+                "src/Core/RepoTests.cs",
+                "src/Domain/RepoTest.php",
+                "src/main/kotlin/RepoIT.kt",
+                "web/util.test.mjs",
+                "__tests__/util.js",
+            ];
+            let production = [
+                "src/main/java/Latest.java",
+                "src/main/java/TestimonialController.java",
+                "src/Core/Contests.cs",
+                "src/Domain/Contest.php",
+                "src/main/kotlin/AUDIT.kt",
+                "my__tests__/util.js",
+            ];
+            Ok(test_files.iter().all(|p| scope(p)) && !production.iter().any(|p| scope(p)))
+        },
+    ),
+    (
+        "ast: a deleted production file added again under a test name is paired; a support file, another stem, a deleted test file, a test directory and a declared path are not",
+        || {
+            use crate::gitctx::{ChangeKind, ChangedFile};
+            let reg = crate::ast::default_registry();
+            let file = |path: &str, old: &str, kind: ChangeKind| ChangedFile {
+                path: path.to_string(),
+                old_path: old.to_string(),
+                kind,
+                added_lines: std::collections::BTreeSet::new(),
+            };
+            let deleted = |path: &str| file(path, path, ChangeKind::Deleted);
+            let paired = |added: &str, gone: &[&str], declared: &[String]| {
+                let f = file(added, added, ChangeKind::Added);
+                let mut changed: Vec<ChangedFile> = gone.iter().map(|p| deleted(p)).collect();
+                changed.push(f.clone());
+                let pack = reg.find_pack(added)?;
+                crate::guards::replaced_production_file(&f, &changed, pack, &reg, declared)
+                    .map(|r| (r.deleted, r.classify_path))
+            };
+            let pair = |gone: &str, path: &str| Some((gone.to_string(), path.to_string()));
+            let declared = ["app/test_*.py".to_string()];
+            // A declared file renamed into a conventional test path was never production code.
+            let qa = ["qa/**".to_string()];
+            let moved = crate::guards::base_anchored_classification(
+                &file("app/test_checks.py", "qa/checks.py", ChangeKind::Renamed),
+                &reg,
+                &qa,
+            );
+            Ok(
+                paired("app/test_loader.py", &["lib/loader.py"], &[])
+                    == pair("lib/loader.py", "app/renamed.py")
+                    && paired("src/RepoTest.java", &["src/Repo.java"], &[])
+                        == pair("src/Repo.java", "src/renamed.java")
+                    && paired("web/util.spec.mjs", &["web/util.js"], &[])
+                        == pair("web/util.js", "web/renamed.mjs")
+                    && paired("app/test_loader.py", &[], &[]).is_none()
+                    && paired("app/test_loader.py", &["app/reader.py"], &[]).is_none()
+                    && paired("app/test_loader.py", &["tests/loader.py"], &[]).is_none()
+                    && paired("app/test_loader.py", &["app/loader.go"], &[]).is_none()
+                    && paired("tests/test_loader.py", &["app/loader.py"], &[]).is_none()
+                    && paired("app/test_loader.py", &["app/loader.py"], &declared).is_none()
+                    && !moved.reclassified
+                    && moved.classify_path == "app/test_checks.py",
+            )
+        },
+    ),
+    (
         "ast: SAFETY comment above documents, prose about it does not",
         || {
             let v = AssertVocabulary::default();

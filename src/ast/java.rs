@@ -127,19 +127,12 @@ impl LanguagePack for JavaPack {
 pub fn is_java_test_path(path: &str) -> bool {
     let filename = path.rsplit('/').next().unwrap_or(path);
     let stem = filename.strip_suffix(".java").unwrap_or(filename);
-    if stem.ends_with("Test")
-        || stem.ends_with("Tests")
-        || stem.ends_with("TestCase")
-        || stem.starts_with("Test")
-    {
-        return true;
-    }
-    path.starts_with("src/test/")
-        || path.contains("/src/test/")
-        || path.starts_with("test/")
-        || path.contains("/test/")
-        || path.starts_with("tests/")
-        || path.contains("/tests/")
+    ["Test", "Tests", "TestCase"]
+        .iter()
+        .any(|word| super::functions::ends_with_word(stem, word))
+        || super::functions::starts_with_test_word(stem)
+        || super::functions::has_dir(path, "test", true)
+        || super::functions::has_dir(path, "tests", true)
 }
 
 struct JavaExtractor<'a> {
