@@ -261,6 +261,11 @@ pub fn build_hooks(ctx: &Context) -> Result<GateOutcome> {
                     f.subject
                 ),
             );
+            // A lifecycle script has no line and shares its manifest with the others: its
+            // name tells them apart. A finding about the file as a whole needs nothing.
+            if f.line.is_none() && f.subject != file.path {
+                out.anchor_last(format!("script:{}", f.subject));
+            }
         }
     }
     if out.examined == 0 {

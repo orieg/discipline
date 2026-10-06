@@ -521,6 +521,7 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                     continue;
                                 }
                             }
+                            let before = out.violations.len();
                             record_or_excuse(
                                 ctx,
                                 Some(&head_content),
@@ -533,6 +534,10 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                 format!("Restore job '{job_id}' or excuse with allow-gate-weakening: ci-integrity <reason>."),
                                 job_id,
                             );
+                            // Several jobs can leave one workflow: the job tells them apart.
+                            if out.violations.len() > before {
+                                out.anchor_last(format!("job:{job_id}"));
+                            }
                         }
                     }
 
@@ -1748,6 +1753,8 @@ fn evaluate_gitlab_file(ctx: &Context, path: &str, out: &mut GateOutcome) -> Res
         Ok(found) => {
             for w in found {
                 let line = find_line_number(&head, &format!("{}:", w.job));
+                let before = out.violations.len();
+                let job = w.job.clone();
                 record_or_excuse(
                     ctx,
                     Some(&head),
@@ -1763,6 +1770,10 @@ fn evaluate_gitlab_file(ctx: &Context, path: &str, out: &mut GateOutcome) -> Res
                     ),
                     &w.subject,
                 );
+                // A job that left the pipeline has no line: the job tells it from another.
+                if line.is_none() && out.violations.len() > before {
+                    out.anchor_last(format!("job:{job}"));
+                }
             }
         }
         Err(e) => out.push(

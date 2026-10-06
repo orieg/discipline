@@ -307,7 +307,8 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                             code: crate::findings::full_code(GATE, &crate::findings::FUZZ_TARGET_REMOVED),
                             fingerprint: String::new(),
                             title: crate::findings::FUZZ_TARGET_REMOVED.title.to_string(),
-                            anchor: None,
+                            // One harness lists many targets: the target tells them apart.
+                            anchor: Some(format!("fuzz-target:{target}")),
                             legacy_title: crate::findings::FUZZ_TARGET_REMOVED.was_title(),
                             message: format!(
                                 "Fuzz target `{target}` was removed from fuzz harness `{}` without an explicit override.",

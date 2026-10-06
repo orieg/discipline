@@ -533,9 +533,17 @@ struct Violation {
     remediation: String,
     file: Option<String>,
     line: Option<usize>,
+    /// What tells this finding from another of its kind in the same command: the policy
+    /// file or the configured pattern it is about. Never command output.
+    detail: Option<String>,
 }
 
 impl Violation {
+    fn about(mut self, detail: &str) -> Self {
+        self.detail = Some(detail.to_string());
+        self
+    }
+
     /// A finding located at the configuration file.
     fn new(
         kind: &'static crate::findings::FindingKind,
@@ -548,6 +556,7 @@ impl Violation {
             remediation: remediation.to_string(),
             file: None,
             line: None,
+            detail: None,
         }
     }
 }
@@ -765,14 +774,17 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             if ctx.git.base_content(pf)?.is_some() {
                 let pf_path = ctx.git.root().join(pf);
                 if !pf_path.exists() {
-                    command_violations.push(Violation::new(
-                        &crate::findings::POLICY_FILE_DELETED,
-                        format!(
+                    command_violations.push(
+                        Violation::new(
+                            &crate::findings::POLICY_FILE_DELETED,
+                            format!(
                             "Command `{}` required policy file `{pf}` was deleted in this change.",
                             item.name
                         ),
-                        "Restore the policy file or justify its removal.",
-                    ));
+                            "Restore the policy file or justify its removal.",
+                        )
+                        .about(pf),
+                    );
                 }
             }
         }
@@ -862,14 +874,17 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             if output_pattern(pattern, &entry_key(None, "forbid_output"))?
                 .is_match(&combined_output)
             {
-                command_violations.push(Violation::new(
-                    &crate::findings::FORBIDDEN_OUTPUT,
-                    format!(
-                        "Command `{}` produced forbidden output matching pattern `{pattern}`.",
-                        item.name
-                    ),
-                    "Eliminate forbidden output patterns from verification command execution.",
-                ));
+                command_violations.push(
+                    Violation::new(
+                        &crate::findings::FORBIDDEN_OUTPUT,
+                        format!(
+                            "Command `{}` produced forbidden output matching pattern `{pattern}`.",
+                            item.name
+                        ),
+                        "Eliminate forbidden output patterns from verification command execution.",
+                    )
+                    .about(pattern),
+                );
             }
         }
 
@@ -978,6 +993,14 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
                         v.message,
                         &v.remediation,
                     );
+                    // Located at the configuration file, which every command shares: the
+                    // command's name tells its findings from another command's.
+                    if v.file.is_none() {
+                        outcome.anchor_last(match &v.detail {
+                            Some(d) => format!("command:{}:{d}", item.name),
+                            None => format!("command:{}", item.name),
+                        });
+                    }
                 }
             }
         }
@@ -1346,6 +1369,8 @@ fn evaluate_base_tests(
                     msg,
                     &rem,
                 );
+                // The message quotes the failure text, which can change run to run.
+                outcome.anchor_last(format!("test:{}", failed.id));
             }
         }
     } else {

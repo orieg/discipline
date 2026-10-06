@@ -282,10 +282,25 @@ pub fn scan_superseded(
 }
 
 /// Sweep a JSON dataset for registered figures. Returns `(key path, message)` pairs.
+/// The gate calls [`scan_superseded_json_by_figure`]; this form is kept for the unit tests.
+#[cfg(test)]
 pub fn scan_superseded_json(
     value: &serde_json::Value,
     registry: &[SupersededFigure],
 ) -> Result<Vec<(String, String)>> {
+    Ok(scan_superseded_json_by_figure(value, registry)?
+        .into_iter()
+        .map(|(key, _, message)| (key, message))
+        .collect())
+}
+
+/// `scan_superseded_json` with the id of the figure each hit is about: `(key path,
+/// figure id, message)`. The key path and the figure id together name a hit, which has
+/// no line.
+pub fn scan_superseded_json_by_figure(
+    value: &serde_json::Value,
+    registry: &[SupersededFigure],
+) -> Result<Vec<(String, String, String)>> {
     let mut out = Vec::new();
     walk_json(value, "root", registry, &mut out)?;
     Ok(out)
@@ -295,7 +310,7 @@ fn walk_json(
     value: &serde_json::Value,
     key_path: &str,
     registry: &[SupersededFigure],
-    out: &mut Vec<(String, String)>,
+    out: &mut Vec<(String, String, String)>,
 ) -> Result<()> {
     match value {
         serde_json::Value::Object(map) => {
@@ -321,6 +336,7 @@ fn walk_json(
                 if as_strings.windows(seq.len()).any(|w| w == seq.as_slice()) {
                     out.push((
                         key_path.to_string(),
+                        fig.id.clone(),
                         format!("retracted sequence of `{}` ({})", fig.id, seq.join(", ")),
                     ));
                 }
@@ -345,6 +361,7 @@ fn walk_json(
                     };
                     out.push((
                         key_path.to_string(),
+                        fig.id.clone(),
                         format!("`{}` is superseded figure `{}`", m.as_str().trim(), fig.id),
                     ));
                     break;
