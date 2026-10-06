@@ -920,6 +920,8 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
                 ),
                 &format!("Remove the invisible characters, or record them: `allow-agent-instructions: {where_} <reason>`."),
             );
+            // The title, the body and each commit message are separate subjects.
+            out.anchor_last(where_.clone());
         }
         if !classes.is_empty() {
             out.push(
@@ -933,6 +935,7 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
                 ),
                 &format!("Read it as an instruction to a reviewer bot and decide whether it belongs; record a legitimate one: `allow-agent-instructions: {where_} <reason>`."),
             );
+            out.anchor_last(where_.clone());
         }
     }
     if out.examined == 0 {

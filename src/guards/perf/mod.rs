@@ -614,6 +614,8 @@ pub fn evaluate_metrics_regression_with_instruments(
                         b.name, b.name
                     ),
                 );
+                // One artifact holds many arms: the arm tells its findings apart.
+                out.anchor_last(b.name.clone());
             }
         }
     }
@@ -666,6 +668,7 @@ pub fn evaluate_metrics_regression_with_instruments(
                         h.name, h.name
                     ),
                 );
+                out.anchor_last(h.name.clone());
             }
             continue;
         };
@@ -743,6 +746,7 @@ pub fn evaluate_metrics_regression_with_instruments(
                                 h.name, h.name
                             ),
                         );
+                        out.anchor_last(h.name.clone());
                     }
                 } else if decision.method.starts_with("not_comparable")
                     || decision.point_delta_pct > effective_tolerance
@@ -1074,6 +1078,8 @@ pub fn report_stale_exempt_arms(
                 "remove `{entry}` from `exempt_arms`, or correct it to the arm name as reported or printed by the benchmark"
             ),
         );
+        // The entry as written: the message carries a count of arms, which moves.
+        out.anchor_last(format!("exempt_arms:{entry}"));
     }
     Ok(())
 }

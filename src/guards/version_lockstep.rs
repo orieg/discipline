@@ -172,6 +172,8 @@ pub fn evaluate_version_lockstep(ctx: &Context) -> Result<GateOutcome> {
                         group.name, group.name
                     ),
                 );
+                // Two groups can drift in one file: the group tells their findings apart.
+                out.anchor_last(format!("group:{}", group.name));
             }
         }
     }

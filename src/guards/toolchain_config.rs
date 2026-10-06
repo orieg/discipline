@@ -1957,6 +1957,8 @@ pub fn toolchain_config(ctx: &Context) -> Result<GateOutcome> {
                             "Review the inherited configuration; record it with `allow-toolchain-weakening: {key} <reason>` if it is intended."
                         ),
                     );
+                    // One file can inherit through several keys: the key tells them apart.
+                    out.anchor_last(key.clone());
                 }
                 for w in diff_trees(&base_tree, &head_tree, &rules) {
                     if let Some(ov) = lift(&crate::findings::TOOLCHAIN_CONFIG_WEAKENED, &w.key)
