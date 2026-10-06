@@ -890,6 +890,21 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "commit-provenance: the trailers of every entry of a multi-commit squash are read, an indented quote is not",
+        || {
+            use crate::guards::commit_provenance::trailers;
+            let keys = |m: &str| -> Vec<String> { trailers(m).into_iter().map(|(k, _)| k).collect() };
+            let squash = "feat: x (#7)\n\n* feat: x\n\nBody.\n\nReviewed-by: A <a@x>\n\n* test: x\n\nAgent-Tool: t\n\n---------\n\nCo-authored-by: B <b@x>\n";
+            let prose = "feat: x (#7)\n\n* feat: x\n\nReviewed-by: A <a@x>\n\nprose\n\n* test: x\n";
+            let quoted = "fix: x\n\nIt ended with:\n\n    Reviewed-by: A <a@x>\n";
+            let picked = "fix: x\r\n\r\nReviewed-by: A <a@x>\r\n(cherry picked from commit 0123456)\r\n";
+            Ok(keys(squash) == ["Reviewed-by", "Agent-Tool", "Co-authored-by"]
+                && keys(prose).is_empty()
+                && keys(quoted).is_empty()
+                && keys(picked) == ["Reviewed-by"])
+        },
+    ),
+    (
         "build-hooks: a lifecycle script gaining curl is reported, an unchanged one is not",
         || {
             use crate::gitctx::{ChangeKind, ChangedFile};
@@ -1652,8 +1667,14 @@ const CASES: &[Case] = &[
                 "github:repos/o/r/commits/ddd/pulls".into(),
                 serde_json::json!({"__status": 403, "__body": {}}),
             );
+            // A 422 that says something else is a failed lookup, like the 403 (#568).
+            api.responses.insert(
+                "github:repos/o/r/commits/eee/pulls".into(),
+                serde_json::json!({"__status": 422, "__body": {"message": "Validation Failed"}}),
+            );
             Ok(commit_origin(&api, &forge, "fff").ok() == Some(CommitOrigin::NotOnForge)
-                && commit_origin(&api, &forge, "ddd").is_err())
+                && commit_origin(&api, &forge, "ddd").is_err()
+                && commit_origin(&api, &forge, "eee").is_err())
         },
     ),
     (
@@ -3085,6 +3106,68 @@ command = "cargo test"
                 && excused.overrides[0].code.as_deref() == Some("assertion-reduction/test-helper-weakened");
 
             Ok(reported && waived)
+        },
+    ),
+    (
+        "assertion-reduction: a helper beside a test, behind a second helper or a receiver is tracked; an extraction, a rename and an example are not drops",
+        || {
+            let weakened = vec!["assertion-reduction/test-helper-weakened".to_string()];
+            let go = |held: &str| {
+                format!("package x\n\nfunc check(t *testing.T, r R) {{\n{held}}}\n\nfunc TestUnrelated(t *testing.T) {{\n\tif 1+1 != 2 {{\n\t\tt.Fatal(\"math\")\n\t}}\n}}\n")
+            };
+            let fatal = "\tif r.A != 1 {\n\t\tt.Fatal(\"a\")\n\t}\n";
+            let beside_a_test = helper_change(&[("helpers_test.go", &go(fatal), &go(""))], "")?;
+            let method = |held: &str| {
+                format!("package x\n\ntype Suite struct{{}}\n\nfunc (s *Suite) check(t *testing.T, r R) {{\n{held}}}\n")
+            };
+            let on_a_receiver =
+                helper_change(&[("helpers_test.go", &method(fatal), &method(""))], "")?;
+            let whole = "def check(r):\n    assert r.a == 1\n    assert r.b == 2\n    assert r.c == 3\n";
+            let split = "def check(r):\n    assert r.a == 1\n    check_body(r)\n\ndef check_body(r):\n    assert r.b == 2\n    assert r.c == 3\n";
+            let uncalled = split.replace("    check_body(r)\n", "");
+            let renamed = whole.replace("def check(", "def check_response(");
+            let renamed_weaker = renamed.replace("    assert r.c == 3\n", "");
+            let py = "tests/helpers.py";
+            let call_dropped = helper_change(&[(py, split, &uncalled)], "")?;
+            let extracted = helper_change(&[(py, whole, split)], "")?;
+            let rename = helper_change(&[(py, whole, &renamed)], "")?;
+            let rename_lost = helper_change(&[(py, whole, &renamed_weaker)], "")?;
+            let example = helper_change(&[("examples/helpers.py", whole, &uncalled)], "")?;
+            Ok(beside_a_test == weakened
+                && on_a_receiver == weakened
+                && call_dropped == weakened
+                && rename_lost == weakened
+                && extracted.is_empty()
+                && rename.is_empty()
+                && example.is_empty())
+        },
+    ),
+    (
+        "assertion-reduction: a helper stands for dropped assertions only when its body was read, and a directive for a helper does not lift the test's own drop",
+        || {
+            let reduced = vec!["assertion-reduction/assertions-reduced".to_string()];
+            let three = "def check(r):\n    assert r.a == 1\n    assert r.b == 2\n    assert r.c == 3\n";
+            let one = "def check(r):\n    assert r.a == 1\n";
+            let inline = "def test_create():\n    r = create()\n    assert r.a == 1\n    assert r.b == 2\n    assert r.c == 3\n";
+            let call = "def test_create():\n    r = create()\n    check(r)\n";
+            let (helpers, test) = ("tests/helpers.py", "tests/test_api.py");
+            // A helper the change adds, read: it holds what the test dropped, or less.
+            let moved = helper_change(&[(helpers, "", three), (test, inline, call)], "")?;
+            let moved_to_less = helper_change(&[(helpers, "", one), (test, inline, call)], "")?;
+            // The helper's file is not part of the change: its body is not read.
+            let unread = helper_change(&[(test, inline, call)], "")?;
+            // The helper and the test that calls it each lose a check of their own.
+            let both = |own: &str| format!("{call}    assert r.s == 200\n{own}");
+            let files = [
+                (helpers, three, one),
+                (test, &both("    assert r.id == 1\n")[..], &both("")[..]),
+            ];
+            let lifted_helper_only =
+                helper_change(&files, "allow-assertion-drop: check moved to the model\n")?;
+            Ok(moved.is_empty()
+                && moved_to_less == reduced
+                && unread == reduced
+                && lifted_helper_only == reduced)
         },
     ),
     (
@@ -5051,6 +5134,53 @@ pub fn run() -> Result<bool> {
     }
     println!("\n{} case(s), {failed} failed", CASES.len());
     Ok(failed == 0)
+}
+
+/// The codes `assertion-reduction` reports for a change given as
+/// `(path, base source, head source)` with `body` as the PR body; an empty source is a
+/// side on which the file does not exist.
+fn helper_change(files: &[(&str, &str, &str)], body: &str) -> Result<Vec<String>> {
+    use crate::gitctx::{ChangeKind, ChangedFile};
+    use crate::guards::agent_diff::{
+        evaluate_assertion_reduction, extract_facts, match_tests, pair_helpers, FileFacts,
+    };
+    let registry = crate::ast::default_registry();
+    let vocab = AssertVocabulary::default();
+    let mut facts = Vec::new();
+    for (path, base, head) in files {
+        let pack = registry
+            .find_pack(path)
+            .ok_or_else(|| anyhow::anyhow!("no language pack for {path}"))?;
+        let side = |src: &str| -> Result<Option<crate::ast::ParsedFileFacts>> {
+            if src.is_empty() {
+                return Ok(None);
+            }
+            Ok(Some(extract_facts(pack, path, src, &vocab)?))
+        };
+        facts.push(FileFacts {
+            file: ChangedFile {
+                path: path.to_string(),
+                old_path: path.to_string(),
+                kind: ChangeKind::Modified,
+                added_lines: std::collections::BTreeSet::new(),
+            },
+            base: side(base)?,
+            head: side(head)?,
+            newly_added_nul: false,
+        });
+    }
+    let (pairs, _, added) = match_tests(&facts);
+    let helpers = pair_helpers(&facts, &pairs);
+    let directives = crate::tokens::parse_directives(body, crate::tokens::OverrideSource::PrBody);
+    let out = evaluate_assertion_reduction(
+        &pairs,
+        &added,
+        &helpers,
+        &crate::config::AssertionGate::default(),
+        &directives,
+        false,
+    )?;
+    Ok(out.violations.iter().map(|v| v.code.to_string()).collect())
 }
 
 /// The case count and non-literal flag the language pack for `path` reads on the first
