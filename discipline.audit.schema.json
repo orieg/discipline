@@ -85,7 +85,7 @@
           "type": "integer"
         },
         "detail": {
-          "description": "Why a configuration or baseline could not be compared",
+          "description": "Why a configuration or baseline could not be compared; on a `config` or `config-tightening` record, the keys a later release removed that the comparison set aside",
           "type": "string"
         },
         "directive": {

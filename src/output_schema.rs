@@ -450,7 +450,7 @@ pub fn audit_schema() -> Value {
                     "reason_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "SHA-256 of the directive's reason, to group reuse without the text" },
                     "reason_len": { "type": "integer", "minimum": 0 },
                     "reason": text("The directive's reason text: only under `--reasons`"),
-                    "detail": text("Why a configuration or baseline could not be compared"),
+                    "detail": text("Why a configuration or baseline could not be compared; on a `config` or `config-tightening` record, the keys a later release removed that the comparison set aside"),
                     "source": { "enum": ["commit-message", "pull-request-body"], "description": "Where a directive was read" },
                     "cites": { "type": "array", "items": { "type": "string" }, "description": "Issue references in a directive's reason, as written; omitted when none" },
                     "lifted": { "type": "boolean", "description": "With `--replay`, for a finding waiver: whether the replayed check applied it to lift a finding (then `evidence` is `applied`). Omitted when the replay did not judge the change, and for `no-issue`. An inline marker matches by file and line" },

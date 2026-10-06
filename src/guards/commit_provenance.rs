@@ -7,6 +7,12 @@
 //! protection. `directives.require_approval` reads the reviews only for a change that
 //! carries an override directive.
 //!
+//! `required_trailers` is judged for each entry of a squash when the forge's message lets
+//! the entries be told apart ([`squash_entries`]), and for the whole message otherwise,
+//! with a note. The agent rule reads the squash as one commit. Only a `Co-authored-by:`
+//! line tells that a squashed commit had a machine author: the layout has no author per
+//! entry, and the squash commit's own author is whoever merged.
+//!
 //! Default off: which trailers a repository requires is its own policy.
 
 use super::{Context, GateOutcome};
@@ -40,21 +46,7 @@ pub const GATE: &str = "commit-provenance";
 /// `git cherry-pick -x` appends to a trailer block is skipped. CRLF line endings are read
 /// as LF, and a line of whitespace separates paragraphs like an empty one.
 pub fn trailers(message: &str) -> Vec<(String, String)> {
-    // `str::lines` ends a line at LF or CRLF, and a line of whitespace ends a paragraph.
-    let mut paragraphs: Vec<Vec<&str>> = Vec::new();
-    let mut current: Vec<&str> = Vec::new();
-    for line in message.lines() {
-        if line.trim().is_empty() {
-            if !current.is_empty() {
-                paragraphs.push(std::mem::take(&mut current));
-            }
-        } else {
-            current.push(line);
-        }
-    }
-    if !current.is_empty() {
-        paragraphs.push(current);
-    }
+    let paragraphs = paragraphs(message);
     let mut out = Vec::new();
     // Trailer paragraphs seen since the last prose paragraph: kept when an entry or the
     // message ends right after them, dropped when prose follows.
@@ -74,13 +66,156 @@ pub fn trailers(message: &str) -> Vec<(String, String)> {
     out
 }
 
+/// The paragraphs of a message, each as its lines. `str::lines` ends a line at LF or CRLF,
+/// and a line of whitespace ends a paragraph.
+fn paragraphs(message: &str) -> Vec<Vec<&str>> {
+    let mut paragraphs: Vec<Vec<&str>> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    for line in message.lines() {
+        if line.trim().is_empty() {
+            if !current.is_empty() {
+                paragraphs.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(line);
+        }
+    }
+    if !current.is_empty() {
+        paragraphs.push(current);
+    }
+    paragraphs
+}
+
+/// One commit of a squash, as the forge's message lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    /// The entry's `* subject` line without the marker, as written.
+    pub subject: String,
+    /// The trailer paragraphs that end the entry, read as the end of a message is.
+    pub trailers: Vec<(String, String)>,
+}
+
+/// How the `* ` paragraphs of a message were read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Entries {
+    /// Fewer than two one-line `* ` paragraphs and no entry directly under the subject:
+    /// an ordinary message.
+    None,
+    /// The message lists the commits of a squash, and each one's text can be told apart.
+    Delimited(Vec<Entry>),
+    /// The message has several one-line `* ` paragraphs that the layout does not place:
+    /// they may be a list in an ordinary message. The reason, for the note.
+    Undelimited(&'static str),
+}
+
+/// A paragraph that opens an entry of a squash: one line that starts with `* `. A
+/// paragraph of several lines that starts with `* ` is a list in a body.
+fn opens_an_entry(paragraph: &[&str]) -> bool {
+    paragraph.len() == 1 && paragraph[0].starts_with("* ")
+}
+
+fn is_dashed_rule(paragraph: &[&str]) -> bool {
+    let first = paragraph[0];
+    paragraph.len() == 1 && first.len() >= 3 && first.chars().all(|c| c == '-')
+}
+
+/// Whether a subject ends with a pull request number in parentheses, `(#12)`: what a
+/// forge appends to the title of the commit it writes for a squash.
+fn ends_with_a_pull_number(subject: &str) -> bool {
+    subject
+        .trim_end()
+        .strip_suffix(')')
+        .and_then(|rest| rest.rsplit_once("(#"))
+        .is_some_and(|(_, n)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// The entries of a forge's message for a squash of several commits, when each can be
+/// delimited.
+///
+/// The layout read is the one a forge writes by default: the subject ends with the pull
+/// request number, the paragraph directly under it is `* subject` on one line, and every
+/// later one-line `* ` paragraph opens the next entry. An entry runs to the next one, to
+/// the dashed rule that is followed by nothing but trailer paragraphs (the block the
+/// forge gathers, which belongs to no entry), or to the end of the message. A dashed
+/// line anywhere else is body text of its entry.
+///
+/// A one-line `* ` paragraph in the body of a squashed commit cannot be told from the
+/// start of the next entry: it is read as one.
+pub fn squash_entries(message: &str) -> Entries {
+    let paragraphs = paragraphs(message);
+    let openers: Vec<usize> = (1..paragraphs.len())
+        .filter(|&i| opens_an_entry(&paragraphs[i]))
+        .collect();
+    let Some(&first) = openers.first() else {
+        return Entries::None;
+    };
+    let numbered = ends_with_a_pull_number(paragraphs[0][0]);
+    if !numbered || first != 1 {
+        // One such paragraph is a list item in a body far more often than a squash.
+        if openers.len() < 2 {
+            return Entries::None;
+        }
+        return Entries::Undelimited(if numbered {
+            "the first `* ` paragraph does not follow the subject directly"
+        } else {
+            "the subject does not end with a pull request number such as `(#12)`"
+        });
+    }
+    // The block the forge gathers: everything after the last dashed rule, when all of it
+    // is trailers.
+    let last = *openers.last().unwrap_or(&first);
+    let end = (last + 1..paragraphs.len())
+        .rev()
+        .find(|&i| {
+            is_dashed_rule(&paragraphs[i])
+                && paragraphs[i + 1..]
+                    .iter()
+                    .all(|p| trailer_block(p).is_some())
+        })
+        .unwrap_or(paragraphs.len());
+    let bounds = openers.iter().copied().chain([end]).collect::<Vec<_>>();
+    let entries = bounds
+        .windows(2)
+        .map(|w| {
+            let mut run: Vec<(String, String)> = Vec::new();
+            for paragraph in &paragraphs[w[0] + 1..w[1]] {
+                match trailer_block(paragraph) {
+                    Some(block) => run.extend(block),
+                    None => run.clear(),
+                }
+            }
+            Entry {
+                subject: paragraphs[w[0]][0][2..].trim().to_string(),
+                trailers: run,
+            }
+        })
+        .collect();
+    Entries::Delimited(entries)
+}
+
+/// An entry's subject as a finding quotes it: one line, without the characters that would
+/// end the code span around it, cut to a length a report line can hold.
+fn quoted_subject(subject: &str) -> String {
+    const MAX: usize = 60;
+    let clean: String = subject
+        .chars()
+        .map(|c| if c == '`' || c.is_control() { ' ' } else { c })
+        .collect();
+    let clean = clean.trim();
+    if clean.chars().count() > MAX {
+        let cut: String = clean.chars().take(MAX).collect();
+        format!("{}...", cut.trim_end())
+    } else {
+        clean.to_string()
+    }
+}
+
 /// Whether a paragraph is a boundary in a forge's message for a squash of several
 /// commits: the `* subject` paragraph that opens the next entry, or the line of dashes
 /// before the trailers the forge gathers.
 fn ends_a_squash_entry(paragraph: &[&str]) -> bool {
     let first = paragraph[0];
-    first.starts_with("* ")
-        || (paragraph.len() == 1 && first.len() >= 3 && first.chars().all(|c| c == '-'))
+    first.starts_with("* ") || is_dashed_rule(paragraph)
 }
 
 /// `(cherry picked from commit <sha>)`, which `git cherry-pick -x` appends to the last
@@ -169,8 +304,11 @@ pub struct Finding {
     pub what: String,
     /// What tells this finding apart from another of its code in the run, for the
     /// baseline fingerprint ([`crate::guards::Violation::anchor`]): the commit, and for a
-    /// missing trailer the key too, since one commit can lack several.
+    /// missing trailer the key too, since one commit can lack several, and the entry's
+    /// position when the commit is a squash judged entry by entry.
     pub anchor: String,
+    /// For a trailer missing from one entry of a squash, the entry's position from 1.
+    pub entry: Option<usize>,
 }
 
 pub fn judge(
@@ -188,15 +326,48 @@ pub fn judge(
         }
         let t = trailers(&c.message);
         let short: String = c.sha.chars().take(10).collect();
-        for key in required {
-            if !has_trailer(&t, key) {
-                out.push(Finding {
-                    kind: &crate::findings::COMMIT_TRAILER_MISSING,
-                    sha: c.sha.clone(),
-                    what: format!("commit {short} has no `{key}:` trailer"),
-                    // Keys match without regard to case, so the anchor does too.
-                    anchor: format!("commit:{}:{}", c.sha, key.to_ascii_lowercase()),
-                });
+        match (required.is_empty(), squash_entries(&c.message)) {
+            (true, _) => {}
+            // Each entry is one commit of the pull request: a trailer in another entry,
+            // or in the block the forge gathers from all of them, is not this one's.
+            (false, Entries::Delimited(entries)) => {
+                for (i, entry) in entries.iter().enumerate() {
+                    let n = i + 1;
+                    for key in required {
+                        if !has_trailer(&entry.trailers, key) {
+                            out.push(Finding {
+                                kind: &crate::findings::COMMIT_TRAILER_MISSING,
+                                sha: c.sha.clone(),
+                                what: format!(
+                                    "squash commit {short}: entry {n} of {}, `{}`, has no `{key}:` trailer",
+                                    entries.len(),
+                                    quoted_subject(&entry.subject)
+                                ),
+                                // The position, not the subject: two entries can share one.
+                                anchor: format!(
+                                    "commit:{}:{}:entry:{n}",
+                                    c.sha,
+                                    key.to_ascii_lowercase()
+                                ),
+                                entry: Some(n),
+                            });
+                        }
+                    }
+                }
+            }
+            (false, Entries::None | Entries::Undelimited(_)) => {
+                for key in required {
+                    if !has_trailer(&t, key) {
+                        out.push(Finding {
+                            kind: &crate::findings::COMMIT_TRAILER_MISSING,
+                            sha: c.sha.clone(),
+                            what: format!("commit {short} has no `{key}:` trailer"),
+                            // Keys match without regard to case, so the anchor does too.
+                            anchor: format!("commit:{}:{}", c.sha, key.to_ascii_lowercase()),
+                            entry: None,
+                        });
+                    }
+                }
             }
         }
         if !review_key.is_empty() && is_agent_commit(c, &t, markers) {
@@ -208,6 +379,7 @@ pub fn judge(
                         "commit {short} identifies itself as agent-produced and carries no `{review_key}:` trailer"
                     ),
                     anchor: format!("commit:{}", c.sha),
+                    entry: None,
                 });
             } else if !reviewed_by_someone_else(c, &t, review_key) {
                 out.push(Finding {
@@ -217,6 +389,7 @@ pub fn judge(
                         "commit {short} is agent-produced and its `{review_key}:` trailer names its own author"
                     ),
                     anchor: format!("commit:{}", c.sha),
+                    entry: None,
                 });
             }
         }
@@ -264,6 +437,34 @@ pub fn commit_provenance(ctx: &Context) -> Result<GateOutcome> {
         }
     }
     out.examined = non_merges.len();
+    // One rule on and the other off: say which was not evaluated, so a clean outcome is
+    // not read as both.
+    if settings.required_trailers.is_empty() {
+        out.notes.push(
+            "the required-trailer rule was not evaluated: `required_trailers` is empty, so only the agent-review rule was checked"
+                .to_string(),
+        );
+    } else if review_key.is_empty() {
+        out.notes.push(
+            "the agent-review rule was not evaluated: `require_agent_review` is false, so only `required_trailers` was checked"
+                .to_string(),
+        );
+    } else if settings.agent_markers.is_empty() {
+        out.notes.push(
+            "the agent-review rule was not evaluated: `agent_markers` is empty, so no commit can be read as agent-produced and only `required_trailers` was checked"
+                .to_string(),
+        );
+    }
+    if !settings.required_trailers.is_empty() {
+        for c in &non_merges {
+            if let Entries::Undelimited(why) = squash_entries(&c.message) {
+                let short: String = c.sha.chars().take(7).collect();
+                out.notes.push(format!(
+                    "commit {short}: its `* ` paragraphs were not read as the entries of a squash ({why}), so `required_trailers` was judged on the whole message: a trailer in any paragraph that ends an entry counts for all of them"
+                ));
+            }
+        }
+    }
     for f in judge(
         &commits,
         &settings.required_trailers,
@@ -284,9 +485,15 @@ pub fn commit_provenance(ctx: &Context) -> Result<GateOutcome> {
             None,
             None,
             format!("{}.", f.what),
-            &format!(
-                "Amend the commit with the trailer, or justify it on its own line in the PR body: `allow-commit-provenance: {short} <reason>`."
-            ),
+            &if f.entry.is_some() {
+                format!(
+                    "Each commit of a pull request carries the trailer before it is squashed; for this one, justify it on its own line in the PR body: `allow-commit-provenance: {short} <reason>`."
+                )
+            } else {
+                format!(
+                    "Amend the commit with the trailer, or justify it on its own line in the PR body: `allow-commit-provenance: {short} <reason>`."
+                )
+            },
         );
         // No file and no line: without the anchor every finding of one code would share a
         // fingerprint, and one baseline entry would hide a finding on any other commit.
@@ -634,6 +841,176 @@ mod tests {
         // Version 1 hashes the message and never the anchor.
         assert_eq!(fp(&one, true, 1), fp(&one, false, 1));
         assert_ne!(fp(&one, true, 1), fp(&two, true, 1));
+    }
+
+    fn subjects_and_keys(message: &str) -> Vec<(String, Vec<String>)> {
+        match squash_entries(message) {
+            Entries::Delimited(entries) => entries
+                .into_iter()
+                .map(|e| (e.subject, e.trailers.into_iter().map(|(k, _)| k).collect()))
+                .collect(),
+            other => panic!("not delimited: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_entries_of_a_squash_are_delimited_with_their_own_trailers() {
+        let m = squash(
+            "Signed-off-by: Dev Eloper <dev@example.com>\nAgent-Tool: coder 1.2",
+            "Ticket: 12",
+            "Signed-off-by: Dev Eloper <dev@example.com>\nCo-authored-by: Dev Eloper <dev@example.com>",
+        );
+        let own = |keys: &[&str]| keys.iter().map(|k| k.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            subjects_and_keys(&m),
+            [
+                (
+                    "feat: parser".to_string(),
+                    own(&["Signed-off-by", "Agent-Tool"])
+                ),
+                ("test: cover the parser".to_string(), own(&["Ticket"])),
+            ]
+        );
+        // Without the gathered block the last entry runs to the end of the message.
+        let m = squash(
+            "Ticket: 1",
+            "Ticket: 2\nSigned-off-by: D <d@example.com>",
+            "",
+        );
+        assert_eq!(
+            subjects_and_keys(&m)[1].1,
+            own(&["Ticket", "Signed-off-by"])
+        );
+        // A dashed line that is not followed by trailers only is body text of its entry,
+        // as is a list of several lines and an indented bullet.
+        let m = "feat: x (#7)\n\n* feat: x\n\n---\n\nProse.\n\n* one\n* two\n\n  * three\n\nTicket: 1\n\n\
+                 * test: x\n\nTicket: 2\n\n---------\n\nSigned-off-by: D <d@example.com>\n";
+        assert_eq!(
+            subjects_and_keys(m),
+            [
+                ("feat: x".to_string(), own(&["Ticket"])),
+                ("test: x".to_string(), own(&["Ticket"])),
+            ]
+        );
+        // Inside an entry the rule is the one for a whole message: prose ends the run.
+        let m = "feat: x (#7)\n\n* feat: x\n\nTicket: 1\n\nProse after it.\n\n* test: x\n";
+        assert_eq!(
+            subjects_and_keys(m),
+            [
+                ("feat: x".to_string(), own(&[])),
+                ("test: x".to_string(), own(&[])),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_message_is_not_split_unless_the_layout_places_every_entry() {
+        // Control: the same paragraphs under a subject with a pull request number.
+        let body = "\n\n* feat: x\n\nTicket: 1\n\n* test: x\n\nTicket: 2\n";
+        assert!(matches!(
+            squash_entries(&format!("feat: x (#7){body}")),
+            Entries::Delimited(e) if e.len() == 2
+        ));
+        // No pull request number at the end of the subject.
+        for subject in [
+            "feat: x",
+            "feat: x (#7) again",
+            "feat: x (#)",
+            "feat: x (#7a)",
+        ] {
+            assert!(
+                matches!(
+                    squash_entries(&format!("{subject}{body}")),
+                    Entries::Undelimited(why) if why.contains("pull request number")
+                ),
+                "{subject}"
+            );
+        }
+        // Text between the subject and the first entry.
+        assert!(matches!(
+            squash_entries(&format!("feat: x (#7)\n\nA description.{body}")),
+            Entries::Undelimited(why) if why.contains("does not follow the subject")
+        ));
+        // One `* ` paragraph that is not directly under a numbered subject, a list of
+        // several lines, and no `* ` paragraph at all: an ordinary message.
+        for m in [
+            "feat: x\n\n* one\n\nTicket: 1\n",
+            "feat: x (#7)\n\nBody.\n\n* one\n\nTicket: 1\n",
+            "feat: x (#7)\n\n* one\n* two\n\nTicket: 1\n",
+            "feat: x (#7)\n\nBody.\n\nTicket: 1\n",
+            "feat: x (#7)",
+        ] {
+            assert_eq!(squash_entries(m), Entries::None, "{m}");
+        }
+    }
+
+    #[test]
+    fn a_required_trailer_is_judged_for_each_entry_of_a_delimited_squash() {
+        let signed = "Signed-off-by: Dev Eloper <dev@example.com>";
+        let required = v(&["Signed-off-by"]);
+        let judge_one = |message: &str| {
+            let mut c = commit("Dev Eloper", "dev@example.com", message);
+            c.sha = "1111111111111111111111111111111111111111".into();
+            judge(&[c], &required, &[], "")
+        };
+        // Control: every entry signed off.
+        assert!(judge_one(&squash(signed, signed, signed)).is_empty());
+        // The sign-off of the first entry, and the one the forge gathers, do not cover
+        // the second.
+        let f = judge_one(&squash(signed, "Ticket: 12", signed));
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].entry, Some(2));
+        assert_eq!(
+            f[0].what,
+            "squash commit 1111111111: entry 2 of 2, `test: cover the parser`, has no `Signed-off-by:` trailer"
+        );
+        assert_eq!(
+            f[0].anchor,
+            "commit:1111111111111111111111111111111111111111:signed-off-by:entry:2"
+        );
+        // Two unsigned entries: two findings, anchored apart.
+        let f = judge_one(&squash("Ticket: 1", "Ticket: 2", signed));
+        let anchors: Vec<&str> = f.iter().map(|f| f.anchor.as_str()).collect();
+        assert_eq!(
+            anchors,
+            [
+                "commit:1111111111111111111111111111111111111111:signed-off-by:entry:1",
+                "commit:1111111111111111111111111111111111111111:signed-off-by:entry:2",
+            ]
+        );
+        // A message that is not delimited keeps the whole-message judgement and anchor.
+        let whole = squash(signed, "Ticket: 12", "").replace(" (#7)", "");
+        assert!(judge_one(&whole).is_empty());
+        let whole = squash("Ticket: 1", "Ticket: 2", "").replace(" (#7)", "");
+        let f = judge_one(&whole);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].entry, None);
+        assert_eq!(
+            f[0].anchor,
+            "commit:1111111111111111111111111111111111111111:signed-off-by"
+        );
+        // The agent rule still reads the squash as one commit.
+        let mut c = commit(
+            "Dev Eloper",
+            "dev@example.com",
+            &squash(
+                "Reviewed-by: Rev Iewer <rev@example.com>",
+                "Agent-Tool: coder 1.2",
+                "",
+            ),
+        );
+        c.sha = "1111111111111111111111111111111111111111".into();
+        assert!(judge(&[c], &[], &v(&["Agent-Tool:"]), "Reviewed-by").is_empty());
+    }
+
+    #[test]
+    fn an_entry_subject_is_quoted_on_one_line_and_cut() {
+        assert_eq!(quoted_subject("feat: `x`\u{1b}[2J"), "feat:  x  [2J");
+        let long = "a".repeat(80);
+        let q = quoted_subject(&long);
+        assert_eq!(q.chars().count(), 63);
+        assert!(q.ends_with("..."));
+        assert_eq!(quoted_subject(&"a".repeat(60)), "a".repeat(60));
     }
 
     #[test]
