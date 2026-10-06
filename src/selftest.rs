@@ -1991,7 +1991,7 @@ const CASES: &[Case] = &[
     (
         "merged-pr-body: a merged pull request is found for a commit, a direct push is not",
         || {
-            use crate::forge::{merged_pull_for_commit, CannedApi, Forge, ForgeKind};
+            use crate::forge::{merged_pull_on_forge, CannedApi, Forge, ForgeKind};
             let forge = Forge {
                 kind: ForgeKind::GitHub,
                 url: "https://github.com".into(),
@@ -2003,8 +2003,8 @@ const CASES: &[Case] = &[
                 serde_json::json!([{"number": 4, "merged_at": "2026-01-01T00:00:00Z", "user": {"login": "a"}, "body": "removes: x y", "head": {"sha": "h"}}]),
             );
             api.responses.insert("github:repos/o/r/commits/bbb/pulls".into(), serde_json::json!([]));
-            let found = merged_pull_for_commit(&api, &forge, "aaa").map_err(|e| anyhow::anyhow!(e))?;
-            let none = merged_pull_for_commit(&api, &forge, "bbb").map_err(|e| anyhow::anyhow!(e))?;
+            let found = merged_pull_on_forge(&api, &forge, "aaa").map_err(|e| anyhow::anyhow!(e))?;
+            let none = merged_pull_on_forge(&api, &forge, "bbb").map_err(|e| anyhow::anyhow!(e))?;
             Ok(found.is_some_and(|p| p.number == 4) && none.is_none())
         },
     ),

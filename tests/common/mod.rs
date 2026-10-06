@@ -492,8 +492,26 @@ type Requests = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<(String, String
 /// Recorded writes: method, path and body.
 type Writes = std::sync::Arc<std::sync::Mutex<Vec<(String, String, String)>>>;
 
+/// The merged pull request lookup of the commit that `path` asks for, when `path` is a
+/// forge's "get a single commit" endpoint: Gitea and Forgejo
+/// `repos/{owner}/{repo}/git/commits/{sha}`, GitLab
+/// `projects/{id}/repository/commits/{sha}`.
+fn pulls_route_of(path: &str) -> Option<String> {
+    if let Some((repo, sha)) = path.rsplit_once("/git/commits/") {
+        return (!sha.contains('/')).then(|| format!("{repo}/commits/{sha}/pull"));
+    }
+    let (project, sha) = path.rsplit_once("/repository/commits/")?;
+    (!sha.contains('/')).then(|| format!("{project}/repository/commits/{sha}/merge_requests"))
+}
+
 /// A forge REST API on a loopback port: canned responses by path, every request recorded.
 /// Unknown paths answer 403 with a rate-limit message, like an exhausted anonymous quota.
+///
+/// One exception. Gitea, Forgejo and GitLab answer 404 for the merged pull request of a
+/// commit both when no merged pull request carries it and when the forge does not have
+/// the commit, so the binary then asks for the commit itself. A test that serves a
+/// commit's pull request lookup is about a commit the forge has: its commit endpoint
+/// answers 200 unless the test serves that too (a 404 there is "not on the forge").
 pub struct FakeForge {
     addr: std::net::SocketAddr,
     routes: Routes,
@@ -559,11 +577,22 @@ impl FakeForge {
                     .get_mut(&path)
                     .and_then(|answers| answers.pop_front());
                 let (status, extra, body) = once.unwrap_or_else(|| {
-                    r.lock().unwrap().get(&path).cloned().unwrap_or((
-                        403,
-                        Vec::new(),
-                        r#"{"message":"API rate limit exceeded"}"#.to_string(),
-                    ))
+                    let routes = r.lock().unwrap();
+                    match routes.get(&path) {
+                        Some(answer) => answer.clone(),
+                        // The commit itself, asked for after its merged pull request
+                        // lookup answered 404: the forge has the commit.
+                        None if pulls_route_of(&path)
+                            .is_some_and(|pulls| routes.contains_key(&pulls)) =>
+                        {
+                            (200, Vec::new(), "{}".to_string())
+                        }
+                        None => (
+                            403,
+                            Vec::new(),
+                            r#"{"message":"API rate limit exceeded"}"#.to_string(),
+                        ),
+                    }
                 });
                 let mut resp = format!(
                     "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
