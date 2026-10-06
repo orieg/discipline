@@ -5091,6 +5091,268 @@ smoke_cost::set_contains
         },
     ),
     (
+        "bench-regression: under a sourced override every allow-regression line is read for the arm it names",
+        || {
+            use crate::config::{BenchRegressionGate, Severity};
+            use crate::guards::perf::bounds::DiscreteMetric;
+            use crate::guards::perf::{BenchmarkMetric, MetricValue};
+            use crate::guards::GateOutcome;
+            use crate::tokens::{OverrideSource, ParsedDirective};
+
+            let settings = BenchRegressionGate {
+                tolerance_pct: 5.0,
+                noise_floor_pct: Some(0.5),
+                advisory_pct: Some(0.1),
+                require_sourced_override: true,
+                ..Default::default()
+            };
+            let arms = |count: u64| -> Vec<BenchmarkMetric> {
+                ["map_get", "map_insert"]
+                    .iter()
+                    .map(|name| BenchmarkMetric {
+                        name: name.to_string(),
+                        count: count as f64,
+                        value: MetricValue::Discrete(DiscreteMetric::new(count)),
+                        unit: "Ir".to_string(),
+                    })
+                    .collect()
+            };
+            let (base, head) = (arms(1000), arms(1020));
+            let line = |reason: &str| ParsedDirective {
+                directive: "allow-regression".to_string(),
+                reason: reason.to_string(),
+                source: OverrideSource::PrBody,
+                hidden: false,
+            };
+            let run = "https://github.com/acme/widgets/actions/runs/4401";
+            let fresh = crate::guards::perf::citation::CannedInstruments {
+                responses: std::collections::BTreeMap::from([
+                    (
+                        "repos/acme/widgets/actions/runs/4401".to_string(),
+                        serde_json::json!({"conclusion": "success", "head_sha": "abc123"}),
+                    ),
+                    (
+                        "repos/acme/widgets/compare/abc123...abc123".to_string(),
+                        serde_json::json!({"status": "identical"}),
+                    ),
+                ]),
+                head: Some("abc123".to_string()),
+                ..Default::default()
+            };
+            let judge = |lines: &[ParsedDirective]| -> anyhow::Result<GateOutcome> {
+                let mut out = GateOutcome::new("bench-regression");
+                crate::guards::perf::evaluate_metrics_regression_with_instruments(
+                    lines,
+                    &settings,
+                    (&base, &head),
+                    ("base.txt", "head.txt"),
+                    Severity::Error,
+                    &fresh,
+                    &mut out,
+                )?;
+                Ok(out)
+            };
+            let codes = |out: &GateOutcome| -> Vec<String> {
+                out.violations
+                    .iter()
+                    .map(|v| v.code.rsplit('/').next().unwrap_or("").to_string())
+                    .collect()
+            };
+            // Two lines, one arm each: both approved, each line recorded with its arm.
+            let two = judge(&[
+                line(&format!("map_get trade refs {run}")),
+                line(&format!("map_insert trade refs {run}")),
+            ])?;
+            let subjects: Vec<&str> = two.overrides.iter().map(|o| o.subject.as_str()).collect();
+            anyhow::ensure!(
+                two.violations.is_empty() && subjects == ["map_get", "map_insert"],
+                "two lines approve two arms: {:?} {subjects:?}",
+                codes(&two)
+            );
+            // The second line is read when the first names an arm that did not regress.
+            let second = judge(&[
+                line(&format!("map_scan trade refs {run}")),
+                line(&format!("map_insert trade refs {run}")),
+            ])?;
+            anyhow::ensure!(
+                codes(&second) == ["counter-regressed-unapproved-arm"]
+                    && second.overrides.len() == 1
+                    && second.overrides[0].subject == "map_insert",
+                "the second line approves its arm: {:?}",
+                codes(&second)
+            );
+            // A line with no citation is void for its own arm only.
+            let void = judge(&[
+                line(&format!("map_get trade refs {run}")),
+                line("map_insert trade by design"),
+            ])?;
+            anyhow::ensure!(
+                codes(&void) == ["override-void-no-resolvable-citation", "counter-regressed"]
+                    && void.overrides.len() == 1,
+                "a void line leaves the admitted one: {:?}",
+                codes(&void)
+            );
+            // No line names a regressed arm: the first is reported, once.
+            let none = judge(&[
+                line(&format!("map_scan trade refs {run}")),
+                line(&format!("map_len trade refs {run}")),
+            ])?;
+            Ok(codes(&none)
+                == [
+                    "override-void-names-no-regressed-arm",
+                    "counter-regressed",
+                    "counter-regressed",
+                ]
+                && none.overrides.is_empty())
+        },
+    ),
+    (
+        "directives: a subject written as `path:line` names that line, never the whole file",
+        || {
+            use crate::findings::INVISIBLE_CHARACTERS_ADDED as KIND;
+            use crate::tokens::{
+                find_override, find_whole_file_override, OverrideSource, ParsedDirective,
+                ALLOW_SMUGGLING,
+            };
+            let line = |reason: &str| ParsedDirective {
+                directive: "allow-agent-instructions".to_string(),
+                reason: reason.to_string(),
+                source: OverrideSource::PrBody,
+                hidden: false,
+            };
+            let gate = "instruction-smuggling";
+            let on_line = [line("docs/table.md:3 the row needs the joiner")];
+            let on_file = [line("docs/table.md the rows need the joiner")];
+            let own = |d: &[ParsedDirective], s: &str| {
+                find_override(d, gate, &KIND, ALLOW_SMUGGLING, s).is_some()
+            };
+            let file = |d: &[ParsedDirective], s: &str| {
+                find_whole_file_override(d, gate, &KIND, ALLOW_SMUGGLING, s).is_some()
+            };
+            Ok(own(&on_line, "docs/table.md:3")
+                && !own(&on_line, "docs/table.md:30")
+                && !own(&on_line, "docs/table.md:5")
+                && !file(&on_line, "docs/table.md")
+                && !file(&on_line, "table.md")
+                && file(&on_file, "docs/table.md")
+                && file(&[line("table.md the rows need the joiner")], "docs/table.md")
+                && !file(&[line("table.md:3 the row needs the joiner")], "docs/table.md"))
+        },
+    ),
+    (
+        "manifest-sync: a later rule on one manifest is anchored on its patterns, the first is not",
+        || {
+            use crate::config::ManifestSyncRule;
+            use crate::guards::manifest_sync::later_rule_anchor;
+            let rule = |manifest: &str, watched: &str| ManifestSyncRule {
+                manifest: manifest.to_string(),
+                extract_regex: "(.+)".to_string(),
+                watched_paths: vec![watched.to_string()],
+                exclude_paths: Vec::new(),
+            };
+            let rules = vec![
+                rule("MANIFEST", "src/**"),
+                rule("other.xml", "src/**"),
+                rule("MANIFEST", "docs/**"),
+                rule("MANIFEST", "man/**"),
+            ];
+            let anchors: Vec<Option<String>> =
+                (0..rules.len()).map(|i| later_rule_anchor(&rules, i)).collect();
+            // A rule placed between the two changes neither anchor.
+            let reordered = vec![rules[0].clone(), rules[3].clone(), rules[2].clone()];
+            Ok(anchors[0].is_none()
+                && anchors[1].is_none()
+                && anchors[2].as_deref().is_some_and(|a| a.starts_with("rule:") && a.len() == 69)
+                && anchors[3].is_some()
+                && anchors[2] != anchors[3]
+                && later_rule_anchor(&reordered, 2) == anchors[2]
+                && later_rule_anchor(&reordered, 1) == anchors[3])
+        },
+    ),
+    (
+        "baseline: a finding on a repeated line is told apart by its occurrence, and the first keeps its fingerprint",
+        || {
+            use crate::baseline::{
+                apply_baseline_with_reader, fill_fingerprints, fingerprint_for_version,
+                BaselineEntry, DisciplineBaseline,
+            };
+            use crate::config::Severity;
+            use crate::guards::{GateOutcome, Violation};
+            use crate::report::gitlab::sha256_hex;
+
+            let read = |_: &str| {
+                Some("try:\n    pass\nexcept E:\n    pass\n\nexcept E:\n\nexcept E:\n".to_string())
+            };
+            let at = |line: usize| Violation {
+                gate: "error-swallowing",
+                code: "error-swallowing/empty-error-handler-added".to_string(),
+                fingerprint: String::new(),
+                anchor: None,
+                legacy_title: None,
+                severity: Severity::Error,
+                title: "Empty Error Handler Added".to_string(),
+                file: Some("pkg/io.py".to_string()),
+                line: Some(line),
+                message: "handler".to_string(),
+                remediation: None,
+            };
+            let print = |line: usize| fingerprint_for_version(&at(line), read, 2);
+            let of = |content: &str| {
+                sha256_hex(
+                    format!(
+                        "v2:error-swallowing/empty-error-handler-added:pkg/io.py:{}",
+                        sha256_hex(content.as_bytes())
+                    )
+                    .as_bytes(),
+                )
+            };
+            anyhow::ensure!(
+                print(3) == of("except E:")
+                    && print(6) == of("except E:\noccurrence:2")
+                    && print(8) == of("except E:\noccurrence:3"),
+                "the first occurrence hashes the line alone, a later one its number"
+            );
+            // An anchored finding is told apart by its anchor, and version 1 is unchanged.
+            let anchored = Violation {
+                anchor: Some("save".to_string()),
+                ..at(6)
+            };
+            anyhow::ensure!(
+                fingerprint_for_version(&anchored, read, 2) == of("except E:\nanchor:save")
+                    && fingerprint_for_version(&at(3), read, 1)
+                        == fingerprint_for_version(&at(6), read, 1),
+                "anchors and version 1 do not take the occurrence"
+            );
+            let entry = |fingerprint: String| BaselineEntry {
+                gate: "error-swallowing".to_string(),
+                rule: "error-swallowing/empty-error-handler-added".to_string(),
+                path: "pkg/io.py".to_string(),
+                fingerprint,
+            };
+            let left = |entries: Vec<String>, lines: &[usize]| -> Vec<usize> {
+                let mut out = GateOutcome::new("error-swallowing");
+                out.violations = lines.iter().map(|l| at(*l)).collect();
+                fill_fingerprints(&mut out.violations.iter_mut().collect::<Vec<_>>(), read);
+                let baseline = DisciplineBaseline {
+                    version: 2,
+                    findings: entries.into_iter().map(entry).collect(),
+                };
+                let mut outcomes = vec![out];
+                apply_baseline_with_reader(read, &baseline, &mut outcomes);
+                outcomes[0].violations.iter().filter_map(|v| v.line).collect()
+            };
+            // An entry for the first does not accept the second, reported alone or not.
+            let first_only = left(vec![print(3)], &[6]) == [6]
+                && left(vec![print(3)], &[3, 6]) == [6];
+            // Entries recorded under the first occurrence's fingerprint, one per line,
+            // accept that many occurrences and no more.
+            let recorded_before = left(vec![print(3), print(3)], &[3, 6, 8]) == [8]
+                && left(vec![print(3), print(3)], &[6]).is_empty()
+                && left(vec![print(3), print(3)], &[8]) == [8];
+            Ok(first_only && recorded_before)
+        },
+    ),
+    (
         "provenance-tags: table provenance, mechanism claims, wall-clock intervals, and paired figures",
         || {
             use crate::guards::provenance_tags::scan_markdown_text;

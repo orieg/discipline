@@ -603,8 +603,10 @@ pub fn evaluate_shell_secrets(ctx: &Context) -> Result<GateOutcome> {
                 if file_lifted {
                     continue;
                 }
+                // The file, from a directive that names no line: one that does
+                // (`scripts/deploy.sh:4`) names the finding on that line and no other.
                 if let Some(record) =
-                    ctx.find_override(GATE, rule.kind(), tokens::SECRETS_ARGV_OK, file)
+                    ctx.find_whole_file_override(GATE, rule.kind(), tokens::SECRETS_ARGV_OK, file)
                 {
                     out.overrides.push(record);
                     file_lifted = true;
