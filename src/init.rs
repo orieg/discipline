@@ -74,11 +74,36 @@ impl TestRunner {
         }
     }
 
+    /// The command to set beside [`Self::mutation_preset`] when the preset's own command
+    /// is another build tool's: `pit` runs Maven, so a Gradle project names its own task
+    /// (the `pitest` task of the gradle-pitest plugin) and keeps the preset's guards.
+    pub fn mutation_command(self) -> Option<&'static str> {
+        match self {
+            TestRunner::Gradle => Some("gradle pitest"),
+            _ => None,
+        }
+    }
+
+    /// Whether [`Self::mutation_preset`]'s command mutates only what the change touched.
+    /// Only `cargo mutants --in-diff` does; the other presets run the tool over the
+    /// whole project.
+    pub fn mutation_preset_is_diff_scoped(self) -> bool {
+        matches!(self, TestRunner::CargoNextest | TestRunner::Cargo)
+    }
+
     pub fn mutation_snippet(self) -> Option<String> {
         self.mutation_preset().map(|preset| {
+            let heading = if self.mutation_preset_is_diff_scoped() {
+                "# Diff-scoped mutation testing (guards against special-cased test inputs):"
+            } else {
+                "# Mutation testing (guards against special-cased test inputs; this preset's command runs over the whole project, not only the diff):"
+            };
+            let command = match self.mutation_command() {
+                Some(command) => format!("\n# command = \"{command}\""),
+                None => String::new(),
+            };
             format!(
-                "# Diff-scoped mutation testing (guards against special-cased test inputs):\n# [[gates.command.commands]]\n# name = \"mutation\"\n# preset = \"{}\"",
-                preset
+                "{heading}\n# [[gates.command.commands]]\n# name = \"mutation\"\n# preset = \"{preset}\"{command}"
             )
         })
     }
@@ -168,8 +193,16 @@ impl TestRunner {
 
 /// Generates the starter `discipline.toml` content for a project.
 pub fn generate_starter(project_name: &str, root: &Path) -> String {
-    let runner = TestRunner::detect(root).unwrap_or(TestRunner::CargoNextest);
-    let test_floor_snippet = runner.config_snippet();
+    // With no runner detected the lines below name tools the repository shows no sign of,
+    // so they are written as an example and say so.
+    let detected = TestRunner::detect(root);
+    let runner = detected.unwrap_or(TestRunner::CargoNextest);
+    let example = if detected.is_some() {
+        ""
+    } else {
+        "# No test runner was detected here. The commented lines below are an example for a\n# Cargo project: replace the command, the report path and the preset with your tools'.\n"
+    };
+    let test_floor_snippet = format!("{example}{}", runner.config_snippet());
     let mutation_part = match runner.mutation_snippet() {
         Some(s) => format!("\n{s}\n"),
         None => String::new(),
@@ -207,4 +240,74 @@ name = "{project_name}"
 # allow_patterns = ['^timeout: \d+']
 "#
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ALL_RUNNERS: &[TestRunner] = &[
+        TestRunner::CargoNextest,
+        TestRunner::Cargo,
+        TestRunner::Pytest,
+        TestRunner::Vitest,
+        TestRunner::Jest,
+        TestRunner::Go,
+        TestRunner::Maven,
+        TestRunner::Gradle,
+    ];
+
+    /// A suggested preset runs with the project's own build tool: its own command starts
+    /// with that tool, or the suggestion carries a command that does.
+    #[test]
+    fn a_suggested_mutation_preset_runs_with_the_project_build_tool() {
+        let tool = |runner: TestRunner| match runner {
+            TestRunner::CargoNextest | TestRunner::Cargo => "cargo ",
+            TestRunner::Pytest => "mutmut ",
+            TestRunner::Vitest | TestRunner::Jest => "npx ",
+            TestRunner::Maven => "mvn ",
+            TestRunner::Gradle => "gradle ",
+            TestRunner::Go => "go ",
+        };
+        for runner in ALL_RUNNERS {
+            let Some(preset) = runner.mutation_preset() else {
+                assert!(runner.mutation_snippet().is_none());
+                continue;
+            };
+            let def = crate::guards::presets::resolve_preset(preset).expect("a real preset");
+            let command = runner.mutation_command().unwrap_or(def.default_command);
+            assert!(
+                command.starts_with(tool(*runner)),
+                "{runner:?}: `{preset}` would run `{command}`"
+            );
+            let snippet = runner.mutation_snippet().unwrap();
+            assert_eq!(
+                snippet.contains("# command = "),
+                runner.mutation_command().is_some(),
+                "{snippet}"
+            );
+        }
+    }
+
+    /// Only a preset whose command takes the diff is called diff-scoped.
+    #[test]
+    fn only_a_preset_whose_command_takes_the_diff_is_called_diff_scoped() {
+        for runner in ALL_RUNNERS {
+            let Some(preset) = runner.mutation_preset() else {
+                continue;
+            };
+            let def = crate::guards::presets::resolve_preset(preset).unwrap();
+            let takes_the_diff = def.default_command.contains("--in-diff");
+            assert_eq!(
+                runner.mutation_preset_is_diff_scoped(),
+                takes_the_diff,
+                "{preset}"
+            );
+            assert_eq!(
+                runner.mutation_snippet().unwrap().contains("Diff-scoped"),
+                takes_the_diff,
+                "{preset}"
+            );
+        }
+    }
 }

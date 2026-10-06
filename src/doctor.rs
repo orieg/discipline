@@ -954,7 +954,7 @@ pub fn test_report_finding(
     }
 }
 
-/// `mutation-testing`: whether diff-scoped mutation testing is configured in `command`.
+/// `mutation-testing`: whether a mutation testing preset is configured in `command`.
 pub fn mutation_preset_finding(
     root: &Path,
     repo_config: Option<&crate::config::DisciplineConfig>,
@@ -984,7 +984,7 @@ pub fn mutation_preset_finding(
         Some(Finding::new(
             "mutation-testing",
             Status::Pass,
-            format!("diff-scoped mutation testing is configured (`{preset}`)"),
+            format!("mutation testing is configured (`{preset}`)"),
         ))
     } else {
         crate::init::TestRunner::detect(root).and_then(|runner| {
@@ -993,13 +993,21 @@ pub fn mutation_preset_finding(
                     "mutation-testing",
                     Status::Info,
                     format!(
-                        "recognized test runner ({}); no diff-scoped mutation preset configured in [gates.command]: special-cased test inputs (hard-coding return values for tested arguments) go undetected by static diff gates",
+                        "recognized test runner ({}); no mutation preset configured in [gates.command]: special-cased test inputs (hard-coding return values for tested arguments) go undetected by static diff gates",
                         runner.name()
                     ),
                 )
                 .fix(format!(
-                    "Configure a diff-scoped mutation preset in [gates.command] (e.g. `preset = \"{}\"`) to verify test discrimination against modified code.",
-                    preset
+                    "Configure a mutation preset in [gates.command] (e.g. `preset = \"{preset}\"`{}) to verify test discrimination{}.",
+                    runner
+                        .mutation_command()
+                        .map(|c| format!(" with `command = \"{c}\"`, since the preset's own command is Maven's"))
+                        .unwrap_or_default(),
+                    if runner.mutation_preset_is_diff_scoped() {
+                        " against modified code"
+                    } else {
+                        "; this preset's command runs over the whole project, not only the diff"
+                    }
                 ))
             })
         })
