@@ -249,10 +249,8 @@ impl<'a> GoExtractor<'a> {
                 test_fn.non_literal_cases = non_literal_cases;
                 self.scan_block(body, &mut test_fn, func_name, &mut direct_calls);
                 super::dispatch_calls(body, self.src, &GO_DISPATCH, &mut direct_calls);
-                if test_fn.conditional_ignore.is_none() && !test_fn.ignored {
-                    if let Some(cond) = self.detect_go_conditional_early_exit(body) {
-                        test_fn.conditional_ignore = Some(cond);
-                    }
+                if !test_fn.ignored {
+                    self.record_conditional_early_exits(body, &mut test_fn);
                 }
             }
 
@@ -475,10 +473,8 @@ impl<'a> GoExtractor<'a> {
                 if let Some(sub_body) = func_lit.child_by_field_name("body") {
                     self.scan_block(sub_body, &mut sub_test, &sub_name, &mut sub_calls);
                     super::dispatch_calls(sub_body, self.src, &GO_DISPATCH, &mut sub_calls);
-                    if sub_test.conditional_ignore.is_none() && !sub_test.ignored {
-                        if let Some(cond) = self.detect_go_conditional_early_exit(sub_body) {
-                            sub_test.conditional_ignore = Some(cond);
-                        }
+                    if !sub_test.ignored {
+                        self.record_conditional_early_exits(sub_body, &mut sub_test);
                     }
                 }
             }
@@ -499,11 +495,17 @@ impl<'a> GoExtractor<'a> {
         {
             // `if testing.Short() { t.Skip(...) }` runs in a full run: a conditional skip,
             // reported as a note. A constant condition skips every run.
-            if test_fn.conditional_ignore.is_none() {
-                match enclosing_if_condition(node, self.src) {
-                    Some(cond) if cond != "true" => test_fn.conditional_ignore = Some(cond),
-                    _ => test_fn.ignored = true,
+            // A skip in the `else` branch of an `if` on a CI variable is conditional too.
+            // A test keeps its first condition unless a later one makes it skip in CI.
+            let legacy = enclosing_if_condition(node, self.src);
+            let constant = legacy.as_deref() == Some("true");
+            let site = super::ci_condition::site(super::ci_condition::Lang::Go, node, self.src);
+            match super::ci_condition::conditional(legacy, site) {
+                Some((cond, verdict)) if !constant => {
+                    test_fn.record_conditional_skip(cond, verdict);
                 }
+                _ if test_fn.conditional_ignore.is_none() => test_fn.ignored = true,
+                _ => {}
             }
             return;
         }
@@ -641,7 +643,26 @@ impl<'a> GoExtractor<'a> {
         }
     }
 
-    fn detect_go_conditional_early_exit(&self, body: Node) -> Option<String> {
+    /// Early exits under a condition: the first `if` the text rule below accepts, then
+    /// every `return` under an `if` (nested and `else` branches included) that a CI
+    /// variable is involved in, through a variable, constant or helper of this file.
+    fn record_conditional_early_exits(&self, body: Node, test: &mut TestFn) {
+        use super::ci_condition::{self, CiVerdict, Lang};
+        if let Some((cond, consequence)) = self.detect_go_conditional_early_exit(body) {
+            let verdict = ci_condition::site(Lang::Go, consequence, self.src)
+                .map_or(CiVerdict::NotCi, |s| s.verdict);
+            test.record_conditional_skip(cond, verdict);
+        }
+        for exit in ci_condition::exits_under_if(body, &|n| n.kind() == "return_statement") {
+            if let Some(site) = ci_condition::site(Lang::Go, exit, self.src) {
+                if site.related {
+                    test.record_conditional_skip(site.text, site.verdict);
+                }
+            }
+        }
+    }
+
+    fn detect_go_conditional_early_exit<'t>(&self, body: Node<'t>) -> Option<(String, Node<'t>)> {
         let mut cursor = body.walk();
         let mut env_bindings = std::collections::HashSet::new();
 
@@ -699,7 +720,7 @@ impl<'a> GoExtractor<'a> {
                             } else {
                                 cond_str.to_string()
                             };
-                            return Some(cond_desc);
+                            return Some((cond_desc, consequence));
                         }
                     }
                 }

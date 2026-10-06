@@ -271,6 +271,10 @@ pub const ISOLATED_ENV_VARS: &[&str] = &[
     "ALL_PROXY",
     "all_proxy",
     "GITLAB_CI",
+    // Named by the CI-condition reader as variables it recognises in the code under
+    // review; the binary does not read them, and removing them keeps that true of a test.
+    "GITHUB_RUN_ID",
+    "CI_JOB_ID",
     "CI_MERGE_REQUEST_TARGET_BRANCH_NAME",
     "CI_MERGE_REQUEST_DIFF_BASE_SHA",
     "CI_DEFAULT_BRANCH",

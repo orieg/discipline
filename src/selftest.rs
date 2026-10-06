@@ -92,6 +92,81 @@ const CASES: &[Case] = &[
                 && good_py.tests[0].caught_assertions.is_empty())
         },
     ),
+    (
+        "ast: a handler swallows an assertion failure only when it catches the failure type and nothing looks at the outcome",
+        || {
+            let v = AssertVocabulary::default();
+            let reg = crate::ast::default_registry();
+            let caught = |path: &str, src: &str| -> Result<usize> {
+                let pack = reg
+                    .find_pack(path)
+                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
+                Ok(pack
+                    .extract(path, src, &v)?
+                    .tests
+                    .iter()
+                    .map(|t| t.caught_assertions.len())
+                    .sum())
+            };
+            let java = |catch: &str| {
+                format!("class ATest {{ @Test void t() {{ try {{ assertEquals(4, add(2, 2)); }} {catch} }} }}")
+            };
+            let kotlin = |body: &str| format!("class ATest {{\n @Test\n fun t() {{\n{body}\n }}\n}}\n");
+            let csharp = |body: &str| format!("public class ATests {{ [Fact] public void T() {{ {body} }} }}");
+            let rust = |after: &str| {
+                format!("#[test] fn t() {{ let r = std::panic::catch_unwind(|| assert_eq!(1, 2)); {after} }}")
+            };
+            Ok(caught("ATest.java", &java("catch (AssertionError e) { }"))? == 1
+                && caught("ATest.java", &java("catch (Exception e) { }"))? == 0
+                && caught("ATest.java", &java("catch (java.io.IOException myError) { }"))? == 0
+                && caught("ATest.java", &java("catch (CheckFailure e) { }"))? == 1
+                && caught(
+                    "ATest.java",
+                    "class ATest { @Test void t() { try (AutoCloseable r = open()) { assertEquals(4, add(2, 2)); } catch (AssertionError e) { } } }",
+                )? == 1
+                && caught(
+                    "ATest.kt",
+                    &kotlin("  try {\n   assertEquals(4, add(2, 2))\n  } catch (e: AssertionError) {\n  }"),
+                )? == 1
+                && caught(
+                    "ATest.kt",
+                    &kotlin("  try {\n   assertEquals(4, add(2, 2))\n  } catch (e: AssertionError) {\n   throw e\n  }"),
+                )? == 0
+                && caught("ATest.kt", &kotlin("  runCatching {\n   assertEquals(4, add(2, 2))\n  }"))? == 1
+                && caught(
+                    "ATest.kt",
+                    &kotlin("  runCatching {\n   assertEquals(4, add(2, 2))\n  }.getOrThrow()"),
+                )? == 0
+                && caught(
+                    "ATests.cs",
+                    &csharp("try { Assert.Equal(4, Add(2, 2)); } catch (IOException) { }"),
+                )? == 0
+                && caught(
+                    "ATests.cs",
+                    &csharp("try { Console.WriteLine(\"Assert.Equal done\"); } catch (Exception) { }"),
+                )? == 0
+                && caught("ATests.cs", &csharp("try { Assert.Equal(4, Add(2, 2)); } catch { }"))? == 1
+                && caught("t.rs", &rust("assert!(matches!(r, Err(_)));"))? == 0
+                && caught("t.rs", &rust("if let Err(e) = r { std::panic::resume_unwind(e); }"))? == 0
+                && caught("t.rs", &rust("/* r.is_err() is not looked at */"))? == 1
+                && caught(
+                    "test_x.py",
+                    "def test_x():\n    try:\n        assert f()\n    except (\n        ValueError,\n        AssertionError,\n    ):\n        pass\n",
+                )? == 1
+                && caught(
+                    "test_x.py",
+                    "def test_x():\n    with contextlib.suppress(AssertionError):\n        assert f()\n",
+                )? == 1
+                && caught(
+                    "a.test.js",
+                    "test('a', (done) => {\n  try {\n    expect(1).toBe(2);\n  } catch (e) {\n    done(e);\n  }\n});\n",
+                )? == 0
+                && caught(
+                    "a.test.js",
+                    "test('a', () => {\n  return load().then((v) => expect(v).toBe(4)).catch(() => {});\n});\n",
+                )? == 1)
+        },
+    ),
     ("ast: assert inside a comment is not an assertion", || {
         let f = analyze(
             "#[test] fn t() { // assert_eq!(1, 2);\n }",
@@ -340,6 +415,22 @@ const CASES: &[Case] = &[
                 && found[0].gate == "ignored-tests"
                 && found[0].key() == "ci_skip_severity"
                 && diff_configs(&base_warning, &stricter)?.is_empty())
+        },
+    ),
+    (
+        "integrity: a command key replacing its preset's default is a weakening, the default written down is not",
+        || {
+            let mut base = DisciplineConfig::default_for_repo("t");
+            base.gates.command.preset = Some("cargo-mutants".to_string());
+            let mut weaker = base.clone();
+            weaker.gates.command.zero_items_pattern = Some("never printed".to_string());
+            let mut same = base.clone();
+            same.gates.command.zero_items_pattern = Some("0 mutants tested".to_string());
+            let found = diff_configs(&base, &weaker)?;
+            Ok(found.len() == 1
+                && found[0].gate == "command"
+                && found[0].key() == "zero_items_pattern"
+                && diff_configs(&base, &same)?.is_empty())
         },
     ),
     (
@@ -3397,6 +3488,58 @@ command = "cargo test"
                     .remediation
                     .as_deref()
                     .is_some_and(|r| r.contains("allow-ignore: ci_test <reason>")))
+        },
+    ),
+    (
+        "ignored-tests: a CI read through a constant or helper of the file is a CI skip, a skip outside CI is not",
+        || {
+            use crate::ast::default_registry;
+            use crate::config::{IgnoredTestsGate, Severity};
+            use crate::guards::agent_diff::{evaluate_ignored_tests, Located};
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let severity_of = |path: &str, src: &str| -> anyhow::Result<Option<Severity>> {
+                let pack = reg
+                    .find_pack(path)
+                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
+                let tests = pack.extract(path, src, &v)?.tests;
+                let test = tests
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("no test in {path}"))?;
+                let added = [Located {
+                    path,
+                    file_survives: true,
+                    test,
+                }];
+                let out =
+                    evaluate_ignored_tests(&[], &added, &IgnoredTestsGate::default(), &[], false)?;
+                Ok(out.violations.first().map(|v| v.severity))
+            };
+            let through_constant = severity_of(
+                "test_q.py",
+                "import os\nimport pytest\n\nIN_CI = os.environ.get(\"CI\")\n\ndef test_q():\n    if IN_CI:\n        pytest.skip()\n    assert 1 + 1 == 2\n",
+            )?;
+            let through_helper = severity_of(
+                "p_test.go",
+                "package p\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc isCI() bool {\n\treturn os.Getenv(\"CI\") != \"\"\n}\n\nfunc TestA(t *testing.T) {\n\tif isCI() {\n\t\tt.Skip()\n\t}\n}\n",
+            )?;
+            let outside_ci = severity_of(
+                "p_test.go",
+                "package p\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestA(t *testing.T) {\n\tif os.Getenv(\"CI\") == \"\" {\n\t\tt.Skip()\n\t}\n}\n",
+            )?;
+            let cfg_outside_ci = severity_of(
+                "tests/q.rs",
+                "#[cfg_attr(not(ci), ignore)]\n#[test]\nfn adds() {\n    assert_eq!(1 + 1, 2);\n}\n",
+            )?;
+            let run_if = severity_of(
+                "a.test.js",
+                "test.runIf(!process.env.CI)('adds', () => {\n  expect(1 + 1).toBe(2);\n});\n",
+            )?;
+            Ok(through_constant == Some(Severity::Error)
+                && through_helper == Some(Severity::Error)
+                && run_if == Some(Severity::Error)
+                && outside_ci == Some(Severity::Note)
+                && cfg_outside_ci == Some(Severity::Note))
         },
     ),
     (
