@@ -1280,6 +1280,7 @@
       "test-floor/required-suite-missing",
       "test-floor/test-count-below-floor",
       "test-floor/test-dropped-from-suite",
+      "test-floor/untrusted-test-command",
       "time-estimates/time-estimate",
       "toolchain-config/toolchain-config-change-not-analysed",
       "toolchain-config/toolchain-config-deleted",
