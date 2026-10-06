@@ -37,7 +37,7 @@ fn a_branch_leased_in_one_worktree_is_refused_to_another_until_stolen_or_release
     assert_eq!(take.code, 0, "{}{}", take.stdout, take.stderr);
     assert!(
         take.stdout
-            .contains("worktree `main` holds work, feat/stack"),
+            .contains("worktree `main` holds `work`, `feat/stack`"),
         "{}",
         take.stdout
     );
@@ -48,7 +48,7 @@ fn a_branch_leased_in_one_worktree_is_refused_to_another_until_stolen_or_release
     assert!(
         check
             .stderr
-            .contains("`feat/stack` is leased by worktree `main` (claude-code session s1"),
+            .contains("`feat/stack` is leased by worktree `main` (`claude-code` session `s1`"),
         "{}",
         check.stderr
     );
@@ -240,7 +240,7 @@ fn the_ref_guard_refuses_moving_a_branch_another_worktree_leased() {
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(!out.status.success(), "{args:?} was allowed: {err}");
         assert!(
-            err.contains("`feat/stack` is leased by worktree `main` (claude-code session s1"),
+            err.contains("`feat/stack` is leased by worktree `main` (`claude-code` session `s1`"),
             "{args:?}: {err}"
         );
     }

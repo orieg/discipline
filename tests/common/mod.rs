@@ -511,7 +511,8 @@ fn pulls_route_of(path: &str) -> Option<String> {
 /// commit both when no merged pull request carries it and when the forge does not have
 /// the commit, so the binary then asks for the commit itself. A test that serves a
 /// commit's pull request lookup is about a commit the forge has: its commit endpoint
-/// answers 200 unless the test serves that too (a 404 there is "not on the forge").
+/// answers 200 with a body that names the commit (`sha` and `id`) unless the test serves
+/// that too (a 404 there is "not on the forge").
 pub struct FakeForge {
     addr: std::net::SocketAddr,
     routes: Routes,
@@ -585,7 +586,12 @@ impl FakeForge {
                         None if pulls_route_of(&path)
                             .is_some_and(|pulls| routes.contains_key(&pulls)) =>
                         {
-                            (200, Vec::new(), "{}".to_string())
+                            let sha = path.rsplit('/').next().unwrap_or_default();
+                            (
+                                200,
+                                Vec::new(),
+                                serde_json::json!({"sha": sha, "id": sha}).to_string(),
+                            )
                         }
                         None => (
                             403,
