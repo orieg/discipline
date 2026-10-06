@@ -449,19 +449,28 @@ fn pinned_a_rename_git_does_not_detect_is_an_added_file() {
     );
 }
 
-/// The file-name rules have no word boundary: these production-looking names
-/// are whole-file test code. Changing the rule changes what every gate that
-/// reads test scope reports, so it is left for a decision.
+/// A file-name rule matches at a word boundary (#598): a name that only starts or
+/// ends with the letters of a test name is production code, and a name with a test
+/// word at a boundary is whole-file test code whatever the file holds.
 #[test]
-fn pinned_file_names_that_only_start_or_end_like_a_test_name_are_test_code() {
+fn pinned_a_test_word_at_a_boundary_is_test_code_and_a_near_miss_name_is_not() {
     let (py_h, java_h) = (py_head(), java_head());
-    for (path, src) in [
-        ("src/main/java/TestimonialController.java", java_h.as_str()),
-        ("src/main/java/Latest.java", java_h.as_str()),
-        ("app/test_runner.py", py_h.as_str()),
-        ("src/TestDataBuilder.cs", CS_HEAD),
+    for (path, src, test_code) in [
+        (
+            "src/main/java/TestimonialController.java",
+            java_h.as_str(),
+            false,
+        ),
+        ("src/main/java/Latest.java", java_h.as_str(), false),
+        ("app/test_runner.py", py_h.as_str(), true),
+        ("src/TestDataBuilder.cs", CS_HEAD, true),
     ] {
-        assert_test_code(path, &added((path, src), None));
+        let run = added((path, src), None);
+        if test_code {
+            assert_test_code(path, &run);
+        } else {
+            assert_reported_as_production(path, &run, false);
+        }
     }
     let run = added(("src/main/java/Other.java", &java_h), None);
     assert_reported_as_production("added Other.java", &run, false);

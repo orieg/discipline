@@ -519,53 +519,158 @@ pub fn is_test_file(path: &str, own: Option<fn(&str) -> bool>) -> bool {
     test_path(path) || own.is_some_and(|is_own| is_own(path))
 }
 
-/// A path under a test directory or with a test suffix. Cargo's `benches/` and
+/// A path under a test directory or with a test file name. Cargo's `benches/` and
 /// `examples/` are compiled as their own crates and are not shipped code.
 pub fn test_path(path: &str) -> bool {
-    let p = path.to_ascii_lowercase();
-    test_support(&p)
-        || p.contains("/benches/")
-        || p.contains("/examples/")
-        || p.starts_with("benches/")
-        || p.starts_with("examples/")
+    test_support_path(path) || has_dir(path, "benches", false) || has_dir(path, "examples", false)
 }
 
 /// A path whose functions are test code that tests call: [`test_path`] without Cargo's
 /// `benches/` and `examples/`, which no test can call into. `assertion-reduction` tracks
 /// the assertion helpers of these files.
+///
+/// A directory rule names one whole component of the path at any depth; a file-name
+/// rule matches at a word boundary of the file name ([`ends_with_word`]), so `Latest.java`
+/// and `Contests.cs` are not test files because of their last letters.
 pub fn test_support_path(path: &str) -> bool {
-    test_support(&path.to_ascii_lowercase())
-}
-
-fn test_support(p: &str) -> bool {
-    p.contains("/tests/")
-        || p.contains("/test/")
-        || p.starts_with("tests/")
-        || p.starts_with("test/")
-        || p.contains("/__tests__/")
-        || p.starts_with("testutil/")
-        || p.contains("/testutil/")
-        || p.starts_with("testutils/")
-        || p.contains("/testutils/")
-        || p == "conftest.py"
+    if ["tests", "test", "__tests__", "testutil", "testutils"]
+        .iter()
+        .any(|dir| has_dir(path, dir, false))
+    {
+        return true;
+    }
+    let lower = path.to_ascii_lowercase();
+    let p = lower.as_str();
+    let name = file_name(path);
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((stem, ext)) => (stem, ext.to_ascii_lowercase()),
+        None => (name, String::new()),
+    };
+    p == "conftest.py"
         || p.ends_with("/conftest.py")
         || p.ends_with("_test.go")
         || names_file(p, "testutil.go")
         || names_file(p, "testutils.go")
         || p.ends_with("_test.py")
-        || p.ends_with(".test.ts")
-        || p.ends_with(".test.js")
-        || p.ends_with(".spec.ts")
-        || p.ends_with(".spec.js")
+        || (JS_EXTENSIONS.contains(&ext.as_str())
+            && [".test", ".spec"]
+                .iter()
+                .any(|word| stem.to_ascii_lowercase().ends_with(word)))
         || names_file(p, "test-utils.ts")
         || names_file(p, "test-utils.js")
         || names_file(p, "test_utils.ts")
         || names_file(p, "test_utils.js")
-        || p.ends_with("test.java")
-        || p.ends_with("tests.cs")
+        || (ext == "java" && ends_with_word(stem, "Test"))
+        || (ext == "cs" && ends_with_word(stem, "Tests"))
         || p.ends_with("_spec.rb")
         || p.ends_with("_test.rb")
-        || p.ends_with("test.php")
+        || (ext == "php" && ends_with_word(stem, "Test"))
+}
+
+/// The extensions a `.test.` or `.spec.` file name is read before: every module and
+/// JSX form of JavaScript and TypeScript.
+const JS_EXTENSIONS: &[&str] = &["js", "ts", "mjs", "cjs", "mts", "cts", "jsx", "tsx"];
+
+/// The last component of `path`.
+pub fn file_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// Whether a directory of `path` is named `dir`: one whole component at any depth, the
+/// first included, and never the file name itself (`__tests__/a.js` and
+/// `web/__tests__/a.js`; not `my__tests__/a.js`, not a file named `__tests__`).
+/// `exact_case` compares the name as written; otherwise ASCII case is ignored.
+pub fn has_dir(path: &str, dir: &str, exact_case: bool) -> bool {
+    let mut components = path.split('/');
+    components.next_back();
+    components.any(|c| {
+        if exact_case {
+            c == dir
+        } else {
+            c.eq_ignore_ascii_case(dir)
+        }
+    })
+}
+
+/// Whether `stem` (a file name without its extension) ends with the test word `word` at
+/// a word boundary. `word` is written as a class name spells it (`Test`, `Tests`,
+/// `TestCase`, `Spec`, `IT`).
+///
+/// A boundary is the start of the name, a separator (any character that is neither a
+/// letter nor a digit: `_`, `-`, `.`), or a change of case that starts a new word:
+/// - a capitalised word (`Test`) spelled with its capital starts a word wherever it
+///   stands (`RepoTest`, `HTTPTest`, `V2Test`);
+/// - a word in capitals (`IT`) starts one only after a lower-case letter or a digit
+///   (`RepoIT`, not `AUDIT`);
+/// - in any other spelling (`test`, `TEST`) the word needs the start of the name or a
+///   separator before it (`repo_test`, not `Latest`, `repotest` or `LATEST`).
+pub fn ends_with_word(stem: &str, word: &str) -> bool {
+    if stem.len() < word.len() || !stem.is_char_boundary(stem.len() - word.len()) {
+        return false;
+    }
+    let (before, tail) = stem.split_at(stem.len() - word.len());
+    let Some(prev) = before.chars().next_back() else {
+        return tail.eq_ignore_ascii_case(word);
+    };
+    if !prev.is_alphanumeric() {
+        return tail.eq_ignore_ascii_case(word);
+    }
+    if tail != word {
+        return false;
+    }
+    let capitalised = word.chars().nth(1).is_some_and(char::is_lowercase);
+    capitalised || prev.is_lowercase() || prev.is_numeric()
+}
+
+/// Whether `stem` starts with the test word `Test`, `Tests` or `Testing` and a word
+/// ends there: the next character is an upper-case letter, a digit, a separator, or
+/// the end of the stem (`TestRepo`, `Test1`, `Test_x`, `TestingSupport`; not
+/// `Testimonial`, `Tester`, `Testable`). This is the boundary-checked form of the
+/// `Test*` include of Maven Surefire.
+pub fn starts_with_test_word(stem: &str) -> bool {
+    ["Test", "Tests", "Testing"].iter().any(|word| {
+        stem.strip_prefix(word).is_some_and(|rest| {
+            rest.chars()
+                .next()
+                .is_none_or(|c| c.is_uppercase() || c.is_numeric() || !c.is_alphanumeric())
+        })
+    })
+}
+
+/// The stems a test-named file would have without its test word: the name of the code
+/// it tests, as the boundary rules split it. `test_loader.py`, `loader_test.py` and
+/// `loader.test.js` give `loader`; `RepoTest.java`, `TestRepo.java` and `RepoSpec.kt`
+/// give `Repo`. Empty when the name holds no test word at a boundary (`conftest.py`).
+pub fn stems_without_test_word(name: &str) -> Vec<String> {
+    const SUFFIXES: &[&str] = &["TestCase", "Tests", "Test", "Spec", "Suite", "Smoke", "IT"];
+    const PREFIXES: &[&str] = &["Testing", "Tests", "Test", "Smoke"];
+    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+    let separator = |c: char| !c.is_alphanumeric();
+    let mut found = Vec::new();
+    for word in SUFFIXES {
+        if ends_with_word(stem, word) {
+            found.push(stem[..stem.len() - word.len()].trim_end_matches(separator));
+        }
+    }
+    for word in PREFIXES {
+        let Some((head, rest)) = stem.split_at_checked(word.len()) else {
+            continue;
+        };
+        let next = rest.chars().next();
+        let at_separator = head.eq_ignore_ascii_case(word) && next.is_some_and(separator);
+        let at_capital = head == *word && next.is_some_and(|c| c.is_uppercase() || c.is_numeric());
+        if at_separator || at_capital {
+            found.push(rest.trim_start_matches(separator));
+        }
+    }
+    found.retain(|s| !s.is_empty());
+    found.into_iter().map(str::to_string).collect()
+}
+
+/// Whether the toolchain itself keeps the file out of a production build, whatever it
+/// holds: Go compiles a `_test.go` file into test binaries only.
+pub fn toolchain_test_file(path: &str) -> bool {
+    path.to_ascii_lowercase().ends_with("_test.go")
 }
 
 /// Whether the file of `p` is named `name`, alone or after a separator
@@ -606,6 +711,129 @@ mod tests {
         ] {
             assert!(!test_path(path), "{path}");
         }
+    }
+
+    /// #598: a test word ends a name only at a word boundary.
+    #[test]
+    fn a_test_word_ends_a_name_only_at_a_word_boundary() {
+        for (stem, word) in [
+            ("RepoTest", "Test"),
+            ("Test", "Test"),
+            ("HTTPTest", "Test"),
+            ("V2Test", "Test"),
+            ("repo_test", "Test"),
+            ("repo-TEST", "Test"),
+            ("Repo.Tests", "Tests"),
+            ("RepoIT", "IT"),
+            ("V2IT", "IT"),
+            ("Repo_it", "IT"),
+            ("IT", "IT"),
+        ] {
+            assert!(ends_with_word(stem, word), "{stem} / {word}");
+        }
+        for (stem, word) in [
+            ("Latest", "Test"),
+            ("repotest", "Test"),
+            ("LATEST", "Test"),
+            ("Contests", "Tests"),
+            ("AUDIT", "IT"),
+            ("WebKIT", "IT"),
+            ("Audit", "IT"),
+            ("es", "Test"),
+            ("\u{e9}est", "Test"),
+        ] {
+            assert!(!ends_with_word(stem, word), "{stem} / {word}");
+        }
+    }
+
+    /// #598: `Test`, `Tests` and `Testing` start a name only when a word ends there.
+    #[test]
+    fn a_test_word_starts_a_name_only_when_a_word_ends_there() {
+        for stem in [
+            "Test",
+            "TestRepo",
+            "Test1",
+            "Test_x",
+            "TestsBase",
+            "Testing",
+            "TestingUtils",
+            "TestDataBuilder",
+        ] {
+            assert!(starts_with_test_word(stem), "{stem}");
+        }
+        for stem in [
+            "Testimonial",
+            "TestimonialController",
+            "Tester",
+            "Testable",
+            "Testsuite",
+            "Testings",
+            "test_x",
+            "ATest",
+        ] {
+            assert!(!starts_with_test_word(stem), "{stem}");
+        }
+    }
+
+    /// #598: the stem a test-named file would have without its test word.
+    #[test]
+    fn the_test_word_is_removed_from_a_stem_at_its_boundary() {
+        for (name, stem) in [
+            ("test_loader.py", "loader"),
+            ("loader_test.py", "loader"),
+            ("loader.test.js", "loader"),
+            ("util.spec.mjs", "util"),
+            ("repo_test.go", "repo"),
+            ("RepoTest.java", "Repo"),
+            ("TestRepo.java", "Repo"),
+            ("RepoTests.cs", "Repo"),
+            ("RepoTestCase.java", "Repo"),
+            ("RepoSpec.kt", "Repo"),
+            ("RepoIT.kt", "Repo"),
+            ("repo_spec.rb", "repo"),
+            ("smoke_io.c", "io"),
+        ] {
+            assert!(
+                stems_without_test_word(name).contains(&stem.to_string()),
+                "{name}: {:?}",
+                stems_without_test_word(name)
+            );
+        }
+        for name in [
+            "conftest.py",
+            "Latest.java",
+            "Testimonial.java",
+            "Test.java",
+            "loader.py",
+        ] {
+            assert!(stems_without_test_word(name).is_empty(), "{name}");
+        }
+    }
+
+    /// #598: a directory rule names a whole component at any depth, the first included.
+    #[test]
+    fn a_directory_rule_names_a_whole_component_at_any_depth() {
+        assert!(has_dir("__tests__/a.js", "__tests__", false));
+        assert!(has_dir("web/__TESTS__/deep/a.js", "__tests__", false));
+        assert!(!has_dir("web/__TESTS__/a.js", "__tests__", true));
+        assert!(!has_dir("my__tests__/a.js", "__tests__", false));
+        assert!(!has_dir("web/__tests__", "__tests__", false));
+        assert!(!has_dir("__tests__", "__tests__", false));
+        assert!(test_path("__tests__/a.js"));
+        assert!(test_path("crates/a/benches/x.rs"));
+        assert!(!test_path("src/mybenches/x.rs"));
+    }
+
+    /// #598: `.test.` and `.spec.` before every JavaScript and TypeScript extension.
+    #[test]
+    fn test_and_spec_suffixes_cover_the_module_and_jsx_extensions() {
+        for ext in ["js", "ts", "mjs", "cjs", "mts", "cts", "jsx", "tsx"] {
+            assert!(test_path(&format!("web/util.test.{ext}")), "{ext}");
+            assert!(test_path(&format!("web/util.spec.{ext}")), "{ext}");
+            assert!(!test_path(&format!("web/utiltest.{ext}")), "{ext}");
+        }
+        assert!(!test_path("web/util.test.json"));
+        assert!(!test_path("web/util.test.py"));
     }
 
     /// #562: `examples/` and `benches/` are test paths, but not test support: no test

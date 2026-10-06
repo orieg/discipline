@@ -208,7 +208,7 @@ pub fn base_anchored_classification(
             } else {
                 file.old_path.clone()
             },
-            reclassified: !base_by_convention && head_by_convention,
+            reclassified: !base_is_test && head_by_convention,
             language_changed_note: None,
             declared_scope_note: (!base_is_test && !head_by_convention && declared(&file.path))
                 .then(|| {
@@ -244,6 +244,84 @@ pub fn base_anchored_classification(
         )),
         declared_scope_note: None,
     }
+}
+
+/// A production file the change deletes and adds again under a test name: for an added
+/// file whose path is test scope by its file NAME only (outside every test directory,
+/// not under `[tests] paths`), the deleted file it replaces and the path the pack reads
+/// the added source under as production code. `None` for every other file.
+///
+/// The deleted file is one of the same language pack that was production code on the
+/// base side and whose stem is the added file's stem without its test word
+/// ([`crate::ast::functions::stems_without_test_word`]): `loader.py` and
+/// `test_loader.py`, `Repo.java` and `RepoTest.java`, `util.js` and `util.spec.mjs`.
+/// The directory may differ.
+///
+/// `error-swallowing` and `stub-bodies` judge the added file by the returned path when
+/// it holds no test at all: git pairs a rename only when enough content is unchanged,
+/// so below that threshold there is no base path to anchor to. A new test-named file
+/// with nothing deleted beside it is a support file and is left alone, and so is a
+/// file Go compiles into test binaries only
+/// ([`crate::ast::functions::toolchain_test_file`]).
+pub struct ReplacedProduction {
+    /// The deleted production file.
+    pub deleted: String,
+    /// Path to pass to `pack.extract` so that the source is read as production code.
+    pub classify_path: String,
+}
+
+pub fn replaced_production_file(
+    file: &crate::gitctx::ChangedFile,
+    changed: &[crate::gitctx::ChangedFile],
+    pack: &dyn crate::ast::LanguagePack,
+    registry: &crate::ast::LanguageRegistry,
+    declared_test_paths: &[String],
+) -> Option<ReplacedProduction> {
+    use crate::ast::functions::{file_name, stems_without_test_word};
+    let declared =
+        |path: &str| crate::ast::functions::declared_test_path(path, declared_test_paths);
+    if file.kind != crate::gitctx::ChangeKind::Added
+        || !pack.is_test_path(&file.path)
+        || declared(&file.path)
+        || crate::ast::functions::toolchain_test_file(&file.path)
+    {
+        return None;
+    }
+    let name = file_name(&file.path);
+    let directory = &file.path[..file.path.len() - name.len()];
+    let neutral = format!("{directory}renamed.{}", crate::ast::extension(&file.path)?);
+    let same_pack = |path: &str| {
+        registry
+            .find_pack(path)
+            .is_some_and(|p| p.id() == pack.id())
+    };
+    if !same_pack(&neutral) || pack.is_test_path(&neutral) || declared(&neutral) {
+        return None;
+    }
+    let stems = stems_without_test_word(name);
+    let deleted = changed.iter().find(|other| {
+        let other_name = file_name(&other.path);
+        let other_stem = other_name
+            .rsplit_once('.')
+            .map_or(other_name, |(stem, _)| stem);
+        other.kind == crate::gitctx::ChangeKind::Deleted
+            && same_pack(&other.path)
+            && !pack.is_test_path(&other.path)
+            && !declared(&other.path)
+            && stems.iter().any(|stem| stem == other_stem)
+    })?;
+    Some(ReplacedProduction {
+        deleted: deleted.path.clone(),
+        classify_path: neutral,
+    })
+}
+
+/// The gate note for a file [`replaced_production_file`] names, once a gate judged it as
+/// production code.
+pub fn replaced_production_note(path: &str, deleted: &str) -> String {
+    format!(
+        "`{path}` is added under a test file name and holds no test, and the change deletes the production file `{deleted}` of the same name; it is judged as production code"
+    )
 }
 
 impl GateOutcome {
@@ -711,6 +789,8 @@ pub fn run_checks(
     ];
     let whole_tree = ctx.git.is_whole_tree();
 
+    // Misses recorded by an earlier run on this thread are not this run's.
+    crate::tokens::forget_subject_misses();
     let mut outcomes = Vec::new();
     let mut ast_outcomes = None;
     for gate in selected {
@@ -943,6 +1023,40 @@ pub fn run_checks(
                 }
             } else if o.gate == target_gate {
                 o.notes.push(note.clone());
+            }
+        }
+    }
+
+    // A directive that names another subject and only mentions this one further on does
+    // not cover it (`tokens::find_override`). The gate that still reports a finding says
+    // which subject the directive was read with, unless another directive lifted the one
+    // it mentions.
+    // A gate may try a path and then its file name: one note for the two.
+    let mut noted: Vec<crate::tokens::SubjectMiss> = Vec::new();
+    for miss in crate::tokens::take_subject_misses() {
+        let same_finding = noted.iter().any(|n| {
+            n.gate == miss.gate
+                && n.directive == miss.directive
+                && n.source == miss.source
+                && n.subject.ends_with(&format!("/{}", miss.subject))
+        });
+        if same_finding {
+            continue;
+        }
+        if let Some(o) = outcomes.iter_mut().find(|o| o.gate == miss.gate) {
+            let lifted = o.overrides.iter().any(|ov| ov.subject == miss.subject);
+            // A gate tries several subjects for one finding (a test's name, then its
+            // file): the note is for a finding the gate still reports, one that names
+            // the subject.
+            let reported = o.violations.iter().any(|v| {
+                v.message.contains(&miss.subject)
+                    || v.file.as_deref().is_some_and(|f| {
+                        f == miss.subject || f.ends_with(&format!("/{}", miss.subject))
+                    })
+            });
+            if reported && !lifted {
+                o.notes.push(miss.note());
+                noted.push(miss);
             }
         }
     }

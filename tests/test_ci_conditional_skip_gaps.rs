@@ -1169,21 +1169,22 @@ fn javascript_run_if_outside_ci_is_a_ci_skip() {
     ]);
 }
 
-/// Control: a run condition that holds in CI, or is on no CI variable, is not reported.
+/// Control: a run condition that holds in CI, or is on no CI variable, is a conditional
+/// skip that no CI variable decides: a note.
 #[test]
-fn javascript_run_if_that_runs_in_ci_is_not_reported() {
+fn javascript_run_if_that_runs_in_ci_is_a_note() {
     check_cases(vec![
         case(
             "test.runIf(process.env.CI)",
             JS,
             js_with("", "test.runIf(process.env.CI)", "() =>", ""),
-            Want::Nothing,
+            Want::Note,
         ),
         case(
             "test.runIf(platform)",
             JS,
             js_with("", "test.runIf(process.platform === 'linux')", "() =>", ""),
-            Want::Nothing,
+            Want::Note,
         ),
     ]);
 }
@@ -1216,10 +1217,10 @@ fn mocha_this_skip_under_a_ci_condition_is_a_ci_skip() {
     ]);
 }
 
-/// Control: `this.skip()` outside CI only, or under no CI variable, is not reported, as
-/// before.
+/// Control: `this.skip()` outside CI only, or under no CI variable, is a conditional skip
+/// that no CI variable decides: a note.
 #[test]
-fn mocha_this_skip_under_another_condition_is_unchanged() {
+fn mocha_this_skip_under_another_condition_is_a_note() {
     check_cases(vec![
         case(
             "outside CI",
@@ -1230,7 +1231,7 @@ fn mocha_this_skip_under_another_condition_is_unchanged() {
                 "function ()",
                 "  if (!process.env.CI) {\n    this.skip();\n  }\n",
             ),
-            Want::Nothing,
+            Want::Note,
         ),
         case(
             "another variable",
@@ -1241,7 +1242,7 @@ fn mocha_this_skip_under_another_condition_is_unchanged() {
                 "function ()",
                 "  if (process.env.SLOW) {\n    this.skip();\n  }\n",
             ),
-            Want::Nothing,
+            Want::Note,
         ),
     ]);
 }
@@ -1285,12 +1286,12 @@ fn a_new_test_with_an_indirect_ci_skip_is_reported() {
     assert_eq!(run.code, 0);
 }
 
-// --- 8. left as they are: a decision on skip-if decorators is pending ----------------
+// --- 8. skip-if decorators (#597) ------------------------------------------------------
 
-/// A `skipif`-style decorator or modifier is read as an unconditional skip whatever its
-/// condition. Pinned so this change is seen not to move it.
+/// A `skipif`-style decorator or modifier is a conditional skip, read by its condition
+/// the way an `if` around a skip is.
 #[test]
-fn skip_if_decorators_are_read_as_before() {
+fn skip_if_decorators_are_conditional_skips_read_by_their_condition() {
     let decorated = |cond: &str| {
         format!(
             "import os\nimport sys\nimport pytest\n\n@pytest.mark.skipif({cond}, reason=\"x\")\ndef test_query():\n    assert 1 + 1 == 2\n"
@@ -1301,37 +1302,37 @@ fn skip_if_decorators_are_read_as_before() {
             "python skipif(CI)",
             PY,
             decorated("os.environ.get(\"CI\")"),
-            Want::Unconditional,
+            Want::CiSkip,
         ),
         case(
             "python skipif(not CI)",
             PY,
             decorated("not os.environ.get(\"CI\")"),
-            Want::Unconditional,
+            Want::Note,
         ),
         case(
             "python skipif(platform)",
             PY,
             decorated("sys.platform == \"win32\""),
-            Want::Unconditional,
+            Want::Note,
         ),
         case(
             "javascript skipIf(CI)",
             JS,
             js_with("", "test.skipIf(process.env.CI)", "() =>", ""),
-            Want::Unconditional,
+            Want::CiSkip,
         ),
         case(
             "javascript skipIf(!CI)",
             JS,
             js_with("", "test.skipIf(!process.env.CI)", "() =>", ""),
-            Want::Unconditional,
+            Want::Note,
         ),
         case(
             "javascript skipIf(platform)",
             JS,
             js_with("", "test.skipIf(process.platform === 'win32')", "() =>", ""),
-            Want::Unconditional,
+            Want::Note,
         ),
     ]);
 }

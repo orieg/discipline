@@ -13,6 +13,7 @@
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
+use super::ci_condition::{CiVerdict, Lang, SkipCondition};
 use super::functions::{self, FunctionSpec};
 use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
@@ -64,6 +65,7 @@ impl LanguagePack for KotlinPack {
             },
             helpers: std::collections::HashMap::new(),
             test_calls: Vec::new(),
+            class_skips: Vec::new(),
         };
 
         extractor.collect_escape_hatches(root);
@@ -142,15 +144,12 @@ pub fn is_kotlin_test_path(path: &str) -> bool {
         .strip_suffix(".kt")
         .or_else(|| filename.strip_suffix(".kts"))
         .unwrap_or(filename);
-    stem.ends_with("Test")
-        || stem.ends_with("Tests")
-        || stem.ends_with("Spec")
-        || stem.ends_with("IT")
-        || path.starts_with("test/")
-        || path.contains("/test/")
-        || path.starts_with("tests/")
-        || path.contains("/tests/")
-        || path.contains("/androidTest/")
+    ["Test", "Tests", "Spec", "IT"]
+        .iter()
+        .any(|word| functions::ends_with_word(stem, word))
+        || ["test", "tests", "androidTest"]
+            .iter()
+            .any(|dir| functions::has_dir(path, dir, true))
 }
 
 /// Test-defining calls of the Kotest spec styles, and the containers that nest them.
@@ -200,6 +199,9 @@ struct KotlinExtractor<'a> {
     facts: ParsedFileFacts,
     helpers: std::collections::HashMap<String, super::HelperFacts>,
     test_calls: Vec<Vec<String>>,
+    /// Conditional skips of the enclosing classes (`@DisabledOnOs(..)` on a class),
+    /// outermost first: the annotation as reported and what a CI variable decides.
+    class_skips: Vec<Vec<(String, CiVerdict)>>,
 }
 
 impl<'a> KotlinExtractor<'a> {
@@ -240,6 +242,74 @@ impl<'a> KotlinExtractor<'a> {
         out
     }
 
+    /// JUnit 5 conditional annotations on a class or function
+    /// (`@DisabledIfEnvironmentVariable(named = "CI", ..)`, `@DisabledOnOs(..)`): whether
+    /// one always skips, and each conditional skip as the annotation and its verdict.
+    fn conditional_annotations(&self, node: Node) -> (bool, Vec<(String, CiVerdict)>) {
+        let mut always = false;
+        let mut conditional = Vec::new();
+        let mut cursor = node.walk();
+        let modifiers: Vec<Node> = node
+            .children(&mut cursor)
+            .filter(|c| c.kind() == "modifiers")
+            .collect();
+        for annotation in modifiers.iter().flat_map(|m| {
+            let mut inner = m.walk();
+            m.children(&mut inner)
+                .filter(|a| a.kind() == "annotation")
+                .collect::<Vec<Node>>()
+        }) {
+            let (mut named, mut matches) = (None, None);
+            let mut stack = vec![annotation];
+            while let Some(n) = stack.pop() {
+                if n.kind() == "value_argument" && n.named_child_count() == 2 {
+                    let key = n.named_child(0).map(|k| self.text(k));
+                    let value = n
+                        .named_child(1)
+                        .filter(|v| v.kind() == "string_literal")
+                        .map(|v| self.text(v).trim_matches('"'));
+                    match key {
+                        Some("named") => named = value,
+                        Some("matches") => matches = value,
+                        _ => {}
+                    }
+                    continue;
+                }
+                let mut inner = n.walk();
+                stack.extend(n.named_children(&mut inner));
+            }
+            let name = self.annotation_name(annotation);
+            match super::ci_condition::jvm_annotation(name, named, matches) {
+                Some(SkipCondition::Always) => always = true,
+                Some(SkipCondition::When(verdict)) => {
+                    conditional.push((self.text(annotation).trim().to_string(), verdict));
+                }
+                Some(SkipCondition::Never) | None => {}
+            }
+        }
+        (always, conditional)
+    }
+
+    /// JUnit assumptions among the statements of a test body (`assumeTrue(..)`,
+    /// `Assumptions.assumeFalse(..)`, `assumingThat(..) { .. }`), read by their condition.
+    fn record_assumptions(&self, body: Node, test: &mut TestFn) {
+        let mut cursor = body.walk();
+        let block = body
+            .named_children(&mut cursor)
+            .find(|c| c.kind() == "block")
+            .unwrap_or(body);
+        let mut statements = block.walk();
+        for statement in block.named_children(&mut statements) {
+            match super::ci_condition::jvm_assumption(Lang::Kotlin, statement, self.src) {
+                Some((_, SkipCondition::Always)) => test.ignored = true,
+                Some((text, SkipCondition::When(verdict))) => {
+                    test.record_conditional_skip(text, verdict);
+                }
+                Some((_, SkipCondition::Never)) | None => {}
+            }
+        }
+    }
+
     fn collect_escape_hatches(&mut self, node: Node) {
         if node.kind() == "annotation" {
             let name = self.annotation_name(node);
@@ -272,12 +342,15 @@ impl<'a> KotlinExtractor<'a> {
                     .child_by_field_name("name")
                     .map(|n| self.text(n).to_string())
                     .unwrap_or_else(|| "Anonymous".to_string());
+                let (always, conditional) = self.conditional_annotations(node);
                 let ignored = parent_ignored
+                    || always
                     || self
                         .annotations(node)
                         .iter()
                         .any(|(n, _)| matches!(*n, "Disabled" | "Ignore"));
                 class_stack.push(name);
+                self.class_skips.push(conditional);
                 // A Kotest spec: `class X : StringSpec({ ... })`.
                 let mut cursor = node.walk();
                 let children: Vec<Node> = node.children(&mut cursor).collect();
@@ -295,6 +368,7 @@ impl<'a> KotlinExtractor<'a> {
                         }
                     }
                 }
+                self.class_skips.pop();
                 class_stack.pop();
             }
             "function_declaration" => self.visit_function(node, class_stack, parent_ignored),
@@ -481,6 +555,17 @@ impl<'a> KotlinExtractor<'a> {
             if let Some(body) = Self::function_body(node) {
                 self.scan_node(body, &mut test_fn, &mut direct_calls);
                 super::dispatch_calls(body, self.src, &KOTLIN_DISPATCH, &mut direct_calls);
+            }
+            let (always, conditional) = self.conditional_annotations(node);
+            test_fn.ignored |= always;
+            if let Some(body) = Self::function_body(node) {
+                self.record_assumptions(body, &mut test_fn);
+            }
+            if !test_fn.ignored {
+                let inherited = self.class_skips.iter().flatten().cloned();
+                for (text, verdict) in inherited.chain(conditional) {
+                    test_fn.record_conditional_skip(text, verdict);
+                }
             }
             self.facts.tests.push(test_fn);
             self.test_calls.push(direct_calls);
@@ -1137,6 +1222,91 @@ mod tests {
         assert_eq!(
             cases_of("@ParameterizedTest\n    @CsvSource(value = ROWS)"),
             (None, true)
+        );
+    }
+}
+
+/// Conditional skips of JUnit: annotations and assumptions (#597). The sources are
+/// fixtures, kept out of the test bodies.
+#[cfg(test)]
+mod conditional_skip_tests {
+    use super::*;
+
+    const SUITE: &str = r#"
+@DisabledOnOs(OS.WINDOWS)
+class QTest {
+    val ci = System.getenv("CI")
+
+    @Test
+    @DisabledIfEnvironmentVariable(named = "CI", matches = "true")
+    fun annotated() { assertEquals(2, 1 + 1) }
+
+    @Test
+    fun inherits() { assertEquals(2, 1 + 1) }
+
+    @Test
+    fun assumed() {
+        assumeTrue(ci.isNullOrEmpty())
+        assertEquals(2, 1 + 1)
+    }
+
+    @Test
+    fun negatedReceiver() {
+        Assumptions.assumeTrue(!"true".equals(System.getenv("CI")))
+        assertEquals(2, 1 + 1)
+    }
+
+    @Test
+    fun runsOnlyInCi() {
+        assumeFalse(System.getenv("CI") == null)
+        assertEquals(2, 1 + 1)
+    }
+
+    @Test
+    fun withLambda() {
+        assumingThat(System.getenv("CI") == null) { assertEquals(2, 1 + 1) }
+    }
+
+    @Test
+    fun never() {
+        assumeTrue(false)
+        assertEquals(2, 1 + 1)
+    }
+}
+"#;
+
+    #[test]
+    fn conditional_annotations_and_assumptions_are_read_by_their_condition() {
+        let facts = KotlinPack
+            .extract(
+                "src/test/kotlin/QTest.kt",
+                SUITE,
+                &AssertVocabulary::default(),
+            )
+            .unwrap();
+        let read: Vec<(&str, bool, bool, bool)> = facts
+            .tests
+            .iter()
+            .map(|t| {
+                (
+                    t.name.as_str(),
+                    t.ignored,
+                    t.conditional_ignore.is_some(),
+                    t.is_ci_skip(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            read,
+            vec![
+                ("QTest.annotated", false, true, true),
+                ("QTest.inherits", false, true, false),
+                ("QTest.assumed", false, true, true),
+                ("QTest.negatedReceiver", false, true, true),
+                ("QTest.runsOnlyInCi", false, true, false),
+                ("QTest.withLambda", false, true, true),
+                ("QTest.never", true, false, false),
+            ]
         );
     }
 }
