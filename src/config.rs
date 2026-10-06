@@ -356,6 +356,18 @@ pub enum Severity {
     Note,
 }
 
+impl Severity {
+    /// This severity, held to at most a warning: an error becomes a warning, a warning
+    /// and a note stay as they are. For a finding a gate reports on a heuristic, or on
+    /// a file it could not analyse, which must not fail the run on its own.
+    pub fn capped_at_warning(self) -> Severity {
+        match self {
+            Severity::Error => Severity::Warning,
+            other => other,
+        }
+    }
+}
+
 impl std::fmt::Display for Severity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -2204,17 +2216,6 @@ pub struct Overrides {
     pub fail_on_overrides: Option<bool>,
 }
 
-impl Overrides {
-    pub fn is_empty(&self) -> bool {
-        self.config_override.is_none()
-            && self.enable.is_empty()
-            && self.disable.is_empty()
-            && self.hostname_denylist.is_empty()
-            && self.directive_sources.is_none()
-            && self.fail_on_overrides.is_none()
-    }
-}
-
 impl DisciplineConfig {
     pub fn default_for_repo(name: &str) -> Self {
         Self {
@@ -2519,19 +2520,6 @@ pub const SHORTER_IS_STRICTER: &[&str] = &[
     "extra_assert_macros",
     "sources",
     "allow_dependencies",
-];
-
-pub const LONGER_IS_STRICTER: &[&str] = &[
-    "hostname_denylist",
-    "citation_source_paths",
-    "extra_patterns",
-    "paths",
-    "include",
-    "forbid_output",
-    "deny_dependencies",
-    "manifests",
-    "corpus_dirs",
-    "fuzz_targets",
 ];
 
 fn is_reset_token(val: &Value) -> bool {

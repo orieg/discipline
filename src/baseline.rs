@@ -386,7 +386,6 @@ pub fn compute_violation_fingerprint(repo_root: &Path, v: &Violation) -> String 
 pub struct BaselineMatchResult {
     pub baselined_count: usize,
     pub stale_count: usize,
-    pub stale_by_gate: BTreeMap<String, usize>,
 }
 
 /// Match detected violations against the baseline using repository root path.
@@ -489,9 +488,7 @@ where
             .push(entry);
     }
 
-    let mut stale_by_gate: BTreeMap<String, usize> = BTreeMap::new();
     for (gate, entries) in &stale_entries_by_gate {
-        stale_by_gate.insert(gate.clone(), entries.len());
         if let Some(outcome) = outcomes.iter_mut().find(|o| o.gate == *gate) {
             if !outcome.enabled {
                 continue;
@@ -526,7 +523,6 @@ where
     BaselineMatchResult {
         baselined_count: total_baselined,
         stale_count,
-        stale_by_gate,
     }
 }
 

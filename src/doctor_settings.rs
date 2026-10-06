@@ -24,7 +24,9 @@
 //! reported by name only: the API never returns a value.
 
 use crate::doctor::{access_hint, Finding, Status};
-use crate::forge::{gitlab_project_id, read_all, Forge, ForgeApi, ForgeErrorKind, ForgeKind};
+use crate::forge::{
+    encode_segment, gitlab_project_id, read_all, Forge, ForgeApi, ForgeErrorKind, ForgeKind,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Finding ids this module reports, in report order.
@@ -720,19 +722,6 @@ pub fn webhooks_finding(kind: ForgeKind, hooks: &[serde_json::Value]) -> Finding
     }
 }
 
-/// Percent-encode a path segment (environment names may hold spaces).
-fn path_segment(s: &str) -> String {
-    s.bytes()
-        .map(|b| {
-            if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
-                (b as char).to_string()
-            } else {
-                format!("%{b:02X}")
-            }
-        })
-        .collect()
-}
-
 /// `environment-reviewers` on GitHub: a deployment environment that holds secrets but needs
 /// no reviewer lets any job bound to it read them once its branch rule allows (OWASP CI/CD
 /// Security Cheat Sheet: manual approval before production deploys). Information.
@@ -773,7 +762,7 @@ fn github_environment_reviewers(api: &dyn ForgeApi, forge: &Forge) -> Finding {
         match ask(
             api,
             forge,
-            &format!("repos/{r}/environments/{}/secrets", path_segment(name)),
+            &format!("repos/{r}/environments/{}/secrets", encode_segment(name)),
         ) {
             Answer::Ok(v) => {
                 let n = v.get("total_count").and_then(|t| t.as_u64()).unwrap_or(0);
@@ -1531,7 +1520,7 @@ fn gitlab_two_factor(api: &dyn ForgeApi, forge: &Forge, project: &serde_json::Va
     let full = ns.get("full_path").and_then(|p| p.as_str()).unwrap_or("");
     let top = full.split('/').next().unwrap_or(full);
     let need = |why: &str| gitlab_need(why, "the Owner role in the top-level group");
-    match ask(api, forge, &format!("groups/{}", path_segment(top))) {
+    match ask(api, forge, &format!("groups/{}", encode_segment(top))) {
         Answer::Ok(g) => match g
             .get("require_two_factor_authentication")
             .and_then(|v| v.as_bool())
@@ -2040,7 +2029,7 @@ mod tests {
             f.summary
         );
         assert_eq!(environment_reviewers_finding(3, &[]).status, Status::Pass);
-        assert_eq!(path_segment("prod eu/1"), "prod%20eu%2F1");
+        assert_eq!(encode_segment("prod eu/1"), "prod%20eu%2F1");
     }
 
     #[test]
