@@ -643,6 +643,8 @@ pub const SWIFT_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
     super::method_checks::ReceiverCalls {
         member: &[("call_expression", "", "navigation_expression", "suffix")],
         direct: &[],
+        bare: &[],
+        tokens: &[],
     };
 
 pub const SWIFT_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {

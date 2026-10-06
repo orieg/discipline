@@ -8,7 +8,9 @@
 //! - Kotlin `try { assertEquals(...) } catch (e: AssertionError) {}` and
 //!   `runCatching { assertEquals(...) }` with the result unused
 //! - C# `try { Assert.Equal(...) } catch (Exception) {}`
-//! - Go `defer func() { recover() }()` enclosing assertions
+//! - Go `defer func() { recover() }()` before a check that panics
+//! - a `finally` block that returns (Java, Kotlin, JavaScript / TypeScript, Python), which
+//!   discards the failure whatever the handlers do
 //!
 //! An assertion wrapped in a handler that catches its failure and swallows it (neither re-raising
 //! nor failing the test nor asserting) cannot fail the test. It drops out of `effective_asserts()`.
@@ -18,11 +20,24 @@
 //! classes that an assertion failure is not an instance of never do, and a type on neither
 //! list may. A handler that may catch it and swallows is reported: a class of the project
 //! under review can extend the failure type, and passing it would leave a way to hide a
-//! failure behind a new class name. Python is the exception: only `AssertionError`,
-//! `Exception` and `BaseException` are read as catching it.
+//! failure behind a new class name. In Python a class the file declares is read through
+//! its bases, and a handler that may catch the failure is reported only when its body is
+//! nothing but `pass`, `continue` or a logging call.
+//!
+//! An assertion is what the pack counts as one by name, and a call to a helper the
+//! configuration lists (`assert_helper_fns`, and `extra_assert_macros` for a Rust macro).
+//!
+//! An assertion in a function passed as an argument inside the `try` is read only when the
+//! function it is passed to is known to run it before returning (`SYNC_CALLBACKS`):
+//! whether any other callback runs before the `try` ends is not known here.
+//!
+//! Go is read differently. `t.Fatal`, `t.Error` and the testify `require` and `assert`
+//! functions do not panic: `t.FailNow` ends the test through `runtime.Goexit`, which a
+//! `recover()` does not stop. So a deferred `recover()` catches only a check that panics:
+//! a `panic(..)` in the test, or a call to a function of the file that panics.
 
 use super::bounds::{text, walk};
-use super::TestFn;
+use super::{helper_call_matches, AssertVocabulary, TestFn};
 use tree_sitter::Node;
 
 /// One assertion whose failure is caught inside the test by an enclosing handler.
@@ -36,9 +51,10 @@ pub struct CaughtAssertion {
     pub detail: String,
     /// Byte range of the assertion: what makes two assertions on one line two.
     pub span: (usize, usize),
-    /// Whether the pack also counts the assertion as a tautology
-    /// (`TestFn::tautology_spans`). Such an assertion is already out of the effective
-    /// count, and being swallowed does not take it out again.
+    /// Whether the assertion is already out of the effective count, so that being
+    /// swallowed does not take it out again: the pack also counts it as a tautology
+    /// (`TestFn::tautology_spans`), or does not count it at all (a `panic(..)` written
+    /// in a Go test).
     pub tautology: bool,
 }
 
@@ -67,10 +83,10 @@ fn attribute(tests: &mut [TestFn], mut c: CaughtAssertion) {
             // another (`expect(x)` in `expect(x).toBe(1)`) is the same assertion.
             .any(|existing| existing.span.0 < c.span.1 && c.span.0 < existing.span.1)
         {
-            c.tautology = t
-                .tautology_spans
-                .iter()
-                .any(|t| t.0 < c.span.1 && c.span.0 < t.1);
+            c.tautology = c.tautology
+                || t.tautology_spans
+                    .iter()
+                    .any(|t| t.0 < c.span.1 && c.span.0 < t.1);
             t.caught_assertions.push(c);
         }
     }
@@ -127,6 +143,58 @@ pub fn newly_caught<'a>(base: &TestFn, head: &'a TestFn) -> Vec<&'a CaughtAssert
     }
     new
 }
+
+/// Whether `callee` names a helper the configuration lists as an assertion
+/// (`assert_helper_fns`), by its whole text or by its last `::` / `.` segment, as the
+/// counters match it.
+fn configured(callee: &str, vocab: &AssertVocabulary) -> bool {
+    !callee.is_empty()
+        && vocab
+            .helper_fns
+            .iter()
+            .any(|h| helper_call_matches(callee.trim(), h))
+}
+
+/// Per language, the functions known to run a function they are passed before they
+/// return: an assertion in such a callback fails inside the `try` that holds the call.
+/// `docs/GATES.md` lists them.
+pub const SYNC_CALLBACKS: &[(&str, &[&str])] = &[
+    (
+        "JavaScript / TypeScript",
+        &[
+            "forEach", "map", "filter", "some", "every", "reduce", "find",
+        ],
+    ),
+    ("Java", &["forEach"]),
+    (
+        "Kotlin",
+        &["let", "run", "apply", "also", "with", "forEach", "use"],
+    ),
+    ("C#", &["ForEach"]),
+];
+
+fn sync_callbacks(language: &str) -> &'static [&'static str] {
+    SYNC_CALLBACKS
+        .iter()
+        .find(|(l, _)| *l == language)
+        .map_or(&[], |(_, names)| names)
+}
+
+/// `walk`, for a visitor that keeps nodes it was handed.
+fn walk_tree<'a>(root: Node<'a>, f: &mut dyn FnMut(Node<'a>) -> bool) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if !f(node) {
+            continue;
+        }
+        let mut cursor = node.walk();
+        let children: Vec<Node> = node.children(&mut cursor).collect();
+        stack.extend(children.into_iter().rev());
+    }
+}
+
+/// The description of a `finally` block that returns.
+const FINALLY_RETURNS: &str = "finally block returns, discarding the failure";
 
 fn find_child_by_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
     let mut cursor = node.walk();
@@ -200,9 +268,117 @@ fn swallowing_handler<'a>(handlers: &[(Node<'a>, Reach, bool)]) -> Option<Node<'
 // Python
 // ---------------------------------------------------------------------------
 
-/// `AssertionError` and its ancestors. A class the file does not explain is read as
-/// unrelated in Python.
+/// `AssertionError` and its ancestors.
 const PY_CATCHING: &[&str] = &["AssertionError", "Exception", "BaseException"];
+
+/// Exception classes of the standard library outside the built-in hierarchy (`json`,
+/// `subprocess`, `urllib.error`, `asyncio`, `zipfile`, `io`, `pickle`, `statistics`;
+/// library reference, each module's "Exceptions"). None derives from `AssertionError`.
+const PY_STDLIB_UNRELATED: &[&str] = &[
+    "JSONDecodeError",
+    "SubprocessError",
+    "CalledProcessError",
+    "TimeoutExpired",
+    "URLError",
+    "HTTPError",
+    "CancelledError",
+    "InvalidStateError",
+    "IncompleteReadError",
+    "BadZipFile",
+    "UnsupportedOperation",
+    "PickleError",
+    "PicklingError",
+    "UnpicklingError",
+    "StatisticsError",
+];
+
+/// The classes a file declares, each with the names of its bases (last segments).
+type PyClasses<'a> = std::collections::HashMap<&'a str, Vec<&'a str>>;
+
+fn py_classes<'a>(root: Node, src: &'a str) -> PyClasses<'a> {
+    let mut classes = PyClasses::new();
+    walk(root, &mut |n| {
+        if n.kind() == "class_definition" {
+            if let Some(name) = n.child_by_field_name("name") {
+                let mut bases = Vec::new();
+                if let Some(supers) = n.child_by_field_name("superclasses") {
+                    let mut c = supers.walk();
+                    for base in supers.named_children(&mut c) {
+                        match base.kind() {
+                            // `metaclass=...` is not a base.
+                            "keyword_argument" | "comment" => {}
+                            "identifier" | "attribute" => py_type_names(base, src, &mut bases),
+                            // A base that is computed is not known.
+                            _ => bases.push(""),
+                        }
+                    }
+                }
+                classes.insert(text(name, src), bases);
+            }
+        }
+        true
+    });
+    classes
+}
+
+/// Whether `name` is a class of Python's standard exception hierarchy (the table the
+/// expected-exception comparison uses), or one of the `OSError` aliases.
+fn python_standard_exception(name: &str) -> bool {
+    matches!(name, "IOError" | "EnvironmentError" | "WindowsError")
+        || super::exception_tables::PYTHON
+            .iter()
+            .any(|(class, parent)| *class == name || *parent == name)
+}
+
+/// Whether an `AssertionError` (or a failure type a test class substitutes for it)
+/// reaches a handler for the class `name`.
+///
+/// `AssertionError` and its ancestors always catch it. A class the file declares is read
+/// through its bases: it never catches it when every base is a standard class beside
+/// `AssertionError` or a declared class that never does, and may otherwise. A standard
+/// class beside `AssertionError` never catches it. Any other name is a class of the
+/// project or of a library, which may derive from `AssertionError`.
+fn py_name_reach(name: &str, classes: &PyClasses, seen: &mut Vec<String>) -> Reach {
+    if let Some(bases) = classes.get(name) {
+        if seen.iter().any(|s| s == name) {
+            return Reach::Maybe;
+        }
+        seen.push(name.to_string());
+        let unrelated = bases.iter().all(|base| {
+            // Deriving from an ancestor of `AssertionError` does not make a subclass of it.
+            (!classes.contains_key(base) && matches!(*base, "Exception" | "BaseException"))
+                || py_name_reach(base, classes, seen) == Reach::Never
+        });
+        seen.pop();
+        return if unrelated {
+            Reach::Never
+        } else {
+            Reach::Maybe
+        };
+    }
+    if PY_CATCHING.contains(&name) {
+        Reach::Always
+    } else if python_standard_exception(name) || PY_STDLIB_UNRELATED.contains(&name) {
+        Reach::Never
+    } else {
+        Reach::Maybe
+    }
+}
+
+/// The reach of a handler that names `names`: as far as its widest class.
+fn py_reach(names: &[&str], classes: &PyClasses) -> Reach {
+    let each: Vec<Reach> = names
+        .iter()
+        .map(|n| py_name_reach(n, classes, &mut Vec::new()))
+        .collect();
+    if each.contains(&Reach::Always) {
+        Reach::Always
+    } else if each.iter().all(|r| *r == Reach::Never) {
+        Reach::Never
+    } else {
+        Reach::Maybe
+    }
+}
 
 /// The class names an `except` clause or a `suppress(...)` call lists, each by its last
 /// segment (`builtins.AssertionError` is `AssertionError`).
@@ -238,17 +414,21 @@ fn py_except_exprs(clause: Node) -> Vec<Node> {
         .collect()
 }
 
-fn py_except_catches_assertion_error(clause: Node, src: &str) -> bool {
+fn py_except_reach(clause: Node, src: &str, classes: &PyClasses) -> Reach {
     let exprs = py_except_exprs(clause);
     if exprs.is_empty() {
         // Bare `except:` catches BaseException, which includes AssertionError.
-        return true;
+        return Reach::Always;
     }
     let mut names = Vec::new();
     for e in exprs {
         py_type_names(e, src, &mut names);
     }
-    names.iter().any(|n| PY_CATCHING.contains(n))
+    if names.is_empty() {
+        // The classes are computed (`except errors():`): not known.
+        return Reach::Maybe;
+    }
+    py_reach(&names, classes)
 }
 
 /// The name the clause binds the caught error to (`except AssertionError as e`).
@@ -271,7 +451,7 @@ fn py_is_fail_call(call: Node, src: &str) -> bool {
 }
 
 /// Whether the subtree raises, asserts or calls a function that fails the test.
-fn py_fails(node: Node, src: &str) -> bool {
+fn py_fails(node: Node, src: &str, vocab: &AssertVocabulary) -> bool {
     let mut fails = false;
     walk(node, &mut |n| {
         if fails
@@ -291,6 +471,7 @@ fn py_fails(node: Node, src: &str) -> bool {
                 if callee.starts_with("self.assert")
                     || callee.starts_with("assert_")
                     || py_is_fail_call(n, src)
+                    || configured(callee, vocab)
                 {
                     fails = true;
                 }
@@ -302,14 +483,84 @@ fn py_fails(node: Node, src: &str) -> bool {
     fails
 }
 
-fn py_except_body_swallows(clause: Node, src: &str) -> bool {
+fn py_except_body_swallows(clause: Node, src: &str, vocab: &AssertVocabulary) -> bool {
     let Some(body) = clause
         .child_by_field_name("body")
         .or_else(|| find_child_by_kind(clause, "block"))
     else {
         return true;
     };
-    !py_fails(body, src)
+    !py_fails(body, src, vocab)
+}
+
+/// Methods a logger is called by.
+const PY_LOG_METHODS: &[&str] = &[
+    "debug",
+    "info",
+    "warning",
+    "warn",
+    "error",
+    "exception",
+    "critical",
+    "fatal",
+    "log",
+];
+
+/// A call that only reports: `print(..)`, `warnings.warn(..)`, or a logging method called
+/// on something named for a log: `log`, `logging`, or a name ending in `logger` or `_log`
+/// (`logger`, `self.log`, `LOG`, `app_logger`), whatever its case.
+fn py_is_log_call(call: Node, src: &str) -> bool {
+    let Some(function) = call.child_by_field_name("function") else {
+        return false;
+    };
+    match function.kind() {
+        "identifier" => text(function, src) == "print",
+        "attribute" => {
+            let method = function
+                .child_by_field_name("attribute")
+                .map_or("", |a| text(a, src));
+            let object = function
+                .child_by_field_name("object")
+                .map_or("", |o| simple_name(o, src));
+            let named = object.trim_start_matches('_').to_lowercase();
+            (object == "warnings" && method == "warn")
+                || (PY_LOG_METHODS.contains(&method)
+                    && (named == "log"
+                        || named == "logging"
+                        || named.ends_with("logger")
+                        || named.ends_with("_log")))
+        }
+        _ => false,
+    }
+}
+
+/// Whether the handler does nothing with the failure: every statement of its body is
+/// `pass`, `...`, `continue` or a logging call.
+fn py_except_body_only_swallows(clause: Node, src: &str) -> bool {
+    let Some(body) = clause
+        .child_by_field_name("body")
+        .or_else(|| find_child_by_kind(clause, "block"))
+    else {
+        return true;
+    };
+    let mut c = body.walk();
+    let only = body.named_children(&mut c).all(|stmt| match stmt.kind() {
+        "pass_statement" | "continue_statement" | "comment" => true,
+        "expression_statement" => stmt.named_child(0).is_some_and(|e| {
+            stmt.named_child_count() == 1
+                && (e.kind() == "ellipsis" || (e.kind() == "call" && py_is_log_call(e, src)))
+        }),
+        _ => false,
+    });
+    only
+}
+
+/// The `finally` clause of a `try` whose block returns: the `return` replaces whatever
+/// the `try` raised, so the failure is discarded.
+fn py_finally_returns(try_stmt: Node) -> Option<Node> {
+    let clause = find_child_by_kind(try_stmt, "finally_clause")?;
+    let block = find_child_by_kind(clause, "block")?;
+    find_child_by_kind(block, "return_statement").map(|_| clause)
 }
 
 /// Whether the subtree names `name` (an identifier, or an attribute such as `self.errors`).
@@ -327,7 +578,12 @@ fn py_mentions(node: Node, name: &str, src: &str) -> bool {
 /// Soft assertions: the handler keeps the caught error (`errors.append(e)`, `last = e`)
 /// and a statement after the `try` that names what it was kept in raises, asserts or
 /// fails the test.
-fn py_error_kept_and_checked(try_stmt: Node, clause: Node, src: &str) -> bool {
+fn py_error_kept_and_checked(
+    try_stmt: Node,
+    clause: Node,
+    src: &str,
+    vocab: &AssertVocabulary,
+) -> bool {
     let Some(alias) = py_except_alias(clause, src) else {
         return false;
     };
@@ -391,7 +647,7 @@ fn py_error_kept_and_checked(try_stmt: Node, clause: Node, src: &str) -> bool {
         if n.start_byte() >= try_stmt.end_byte()
             && n.kind().ends_with("_statement")
             && kept_in.iter().any(|k| py_mentions(n, k, src))
-            && py_fails(n, src)
+            && py_fails(n, src, vocab)
         {
             checked = true;
         }
@@ -417,7 +673,7 @@ fn py_always_fails(stmt: Node, src: &str) -> bool {
 /// `return` in the `try` body or its `else`), and the test fails once the loop runs out:
 /// the loop's `else` raises or fails, or, when success returns, a statement after the
 /// loop always fails.
-fn py_retry_fails_after_last_attempt(try_stmt: Node, src: &str) -> bool {
+fn py_retry_fails_after_last_attempt(try_stmt: Node, src: &str, vocab: &AssertVocabulary) -> bool {
     let mut enclosing_loop = None;
     let mut cur = try_stmt.parent();
     while let Some(p) = cur {
@@ -456,7 +712,7 @@ fn py_retry_fails_after_last_attempt(try_stmt: Node, src: &str) -> bool {
     }
     let else_fails = lp
         .child_by_field_name("alternative")
-        .is_some_and(|e| py_fails(e, src));
+        .is_some_and(|e| py_fails(e, src, vocab));
     if (breaks || returns) && else_fails {
         return true;
     }
@@ -472,15 +728,15 @@ fn py_retry_fails_after_last_attempt(try_stmt: Node, src: &str) -> bool {
     false
 }
 
-/// Whether a `with` statement has a `suppress(...)` item (`contextlib.suppress`) that
-/// lists `AssertionError` or one of its ancestors.
-fn py_with_suppresses_assertion_error(with_stmt: Node, src: &str) -> bool {
-    let mut suppresses = false;
+/// How far the `suppress(...)` items of a `with` statement (`contextlib.suppress`) reach:
+/// `Never` when it has none, or none that lists a class an assertion failure may be.
+fn py_with_suppress_reach(with_stmt: Node, src: &str, classes: &PyClasses) -> Reach {
+    let mut suppresses = Reach::Never;
     let Some(clause) = find_child_by_kind(with_stmt, "with_clause") else {
-        return false;
+        return Reach::Never;
     };
     walk(clause, &mut |n| {
-        if suppresses {
+        if suppresses == Reach::Always {
             return false;
         }
         if n.kind() != "call" {
@@ -508,17 +764,21 @@ fn py_with_suppresses_assertion_error(with_stmt: Node, src: &str) -> bool {
                     py_type_names(arg, src, &mut names);
                 }
             }
-            suppresses = names.iter().any(|name| PY_CATCHING.contains(name));
+            let reach = py_reach(&names, classes);
+            if reach != Reach::Never && suppresses != Reach::Always {
+                suppresses = reach;
+            }
         }
         false
     });
     suppresses
 }
 
-pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
+pub fn python(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabulary) {
     if tests.is_empty() {
         return;
     }
+    let classes = py_classes(root, src);
     walk(root, &mut |node| {
         let is_assertion = match node.kind() {
             "assert_statement" => true,
@@ -526,10 +786,11 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
                 let callee = node
                     .child_by_field_name("function")
                     .map_or("", |f| text(f, src));
-                callee.starts_with("self.assert")
+                (callee.starts_with("self.assert")
                     && !callee.contains("assertRaises")
                     && !callee.contains("assertWarns")
-                    && !callee.contains("assertLogs")
+                    && !callee.contains("assertLogs"))
+                    || configured(callee, vocab)
             }
             _ => false,
         };
@@ -547,7 +808,12 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
                 let in_body = p
                     .child_by_field_name("body")
                     .is_some_and(|b| within(node, b));
-                if in_body && py_with_suppresses_assertion_error(p, src) {
+                let reach = if in_body {
+                    py_with_suppress_reach(p, src, &classes)
+                } else {
+                    Reach::Never
+                };
+                if reach != Reach::Never {
                     attribute(
                         tests,
                         CaughtAssertion {
@@ -555,7 +821,12 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
                             span: site(node).1,
                             tautology: false,
                             handler_line: p.start_position().row + 1,
-                            detail: "contextlib.suppress discards the AssertionError".to_string(),
+                            detail: if reach == Reach::Always {
+                                "contextlib.suppress discards the AssertionError"
+                            } else {
+                                "contextlib.suppress of a class that may be an assertion failure"
+                            }
+                            .to_string(),
                         },
                     );
                     break;
@@ -566,29 +837,56 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
                     .child_by_field_name("body")
                     .is_some_and(|b| within(node, b));
                 if inside_try_body {
+                    if let Some(finally) = py_finally_returns(p) {
+                        attribute(
+                            tests,
+                            CaughtAssertion {
+                                line: node.start_position().row + 1,
+                                span: site(node).1,
+                                tautology: false,
+                                handler_line: finally.start_position().row + 1,
+                                detail: FINALLY_RETURNS.to_string(),
+                            },
+                        );
+                        break;
+                    }
                     let mut cursor = p.walk();
-                    let matching_clause = p.children(&mut cursor).find(|c| {
-                        c.kind() == "except_clause" && py_except_catches_assertion_error(*c, src)
-                    });
-                    if let Some(clause) = matching_clause {
-                        if py_except_body_swallows(clause, src)
-                            && !py_error_kept_and_checked(p, clause, src)
-                            && !py_retry_fails_after_last_attempt(p, src)
-                        {
-                            attribute(
-                                tests,
-                                CaughtAssertion {
-                                    line: node.start_position().row + 1,
-                                    span: site(node).1,
-                                    tautology: false,
-                                    handler_line: clause.start_position().row + 1,
-                                    detail:
-                                        "AssertionError caught without re-raise or test failure"
-                                            .to_string(),
-                                },
-                            );
-                            break;
-                        }
+                    let handlers: Vec<(Node, Reach, bool)> = p
+                        .children(&mut cursor)
+                        .filter(|c| c.kind() == "except_clause")
+                        .map(|c| {
+                            let reach = py_except_reach(c, src, &classes);
+                            let swallows = match reach {
+                                Reach::Never => false,
+                                Reach::Always => py_except_body_swallows(c, src, vocab),
+                                // A class that may be an assertion failure: reported
+                                // only when the handler plainly does nothing with it.
+                                Reach::Maybe => py_except_body_only_swallows(c, src),
+                            } && !py_error_kept_and_checked(p, c, src, vocab)
+                                && !py_retry_fails_after_last_attempt(p, src, vocab);
+                            (c, reach, swallows)
+                        })
+                        .collect();
+                    if let Some(clause) = swallowing_handler(&handlers) {
+                        let always = handlers
+                            .iter()
+                            .any(|(c, reach, _)| *c == clause && *reach == Reach::Always);
+                        attribute(
+                            tests,
+                            CaughtAssertion {
+                                line: node.start_position().row + 1,
+                                span: site(node).1,
+                                tautology: false,
+                                handler_line: clause.start_position().row + 1,
+                                detail: if always {
+                                    "AssertionError caught without re-raise or test failure"
+                                } else {
+                                    "a class that may be an assertion failure caught and discarded"
+                                }
+                                .to_string(),
+                            },
+                        );
+                        break;
                     }
                 }
             }
@@ -625,14 +923,15 @@ fn rs_macro_name<'a>(invocation: Node, src: &'a str) -> &'a str {
     name.rsplit("::").next().unwrap_or(name)
 }
 
-fn rs_closure_contains_assert(closure: Node, src: &str) -> Vec<Site> {
+fn rs_closure_contains_assert(closure: Node, src: &str, vocab: &AssertVocabulary) -> Vec<Site> {
     let mut asserts = Vec::new();
     walk(closure, &mut |n| {
         if n.kind() == "function_item" {
             return false;
         }
         if n.kind() == "macro_invocation" {
-            if RS_ASSERT_MACROS.contains(&rs_macro_name(n, src)) {
+            let name = rs_macro_name(n, src);
+            if RS_ASSERT_MACROS.contains(&name) || vocab.extra_macros.iter().any(|m| m == name) {
                 asserts.push(site(n));
             }
         } else if n.kind() == "call_expression" {
@@ -640,10 +939,12 @@ fn rs_closure_contains_assert(closure: Node, src: &str) -> Vec<Site> {
                 if f.kind() == "field_expression" {
                     if let Some(field) = f.child_by_field_name("field") {
                         let method = text(field, src);
-                        if method == "unwrap" || method == "expect" {
+                        if method == "unwrap" || method == "expect" || configured(method, vocab) {
                             asserts.push(site(n));
                         }
                     }
+                } else if configured(text(f, src), vocab) {
+                    asserts.push(site(n));
                 }
             }
         }
@@ -704,6 +1005,107 @@ fn rs_fails(node: Node, src: &str) -> bool {
     fails
 }
 
+/// The side of a `Result` a pattern names: `Some(true)` for `Err(..)`, `Some(false)` for
+/// `Ok(..)`, `None` for anything else (a wildcard, a binding).
+fn rs_pattern_is_err(pattern: Node, src: &str) -> Option<bool> {
+    let mut side = None;
+    walk(pattern, &mut |n| {
+        if side.is_some() {
+            return false;
+        }
+        if n.kind() == "tuple_struct_pattern" {
+            let name = n.child_by_field_name("type").map_or("", |t| text(t, src));
+            side = match name.rsplit("::").next() {
+                Some("Err") => Some(true),
+                Some("Ok") => Some(false),
+                _ => None,
+            };
+            return false;
+        }
+        true
+    });
+    side
+}
+
+/// Whether the branch of an `if` taken when the unwind result is an `Err` fails.
+/// `err_when_true` says which branch that is: the consequence, or the alternative.
+/// With no `else`, the code after the `if` is not read as that branch.
+fn rs_if_fails_on_err(if_expr: Node, err_when_true: bool, src: &str) -> bool {
+    let branch = if err_when_true {
+        if_expr.child_by_field_name("consequence")
+    } else {
+        if_expr.child_by_field_name("alternative")
+    };
+    branch.is_some_and(|b| rs_fails(b, src))
+}
+
+/// Whether an `if` whose condition is `condition` (the unwind result with `is_err()` or
+/// `is_ok()` called on it, possibly negated) fails on the branch taken for an `Err`.
+/// A condition of another shape is judged as before: by whether any branch fails.
+fn rs_if_checks(if_expr: Node, condition: Node, src: &str) -> bool {
+    let mut cond = condition;
+    let mut negated = false;
+    loop {
+        match cond.kind() {
+            "parenthesized_expression" => match cond.named_child(0) {
+                Some(inner) => cond = inner,
+                None => break,
+            },
+            "unary_expression" if text(cond, src).trim_start().starts_with('!') => {
+                match cond.named_child(0) {
+                    Some(inner) => {
+                        negated = !negated;
+                        cond = inner;
+                    }
+                    None => break,
+                }
+            }
+            _ => break,
+        }
+    }
+    let method = (cond.kind() == "call_expression")
+        .then(|| cond.child_by_field_name("function"))
+        .flatten()
+        .filter(|f| f.kind() == "field_expression")
+        .and_then(|f| f.child_by_field_name("field"))
+        .map_or("", |m| text(m, src));
+    match method {
+        "is_err" => rs_if_fails_on_err(if_expr, !negated, src),
+        "is_ok" => rs_if_fails_on_err(if_expr, negated, src),
+        _ => rs_fails(if_expr, src),
+    }
+}
+
+/// Whether a `match` on the unwind result fails in the arm taken for an `Err`: an arm
+/// whose pattern names `Err`, or, when no arm does, one whose pattern does not name `Ok`.
+/// A `match` with no arm for either side is judged by whether any arm fails.
+fn rs_match_checks(match_expr: Node, src: &str) -> bool {
+    let mut arms: Vec<(Option<bool>, bool)> = Vec::new();
+    if let Some(body) = match_expr.child_by_field_name("body") {
+        let mut c = body.walk();
+        for arm in body.named_children(&mut c) {
+            if arm.kind() != "match_arm" {
+                continue;
+            }
+            let side = arm
+                .child_by_field_name("pattern")
+                .and_then(|p| rs_pattern_is_err(p, src));
+            let fails = arm
+                .child_by_field_name("value")
+                .is_some_and(|v| rs_fails(v, src));
+            arms.push((side, fails));
+        }
+    }
+    if arms.iter().any(|(side, _)| *side == Some(true)) {
+        arms.iter()
+            .any(|(side, fails)| *side == Some(true) && *fails)
+    } else if arms.iter().any(|(side, _)| *side == Some(false)) {
+        arms.iter().any(|(side, fails)| side.is_none() && *fails)
+    } else {
+        rs_fails(match_expr, src)
+    }
+}
+
 /// Whether a later use of the binding `name` looks at the outcome it holds.
 fn rs_binding_is_checked(binding: Node, name: &str, src: &str) -> bool {
     let mut scope = binding;
@@ -733,10 +1135,12 @@ fn rs_binding_is_checked(binding: Node, name: &str, src: &str) -> bool {
 /// The value is followed outwards to where it ends up. It is looked at when a method that
 /// panics on one side is called on it, when `?` or `return` hands it on, when it is the
 /// value of the test function, when an asserting or panicking macro names it, and when an
-/// `if` / `match` on it has a branch that fails. It is thrown away as a statement, in
-/// `let _ =` or `_ =`, in `drop(..)`, in a binding nothing looks at, and in an `if` /
-/// `match` no branch of which fails. A shape not listed is followed further out, so a
-/// value this does not understand is reported, not passed.
+/// `if` / `match` on it fails in the branch taken for an `Err` (`is_err()`, `Err(..)`).
+/// It is thrown away as a statement, in `let _ =` or `_ =`, in `drop(..)`, in a binding
+/// nothing looks at, and in an `if` / `match` that fails only in the branch taken for an
+/// `Ok`: there the test fails when the assertion held and passes when it did not. A shape
+/// not listed is followed further out, so a value this does not understand is reported,
+/// not passed.
 fn rs_value_is_discarded(value: Node, src: &str) -> bool {
     let mut cur = value;
     while let Some(p) = cur.parent() {
@@ -789,12 +1193,12 @@ fn rs_value_is_discarded(value: Node, src: &str) -> bool {
             }
             "match_expression" => {
                 if p.child_by_field_name("value") == Some(cur) {
-                    return !rs_fails(p, src);
+                    return !rs_match_checks(p, src);
                 }
             }
             "if_expression" => {
                 if p.child_by_field_name("condition") == Some(cur) {
-                    return !rs_fails(p, src);
+                    return !rs_if_checks(p, cur, src);
                 }
             }
             "let_condition" | "let_chain" => {
@@ -812,7 +1216,19 @@ fn rs_value_is_discarded(value: Node, src: &str) -> bool {
                         _ => return true,
                     }
                 }
-                return !rs_fails(branch, src);
+                // `if let Err(..) = r`: the consequence is the branch for a failure;
+                // `if let Ok(..) = r`: the alternative is. A chain of conditions, a
+                // `while`, or another pattern is judged by whether any branch fails.
+                let side = (p.kind() == "let_condition" && branch.kind() == "if_expression")
+                    .then(|| p.child_by_field_name("pattern"))
+                    .flatten()
+                    .and_then(|pattern| rs_pattern_is_err(pattern, src));
+                return match side {
+                    Some(err) if p.parent() == Some(branch) => {
+                        !rs_if_fails_on_err(branch, err, src)
+                    }
+                    _ => !rs_fails(branch, src),
+                };
             }
             _ => {}
         }
@@ -821,7 +1237,7 @@ fn rs_value_is_discarded(value: Node, src: &str) -> bool {
     true
 }
 
-pub fn rust(root: Node, src: &str, tests: &mut [TestFn]) {
+pub fn rust(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabulary) {
     if tests.is_empty() {
         return;
     }
@@ -846,7 +1262,7 @@ pub fn rust(root: Node, src: &str, tests: &mut [TestFn]) {
             return true;
         };
 
-        let inner_asserts = rs_closure_contains_assert(closure, src);
+        let inner_asserts = rs_closure_contains_assert(closure, src, vocab);
         if inner_asserts.is_empty() {
             return true;
         }
@@ -885,8 +1301,64 @@ fn js_callee<'a>(call: Node, src: &'a str) -> &'a str {
         .map_or("", |f| text(f, src))
 }
 
-fn js_is_assertion(call: Node, src: &str) -> bool {
+/// Whether `func` is passed to a method known to run it before returning
+/// (`SYNC_CALLBACKS`): `items.forEach((v) => ..)`.
+fn js_is_sync_callback(func: Node, src: &str) -> bool {
+    func.parent()
+        .filter(|args| args.kind() == "arguments")
+        .and_then(|args| args.parent())
+        .filter(|call| call.kind() == "call_expression")
+        .and_then(|call| call.child_by_field_name("function"))
+        .filter(|callee| callee.kind() == "member_expression")
+        .and_then(|callee| callee.child_by_field_name("property"))
+        .is_some_and(|name| sync_callbacks("JavaScript / TypeScript").contains(&text(name, src)))
+}
+
+/// The body of the one function the file declares under `name`: a function declaration,
+/// or a `const` / `let` / `var` bound to a function. None when the file declares no such
+/// function, or more than one.
+fn js_declared_function_body<'a>(root: Node<'a>, name: &str, src: &str) -> Option<Node<'a>> {
+    let mut bodies = Vec::new();
+    walk_tree(root, &mut |n| {
+        let function = match n.kind() {
+            "function_declaration" | "generator_function_declaration" => Some(n),
+            "variable_declarator" => n
+                .child_by_field_name("value")
+                .filter(|v| matches!(v.kind(), "arrow_function" | "function_expression")),
+            _ => None,
+        };
+        if let Some(function) = function {
+            if n.child_by_field_name("name")
+                .is_some_and(|id| text(id, src) == name)
+            {
+                bodies.push(function.child_by_field_name("body"));
+            }
+        }
+        true
+    });
+    match bodies[..] {
+        [body] => body,
+        _ => None,
+    }
+}
+
+/// The `finally` block of a `try` when it returns: the `return` replaces whatever the
+/// `try` threw, so the failure is discarded.
+fn js_finally_returns(try_stmt: Node) -> Option<Node> {
+    let finally = try_stmt
+        .child_by_field_name("finalizer")
+        .or_else(|| find_child_by_kind(try_stmt, "finally_clause"))?;
+    let block = finally
+        .child_by_field_name("body")
+        .or_else(|| find_child_by_kind(finally, "statement_block"))?;
+    find_child_by_kind(block, "return_statement").map(|_| finally)
+}
+
+fn js_is_assertion(call: Node, src: &str, vocab: &AssertVocabulary) -> bool {
     let callee = js_callee(call, src);
+    if configured(callee, vocab) {
+        return true;
+    }
     let is_assert = callee == "expect"
         || callee.starts_with("expect(")
         || callee == "assert"
@@ -911,7 +1383,7 @@ fn js_is_assertion(call: Node, src: &str) -> bool {
 /// Whether a handler body (a block, or the expression an arrow function returns) neither
 /// rethrows, nor asserts, nor fails the test. `done(err)` and `reject(..)` fail it: the
 /// runner's callback with an argument, and the promise the test returns.
-fn js_handler_swallows(body: Node, src: &str) -> bool {
+fn js_handler_swallows(body: Node, src: &str, vocab: &AssertVocabulary) -> bool {
     let mut fails = false;
     walk(body, &mut |n| {
         if fails || (n != body && JS_FUNCTIONS.contains(&n.kind())) {
@@ -932,25 +1404,33 @@ fn js_handler_swallows(body: Node, src: &str) -> bool {
                 || callee == "done.fail"
                 || callee.ends_with(".fail")
                 || callee == "reject"
-                || (callee == "done" && has_argument);
+                || (callee == "done" && has_argument)
+                || configured(callee, vocab);
         }
         !fails
     });
     !fails
 }
 
-fn js_catch_body_swallows(catch_clause: Node, src: &str) -> bool {
+fn js_catch_body_swallows(catch_clause: Node, src: &str, vocab: &AssertVocabulary) -> bool {
     let Some(body) = catch_clause
         .child_by_field_name("body")
         .or_else(|| find_child_by_kind(catch_clause, "statement_block"))
     else {
         return true;
     };
-    js_handler_swallows(body, src)
+    js_handler_swallows(body, src, vocab)
 }
 
 /// `<promise>.catch(<function that swallows>)`: the assertions in the chain before it.
-fn js_promise_catch(call: Node, src: &str, tests: &mut [TestFn]) {
+/// The function is one written in place, or one the file declares under the name given.
+fn js_promise_catch(
+    root: Node,
+    call: Node,
+    src: &str,
+    tests: &mut [TestFn],
+    vocab: &AssertVocabulary,
+) {
     let Some(function) = call.child_by_field_name("function") else {
         return;
     };
@@ -963,13 +1443,20 @@ fn js_promise_catch(call: Node, src: &str, tests: &mut [TestFn]) {
     }
     let handler = call
         .child_by_field_name("arguments")
-        .and_then(|a| a.named_child(0))
-        .filter(|h| matches!(h.kind(), "arrow_function" | "function_expression"));
-    let Some(body) = handler.and_then(|h| h.child_by_field_name("body")) else {
-        // A named handler (`.catch(done)`) is not read.
+        .and_then(|a| a.named_child(0));
+    let body = match handler {
+        Some(h) if matches!(h.kind(), "arrow_function" | "function_expression") => {
+            h.child_by_field_name("body")
+        }
+        Some(h) if h.kind() == "identifier" => js_declared_function_body(root, text(h, src), src),
+        _ => None,
+    };
+    let Some(body) = body else {
+        // A handler the file does not declare (`.catch(done)`, `.catch(h.ignore)`) is
+        // not read.
         return;
     };
-    if !js_handler_swallows(body, src) {
+    if !js_handler_swallows(body, src, vocab) {
         return;
     }
     let (Some(chain), Some(property)) = (
@@ -980,7 +1467,7 @@ fn js_promise_catch(call: Node, src: &str, tests: &mut [TestFn]) {
     };
     let handler_line = property.start_position().row + 1;
     walk(chain, &mut |n| {
-        if n.kind() == "call_expression" && js_is_assertion(n, src) {
+        if n.kind() == "call_expression" && js_is_assertion(n, src, vocab) {
             attribute(
                 tests,
                 CaughtAssertion {
@@ -996,13 +1483,13 @@ fn js_promise_catch(call: Node, src: &str, tests: &mut [TestFn]) {
     });
 }
 
-pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
+pub fn javascript(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabulary) {
     if tests.is_empty() {
         return;
     }
     walk(root, &mut |node| {
         if node.kind() == "call_expression" {
-            js_promise_catch(node, src, tests);
+            js_promise_catch(root, node, src, tests, vocab);
             return true;
         }
         if node.kind() != "try_statement" {
@@ -1011,23 +1498,25 @@ pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
         let Some(body) = node.child_by_field_name("body") else {
             return true;
         };
+        let finally = js_finally_returns(node);
         let catch_clause = node
             .child_by_field_name("handler")
-            .or_else(|| find_child_by_kind(node, "catch_clause"));
-        let Some(clause) = catch_clause else {
-            return true;
+            .or_else(|| find_child_by_kind(node, "catch_clause"))
+            .filter(|clause| js_catch_body_swallows(*clause, src, vocab));
+        let (handler, detail) = match (finally, catch_clause) {
+            (Some(finally), _) => (finally, FINALLY_RETURNS),
+            (None, Some(clause)) => (clause, "try/catch swallows assertion error"),
+            (None, None) => return true,
         };
 
-        if !js_catch_body_swallows(clause, src) {
-            return true;
-        }
-
-        let handler_line = clause.start_position().row + 1;
+        let handler_line = handler.start_position().row + 1;
         walk(body, &mut |n| {
-            if JS_FUNCTIONS.contains(&n.kind()) || n.kind() == "try_statement" {
+            if n.kind() == "try_statement"
+                || (JS_FUNCTIONS.contains(&n.kind()) && !js_is_sync_callback(n, src))
+            {
                 return false;
             }
-            if n.kind() == "call_expression" && js_is_assertion(n, src) {
+            if n.kind() == "call_expression" && js_is_assertion(n, src, vocab) {
                 attribute(
                     tests,
                     CaughtAssertion {
@@ -1035,7 +1524,7 @@ pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
                         span: site(n).1,
                         tautology: false,
                         handler_line,
-                        detail: "try/catch swallows assertion error".to_string(),
+                        detail: detail.to_string(),
                     },
                 );
             }
@@ -1128,7 +1617,7 @@ fn java_catch_reach(clause: Node, src: &str) -> Reach {
     reach(&names, JVM_ASSERTION_ANCESTORS, JVM_UNRELATED)
 }
 
-fn java_catch_body_swallows(clause: Node, src: &str) -> bool {
+fn java_catch_body_swallows(clause: Node, src: &str, vocab: &AssertVocabulary) -> bool {
     let Some(body) = clause
         .child_by_field_name("body")
         .or_else(|| find_child_by_kind(clause, "block"))
@@ -1157,7 +1646,10 @@ fn java_catch_body_swallows(clause: Node, src: &str) -> bool {
         }
         if n.kind() == "method_invocation" {
             let name = n.child_by_field_name("name").map_or("", |m| text(m, src));
-            if name.starts_with("assert") || name.starts_with("assertThat") {
+            if name.starts_with("assert")
+                || name.starts_with("assertThat")
+                || configured(name, vocab)
+            {
                 has_assert = true;
                 return false;
             }
@@ -1172,7 +1664,27 @@ fn java_catch_body_swallows(clause: Node, src: &str) -> bool {
     !has_throw && !has_fail && !has_assert
 }
 
-pub fn java(root: Node, src: &str, tests: &mut [TestFn]) {
+/// Whether `lambda` is passed to a method known to run it before returning
+/// (`SYNC_CALLBACKS`): `items.forEach(v -> ..)`.
+fn java_is_sync_callback(lambda: Node, src: &str) -> bool {
+    lambda
+        .parent()
+        .filter(|args| args.kind() == "argument_list")
+        .and_then(|args| args.parent())
+        .filter(|call| call.kind() == "method_invocation")
+        .and_then(|call| call.child_by_field_name("name"))
+        .is_some_and(|name| sync_callbacks("Java").contains(&text(name, src)))
+}
+
+/// The `finally` clause of a `try` when its block returns: the `return` replaces
+/// whatever the `try` threw, so the failure is discarded.
+fn java_finally_returns(try_stmt: Node) -> Option<Node> {
+    let finally = find_child_by_kind(try_stmt, "finally_clause")?;
+    let block = find_child_by_kind(finally, "block")?;
+    find_child_by_kind(block, "return_statement").map(|_| finally)
+}
+
+pub fn java(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabulary) {
     if tests.is_empty() {
         return;
     }
@@ -1195,24 +1707,26 @@ pub fn java(root: Node, src: &str, tests: &mut [TestFn]) {
                 (
                     c,
                     java_catch_reach(c, src),
-                    java_catch_body_swallows(c, src),
+                    java_catch_body_swallows(c, src, vocab),
                 )
             })
             .collect();
-        let Some(clause) = swallowing_handler(&handlers) else {
-            return true;
+        let (handler, detail) = match (java_finally_returns(node), swallowing_handler(&handlers)) {
+            (Some(finally), _) => (finally, FINALLY_RETURNS),
+            (None, Some(clause)) => (clause, "AssertionError caught by catch clause"),
+            (None, None) => return true,
         };
-        let handler_line = clause.start_position().row + 1;
+        let handler_line = handler.start_position().row + 1;
 
         walk(body, &mut |n| {
             if matches!(
                 n.kind(),
                 "class_declaration"
                     | "method_declaration"
-                    | "lambda_expression"
                     | "try_statement"
                     | "try_with_resources_statement"
-            ) {
+            ) || (n.kind() == "lambda_expression" && !java_is_sync_callback(n, src))
+            {
                 return false;
             }
             let is_assertion = match n.kind() {
@@ -1221,6 +1735,7 @@ pub fn java(root: Node, src: &str, tests: &mut [TestFn]) {
                     let name = n.child_by_field_name("name").map_or("", |m| text(m, src));
                     (name.starts_with("assert") && name != "assertThrows")
                         || name.starts_with("assertThat")
+                        || configured(name, vocab)
                 }
                 _ => false,
             };
@@ -1232,7 +1747,7 @@ pub fn java(root: Node, src: &str, tests: &mut [TestFn]) {
                         span: site(n).1,
                         tautology: false,
                         handler_line,
-                        detail: "AssertionError caught by catch clause".to_string(),
+                        detail: detail.to_string(),
                     },
                 );
             }
@@ -1264,12 +1779,15 @@ fn kt_callee<'a>(call: Node, src: &'a str) -> &'a str {
 
 /// `assertEquals(..)`, `assert(..)`, `x.shouldBe(y)` and the infix `x shouldBe y`; not the
 /// calls that expect a throw (`assertThrows`, `assertFailsWith`, `shouldThrow`).
-fn kt_is_assertion(node: Node, src: &str) -> bool {
+fn kt_is_assertion(node: Node, src: &str, vocab: &AssertVocabulary) -> bool {
     let name = match node.kind() {
         "call_expression" => kt_callee(node, src),
         "infix_expression" => node.named_child(1).map_or("", |op| text(op, src)),
         _ => return false,
     };
+    if node.kind() == "call_expression" && configured(name, vocab) {
+        return true;
+    }
     (name.starts_with("assert") || name.starts_with("should"))
         && !name.starts_with("assertThrows")
         && !name.starts_with("assertFails")
@@ -1278,28 +1796,61 @@ fn kt_is_assertion(node: Node, src: &str) -> bool {
 }
 
 /// Whether the subtree throws, asserts or calls a function that fails the test.
-fn kt_fails(node: Node, src: &str) -> bool {
+fn kt_fails(node: Node, src: &str, vocab: &AssertVocabulary) -> bool {
     let mut fails = false;
     walk(node, &mut |n| {
         if fails || (n != node && KT_SCOPES.contains(&n.kind())) {
             return false;
         }
         fails = n.kind() == "throw_expression"
-            || kt_is_assertion(n, src)
+            || kt_is_assertion(n, src, vocab)
             || (n.kind() == "call_expression" && matches!(kt_callee(n, src), "fail" | "error"));
         !fails
     });
     fails
 }
 
-/// Lines of the assertions directly in `body` (not in a lambda or a nested `try`).
-fn kt_assertions(body: Node, src: &str) -> Vec<Site> {
+/// Whether `lambda` is passed to a function known to run it before returning
+/// (`SYNC_CALLBACKS`): `x.let { .. }`, `items.forEach { .. }`, `with(x) { .. }`.
+fn kt_is_sync_callback(lambda: Node, src: &str) -> bool {
+    if lambda.kind() != "lambda_literal" {
+        return false;
+    }
+    let mut cur = lambda;
+    let call = loop {
+        match cur.parent() {
+            Some(p) if p.kind() == "call_expression" => break p,
+            Some(p)
+                if matches!(
+                    p.kind(),
+                    "annotated_lambda" | "call_suffix" | "value_argument" | "value_arguments"
+                ) =>
+            {
+                cur = p
+            }
+            _ => return false,
+        }
+    };
+    // `with(x) { .. }` is a call of the call `with(x)`.
+    let callee = match call.named_child(0) {
+        Some(inner) if inner.kind() == "call_expression" => kt_callee(inner, src),
+        _ => kt_callee(call, src),
+    };
+    sync_callbacks("Kotlin").contains(&callee)
+}
+
+/// Lines of the assertions directly in `body`: not in a nested `try`, and not in a lambda
+/// unless it is passed to a function that runs it before returning.
+fn kt_assertions(body: Node, src: &str, vocab: &AssertVocabulary) -> Vec<Site> {
     let mut lines = Vec::new();
     walk(body, &mut |n| {
-        if n != body && (KT_SCOPES.contains(&n.kind()) || n.kind() == "try_expression") {
+        if n != body
+            && ((KT_SCOPES.contains(&n.kind()) && !kt_is_sync_callback(n, src))
+                || n.kind() == "try_expression")
+        {
             return false;
         }
-        if kt_is_assertion(n, src) {
+        if kt_is_assertion(n, src, vocab) {
             lines.push(site(n));
         }
         true
@@ -1318,11 +1869,25 @@ fn kt_catch_reach(catch: Node, src: &str) -> Reach {
     }
 }
 
+/// The `finally` block of a `try` when it returns: the `return` replaces whatever the
+/// `try` threw, so the failure is discarded.
+fn kt_finally_returns<'a>(try_expr: Node<'a>, src: &str) -> Option<Node<'a>> {
+    let finally = find_child_by_kind(try_expr, "finally_block")?;
+    let block = find_child_by_kind(finally, "block")?;
+    let statements = find_child_by_kind(block, "statements").unwrap_or(block);
+    let mut c = statements.walk();
+    let returns = statements.named_children(&mut c).any(|stmt| {
+        matches!(stmt.kind(), "return_expression" | "jump_expression")
+            && text(stmt, src).trim_start().starts_with("return")
+    });
+    returns.then_some(finally)
+}
+
 /// Whether nothing looks at the result of a `runCatching { }` call. It is looked at when
 /// `getOrThrow()` is called on it, when a callback chained on it (`onFailure { }`,
 /// `fold`, `recover`, `getOrElse`) throws or fails, when it is bound to a name used
 /// later, and when it is passed on (an argument, a `return`, an expression body).
-fn kt_result_is_unused(call: Node, src: &str) -> bool {
+fn kt_result_is_unused(call: Node, src: &str, vocab: &AssertVocabulary) -> bool {
     let mut cur = call;
     while let Some(p) = cur.parent() {
         match p.kind() {
@@ -1336,7 +1901,7 @@ fn kt_result_is_unused(call: Node, src: &str) -> bool {
                 let callback = find_child_by_kind(p, "annotated_lambda")
                     .and_then(|a| find_child_by_kind(a, "lambda_literal"));
                 if let Some(lambda) = callback {
-                    if kt_fails(lambda, src) {
+                    if kt_fails(lambda, src, vocab) {
                         return false;
                     }
                 }
@@ -1372,7 +1937,7 @@ fn kt_result_is_unused(call: Node, src: &str) -> bool {
     true
 }
 
-pub fn kotlin(root: Node, src: &str, tests: &mut [TestFn]) {
+pub fn kotlin(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabulary) {
     if tests.is_empty() {
         return;
     }
@@ -1386,13 +1951,19 @@ pub fn kotlin(root: Node, src: &str, tests: &mut [TestFn]) {
                 .children(&mut cursor)
                 .filter(|c| c.kind() == "catch_block")
                 .map(|c| {
-                    let swallows = find_child_by_kind(c, "block").is_none_or(|b| !kt_fails(b, src));
+                    let swallows =
+                        find_child_by_kind(c, "block").is_none_or(|b| !kt_fails(b, src, vocab));
                     (c, kt_catch_reach(c, src), swallows)
                 })
                 .collect();
-            if let Some(handler) = swallowing_handler(&handlers) {
+            let caught = match (kt_finally_returns(node, src), swallowing_handler(&handlers)) {
+                (Some(finally), _) => Some((finally, FINALLY_RETURNS)),
+                (None, Some(clause)) => Some((clause, "AssertionError caught by catch clause")),
+                (None, None) => None,
+            };
+            if let Some((handler, detail)) = caught {
                 let handler_line = handler.start_position().row + 1;
-                for (line, span) in kt_assertions(body, src) {
+                for (line, span) in kt_assertions(body, src, vocab) {
                     attribute(
                         tests,
                         CaughtAssertion {
@@ -1400,7 +1971,7 @@ pub fn kotlin(root: Node, src: &str, tests: &mut [TestFn]) {
                             span,
                             tautology: false,
                             handler_line,
-                            detail: "AssertionError caught by catch clause".to_string(),
+                            detail: detail.to_string(),
                         },
                     );
                 }
@@ -1409,9 +1980,9 @@ pub fn kotlin(root: Node, src: &str, tests: &mut [TestFn]) {
             let lambda = find_child_by_kind(node, "annotated_lambda")
                 .and_then(|a| find_child_by_kind(a, "lambda_literal"));
             if let Some(lambda) = lambda {
-                if kt_result_is_unused(node, src) {
+                if kt_result_is_unused(node, src, vocab) {
                     let handler_line = node.start_position().row + 1;
-                    for (line, span) in kt_assertions(lambda, src) {
+                    for (line, span) in kt_assertions(lambda, src, vocab) {
                         attribute(
                             tests,
                             CaughtAssertion {
@@ -1514,7 +2085,42 @@ fn csharp_catch_reach(clause: Node, src: &str) -> Reach {
     by_type
 }
 
-fn csharp_catch_body_swallows(clause: Node, src: &str) -> bool {
+/// NUnit calls that end the test without failing it: the result is a pass, an ignored
+/// test or an inconclusive one. In a handler, they leave the failure swallowed.
+const CS_NOT_A_FAILURE: &[&str] = &["Pass", "Ignore", "Inconclusive"];
+
+/// The name a call is made by when it is a helper the configuration lists: `CheckTotal`
+/// of `CheckTotal(..)` or `Checks.CheckTotal(..)`.
+fn csharp_is_configured(invocation: Node, src: &str, vocab: &AssertVocabulary) -> bool {
+    invocation
+        .child_by_field_name("function")
+        .is_some_and(|f| match f.kind() {
+            "identifier" => configured(text(f, src), vocab),
+            "member_access_expression" => f
+                .child_by_field_name("name")
+                .is_some_and(|n| configured(text(n, src), vocab)),
+            _ => false,
+        })
+}
+
+/// Whether `lambda` is passed to a method known to run it before returning
+/// (`SYNC_CALLBACKS`): `items.ForEach(v => ..)`.
+fn csharp_is_sync_callback(lambda: Node, src: &str) -> bool {
+    let mut cur = lambda;
+    let call = loop {
+        match cur.parent() {
+            Some(p) if p.kind() == "invocation_expression" => break p,
+            Some(p) if matches!(p.kind(), "argument" | "argument_list") => cur = p,
+            _ => return false,
+        }
+    };
+    call.child_by_field_name("function")
+        .filter(|f| f.kind() == "member_access_expression")
+        .and_then(|f| f.child_by_field_name("name"))
+        .is_some_and(|name| sync_callbacks("C#").contains(&text(name, src)))
+}
+
+fn csharp_catch_body_swallows(clause: Node, src: &str, vocab: &AssertVocabulary) -> bool {
     let Some(body) = find_child_by_kind(clause, "block") else {
         return true;
     };
@@ -1531,13 +2137,15 @@ fn csharp_catch_body_swallows(clause: Node, src: &str) -> bool {
         }
         // A rethrow, `Assert.Fail`, or an assertion on the caught error.
         fails = n.kind() == "throw_statement"
-            || (n.kind() == "invocation_expression" && csharp_assert_method(n, src).is_some());
+            || (n.kind() == "invocation_expression"
+                && (csharp_assert_method(n, src).is_some_and(|m| !CS_NOT_A_FAILURE.contains(&m))
+                    || csharp_is_configured(n, src, vocab)));
         !fails
     });
     !fails
 }
 
-pub fn csharp(root: Node, src: &str, tests: &mut [TestFn]) {
+pub fn csharp(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabulary) {
     if tests.is_empty() {
         return;
     }
@@ -1557,7 +2165,7 @@ pub fn csharp(root: Node, src: &str, tests: &mut [TestFn]) {
                 (
                     c,
                     csharp_catch_reach(c, src),
-                    csharp_catch_body_swallows(c, src),
+                    csharp_catch_body_swallows(c, src, vocab),
                 )
             })
             .collect();
@@ -1569,12 +2177,14 @@ pub fn csharp(root: Node, src: &str, tests: &mut [TestFn]) {
         walk(body_node, &mut |n| {
             if matches!(
                 n.kind(),
-                "class_declaration" | "method_declaration" | "lambda_expression" | "try_statement"
-            ) {
+                "class_declaration" | "method_declaration" | "try_statement"
+            ) || (n.kind() == "lambda_expression" && !csharp_is_sync_callback(n, src))
+            {
                 return false;
             }
             if n.kind() == "invocation_expression"
-                && csharp_assert_method(n, src).is_some_and(|m| !m.starts_with("Throws"))
+                && (csharp_assert_method(n, src).is_some_and(|m| !m.starts_with("Throws"))
+                    || csharp_is_configured(n, src, vocab))
             {
                 attribute(
                     tests,
@@ -1597,88 +2207,202 @@ pub fn csharp(root: Node, src: &str, tests: &mut [TestFn]) {
 // Go
 // ---------------------------------------------------------------------------
 
-pub fn go(root: Node, src: &str, tests: &mut [TestFn]) {
+/// Methods of `testing.T` (and of a logger or `os`) that fail or end the test.
+const GO_FAILING_METHODS: &[&str] = &[
+    "Fatal", "Fatalf", "FailNow", "Fail", "Failf", "Error", "Errorf", "Exit",
+];
+
+/// Walks the nodes of a function body that belong to the function itself: a function
+/// literal inside it is another function, with its own deferred calls and panics.
+fn go_own_nodes<'a>(body: Node<'a>, visit: &mut dyn FnMut(Node<'a>)) {
+    walk_tree(body, &mut |n| {
+        if n != body && n.kind() == "func_literal" {
+            return false;
+        }
+        visit(n);
+        true
+    });
+}
+
+/// Whether `call` is a call of the built-in `name` (`recover`, `panic`).
+fn go_calls_builtin(call: Node, name: &str, src: &str) -> bool {
+    call.kind() == "call_expression"
+        && call
+            .child_by_field_name("function")
+            .is_some_and(|f| f.kind() == "identifier" && text(f, src) == name)
+}
+
+/// Whether a call in a deferred function fails the test, so that a panic it recovered
+/// from is not swallowed: `panic(..)`, a failing method of `testing.T` (`t.Fatal(r)`,
+/// `t.Errorf(..)`, `t.Fail()`), any `require` / `assert` call (`require.Nil(t, r)`), a
+/// suite's (`s.Require().Nil(r)`), or a helper the configuration lists.
+///
+/// `err.Error()` formats an error and `fmt.Errorf(..)` builds one: neither fails the test.
+fn go_call_fails_the_test(call: Node, src: &str, vocab: &AssertVocabulary) -> bool {
+    let Some(function) = call.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() == "identifier" {
+        let name = text(function, src);
+        return name == "panic" || configured(name, vocab);
+    }
+    if function.kind() != "selector_expression" {
+        return false;
+    }
+    let (Some(on), Some(method)) = (
+        function.child_by_field_name("operand"),
+        function.child_by_field_name("field"),
+    ) else {
+        return false;
+    };
+    let method = text(method, src);
+    if configured(method, vocab) {
+        return true;
+    }
+    match on.kind() {
+        "identifier" => {
+            let on = text(on, src);
+            if matches!(on, "require" | "assert") {
+                return true;
+            }
+            if !GO_FAILING_METHODS.contains(&method) || on == "fmt" {
+                return false;
+            }
+            // `t.Error(r)` reports; `err.Error()` takes no argument.
+            method != "Error"
+                || call
+                    .child_by_field_name("arguments")
+                    .is_some_and(|a| a.named_child_count() > 0)
+        }
+        // `s.Require().NoError(..)`, `s.Assert().Nil(..)`, `s.T().Fatal(..)`.
+        "call_expression" => {
+            let through = on
+                .child_by_field_name("function")
+                .filter(|f| f.kind() == "selector_expression")
+                .and_then(|f| f.child_by_field_name("field"))
+                .map_or("", |f| text(f, src));
+            matches!(through, "Require" | "Assert")
+                || (through == "T" && GO_FAILING_METHODS.contains(&method))
+        }
+        _ => GO_FAILING_METHODS.contains(&method) && method != "Error",
+    }
+}
+
+/// Whether a `defer` statement runs a function that calls `recover()` and then lets the
+/// test go on as passed. The function is a literal, or one the file declares; any other
+/// (a method, a function of another file) is not read.
+fn go_defer_swallows(
+    defer: Node,
+    declared: &std::collections::HashMap<&str, Node>,
+    src: &str,
+    vocab: &AssertVocabulary,
+) -> bool {
+    let function = find_child_by_kind(defer, "call_expression")
+        .and_then(|call| call.child_by_field_name("function"));
+    let body = match function {
+        Some(f) if f.kind() == "func_literal" => f.child_by_field_name("body"),
+        Some(f) if f.kind() == "identifier" => declared.get(text(f, src)).copied(),
+        _ => None,
+    };
+    let Some(body) = body else {
+        return false;
+    };
+    let mut recovers = false;
+    go_own_nodes(body, &mut |n| {
+        recovers = recovers || go_calls_builtin(n, "recover", src);
+    });
+    if !recovers {
+        return false;
+    }
+    let mut fails = false;
+    walk(body, &mut |n| {
+        fails = fails || (n.kind() == "call_expression" && go_call_fails_the_test(n, src, vocab));
+        !fails
+    });
+    !fails
+}
+
+pub fn go(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabulary) {
     if tests.is_empty() {
         return;
     }
-    walk(root, &mut |node| {
-        if node.kind() != "function_declaration" {
-            return true;
+    // The functions the file declares, by name: a deferred function, or a check that
+    // panics, may be one of them.
+    let mut declared = std::collections::HashMap::new();
+    walk_tree(root, &mut |n| {
+        if n.kind() == "function_declaration" {
+            if let (Some(name), Some(body)) =
+                (n.child_by_field_name("name"), n.child_by_field_name("body"))
+            {
+                declared.insert(text(name, src), body);
+            }
         }
-        let fn_name = node
-            .child_by_field_name("name")
-            .map_or("", |n| text(n, src));
-        if !fn_name.starts_with("Test") {
-            return true;
-        }
+        true
+    });
+    let panics = |body: Node| {
+        let mut found = false;
+        go_own_nodes(body, &mut |n| {
+            found = found || go_calls_builtin(n, "panic", src);
+        });
+        found
+    };
 
+    walk(root, &mut |node| {
+        if !matches!(
+            node.kind(),
+            "function_declaration" | "method_declaration" | "func_literal"
+        ) {
+            return true;
+        }
         let Some(body) = node.child_by_field_name("body") else {
             return true;
         };
 
-        let mut recover_defer_line: Option<usize> = None;
-        walk(body, &mut |n| {
-            if n.kind() == "defer_statement" {
-                let defer_text = text(n, src);
-                if defer_text.contains("recover()") {
-                    let mut re_panics_or_fails = false;
-                    walk(n, &mut |d| {
-                        if d.kind() == "call_expression" {
-                            let callee = d
-                                .child_by_field_name("function")
-                                .map_or("", |f| text(f, src));
-                            // `t.Fail()`, `require.Fail(t, ..)`, `assert.Failf(t, ..)`:
-                            // the method name, read from the selector node.
-                            let fails_by_name = d
-                                .child_by_field_name("function")
-                                .filter(|f| f.kind() == "selector_expression")
-                                .and_then(|f| f.child_by_field_name("field"))
-                                .is_some_and(|f| matches!(text(f, src), "Fail" | "Failf"));
-                            if callee == "panic"
-                                || callee.contains(".Fatal")
-                                || callee.contains(".FailNow")
-                                || callee.contains(".Error")
-                                || fails_by_name
-                            {
-                                re_panics_or_fails = true;
-                                return false;
-                            }
-                        }
-                        true
-                    });
-                    if !re_panics_or_fails {
-                        recover_defer_line = Some(n.start_position().row + 1);
-                    }
-                }
+        // The first deferred function of this function that swallows a panic: it is in
+        // force for what runs after the `defer` statement.
+        let mut handler: Option<Node> = None;
+        go_own_nodes(body, &mut |n| {
+            if n.kind() == "defer_statement"
+                && handler.is_none_or(|h| n.start_byte() < h.start_byte())
+                && go_defer_swallows(n, &declared, src, vocab)
+            {
+                handler = Some(n);
             }
-            true
         });
+        let Some(handler) = handler else {
+            return true;
+        };
+        let handler_line = handler.start_position().row + 1;
 
-        if let Some(handler_line) = recover_defer_line {
-            walk(body, &mut |n| {
-                if n.kind() == "call_expression" {
-                    let callee = n
-                        .child_by_field_name("function")
-                        .map_or("", |f| text(f, src));
-                    if callee.starts_with("require.") || callee.starts_with("assert.") {
-                        let line = n.start_position().row + 1;
-                        if line > handler_line {
-                            attribute(
-                                tests,
-                                CaughtAssertion {
-                                    line,
-                                    span: site(n).1,
-                                    tautology: false,
-                                    handler_line,
-                                    detail: "recover() catches assertion panic".to_string(),
-                                },
-                            );
-                        }
-                    }
-                }
+        go_own_nodes(body, &mut |n| {
+            if n.kind() != "call_expression" || n.start_byte() < handler.end_byte() {
+                return;
+            }
+            // A `panic(..)` written in the test is a check the pack does not count; a
+            // call to a function of the file that panics is one it does.
+            let counted = if go_calls_builtin(n, "panic", src) {
+                false
+            } else if n
+                .child_by_field_name("function")
+                .filter(|f| f.kind() == "identifier")
+                .and_then(|f| declared.get(text(f, src)))
+                .is_some_and(|helper| panics(*helper))
+            {
                 true
-            });
-        }
+            } else {
+                return;
+            };
+            attribute(
+                tests,
+                CaughtAssertion {
+                    line: n.start_position().row + 1,
+                    span: site(n).1,
+                    tautology: !counted,
+                    handler_line,
+                    detail: "recover() swallows the panic of a check".to_string(),
+                },
+            );
+        });
         true
     });
 }
@@ -1818,7 +2542,7 @@ mod tests {
 
     fn go(handler: &str) -> Vec<(usize, usize)> {
         let src = format!(
-            "package p\nfunc TestA(t *testing.T) {{\n\tdefer func() {{\n\t\tif r := recover(); r != nil {{\n\t\t\t{handler}\n\t\t}}\n\t}}()\n\trequire.Equal(t, 4, add(2, 2))\n}}\n"
+            "package p\nfunc TestA(t *testing.T) {{\n\tdefer func() {{\n\t\tif r := recover(); r != nil {{\n\t\t\t{handler}\n\t\t}}\n\t}}()\n\tmustEqual(4, add(2, 2))\n}}\nfunc mustEqual(a, b int) {{\n\tif a != b {{\n\t\tpanic(\"not equal\")\n\t}}\n}}\n"
         );
         caught_lines(&crate::ast::r#go::GoPack, "p_test.go", &src)
     }
@@ -1967,7 +2691,7 @@ mod tests {
             "    assert!(matches!(r, Err(_)));\n",
             "    r.unwrap();\n",
             "    if let Err(e) = r {\n        std::panic::resume_unwind(e);\n    }\n",
-            "    match r {\n        Ok(()) => panic!(\"no\"),\n        Err(_) => {}\n    }\n",
+            "    match r {\n        Ok(()) => {}\n        Err(e) => std::panic::resume_unwind(e),\n    }\n",
             "    let failed = r.is_err();\n    assert!(failed);\n",
         ] {
             assert_eq!(rs(&format!("{UNWIND}{checked}")), NONE, "{checked}");
@@ -1979,6 +2703,8 @@ mod tests {
             "    drop(r);\n",
             "    println!(\"{:?}\", r);\n",
             "    match r {\n        Ok(()) => {}\n        Err(_) => {}\n    }\n",
+            // The arm that fails is the one taken when the assertion held.
+            "    match r {\n        Ok(()) => panic!(\"no\"),\n        Err(_) => {}\n    }\n",
             "    let failed = r.is_err();\n",
         ] {
             assert_eq!(rs(&format!("{UNWIND}{dropped}")), vec![(3, 3)], "{dropped}");
@@ -2172,12 +2898,158 @@ mod tests {
         assert_eq!(go("assert.Failf(t, \"panicked\", \"%v\", r)"), NONE);
     }
 
-    /// Pending the decision on how `recover()` is read (#569): what it reports today.
+    /// #627: a check that panics is caught by a deferred `recover()` that only logs or
+    /// formats the error, and not by one that fails the test.
     #[test]
-    fn pinned_go_recovering_defer_reports_as_before() {
+    fn go_recovering_defer_swallows_a_panicking_check_unless_it_fails_the_test() {
         assert_eq!(go("log.Println(r)"), vec![(8, 3)]);
         assert_eq!(go("t.Fatal(r)"), NONE);
-        assert_eq!(go("log.Println(r.(error).Error())"), NONE);
+        assert_eq!(go("log.Println(r.(error).Error())"), vec![(8, 3)]);
+    }
+
+    /// A Go test whose deferred function runs `deferred` and whose body then runs `check`;
+    /// `mustEqual` is a function of the file that panics.
+    fn go_with(deferred: &str, check: &str) -> Vec<(usize, usize)> {
+        let src = format!(
+            "package p\nfunc TestA(t *testing.T) {{\n\tdefer func() {{\n\t\t{deferred}\n\t}}()\n\t{check}\n}}\nfunc mustEqual(a, b int) {{\n\tif a != b {{\n\t\tpanic(\"not equal\")\n\t}}\n}}\n"
+        );
+        caught_lines(&crate::ast::r#go::GoPack, "p_test.go", &src)
+    }
+
+    /// #627: `require`, `assert` and `t.Fatal` do not panic, so a `recover()` does not
+    /// catch them; a check that panics is caught unless the deferred function fails
+    /// the test.
+    #[test]
+    fn go_recover_catches_a_check_that_panics_and_nothing_else() {
+        const PANICS: &str = "mustEqual(4, add(2, 2))";
+        for not_caught in [
+            "require.Equal(t, 4, add(2, 2))",
+            "assert.Equal(t, 4, add(2, 2))",
+            "if add(2, 2) != 4 {\n\t\tt.Fatal(\"no\")\n\t}",
+            "other(4, add(2, 2))",
+        ] {
+            assert_eq!(go_with("_ = recover()", not_caught), NONE, "{not_caught}");
+        }
+        assert_eq!(go_with("_ = recover()", PANICS), vec![(6, 3)]);
+        assert_eq!(
+            go_with(
+                "_ = recover()",
+                "if add(2, 2) != 4 {\n\t\tpanic(\"no\")\n\t}"
+            ),
+            vec![(7, 3)]
+        );
+        for swallowing in [
+            "log.Println(recover())",
+            "if r := recover(); r != nil {\n\t\t\tlog.Println(r.(error).Error())\n\t\t}",
+            "_ = fmt.Errorf(\"%v\", recover())",
+            // `err.Error()` takes no argument: it formats, where `t.Error(r)` reports.
+            "err := asError(recover())\n\t\tlog.Println(err.Error())",
+        ] {
+            assert_eq!(go_with(swallowing, PANICS).len(), 1, "{swallowing}");
+        }
+        for failing in [
+            "if r := recover(); r != nil {\n\t\t\tt.Fatal(r)\n\t\t}",
+            "if r := recover(); r != nil {\n\t\t\tt.Error(r)\n\t\t}",
+            "if r := recover(); r != nil {\n\t\t\tt.Errorf(\"%v\", r)\n\t\t}",
+            "if r := recover(); r != nil {\n\t\t\tpanic(r)\n\t\t}",
+            "require.Nil(t, recover())",
+            "s.Require().Nil(recover())",
+            // No `recover()`: the panic is not caught at all.
+            "cleanup()",
+            // A `recover()` in a function literal of the deferred function recovers nothing.
+            "go func() {\n\t\t\t_ = recover()\n\t\t}()",
+        ] {
+            assert_eq!(go_with(failing, PANICS), NONE, "{failing}");
+        }
+        // A subtest is a function of its own: the `defer` of the test around it does not
+        // catch what the subtest's function panics with.
+        assert_eq!(
+            go_with(
+                "_ = recover()",
+                "t.Run(\"sub\", func(t *testing.T) {\n\t\tmustEqual(4, add(2, 2))\n\t})"
+            ),
+            NONE
+        );
+    }
+
+    /// #627: a class is read by what it may be an instance of.
+    #[test]
+    fn python_class_reach_is_read_from_the_tables_and_the_bases_of_the_file() {
+        use super::{py_name_reach, PyClasses, Reach};
+        let mut classes = PyClasses::new();
+        classes.insert("FromValue", vec!["ValueError"]);
+        classes.insert("FromException", vec!["Exception"]);
+        classes.insert("FromAssertion", vec!["AssertionError"]);
+        classes.insert("Chained", vec!["FromValue"]);
+        classes.insert("Mixed", vec!["FromValue", "FromAssertion"]);
+        classes.insert("FromElsewhere", vec!["Imported"]);
+        classes.insert("Computed", vec![""]);
+        classes.insert("Loop", vec!["Loop"]);
+        classes.insert("Plain", vec![]);
+        let reach = |name: &str| py_name_reach(name, &classes, &mut Vec::new());
+        for always in ["AssertionError", "Exception", "BaseException"] {
+            assert_eq!(reach(always), Reach::Always, "{always}");
+        }
+        for never in [
+            "KeyError",
+            "OSError",
+            "IOError",
+            "JSONDecodeError",
+            "FromValue",
+            "FromException",
+            "Chained",
+            "Plain",
+        ] {
+            assert_eq!(reach(never), Reach::Never, "{never}");
+        }
+        for maybe in [
+            "CheckFailed",
+            "FromAssertion",
+            "Mixed",
+            "FromElsewhere",
+            "Computed",
+            "Loop",
+        ] {
+            assert_eq!(reach(maybe), Reach::Maybe, "{maybe}");
+        }
+    }
+
+    /// #627: a Python handler that may catch the failure is reported only when its body
+    /// does nothing with it.
+    #[test]
+    fn python_handler_for_an_unknown_class_is_reported_only_when_it_plainly_swallows() {
+        let with = |handler: &str| py(&format!("    try:\n        assert f()\n{handler}"));
+        for swallowing in [
+            "    except CheckFailed:\n        pass\n",
+            "    except CheckFailed:\n        ...\n",
+            "    except CheckFailed as e:\n        print(e)\n",
+            "    except CheckFailed as e:\n        self.log.error(e)\n",
+            "    except CheckFailed as e:\n        warnings.warn(str(e))\n",
+            "    except (KeyError, mod.CheckFailed):\n        pass\n",
+        ] {
+            assert_eq!(with(swallowing), vec![(3, 4)], "{swallowing}");
+        }
+        for other in [
+            "    except CheckFailed:\n        raise\n",
+            "    except CheckFailed:\n        return\n",
+            "    except CheckFailed as e:\n        record(e)\n",
+            "    except CheckFailed as e:\n        dialog.error(e)\n",
+            "    except CheckFailed as e:\n        print(e)\n        seen = True\n",
+            "    except KeyError:\n        pass\n",
+        ] {
+            assert_eq!(with(other), NONE, "{other}");
+        }
+        // A handler that always catches the failure is judged as before.
+        assert_eq!(
+            with("    except AssertionError as e:\n        record(e)\n"),
+            vec![(3, 4)]
+        );
+        // A handler that may catch it and does not plainly swallow is passed over: the
+        // next one decides.
+        assert_eq!(
+            with("    except CheckFailed:\n        raise\n    except Exception:\n        pass\n"),
+            vec![(3, 6)]
+        );
     }
 
     #[test]
@@ -2386,11 +3258,23 @@ func TestCaught(t *testing.T) {
     defer func() {
         _ = recover()
     }()
-    require.Equal(t, 4, add(2, 2))
+    mustEqual(4, add(2, 2))
+}
+func mustEqual(a, b int) {
+    if a != b {
+        panic("not equal")
+    }
 }
 "#;
         let caught = caught_lines(&crate::ast::r#go::GoPack, "p_test.go", pos_src);
         assert_eq!(caught, vec![(8, 5)]);
+        // An assertion that does not panic is not caught by the `recover()`.
+        let not_caught =
+            pos_src.replace("mustEqual(4, add(2, 2))", "require.Equal(t, 4, add(2, 2))");
+        assert_eq!(
+            caught_lines(&crate::ast::r#go::GoPack, "p_test.go", &not_caught),
+            NONE
+        );
 
         let neg_src = r#"
 package p

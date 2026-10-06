@@ -154,6 +154,8 @@ pub const PHP_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
             ("nullsafe_member_call_expression", "object", "name"),
             ("scoped_call_expression", "scope", "name"),
         ],
+        bare: &[],
+        tokens: &[],
     };
 
 pub const PHP_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {

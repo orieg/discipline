@@ -139,7 +139,7 @@ impl LanguagePack for RustPack {
         }
         super::bounds::rust(root, src, &mut cx.facts.tests);
         super::expectations::rust(root, src, &mut cx.facts.tests);
-        super::caught_assertions::rust(root, src, &mut cx.facts.tests);
+        super::caught_assertions::rust(root, src, &mut cx.facts.tests, vocab);
         cx.facts.prose = super::prose::extract(
             root,
             src,
@@ -1103,7 +1103,7 @@ impl<'a> Extractor<'a> {
         }];
         super::bounds::rust(root, &fake_fn, &mut read);
         super::expectations::rust(root, &fake_fn, &mut read);
-        super::caught_assertions::rust(root, &fake_fn, &mut read);
+        super::caught_assertions::rust(root, &fake_fn, &mut read, self.vocab);
         let [read] = read;
         let file_byte = |byte: usize| body_node.start_byte() + byte.saturating_sub(PREFIX.len());
         for mut bound in read.bounds {
@@ -2367,6 +2367,8 @@ pub const RUST_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
     super::method_checks::ReceiverCalls {
         member: &[("call_expression", "function", "field_expression", "field")],
         direct: &[],
+        bare: &[],
+        tokens: &["token_tree"],
     };
 
 pub const RUST_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {

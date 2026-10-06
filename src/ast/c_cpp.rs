@@ -305,6 +305,8 @@ pub const C_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
     super::method_checks::ReceiverCalls {
         member: &[("call_expression", "function", "field_expression", "field")],
         direct: &[],
+        bare: &[],
+        tokens: &[],
     };
 
 pub const C_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
@@ -577,42 +579,7 @@ impl<'a> CCppExtractor<'a> {
                 ) {
                     let (fn_name, _) = self.inspect_declarator(decl);
                     if !fn_name.is_empty() {
-                        let mut helper_fn = TestFn::default();
-                        let mut dummy_calls = Vec::new();
-                        self.extract_assertions_in_body(body, &mut helper_fn, &mut dummy_calls);
-                        super::dispatch_calls(body, self.src, &C_DISPATCH, &mut dummy_calls);
-                        self.helpers.insert(
-                            fn_name.to_string(),
-                            super::HelperFacts {
-                                total_asserts: helper_fn.total_asserts,
-                                strong_asserts: helper_fn.strong_asserts,
-                                tautologies: helper_fn.tautologies,
-                                fatal_asserts: helper_fn.fatal_asserts,
-                                wraps: super::forwarding_wrapper_callee(
-                                    body,
-                                    &C_WRAPPER,
-                                    &C_LOCALS,
-                                    &dummy_calls,
-                                    self.src,
-                                ),
-                            },
-                        );
-                        let line = node.start_position().row + 1;
-                        let end_line = node.end_position().row + 1;
-                        self.facts.push_helper(
-                            super::TestHelperFacts {
-                                name: fn_name.to_string(),
-                                line,
-                                end_line,
-                                total_asserts: helper_fn.total_asserts,
-                                strong_asserts: helper_fn.strong_asserts,
-                                tautologies: helper_fn.tautologies,
-                                fatal_asserts: helper_fn.fatal_asserts,
-                                helper_checks: 0,
-                            },
-                            dummy_calls.clone(),
-                        );
-                        self.helper_calls.insert(fn_name.to_string(), dummy_calls);
+                        self.record_helper(node, body, fn_name.to_string());
                     }
                 }
                 i += 1;
@@ -659,6 +626,20 @@ impl<'a> CCppExtractor<'a> {
                 }
             }
 
+            // A class or struct (also one a template declares): the member functions
+            // defined inside its body are helpers, named `Class::method` as the ones
+            // defined outside it are.
+            if matches!(kind, "class_specifier" | "struct_specifier") {
+                self.record_member_functions(node);
+            } else if kind == "template_declaration" {
+                let mut c = node.walk();
+                for child in node.children(&mut c) {
+                    if matches!(child.kind(), "class_specifier" | "struct_specifier") {
+                        self.record_member_functions(child);
+                    }
+                }
+            }
+
             // 3. Recurse into namespaces, linkage specs, declaration lists
             if matches!(
                 kind,
@@ -672,6 +653,86 @@ impl<'a> CCppExtractor<'a> {
             }
 
             i += 1;
+        }
+    }
+
+    /// Records the function `node` with `body` as a helper named `name`: what it checks,
+    /// and the calls it makes.
+    fn record_helper(&mut self, node: Node, body: Node, name: String) {
+        let mut helper_fn = TestFn::default();
+        let mut dummy_calls = Vec::new();
+        self.extract_assertions_in_body(body, &mut helper_fn, &mut dummy_calls);
+        super::dispatch_calls(body, self.src, &C_DISPATCH, &mut dummy_calls);
+        self.helpers.insert(
+            name.clone(),
+            super::HelperFacts {
+                total_asserts: helper_fn.total_asserts,
+                strong_asserts: helper_fn.strong_asserts,
+                tautologies: helper_fn.tautologies,
+                fatal_asserts: helper_fn.fatal_asserts,
+                wraps: super::forwarding_wrapper_callee(
+                    body,
+                    &C_WRAPPER,
+                    &C_LOCALS,
+                    &dummy_calls,
+                    self.src,
+                ),
+            },
+        );
+        let line = node.start_position().row + 1;
+        let end_line = node.end_position().row + 1;
+        self.facts.push_helper(
+            super::TestHelperFacts {
+                name: name.clone(),
+                line,
+                end_line,
+                total_asserts: helper_fn.total_asserts,
+                strong_asserts: helper_fn.strong_asserts,
+                tautologies: helper_fn.tautologies,
+                fatal_asserts: helper_fn.fatal_asserts,
+                helper_checks: 0,
+            },
+            dummy_calls.clone(),
+        );
+        self.helper_calls.insert(name, dummy_calls);
+    }
+
+    /// Records the member functions a class or struct defines inside its body (also
+    /// behind `template<..>`) as helpers named `Class::method`. A member that is only
+    /// declared there has no body to read.
+    fn record_member_functions(&mut self, class: Node) {
+        let (Some(name), Some(body)) = (
+            class.child_by_field_name("name"),
+            class.child_by_field_name("body"),
+        ) else {
+            return;
+        };
+        let class_name = self.text(name);
+        let mut cursor = body.walk();
+        let members: Vec<Node> = body.children(&mut cursor).collect();
+        for member in members {
+            let function = if member.kind() == "template_declaration" {
+                let mut c = member.walk();
+                let inner = member
+                    .children(&mut c)
+                    .find(|n| n.kind() == "function_definition");
+                inner
+            } else {
+                (member.kind() == "function_definition").then_some(member)
+            };
+            let Some(function) = function else {
+                continue;
+            };
+            let (Some(decl), Some(fn_body)) = (
+                function.child_by_field_name("declarator"),
+                function.child_by_field_name("body"),
+            ) else {
+                continue;
+            };
+            let (fn_name, _) = self.inspect_declarator(decl);
+            if !fn_name.is_empty() {
+                self.record_helper(function, fn_body, format!("{class_name}::{fn_name}"));
+            }
         }
     }
 
