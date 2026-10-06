@@ -961,7 +961,8 @@ impl<'a> Extractor<'a> {
                     ignored,
                     ci_verdict: ci_verdict.filter(|_| conditional_ignore.is_some()),
                     conditional_ignore,
-                    should_panic,
+                    should_panic: should_panic.clone(),
+                    expected_exceptions: should_panic.into_iter().collect(),
                     ..Default::default()
                 };
 
