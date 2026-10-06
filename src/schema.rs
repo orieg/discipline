@@ -725,7 +725,7 @@ pub fn generate_schema() -> Value {
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
                     "pinned_version": { "type": ["string", "null"], "description": "Explicit MSRV version string (e.g. \"1.90.0\")" },
-                    "command": { "type": ["string", "null"], "description": "Command to run to verify MSRV compatibility" }
+                    "command": { "type": ["string", "null"], "description": "Command to run to verify MSRV compatibility. It is executed, so a change under review cannot add or alter it" }
                 }
             },
             "MiriGate": {
@@ -735,7 +735,7 @@ pub fn generate_schema() -> Value {
                     "enabled": { "type": "boolean", "description": "Whether this gate is active" },
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
-                    "args": { "$ref": "#/$defs/StringListOrReset", "description": "Additional CLI arguments passed to cargo miri test" },
+                    "args": { "$ref": "#/$defs/StringListOrReset", "description": "Additional CLI arguments passed to cargo miri test, one argument per item (ASCII letters, digits and _ . / : = , @ + -). They are executed, so a change under review cannot add or alter them" },
                     "timeout_seconds": { "type": "integer", "description": "Maximum execution time in seconds before failing closed (default: 600)" }
                 }
             },
@@ -746,8 +746,8 @@ pub fn generate_schema() -> Value {
                     "enabled": { "type": "boolean", "description": "Whether this gate is active" },
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
-                    "sanitizer": { "type": "string", "description": "Sanitizer name to activate (e.g. \"address\", \"thread\")" },
-                    "canary": { "type": "boolean", "description": "Whether to verify a negative-control race canary before main tests" },
+                    "sanitizer": { "type": "string", "description": "Sanitizer name to activate (e.g. \"address\", \"thread\"): a lower-case letter, then lower-case letters, digits and -. It reaches the command that runs, so a change under review cannot alter it" },
+                    "canary": { "type": "boolean", "description": "Whether to verify a negative-control race canary before main tests. It selects a command that runs, so a change under review cannot alter it" },
                     "timeout_seconds": { "type": "integer", "description": "Maximum execution time in seconds (default: 300)" }
                 }
             }

@@ -160,6 +160,18 @@ pub fn run_command_bounded(
 ) -> Result<CommandRunResult> {
     let tokens = split_command_line(cmd_str)
         .with_context(|| format!("invalid command line for `{name}`"))?;
+    run_argv_bounded(name, &tokens, timeout_secs, repo_root)
+}
+
+/// [`run_command_bounded`] for a command already split into program and arguments. Each
+/// element reaches the process as exactly one argument: nothing here splits it again, so
+/// a configured value placed in one element cannot become several.
+pub fn run_argv_bounded(
+    name: &str,
+    tokens: &[String],
+    timeout_secs: u64,
+    repo_root: &Path,
+) -> Result<CommandRunResult> {
     if tokens.is_empty() {
         bail!("empty command string for `{name}`");
     }
@@ -257,8 +269,9 @@ pub fn run_command_bounded(
 }
 
 /// Whether the runner's environment authorises a change to the commands a gate executes:
-/// `DISCIPLINE_ALLOW_COMMAND_CHANGE`, which the change under review cannot set. The
-/// `command` gate and `test-floor`'s `test_command` share this one switch.
+/// `DISCIPLINE_ALLOW_COMMAND_CHANGE`, which the change under review cannot set. Every
+/// gate that executes configured text shares this one switch: `command`, `test-floor`'s
+/// `test_command`, and `msrv`, `miri` and `sanitizers` ([`configured_execution`]).
 ///
 /// `DISCIPLINE_COMMAND` and `DISCIPLINE_COMMAND_<NAME>` are not this switch. Each
 /// supplies one command in place of a configured one ([`runner_supplies_command`]) and
@@ -292,6 +305,142 @@ fn runner_command(entry: Option<&str>) -> Option<String> {
 /// a change to it is moot; nothing else about the table or the entry is.
 pub(crate) fn runner_supplies_command(entry: Option<&str>) -> bool {
     runner_command(entry).is_some()
+}
+
+/// The keys of one gate's table whose value reaches a process invocation, each with its
+/// value rendered so that two sides compare equal exactly when they run the same thing.
+pub(crate) type ExecutedKeys = Vec<(&'static str, String)>;
+
+/// The keys of `head` whose value is not the one `base` has. Both lists come from the
+/// same gate, so a key one side lacks differs as well.
+pub(crate) fn executed_keys_that_differ(
+    head: &[(&'static str, String)],
+    base: &[(&'static str, String)],
+) -> Vec<&'static str> {
+    head.iter()
+        .filter(|(key, value)| {
+            base.iter()
+                .find(|(base_key, _)| base_key == key)
+                .is_none_or(|(_, base_value)| base_value != value)
+        })
+        .map(|(key, _)| *key)
+        .collect()
+}
+
+/// What the report tells the reader of a refused execution to do.
+pub(crate) const EXECUTED_KEY_REMEDIATION: &str = "Configure the key in the merge base ref's discipline.toml, or set DISCIPLINE_ALLOW_COMMAND_CHANGE on the runner to accept the change. DISCIPLINE_COMMAND supplies the `command` gate's command and authorises nothing here.";
+
+/// What a gate that executes configured text may do, decided before it runs anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ConfiguredExecution {
+    /// Nothing the gate would execute is text the change supplies, or the runner
+    /// authorised it. `enabling_note` is set when the base side does not enable the
+    /// gate: that it runs at all is this change's doing, which the report should say.
+    Vouched { enabling_note: Option<String> },
+    /// The change supplies what the gate would execute, and the runner did not authorise
+    /// it: the gate runs nothing and reports `message`.
+    Refused { message: String },
+}
+
+/// The guard of every gate that executes configured text other than `command` and
+/// `test-floor`, which have their own: `msrv`, `miri` and `sanitizers`.
+///
+/// `executed` lists the keys of `gate`'s table that reach a process invocation. Under
+/// the default policy side the configuration in force is the change's own copy, so each
+/// is compared with the merge base copy: a key that differs is text the change supplies.
+/// A base configuration that is absent, or does not load, vouches for nothing, so the
+/// head is compared with the gate's defaults. Under `--policy-from base` the copy in
+/// force is the base's and the two are equal.
+///
+/// A run with no base at all (`--staged` before the first commit) has nothing to compare
+/// with. On a developer's machine the configuration is the developer's own and it runs;
+/// on a CI runner it is the change's, so it is compared with the defaults.
+///
+/// [`runner_authorises_command_change`] accepts every difference. `DISCIPLINE_COMMAND`
+/// does not: it supplies a command of the `command` gate.
+pub(crate) fn configured_execution(
+    ctx: &Context,
+    gate: &str,
+    executed: &dyn Fn(&crate::config::Gates) -> ExecutedKeys,
+) -> Result<ConfiguredExecution> {
+    let head = executed(&ctx.config.gates);
+    let unvouched = executed(&crate::config::Gates::default());
+    let enabled = |gates: &crate::config::Gates| gates.settings(gate).is_some_and(|s| s.enabled());
+    let has_base = ctx.git.has_base();
+    let (keys, enabled_here) = if has_base {
+        let base = ctx
+            .base_config_text()?
+            .and_then(|src| DisciplineConfig::from_toml_str(&src).ok());
+        let enabled_here = match &base {
+            Some(base) if enabled(&base.gates) => None,
+            Some(_) => Some(format!(
+                "`[gates.{gate}]` is disabled on the base side and this change enables it"
+            )),
+            None => Some(format!(
+                "the base side has no configuration that loads and this change enables `[gates.{gate}]`"
+            )),
+        };
+        let base_keys = base.map_or(unvouched, |base| executed(&base.gates));
+        (executed_keys_that_differ(&head, &base_keys), enabled_here)
+    } else if crate::gitctx::is_ci_environment() {
+        (executed_keys_that_differ(&head, &unvouched), None)
+    } else {
+        (Vec::new(), None)
+    };
+    let named = keys
+        .iter()
+        .map(|k| format!("`{k}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if keys.is_empty() {
+        let enabling_note = enabled_here.map(|said| {
+            format!("{said}: what ran is what the base side vouches for (the values it configures, else the gate's built-in command)")
+        });
+        return Ok(ConfiguredExecution::Vouched { enabling_note });
+    }
+    if runner_authorises_command_change() {
+        let enabling_note = enabled_here
+            .map(|said| format!("{said}: the runner authorised what the change set in {named}"));
+        return Ok(ConfiguredExecution::Vouched { enabling_note });
+    }
+    let message = if has_base {
+        format!(
+            "The change adds or alters {named} in `[gates.{gate}]`, which the gate executes, without runner environment authorization; text a gate executes cannot be introduced or altered by the change it judges, so nothing was run."
+        )
+    } else {
+        format!(
+            "This CI run has no base ref to compare {named} in `[gates.{gate}]` with, and no runner environment authorization; text a gate executes cannot be introduced by the change it judges, so nothing was run."
+        )
+    };
+    Ok(ConfiguredExecution::Refused { message })
+}
+
+/// [`configured_execution`] for the gate `out` reports for. `None` when the execution
+/// is refused: `kind` is reported at the configuration file and the gate must return
+/// without running anything. Otherwise the notes to record once the gate has run
+/// something.
+pub(crate) fn vouched_execution(
+    ctx: &Context,
+    out: &mut GateOutcome,
+    severity: crate::config::Severity,
+    kind: &crate::findings::FindingKind,
+    executed: &dyn Fn(&crate::config::Gates) -> ExecutedKeys,
+) -> Result<Option<Vec<String>>> {
+    Ok(match configured_execution(ctx, out.gate, executed)? {
+        ConfiguredExecution::Vouched { enabling_note } => Some(enabling_note.into_iter().collect()),
+        ConfiguredExecution::Refused { message } => {
+            out.examined = 0;
+            out.push(
+                severity,
+                kind,
+                Some(ctx.config_path),
+                None,
+                message,
+                EXECUTED_KEY_REMEDIATION,
+            );
+            None
+        }
+    })
 }
 
 /// Whether two `[gates.command]` tables differ in anything the gate executes.
@@ -1736,6 +1885,41 @@ mod tests {
     fn test_split_command_line_unclosed_quote_fails() {
         assert!(split_command_line("echo \"unclosed").is_err());
         assert!(split_command_line("echo 'unclosed").is_err());
+    }
+
+    #[test]
+    fn a_key_differs_when_its_value_does_or_the_other_side_lacks_it() {
+        let side = |pairs: &[(&'static str, &str)]| -> ExecutedKeys {
+            pairs.iter().map(|(k, v)| (*k, v.to_string())).collect()
+        };
+        let base = side(&[("sanitizer", "address"), ("canary", "false")]);
+        assert_eq!(executed_keys_that_differ(&base, &base), Vec::<&str>::new());
+        assert_eq!(
+            executed_keys_that_differ(
+                &side(&[("sanitizer", "thread"), ("canary", "false")]),
+                &base
+            ),
+            ["sanitizer"]
+        );
+        assert_eq!(
+            executed_keys_that_differ(&side(&[("sanitizer", "thread"), ("canary", "true")]), &base),
+            ["sanitizer", "canary"]
+        );
+        assert_eq!(
+            executed_keys_that_differ(&base, &side(&[("sanitizer", "address")])),
+            ["canary"]
+        );
+    }
+
+    #[test]
+    fn an_argv_element_is_one_argument_whatever_it_holds() {
+        let argv: Vec<String> = ["sh", "-c", "printf '%s|' \"$@\"", "sh", "a b", "c;d"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let res = run_argv_bounded("argv", &argv, 5, Path::new(".")).unwrap();
+        assert_eq!(res.stdout, "a b|c;d|");
+        assert!(run_argv_bounded("argv", &[], 5, Path::new(".")).is_err());
     }
 
     #[test]
