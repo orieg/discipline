@@ -323,6 +323,128 @@ fn a_force_push_of_a_branch_another_worktree_leased_is_refused() {
     assert_eq!(plain.code, 0, "{}", plain.stderr);
 }
 
+/// A shell command is parsed from an ASCII copy (the bash grammar's scanner reads out of
+/// bounds on a wide character after `{`, #618) and judged by its own text: a worktree
+/// directory and a branch whose names are not ASCII are refused, and named, as written.
+#[test]
+fn a_shell_command_with_non_ascii_words_is_judged_by_its_own_text() {
+    let repo = Repo::new();
+    std::fs::write(repo.path().join(".git/info/exclude"), "wt\u{e9}/\n").unwrap();
+    repo.git(&["worktree", "add", "-q", "-b", "feat/b", "wt\u{e9}"]);
+    repo.git(&["branch", "feat/\u{e9}t\u{e9}"]);
+    let main = repo.path().canonicalize().unwrap();
+    let take = repo.run_in_dir(
+        "wt\u{e9}",
+        &[
+            "lease",
+            "take",
+            "--agent",
+            "copilot",
+            "--session",
+            "s2",
+            "--branch",
+            "feat/\u{e9}t\u{e9}",
+        ],
+        &[],
+    );
+    assert_eq!(take.code, 0, "{}", take.stderr);
+    let other = format!("{})", main.join("wt\u{e9}").display());
+    for (agent, _) in AGENTS {
+        for (refused, names) in [
+            ("git -C wt\u{e9} commit -m \u{1f389}", other.as_str()),
+            (
+                "echo h\u{e9} > wt\u{e9}/\u{e9}chapp\u{e9}.txt",
+                other.as_str(),
+            ),
+            ("cd wt\u{e9}", other.as_str()),
+            (
+                "git push --force origin feat/\u{e9}t\u{e9}",
+                "force-pushes `feat/\u{e9}t\u{e9}`",
+            ),
+        ] {
+            let o = pretool(&main, agent, &shell(agent, &main, refused), &[]);
+            assert!(
+                denied(agent, &o),
+                "{agent} `{refused}`: {} {} {}",
+                o.code,
+                o.stdout,
+                o.stderr
+            );
+            assert!(
+                format!("{}{}", o.stdout, o.stderr).contains(names),
+                "{agent} `{refused}`: {} {}",
+                o.stdout,
+                o.stderr
+            );
+        }
+        for allowed in [
+            "git -C wt\u{e9} status",
+            "echo h\u{e9} > own-\u{e9}.txt",
+            // As long in bytes as the other worktree's name and the leased branch.
+            "cd wt\u{f1}",
+            "git push --force origin feat/\u{e8}t\u{e8}",
+            // What reaches the two `isdigit` calls of the grammar's brace-range scan.
+            "echo {\u{8e753}",
+            "echo {1..\u{8e753}}",
+        ] {
+            let o = pretool(&main, agent, &shell(agent, &main, allowed), &[]);
+            assert!(
+                !denied(agent, &o) && o.code == 0,
+                "{agent} `{allowed}`: {} {} {}",
+                o.code,
+                o.stdout,
+                o.stderr
+            );
+        }
+    }
+}
+
+/// The seeds of the `pretool_payload` fuzz target for #618: the input its run crashed
+/// on under AddressSanitizer, and the shortest commands that reach the two `isdigit`
+/// calls of the bash grammar's brace-range scan. The out-of-bounds read needs glibc to
+/// be seen; here each seed's command (what follows the selector byte, decoded as the
+/// target decodes it) goes through the hook and is answered.
+#[test]
+fn the_618_fuzz_seeds_are_committed_and_their_commands_are_answered() {
+    let (_repo, main, _wt2) = two_worktrees();
+    for (name, bytes) in [
+        (
+            "crash_wide_char_after_brace",
+            &b"\x05{\xf2\x8e\x9d\x93\x9a\xa0\x91\x9eme \n}\n"[..],
+        ),
+        ("wide_char_after_brace", "\0echo {\u{8e753}".as_bytes()),
+        (
+            "wide_char_after_brace_range",
+            "\0echo {1..\u{8e753}}".as_bytes(),
+        ),
+    ] {
+        let seed = std::fs::read(format!(
+            "{}/fuzz/corpus/pretool_payload/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(seed, bytes, "{name}");
+        // The recorded payload's command goes on after the replaced part (`&& cat
+        // b.txt`), so the seed's command is closed with a line of its own.
+        let command = format!("{}\ntrue", String::from_utf8_lossy(&seed[1..]));
+        assert!(command.contains("{\u{8e753}") || command.contains("{1..\u{8e753}"));
+        let quoted = serde_json::to_string(&command).unwrap();
+        let payload = shell("claude-code", &main, &quoted[1..quoted.len() - 1]);
+        let o = pretool(&main, "claude-code", &payload, &[]);
+        assert_eq!((o.code, o.stderr.as_str()), (0, ""), "{name}");
+        // The same command aimed at the other worktree is refused: it was read.
+        let aimed = serde_json::to_string(&format!("cd wt2 && {command}")).unwrap();
+        let payload = shell("claude-code", &main, &aimed[1..aimed.len() - 1]);
+        let o = pretool(&main, "claude-code", &payload, &[]);
+        assert!(
+            o.code == 2 && o.stderr.contains("worktree `wt2`"),
+            "{name}: {} {}",
+            o.code,
+            o.stderr
+        );
+    }
+}
+
 /// `discipline hook run --agent <agent> --event session-start` in `dir`, `payload` on stdin.
 fn session_start(dir: &Path, agent: &str, payload: &str) -> Out {
     session_start_args(dir, agent, payload, &[])
