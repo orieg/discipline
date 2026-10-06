@@ -1070,16 +1070,15 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
         let p = git.root().join(&args.baseline_file);
         if p.exists() {
             // An unreadable baseline is not an empty one: rewriting it would drop entries.
-            Some(
-                discipline::baseline::DisciplineBaseline::load_from_file(&p).with_context(
-                    || {
+            Some({
+                let shown = discipline::baseline::path_for_message(git.root(), &p);
+                discipline::baseline::DisciplineBaseline::load_from_file_named(&p, &shown)
+                    .with_context(|| {
                         format!(
-                            "existing baseline `{}` could not be read; fix or remove it first",
-                            args.baseline_file.display()
+                            "existing baseline `{shown}` could not be read; fix or remove it first"
                         )
-                    },
-                )?,
-            )
+                    })?
+            })
         } else {
             None
         }
@@ -1143,6 +1142,7 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
     let summary = run_checks(&config, args.suite, &ctx)?;
 
     let baseline_path = git.root().join(&args.baseline_file);
+    let baseline_shown = discipline::baseline::path_for_message(git.root(), &baseline_path);
     let reads = discipline::gitctx::ReadRecorder::new();
     let read_head = reads.head(&git);
 
@@ -1156,7 +1156,7 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
             .collect();
         let (migrated, report) = discipline::baseline::migrate(&old, &findings, &read_head);
         reads.finish()?;
-        migrated.write_to_file(&baseline_path)?;
+        migrated.write_to_file(&baseline_path, &baseline_shown)?;
         println!(
             "{} rewrote {} to fingerprint version {}: {} entr{} migrated, {} stale entr{} dropped",
             style::green("ok:"),
@@ -1234,7 +1234,7 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
     };
 
     if args.write {
-        baseline_obj.write_to_file(&baseline_path)?;
+        baseline_obj.write_to_file(&baseline_path, &baseline_shown)?;
         println!(
             "{} recorded {} grandfathered finding{} to {}",
             style::green("ok:"),

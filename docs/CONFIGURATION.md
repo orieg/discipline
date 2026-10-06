@@ -26,6 +26,10 @@ Discipline employs a 5-layer configuration hierarchy. With zero configuration, e
 
 Two `check` switches apply after layer 5: `--directive-sources` (`DISCIPLINE_DIRECTIVE_SOURCES`, action input `directive_sources`) replaces `directives.sources`, and `--fail-on-overrides` can only turn `fail_on_overrides` on.
 
+**The inline override and executed keys.** Layer 3 changes what is configured; it does not vouch for what is executed. The keys a gate starts a process from (`command`'s `command`, `preset`, `canary_command` and entries; `test-floor`'s `test_command`; `msrv`'s `command`; `miri`'s `args`; `sanitizers`' `sanitizer` and `canary`) are compared, in the configuration in force after every layer, with the base ref's `discipline.toml`. One that differs is not run and is reported as `untrusted-command-modification` (`untrusted-test-command` for `test-floor`), whether the difference comes from the change's file or from `--config-override` / `DISCIPLINE_CONFIG_OVERRIDE` / the action input `config_override`. A runner that supplies an executed key through the override also sets `DISCIPLINE_ALLOW_COMMAND_CHANGE`, the one switch that accepts it; see [the rule for every gate that executes configured text](GATES.md#command). `DISCIPLINE_COMMAND` and `DISCIPLINE_COMMAND_<NAME>` supply the `command` gate's command lines without it.
+
+**Checks made before any gate runs.** For the configuration in force, and for the change's own copy when the policy comes from the base ref, every glob list, every regular expression of every enabled gate (`extra_patterns`, `allow_patterns`, `extra_secret_patterns`, `forbidden_patterns`, `snapshot_ignore`, `issue-link`'s `pattern`, each `manifest-sync` rule's `extract_regex`, each `version-lockstep` source's `regex`, the entries of `ratio_satisfied_by`, and the `command` and `ci-integrity` patterns) is compiled, and the values that only work together are checked as a pair. One that fails stops the run with exit `2`, reason `configuration`, naming the gate and the key (`gates.manifest-sync.rules[0].extract_regex`, `gates.command.commands[api].snapshot_ignore`: an entry of a list of tables is named by its `name` when it has one, else by its index). A gate that would have returned before reading the value no longer passes with it unread.
+
 ### Merge Rules & Asymmetric List Resets
 
 `discipline.toml` is read over the built-in defaults key by key: a key it leaves out keeps its default, and a list it sets replaces the built-in list (`config-integrity` reports the edit). From layer 3 up, values merge onto the file's as TOML under strict typing (F6); a list key the file left out is inserted whole, so it replaces the built-in default:
@@ -229,7 +233,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.msrv.command` | string or null | *(unset)* | Command to run to verify MSRV compatibility. It is executed, so a change under review cannot add or alter it |
 | `gates.msrv.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.msrv.exempt_paths` | list | `[]` | File path globs exempted from this gate |
-| `gates.msrv.pinned_version` | string or null | *(unset)* | Explicit MSRV version string (e.g. "1.90.0") |
+| `gates.msrv.pinned_version` | string or null | *(unset)* | Explicit MSRV version string (e.g. "1.90.0"); config-integrity reports a change that lowers it, compared as a version, or removes it |
 | `gates.msrv.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.pii.agent_config_refs` | boolean | `true` | When true, flags references to personal agent configuration directories and playbook docs |
 | `gates.pii.agent_config_standard_paths` | boolean | `true` | With agent_config_refs: do not report a reference to an agent tool's home directory itself or to an entry the tool documents there (settings, hooks, skills, agents, commands, rules, plugins, MCP configuration, its instruction file); false reports every one |
@@ -287,7 +291,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.sandbox-config.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.sandbox-config.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.sandbox-config.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
-| `gates.sanitizers.canary` | boolean | `false` | Whether to verify a negative-control race canary before main tests. It selects a command that runs, so a change under review cannot alter it |
+| `gates.sanitizers.canary` | boolean | `false` | Whether to verify a negative-control race canary before main tests. It selects a command that runs, so a change under review cannot alter it. The canary is checked for ThreadSanitizer's diagnostic: with a sanitizer other than "thread" it is a configuration error |
 | `gates.sanitizers.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.sanitizers.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.sanitizers.sanitizer` | string | `"address"` | Sanitizer name to activate (e.g. "address", "thread"): a lower-case letter, then lower-case letters, digits and -. It reaches the command that runs, so a change under review cannot alter it |
@@ -1517,6 +1521,8 @@ When an authorized directive is parsed and applied:
 ## Grandfathering Baseline Mode
 
 When adopting Discipline on existing brownfield repositories, pre-existing code may trigger numerous violations across historical files (measured at v0.4.2 on two consumer repositories: 51 and 26 findings, nearly all pre-existing). Rather than disabling gates or littering inline directives across legacy files, Discipline provides a grandfathering baseline mode.
+
+A baseline that cannot be read, does not parse, or was named with `--baseline-file` and does not exist stops the run (exit `2`, reason `baseline`). The message names the file relative to the repository root when it is inside the repository, and by its file name alone when the path points outside it: the directory of such a file is the runner's, and can be a home directory, so it is not printed.
 
 ### 1. Generating a Baseline
 
