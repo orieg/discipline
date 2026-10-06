@@ -4374,6 +4374,63 @@ test tests::c: test
         },
     ),
     (
+        "config-integrity: an evidence key added over a built-in or preset default is a change from it, the default written down is not",
+        || {
+            use crate::config::DisciplineConfig;
+            use crate::guards::integrity::diff_configs_under;
+            let cfg = |body: &str| DisciplineConfig::from_toml_str(body);
+            let link = "[gates.issue-link]\nenabled = true\n";
+            let builtin = format!(
+                "{link}pattern = '{}'\n",
+                crate::guards::issue_link::DEFAULT_ISSUE_PATTERN
+            );
+            let mutants = "[gates.command]\npreset = \"cargo-mutants\"\n";
+            let guard = "zero_items_pattern = \"0 mutants tested\"\n";
+            let plain = "[gates.command]\ncommand = \"true\"\n";
+            let named = format!("{plain}preset = \"cargo-mutants\"\nzero_items_pattern = \"never\"\n");
+            let n = |base: &str, head: &str, authorised: bool| -> Result<usize> {
+                Ok(diff_configs_under(&cfg(base)?, &cfg(head)?, authorised)?.len())
+            };
+            Ok(n(link, &format!("{link}pattern = \".\"\n"), false)? == 1
+                && n(link, &builtin, false)? == 0
+                && n(&builtin, link, false)? == 0
+                && n(mutants, &format!("{mutants}command = \"true\"\n"), false)? == 1
+                && n(&format!("{mutants}{guard}"), mutants, false)? == 0
+                // A preset the head first names is the reference once the runner
+                // authorises the command change, and not before.
+                && n(plain, &named, true)? == 1
+                && n(plain, &named, false)? == 0)
+        },
+    ),
+    (
+        "command: a command the runner supplies makes only that command's change moot",
+        || {
+            use crate::config::DisciplineConfig;
+            use crate::guards::command::executed_definitions_differ_beyond;
+            let gate = |body: &str| -> Result<crate::config::CommandGate> {
+                Ok(DisciplineConfig::from_toml_str(&format!("[gates.command]\n{body}"))?
+                    .gates
+                    .command)
+            };
+            let table_only = |entry: Option<&str>| entry.is_none();
+            let base = gate("command = \"true\"\n")?;
+            Ok(
+                !executed_definitions_differ_beyond(&gate("command = \"false\"\n")?, &base, &table_only)
+                    && executed_definitions_differ_beyond(&gate("command = \"false\"\n")?, &base, &|_| false)
+                    && executed_definitions_differ_beyond(
+                        &gate("command = \"true\"\ncanary_command = \"false\"\n")?,
+                        &base,
+                        &table_only,
+                    )
+                    && executed_definitions_differ_beyond(
+                        &gate("command = \"true\"\npreset = \"cargo-deny\"\n")?,
+                        &base,
+                        &table_only,
+                    ),
+            )
+        },
+    ),
+    (
         "test-floor: runner collection rules filter uncollected files and undeclared feature cfgs",
         || {
             use crate::ast::runner_collection::{

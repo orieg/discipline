@@ -367,7 +367,7 @@
           "type": "string"
         },
         "snapshot": {
-          "description": "Repository-relative path of a committed file the command's stdout must match",
+          "description": "Repository-relative path of a committed file the command's stdout must match; read from the head side before any command runs",
           "type": "string"
         },
         "snapshot_ignore": {
@@ -441,7 +441,7 @@
           "$ref": "#/$defs/Severity"
         },
         "snapshot": {
-          "description": "Repository-relative path of a committed file the command's stdout must match",
+          "description": "Repository-relative path of a committed file the command's stdout must match; read from the head side before any command runs. Needs the table's own command or preset: entries do not inherit it",
           "type": "string"
         },
         "snapshot_ignore": {
@@ -665,7 +665,7 @@
           "$ref": "#/$defs/StringListOrReset"
         },
         "pattern": {
-          "description": "Custom regex pattern required in PR title or body",
+          "description": "Custom regex pattern required in PR title or body, in place of the built-in one; config-integrity judges adding it as the built-in pattern changed",
           "type": "string"
         },
         "reference_repos": {
@@ -1296,7 +1296,7 @@
           "$ref": "#/$defs/Severity"
         },
         "test_command": {
-          "description": "Custom command to list or count tests",
+          "description": "Custom command to list or count tests; run for at most 600 seconds with stdout captured up to 25 MiB, and a timeout or a listing cut off is exit 2",
           "type": "string"
         },
         "test_report": {

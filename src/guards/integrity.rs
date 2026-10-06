@@ -312,7 +312,12 @@ fn entry_tightened(key: &str, entry: &Value, base: &[Value], head: &[Value]) -> 
             // preset's instead of adding a check: stricter only when it is that value.
             preset_default(b, field).is_none_or(|d| Some(&d) == hv)
         } else {
-            bv == hv
+            // A field one side leaves to its preset reads as the preset's value, so the
+            // default written down, or removed again, is no edit.
+            let in_force = |t: &toml::Table, v: Option<&Value>| {
+                v.cloned().or_else(|| preset_default(t, field))
+            };
+            in_force(b, bv) == in_force(h, hv)
         }
     })
 }
@@ -323,8 +328,44 @@ fn entry_tightened(key: &str, entry: &Value, base: &[Value], head: &[Value]) -> 
 fn preset_default(table: &toml::Table, key: &str) -> Option<Value> {
     let preset = table.get("preset")?.as_str()?;
     super::presets::resolve_preset(preset)?
+        .supplied_default(key)
+        .map(|v| Value::String(v.to_string()))
+}
+
+/// [`preset_default`] for the keys that decide what evidence the command's output is held
+/// to and execute nothing: the guards of a preset.
+fn preset_guard_default(table: &toml::Table, key: &str) -> Option<Value> {
+    let preset = table.get("preset")?.as_str()?;
+    super::presets::resolve_preset(preset)?
         .replaced_default(key)
         .map(|v| Value::String(v.to_string()))
+}
+
+const FROM_PRESET: &str = "the base value is its preset's default";
+const FROM_BUILTIN: &str = "the base value is the built-in default";
+const FROM_NEW_PRESET: &str = "compared with the default of the preset this change names";
+
+/// Evidence keys of a `commands` entry a preset supplies a guard for.
+const PRESET_GUARD_KEYS: &[&str] = &[
+    "zero_items_pattern",
+    "canary_expected_diagnostic",
+    "snapshot",
+];
+
+/// What gate `gate` reads for the evidence key `key` when `table` leaves it unset, where
+/// unset is a value rather than "no such check", with the words the finding says it in:
+/// the built-in `issue-link` `pattern`, and a `command` key its table's preset supplies.
+/// Every other optional evidence key unset means the check it names is not made, so
+/// adding it adds a check (`optional_evidence_keys_are_inventoried` lists them).
+fn effective_default(gate: &str, table: &toml::Table, key: &str) -> Option<(Value, &'static str)> {
+    match (gate, key) {
+        ("issue-link", "pattern") => Some((
+            Value::String(super::issue_link::DEFAULT_ISSUE_PATTERN.to_string()),
+            FROM_BUILTIN,
+        )),
+        ("command", _) => preset_default(table, key).map(|v| (v, FROM_PRESET)),
+        _ => None,
+    }
 }
 
 /// Every item of the list `small` is in the list `big`; an absent list reads as empty.
@@ -541,7 +582,11 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                             .to_string(),
                     );
                 }
-                let weakenings = diff_configs(&base, head)?;
+                let weakenings = diff_configs_under(
+                    &base,
+                    head,
+                    super::command::runner_authorises_command_change(),
+                )?;
                 out.examined = Value::try_from(&base.gates)?
                     .as_table()
                     .map(|t| t.len())
@@ -984,6 +1029,19 @@ pub fn golden_output(ctx: &Context) -> Result<GateOutcome> {
 }
 
 pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<Vec<Weakening>> {
+    diff_configs_under(base, head, false)
+}
+
+/// [`diff_configs`], told whether the runner authorises a change to the commands a gate
+/// executes (`DISCIPLINE_ALLOW_COMMAND_CHANGE`). The authorisation covers what is
+/// executed, not what evidence is accepted: a `command` preset the head is then allowed to
+/// name becomes the reference its guards are compared with, so a guard key written beside
+/// the new preset in place of the preset's own is still reported.
+pub fn diff_configs_under(
+    base: &DisciplineConfig,
+    head: &DisciplineConfig,
+    command_change_authorised: bool,
+) -> Result<Vec<Weakening>> {
     let mut found = Vec::new();
 
     // Check [directives] table
@@ -1102,6 +1160,9 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
             // weakening when the absent reading is looser than the value removed.
             let Some(hv) = h.get(key) else {
                 match dir {
+                    // Unset reads as the default: removing that very value changes nothing.
+                    Direction::Evidence
+                        if effective_default(gate, h, key).is_some_and(|(d, _)| d == *bv) => {}
                     Direction::Evidence | Direction::Floor | Direction::Cap => {
                         note(w(key, Change::Removed).was(bv))
                     }
@@ -1215,18 +1276,29 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
         // A key only on head is an optional key the base left unset, judged by what unset
         // means: `ci_skip_severity` unset is the gate's `severity`; a tolerance in
         // `ABSENT_IS_NONE` unset adds none; a gate's `allow_hidden` unset inherits
-        // `[directives] allow_hidden`; a `command` key its base-side preset supplies unset
-        // is that preset's value. Any other added floor, cap or evidence key adds a check.
+        // `[directives] allow_hidden`; an evidence key with an effective default unset is
+        // that default (`effective_default`). Any other added floor, cap or evidence key
+        // adds a check.
+        let names_new_preset = gate == "command"
+            && command_change_authorised
+            && h.get("preset").is_some_and(|p| b.get("preset") != Some(p));
         for (key, hv) in h {
             if b.contains_key(key) {
                 continue;
             }
             match direction_of(key) {
-                // Judged as the same key changed from the preset's value would be.
-                Some(Direction::Evidence) if gate == "command" => {
-                    if let Some(default) = preset_default(b, key).filter(|d| d != hv) {
+                // Judged as the same key changed from the default would be: any other
+                // value is reported, the default written down is not.
+                Some(Direction::Evidence) => {
+                    let reference = effective_default(gate, b, key).or_else(|| {
+                        names_new_preset
+                            .then(|| preset_guard_default(h, key))
+                            .flatten()
+                            .map(|d| (d, FROM_NEW_PRESET))
+                    });
+                    if let Some((default, why)) = reference.filter(|(d, _)| d != hv) {
                         let mut changed = w(key, Change::Changed).values(default, hv);
-                        changed.note = Some("the base value is its preset's default");
+                        changed.note = Some(why);
                         note(changed);
                     }
                 }
@@ -1255,6 +1327,36 @@ pub fn diff_configs(base: &DisciplineConfig, head: &DisciplineConfig) -> Result<
                         || (bs == "warning" && hs == "note")
                     {
                         note(w(key, Change::Lowered).values(bs, hs));
+                    }
+                }
+            }
+        }
+        // An entry only the head has adds a command, which the runner authorised. Its
+        // preset's guards are the reference for the guard keys written beside it.
+        if gate == "command" && command_change_authorised {
+            let entries = |t: &toml::Table| -> Vec<toml::Table> {
+                t.get("commands")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().filter_map(Value::as_table).cloned().collect())
+                    .unwrap_or_default()
+            };
+            let on_base = entries(b);
+            for entry in entries(h) {
+                let name = entry.get("name").and_then(Value::as_str).unwrap_or("");
+                if on_base.iter().any(|e| e.get("name") == entry.get("name")) {
+                    continue;
+                }
+                for key in PRESET_GUARD_KEYS {
+                    let (Some(hv), Some(default)) =
+                        (entry.get(*key), preset_guard_default(&entry, key))
+                    else {
+                        continue;
+                    };
+                    if *hv != default {
+                        let mut changed = w(&format!("commands[{name}].{key}"), Change::Changed)
+                            .values(default, hv);
+                        changed.note = Some(FROM_NEW_PRESET);
+                        note(changed);
                     }
                 }
             }
@@ -2331,5 +2433,274 @@ mod tests {
         )
         .unwrap();
         assert!(found_d.is_empty(), "expected 0 weakenings, got {found_d:?}");
+    }
+
+    // ---- #592: evidence keys judged by their effective value ----
+
+    const ISSUE_LINK_ON: &str = "[gates.issue-link]\nenabled = true\n";
+    const MUTANTS: &str = "[gates.command]\npreset = \"cargo-mutants\"\n";
+    const SANITIZERS: &str = "[gates.command]\npreset = \"sanitizers\"\n";
+    const NEVER: &str = "zero_items_pattern = \"never\"\n";
+    const MUTANTS_GUARD: &str = "zero_items_pattern = \"0 mutants tested\"\n";
+    const MUTANTS_ENTRY: &str =
+        "[gates.command]\n[[gates.command.commands]]\nname = \"mut\"\npreset = \"cargo-mutants\"\n";
+
+    fn said(base: &str, head: &str, authorised: bool) -> Vec<String> {
+        diff_configs_under(&cfg(base), &cfg(head), authorised)
+            .unwrap()
+            .iter()
+            .map(|w| format!("{}: {}", w.gate, w.what()))
+            .collect()
+    }
+
+    fn builtin_pattern_line() -> String {
+        format!(
+            "pattern = '{}'\n",
+            crate::guards::issue_link::DEFAULT_ISSUE_PATTERN
+        )
+    }
+
+    #[test]
+    fn an_issue_pattern_added_over_the_builtin_default_is_judged_as_changed_from_it() {
+        let found = said(
+            ISSUE_LINK_ON,
+            &format!("{ISSUE_LINK_ON}pattern = \".\"\n"),
+            false,
+        );
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].starts_with("issue-link: `pattern` changed from ")
+                && found[0].ends_with("to \".\" (the base value is the built-in default)"),
+            "{found:?}"
+        );
+        // The built-in pattern written down, or removed again, changes nothing in force.
+        let written = format!("{ISSUE_LINK_ON}{}", builtin_pattern_line());
+        assert!(said(ISSUE_LINK_ON, &written, false).is_empty());
+        assert!(said(&written, ISSUE_LINK_ON, false).is_empty());
+        // Removing any other pattern is still a removal.
+        assert_eq!(
+            said(
+                &format!("{ISSUE_LINK_ON}pattern = \".\"\n"),
+                ISSUE_LINK_ON,
+                false
+            ),
+            ["issue-link: `pattern` removed (was \".\")"]
+        );
+        // `pattern` has that default in `issue-link` only: another gate's `pattern` is
+        // not compared with it.
+        assert!(effective_default("ci-integrity", &toml::Table::new(), "pattern").is_none());
+    }
+
+    #[test]
+    fn a_command_or_canary_added_over_its_preset_default_is_judged_as_changed_from_it() {
+        assert_eq!(
+            said(MUTANTS, &format!("{MUTANTS}command = \"true\"\n"), false),
+            [
+                "command: `command` changed from \"cargo mutants --in-diff\" to \"true\" \
+              (the base value is its preset's default)"
+            ]
+        );
+        assert_eq!(
+            said(
+                SANITIZERS,
+                &format!("{SANITIZERS}canary_command = \"false\"\n"),
+                false
+            ),
+            [
+                "command: `canary_command` changed from \"cargo test --test race_canary\" to \
+              \"false\" (the base value is its preset's default)"
+            ]
+        );
+        // Written down, and removed again.
+        let written = format!("{MUTANTS}command = \"cargo mutants --in-diff\"\n");
+        assert!(said(MUTANTS, &written, false).is_empty());
+        assert!(said(&written, MUTANTS, false).is_empty());
+        // A preset with no canary: unset means no canary, and adding one adds a check.
+        assert!(said(
+            MUTANTS,
+            &format!("{MUTANTS}canary_command = \"false\"\n"),
+            false
+        )
+        .is_empty());
+        // No preset: unset means no command.
+        assert!(said(
+            "[gates.command]\n",
+            "[gates.command]\ncommand = \"true\"\n",
+            false
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn removing_a_key_equal_to_its_effective_default_is_not_a_weakening() {
+        assert!(said(&format!("{MUTANTS}{MUTANTS_GUARD}"), MUTANTS, false).is_empty());
+        assert_eq!(
+            said(&format!("{MUTANTS}{NEVER}"), MUTANTS, false),
+            ["command: `zero_items_pattern` removed (was \"never\")"]
+        );
+        // With no preset on the head side the removed value has no default to equal.
+        assert_eq!(
+            said(
+                &format!("[gates.command]\ncommand = \"true\"\n{MUTANTS_GUARD}"),
+                "[gates.command]\ncommand = \"true\"\n",
+                false
+            ),
+            ["command: `zero_items_pattern` removed (was \"0 mutants tested\")"]
+        );
+        // An entry is judged as a whole: the default removed or written down is no edit,
+        // any other value is.
+        let with = |rest: &str| format!("{MUTANTS_ENTRY}{rest}");
+        assert!(said(&with(MUTANTS_GUARD), &with(""), false).is_empty());
+        assert!(said(&with(""), &with(MUTANTS_GUARD), false).is_empty());
+        assert_eq!(
+            said(&with(NEVER), &with(""), false),
+            ["command: `commands` lost 1 entr(y/ies)"]
+        );
+        assert_eq!(
+            said(&with(""), &with(NEVER), false),
+            ["command: `commands` lost 1 entr(y/ies)"]
+        );
+    }
+
+    #[test]
+    fn guards_beside_a_preset_the_head_first_names_are_judged_under_authorisation() {
+        let base = "[gates.command]\ncommand = \"true\"\n";
+        let head = |rest: &str| format!("{base}preset = \"cargo-mutants\"\n{rest}");
+        let expected =
+            "command: `zero_items_pattern` changed from \"0 mutants tested\" to \"never\" \
+             (compared with the default of the preset this change names)";
+        assert_eq!(said(base, &head(NEVER), true), [expected]);
+        // Unauthorised, the `command` gate refuses the new preset and nothing runs.
+        assert!(said(base, &head(NEVER), false).is_empty());
+        // The preset alone, or its guard written down.
+        assert!(said(base, &head(""), true).is_empty());
+        assert!(said(base, &head(MUTANTS_GUARD), true).is_empty());
+        // A key the new preset has no guard for adds a check.
+        assert!(said(base, &head("snapshot = \"out.txt\"\n"), true).is_empty());
+        // The command written beside the new preset is what the runner authorised.
+        assert!(said(
+            "[gates.command]\n",
+            "[gates.command]\npreset = \"cargo-mutants\"\ncommand = \"true\"\n",
+            true
+        )
+        .is_empty());
+        // A preset both sides name is the base's: judged the same either way.
+        for authorised in [false, true] {
+            assert_eq!(
+                said(MUTANTS, &format!("{MUTANTS}{NEVER}"), authorised).len(),
+                1
+            );
+        }
+
+        // An entry only the head has.
+        let entry = |rest: &str| format!("{MUTANTS_ENTRY}{rest}");
+        assert_eq!(
+            said("[gates.command]\n", &entry(NEVER), true),
+            [
+                "command: `commands[mut].zero_items_pattern` changed from \"0 mutants tested\" \
+              to \"never\" (compared with the default of the preset this change names)"
+            ]
+        );
+        assert!(said("[gates.command]\n", &entry(NEVER), false).is_empty());
+        assert!(said("[gates.command]\n", &entry(""), true).is_empty());
+        assert!(said("[gates.command]\n", &entry(MUTANTS_GUARD), true).is_empty());
+        // An entry both sides have is matched by name and judged as an edited entry.
+        assert_eq!(
+            said(&entry(""), &entry(NEVER), true),
+            ["command: `commands` lost 1 entr(y/ies)"]
+        );
+    }
+
+    /// What leaving an optional evidence key unset means to the gate that reads it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Unset {
+        /// The check the key names is not made, so adding the key adds a check.
+        NoCheck,
+        /// A value stands in (`effective_default`): adding the key replaces it.
+        Default,
+        /// The gate cannot run without it (exit 2), so there is no unset behaviour.
+        Required,
+        /// Another way of counting is used; there is no value the head could write down.
+        OtherBasis,
+    }
+
+    /// Every evidence key a gate table can leave out, and what leaving it out means.
+    /// A key filled by the gate's `Default` (`deny_file`, `rollup_job`, `marker`,
+    /// `review_trailer`, `workflow`, `change_job`, `sanitizer`, `closing_keywords`) is on
+    /// both sides of every comparison and is not optional in this sense.
+    const OPTIONAL_EVIDENCE_KEYS: &[(&str, &str, Unset)] = &[
+        ("archive-contents", "archive_path", Unset::Required),
+        ("archive-contents", "preset", Unset::NoCheck),
+        ("bench-regression", "ratio_baseline", Unset::Required),
+        ("ci-integrity", "documented_job_count_path", Unset::NoCheck),
+        (
+            "ci-integrity",
+            "documented_job_count_pattern",
+            Unset::NoCheck,
+        ),
+        ("command", "canary_command", Unset::Default),
+        ("command", "canary_expected_diagnostic", Unset::Default),
+        ("command", "command", Unset::Default),
+        ("command", "count_pattern", Unset::NoCheck),
+        ("command", "preset", Unset::NoCheck),
+        ("command", "snapshot", Unset::Default),
+        ("command", "zero_items_pattern", Unset::Default),
+        ("issue-link", "pattern", Unset::Default),
+        ("msrv", "command", Unset::NoCheck),
+        ("provenance-tags", "superseded_registry", Unset::NoCheck),
+        ("test-floor", "base_report", Unset::OtherBasis),
+        ("test-floor", "constant_file", Unset::NoCheck),
+        ("test-floor", "constant_name", Unset::NoCheck),
+        ("test-floor", "head_report", Unset::OtherBasis),
+        ("test-floor", "test_command", Unset::OtherBasis),
+        ("test-floor", "test_report", Unset::OtherBasis),
+    ];
+
+    #[test]
+    fn optional_evidence_keys_are_inventoried() {
+        let schema = crate::schema::generate_schema();
+        let gates_schema = schema["properties"]["gates"]["properties"]
+            .as_object()
+            .unwrap();
+        let defaults = Value::try_from(DisciplineConfig::default_for_repo("t").gates).unwrap();
+        let mut optional = Vec::new();
+        for (gate, table) in defaults.as_table().unwrap() {
+            let def_ref = gates_schema[gate]["allOf"][0]["$ref"].as_str().unwrap();
+            let def_name = def_ref.rsplit('/').next().unwrap();
+            let props = schema["$defs"][def_name]["properties"].as_object().unwrap();
+            for key in props.keys() {
+                if direction_of(key) == Some(Direction::Evidence)
+                    && !table.as_table().unwrap().contains_key(key)
+                {
+                    optional.push((gate.clone(), key.clone()));
+                }
+            }
+        }
+        optional.sort();
+        let listed: Vec<(String, String)> = OPTIONAL_EVIDENCE_KEYS
+            .iter()
+            .map(|(g, k, _)| (g.to_string(), k.to_string()))
+            .collect();
+        assert_eq!(
+            optional, listed,
+            "an optional evidence key is new or gone: say in OPTIONAL_EVIDENCE_KEYS what unset means, and give it an `effective_default` if a value stands in"
+        );
+        // A key has an effective default exactly when the inventory says a value stands in.
+        // `command` keys take theirs from a preset; `sanitizers` and `cargo-public-api`
+        // between them supply all five.
+        let tables: Vec<toml::Table> = ["sanitizers", "cargo-public-api", "cargo-mutants"]
+            .iter()
+            .map(|p| {
+                let mut t = toml::Table::new();
+                t.insert("preset".to_string(), Value::String(p.to_string()));
+                t
+            })
+            .collect();
+        for (gate, key, unset) in OPTIONAL_EVIDENCE_KEYS {
+            let has = tables
+                .iter()
+                .any(|t| effective_default(gate, t, key).is_some());
+            assert_eq!(has, *unset == Unset::Default, "{gate}.{key}");
+        }
     }
 }

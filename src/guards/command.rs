@@ -11,8 +11,10 @@
 //! - `zero_items_pattern` and zero-count guard (failure unless `allow_zero = true`)
 //! - `count_pattern` + `min_count` ratchet read from BASE ref
 //! - Untrusted PR text guard: commands cannot be modified in PR diff without runner authorization
-//! - `snapshot`: stdout must match a committed file, line by line (exit 2 when the output
-//!   cannot be compared: cut off at the capture limit, not UTF-8, empty, or no file)
+//! - Bounded capture: output past [`MAX_CAPTURE_BYTES`] is exit 2 for every check that reads it
+//! - `snapshot`: stdout must match a committed file, line by line, read before any command
+//!   runs (exit 2 when the output cannot be compared: cut off at the capture limit, not
+//!   UTF-8, empty, no file, a symbolic link, or a file past the capture limit)
 
 use crate::config::{DisciplineConfig, GateSettings};
 use crate::could_not_check::{tag, Reason};
@@ -254,13 +256,42 @@ pub fn run_command_bounded(
     })
 }
 
-/// Whether the runner's environment authorises a change to a command a gate executes.
-/// `DISCIPLINE_COMMAND` and `DISCIPLINE_ALLOW_COMMAND_CHANGE` come from the runner, which
-/// the change under review cannot set; the `command` gate and `test-floor`'s
-/// `test_command` share this one switch.
+/// Whether the runner's environment authorises a change to the commands a gate executes:
+/// `DISCIPLINE_ALLOW_COMMAND_CHANGE`, which the change under review cannot set. The
+/// `command` gate and `test-floor`'s `test_command` share this one switch.
+///
+/// `DISCIPLINE_COMMAND` and `DISCIPLINE_COMMAND_<NAME>` are not this switch. Each
+/// supplies one command in place of a configured one ([`runner_supplies_command`]) and
+/// authorises nothing else.
 pub(crate) fn runner_authorises_command_change() -> bool {
-    std::env::var("DISCIPLINE_COMMAND").is_ok()
-        || std::env::var("DISCIPLINE_ALLOW_COMMAND_CHANGE").is_ok()
+    std::env::var("DISCIPLINE_ALLOW_COMMAND_CHANGE").is_ok()
+}
+
+/// The variable that supplies the command of the `commands` entry named `name`.
+pub(crate) fn entry_command_variable(name: &str) -> String {
+    format!(
+        "DISCIPLINE_COMMAND_{}",
+        name.replace('-', "_").to_uppercase()
+    )
+}
+
+/// The command the runner's environment supplies in place of the table's own `command`
+/// (`entry` is `None`: `DISCIPLINE_COMMAND`) or of the `command` of the entry named
+/// `entry` (`DISCIPLINE_COMMAND_<NAME>`).
+fn runner_command(entry: Option<&str>) -> Option<String> {
+    match entry {
+        None => std::env::var("DISCIPLINE_COMMAND").ok(),
+        Some(name) => {
+            let env_key = entry_command_variable(name);
+            std::env::var(&env_key).ok()
+        }
+    }
+}
+
+/// Whether the runner supplies that command. The configured value is then never run, so
+/// a change to it is moot; nothing else about the table or the entry is.
+pub(crate) fn runner_supplies_command(entry: Option<&str>) -> bool {
+    runner_command(entry).is_some()
 }
 
 /// Whether two `[gates.command]` tables differ in anything the gate executes.
@@ -281,47 +312,92 @@ pub(crate) fn executed_definitions_differ(
     head: &crate::config::CommandGate,
     base: &crate::config::CommandGate,
 ) -> bool {
-    head.command != base.command
+    executed_definitions_differ_beyond(head, base, &|_| false)
+}
+
+/// [`executed_definitions_differ`], leaving out each `command` the runner supplies:
+/// `supplied(None)` for the table's, `supplied(Some(name))` for an entry's. A supplied
+/// command replaces the configured one, so the two sides run the same thing whatever
+/// they wrote. A preset, a canary, an entry's name, and the number and order of entries
+/// are compared regardless.
+pub(crate) fn executed_definitions_differ_beyond(
+    head: &crate::config::CommandGate,
+    base: &crate::config::CommandGate,
+    supplied: &dyn Fn(Option<&str>) -> bool,
+) -> bool {
+    (head.command != base.command && !supplied(None))
         || head.preset != base.preset
         || head.canary_command != base.canary_command
         || head.commands.len() != base.commands.len()
         || head.commands.iter().zip(&base.commands).any(|(h, b)| {
             h.name != b.name
-                || h.command != b.command
+                || (h.command != b.command && !supplied(Some(&h.name)))
                 || h.preset != b.preset
                 || h.canary_command != b.canary_command
         })
 }
 
+/// Whether the commands `gate` would run are ones nothing vouches for: the change under
+/// review altered them (compared with the merge base copy), or wrote them where the base
+/// has no configuration, or one that does not load.
+///
+/// A run with no base at all (`--staged` before the first commit) has nothing to compare
+/// with. On a developer's machine that is the developer's own configuration and it runs.
+/// On a CI runner it is the change's, so it is treated as a base with no configuration.
+pub(crate) fn commands_supplied_by_change(
+    ctx: &Context,
+    supplied: &dyn Fn(Option<&str>) -> bool,
+) -> Result<bool> {
+    let head_cmd = &ctx.config.gates.command;
+    // With no base-side table to vouch for it, every command the head declares is the
+    // change's, except a table `command` the runner replaces.
+    let unvouched = || {
+        executed_definitions_differ_beyond(
+            head_cmd,
+            &crate::config::CommandGate {
+                canary_command: head_cmd.canary_command.clone(),
+                ..Default::default()
+            },
+            supplied,
+        )
+    };
+    if !ctx.git.has_base() {
+        return Ok(crate::gitctx::is_ci_environment() && unvouched());
+    }
+    Ok(match ctx.base_config_text()? {
+        Some(src) => match DisciplineConfig::from_toml_str(&src) {
+            Ok(base_cfg) => {
+                executed_definitions_differ_beyond(head_cmd, &base_cfg.gates.command, supplied)
+            }
+            Err(_) => unvouched(),
+        },
+        None => unvouched(),
+    })
+}
+
 /// Checks whether an untrusted PR diff modified command gate definitions without
 /// runner environment authorization.
 fn check_untrusted_command_tampering(ctx: &Context) -> Result<Option<String>> {
-    let base_src = ctx.base_config_text()?;
-
-    let head_cmd = &ctx.config.gates.command;
-    let head_has_commands =
-        head_cmd.command.is_some() || head_cmd.preset.is_some() || !head_cmd.commands.is_empty();
-
-    let modified = if ctx.git.has_base() {
-        match base_src {
-            Some(src) => match DisciplineConfig::from_toml_str(&src) {
-                Ok(base_cfg) => executed_definitions_differ(head_cmd, &base_cfg.gates.command),
-                Err(_) => head_has_commands,
-            },
-            None => head_has_commands,
-        }
-    } else {
-        false
-    };
-
-    if modified && !runner_authorises_command_change() {
-        return Ok(Some(
-            "PR diff modifies command or canary definitions without runner environment authorization; commands cannot be introduced or altered by untrusted PR text"
-                .to_string(),
-        ));
+    if runner_authorises_command_change() {
+        return Ok(None);
     }
-
+    if commands_supplied_by_change(ctx, &runner_supplies_command)? {
+        let why = if ctx.git.has_base() {
+            "PR diff modifies command or canary definitions without runner environment authorization; commands cannot be introduced or altered by untrusted PR text"
+        } else {
+            "this CI run has no base ref to compare the command or canary definitions with, and no runner environment authorization; commands cannot be introduced by the change they judge"
+        };
+        return Ok(Some(why.to_string()));
+    }
     Ok(None)
+}
+
+/// Whether the base side has a configuration that loads and switches this gate off.
+fn base_disables_gate(ctx: &Context) -> Result<bool> {
+    Ok(ctx
+        .base_config_text()?
+        .and_then(|src| DisciplineConfig::from_toml_str(&src).ok())
+        .is_some_and(|base| !base.gates.command.enabled()))
 }
 
 /// Whether a base-side configuration exists and does not load with this binary.
@@ -368,12 +444,85 @@ struct ResolvedCommand {
     canary_expected_diagnostic: Option<String>,
     policy_files: Vec<String>,
     snapshot: Option<Snapshot>,
+    /// What `snapshot` held before any command of this run started.
+    committed_snapshot: Option<CommittedSnapshot>,
 }
 
 /// A committed file the command's stdout must match.
 struct Snapshot {
     path: String,
     ignore: Vec<regex::Regex>,
+}
+
+/// What the head side holds at a snapshot's path, read before any command runs so that
+/// no command of the run can write the file it is compared with.
+enum CommittedSnapshot {
+    Text(String),
+    Missing,
+    /// Present, and not a file the output can be compared with; the sentence says why.
+    Unusable(String),
+}
+
+/// Reads the snapshot at `path` from the head side (the index under `--staged`, else the
+/// working tree), the side every gate reads the change from. A symbolic link is refused:
+/// it would compare the output with whatever the link names. A file larger than
+/// [`MAX_CAPTURE_BYTES`] is refused unread: no captured output can equal it.
+fn read_committed_snapshot(ctx: &Context, path: &str) -> Result<CommittedSnapshot> {
+    let unusable = |why: String| Ok(CommittedSnapshot::Unusable(why));
+    let on_disk = std::fs::symlink_metadata(ctx.git.root().join(path)).ok();
+    if ctx.git.is_symlink(path)? || on_disk.as_ref().is_some_and(|m| m.file_type().is_symlink()) {
+        return unusable(format!(
+            "snapshot `{path}` is a symbolic link; commit the command's output as a regular file"
+        ));
+    }
+    let too_large = |len: u64| {
+        format!(
+            "snapshot `{path}` is {len} bytes, past the {MAX_CAPTURE_BYTES}-byte capture limit, so no captured output can match it"
+        )
+    };
+    if !ctx.staged {
+        if let Some(len) = on_disk
+            .map(|m| m.len())
+            .filter(|len| *len > MAX_CAPTURE_BYTES)
+        {
+            return unusable(too_large(len));
+        }
+    }
+    let bytes = match ctx.git.head_bytes(path) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return Ok(CommittedSnapshot::Missing),
+        Err(e) => return unusable(format!("snapshot `{path}` could not be read: {e:#}")),
+    };
+    if bytes.len() as u64 > MAX_CAPTURE_BYTES {
+        return unusable(too_large(bytes.len() as u64));
+    }
+    match String::from_utf8(bytes) {
+        Ok(text) => Ok(CommittedSnapshot::Text(text)),
+        Err(_) => unusable(format!("snapshot `{path}` is not valid UTF-8")),
+    }
+}
+
+/// [`read_committed_snapshot`] for a command's snapshot, when it has one.
+fn committed_snapshot(
+    ctx: &Context,
+    snapshot: Option<&Snapshot>,
+) -> Result<Option<CommittedSnapshot>> {
+    snapshot
+        .map(|s| read_committed_snapshot(ctx, &s.path))
+        .transpose()
+}
+
+/// The error (exit 2, reason `gate`) of a check that reads a command's output when the
+/// capture of that output is incomplete. A check answered from the captured part would
+/// pass whenever the line it looks for was printed after the limit, and a command can
+/// always print more.
+fn incomplete_capture(name: &str, what: &str) -> anyhow::Error {
+    tag(
+        Reason::Gate,
+        anyhow!(
+            "command `{name}`: output went past the {MAX_CAPTURE_BYTES}-byte capture limit or could not be read, so {what} cannot be checked against all of it; make the command print less (a summary, not a log)"
+        ),
+    )
 }
 
 /// A `base-tests` command runs the base branch's tests and never reaches the snapshot
@@ -579,7 +728,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             Some(ctx.config_path),
             None,
             err_msg,
-            "Configure commands in the merge base ref discipline.toml or provide trusted overrides via runner environment (DISCIPLINE_COMMAND), or set DISCIPLINE_ALLOW_COMMAND_CHANGE on the runner to accept the change.",
+            "Configure commands in the merge base ref discipline.toml, or set DISCIPLINE_ALLOW_COMMAND_CHANGE on the runner to accept the change. DISCIPLINE_COMMAND (and DISCIPLINE_COMMAND_<NAME> for an entry) replaces one configured `command` and accepts no other change.",
         );
         return Ok(outcome);
     }
@@ -587,7 +736,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
     // Collect resolved commands (from top-level command/preset and commands list)
     let mut resolved = Vec::new();
 
-    let runner_default = std::env::var("DISCIPLINE_COMMAND").ok();
+    let runner_default = runner_command(None);
     let preset_def = match gate.preset.as_deref() {
         Some(name) => match presets::resolve_preset(name) {
             Some(def) => Some(def),
@@ -647,8 +796,23 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             canary_command: canary_cmd,
             canary_expected_diagnostic: canary_diag,
             policy_files,
+            committed_snapshot: committed_snapshot(ctx, snapshot.as_ref())?,
             snapshot,
         });
+    } else if gate.snapshot.is_some() || !gate.snapshot_ignore.is_empty() {
+        // Nothing would compare it: the table runs no command of its own, and an entry
+        // does not inherit the table's snapshot.
+        let key = if gate.snapshot.is_some() {
+            "snapshot"
+        } else {
+            "snapshot_ignore"
+        };
+        return Err(tag(
+            Reason::Configuration,
+            anyhow!(
+                "`[gates.command]` sets `{key}` but declares no `command` or `preset` of its own, so no output is compared with it: entries do not inherit the table's snapshot; set `snapshot` on the `[[gates.command.commands]]` entry it is for"
+            ),
+        ));
     }
 
     for entry in &gate.commands {
@@ -663,12 +827,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             None => None,
         };
 
-        let env_key = format!(
-            "DISCIPLINE_COMMAND_{}",
-            entry.name.replace('-', "_").to_uppercase()
-        );
-        let effective_cmd = std::env::var(&env_key)
-            .ok()
+        let effective_cmd = runner_command(Some(&entry.name))
             .or_else(|| entry.command.clone())
             .or_else(|| preset_def.map(|d| d.default_command.to_string()));
 
@@ -752,6 +911,7 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             canary_command: canary_cmd,
             canary_expected_diagnostic: canary_diag,
             policy_files,
+            committed_snapshot: committed_snapshot(ctx, snapshot.as_ref())?,
             snapshot,
         });
     }
@@ -759,6 +919,15 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
     if resolved.is_empty() {
         outcome.notes.push("no commands declared".to_string());
         return Ok(outcome);
+    }
+
+    // The commands are the base's own text, so the guard above lets them run; that they
+    // run at all is this change's doing, which the report should say.
+    if base_disables_gate(ctx)? {
+        outcome.notes.push(
+            "`[gates.command]` is disabled on the base side and this change enables it: the commands the base configuration declares were run"
+                .to_string(),
+        );
     }
 
     for item in resolved {
@@ -843,11 +1012,25 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             ctx.git.root(),
         )?;
         let combined_output = format!("{}\n{}", run_res.stdout, run_res.stderr);
-        if item.snapshot.is_none() && (run_res.stdout_truncated || run_res.stderr_truncated) {
-            outcome.notes.push(format!(
-                "command `{}`: output went past the {MAX_CAPTURE_BYTES}-byte capture limit or could not be read; output patterns were checked against the captured part only",
-                item.name
-            ));
+        if run_res.stdout_truncated || run_res.stderr_truncated {
+            // Every pattern is matched against stdout and stderr together.
+            let reads_output = if !item.forbid_output.is_empty() {
+                Some("`forbid_output`")
+            } else if item.zero_items_pattern.is_some() {
+                Some("`zero_items_pattern`")
+            } else if item.count_pattern.is_some() {
+                Some("`count_pattern`")
+            } else {
+                None
+            };
+            match reads_output {
+                Some(what) => return Err(incomplete_capture(&item.name, what)),
+                // The snapshot comparison reads stdout alone and refuses a cut one itself.
+                None => outcome.notes.push(format!(
+                    "command `{}`: output went past the {MAX_CAPTURE_BYTES}-byte capture limit or could not be read; no output pattern is configured, so only the exit status was judged",
+                    item.name
+                )),
+            }
         }
 
         // Check exit status
@@ -1033,10 +1216,13 @@ fn check_snapshot(
             snap.path
         ));
     }
-    let file = ctx.git.root().join(&snap.path);
-    let bytes = match std::fs::read(&file) {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+    let text = match item
+        .committed_snapshot
+        .as_ref()
+        .unwrap_or(&CommittedSnapshot::Missing)
+    {
+        CommittedSnapshot::Text(text) => text,
+        CommittedSnapshot::Missing => {
             if ctx.git.base_content(&snap.path)?.is_some() {
                 // Reported as `policy-file-deleted`.
                 return Ok(None);
@@ -1046,18 +1232,7 @@ fn check_snapshot(
                 snap.path
             ));
         }
-        Err(e) => {
-            return cannot(format!(
-                "command `{name}`: snapshot `{}` could not be read: {e}",
-                snap.path
-            ))
-        }
-    };
-    let Ok(text) = std::str::from_utf8(&bytes) else {
-        return cannot(format!(
-            "command `{name}`: snapshot `{}` is not valid UTF-8",
-            snap.path
-        ));
+        CommittedSnapshot::Unusable(why) => return cannot(format!("command `{name}`: {why}")),
     };
     let output = snapshot_lines(&run.stdout, &snap.ignore);
     if output.is_empty() && !item.allow_zero {
@@ -1298,6 +1473,10 @@ fn evaluate_base_tests(
     // Execute the test command bounded in temp_path
     let run_res = run_command_bounded(&cmd.name, &cmd.command, cmd.timeout_seconds, &temp_path)?;
     outcome.examined += 1;
+    // The failed cases are read from the output: a report cut off may have lost them.
+    if run_res.stdout_truncated || run_res.stderr_truncated {
+        return Err(incomplete_capture(&cmd.name, "the base tests' report"));
+    }
 
     let combined_output = format!("{}\n{}", run_res.stdout, run_res.stderr);
     let mut cases = parse_junit_cases(&combined_output);
@@ -1769,5 +1948,87 @@ mod tests {
         assert!(bad.stdout_lossy);
         let good = run_command_bounded("t", "printf 'ok'", 5, Path::new(".")).unwrap();
         assert!(!good.stdout_lossy && !good.stdout_truncated);
+    }
+
+    // ---- #592: what the runner's variables make moot ----
+
+    const TABLE_TRUE: &str = "command = \"true\"\n";
+    const TWO_ENTRIES: &str =
+        "[[gates.command.commands]]\nname = \"unit-tests\"\ncommand = \"true\"\n\
+         [[gates.command.commands]]\nname = \"lint\"\ncommand = \"true\"\n";
+    const TWO_ENTRIES_FIRST_REPOINTED: &str =
+        "[[gates.command.commands]]\nname = \"unit-tests\"\ncommand = \"false\"\n\
+         [[gates.command.commands]]\nname = \"lint\"\ncommand = \"true\"\n";
+    const TWO_ENTRIES_FIRST_CANARY: &str = "[[gates.command.commands]]\nname = \"unit-tests\"\ncommand = \"true\"\ncanary_command = \"false\"\n\
+         [[gates.command.commands]]\nname = \"lint\"\ncommand = \"true\"\n";
+
+    fn table(body: &str) -> crate::config::CommandGate {
+        DisciplineConfig::from_toml_str(&format!("[gates.command]\n{body}"))
+            .unwrap()
+            .gates
+            .command
+    }
+
+    #[test]
+    fn a_supplied_table_command_makes_only_that_command_moot() {
+        let table_only = |entry: Option<&str>| entry.is_none();
+        let nothing = |_: Option<&str>| false;
+        let base = table(TABLE_TRUE);
+        let repointed = table("command = \"false\"\n");
+        assert!(executed_definitions_differ_beyond(
+            &repointed, &base, &nothing
+        ));
+        assert!(!executed_definitions_differ_beyond(
+            &repointed,
+            &base,
+            &table_only
+        ));
+        // Everything else the table executes is compared whatever the runner supplies.
+        for body in [
+            "command = \"true\"\ncanary_command = \"false\"\n",
+            "command = \"true\"\npreset = \"cargo-deny\"\n",
+            "command = \"true\"\n[[gates.command.commands]]\nname = \"extra\"\ncommand = \"true\"\n",
+        ] {
+            assert!(
+                executed_definitions_differ_beyond(&table(body), &base, &table_only),
+                "{body}"
+            );
+        }
+        // The two-argument form supplies nothing.
+        assert!(executed_definitions_differ(&repointed, &base));
+    }
+
+    #[test]
+    fn a_supplied_entry_command_makes_only_that_entry_command_moot() {
+        let unit_only = |entry: Option<&str>| entry == Some("unit-tests");
+        let lint_only = |entry: Option<&str>| entry == Some("lint");
+        let base = table(TWO_ENTRIES);
+        let repointed = table(TWO_ENTRIES_FIRST_REPOINTED);
+        assert!(!executed_definitions_differ_beyond(
+            &repointed, &base, &unit_only
+        ));
+        assert!(executed_definitions_differ_beyond(
+            &repointed, &base, &lint_only
+        ));
+        assert!(executed_definitions_differ_beyond(
+            &table(TWO_ENTRIES_FIRST_CANARY),
+            &base,
+            &unit_only
+        ));
+        // Neither does it cover the table's own command.
+        assert!(executed_definitions_differ_beyond(
+            &table(&format!("command = \"false\"\n{TWO_ENTRIES}")),
+            &table(&format!("{TABLE_TRUE}{TWO_ENTRIES}")),
+            &unit_only
+        ));
+    }
+
+    #[test]
+    fn an_entry_command_variable_is_named_after_the_entry() {
+        // Spelled in two parts: a whole name in quotes would read as a variable the test
+        // harness has to isolate.
+        let named = |suffix: &str| format!("{}_{suffix}", "DISCIPLINE_COMMAND");
+        assert_eq!(entry_command_variable("unit-tests"), named("UNIT_TESTS"));
+        assert_eq!(entry_command_variable("api"), named("API"));
     }
 }
