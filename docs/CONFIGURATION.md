@@ -110,7 +110,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.ci-integrity.banned_actions[].reason` | string | *(per entry)* | Why the action is banned; echoed in the finding |
 | `gates.ci-integrity.banned_actions[].uses` | string | *(required)* | `owner/repo`, `owner/repo/path`, optionally `@ref`; without a ref every ref is banned |
 | `gates.ci-integrity.diff_only` | boolean | `true` | When true, scans only modified workflow files rather than all workflows, and pins only references new relative to the base; false reports every unpinned reference, pre-existing ones included |
-| `gates.ci-integrity.documented_job_count_path` | string | *(unset)* | Path to catalog documentation stating job count |
+| `gates.ci-integrity.documented_job_count_path` | string | *(unset)* | Path to catalog documentation stating job count; set together with documented_job_count_pattern, one without the other is a configuration error |
 | `gates.ci-integrity.documented_job_count_pattern` | string | *(unset)* | Regex pattern to extract job count from documentation, from its first capture group; a pattern that does not compile or has no capture group is a configuration error |
 | `gates.ci-integrity.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.ci-integrity.excluded_jobs` | list | `["detect-changes"]` | Job names excluded from rollup dependency requirements |
@@ -133,33 +133,33 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.citation-metadata.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.command.allow_zero` | boolean | `false` | Whether zero items selected is allowed |
 | `gates.command.canary_command` | string | *(unset)* | Optional negative-control canary command |
-| `gates.command.canary_expected_diagnostic` | string | *(unset)* | Expected diagnostic string that canary must produce |
+| `gates.command.canary_expected_diagnostic` | string | *(unset)* | Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text |
 | `gates.command.command` | string | *(unset)* | Primary command to execute |
 | `gates.command.commands` | array of tables | `[]` | Multi-command suite entries |
 | `gates.command.commands[].allow_zero` | boolean | *(per entry)* | Whether zero items selected is allowed |
 | `gates.command.commands[].canary_command` | string | *(per entry)* | Optional negative-control canary command |
-| `gates.command.commands[].canary_expected_diagnostic` | string | *(per entry)* | Expected diagnostic string that canary must produce |
+| `gates.command.commands[].canary_expected_diagnostic` | string | *(per entry)* | Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text |
 | `gates.command.commands[].command` | string | *(per entry)* | Command string to execute |
 | `gates.command.commands[].count_pattern` | string | *(per entry)* | Regex pattern to extract an integer count from its first capture group; a pattern that does not compile or has no capture group is a configuration error |
-| `gates.command.commands[].forbid_output` | list | *(per entry)* | Output patterns that must not appear in stdout or stderr |
+| `gates.command.commands[].forbid_output` | list | *(per entry)* | Regular expressions that must not match stdout or stderr; a value that does not compile is a configuration error, never matched as literal text |
 | `gates.command.commands[].min_count` | integer | *(per entry)* | Minimum count required |
 | `gates.command.commands[].name` | string | *(required)* | Name or identifier of the command |
 | `gates.command.commands[].preset` | string | *(per entry)* | Predefined turnkey preset name (e.g. cargo-mutants, cargo-deny, loom) |
 | `gates.command.commands[].snapshot` | string | *(per entry)* | Repository-relative path of a committed file the command's stdout must match |
 | `gates.command.commands[].snapshot_ignore` | list | *(per entry)* | Regexes for lines left out of the snapshot comparison, on both sides |
 | `gates.command.commands[].timeout_seconds` | integer | *(per entry)* | Execution timeout in seconds |
-| `gates.command.commands[].zero_items_pattern` | string | *(per entry)* | Pattern that indicates zero items were executed |
+| `gates.command.commands[].zero_items_pattern` | string | *(per entry)* | Regular expression whose match in the output means zero items were executed; a value that does not compile is a configuration error, never matched as literal text |
 | `gates.command.count_pattern` | string | *(unset)* | Regex pattern to extract an integer count from its first capture group; a pattern that does not compile or has no capture group is a configuration error |
 | `gates.command.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.command.exempt_paths` | list | `[]` | File path globs exempted from this gate |
-| `gates.command.forbid_output` | list | `[]` | Output patterns that must not appear in stdout or stderr |
+| `gates.command.forbid_output` | list | `[]` | Regular expressions that must not match stdout or stderr; a value that does not compile is a configuration error, never matched as literal text |
 | `gates.command.min_count` | integer | *(unset)* | Minimum count required |
 | `gates.command.preset` | string | *(unset)* | Predefined turnkey preset name (e.g. cargo-mutants, cargo-deny, loom) |
 | `gates.command.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.command.snapshot` | string | *(unset)* | Repository-relative path of a committed file the command's stdout must match |
 | `gates.command.snapshot_ignore` | list | `[]` | Regexes for lines left out of the snapshot comparison, on both sides |
 | `gates.command.timeout_seconds` | integer | *(unset)* | Execution timeout in seconds (default: 60s) |
-| `gates.command.zero_items_pattern` | string | *(unset)* | Pattern that indicates zero items were executed |
+| `gates.command.zero_items_pattern` | string | *(unset)* | Regular expression whose match in the output means zero items were executed; a value that does not compile is a configuration error, never matched as literal text |
 | `gates.commit-provenance.agent_markers` | list | *(12 entries)* | Substrings of a trailer line, author name or author email that identify an agent-produced commit |
 | `gates.commit-provenance.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.commit-provenance.exempt_paths` | list | `[]` | File path globs exempted from this gate |
@@ -314,7 +314,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.test-budget.corpus_dirs` | list | *(3 entries)* | Corpus directory patterns to monitor for seed file shrink |
 | `gates.test-budget.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.test-budget.exempt_paths` | list | `[]` | File path globs exempted from this gate |
-| `gates.test-budget.fuzz_targets` | list | `["fuzz/Cargo.toml","fuzz/fuzz_targets/**"]` | Fuzz manifest and harness globs |
+| `gates.test-budget.fuzz_targets` | list | `["fuzz/Cargo.toml","fuzz/fuzz_targets/**"]` | Globs of fuzz manifests (a Cargo.toml) and Rust harness files outside the root fuzz/ crate, which is always watched |
 | `gates.test-budget.scan_scripts` | boolean | `true` | Whether to scan shell scripts |
 | `gates.test-budget.scan_workflows` | boolean | `true` | Whether to scan workflow files |
 | `gates.test-budget.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
@@ -816,7 +816,7 @@ Comments, string literals and preprocessor lines are never rewritten. A blanked 
 ## Trust Model
 
 Discipline distinguishes between **configurable** and **bypassable**:
-0. **Who wrote the policy:** By default a change is judged by its own copy of `discipline.toml`. With `--policy-from base` (action input `policy_from: base`, env `DISCIPLINE_POLICY_FROM`) it is judged by the base ref's copy: a policy edit, looser or stricter, takes effect once merged, and `config-integrity` still reports the edit for review. A base ref without the file is judged by the built-in defaults, never by the change's copy. The change's own file must still parse (exit `2` otherwise). A `--config` given as an absolute path outside the repository is on neither side of the change, so `config-integrity` compares nothing for it, and under `--policy-from base` it is not used: the base ref's `discipline.toml` (else the built-in defaults) judges. A relative path that leaves the repository (`../outside.toml`) is exit `2`.
+0. **Who wrote the policy:** By default a change is judged by its own copy of `discipline.toml`. With `--policy-from base` (action input `policy_from: base`, env `DISCIPLINE_POLICY_FROM`) it is judged by the base ref's copy: a policy edit, looser or stricter, takes effect once merged, and `config-integrity` still reports the edit for review. A base ref without the file is judged by the built-in defaults, never by the change's copy. The change's own file must still parse (exit `2` otherwise). A base copy with a glob or pattern that does not compile, or a half-set pair of keys, stops every run (exit `2`), with one exception so that it can be repaired: when the change's own copy passes the same check, each key that fails it in the base copy is read from the change's copy for that run, and every other setting stays the base ref's. The report says so in a note on the gate that owns the key and on `config-integrity`, and on stderr, and `config-integrity` judges the edit like any other (replacing an entry of a list that only tightens when grown is `gate-weakened`, lifted by `allow-gate-weakening: <gate> <reason>`). A change that leaves the value as it is, replaces it with another that does not compile, or switches the gate off instead still stops with exit `2`. A `--config` given as an absolute path outside the repository is on neither side of the change, so `config-integrity` compares nothing for it, and under `--policy-from base` it is not used: the base ref's `discipline.toml` (else the built-in defaults) judges. A relative path that leaves the repository (`../outside.toml`) is exit `2`.
 1. **Config integrity:** A pull request cannot weaken its own `discipline.toml` without triggering `config-integrity`. If an agent disables a gate or grows an exemption list, the PR is rejected unless an authorized `allow-gate-weakening:` directive is present.
 2. **Directive channel enforcement:** Directives are parsed exclusively from trusted channels specified in `directives.sources` (defaulting to `["pr-body", "commits", "merged-pr-body"]`).
 3. **Hidden directive policy:** By default, HTML comment-wrapped directives in PR bodies, commit messages and merged PR bodies are ignored (`directives.allow_hidden = false`; `gates.deletion-rationale.allow_hidden` can admit them for deletions) to ensure reviewers see all requested waivers. Each ignored one is a note on its directive's gate that names the directive and where it was, never its reason: the line was hidden from reviewers, so the report does not repeat what it says.
