@@ -96,6 +96,7 @@ impl LanguagePack for PhpPack {
             }
         }
         super::method_checks::count(root, src, &mut extractor.facts, &PHP_RECEIVER_CALLS);
+        super::helper_loops::count(root, src, &mut extractor.facts, &super::helper_loops::PHP);
         super::calls::count(
             root,
             src,

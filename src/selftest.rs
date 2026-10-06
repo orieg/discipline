@@ -2632,6 +2632,84 @@ const CASES: &[Case] = &[
                 && weak_facts.tests[0].total_asserts == 2)
         },
     ),
+    #[cfg(feature = "lang-go")]
+    (
+        "go: a testify suite method is a test, its lifecycle methods are not, and assertions on the suite count",
+        || {
+            use crate::ast::LanguagePack;
+            let go_pack = crate::ast::r#go::GoPack;
+            let vocab = AssertVocabulary::default();
+            let src = "package pkg\n\ntype Suite struct {\n\tsuite.Suite\n}\n\nfunc (s *Suite) SetupTest() {\n\ts.Require().NoError(open())\n}\n\nfunc (s *Suite) TestAdd() {\n\ts.Equal(2, Add(1, 1))\n\ts.Require().NoError(run())\n\ts.Assert().True(ok())\n}\n\nfunc (s *Suite) TestEmpty() {\n\t_ = Add(1, 1)\n}\n\ntype Plain struct{ n int }\n\nfunc (p *Plain) TestConn() {\n\tp.Equal(1, 2)\n}\n";
+            let facts = go_pack.extract("pkg_test.go", src, &vocab)?;
+            let by = |n: &str| facts.tests.iter().find(|t| t.name == n);
+            Ok(facts.tests.len() == 2
+                && by("Suite.TestAdd").is_some_and(|t| {
+                    (t.total_asserts, t.strong_asserts, t.fatal_asserts) == (3, 2, 1)
+                })
+                && by("Suite.TestEmpty").is_some_and(|t| t.is_vacuous())
+                && facts.test_helpers.iter().any(|h| {
+                    h.name == "Suite.SetupTest" && (h.total_asserts, h.fatal_asserts) == (1, 1)
+                })
+                && facts
+                    .test_helpers
+                    .iter()
+                    .any(|h| h.name == "Plain.TestConn" && h.total_asserts == 0))
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
+        "assertion-reduction: a same-file helper stands for the checks it holds, unless it checks in a loop",
+        || {
+            use crate::guards::agent_diff::{evaluate_assertion_reduction, extract_facts, TestPair};
+            let pack = crate::ast::python::PythonPack;
+            let vocab = AssertVocabulary::default();
+            let settings = crate::config::AssertionGate::default();
+            let base = "def test_create():\n    r = create()\n    assert r.a == 1\n    assert r.b == 2\n    assert r.c == 3\n";
+            let run = |head: &str| -> anyhow::Result<(usize, bool)> {
+                let b = extract_facts(&pack, "tests/test_api.py", base, &vocab)?;
+                let h = extract_facts(&pack, "tests/test_api.py", head, &vocab)?;
+                let pair = [TestPair {
+                    path: "tests/test_api.py",
+                    base: &b.tests[0],
+                    head: &h.tests[0],
+                    forced: false,
+                }];
+                let out = evaluate_assertion_reduction(&pair, &[], &[], &settings, &[], false)?;
+                let noted = out.notes.iter().any(|n| n.contains("read as moved into"));
+                Ok((out.violations.len(), noted))
+            };
+            let test = "def test_create():\n    r = create()\n";
+            // One check in a straight line for three dropped: a drop.
+            let fewer = run(&format!(
+                "def check(r):\n    assert r.a == 1\n\n{test}    check(r)\n"
+            ))?;
+            // The same helper called once per element, and a helper that checks in a
+            // loop of its own: read as a refactor.
+            let called_in_loop = run(&format!(
+                "def check(r):\n    assert r.a == 1\n\n{test}    for x in r:\n        check(x)\n"
+            ))?;
+            let loops = run(&format!(
+                "def check(r):\n    for x in r:\n        assert x == 1\n\n{test}    check(r)\n"
+            ))?;
+            // Three checks behind a method called on an object: nothing lost. Two of
+            // three behind it: a drop.
+            let method = |held: usize| {
+                let body: String = (0..held)
+                    .map(|i| format!("        assert r.f{i} == {i}\n"))
+                    .collect();
+                format!(
+                    "class Checker:\n    def check(self, r):\n{body}\n{test}    Checker().check(r)\n"
+                )
+            };
+            let behind_receiver = run(&method(3))?;
+            let behind_receiver_fewer = run(&method(2))?;
+            Ok(fewer == (1, false)
+                && called_in_loop == (0, true)
+                && loops == (0, true)
+                && behind_receiver == (0, true)
+                && behind_receiver_fewer == (1, false))
+        },
+    ),
     #[cfg(feature = "lang-php")]
     (
         "php: PHPUnit extraction catches assertions, vacuous tests, and markTestSkipped",
@@ -3426,6 +3504,154 @@ command = "cargo test"
                 && !dead.has_parse_errors
                 && broken.has_parse_errors
                 && broken.first_parse_error_line == Some(5))
+        },
+    ),
+    (
+        "assertion-reduction: a case dropped beside an unrelated new test is a reduction, and one that arrives in another test of the file is not",
+        || {
+            let file = |first: &str, second: &str| {
+                let mut src = format!(
+                    "import pytest\n\n@pytest.mark.parametrize(\"x\", [{first}])\ndef test_x(x):\n    assert x > 0\n"
+                );
+                if !second.is_empty() {
+                    src.push_str(&format!(
+                        "\n@pytest.mark.parametrize(\"x\", [{second}])\ndef test_other(x):\n    assert x > 0\n"
+                    ));
+                }
+                src
+            };
+            let change = |head: &str| {
+                helper_change(&[("tests/test_a.py", &file("1, 2, 3, 4", ""), head)], "")
+            };
+            let reduced = vec!["assertion-reduction/test-cases-reduced".to_string()];
+            Ok(change(&file("1", "7, 8, 9"))? == reduced
+                && change(&file("1", "2, 3, 9"))? == reduced
+                && change(&file("1", "MORE"))? == reduced
+                // Control: the three cases, as written, in the other test.
+                && change(&file("1", "4,3 , 2"))?.is_empty())
+        },
+    ),
+    (
+        "assertion-reduction: a case list holding a spread or splat is not a literal list; a one-column test.each template is counted; Go and Rust case names are whole names",
+        || {
+            let py = |values: &str| {
+                first_test_cases(
+                    "tests/test_a.py",
+                    &format!("import pytest\n\n@pytest.mark.parametrize(\"x\", {values})\ndef test_x(x):\n    assert x\n"),
+                )
+            };
+            let js = |each: &str| {
+                first_test_cases(
+                    "tests/a.test.js",
+                    &format!("test.each{each}('x', (x) => {{ expect(x).toBe(1); }});\n"),
+                )
+            };
+            let go = |ty: &str| {
+                first_test_cases(
+                    "a_test.go",
+                    &format!("package p\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) {{\n\trows := {ty}{{{{1}}, {{2}}, {{3}}}}\n\tif len(rows) == 0 {{\n\t\tt.Fatal(\"empty\")\n\t}}\n}}\n"),
+                )
+            };
+            let rs = |attrs: &str, param: &str| {
+                first_test_cases(
+                    "tests/a.rs",
+                    &format!("#[rstest]\n{attrs}fn t({param} a: i32) {{\n    assert!(a > 0);\n}}\n"),
+                )
+            };
+            Ok(py("[1, *MORE]")? == (None, true)
+                && py("[1, 2, 3]")? == (Some(3), false)
+                && py("[(1, *MORE), (2,)]")? == (Some(2), false)
+                && js("([[1], ...more])")? == (None, true)
+                && js("([[1], [...more]])")? == (Some(2), false)
+                && js("`\n  n\n  ${1}\n  ${2}\n  ${3}\n`")? == (Some(3), false)
+                && js("`\n  a | b\n  ${1} | ${2}\n`")? == (Some(1), false)
+                && go("[]testCase")? == (Some(3), false)
+                && go("[]Showcase")? == (None, false)
+                && go("[]Contestant")? == (None, false)
+                && rs("#[case(1)]\n#[rstest::case::two(2)]\n", "#[case]")? == (Some(2), false)
+                && rs("#[case_x(1)]\n#[case_x(2)]\n", "")? == (None, false)
+                && rs("", "#[values(1, 2)]")? == (Some(2), false)
+                && rs("", "#[values_x(1, 2)]")? == (None, false))
+        },
+    ),
+    (
+        "assertion-reduction: a function in proptest! is a test only with #[test]; a quickcheck result that is always true is a tautology in the macro and the attribute form",
+        || {
+            use crate::ast::LanguagePack;
+            let vocab = AssertVocabulary::default();
+            let facts = |src: &str| crate::ast::rust::RustPack.extract("tests/prop.rs", src, &vocab);
+            let proptest = facts("proptest! {\n    #[test]\n    fn runs(a in 0..10i32) {\n        prop_assert!(a < 10);\n    }\n\n    fn not_run(a in 0..10i32) {\n        prop_assert!(a < 10);\n    }\n}\n")?;
+            let names: Vec<&str> = proptest.tests.iter().map(|t| t.name.as_str()).collect();
+            let forms = |ty: &str, body: &str| {
+                [
+                    format!("quickcheck! {{\n    fn holds(x: u32) -> {ty} {{\n{body}\n    }}\n}}\n"),
+                    format!("#[quickcheck]\nfn holds(x: u32) -> {ty} {{\n{body}\n}}\n"),
+                ]
+            };
+            let mut always_true = true;
+            for (ty, body) in [
+                ("bool", "true"),
+                ("bool", "x == x"),
+                ("bool", "let ok = true;\nok"),
+                ("bool", "if x > 0 { true } else { true }"),
+                ("bool", "match x { 0 => true, _ => true }"),
+                ("TestResult", "TestResult::passed()"),
+            ] {
+                for src in forms(ty, body) {
+                    let f = facts(&src)?;
+                    always_true &= f.tests[0].total_asserts == 1 && f.tests[0].tautologies == 1;
+                }
+            }
+            let mut checks = true;
+            for (ty, body) in [
+                ("bool", "double(x) == x + x"),
+                ("bool", "if x > 0 { double(x) > x } else { true }"),
+                ("bool", "let ok = double(x) > x;\nok"),
+                ("TestResult", "TestResult::from_bool(double(x) > x)"),
+            ] {
+                for src in forms(ty, body) {
+                    let f = facts(&src)?;
+                    checks &= f.tests[0].total_asserts == 1 && f.tests[0].tautologies == 0;
+                }
+            }
+            Ok(names == ["runs"] && always_true && checks)
+        },
+    ),
+    (
+        "assertion-reduction: a bound, an expected value and a caught assertion are read in a proptest! body and in the closure form, on the lines of the file",
+        || {
+            let function = |body: &str| {
+                format!("proptest! {{\n    #[test]\n    fn p(a in 0..10i32) {{\n{body}    }}\n}}\n")
+            };
+            let closure = |body: &str| {
+                format!("#[test]\nfn p() {{\n    proptest!(|(a in 0..10i32)| {{\n{body}    }});\n}}\n")
+            };
+            let base = "        prop_assert!(a < 10);\n        prop_assert_eq!(digits(a), 1);\n";
+            let mut ok = true;
+            for form in [&function as &dyn Fn(&str) -> String, &closure] {
+                let change = |head: &str| {
+                    helper_change(&[("tests/prop.rs", &form(base), &form(head))], "")
+                };
+                ok &= change("        prop_assert!(a < 1000);\n        prop_assert_eq!(digits(a), 1);\n")?
+                    == ["assertion-reduction/assertion-bound-loosened"];
+                ok &= change("        prop_assert!(a < 10);\n        prop_assert_eq!(digits(a), 2);\n")?
+                    == ["assertion-reduction/expected-value-changed"];
+                ok &= change("        prop_assert!(a < 10);\n")?
+                    == ["assertion-reduction/assertions-reduced"];
+                ok &= change("        let _ = std::panic::catch_unwind(|| {\n            assert!(a < 10);\n        });\n        prop_assert_eq!(digits(a), 1);\n")?
+                    .contains(&"assertion-reduction/assertion-failure-caught".to_string());
+                // Control: a statement added above, every check kept.
+                ok &= change("        let _b = a;\n        prop_assert!(a < 10);\n        prop_assert_eq!(digits(a), 1);\n")?
+                    .is_empty();
+            }
+            use crate::ast::LanguagePack;
+            let facts = crate::ast::rust::RustPack.extract(
+                "tests/prop.rs",
+                &closure(base),
+                &AssertVocabulary::default(),
+            )?;
+            let lines: Vec<usize> = facts.tests[0].bounds.iter().map(|b| b.line).collect();
+            Ok(ok && lines == [4])
         },
     ),
     (
@@ -5830,7 +6056,7 @@ proptest! {
 }
 quickcheck! {
     fn prop_qc(x: u32) -> bool {
-        x == x
+        decode(encode(x)) == x
     }
     fn prop_tautology(_x: u32) -> bool {
         true

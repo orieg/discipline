@@ -131,6 +131,7 @@ impl LanguagePack for ObjcPack {
             }
         }
         super::method_checks::count(root, src, &mut extractor.facts, &OBJC_RECEIVER_CALLS);
+        super::helper_loops::count(root, src, &mut extractor.facts, &super::helper_loops::OBJC);
         super::calls::count(
             root,
             src,

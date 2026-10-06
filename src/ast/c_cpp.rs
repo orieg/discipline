@@ -234,6 +234,7 @@ fn shared_facts(
         }
     }
     super::method_checks::count(root, src, facts, &C_RECEIVER_CALLS);
+    super::helper_loops::count(root, src, facts, &super::helper_loops::C);
     super::calls::count(
         root,
         src,

@@ -102,6 +102,12 @@ impl LanguagePack for CSharpPack {
             }
         }
         super::method_checks::count(root, src, &mut extractor.facts, &CSHARP_RECEIVER_CALLS);
+        super::helper_loops::count(
+            root,
+            src,
+            &mut extractor.facts,
+            &super::helper_loops::CSHARP,
+        );
         super::calls::count(
             root,
             src,
@@ -418,7 +424,8 @@ impl<'a> CSharpExtractor<'a> {
 
         let line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
-        let (cases, non_literal_cases) = super::test_cases::extract_csharp_cases(node, self.src);
+        let (cases, non_literal_cases, case_rows) =
+            super::test_cases::extract_csharp_cases(node, self.src).into_parts();
         let mut test_fn = TestFn {
             name: method_name.to_string(),
             line,
@@ -430,6 +437,7 @@ impl<'a> CSharpExtractor<'a> {
             should_panic: None,
             cases,
             non_literal_cases,
+            case_rows,
             ..Default::default()
         };
 
