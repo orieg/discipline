@@ -3,6 +3,7 @@
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
+use super::ci_condition::{read_skip, Grammar};
 use super::functions::{self, FunctionSpec};
 use super::{
     collect_error_nodes_info, AssertVocabulary, EscapeHatchSite, Fact, LanguagePack,
@@ -899,9 +900,13 @@ impl<'a> CCppExtractor<'a> {
                 calls.push(fn_name.to_string());
             }
 
-            // Skip detection inside test body
-            if matches!(fn_name, "GTEST_SKIP" | "SKIP") {
-                test_fn.ignored = true;
+            // googletest `GTEST_SKIP()`, Catch2 `SKIP()`, Unity `TEST_IGNORE()` and
+            // `TEST_IGNORE_MESSAGE(..)`.
+            if matches!(
+                fn_name,
+                "GTEST_SKIP" | "SKIP" | "TEST_IGNORE" | "TEST_IGNORE_MESSAGE"
+            ) {
+                test_fn.record_skip(read_skip(Grammar::C, node, None, self.src));
                 return;
             }
 

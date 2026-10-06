@@ -488,10 +488,22 @@ impl<'a> PythonExtractor<'a> {
         self.inherited_cases.pop();
     }
 
-    /// The skip marks of one decorator. A decorator the text rule
-    /// ([`Self::is_skip_decorator`]) accepts is an unconditional skip unless its syntax
-    /// tree shows a skip that takes a condition.
-    fn decorator_skips(&self, dec: Node, marks: &mut SkipMarks) {
+    /// The skip marks of one decorator. A name the file binds to a mark is read as that
+    /// mark. Otherwise a decorator the text rule ([`Self::is_skip_decorator`]) accepts is
+    /// an unconditional skip unless its syntax tree shows a skip that takes a condition.
+    fn decorator_skips(&self, dec: Node<'a>, marks: &mut SkipMarks) {
+        // `requires_db = pytest.mark.skipif(..)` then `@requires_db`: the mark the file
+        // binds the name to, judged as if it were written here.
+        let bound = dec
+            .named_child(0)
+            .map(|name| self.marks_bound_to(name))
+            .unwrap_or_default();
+        if !bound.is_empty() {
+            for mark in bound {
+                self.mark_skips(mark, marks);
+            }
+            return;
+        }
         if !self.is_skip_decorator(dec) {
             return;
         }
@@ -499,6 +511,62 @@ impl<'a> PythonExtractor<'a> {
             marks.ignored = true;
             return;
         };
+        self.mark_skips(expr, marks);
+    }
+
+    /// The skip marks a module-level assignment of this file binds the name `name` to
+    /// (`requires_db = pytest.mark.skipif(..)`). A name bound in another file, or to
+    /// anything but a `skip`, `skipif`, `skipIf`, `skipUnless` or `xfail` mark, gives
+    /// none, and so does any expression that is not a bare name.
+    fn marks_bound_to(&self, name: Node<'a>) -> Vec<Node<'a>> {
+        if name.kind() != "identifier" {
+            return Vec::new();
+        }
+        let mut root = name;
+        let name = self.text(name);
+        while let Some(parent) = root.parent() {
+            root = parent;
+        }
+        let mut out = Vec::new();
+        let mut cursor = root.walk();
+        for statement in root.named_children(&mut cursor) {
+            let assignment = statement
+                .named_child(0)
+                .filter(|a| statement.kind() == "expression_statement" && a.kind() == "assignment");
+            let Some(assignment) = assignment else {
+                continue;
+            };
+            let bound = assignment
+                .child_by_field_name("left")
+                .is_some_and(|l| l.kind() == "identifier" && self.text(l) == name);
+            let Some(value) = assignment.child_by_field_name("right").filter(|_| bound) else {
+                continue;
+            };
+            let mark = if value.kind() == "call" {
+                value.child_by_field_name("function")
+            } else {
+                Some(value)
+            };
+            let is_mark = mark.is_some_and(|m| {
+                let dotted = self.text(m);
+                m.kind() == "attribute"
+                    && (dotted.starts_with("pytest.mark.")
+                        || dotted.starts_with("mark.")
+                        || dotted.starts_with("unittest."))
+                    && matches!(
+                        self.last_name(m),
+                        Some("skip" | "skipif" | "skipIf" | "skipUnless" | "xfail")
+                    )
+            });
+            if is_mark {
+                out.push(value);
+            }
+        }
+        out
+    }
+
+    /// The skip marks of one mark expression (`pytest.mark.skipif(c)`, `pytest.mark.skip`).
+    fn mark_skips(&self, expr: Node, marks: &mut SkipMarks) {
         if self.condition_skip(expr, marks) {
             return;
         }
@@ -529,17 +597,22 @@ impl<'a> PythonExtractor<'a> {
     }
 
     /// The skip marks of a `pytestmark = ..` statement of a module or class body.
-    fn pytestmark_skips(&self, statement: Node, marks: &mut SkipMarks) {
-        if !statement_has_skip_mark(self.text(statement)) {
-            return;
-        }
+    fn pytestmark_skips(&self, statement: Node<'a>, marks: &mut SkipMarks) {
         let assignment = statement
             .named_child(0)
             .filter(|a| statement.kind() == "expression_statement" && a.kind() == "assignment");
         let Some(value) = assignment.and_then(|a| a.child_by_field_name("right")) else {
-            marks.ignored = true;
+            if statement_has_skip_mark(self.text(statement)) {
+                marks.ignored = true;
+            }
             return;
         };
+        let assigns_pytestmark = assignment
+            .and_then(|a| a.child_by_field_name("left"))
+            .is_some_and(|l| l.kind() == "identifier" && self.text(l) == "pytestmark");
+        if !assigns_pytestmark {
+            return;
+        }
         let elements: Vec<Node> = if matches!(value.kind(), "list" | "tuple") {
             let mut cursor = value.walk();
             value
@@ -550,6 +623,14 @@ impl<'a> PythonExtractor<'a> {
             vec![value]
         };
         for element in elements {
+            // A name the file binds to a mark, as on a decorator.
+            let bound = self.marks_bound_to(element);
+            if !bound.is_empty() {
+                for mark in bound {
+                    self.mark_skips(mark, marks);
+                }
+                continue;
+            }
             let text = self.text(element);
             if !(text.contains("skip") || text.contains("xfail")) {
                 continue;
@@ -575,14 +656,17 @@ impl<'a> PythonExtractor<'a> {
     }
 
     /// Reads `expr` as a skip that takes a condition: `pytest.mark.skipif(<condition>)`,
-    /// `unittest.skipIf(<condition>, ..)`, `unittest.skipUnless(<condition>, ..)`. Returns
-    /// whether it is one, with what it does added to `marks`.
+    /// `unittest.skipIf(<condition>, ..)`, `unittest.skipUnless(<condition>, ..)`, and
+    /// `pytest.mark.xfail(<condition>, ..)`, which expects the failure only where the
+    /// condition holds. Returns whether it is one, with what it does added to `marks`. An
+    /// `xfail` that takes no condition is not one.
     fn condition_skip(&self, expr: Node, marks: &mut SkipMarks) -> bool {
         use super::ci_condition::{self, Lang};
         if expr.kind() != "call" {
             return false;
         }
-        let Some(name @ ("skipif" | "skipIf" | "skipUnless")) = self.callee_name(expr) else {
+        let Some(name @ ("skipif" | "skipIf" | "skipUnless" | "xfail")) = self.callee_name(expr)
+        else {
             return false;
         };
         let negated = name == "skipUnless";
@@ -604,6 +688,9 @@ impl<'a> PythonExtractor<'a> {
             })
         });
         let Some(condition) = condition else {
+            if name == "xfail" {
+                return false;
+            }
             // No condition to read: `pytest.mark.skipif()` skips.
             marks.ignored = true;
             return true;
@@ -613,7 +700,7 @@ impl<'a> PythonExtractor<'a> {
             // pytest evaluates a string condition as an expression when the test is
             // collected. It is parsed the same way here; one that does not parse as a
             // single expression is a condition on no CI variable.
-            ("skipif", Some(code)) => python_string_condition(&code),
+            ("skipif" | "xfail", Some(code)) => python_string_condition(&code),
             // To unittest a string is a value: skipped when it is not empty.
             (_, Some(code)) => {
                 if code.is_empty() == negated {
@@ -696,23 +783,11 @@ impl<'a> PythonExtractor<'a> {
             .map(|n| self.text(n).to_string())
             .unwrap_or_default();
 
-        let class_has_skip_mark = if let Some(body) = node.child_by_field_name("body") {
-            let mut cursor = body.walk();
-            let has_skip = body
-                .children(&mut cursor)
-                .any(|c| statement_has_skip_mark(self.text(c)));
-            has_skip
-        } else {
-            false
-        };
-
         let mut marks = SkipMarks::default();
-        if class_has_skip_mark {
-            if let Some(body) = node.child_by_field_name("body") {
-                let mut cursor = body.walk();
-                for statement in body.children(&mut cursor) {
-                    self.pytestmark_skips(statement, &mut marks);
-                }
+        if let Some(body) = node.child_by_field_name("body") {
+            let mut cursor = body.walk();
+            for statement in body.children(&mut cursor) {
+                self.pytestmark_skips(statement, &mut marks);
             }
         }
         for dec in class_decorators.unwrap_or_default() {
