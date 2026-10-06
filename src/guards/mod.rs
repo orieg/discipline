@@ -801,6 +801,16 @@ pub fn run_checks(
 
     let mut run_directive_notes: Vec<String> = Vec::new();
     for note in &ctx.directive_notes {
+        // Where a pushed commit came from: about the run's sources, not any gate's
+        // directives, so it is reported once for the run. Decided before the words in the
+        // note are read for a gate: it carries an author login and can carry a forge's
+        // refusal, and neither names a directive (#568).
+        if crate::tokens::is_merged_source_note(note) {
+            if !run_directive_notes.contains(note) {
+                run_directive_notes.push(note.clone());
+            }
+            continue;
+        }
         // A refused hidden directive's note names the directive and nothing it says (#362):
         // it belongs to that directive's gate alone.
         let hidden_gate = note
@@ -878,14 +888,6 @@ pub fn run_checks(
         } else {
             ""
         };
-        // Where a pushed commit came from: about the run's sources, not any gate's
-        // directives, so it is reported once for the run.
-        if target_gate.is_empty() && crate::tokens::is_merged_source_note(note) {
-            if !run_directive_notes.contains(note) {
-                run_directive_notes.push(note.clone());
-            }
-            continue;
-        }
         for o in &mut outcomes {
             if target_gate.is_empty() {
                 if matches!(
