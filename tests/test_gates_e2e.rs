@@ -14599,8 +14599,9 @@ forbidden_paths = ["["]
         .unwrap()
         .to_string();
     assert!(
-        detail.contains("invalid glob") && detail.contains('['),
-        "exit 2 must name the bad glob, got: {detail}"
+        detail.contains("invalid glob `[`")
+            && detail.contains("gates.scope-confinement.forbidden_paths"),
+        "exit 2 must name the bad glob and its key, got: {detail}"
     );
 }
 
@@ -14668,8 +14669,9 @@ exempt_paths = ["["]
         .unwrap()
         .to_string();
     assert!(
-        detail.contains("invalid glob") && detail.contains('['),
-        "exit 2 must name the bad glob, got: {detail}"
+        detail.contains("invalid glob `[`")
+            && detail.contains("gates.suppression-delta.exempt_paths"),
+        "exit 2 must name the bad glob and its key, got: {detail}"
     );
 }
 
@@ -14793,8 +14795,8 @@ exempt_paths = ["["]
         .unwrap()
         .to_string();
     assert!(
-        detail.contains("invalid glob") && detail.contains('['),
-        "exit 2 must name the bad glob, got: {detail}"
+        detail.contains("invalid glob `[`") && detail.contains("gates.unsafe-budget.exempt_paths"),
+        "exit 2 must name the bad glob and its key, got: {detail}"
     );
 }
 

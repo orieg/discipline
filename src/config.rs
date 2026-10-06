@@ -1258,15 +1258,16 @@ pub struct CommandGate {
     pub count_pattern: Option<String>,
     /// Minimum count required. If base ref has a higher count, the base count acts as ratchet floor.
     pub min_count: Option<u64>,
-    /// Output patterns that must NOT appear in stdout or stderr.
+    /// Regular expressions that must NOT match stdout or stderr. One that does not compile
+    /// is a configuration error, never matched as literal text.
     pub forbid_output: Vec<String>,
-    /// Pattern that indicates zero items were executed (e.g. `running 0 tests`).
+    /// Regular expression whose match means zero items were executed (e.g. `running 0 tests`).
     pub zero_items_pattern: Option<String>,
     /// Whether zero items selected is allowed (default: false).
     pub allow_zero: bool,
     /// Optional negative-control canary command.
     pub canary_command: Option<String>,
-    /// Expected diagnostic string or regex that the canary MUST produce.
+    /// Regular expression the canary's output MUST match.
     pub canary_expected_diagnostic: Option<String>,
     /// Repository-relative path of a committed file the command's stdout must match.
     pub snapshot: Option<String>,
@@ -1376,7 +1377,8 @@ pub struct TestBudgetGate {
     pub exempt_paths: Vec<String>,
     /// Corpus directory patterns to monitor for seed file shrink (default: ["fuzz/corpus/**", "corpus/**", "**/tests/corpus/**"]).
     pub corpus_dirs: Vec<String>,
-    /// Fuzz manifest and harness globs (default: ["fuzz/Cargo.toml", "fuzz/fuzz_targets/**"]).
+    /// Globs of fuzz manifests and Rust harness files outside the root `fuzz/` crate, which
+    /// is always watched (default: ["fuzz/Cargo.toml", "fuzz/fuzz_targets/**"]).
     pub fuzz_targets: Vec<String>,
     /// Whether to scan workflow files (.github/workflows, .gitlab-ci.yml) (default: true).
     pub scan_workflows: bool,

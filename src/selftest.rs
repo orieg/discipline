@@ -5001,9 +5001,27 @@ smoke_cost::set_contains
     (
         "scope-confinement: a malformed glob is a configuration error, never a skipped pattern",
         || {
-            use crate::guards::PathFilter;
-            Ok(PathFilter::new(&["[".to_string()]).is_err()
-                && PathFilter::new(&["src/**".to_string()]).is_ok())
+            use crate::config::DisciplineConfig;
+            use crate::guards::check_configured_globs;
+            let load = |key: &str, glob: &str| {
+                DisciplineConfig::from_toml_str(&format!(
+                    "[meta]\nversion = 1\nname = \"t\"\n[gates.scope-confinement]\nenabled = true\n{key} = [\"{glob}\"]\n"
+                ))
+            };
+            let ids = ["scope-confinement"];
+            for key in ["exempt_paths", "allowed_paths", "forbidden_paths"] {
+                let refused = check_configured_globs(&load(key, "[")?, &ids)
+                    .err()
+                    .is_some_and(|e| {
+                        let text = format!("{e:#}");
+                        text.contains("invalid glob `[`")
+                            && text.contains(&format!("gates.scope-confinement.{key}"))
+                    });
+                if !refused || check_configured_globs(&load(key, "src/**")?, &ids).is_err() {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
         },
     ),
     (
@@ -5067,6 +5085,93 @@ smoke_cost::set_contains
             )? && passes(
                 "[gates.ci-integrity]\ndocumented_job_count_pattern = '(\\d+) jobs'\n[gates.command]\nenabled = true\ncommand = \"true\"\ncount_pattern = '(\\d+) passed'\n[gates.bench-regression]\nenabled = true\nexempt_arms = [\"*.heap.*\", \"map_get/random\"]\n",
             )?)
+        },
+    ),
+    (
+        "configuration: a command output pattern that does not compile is a configuration error, never matched as literal text",
+        || {
+            use crate::config::DisciplineConfig;
+            use crate::guards::check_configured_patterns;
+            let head = "[meta]\nversion = 1\nname = \"t\"\n[gates.command]\nenabled = true\ncommand = \"true\"\n";
+            let load = |body: &str| DisciplineConfig::from_toml_str(&format!("{head}{body}"));
+            let ids = ["command"];
+            let names = |body: &str, needle: &str| -> Result<bool> {
+                Ok(check_configured_patterns(&load(body)?, &ids)
+                    .err()
+                    .is_some_and(|e| format!("{e:#}").contains(needle)))
+            };
+            Ok(names("forbid_output = ['ok', '(a']\n", "`gates.command.forbid_output`")?
+                && names("zero_items_pattern = '0 tests ['\n", "`gates.command.zero_items_pattern`")?
+                && names(
+                    "canary_expected_diagnostic = 'boom('\n",
+                    "`gates.command.canary_expected_diagnostic`",
+                )?
+                && names(
+                    "[[gates.command.commands]]\nname = \"unit\"\ncommand = \"true\"\nforbid_output = ['(a']\n",
+                    "`gates.command.commands[unit].forbid_output`",
+                )?
+                && check_configured_patterns(
+                    &load("forbid_output = ['\\(a', 'FAILED\\d+']\nzero_items_pattern = '0 tests \\['\ncanary_expected_diagnostic = 'boom\\('\n")?,
+                    &ids,
+                )
+                .is_ok())
+        },
+    ),
+    (
+        "configuration: a documented job count with one of its two keys, and a fuzz_targets glob that does not compile, are found before any gate runs",
+        || {
+            use crate::config::DisciplineConfig;
+            use crate::guards::{check_configured_globs, check_configured_pairs};
+            let head = "[meta]\nversion = 1\nname = \"t\"\n";
+            let load = |body: &str| DisciplineConfig::from_toml_str(&format!("{head}{body}"));
+            let ids = ["ci-integrity", "test-budget"];
+            let half = |body: &str| -> Result<bool> {
+                Ok(check_configured_pairs(&load(body)?, &ids).err().is_some_and(|e| {
+                    let shown = format!("{e:#}");
+                    shown.contains("`gates.ci-integrity.documented_job_count_path`")
+                        && shown.contains("`gates.ci-integrity.documented_job_count_pattern`")
+                }))
+            };
+            let both = "[gates.ci-integrity]\ndocumented_job_count_path = \"docs/ci.md\"\ndocumented_job_count_pattern = '(\\d+) jobs'\n";
+            let bad_fuzz = load("[gates.test-budget]\nfuzz_targets = [\"crates/[a-z/fuzz/**\"]\n")?;
+            let good_fuzz = load("[gates.test-budget]\nfuzz_targets = [\"crates/*/fuzz/**\"]\n")?;
+            Ok(half("[gates.ci-integrity]\ndocumented_job_count_path = \"docs/ci.md\"\n")?
+                && half("[gates.ci-integrity]\ndocumented_job_count_pattern = '(\\d+) jobs'\n")?
+                && check_configured_pairs(&load(both)?, &ids).is_ok()
+                && check_configured_pairs(&load("")?, &ids).is_ok()
+                && check_configured_pairs(
+                    &load("[gates.ci-integrity]\nenabled = false\ndocumented_job_count_path = \"docs/ci.md\"\n")?,
+                    &ids,
+                )
+                .is_ok()
+                && check_configured_globs(&bad_fuzz, &ids)
+                    .err()
+                    .is_some_and(|e| format!("{e:#}").contains("gates.test-budget.fuzz_targets"))
+                && check_configured_globs(&good_fuzz, &ids).is_ok())
+        },
+    ),
+    (
+        "configuration: under base policy a base glob that does not compile is read from the change that repairs it, and nothing else is",
+        || {
+            use crate::cli::SuiteChoice;
+            use crate::config::DisciplineConfig;
+            use crate::guards::base_policy_repaired_by_head;
+            let head = "[meta]\nversion = 1\nname = \"t\"\n";
+            let load = |body: &str| DisciplineConfig::from_toml_str(&format!("{head}{body}"));
+            let bad = load("[gates.scope-confinement]\nenabled = true\nforbidden_paths = [\"keys/[a-z\"]\n")?;
+            let good = load("[gates.scope-confinement]\nenabled = true\nforbidden_paths = [\"keys/[a-z]*\"]\n[gates.pii]\nenabled = false\n")?;
+            let off = load("[gates.scope-confinement]\nenabled = false\nforbidden_paths = [\"keys/[a-z\"]\n")?;
+            let repaired = base_policy_repaired_by_head(&bad, &good, SuiteChoice::All)?;
+            let taken = repaired.is_some_and(|(config, taken)| {
+                config.gates.scope_confinement.forbidden_paths == ["keys/[a-z]*"]
+                    && config.gates.pii.enabled
+                    && taken.len() == 1
+                    && taken[0].note.contains("`gates.scope-confinement.forbidden_paths`")
+            });
+            Ok(taken
+                && base_policy_repaired_by_head(&bad, &bad, SuiteChoice::All)?.is_none()
+                && base_policy_repaired_by_head(&bad, &off, SuiteChoice::All)?.is_none()
+                && base_policy_repaired_by_head(&good, &good, SuiteChoice::All)?.is_none())
         },
     ),
     (
