@@ -639,7 +639,9 @@ impl<'a> Extractor<'a> {
         conditional_ignore: &mut Option<String>,
     ) {
         let text = self.text(attr_node);
-        if is_cfg_test_suppression(text) {
+        // `not(test)` is left to the evaluator below, which reads where it stands in the
+        // predicate: `any(not(test), unix)` still builds under `cargo test`.
+        if is_cfg_ci_suppression(text) {
             *ignored = true;
             *conditional_ignore = None;
             return;
@@ -692,6 +694,11 @@ impl<'a> Extractor<'a> {
             if p.kind() == "mod_item" {
                 let mut prev_mod = p.prev_sibling();
                 while let Some(a) = prev_mod {
+                    // A comment between the attribute and the module changes nothing.
+                    if matches!(a.kind(), "line_comment" | "block_comment") {
+                        prev_mod = a.prev_sibling();
+                        continue;
+                    }
                     if a.kind() != "attribute_item" {
                         break;
                     }
@@ -701,6 +708,20 @@ impl<'a> Extractor<'a> {
                         self.apply_cfg(a, &mut ignored, &mut conditional_ignore);
                     }
                     prev_mod = a.prev_sibling();
+                }
+            }
+            // `#![cfg(..)]` inside a module body, or at the top of the file, gates
+            // everything in it.
+            if matches!(p.kind(), "declaration_list" | "source_file") {
+                let mut cursor = p.walk();
+                let inner: Vec<Node> = p
+                    .children(&mut cursor)
+                    .filter(|c| c.kind() == "inner_attribute_item")
+                    .collect();
+                for a in inner {
+                    if attribute_name(a.utf8_text(self.src).unwrap_or("")) == "cfg" {
+                        self.apply_cfg(a, &mut ignored, &mut conditional_ignore);
+                    }
                 }
             }
             cur = p.parent();
@@ -1437,9 +1458,14 @@ pub(crate) fn has_valid_safety_comment_with_placeholders(
 
 fn is_cfg_test_suppression(attr_text: &str) -> bool {
     let normalized: String = attr_text.chars().filter(|c| !c.is_whitespace()).collect();
+    normalized.to_lowercase().contains("not(test)") || is_cfg_ci_suppression(attr_text)
+}
+
+/// A cfg whose text names a CI flag as the condition under which the item is left out.
+fn is_cfg_ci_suppression(attr_text: &str) -> bool {
+    let normalized: String = attr_text.chars().filter(|c| !c.is_whitespace()).collect();
     let lower = normalized.to_lowercase();
     lower.contains("not(ci)")
-        || lower.contains("not(test)")
         || lower.contains("not(any(ci")
         || lower.contains("not(all(ci")
         || lower.contains("skip_ci")
@@ -3197,5 +3223,44 @@ mod mod_tests {
             .unwrap();
         assert!(in_mod.ignored);
         assert_eq!(in_mod.conditional_ignore, None);
+    }
+
+    #[test]
+    fn a_module_cfg_is_read_past_a_comment_and_as_an_inner_attribute() {
+        let ignored = |src: &str| {
+            let f = facts(src);
+            assert_eq!(f.tests.len(), 1, "{src}");
+            f.tests[0].ignored
+        };
+        let test = "#[test]\n    fn t() { assert_eq!(a(), 1); }";
+        assert!(ignored(&format!(
+            "#[cfg(any())]\n// parked\nmod m {{\n    {test}\n}}\n"
+        )));
+        assert!(ignored(&format!(
+            "#[cfg(any())]\n/* parked */\nmod m {{\n    {test}\n}}\n"
+        )));
+        assert!(ignored(&format!(
+            "mod m {{\n    #![cfg(any())]\n    {test}\n}}\n"
+        )));
+        assert!(ignored(&format!("#![cfg(any())]\n\n{test}\n")));
+        assert!(ignored(&format!("#[cfg(false)]\n{test}\n")));
+        // Controls: no cfg, a cfg that holds, and an inner attribute that is not a cfg.
+        assert!(!ignored(&format!("// parked\nmod m {{\n    {test}\n}}\n")));
+        assert!(!ignored(&format!(
+            "mod m {{\n    #![cfg(test)]\n    {test}\n}}\n"
+        )));
+        assert!(!ignored(&format!("#![allow(dead_code)]\n\n{test}\n")));
+        assert!(!ignored(&format!("#[cfg(true)]\n{test}\n")));
+    }
+
+    #[test]
+    fn not_test_is_read_where_it_stands_in_the_predicate() {
+        let f = facts("#[cfg(any(not(test), unix))]\n#[test]\nfn t() { assert_eq!(a(), 1); }");
+        assert!(!f.tests[0].ignored);
+        // Controls: alone it never builds under test, and a CI flag still parks the test.
+        let f = facts("#[cfg(not(test))]\n#[test]\nfn t() { assert_eq!(a(), 1); }");
+        assert!(f.tests[0].ignored);
+        let f = facts("#[cfg(not(ci))]\n#[test]\nfn t() { assert_eq!(a(), 1); }");
+        assert!(f.tests[0].ignored);
     }
 }
