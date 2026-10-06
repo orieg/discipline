@@ -2780,4 +2780,57 @@ mod tests {
         );
         assert!(ci_vars_in_condition("cfg!(miri) || os.Getenv(\"SKIP_SLOW\") != \"\"").is_empty());
     }
+    /// #598: the test-path rule over a corpus of file names, in both directions. Each
+    /// row is `family, path, test|production`; the expectation comes from the convention
+    /// the row was written for, so a rule that starts matching `Latest.java` or stops
+    /// matching `RepoTest.java` fails here by name.
+    #[cfg(all(
+        feature = "lang-rust",
+        feature = "lang-javascript",
+        feature = "lang-python",
+        feature = "lang-go",
+        feature = "lang-java",
+        feature = "lang-csharp",
+        feature = "lang-c",
+        feature = "lang-cpp",
+        feature = "lang-php",
+        feature = "lang-ruby",
+        feature = "lang-kotlin",
+        feature = "lang-swift",
+        feature = "lang-scala",
+        feature = "lang-objc"
+    ))]
+    #[test]
+    fn the_test_path_rule_matches_the_corpus_in_both_directions() {
+        let reg = default_registry();
+        let mut wrong = Vec::new();
+        let mut seen = (0, 0);
+        for row in include_str!("../../tests/fixtures/test_path_corpus.tsv").lines() {
+            let mut fields = row.split('\t');
+            let (Some(_family), Some(path), Some(expected)) =
+                (fields.next(), fields.next(), fields.next())
+            else {
+                panic!("malformed row: {row}");
+            };
+            let expected = match expected {
+                "test" => true,
+                "production" => false,
+                other => panic!("{path}: unknown expectation {other}"),
+            };
+            let got = reg
+                .find_pack(path)
+                .unwrap_or_else(|| panic!("no pack reads {path}"))
+                .is_test_path(path);
+            if got != expected {
+                wrong.push(format!("{path}: expected {expected}, got {got}"));
+            }
+            if expected {
+                seen.0 += 1;
+            } else {
+                seen.1 += 1;
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+        assert!(seen.0 > 900 && seen.1 > 600, "{seen:?}");
+    }
 }

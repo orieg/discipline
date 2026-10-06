@@ -254,6 +254,79 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "ast: a test file name is matched at a word boundary, a test directory at any depth",
+        || {
+            let reg = crate::ast::default_registry();
+            let scope = |path: &str| reg.find_pack(path).is_some_and(|p| p.is_test_path(path));
+            let test_files = [
+                "src/main/java/RepoTest.java",
+                "src/main/java/TestRepo.java",
+                "src/main/java/HTTPTest.java",
+                "src/Core/RepoTests.cs",
+                "src/Domain/RepoTest.php",
+                "src/main/kotlin/RepoIT.kt",
+                "web/util.test.mjs",
+                "__tests__/util.js",
+            ];
+            let production = [
+                "src/main/java/Latest.java",
+                "src/main/java/TestimonialController.java",
+                "src/Core/Contests.cs",
+                "src/Domain/Contest.php",
+                "src/main/kotlin/AUDIT.kt",
+                "my__tests__/util.js",
+            ];
+            Ok(test_files.iter().all(|p| scope(p)) && !production.iter().any(|p| scope(p)))
+        },
+    ),
+    (
+        "ast: a deleted production file added again under a test name is paired; a support file, another stem, a deleted test file, a test directory and a declared path are not",
+        || {
+            use crate::gitctx::{ChangeKind, ChangedFile};
+            let reg = crate::ast::default_registry();
+            let file = |path: &str, old: &str, kind: ChangeKind| ChangedFile {
+                path: path.to_string(),
+                old_path: old.to_string(),
+                kind,
+                added_lines: std::collections::BTreeSet::new(),
+            };
+            let deleted = |path: &str| file(path, path, ChangeKind::Deleted);
+            let paired = |added: &str, gone: &[&str], declared: &[String]| {
+                let f = file(added, added, ChangeKind::Added);
+                let mut changed: Vec<ChangedFile> = gone.iter().map(|p| deleted(p)).collect();
+                changed.push(f.clone());
+                let pack = reg.find_pack(added)?;
+                crate::guards::replaced_production_file(&f, &changed, pack, &reg, declared)
+                    .map(|r| (r.deleted, r.classify_path))
+            };
+            let pair = |gone: &str, path: &str| Some((gone.to_string(), path.to_string()));
+            let declared = ["app/test_*.py".to_string()];
+            // A declared file renamed into a conventional test path was never production code.
+            let qa = ["qa/**".to_string()];
+            let moved = crate::guards::base_anchored_classification(
+                &file("app/test_checks.py", "qa/checks.py", ChangeKind::Renamed),
+                &reg,
+                &qa,
+            );
+            Ok(
+                paired("app/test_loader.py", &["lib/loader.py"], &[])
+                    == pair("lib/loader.py", "app/renamed.py")
+                    && paired("src/RepoTest.java", &["src/Repo.java"], &[])
+                        == pair("src/Repo.java", "src/renamed.java")
+                    && paired("web/util.spec.mjs", &["web/util.js"], &[])
+                        == pair("web/util.js", "web/renamed.mjs")
+                    && paired("app/test_loader.py", &[], &[]).is_none()
+                    && paired("app/test_loader.py", &["app/reader.py"], &[]).is_none()
+                    && paired("app/test_loader.py", &["tests/loader.py"], &[]).is_none()
+                    && paired("app/test_loader.py", &["app/loader.go"], &[]).is_none()
+                    && paired("tests/test_loader.py", &["app/loader.py"], &[]).is_none()
+                    && paired("app/test_loader.py", &["app/loader.py"], &declared).is_none()
+                    && !moved.reclassified
+                    && moved.classify_path == "app/test_checks.py",
+            )
+        },
+    ),
+    (
         "ast: SAFETY comment above documents, prose about it does not",
         || {
             let v = AssertVocabulary::default();
@@ -286,6 +359,30 @@ const CASES: &[Case] = &[
             && prose.is_empty()
             && placeholder.is_empty())
     }),
+    (
+        "tokens: a subject is read from the start of a directive, never from its reason",
+        || {
+            let other = directive_reasons(
+                "allow-assertion-drop: test_other the helper adds to the total",
+                crate::tokens::ALLOW_ASSERTION_DROP,
+            );
+            let quoted_later = directive_reasons(
+                "allow-assertion-drop: test_other keeps what \"adds\" checked",
+                crate::tokens::ALLOW_ASSERTION_DROP,
+            );
+            let first = directive_reasons(
+                "allow-assertion-drop: adds the equality moved to the property suite",
+                crate::tokens::ALLOW_ASSERTION_DROP,
+            );
+            let path = directive_reasons("removes: tests/b.rs moved under tests/", REMOVES);
+            Ok(!covers(&other, "adds")
+                && covers(&other, "test_other")
+                && !covers(&quoted_later, "adds")
+                && covers(&first, "adds")
+                && covers(&path, "tests/b.rs")
+                && !covers(&path, "tests/a.rs"))
+        },
+    ),
     ("hygiene: time-estimate patterns discriminate", || {
         let res: Vec<Regex> = time_estimate_patterns()
             .iter()
@@ -3762,6 +3859,125 @@ command = "cargo test"
                 && run_if == Some(Severity::Error)
                 && outside_ci == Some(Severity::Note)
                 && cfg_outside_ci == Some(Severity::Note))
+        },
+    ),
+    (
+        "ignored-tests: a skip that takes a condition is read by it: CI is an error, a platform a note, a constant unconditional",
+        || {
+            use crate::ast::default_registry;
+            use crate::config::{IgnoredTestsGate, Severity};
+            use crate::guards::agent_diff::{evaluate_ignored_tests, Located};
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            // `(title, severity)` of the finding for the one test of a file that arrives.
+            type Finding = Option<(String, Severity)>;
+            let finding_of = |path: &str, src: &str| -> anyhow::Result<Finding> {
+                let pack = reg
+                    .find_pack(path)
+                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
+                let tests = pack.extract(path, src, &v)?.tests;
+                let test = tests
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("no test in {path}"))?;
+                let added = [Located {
+                    path,
+                    file_survives: true,
+                    test,
+                }];
+                let out =
+                    evaluate_ignored_tests(&[], &added, &IgnoredTestsGate::default(), &[], false)?;
+                Ok(out.violations.first().map(|v| (v.title.to_string(), v.severity)))
+            };
+            let conditional = |severity: Severity| Some(("Test Conditionally Skipped".to_string(), severity));
+            let unconditional = Some(("Ignored Test Added".to_string(), Severity::Error));
+            let py = |decorator: &str| {
+                format!("import os\nimport sys\nimport pytest\n\n{decorator}\ndef test_q():\n    assert 1 + 1 == 2\n")
+            };
+            let js = |call: &str| format!("{call}('adds', () => {{\n  expect(1 + 1).toBe(2);\n}});\n");
+            let java = |annotation: &str, first: &str| {
+                format!("class QTest {{\n    {annotation}\n    @Test\n    void adds() {{\n        {first}\n        assertEquals(2, 1 + 1);\n    }}\n}}\n")
+            };
+            let cases: Vec<(&str, String, Finding)> = vec![
+                ("test_q.py", py("@pytest.mark.skipif(os.environ.get(\"CI\"), reason=\"x\")"), conditional(Severity::Error)),
+                ("test_q.py", py("@pytest.mark.skipif(not os.environ.get(\"CI\"), reason=\"x\")"), conditional(Severity::Note)),
+                ("test_q.py", py("@pytest.mark.skipif(sys.platform == \"win32\", reason=\"x\")"), conditional(Severity::Note)),
+                ("test_q.py", py("@pytest.mark.skipif(True, reason=\"x\")"), unconditional.clone()),
+                ("test_q.py", py("@pytest.mark.skipif(False, reason=\"x\")"), None),
+                ("test_q.py", py("@pytest.mark.skip(reason=\"x\")"), unconditional.clone()),
+                ("a.test.js", js("test.skipIf(process.env.CI)"), conditional(Severity::Error)),
+                ("a.test.js", js("test.skipIf(process.platform === 'win32')"), conditional(Severity::Note)),
+                ("a.test.js", js("test.runIf(process.env.CI)"), conditional(Severity::Note)),
+                ("a.test.js", js("test.skip"), unconditional.clone()),
+                (
+                    "src/test/java/QTest.java",
+                    java("@DisabledIfEnvironmentVariable(named = \"CI\", matches = \"true\")", ""),
+                    conditional(Severity::Error),
+                ),
+                ("src/test/java/QTest.java", java("@DisabledOnOs(OS.WINDOWS)", ""), conditional(Severity::Note)),
+                (
+                    "src/test/java/QTest.java",
+                    java("", "assumeTrue(System.getenv(\"CI\") == null);"),
+                    conditional(Severity::Error),
+                ),
+                ("src/test/java/QTest.java", java("@Disabled", ""), unconditional.clone()),
+                (
+                    "src/test/kotlin/QTest.kt",
+                    "class QTest {\n    @Test\n    fun adds() {\n        assumeFalse(System.getenv(\"CI\") != null)\n        assertEquals(2, 1 + 1)\n    }\n}\n".to_string(),
+                    conditional(Severity::Error),
+                ),
+            ];
+            for (path, src, want) in cases {
+                if finding_of(path, &src)? != want {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        },
+    ),
+    (
+        "ignored-tests: a CI variable added to a CI-conditional skip is reported unless approved",
+        || {
+            use crate::ast::TestFn;
+            use crate::config::{IgnoredTestsGate, Severity};
+            use crate::guards::agent_diff::{evaluate_ignored_tests, TestPair};
+            let skip_under = |cond: &str| TestFn {
+                name: "TestA".to_string(),
+                line: 9,
+                conditional_ignore: Some(cond.to_string()),
+                ..Default::default()
+            };
+            let ci = skip_under("os.Getenv(\"CI\") != \"\"");
+            let ci_or_github =
+                skip_under("os.Getenv(\"CI\") != \"\" || os.Getenv(\"GITHUB_ACTIONS\") != \"\"");
+            let ci_and_short = skip_under("os.Getenv(\"CI\") != \"\" && testing.Short()");
+            let run = |head: &TestFn, approved: &[&str]| -> anyhow::Result<Vec<(Severity, String)>> {
+                let pairs = [TestPair {
+                    path: "p_test.go",
+                    base: &ci,
+                    head,
+                    forced: false,
+                }];
+                let settings = IgnoredTestsGate {
+                    approved_predicates: approved.iter().map(|s| s.to_string()).collect(),
+                    ..Default::default()
+                };
+                let out = evaluate_ignored_tests(&pairs, &[], &settings, &[], false)?;
+                Ok(out
+                    .violations
+                    .iter()
+                    .map(|v| (v.severity, v.message.clone()))
+                    .collect())
+            };
+            let names_added = |found: &[(Severity, String)]| {
+                found.len() == 1
+                    && found[0].0 == Severity::Error
+                    && found[0].1.contains("adds CI variable `GITHUB_ACTIONS`")
+            };
+            Ok(names_added(&run(&ci_or_github, &[])?)
+                && names_added(&run(&ci_or_github, &["CI"])?)
+                && run(&ci_or_github, &["CI", "GITHUB_ACTIONS"])?.is_empty()
+                && run(&ci_and_short, &[])?.is_empty()
+                && run(&ci, &[])?.is_empty())
         },
     ),
     (

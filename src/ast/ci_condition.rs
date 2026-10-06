@@ -8,7 +8,13 @@
 //! A name is followed within its file: a local variable, a module-level variable or
 //! constant, and a function defined in the file whose result is the read. A name bound in
 //! another file is not followed. One that is not bound in the file and is spelled like a
-//! CI variable (`CI`, `settings.CI`) counts as a read of it.
+//! CI variable (`CI`, `settings.CI`) counts as a read of it, and one written exactly as a
+//! CI variable that the file binds to a call or attribute it does not define
+//! (`CI = helpers.in_ci()`) involves that variable undecidedly.
+//!
+//! A skip that takes its condition as an argument (`skipif(..)`, `test.skipIf(..)`,
+//! `assumeTrue(..)`) is read by [`skip_condition`]: the same evaluation, after a check
+//! for a condition that is a constant.
 
 use std::collections::{BTreeSet, HashMap};
 use tree_sitter::Node;
@@ -29,6 +35,20 @@ pub enum Lang {
     Go,
     JavaScript,
     Rust,
+    Java,
+    Kotlin,
+}
+
+/// What a skip that takes a condition (`skipif(<condition>)`, `assumeTrue(<condition>)`)
+/// does to its test.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkipCondition {
+    /// The condition is a constant that always holds: an unconditional skip.
+    Always,
+    /// The condition is a constant that never holds: no skip.
+    Never,
+    /// A conditional skip, with what a CI variable decides about it.
+    When(CiVerdict),
 }
 
 /// The enclosing conditions of a skip or early exit.
@@ -143,6 +163,12 @@ fn mention(name: &str) -> Option<&'static str> {
         .find(|v| v.eq_ignore_ascii_case(name))
 }
 
+/// A name written exactly as a CI variable is (`CI`, `GITHUB_ACTIONS`). A lower-case
+/// local (`ci = make_client()`) is not one.
+fn exact_mention(name: &str) -> Option<&'static str> {
+    super::CI_VARS.iter().copied().find(|v| *v == name)
+}
+
 const FUNCTION_KINDS: &[&str] = &[
     "function_definition",
     "lambda",
@@ -156,6 +182,10 @@ const FUNCTION_KINDS: &[&str] = &[
     "method_definition",
     "function_item",
     "closure_expression",
+    "lambda_expression",
+    "constructor_declaration",
+    "lambda_literal",
+    "anonymous_function",
 ];
 
 const IF_KINDS: &[&str] = &["if_statement", "if_expression", "elif_clause"];
@@ -167,6 +197,13 @@ enum Bound<'t> {
 }
 
 type Bindings<'t> = HashMap<String, Vec<Bound<'t>>>;
+
+struct JvmCall<'t, 's> {
+    receiver: Option<Node<'t>>,
+    name: &'s str,
+    args: Vec<Node<'t>>,
+    negated: bool,
+}
 
 struct Eval<'t, 's> {
     lang: Lang,
@@ -193,7 +230,7 @@ impl<'t, 's> Eval<'t, 's> {
             matches!(
                 c.kind(),
                 "interpolation" | "template_substitution" | "escape_sequence"
-            )
+            ) || (self.is_jvm() && !matches!(c.kind(), "string_fragment" | "string_content"))
         }) {
             return None;
         }
@@ -215,6 +252,130 @@ impl<'t, 's> Eval<'t, 's> {
         first
     }
 
+    fn is_jvm(&self) -> bool {
+        matches!(self.lang, Lang::Java | Lang::Kotlin)
+    }
+
+    /// The body of a function: its `body` field, or in Kotlin the block or expression
+    /// under its `function_body` child.
+    fn body_of(&self, func: Node<'t>) -> Option<Node<'t>> {
+        if let Some(body) = func.child_by_field_name("body") {
+            return Some(body);
+        }
+        let mut cursor = func.walk();
+        let holder = func
+            .named_children(&mut cursor)
+            .find(|c| c.kind() == "function_body")?;
+        let mut inner = holder.walk();
+        let body = holder.named_children(&mut inner).next();
+        body
+    }
+
+    /// A Java `method_invocation` or Kotlin `call_expression` as receiver, method name
+    /// and arguments. `negated` is set where the Kotlin grammar attaches a leading `!` to
+    /// the receiver (`!"true".equals(x)`).
+    fn jvm_call(&self, n: Node<'t>) -> Option<JvmCall<'t, 's>> {
+        match (self.lang, n.kind()) {
+            (Lang::Java, "method_invocation") => {
+                let name = self.text(n.child_by_field_name("name")?);
+                let args = match n.child_by_field_name("arguments") {
+                    Some(list) => {
+                        let mut cursor = list.walk();
+                        list.named_children(&mut cursor)
+                            .filter(|c| !c.kind().ends_with("comment"))
+                            .collect()
+                    }
+                    None => Vec::new(),
+                };
+                Some(JvmCall {
+                    receiver: n.child_by_field_name("object"),
+                    name,
+                    args,
+                    negated: false,
+                })
+            }
+            (Lang::Kotlin, "call_expression") => {
+                let mut cursor = n.walk();
+                let children: Vec<Node<'t>> = n.named_children(&mut cursor).collect();
+                let callee = *children.first()?;
+                let (mut receiver, name) = match callee.kind() {
+                    "identifier" => (None, self.text(callee)),
+                    "navigation_expression" => {
+                        let mut parts = callee.walk();
+                        let parts: Vec<Node<'t>> = callee.named_children(&mut parts).collect();
+                        let (first, last) = (*parts.first()?, *parts.last()?);
+                        if parts.len() < 2 || last.kind() != "identifier" {
+                            return None;
+                        }
+                        (Some(first), self.text(last))
+                    }
+                    _ => return None,
+                };
+                let mut negated = false;
+                if let Some(r) = receiver {
+                    if r.kind() == "unary_expression"
+                        && r.child(0).is_some_and(|c| self.text(c) == "!")
+                    {
+                        let mut inner = r.walk();
+                        receiver = r.named_children(&mut inner).last();
+                        negated = true;
+                    }
+                }
+                let mut args = Vec::new();
+                for list in children.iter().filter(|c| c.kind() == "value_arguments") {
+                    let mut cursor = list.walk();
+                    for arg in list.named_children(&mut cursor) {
+                        if arg.kind() != "value_argument" {
+                            continue;
+                        }
+                        let mut inner = arg.walk();
+                        if let Some(value) = arg.named_children(&mut inner).last() {
+                            args.push(value);
+                        }
+                    }
+                }
+                Some(JvmCall {
+                    receiver,
+                    name,
+                    args,
+                    negated,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// The variable a Java or Kotlin call reads: `System.getenv("X")`, or `get`,
+    /// `getOrDefault`, `containsKey` on `System.getenv()`. A system property
+    /// (`System.getProperty("ci")`, `Boolean.getBoolean("ci")`) is read as a CI variable
+    /// only when its name is one.
+    fn jvm_env_read(&self, n: Node<'t>) -> Option<String> {
+        let call = self.jvm_call(n)?;
+        if call.negated {
+            return None;
+        }
+        let receiver = call.receiver?;
+        let first = call.args.first().and_then(|a| self.string_value(*a));
+        match (self.text(receiver), call.name) {
+            ("System", "getenv") => first,
+            ("System", "getProperty") | ("Boolean", "getBoolean") => {
+                Some(first.and_then(|p| mention(&p)).unwrap_or("").to_string())
+            }
+            (_, "get" | "getOrDefault" | "containsKey" | "getValue") => {
+                let inner = self.jvm_call(receiver)?;
+                let on_environment = inner.receiver.map(|r| self.text(r)) == Some("System")
+                    && inner.name == "getenv"
+                    && inner.args.is_empty();
+                if on_environment {
+                    first
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Whether `n` is the process environment object (`os.environ`, `process.env`).
     fn is_env_object(&self, n: Node) -> bool {
         match self.lang {
@@ -227,7 +388,7 @@ impl<'t, 's> Eval<'t, 's> {
                 let property = n.child_by_field_name("property").map(|p| self.text(p));
                 property == Some("env") && matches!(object, Some("process" | "import.meta"))
             }
-            Lang::Go | Lang::Rust => false,
+            Lang::Go | Lang::Rust | Lang::Java | Lang::Kotlin => false,
         }
     }
 
@@ -297,6 +458,9 @@ impl<'t, 's> Eval<'t, 's> {
                 }
                 self.string_value(self.first_argument(n)?)
             }
+            (Lang::Java, "method_invocation") | (Lang::Kotlin, "call_expression") => {
+                self.jvm_env_read(n)
+            }
             (Lang::Rust, "macro_invocation") => {
                 let name = self.text(n.child_by_field_name("macro")?);
                 if !matches!(name, "option_env" | "env" | "std::option_env" | "std::env") {
@@ -320,11 +484,15 @@ impl<'t, 's> Eval<'t, 's> {
             return Some(matches!(lower.as_str(), "" | "0" | "false" | "no" | "off"));
         }
         match n.kind() {
-            "none" | "nil" | "null" | "undefined" | "false" => Some(true),
+            "none" | "nil" | "null" | "undefined" | "false" | "null_literal" => Some(true),
             "true" => Some(false),
-            "integer" | "int_literal" | "number" | "integer_literal" => {
-                Some(self.text(n).trim() == "0")
-            }
+            "integer"
+            | "int_literal"
+            | "number"
+            | "integer_literal"
+            | "decimal_integer_literal"
+            | "number_literal" => Some(self.text(n).trim() == "0"),
+            "identifier" if self.lang == Lang::Kotlin && self.text(n) == "null" => Some(true),
             "identifier" => match self.text(n) {
                 "None" | "nil" | "undefined" | "False" | "false" => Some(true),
                 "True" | "true" => Some(false),
@@ -404,7 +572,17 @@ impl<'t, 's> Eval<'t, 's> {
                         Bound::EnvVar(var) if is_ci_env_read_name(var) => one(Truth::InCi, var),
                         Bound::EnvVar(_) => None,
                         Bound::Expr(e) if FUNCTION_KINDS.contains(&e.kind()) => None,
-                        Bound::Expr(e) => self.eval(*e, locals, depth + 1),
+                        Bound::Expr(e) => {
+                            let value = self.eval(*e, locals, depth + 1);
+                            match exact_mention(name) {
+                                // `CI = helpers.in_ci()`: the name says what the value
+                                // is, and nothing in this file says otherwise.
+                                Some(var) if value.is_none() && self.unresolved(*e, locals) => {
+                                    one(Truth::Mixed, var)
+                                }
+                                _ => value,
+                            }
+                        }
                     })
                     .collect(),
             ),
@@ -412,9 +590,65 @@ impl<'t, 's> Eval<'t, 's> {
         }
     }
 
+    /// Whether `e` is a call or an attribute this file does not define: not a literal,
+    /// not an environment read, not a call of a function of the file.
+    fn unresolved(&self, e: Node<'t>, locals: &Bindings<'t>) -> bool {
+        if self.env_read(e).is_some() {
+            return false;
+        }
+        match e.kind() {
+            "parenthesized_expression"
+            | "await_expression"
+            | "await"
+            | "not_operator"
+            | "unary_expression"
+            | "try_expression" => {
+                let mut cursor = e.walk();
+                let inner = e.named_children(&mut cursor).last();
+                inner.is_some_and(|i| self.unresolved(i, locals))
+            }
+            "attribute"
+            | "member_expression"
+            | "selector_expression"
+            | "field_expression"
+            | "field_access"
+            | "navigation_expression"
+            | "scoped_identifier" => true,
+            "call" | "call_expression" | "method_invocation" => {
+                let callee = match self.jvm_call(e) {
+                    Some(call) if call.receiver.is_some() => return true,
+                    Some(call) => Some(call.name),
+                    None => e
+                        .child_by_field_name("function")
+                        .filter(|f| f.kind() == "identifier")
+                        .map(|f| self.text(f)),
+                };
+                let Some(name) = callee else {
+                    // A method or a function of another module.
+                    return true;
+                };
+                if matches!(
+                    name,
+                    "bool" | "str" | "int" | "Boolean" | "String" | "Number"
+                ) {
+                    return self
+                        .first_argument(e)
+                        .is_some_and(|a| self.unresolved(a, locals));
+                }
+                let defined = locals.get(name).or_else(|| self.module.get(name));
+                !defined.is_some_and(|bounds| {
+                    bounds
+                        .iter()
+                        .any(|b| matches!(b, Bound::Expr(f) if FUNCTION_KINDS.contains(&f.kind())))
+                })
+            }
+            _ => false,
+        }
+    }
+
     /// The value a call of a function defined in this file returns.
     fn eval_function(&self, func: Node<'t>, depth: usize) -> Val {
-        let body = func.child_by_field_name("body")?;
+        let body = self.body_of(func)?;
         let mut locals = Bindings::new();
         self.collect_bindings(body, &mut locals, false);
         let mut returns = Vec::new();
@@ -467,7 +701,90 @@ impl<'t, 's> Eval<'t, 's> {
         }
     }
 
+    /// The functions of this file a call of `name` reaches.
+    fn functions_named(&self, name: &str, locals: &Bindings<'t>) -> Vec<Node<'t>> {
+        locals
+            .get(name)
+            .or_else(|| self.module.get(name))
+            .map(|bounds| {
+                bounds
+                    .iter()
+                    .filter_map(|b| match b {
+                        Bound::Expr(e) if FUNCTION_KINDS.contains(&e.kind()) => Some(*e),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// A Java or Kotlin call: a helper of the file, a comparison spelled as a method
+    /// (`"true".equals(x)`), or a method that keeps or inverts what its receiver says.
+    fn eval_jvm_call(
+        &self,
+        n: Node<'t>,
+        call: JvmCall<'t, 's>,
+        locals: &Bindings<'t>,
+        depth: usize,
+    ) -> Val {
+        let value = match call.receiver {
+            None => {
+                let functions = self.functions_named(call.name, locals);
+                if functions.is_empty() {
+                    self.undecided(n, locals, depth)
+                } else {
+                    combine(
+                        functions
+                            .iter()
+                            .map(|f| self.eval_function(*f, depth + 1))
+                            .collect(),
+                    )
+                }
+            }
+            Some(receiver) => {
+                let first = call.args.first().copied();
+                match (call.name, first) {
+                    ("equals" | "equalsIgnoreCase" | "contentEquals", Some(arg)) => self
+                        .compare(receiver, "==", arg, locals, depth)
+                        .unwrap_or_else(|| self.undecided(n, locals, depth)),
+                    ("parseBoolean" | "valueOf" | "nonNull", Some(arg))
+                        if matches!(self.text(receiver), "Boolean" | "Objects") =>
+                    {
+                        self.eval(arg, locals, depth)
+                    }
+                    ("isNull", Some(arg)) if self.text(receiver) == "Objects" => {
+                        flip(self.eval(arg, locals, depth))
+                    }
+                    (method, _) => {
+                        let value = self.eval(receiver, locals, depth);
+                        if value.is_none() {
+                            self.undecided(n, locals, depth)
+                        } else {
+                            match method {
+                                "toLowerCase" | "toUpperCase" | "trim" | "strip" | "toString"
+                                | "toBoolean" | "lowercase" | "uppercase" | "orEmpty"
+                                | "isNotEmpty" | "isNotBlank" | "isPresent" => value,
+                                "isEmpty" | "isBlank" | "isNullOrEmpty" | "isNullOrBlank" => {
+                                    flip(value)
+                                }
+                                _ => self.undecided(n, locals, depth),
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        if call.negated {
+            flip(value)
+        } else {
+            value
+        }
+    }
+
     fn eval_call(&self, n: Node<'t>, locals: &Bindings<'t>, depth: usize) -> Val {
+        if let Some(call) = self.jvm_call(n) {
+            return self.eval_jvm_call(n, call, locals, depth);
+        }
         let Some(func) = n.child_by_field_name("function") else {
             return self.undecided(n, locals, depth);
         };
@@ -540,6 +857,141 @@ impl<'t, 's> Eval<'t, 's> {
         }
     }
 
+    /// The two operands of a binary node and the operator between them, as written.
+    fn binary_parts(&self, n: Node<'t>) -> Option<(Node<'t>, String, Node<'t>)> {
+        let (left, right) = match (
+            n.child_by_field_name("left"),
+            n.child_by_field_name("right"),
+        ) {
+            (Some(left), Some(right)) => (left, right),
+            _ => {
+                // A Python comparison has no fields: two operands is one comparison.
+                let mut cursor = n.walk();
+                let operands: Vec<Node<'t>> = n.named_children(&mut cursor).collect();
+                if n.kind() != "comparison_operator" || operands.len() != 2 {
+                    return None;
+                }
+                (operands[0], operands[1])
+            }
+        };
+        if left.end_byte() > right.start_byte() {
+            return None;
+        }
+        let op = self.src[left.end_byte()..right.start_byte()]
+            .split(|b| b.is_ascii_whitespace())
+            .filter(|w| !w.is_empty())
+            .map(|w| std::str::from_utf8(w).unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join(" ");
+        Some((left, op, right))
+    }
+
+    /// A literal as a comparable constant: its kind and its value.
+    fn scalar(&self, n: Node<'t>) -> Option<(&'static str, String)> {
+        if let Some(s) = self.string_value(n) {
+            return Some(("string", s));
+        }
+        match n.kind() {
+            "integer"
+            | "int_literal"
+            | "number"
+            | "integer_literal"
+            | "decimal_integer_literal"
+            | "number_literal"
+            | "float"
+            | "float_literal" => Some(("number", self.text(n).trim().to_string())),
+            "parenthesized_expression" => {
+                let mut cursor = n.walk();
+                let inner = n.named_children(&mut cursor).next()?;
+                self.scalar(inner)
+            }
+            _ => None,
+        }
+    }
+
+    /// The value of a condition that is a constant whatever the environment: a boolean
+    /// or number literal, its negation, `and` / `or` of constants, a comparison of two
+    /// literals, or a name bound once in the file to one of these.
+    fn constant(&self, n: Node<'t>, locals: &Bindings<'t>, depth: usize) -> Option<bool> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        match n.kind() {
+            "true" => Some(true),
+            "false" => Some(false),
+            "boolean_literal" => Some(self.text(n) == "true"),
+            "integer"
+            | "int_literal"
+            | "number"
+            | "integer_literal"
+            | "decimal_integer_literal"
+            | "number_literal" => {
+                let value: f64 = self.text(n).trim().parse().ok()?;
+                Some(value != 0.0)
+            }
+            "parenthesized_expression" => {
+                let mut cursor = n.walk();
+                let inner = n.named_children(&mut cursor).next()?;
+                self.constant(inner, locals, depth)
+            }
+            "not_operator" => {
+                let arg = n.child_by_field_name("argument")?;
+                self.constant(arg, locals, depth).map(|v| !v)
+            }
+            "unary_expression" if n.child(0).is_some_and(|c| self.text(c) == "!") => {
+                let mut cursor = n.walk();
+                let operand = n.named_children(&mut cursor).last()?;
+                self.constant(operand, locals, depth).map(|v| !v)
+            }
+            "boolean_operator" | "binary_expression" | "comparison_operator" => {
+                let (left, op, right) = self.binary_parts(n)?;
+                match op.as_str() {
+                    "and" | "&&" => match (
+                        self.constant(left, locals, depth),
+                        self.constant(right, locals, depth),
+                    ) {
+                        (Some(false), _) | (_, Some(false)) => Some(false),
+                        (Some(true), Some(true)) => Some(true),
+                        _ => None,
+                    },
+                    "or" | "||" => match (
+                        self.constant(left, locals, depth),
+                        self.constant(right, locals, depth),
+                    ) {
+                        (Some(true), _) | (_, Some(true)) => Some(true),
+                        (Some(false), Some(false)) => Some(false),
+                        _ => None,
+                    },
+                    "==" | "===" | "!=" | "!==" => {
+                        let (left_kind, left_value) = self.scalar(left)?;
+                        let (right_kind, right_value) = self.scalar(right)?;
+                        if left_kind != right_kind {
+                            return None;
+                        }
+                        Some((left_value == right_value) == op.starts_with('='))
+                    }
+                    _ => None,
+                }
+            }
+            "identifier" => {
+                let name = self.text(n);
+                match name {
+                    "true" | "True" => return Some(true),
+                    "false" | "False" => return Some(false),
+                    _ => {}
+                }
+                let bounds = locals.get(name).or_else(|| self.module.get(name))?;
+                match bounds.as_slice() {
+                    [Bound::Expr(e)] if !FUNCTION_KINDS.contains(&e.kind()) => {
+                        self.constant(*e, locals, depth + 1)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn eval(&self, n: Node<'t>, locals: &Bindings<'t>, depth: usize) -> Val {
         if depth > MAX_DEPTH {
             return None;
@@ -572,14 +1024,10 @@ impl<'t, 's> Eval<'t, 's> {
                 }
             }
             "boolean_operator" | "binary_expression" => {
-                let (Some(left), Some(right), Some(op)) = (
-                    n.child_by_field_name("left"),
-                    n.child_by_field_name("right"),
-                    n.child_by_field_name("operator"),
-                ) else {
+                let Some((left, op, right)) = self.binary_parts(n) else {
                     return self.undecided(n, locals, depth);
                 };
-                match op.kind() {
+                match op.as_str() {
                     "and" | "&&" => and(
                         self.eval(left, locals, depth),
                         self.eval(right, locals, depth),
@@ -599,18 +1047,9 @@ impl<'t, 's> Eval<'t, 's> {
                 }
             }
             "comparison_operator" => {
-                let mut cursor = n.walk();
-                let operands: Vec<Node<'t>> = n.named_children(&mut cursor).collect();
-                if operands.len() != 2 {
+                let Some((left, op, right)) = self.binary_parts(n) else {
                     return self.undecided(n, locals, depth);
-                }
-                let (left, right) = (operands[0], operands[1]);
-                let op = self.src[left.end_byte()..right.start_byte()]
-                    .split(|b| b.is_ascii_whitespace())
-                    .filter(|w| !w.is_empty())
-                    .map(|w| std::str::from_utf8(w).unwrap_or(""))
-                    .collect::<Vec<_>>()
-                    .join(" ");
+                };
                 // `"CI" in os.environ`, `"CI" not in os.environ`
                 if matches!(op.as_str(), "in" | "not in") && self.is_env_object(right) {
                     let read = match self.string_value(left) {
@@ -622,7 +1061,7 @@ impl<'t, 's> Eval<'t, 's> {
                 self.compare(left, &op, right, locals, depth)
                     .unwrap_or_else(|| self.undecided(n, locals, depth))
             }
-            "call" | "call_expression" => self.eval_call(n, locals, depth),
+            "call" | "call_expression" | "method_invocation" => self.eval_call(n, locals, depth),
             "identifier" => self.eval_name(self.text(n), locals, depth),
             "property_identifier" | "field_identifier" | "type_identifier" => {
                 mention(self.text(n)).and_then(|var| one(Truth::InCi, var))
@@ -711,6 +1150,26 @@ impl<'t, 's> Eval<'t, 's> {
                         out,
                     );
                 }
+                // Kotlin `val x = value`
+                "property_declaration" if self.lang == Lang::Kotlin => {
+                    let mut parts = child.walk();
+                    let parts: Vec<Node<'t>> = child.named_children(&mut parts).collect();
+                    let name = parts
+                        .iter()
+                        .find(|p| p.kind() == "variable_declaration")
+                        .and_then(|d| d.named_child(0));
+                    let value = parts.last().copied().filter(|v| {
+                        !matches!(
+                            v.kind(),
+                            "variable_declaration"
+                                | "modifiers"
+                                | "user_type"
+                                | "getter"
+                                | "setter"
+                        )
+                    });
+                    self.bind_pair(name, value, out);
+                }
                 _ => {}
             }
             // A file's bindings are its own statements, wherever a declaration keyword,
@@ -728,7 +1187,20 @@ impl<'t, 's> Eval<'t, 's> {
                         | "export_statement"
                         | "mod_item"
                         | "declaration_list"
-                )
+                ) || (self.is_jvm()
+                    && matches!(
+                        kind,
+                        "class_declaration"
+                            | "class_body"
+                            | "field_declaration"
+                            | "interface_declaration"
+                            | "interface_body"
+                            | "enum_declaration"
+                            | "enum_body"
+                            | "record_declaration"
+                            | "object_declaration"
+                            | "companion_object"
+                    ))
             } else {
                 true
             };
@@ -796,7 +1268,9 @@ impl<'t, 's> Eval<'t, 's> {
     fn negated_text(&self, text: &str) -> String {
         match self.lang {
             Lang::Python => format!("not ({text})"),
-            Lang::Go | Lang::JavaScript | Lang::Rust => format!("!({text})"),
+            Lang::Go | Lang::JavaScript | Lang::Rust | Lang::Java | Lang::Kotlin => {
+                format!("!({text})")
+            }
         }
     }
 }
@@ -834,7 +1308,7 @@ fn evaluator<'t, 's>(lang: Lang, site: Node<'t>, src: &'s [u8]) -> (Eval<'t, 's>
     eval.module = module;
     let mut locals = Bindings::new();
     for function in enclosing_functions(site) {
-        if let Some(body) = function.child_by_field_name("body") {
+        if let Some(body) = eval.body_of(function) {
             eval.collect_bindings(body, &mut locals, false);
         }
     }
@@ -927,14 +1401,122 @@ pub fn conditional(legacy: Option<String>, site: Option<Site>) -> Option<(String
     }
 }
 
-/// The verdict for one expression used as a skip condition (`skipIf(<expr>)`), with
-/// `negated` for a run condition (`runIf(<expr>)`). `None` when it involves no CI variable.
-pub fn expression(lang: Lang, expr: Node, src: &[u8], negated: bool) -> Option<CiVerdict> {
+/// What a skip under the condition `expr` does (`skipif(<expr>)`, `assumeFalse(<expr>)`),
+/// with `negated` for a condition under which the test runs (`runIf(<expr>)`,
+/// `skipUnless(<expr>)`, `assumeTrue(<expr>)`).
+///
+/// A condition that is a constant is not a condition: always true is an unconditional
+/// skip, always false is no skip. The constants read are a boolean or number literal, its
+/// negation, `and` / `or` of constants, a comparison of two literals, and a name the file
+/// binds once to one of these. Any other condition is a conditional skip.
+pub fn skip_condition(lang: Lang, expr: Node, src: &[u8], negated: bool) -> SkipCondition {
     let (eval, locals) = evaluator(lang, expr, src);
+    if let Some(holds) = eval.constant(expr, &locals, 0) {
+        return if holds != negated {
+            SkipCondition::Always
+        } else {
+            SkipCondition::Never
+        };
+    }
     let value = eval.eval(expr, &locals, 0);
     let value = if negated { flip(value) } else { value };
-    value.as_ref()?;
-    Some(verdict_of(&value))
+    SkipCondition::When(verdict_of(&value))
+}
+
+/// What a JUnit 5 conditional annotation does to its test: `name` is the annotation
+/// (`DisabledIfEnvironmentVariable`), `named` and `matches` its string arguments. `None`
+/// for any other annotation.
+///
+/// An environment variable is a CI variable by the rule for an environment read; a
+/// system property only when its name is a CI variable name (`ci`, `CI`). `matches` is a
+/// regular expression and is not evaluated, except that `Enabled..` on a CI variable with
+/// a value that reads as off (`false`, `0`) runs the test outside CI only. Operating
+/// system, runtime version and `@DisabledIf("method")` conditions read no CI variable.
+pub fn jvm_annotation(
+    name: &str,
+    named: Option<&str>,
+    matches: Option<&str>,
+) -> Option<SkipCondition> {
+    let skips = |var: &str| SkipCondition::When(CiVerdict::Skips(vec![var.to_string()]));
+    let other = SkipCondition::When(CiVerdict::NotCi);
+    let variable = |property: bool| -> Option<String> {
+        let named = named?;
+        if property {
+            mention(named).map(str::to_string)
+        } else {
+            is_ci_env_read_name(named).then(|| named.to_string())
+        }
+    };
+    let off = matches.is_some_and(|m| {
+        matches!(
+            m.to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        )
+    });
+    Some(match name {
+        "DisabledIfEnvironmentVariable" => variable(false).map_or(other, |v| skips(&v)),
+        "DisabledIfSystemProperty" => variable(true).map_or(other, |v| skips(&v)),
+        "EnabledIfEnvironmentVariable" => match variable(false) {
+            Some(v) if off => skips(&v),
+            _ => other,
+        },
+        "EnabledIfSystemProperty" => match variable(true) {
+            Some(v) if off => skips(&v),
+            _ => other,
+        },
+        "DisabledOnOs"
+        | "EnabledOnOs"
+        | "DisabledOnJre"
+        | "EnabledOnJre"
+        | "DisabledForJreRange"
+        | "EnabledForJreRange"
+        | "DisabledIf"
+        | "EnabledIf"
+        | "DisabledInNativeImage"
+        | "EnabledInNativeImage" => other,
+        _ => return None,
+    })
+}
+
+/// The skip a JUnit assumption makes, for one statement of a test body: `assumeTrue(c)`
+/// and `assumingThat(c, ..)` skip when `c` does not hold, `assumeFalse(c)` when it does,
+/// bare or on `Assumptions` / `Assume`. Returns the call as reported and what it does;
+/// `None` for any other statement.
+pub fn jvm_assumption(lang: Lang, statement: Node, src: &[u8]) -> Option<(String, SkipCondition)> {
+    let mut call = statement;
+    if call.kind() == "expression_statement" {
+        call = call.named_child(0)?;
+    }
+    // Kotlin `assumingThat(c) { .. }`: the call that takes the lambda wraps the call
+    // that takes the condition.
+    if lang == Lang::Kotlin
+        && call.kind() == "call_expression"
+        && call
+            .named_child(0)
+            .is_some_and(|c| c.kind() == "call_expression")
+    {
+        call = call.named_child(0)?;
+    }
+    let (eval, _) = evaluator(lang, call, src);
+    let parts = eval.jvm_call(call)?;
+    if parts.negated
+        || !matches!(
+            parts.receiver.map(|r| eval.text(r)),
+            None | Some("Assumptions" | "Assume")
+        )
+    {
+        return None;
+    }
+    let runs_when = match parts.name {
+        "assumeTrue" | "assumingThat" => true,
+        "assumeFalse" => false,
+        _ => return None,
+    };
+    let condition = *parts.args.first()?;
+    Some((
+        eval.text(call).trim().to_string(),
+        skip_condition(lang, condition, src, runs_when),
+    ))
 }
 
 /// Statements `is_exit` accepts that sit directly in a branch of an `if` of `body`,
@@ -991,10 +1573,10 @@ pub fn exits_under_if<'t>(body: Node<'t>, is_exit: &dyn Fn(Node<'t>) -> bool) ->
     out
 }
 
-/// The verdict for a Rust `cfg` predicate under which a test is ignored
-/// (`#[cfg_attr(<predicate>, ignore)]`), from the predicate's token nodes. `None` when it
-/// names no CI cfg.
-pub fn rust_cfg_predicate(nodes: &[Node], src: &[u8]) -> Option<CiVerdict> {
+/// The value of a Rust `cfg` predicate, from its token nodes: `not`, `all` and `any` over
+/// bare cfg names, where `flag` says which names count. A `key = "value"` predicate
+/// (`feature = "ci"`) is not a bare name and counts for nothing.
+fn cfg_value(nodes: &[Node], src: &[u8], flag: &dyn Fn(&str) -> Option<String>) -> Val {
     fn split<'t>(nodes: &[Node<'t>]) -> Vec<Vec<Node<'t>>> {
         let mut out = vec![Vec::new()];
         for n in nodes {
@@ -1013,35 +1595,81 @@ pub fn rust_cfg_predicate(nodes: &[Node], src: &[u8]) -> Option<CiVerdict> {
             .filter(|c| !matches!(c.kind(), "(" | ")" | "[" | "]" | "{" | "}"))
             .collect()
     }
-    fn eval(nodes: &[Node], src: &[u8]) -> Val {
-        let items: Vec<Node> = nodes
-            .iter()
-            .copied()
-            .filter(|n| !matches!(n.kind(), "line_comment" | "block_comment"))
-            .collect();
-        let first = items.first()?;
-        let name = first.utf8_text(src).ok()?;
-        if first.kind() != "identifier" {
-            return None;
-        }
-        match items.get(1) {
-            Some(tree) if tree.kind() == "token_tree" => {
-                let parts = split(&inner(*tree));
-                match name {
-                    "not" => flip(parts.first().and_then(|p| eval(p, src))),
-                    "all" => parts.iter().fold(None, |acc, p| and(acc, eval(p, src))),
-                    "any" => parts.iter().fold(None, |acc, p| or(acc, eval(p, src))),
-                    _ => None,
-                }
-            }
-            // A bare cfg name: `ci`, `github_actions`.
-            None => mention(name).and_then(|var| one(Truth::InCi, var)),
-            Some(_) => None,
-        }
+    let items: Vec<Node> = nodes
+        .iter()
+        .copied()
+        .filter(|n| !matches!(n.kind(), "line_comment" | "block_comment"))
+        .collect();
+    let first = items.first()?;
+    let name = first.utf8_text(src).ok()?;
+    if first.kind() != "identifier" {
+        return None;
     }
-    let value = eval(nodes, src);
+    match items.get(1) {
+        Some(tree) if tree.kind() == "token_tree" => {
+            let parts = split(&inner(*tree));
+            match name {
+                "not" => flip(parts.first().and_then(|p| cfg_value(p, src, flag))),
+                "all" => parts
+                    .iter()
+                    .fold(None, |acc, p| and(acc, cfg_value(p, src, flag))),
+                "any" => parts
+                    .iter()
+                    .fold(None, |acc, p| or(acc, cfg_value(p, src, flag))),
+                _ => None,
+            }
+        }
+        // A bare cfg name: `ci`, `github_actions`.
+        None => flag(name).and_then(|var| one(Truth::InCi, &var)),
+        Some(_) => None,
+    }
+}
+
+fn ci_flag(name: &str) -> Option<String> {
+    mention(name).map(str::to_string)
+}
+
+/// The verdict for a Rust `cfg` predicate under which a test is ignored
+/// (`#[cfg_attr(<predicate>, ignore)]`), from the predicate's token nodes. `None` when it
+/// names no CI cfg.
+pub fn rust_cfg_predicate(nodes: &[Node], src: &[u8]) -> Option<CiVerdict> {
+    let value = cfg_value(nodes, src, &ci_flag);
     value.as_ref()?;
     Some(verdict_of(&value))
+}
+
+/// Whether an item under `#[cfg(<predicate>)]` is left out of a CI build: the predicate
+/// holds only outside CI (`not(ci)`, `not(any(miri, ci))`, `all(unix, not(ci))`), or
+/// mixes CI flags both ways. A flag named for skipping in CI (`skip_ci`, `ci_skip`)
+/// counts wherever it stands as a bare name.
+pub fn rust_cfg_leaves_out_in_ci(nodes: &[Node], src: &[u8]) -> bool {
+    fn names_skip_flag(nodes: &[Node], src: &[u8]) -> bool {
+        nodes.iter().enumerate().any(|(i, n)| match n.kind() {
+            "identifier" => {
+                matches!(n.utf8_text(src), Ok("skip_ci" | "ci_skip"))
+                    && nodes
+                        .get(i + 1)
+                        .is_none_or(|next| !matches!(next.kind(), "=" | "token_tree"))
+            }
+            "token_tree" => {
+                let mut cursor = n.walk();
+                let children: Vec<Node> = n.children(&mut cursor).collect();
+                names_skip_flag(&children, src)
+            }
+            _ => false,
+        })
+    }
+    let absent = flip(cfg_value(nodes, src, &ci_flag));
+    matches!(verdict_of(&absent), CiVerdict::Skips(_)) || names_skip_flag(nodes, src)
+}
+
+/// Whether an item under `#[cfg(<predicate>)]` is left out of a test build: the
+/// predicate holds only where `test` is off (`not(test)`, `all(not(test), unix)`).
+pub fn rust_cfg_leaves_out_of_tests(nodes: &[Node], src: &[u8]) -> bool {
+    let value = cfg_value(nodes, src, &|name| {
+        (name == "test").then(|| name.to_string())
+    });
+    value.is_some_and(|c| c.truth == Truth::NotInCi)
 }
 
 /// Each case reads a test through its language pack and asks the two questions the
@@ -1335,7 +1963,7 @@ mod tests {
     }
 
     #[test]
-    fn run_if_and_this_skip_are_read_only_when_they_skip_in_ci() {
+    fn run_if_and_this_skip_are_ci_skips_only_when_they_skip_in_ci() {
         assert_eq!(read(&js("", "test.runIf(!process.env.CI)", "")), CI_SKIP);
         assert_eq!(
             read(&js(
@@ -1345,18 +1973,16 @@ mod tests {
             )),
             CI_SKIP
         );
-        // Controls: a run condition that holds in CI, and a skip outside CI.
-        assert_eq!(
-            read(&js("", "test.runIf(process.env.CI)", "")),
-            (false, false)
-        );
+        // Controls: a run condition that holds in CI, and a skip outside CI, are
+        // conditional skips that no CI variable decides.
+        assert_eq!(read(&js("", "test.runIf(process.env.CI)", "")), OTHER_SKIP);
         assert_eq!(
             read(&js(
                 "",
                 "it",
                 "  if (!process.env.CI) {\n    this.skip();\n  }\n"
             )),
-            (false, false)
+            OTHER_SKIP
         );
     }
 
