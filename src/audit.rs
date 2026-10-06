@@ -626,6 +626,9 @@ impl Summary {
     }
 
     pub fn render(&self) -> String {
+        // A detail can quote the forge (why a read failed) and a record names a file, a
+        // key or a directive from a commit: each stays on its own line.
+        let line = crate::report::text::terminal_line;
         let mut out = String::new();
         if self.signals.is_empty() {
             out.push_str("Needs a decision: nothing the git history shows.\n");
@@ -643,8 +646,12 @@ impl Summary {
                     changes.push_str(&format!(" and {} more", sg.changes.len() - 8));
                 }
                 out.push_str(&format!(
-                    "  {:<10} {:<30} {:>3}  {changes}\n             next: {}\n",
-                    sg.rank, sg.id, sg.count, sg.next
+                    "  {:<10} {:<30} {:>3}  {}\n             next: {}\n",
+                    sg.rank,
+                    sg.id,
+                    sg.count,
+                    line(&changes),
+                    sg.next
                 ));
             }
         }
@@ -662,7 +669,12 @@ impl Summary {
         }
         out.push_str("\nChecks:\n");
         for c in &self.checks {
-            out.push_str(&format!("  {:<11} {:<30} {}\n", c.state, c.id, c.detail));
+            out.push_str(&format!(
+                "  {:<11} {:<30} {}\n",
+                c.state,
+                c.id,
+                line(&c.detail)
+            ));
         }
         out.push('\n');
         for r in self.records.iter().chain(&self.tightenings) {
@@ -702,9 +714,10 @@ impl Summary {
                 ),
             };
             out.push_str(&format!(
-                "{label:<9} {:<17} {:<24} {what}\n",
+                "{label:<9} {:<17} {:<24} {}\n",
                 r.kind,
-                r.gate.as_deref().unwrap_or("-")
+                line(r.gate.as_deref().unwrap_or("-")),
+                line(&what)
             ));
         }
         out.push_str(&format!(
@@ -717,7 +730,7 @@ impl Summary {
             out.push_str(&format!("  class {k:<10} {n}\n"));
         }
         for (g, n) in &self.by_gate {
-            out.push_str(&format!("  gate  {g:<24} {n}\n"));
+            out.push_str(&format!("  gate  {:<24} {n}\n", line(g)));
         }
         out.push_str(
             "Directives are read from commit messages only; whether one lifted a finding is `discipline replay`'s to say.\n",

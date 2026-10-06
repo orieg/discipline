@@ -180,6 +180,9 @@ fn escape_xml(s: &str) -> String {
             c if (c as u32) < 0x20 && c != '\t' && c != '\n' && c != '\r' => {
                 // Strip non-printable ASCII control characters forbidden in XML 1.0
             }
+            // The two noncharacters XML 1.0 excludes from `Char` as well: a parser
+            // refuses the document that carries one.
+            '\u{FFFE}' | '\u{FFFF}' => {}
             _ => out.push(c),
         }
     }
@@ -295,6 +298,27 @@ mod tests {
         let input = "clean\ttext\nwith\rvalid and \x00null \x07bell \x1Bescape";
         let escaped = escape_xml(input);
         assert_eq!(escaped, "clean\ttext\nwith\rvalid and null bell escape");
+    }
+
+    /// Whether `c` is a `Char` of XML 1.0 (section 2.2).
+    fn xml_char(c: char) -> bool {
+        matches!(c as u32, 0x9 | 0xA | 0xD | 0x20..=0xD7FF | 0xE000..=0xFFFD | 0x10000..=0x10FFFF)
+    }
+
+    #[test]
+    fn escaped_text_is_made_of_xml_characters_only_and_opens_no_markup() {
+        // Every character XML 1.0 forbids, then markup, an attribute break, a CDATA end.
+        let mut hostile: String = (0u32..0x20).filter_map(char::from_u32).collect();
+        hostile.push_str("\u{FFFE}\u{FFFF}</failure><testcase name=\"x\" y='z'>]]>&amp;\u{1b}[31m");
+        let escaped = escape_xml(&hostile);
+        assert!(escaped.chars().all(xml_char), "{escaped:?}");
+        assert!(!escaped.contains(['<', '>', '"', '\'']), "{escaped:?}");
+        assert!(
+            escaped.ends_with("&lt;/failure&gt;&lt;testcase name=&quot;x&quot; y=&apos;z&apos;&gt;]]&gt;&amp;amp;[31m"),
+            "{escaped:?}"
+        );
+        // C1 controls and the bidirectional controls are XML characters: carried as they are.
+        assert_eq!(escape_xml("a\u{9b}b\u{202e}c"), "a\u{9b}b\u{202e}c");
     }
 
     #[test]

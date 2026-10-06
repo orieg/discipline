@@ -42,9 +42,13 @@ fn main() -> ExitCode {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::from(1),
         Err(e) => {
+            // An error can quote a forge's answer or a file of the change. Its own line
+            // breaks are kept (a parse error shows an excerpt under it); nothing else
+            // that drives a terminal is.
             eprintln!(
-                "{}: {e:#}",
-                style::red(&format!("discipline {cmd_name}: error"))
+                "{}: {}",
+                style::red(&format!("discipline {cmd_name}: error")),
+                discipline::report::text::terminal_text(&format!("{e:#}"))
             );
             ExitCode::from(2)
         }
@@ -979,8 +983,9 @@ fn post_comment(
         Posted::Denied(e) => eprintln!(
             "{}",
             style::yellow(&format!(
-                "comment: not posted on #{}: {e}. A pull request from a fork runs with a token that cannot write; the check's status still carries the verdict",
-                pull.number
+                "comment: not posted on #{}: {}. A pull request from a fork runs with a token that cannot write; the check's status still carries the verdict",
+                pull.number,
+                discipline::report::text::terminal_line(&e)
             ))
         ),
     }

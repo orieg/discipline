@@ -22,19 +22,12 @@ const MAX_ROWS: usize = 50;
 /// Pages of comments read when looking for the marker.
 const MAX_PAGES: usize = 20;
 
-/// Text from the change, safe inside a markdown table cell.
+/// Text from the change, safe inside a markdown table cell: what
+/// [`crate::report::text::markdown_cell`] neutralises (HTML, a mention, a link, a pipe,
+/// a line break, control characters), and a backtick becomes an apostrophe, so the cell
+/// has no code span for the text to open or close.
 pub fn cell(text: &str) -> String {
-    let flat: String = text
-        .chars()
-        .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
-        .collect();
-    let escaped = flat
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('|', "\\|")
-        .replace('@', "&#64;")
-        .replace('`', "'");
+    let escaped = crate::report::text::markdown_cell(&text.replace('`', "'"));
     crate::report::scrub_override_directives(&escaped)
 }
 

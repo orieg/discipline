@@ -636,13 +636,23 @@ pub trait ForgeApi {
 /// Gitea, Forgejo, GitLab), else GitLab's OAuth-style `error_description` (a
 /// fine-grained token without the permission a setting needs: "... requires ... the
 /// following project permissions: [Variable: Read]."), else `error`. At most 300
-/// characters, so a caller can name what the token lacks without echoing a long body.
+/// characters, so a caller can name what the token lacks without echoing a long body,
+/// and one line: the reason is put inside a sentence of a report, and whoever answers
+/// for the forge must not be able to end that sentence's line. A control character (a
+/// line break, an escape) is written as a space. The output formats neutralise text
+/// again where they write it (`crate::report::text`); this keeps the reason one line in
+/// an error message and in the JSON report too.
 pub fn refusal_message(body: &serde_json::Value) -> Option<String> {
     ["message", "error_description", "error"]
         .iter()
         .find_map(|k| body.get(*k).and_then(|m| m.as_str()))
         .filter(|m| !m.is_empty())
-        .map(|m| m.chars().take(300).collect())
+        .map(|m| {
+            m.chars()
+                .take(300)
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect()
+        })
 }
 
 /// The `message` of a forge's JSON error body, when it is a non-empty string: the field
@@ -792,13 +802,36 @@ impl CannedApi {
         self.log.borrow().iter().any(|k| k == key)
     }
 
+    /// Whether `key` is the commit endpoint ([`commit_path`]) of a commit whose merged
+    /// pull request lookup has a recorded response.
+    fn records_the_pulls_of(&self, key: &str) -> bool {
+        let Some((label, path)) = key.split_once(':') else {
+            return false;
+        };
+        let pulls = if label == "gitlab" {
+            path.rsplit_once("/repository/commits/")
+                .filter(|(_, sha)| !sha.contains('/'))
+                .map(|(project, sha)| format!("{project}/repository/commits/{sha}/merge_requests"))
+        } else {
+            path.rsplit_once("/git/commits/")
+                .filter(|(_, sha)| !sha.contains('/'))
+                .map(|(repo, sha)| format!("{repo}/commits/{sha}/pull"))
+        };
+        pulls.is_some_and(|p| self.responses.contains_key(&format!("{label}:{p}")))
+    }
+
     fn answer(&self, key: &str) -> Result<CannedAnswer, String> {
         self.log.borrow_mut().push(key.to_string());
-        let mut v = self
-            .responses
-            .get(key)
-            .cloned()
-            .ok_or_else(|| format!("no recorded response for `{key}`"))?;
+        let mut v = match self.responses.get(key) {
+            Some(v) => v.clone(),
+            // The commit itself, asked for after its merged pull request lookup answered
+            // 404: a test that recorded that lookup is about a commit the forge has,
+            // unless it records the commit's own answer.
+            None if self.records_the_pulls_of(key) => {
+                return Ok((200, Vec::new(), serde_json::json!({})))
+            }
+            None => return Err(format!("no recorded response for `{key}`")),
+        };
         if let Some(seq) = v.get("__sequence").and_then(|s| s.as_array()).cloned() {
             let mut served = self.served.borrow_mut();
             let n = served.entry(key.to_string()).or_default();
@@ -953,6 +986,45 @@ impl ForgeApi for NoApi {
     }
 }
 
+/// The environment variables a token for `kind` is read from, in the order they are tried.
+pub fn token_variables(kind: ForgeKind) -> &'static [&'static str] {
+    match kind {
+        ForgeKind::GitHub => &["DISCIPLINE_FORGE_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
+        ForgeKind::GitLab => &["DISCIPLINE_FORGE_TOKEN", "GITLAB_TOKEN"],
+        ForgeKind::Gitea => &["DISCIPLINE_FORGE_TOKEN", "GITEA_TOKEN"],
+        ForgeKind::Forgejo => &["DISCIPLINE_FORGE_TOKEN", "FORGEJO_TOKEN", "GITEA_TOKEN"],
+    }
+}
+
+/// What a token would change about a read of pull requests that failed as `error`, or
+/// `None` when a token is not what the failure is about (the forge was unreachable, it
+/// answered something unusable, it does not have the commit). It names the variables
+/// read for `kind` and whether one was set, never a token or any part of one.
+pub fn token_hint(kind: ForgeKind, error: ForgeErrorKind, has_token: bool) -> Option<String> {
+    let names = token_variables(kind);
+    let variables = match names {
+        [one] => (*one).to_string(),
+        [first @ .., last] => format!("{} or {last}", first.join(", ")),
+        [] => return None,
+    };
+    match (error, has_token) {
+        (ForgeErrorKind::RateLimited, false) => Some(format!(
+            "no token was sent, and the forge limits requests without one: set a token that can read pull requests in {variables}"
+        )),
+        (ForgeErrorKind::RateLimited, true) => Some(
+            "the request limit of the token in use is spent: run again when the forge lifts it"
+                .to_string(),
+        ),
+        (ForgeErrorKind::Denied, false) => Some(format!(
+            "no token was sent: set a token that can read pull requests in {variables}"
+        )),
+        (ForgeErrorKind::Denied, true) => Some(format!(
+            "the token in use cannot read this repository's pull requests: set one that can in {variables}"
+        )),
+        _ => None,
+    }
+}
+
 /// Maximum response body read from a forge.
 pub const MAX_BODY_BYTES: u64 = 25 * 1024 * 1024;
 
@@ -982,16 +1054,15 @@ impl HttpApi<'_> {
     }
 
     fn token(&self, kind: ForgeKind) -> Option<String> {
-        let names: &[&str] = match kind {
-            ForgeKind::GitHub => &["DISCIPLINE_FORGE_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
-            ForgeKind::GitLab => &["DISCIPLINE_FORGE_TOKEN", "GITLAB_TOKEN"],
-            ForgeKind::Gitea => &["DISCIPLINE_FORGE_TOKEN", "GITEA_TOKEN"],
-            ForgeKind::Forgejo => &["DISCIPLINE_FORGE_TOKEN", "FORGEJO_TOKEN", "GITEA_TOKEN"],
-        };
-        names
+        token_variables(kind)
             .iter()
             .find_map(|n| self.var(n))
             .map(|t| t.trim().to_string())
+    }
+
+    /// Whether a token for `kind` is set. The token itself is never returned or printed.
+    pub fn has_token(&self, kind: ForgeKind) -> bool {
+        self.token(kind).is_some()
     }
 
     /// The API base URL for `forge`, without a trailing slash.
@@ -1590,24 +1661,11 @@ pub enum CommitOrigin {
     /// The forge has the commit, and no merged pull request carries it (a direct push).
     DirectPush,
     /// The forge says it does not have the commit (GitHub answers 422 with the message
-    /// "No commit found for SHA: ..."): a commit made only locally, such as a test
-    /// fixture. No pull request can carry it. A 422 that says anything else, or nothing,
-    /// is a lookup that failed, never this.
+    /// "No commit found for SHA: ..."; Gitea, Forgejo and GitLab answer 404 for the
+    /// commit itself): a commit made only locally, such as a test fixture. No pull
+    /// request can carry it. A 422 that says anything else, or nothing, is a lookup
+    /// that failed, never this.
     NotOnForge,
-}
-
-/// [`commit_origin`] without the reason there is no merged pull request: a direct push
-/// and a commit made only locally both read as `None`. A caller that expects the forge
-/// to have the commit uses [`merged_pull_on_forge`], where the second is an error.
-pub fn merged_pull_for_commit(
-    api: &dyn ForgeApi,
-    forge: &Forge,
-    sha: &str,
-) -> Result<Option<MergedPull>, String> {
-    Ok(match commit_origin(api, forge, sha)? {
-        CommitOrigin::Merged(pull) => Some(pull),
-        CommitOrigin::DirectPush | CommitOrigin::NotOnForge => None,
-    })
 }
 
 /// [`commit_origin`] for a caller whose commits are expected to be on the forge (`audit
@@ -1620,21 +1678,83 @@ pub fn merged_pull_on_forge(
     forge: &Forge,
     sha: &str,
 ) -> Result<Option<MergedPull>, String> {
-    match commit_origin(api, forge, sha)? {
+    merged_pull_lookup(api, forge, sha).map_err(|e| e.detail())
+}
+
+/// [`merged_pull_on_forge`], a failure keeping its class: a caller that advises on a
+/// token ([`token_hint`]) needs to know whether the forge refused, limited or failed.
+/// A commit the forge does not have is [`ForgeErrorKind::NotFound`].
+pub fn merged_pull_lookup(
+    api: &dyn ForgeApi,
+    forge: &Forge,
+    sha: &str,
+) -> Result<Option<MergedPull>, ForgeError> {
+    match commit_origin_read(api, forge, sha)? {
         CommitOrigin::Merged(pull) => Ok(Some(pull)),
         CommitOrigin::DirectPush => Ok(None),
         CommitOrigin::NotOnForge => {
             let short: String = sha.chars().take(10).collect();
-            Err(format!(
-                "the forge does not have commit {short} (not pushed, or another repository)"
+            Err(ForgeError::new(
+                ForgeErrorKind::NotFound,
+                format!(
+                    "the forge does not have commit {short} (not pushed, or another repository)"
+                ),
             ))
         }
+    }
+}
+
+/// The endpoint that answers for commit `sha` itself, on a forge whose merged pull
+/// request lookup answers 404 both for a commit it does not have and for a commit no
+/// merged pull request carries: Gitea and Forgejo "Get a single commit"
+/// (`GET /repos/{owner}/{repo}/git/commits/{sha}`), GitLab "Get a single commit"
+/// (`GET /projects/:id/repository/commits/:sha`). GitHub tells the two apart in its
+/// first answer ([`github_says_no_commit`]) and is not asked again.
+fn commit_path(forge: &Forge, sha: &str) -> Option<String> {
+    match forge.kind {
+        ForgeKind::GitHub => None,
+        ForgeKind::Gitea | ForgeKind::Forgejo => {
+            Some(format!("repos/{}/git/commits/{sha}", forge.repo))
+        }
+        ForgeKind::GitLab => Some(format!(
+            "projects/{}/repository/commits/{sha}",
+            gitlab_project_id(&forge.repo)
+        )),
+    }
+}
+
+/// What a 404 from the merged pull request lookup of `sha` means, by asking for the
+/// commit itself: the forge has it and no merged pull request carries it (a direct
+/// push), or the forge does not have it. Any other answer is a lookup that failed. One
+/// more read-only request, made only after that 404.
+fn origin_without_pull(
+    api: &dyn ForgeApi,
+    forge: &Forge,
+    sha: &str,
+) -> Result<CommitOrigin, ForgeError> {
+    let Some(path) = commit_path(forge, sha) else {
+        return Ok(CommitOrigin::DirectPush);
+    };
+    match api.fetch(forge, &path) {
+        Ok(_) => Ok(CommitOrigin::DirectPush),
+        Err(e) if e.kind == ForgeErrorKind::NotFound => Ok(CommitOrigin::NotOnForge),
+        Err(e) => Err(e),
     }
 }
 
 /// Where a commit came from: the merged pull request that carries it, a direct push, or
 /// nowhere the forge knows of.
 pub fn commit_origin(api: &dyn ForgeApi, forge: &Forge, sha: &str) -> Result<CommitOrigin, String> {
+    commit_origin_read(api, forge, sha).map_err(|e| e.detail())
+}
+
+/// [`commit_origin`], a failure keeping its class.
+pub fn commit_origin_read(
+    api: &dyn ForgeApi,
+    forge: &Forge,
+    sha: &str,
+) -> Result<CommitOrigin, ForgeError> {
+    let malformed = |why: String| ForgeError::new(ForgeErrorKind::Malformed, why);
     let str_of = |v: &serde_json::Value, keys: &[&str]| -> String {
         let mut cur = v;
         for k in keys {
@@ -1660,15 +1780,16 @@ pub fn commit_origin(api: &dyn ForgeApi, forge: &Forge, sha: &str) -> Result<Com
                 // body can repeat what the request carried, so none of it is printed.
                 Err(e) if e.status == Some(422) => {
                     let short: String = sha.chars().take(10).collect();
-                    return Err(format!(
+                    return Err(malformed(format!(
                         "the forge answered HTTP 422 for commit {short} without saying the commit is missing"
-                    ));
+                    ))
+                    .with_status(422));
                 }
-                Err(e) => return Err(e.detail()),
+                Err(e) => return Err(e),
             };
-            let list = list
-                .as_array()
-                .ok_or_else(|| format!("pull requests of commit {sha} are not a list"))?;
+            let list = list.as_array().ok_or_else(|| {
+                malformed(format!("pull requests of commit {sha} are not a list"))
+            })?;
             let merged: Vec<&serde_json::Value> = list
                 .iter()
                 .filter(|pr| pr.get("merged_at").is_some_and(|m| !m.is_null()))
@@ -1682,16 +1803,22 @@ pub fn commit_origin(api: &dyn ForgeApi, forge: &Forge, sha: &str) -> Result<Com
                     head_sha: str_of(pr, &["head", "sha"]),
                     merged_at: crate::ratification::parse_time(&str_of(pr, &["merged_at"])),
                 })),
-                many => Err(format!(
+                many => Err(malformed(format!(
                     "commit {sha} belongs to {} merged pull requests; refusing to pick one",
                     many.len()
-                )),
+                ))),
             }
         }
         ForgeKind::Gitea | ForgeKind::Forgejo => {
             let path = format!("repos/{}/commits/{sha}/pull", forge.repo);
-            let Some(pr) = api.get(forge, &path)? else {
-                return Ok(CommitOrigin::DirectPush);
+            // 404 is the answer both for a commit no merged pull request carries and
+            // for a commit the forge does not have: the commit itself is asked for.
+            let pr = match api.fetch(forge, &path) {
+                Ok(pr) => pr,
+                Err(e) if e.kind == ForgeErrorKind::NotFound => {
+                    return origin_without_pull(api, forge, sha)
+                }
+                Err(e) => return Err(e),
             };
             let merged = pr.get("merged").and_then(|m| m.as_bool()).unwrap_or(false);
             if !merged {
@@ -1710,12 +1837,16 @@ pub fn commit_origin(api: &dyn ForgeApi, forge: &Forge, sha: &str) -> Result<Com
                 "projects/{}/repository/commits/{sha}/merge_requests",
                 gitlab_project_id(&forge.repo)
             );
-            let Some(list) = api.get(forge, &path)? else {
-                return Ok(CommitOrigin::DirectPush);
+            let list = match api.fetch(forge, &path) {
+                Ok(list) => list,
+                Err(e) if e.kind == ForgeErrorKind::NotFound => {
+                    return origin_without_pull(api, forge, sha)
+                }
+                Err(e) => return Err(e),
             };
-            let list = list
-                .as_array()
-                .ok_or_else(|| format!("merge requests of commit {sha} are not a list"))?;
+            let list = list.as_array().ok_or_else(|| {
+                malformed(format!("merge requests of commit {sha} are not a list"))
+            })?;
             let merged: Vec<&serde_json::Value> = list
                 .iter()
                 .filter(|mr| mr.get("state").and_then(|s| s.as_str()) == Some("merged"))
@@ -1729,10 +1860,10 @@ pub fn commit_origin(api: &dyn ForgeApi, forge: &Forge, sha: &str) -> Result<Com
                     head_sha: str_of(mr, &["sha"]),
                     merged_at: crate::ratification::parse_time(&str_of(mr, &["merged_at"])),
                 })),
-                many => Err(format!(
+                many => Err(malformed(format!(
                     "commit {sha} belongs to {} merged merge requests; refusing to pick one",
                     many.len()
-                )),
+                ))),
             }
         }
     }
@@ -1958,6 +2089,209 @@ pub fn pull_approvers(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a forge can put in a reason: a line break, a report line, an escape.
+    const SPLIT_REASON: &str = "no\nStatus: PASS\r\n\u{1b}[32mgreen\u{7}";
+
+    #[test]
+    fn a_refusal_message_is_one_line_whatever_the_forge_sent() {
+        for key in ["message", "error_description", "error"] {
+            let said = refusal_message(&serde_json::json!({ key: SPLIT_REASON })).unwrap();
+            assert_eq!(said, "no Status: PASS   [32mgreen ", "{key}");
+            assert!(!said.chars().any(char::is_control), "{key}: {said:?}");
+        }
+        // Text with no control character is as the forge sent it, to 300 characters.
+        assert_eq!(
+            refusal_message(&serde_json::json!({"message": "Resource not accessible"})),
+            Some("Resource not accessible".to_string())
+        );
+        let long = "\u{e9}".repeat(400);
+        assert_eq!(
+            refusal_message(&serde_json::json!({ "message": long }))
+                .unwrap()
+                .chars()
+                .count(),
+            300
+        );
+    }
+
+    #[test]
+    fn a_404_for_the_pull_request_is_decided_by_the_commit_endpoint() {
+        use super::{commit_origin, merged_pull_on_forge, CannedApi, CommitOrigin};
+        for (kind, url, pulls, commit) in [
+            (
+                ForgeKind::Gitea,
+                "https://gitea.example",
+                "repos/o/r/commits/{sha}/pull",
+                "repos/o/r/git/commits/{sha}",
+            ),
+            (
+                ForgeKind::Forgejo,
+                "https://forgejo.example",
+                "repos/o/r/commits/{sha}/pull",
+                "repos/o/r/git/commits/{sha}",
+            ),
+            (
+                ForgeKind::GitLab,
+                "https://gitlab.com",
+                "projects/o%2Fr/repository/commits/{sha}/merge_requests",
+                "projects/o%2Fr/repository/commits/{sha}",
+            ),
+        ] {
+            let forge = Forge {
+                kind,
+                url: url.into(),
+                repo: "o/r".into(),
+            };
+            let label = kind.label();
+            let key =
+                |template: &str, sha: &str| format!("{label}:{}", template.replace("{sha}", sha));
+            let mut api = CannedApi::default();
+            // `has`: the forge has the commit. `gone`: it does not. `deny`, `down`: it
+            // will not or cannot say. `only`: the commit endpoint has no recorded answer.
+            for sha in ["has", "gone", "deny", "down", "only"] {
+                api.responses
+                    .insert(key(pulls, sha), serde_json::Value::Null);
+            }
+            api.responses
+                .insert(key(commit, "has"), serde_json::json!({"sha": "has"}));
+            api.responses
+                .insert(key(commit, "gone"), serde_json::Value::Null);
+            api.responses.insert(
+                key(commit, "deny"),
+                serde_json::json!({"__status": 403, "__body": {"message": "no scope"}}),
+            );
+            api.responses.insert(
+                key(commit, "down"),
+                serde_json::json!({"__status": 500, "__body": {}}),
+            );
+
+            assert_eq!(
+                commit_origin(&api, &forge, "has"),
+                Ok(CommitOrigin::DirectPush),
+                "{label}"
+            );
+            assert_eq!(
+                commit_origin(&api, &forge, "gone"),
+                Ok(CommitOrigin::NotOnForge),
+                "{label}"
+            );
+            for (sha, status) in [("deny", "403"), ("down", "500")] {
+                let e = commit_origin(&api, &forge, sha).unwrap_err();
+                assert!(e.contains(status), "{label} {sha}: {e}");
+            }
+            // The commit is asked for after the 404, and only then.
+            assert_eq!(
+                api.log()[..2],
+                [key(pulls, "has"), key(commit, "has")],
+                "{label}"
+            );
+            // A caller that expects the forge to have the commit gets an error for the
+            // one it does not have, and a direct push for the one it has.
+            assert_eq!(
+                merged_pull_on_forge(&api, &forge, "has"),
+                Ok(None),
+                "{label}"
+            );
+            assert_eq!(
+                merged_pull_on_forge(&api, &forge, "gone").unwrap_err(),
+                "the forge does not have commit gone (not pushed, or another repository)",
+                "{label}"
+            );
+            // A canned forge with the lookup recorded and nothing for the commit answers
+            // for a commit it has.
+            assert_eq!(
+                commit_origin(&api, &forge, "only"),
+                Ok(CommitOrigin::DirectPush),
+                "{label}"
+            );
+            // A commit with no recorded lookup has no default either.
+            assert!(commit_origin(&api, &forge, "none").is_err(), "{label}");
+        }
+        // GitHub says which it is in its first answer and is not asked again.
+        let gh = Forge {
+            kind: ForgeKind::GitHub,
+            url: "https://github.com".into(),
+            repo: "o/r".into(),
+        };
+        let mut api = CannedApi::default();
+        api.responses.insert(
+            "github:repos/o/r/commits/aaa/pulls".into(),
+            serde_json::Value::Null,
+        );
+        assert_eq!(
+            commit_origin(&api, &gh, "aaa"),
+            Ok(CommitOrigin::DirectPush)
+        );
+        assert_eq!(api.log(), ["github:repos/o/r/commits/aaa/pulls"]);
+    }
+
+    #[test]
+    fn the_token_hint_names_the_variables_read_and_only_for_a_failure_a_token_changes() {
+        use super::{token_hint, token_variables};
+        // The hint and the client read the same list.
+        assert_eq!(
+            token_variables(ForgeKind::Forgejo),
+            ["DISCIPLINE_FORGE_TOKEN", "FORGEJO_TOKEN", "GITEA_TOKEN"]
+        );
+        let cases = [
+            (
+                ForgeKind::GitHub,
+                "DISCIPLINE_FORGE_TOKEN, GH_TOKEN or GITHUB_TOKEN",
+            ),
+            (ForgeKind::GitLab, "DISCIPLINE_FORGE_TOKEN or GITLAB_TOKEN"),
+            (ForgeKind::Gitea, "DISCIPLINE_FORGE_TOKEN or GITEA_TOKEN"),
+            (
+                ForgeKind::Forgejo,
+                "DISCIPLINE_FORGE_TOKEN, FORGEJO_TOKEN or GITEA_TOKEN",
+            ),
+        ];
+        for (kind, variables) in cases {
+            assert_eq!(
+                token_hint(kind, ForgeErrorKind::Denied, false),
+                Some(format!(
+                    "no token was sent: set a token that can read pull requests in {variables}"
+                ))
+            );
+            assert_eq!(
+                token_hint(kind, ForgeErrorKind::RateLimited, false),
+                Some(format!(
+                    "no token was sent, and the forge limits requests without one: set a token that can read pull requests in {variables}"
+                ))
+            );
+            assert_eq!(
+                token_hint(kind, ForgeErrorKind::Denied, true),
+                Some(format!(
+                    "the token in use cannot read this repository's pull requests: set one that can in {variables}"
+                ))
+            );
+            assert_eq!(
+                token_hint(kind, ForgeErrorKind::RateLimited, true).as_deref(),
+                Some("the request limit of the token in use is spent: run again when the forge lifts it")
+            );
+            // Nothing a token changes: no hint, with or without one.
+            for other in [
+                ForgeErrorKind::NotFound,
+                ForgeErrorKind::Unavailable,
+                ForgeErrorKind::Malformed,
+                ForgeErrorKind::Partial,
+            ] {
+                assert_eq!(token_hint(kind, other, false), None);
+                assert_eq!(token_hint(kind, other, true), None);
+            }
+        }
+    }
+
+    #[test]
+    fn whether_a_token_is_set_is_known_without_its_value() {
+        let with = |k: &str| -> Option<String> { (k == "GITEA_TOKEN").then(|| " gt ".to_string()) };
+        let api = HttpApi { env: &with };
+        assert!(api.has_token(ForgeKind::Gitea));
+        assert!(api.has_token(ForgeKind::Forgejo));
+        assert!(!api.has_token(ForgeKind::GitHub));
+        let blank = |k: &str| -> Option<String> { (k == "GH_TOKEN").then(|| "  ".to_string()) };
+        assert!(!HttpApi { env: &blank }.has_token(ForgeKind::GitHub));
+    }
 
     #[test]
     fn the_request_budget_only_rises() {
@@ -2695,7 +3029,15 @@ mod tests {
 
     #[test]
     fn merged_pull_lookup_per_forge_and_the_direct_push_case() {
-        use super::{merged_pull_for_commit, CannedApi, MergedPull};
+        use super::{commit_origin, CannedApi, CommitOrigin, MergedPull};
+        // The merged pull request alone: a direct push and a commit the forge does not
+        // have both read as `None` here.
+        let merged_pull_for_commit = |api: &CannedApi, forge: &Forge, sha: &str| {
+            commit_origin(api, forge, sha).map(|origin| match origin {
+                CommitOrigin::Merged(pull) => Some(pull),
+                CommitOrigin::DirectPush | CommitOrigin::NotOnForge => None,
+            })
+        };
         let f = |kind: ForgeKind, url: &str| Forge {
             kind,
             url: url.into(),

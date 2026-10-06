@@ -194,6 +194,8 @@ impl Summary {
     }
 
     pub fn render(&self) -> String {
+        // A subject is a commit's own text, and a detail can quote the forge.
+        let line = crate::report::text::terminal_line;
         let mut out = String::new();
         for c in &self.cases_detail {
             let mut gates = if c.blocking_gates.is_empty() {
@@ -216,7 +218,7 @@ impl Summary {
                 "{:<9} {:<16} {}{gates}\n",
                 c.label(),
                 c.verdict,
-                c.subject.chars().take(72).collect::<String>()
+                line(&c.subject.chars().take(72).collect::<String>())
             ));
         }
         out.push_str(&format!(
@@ -297,11 +299,28 @@ impl Summary {
                 .filter(|c| c.verdict == "could_not_check")
                 .filter(|c| c.reason.unwrap_or(Reason::Internal).as_str() == r)
             {
-                out.push_str(&format!("    {:<9} {}\n", c.label(), last_line(&c.detail)));
+                out.push_str(&format!(
+                    "    {:<9} {}\n",
+                    c.label(),
+                    line(&last_line(&c.detail))
+                ));
             }
         }
         out
     }
+}
+
+/// The detail of a change whose merged pull request could not be read: what the lookup
+/// said, and what a token would change when the failure is one a token changes
+/// ([`crate::forge::token_hint`]).
+fn lookup_failed_detail(error: &str, hint: Option<&str>) -> String {
+    let mut detail = format!(
+        "its merged pull request could not be read, and its body may carry directives: {error}"
+    );
+    if let Some(hint) = hint {
+        detail.push_str(&format!(" ({hint})"));
+    }
+    detail
 }
 
 /// The error a case stopped on: the last line of its detail, without the
@@ -674,7 +693,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
 
         let mut lookup_error = None;
         let (pr, body, author, directives_from) = match &forge {
-            Ok(f) => match crate::forge::merged_pull_on_forge(&api, f, &c.id().to_string()) {
+            Ok(f) => match crate::forge::merged_pull_lookup(&api, f, &c.id().to_string()) {
                 Ok(Some(m)) => (
                     Some(m.number),
                     Some(m.body),
@@ -688,8 +707,11 @@ pub fn run(opts: &Options) -> Result<Summary> {
                     "commit message only: no merged pull request".to_string(),
                 ),
                 Err(e) => {
-                    lookup_error = Some(e.to_string());
-                    (None, None, None, format!("commit message only: {e}"))
+                    let hint = crate::forge::token_hint(f.kind, e.kind, api.has_token(f.kind));
+                    let e = e.detail();
+                    let from = format!("commit message only: {e}");
+                    lookup_error = Some((e, hint));
+                    (None, None, None, from)
                 }
             },
             Err(e) => (None, None, None, format!("commit message only: {e}")),
@@ -764,12 +786,10 @@ pub fn run(opts: &Options) -> Result<Summary> {
         };
         // A forge that was found but could not answer may hold a merged pull request whose
         // body lifts these findings: the change's verdict is unknown, not blocked.
-        if let (Some(e), "blocked") = (&lookup_error, verdict) {
+        if let (Some((e, hint)), "blocked") = (&lookup_error, verdict) {
             verdict = "could_not_check";
             reason = Some(Reason::Forge);
-            detail = format!(
-                "its merged pull request could not be read, and its body may carry directives: {e} (a forge token in DISCIPLINE_FORGE_TOKEN raises the API rate limit)"
-            );
+            detail = lookup_failed_detail(e, hint.as_deref());
         }
         eprintln!(
             "replay {}/{}: {} {}",
@@ -801,6 +821,52 @@ pub fn run(opts: &Options) -> Result<Summary> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_lookup_carries_a_hint_only_when_there_is_one() {
+        assert_eq!(
+            lookup_failed_detail("h answered HTTP 500", None),
+            "its merged pull request could not be read, and its body may carry directives: h answered HTTP 500"
+        );
+        assert_eq!(
+            lookup_failed_detail("h answered HTTP 401", Some("no token was sent")),
+            "its merged pull request could not be read, and its body may carry directives: h answered HTTP 401 (no token was sent)"
+        );
+    }
+
+    /// A commit subject and a detail that try to write the summary.
+    const SUBJECT_WITH_AN_ESCAPE: &str = "fix: x\u{1b}[2J\u{7}";
+    const DETAIL_WITH_A_LINE: &str = "discipline check: error: no\rStatus: PASS\u{1b}[0m";
+
+    #[test]
+    fn the_summary_keeps_a_subject_and_a_detail_on_their_lines() {
+        let case = Case {
+            sha: "abcdef0123456789".into(),
+            pr: None,
+            subject: SUBJECT_WITH_AN_ESCAPE.into(),
+            verdict: "could_not_check",
+            blocking_gates: Vec::new(),
+            refused_overrides: Vec::new(),
+            overrides: Vec::new(),
+            actor: None,
+            warning_gates: Vec::new(),
+            findings: Vec::new(),
+            directives_from: String::new(),
+            skipped_checks: Vec::new(),
+            reason: Some(Reason::Forge),
+            detail: DETAIL_WITH_A_LINE.into(),
+        };
+        let text = Summary::from_cases(vec![case]).render();
+        assert!(text.contains("fix: x\u{fffd}[2J\u{fffd}\n"), "{text:?}");
+        assert!(
+            text.contains("no\u{fffd}Status: PASS\u{fffd}[0m\n"),
+            "{text:?}"
+        );
+        assert!(
+            !text.chars().any(|c| c.is_control() && c != '\n'),
+            "{text:?}"
+        );
+    }
 
     #[test]
     fn verdicts_and_gates_are_read_from_the_report() {

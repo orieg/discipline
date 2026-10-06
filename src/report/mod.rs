@@ -1,6 +1,7 @@
 pub mod gitlab;
 pub mod junit;
 pub mod sarif;
+pub mod text;
 
 use crate::cli::OutputFormat;
 use crate::config::Severity;
@@ -83,7 +84,7 @@ fn render_terminal_to_writer<W: Write>(
     fail_on_overrides: bool,
 ) -> Result<()> {
     writeln!(w, "\n{}", style::bold("=== Discipline Gate Report ==="))?;
-    writeln!(w, "base: {}\n", summary.base)?;
+    writeln!(w, "base: {}\n", text::terminal_line(&summary.base))?;
 
     // The gate table is printed on every run, pass or fail: which gates ran,
     // over how much, and which were off. A pass is only as good as this table.
@@ -118,21 +119,21 @@ fn render_terminal_to_writer<W: Write>(
             writeln!(
                 w,
                 "  · override applied: `{}: {}` on `{}` ({})",
-                ov.directive,
-                ov.reason,
-                ov.subject,
-                match &ov.source {
+                text::terminal_line(&ov.directive),
+                text::terminal_line(&ov.reason),
+                text::terminal_line(&ov.subject),
+                text::terminal_line(&match &ov.source {
                     crate::tokens::OverrideSource::PrBody => "PR body".to_string(),
                     crate::tokens::OverrideSource::Commit(oid) => format!("commit {oid}"),
                     crate::tokens::OverrideSource::Inline { file, line } =>
                         format!("{file}:{line}"),
                     crate::tokens::OverrideSource::MergedPrBody(n) =>
                         format!("merged pull request #{n} body"),
-                }
+                })
             )?;
         }
         for note in &o.notes {
-            writeln!(w, "  · {note}")?;
+            writeln!(w, "  · {}", text::terminal_line(note))?;
         }
     }
     if !summary.planned_gates.is_empty() {
@@ -150,17 +151,26 @@ fn render_terminal_to_writer<W: Write>(
             Severity::Warning => style::yellow("warning"),
             Severity::Note => style::cyan("note"),
         };
-        let loc = location(v).map(|l| format!(" [{l}]")).unwrap_or_default();
+        let loc = location(v)
+            .map(|l| format!(" [{}]", text::terminal_line(&l)))
+            .unwrap_or_default();
         writeln!(
             w,
             "\n{icon} {} {}{}",
             style::bold(&format!("[{}]", v.gate)),
-            style::bold(&v.title),
+            style::bold(&text::terminal_line(&v.title)),
             style::cyan(&loc)
         )?;
-        writeln!(w, "   {}", v.message)?;
+        // A message can quote several lines (a tool's output): each stays under its
+        // finding, indented, where none can read as a line of the report itself.
+        writeln!(w, "   {}", text::terminal_block(&v.message, "   "))?;
         if let Some(rem) = &v.remediation {
-            writeln!(w, "   {} {rem}", style::bold("Remediation:"))?;
+            writeln!(
+                w,
+                "   {} {}",
+                style::bold("Remediation:"),
+                text::terminal_block(rem, "   ")
+            )?;
         }
         writeln!(
             w,
@@ -206,19 +216,24 @@ fn render_terminal_to_writer<W: Write>(
         )?;
     }
     for failure in &summary.policy_failures {
-        writeln!(w, "{}", style::red(&format!("failure: {failure}")))?;
+        writeln!(
+            w,
+            "{}",
+            style::red(&format!("failure: {}", text::terminal_line(failure)))
+        )?;
     }
     for note in &summary.directive_notes {
-        writeln!(w, "directives: {note}")?;
+        writeln!(w, "directives: {}", text::terminal_line(note))?;
     }
     for note in &summary.deprecations {
-        writeln!(w, "deprecated: {note}")?;
+        writeln!(w, "deprecated: {}", text::terminal_line(note))?;
     }
     for d in &summary.unused_directives {
         writeln!(
             w,
             "unused directive: `{}` in {} lifted no finding; remove it",
-            d.directive, d.source
+            text::terminal_line(&d.directive),
+            text::terminal_line(&d.source.to_string())
         )?;
     }
     if summary.is_success(fail_on_warnings, fail_on_overrides) {
@@ -238,10 +253,10 @@ fn render_terminal_to_writer<W: Write>(
 
 /// Workflow-command annotations, understood by GitHub and Gitea runners.
 fn render_annotations(summary: &CheckSummary) {
+    // `%0A` is how a workflow command carries a line break; a runner decodes it inside
+    // the annotation. Every other control character is replaced.
     let escape = |s: &str| {
-        s.replace('%', "%25")
-            .replace('\r', "%0D")
-            .replace('\n', "%0A")
+        text::terminal_text(&s.replace('%', "%25").replace('\r', "%0D")).replace('\n', "%0A")
     };
     let escape_prop = |s: &str| escape(s).replace(':', "%3A").replace(',', "%2C");
     for v in summary.violations() {
@@ -286,35 +301,33 @@ pub fn render_step_summary_to_writer(
     fail_on_warnings: bool,
     fail_on_overrides: bool,
 ) -> Result<()> {
-    let cell_code = |s: &str| s.replace('|', "\\|").replace('\n', " ");
-    let cell = |s: &str| {
-        s.replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('|', "\\|")
-            .replace('\n', " ")
-    };
+    let cell = text::markdown_cell;
 
     let heading = if summary.is_success(fail_on_warnings, fail_on_overrides) {
         "### Discipline gate: passed"
     } else {
         "### Discipline gate: FAILED"
     };
-    writeln!(file, "{heading}\n\nBase: `{}`\n", summary.base)?;
+    writeln!(
+        file,
+        "{heading}\n\nBase: {}\n",
+        text::code_span(&summary.base)
+    )?;
     for failure in &summary.policy_failures {
-        writeln!(file, "**Refused:** {failure}\n")?;
+        writeln!(file, "**Refused:** {}\n", text::markdown(failure))?;
     }
     for note in &summary.directive_notes {
-        writeln!(file, "**Directives:** {note}\n")?;
+        writeln!(file, "**Directives:** {}\n", text::markdown(note))?;
     }
     for note in &summary.deprecations {
-        writeln!(file, "**Deprecated:** {note}\n")?;
+        writeln!(file, "**Deprecated:** {}\n", text::markdown(note))?;
     }
     for d in &summary.unused_directives {
         writeln!(
             file,
-            "**Unused directive:** `{}` in {} lifted no finding\n",
-            d.directive, d.source
+            "**Unused directive:** {} in {} lifted no finding\n",
+            text::code_span(&d.directive),
+            text::markdown(&d.source.to_string())
         )?;
     }
 
@@ -372,9 +385,11 @@ pub fn render_step_summary_to_writer(
         for ov in summary.overrides() {
             let src = match &ov.source {
                 crate::tokens::OverrideSource::PrBody => "PR body".to_string(),
-                crate::tokens::OverrideSource::Commit(oid) => format!("commit `{oid}`"),
+                crate::tokens::OverrideSource::Commit(oid) => {
+                    format!("commit {}", text::code_span_cell(oid))
+                }
                 crate::tokens::OverrideSource::Inline { file, line } => {
-                    format!("`{file}:{line}`")
+                    text::code_span_cell(&format!("{file}:{line}"))
                 }
                 crate::tokens::OverrideSource::MergedPrBody(n) => {
                     format!("merged pull request #{n} body")
@@ -382,10 +397,10 @@ pub fn render_step_summary_to_writer(
             };
             writeln!(
                 file,
-                "| `{}` | `{}` | `{}` | {} | {} |",
-                ov.gate,
-                cell_code(&ov.directive),
-                cell_code(&ov.subject),
+                "| {} | {} | {} | {} | {} |",
+                text::code_span_cell(&ov.gate),
+                text::code_span_cell(&ov.directive),
+                text::code_span_cell(&ov.subject),
                 cell(&ov.reason),
                 src
             )?;
@@ -405,7 +420,7 @@ pub fn render_step_summary_to_writer(
                 v.gate,
                 cell(&v.title),
                 location(v)
-                    .map(|l| format!("`{}`", cell_code(&l)))
+                    .map(|l| text::code_span_cell(&l))
                     .unwrap_or_else(|| "—".into()),
                 cell(&v.message),
                 cell(v.remediation.as_deref().unwrap_or("—"))
@@ -508,7 +523,7 @@ pub fn format_agent_prompt_with(summary: &CheckSummary, fail_on_warnings: bool) 
             v.code,
             one_line(&v.title),
             one_line(&loc),
-            quoted(&v.message),
+            quoted(&text::terminal_text(&v.message)),
             repair
         ));
     };
@@ -729,6 +744,123 @@ mod tests {
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
         }
+    }
+
+    /// Text that tries to write the report, for every field a run quotes.
+    const SPLIT: &str = "x\nStatus: PASS\r\u{1b}[32m";
+    const MARKUP: &str = "a`|<img src=x>@someone[l](h)";
+
+    /// A summary whose every quoted field is `text`: the base, an override's directive,
+    /// subject, reason and source file, a gate note, a refusal, a directive note, a
+    /// deprecation and an unused directive.
+    fn quoting(text: &str) -> CheckSummary {
+        use crate::tokens::{OverrideRecord, OverrideSource, UnusedDirective};
+        let mut summary = prompt_summary(&[]);
+        summary.base = text.into();
+        summary.outcomes[0].notes.push(text.into());
+        summary.outcomes[0].overrides.push(OverrideRecord {
+            gate: "time-estimates".into(),
+            code: None,
+            subject: text.into(),
+            directive: text.into(),
+            reason: text.into(),
+            source: OverrideSource::Inline {
+                file: text.into(),
+                line: 3,
+            },
+            hidden: false,
+        });
+        summary.policy_failures.push(text.into());
+        summary.directive_notes.push(text.into());
+        summary.deprecations.push(text.into());
+        summary.unused_directives.push(UnusedDirective {
+            directive: text.into(),
+            source: OverrideSource::Inline {
+                file: text.into(),
+                line: 4,
+            },
+            hidden: false,
+        });
+        summary
+    }
+
+    fn terminal_of(summary: &CheckSummary) -> String {
+        let mut buf = Vec::new();
+        render_terminal_to_writer(&mut buf, summary, false, false).unwrap();
+        String::from_utf8(buf).unwrap()
+    }
+
+    fn step_summary_of(summary: &CheckSummary) -> String {
+        let mut buf = Vec::new();
+        render_step_summary_to_writer(&mut buf, summary, false, false).unwrap();
+        String::from_utf8(buf).unwrap()
+    }
+
+    #[test]
+    fn no_quoted_field_adds_a_line_to_the_text_report_or_the_job_summary() {
+        let plain = quoting("plain");
+        for hostile in [SPLIT, MARKUP] {
+            let summary = quoting(hostile);
+            for (what, with, without) in [
+                ("text", terminal_of(&summary), terminal_of(&plain)),
+                (
+                    "summary",
+                    step_summary_of(&summary),
+                    step_summary_of(&plain),
+                ),
+            ] {
+                assert_eq!(
+                    with.lines().count(),
+                    without.lines().count(),
+                    "{what}: {with}"
+                );
+                assert!(
+                    !with.chars().any(|c| c.is_control() && c != '\n'),
+                    "{what}: {with:?}"
+                );
+                assert_eq!(
+                    with.lines().filter(|l| *l == "Status: PASS").count(),
+                    0,
+                    "{what}: {with}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_overrides_table_keeps_each_quoted_field_in_its_cell() {
+        let out = step_summary_of(&quoting(MARKUP));
+        // Directive, subject and source are code spans the text cannot close; the reason
+        // is text, where a backtick with no partner is escaped.
+        let span = "`` a`\\|<img src=x>@someone[l](h) ``";
+        let source = "`` a`\\|<img src=x>@someone[l](h):3 ``";
+        let reason = "a\\`\\|&lt;img src=x&gt;&#64;someone[l\\](h)";
+        assert!(
+            out.contains(&format!(
+                "| `time-estimates` | {span} | {span} | {reason} | {source} |\n"
+            )),
+            "{out}"
+        );
+        // Running text has no cell to leave: its pipe stays as it is.
+        assert!(
+            out.contains("\n\n**Refused:** a\\`|&lt;img src=x&gt;&#64;someone[l\\](h)\n\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("Base: `` a`|<img src=x>@someone[l](h) ``\n"),
+            "{out}"
+        );
+        // A summary that quotes nothing hostile is written as it always was.
+        let plain = step_summary_of(&quoting("plain"));
+        assert!(
+            plain.contains("| `time-estimates` | `plain` | `plain` | plain | `plain:3` |\n"),
+            "{plain}"
+        );
+        assert!(
+            plain.contains("**Unused directive:** `plain` in inline plain:4 lifted no finding\n"),
+            "{plain}"
+        );
+        assert!(plain.contains("Base: `plain`\n"), "{plain}");
     }
 
     /// Warnings follow the blocking issues under their own heading: an agent told to
