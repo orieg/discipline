@@ -87,6 +87,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("constant_fallback_paths", Direction::Shrunk),
     ("hostname_denylist", Direction::Shrunk),
     ("superseded_json_paths", Direction::Shrunk),
+    ("record_paths", Direction::Shrunk),
     ("citation_source_paths", Direction::Shrunk),
     ("citation_measurement_jobs", Direction::Shrunk),
     ("unconditional_jobs", Direction::Shrunk),
@@ -123,6 +124,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("advisory_pct", Direction::Tolerance),
     ("max_noise_cv", Direction::Tolerance),
     ("tolerance", Direction::Tolerance),
+    ("figure_tolerance_pct", Direction::Tolerance),
     ("min_count", Direction::Floor),
     ("min_tests", Direction::Floor),
     ("test_report", Direction::Evidence),
@@ -155,6 +157,8 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("check_paired_figures", Direction::LooserWhenFalse),
     ("check_pending_citations", Direction::LooserWhenFalse),
     ("require_open_pending_issues", Direction::LooserWhenFalse),
+    ("verify_measured_commit", Direction::LooserWhenFalse),
+    ("verify_cited_figures", Direction::LooserWhenFalse),
     ("require_git_pins", Direction::LooserWhenFalse),
     ("scan_workflows", Direction::LooserWhenFalse),
     ("scan_scripts", Direction::LooserWhenFalse),
@@ -188,6 +192,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("scan_contents", Direction::LooserWhenFalse),
     // What the gate runs or checks against.
     ("superseded_registry", Direction::Evidence),
+    ("record_commit_key", Direction::Evidence),
     ("ratio_baseline", Direction::Evidence),
     ("workflow", Direction::Evidence),
     ("change_job", Direction::Evidence),
@@ -1701,6 +1706,68 @@ mod tests {
         assert!(has("command", "`min_count` decreased from 10 to 5"));
         assert!(has("unsafe-budget", "`max_unsafe` increased from 5 to 10"));
         assert!(has("pii", "`diff_only` changed from false to true"));
+    }
+
+    #[test]
+    fn the_measured_citation_keys_loosen_when_switched_off_narrowed_or_widened() {
+        let table = |keys: &str| cfg(&format!("[gates.provenance-tags]\n{keys}"));
+        let strict = "verify_measured_commit = true\nverify_cited_figures = true\n\
+                      figure_tolerance_pct = 1.0\nrecord_paths = [\"results/**\", \"bench/**\"]\n";
+        let said = |head: &str| -> Vec<String> {
+            diff_configs(&table(strict), &table(head))
+                .unwrap()
+                .iter()
+                .map(|w| w.what())
+                .collect()
+        };
+        let has = |found: &[String], needle: &str| found.iter().any(|w| w.contains(needle));
+        // Each key loosened on its own is the one thing reported.
+        for (from, to, needle) in [
+            (
+                "verify_measured_commit = true",
+                "verify_measured_commit = false",
+                "`verify_measured_commit` changed from true to false",
+            ),
+            (
+                "verify_cited_figures = true",
+                "verify_cited_figures = false",
+                "`verify_cited_figures` changed from true to false",
+            ),
+            (
+                "figure_tolerance_pct = 1.0",
+                "figure_tolerance_pct = 2.5",
+                "`figure_tolerance_pct` increased from 1.0 to 2.5",
+            ),
+            (", \"bench/**\"", "", "`record_paths` lost 1"),
+        ] {
+            let found = said(&strict.replace(from, to));
+            assert!(has(&found, needle), "{needle}: {found:?}");
+            assert_eq!(found.len(), 1, "{found:?}");
+        }
+        // Removing a key returns it to its default: the three checks are off, and the
+        // tolerance is back at zero, which is stricter.
+        let found = said("");
+        assert_eq!(found.len(), 3, "{found:?}");
+        assert!(!has(&found, "figure_tolerance_pct"), "{found:?}");
+        // Another commit key reads another field of every record.
+        let found = said(&format!("{strict}record_commit_key = \"rev\"\n"));
+        assert!(has(&found, "`record_commit_key` changed"), "{found:?}");
+        // Controls: unchanged, and tightened, are not reported.
+        assert!(said(strict).is_empty());
+        let tighter = strict
+            .replace("1.0", "0.5")
+            .replace(", \"bench/**\"", ", \"bench/**\", \"runs/**\"");
+        assert!(said(&tighter).is_empty());
+        // Switching the keys on from their defaults adds checks. A tolerance written in
+        // the same change is above the default of zero, and is reported as raised.
+        let on = strict.replace("figure_tolerance_pct = 1.0\n", "");
+        assert!(diff_configs(&table(""), &table(&on)).unwrap().is_empty());
+        let raised: Vec<String> = diff_configs(&table(""), &table(strict))
+            .unwrap()
+            .iter()
+            .map(|w| w.what())
+            .collect();
+        assert_eq!(raised, ["`figure_tolerance_pct` increased from 0.0 to 1.0"]);
     }
 
     #[test]

@@ -44,6 +44,19 @@ impl ChangedFile {
     }
 }
 
+/// What a hexadecimal object id names ([`GitCtx::lookup_commit`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitLookup {
+    /// Exactly one object, a commit: its full id.
+    Commit(String),
+    /// Exactly one object, of another type (a tree, a blob, a tag object).
+    NotACommit,
+    /// No object.
+    Missing,
+    /// An abbreviation more than one object starts with.
+    Ambiguous,
+}
+
 /// Author and committer of the base commit `discipline replay` builds for each case.
 pub const REPLAY_BASE_EMAIL: &str = "replay@discipline.invalid";
 /// Message of that base commit.
@@ -1129,6 +1142,29 @@ impl GitCtx {
             }
         }
         Ok(None)
+    }
+
+    /// What the hexadecimal object id `hex` (full or abbreviated) names in the local
+    /// object database. Only an id is looked up: a branch or tag whose name is made of
+    /// hexadecimal digits is not read, and a tag object is not peeled to its commit.
+    pub fn lookup_commit(&self, hex: &str) -> Result<CommitLookup> {
+        match self.repo.find_object_by_prefix(hex, None) {
+            Ok(obj) if obj.kind() == Some(git2::ObjectType::Commit) => {
+                Ok(CommitLookup::Commit(obj.id().to_string()))
+            }
+            Ok(_) => Ok(CommitLookup::NotACommit),
+            Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(CommitLookup::Missing),
+            Err(e) if e.code() == git2::ErrorCode::Ambiguous => Ok(CommitLookup::Ambiguous),
+            Err(e) => {
+                Err(anyhow::Error::new(e).context(format!("failed to look up object `{hex}`")))
+            }
+        }
+    }
+
+    /// Whether history was truncated when the repository was cloned or fetched, so an
+    /// object it does not hold may exist upstream.
+    pub fn is_shallow(&self) -> bool {
+        self.repo.is_shallow()
     }
 
     /// Commits between the base and `HEAD` as `(short_oid, message)` (empty when staged).
@@ -2491,5 +2527,58 @@ mod tests {
                 Some("x\n")
             );
         }
+    }
+
+    /// Two blob contents whose object ids share their first seven hexadecimal digits.
+    #[cfg(unix)]
+    fn blobs_sharing_a_prefix() -> (String, String, String) {
+        let mut seen = std::collections::HashMap::new();
+        for i in 0u32.. {
+            let content = format!("blob {i}\n");
+            let id = Oid::hash_object(git2::ObjectType::Blob, content.as_bytes())
+                .unwrap()
+                .to_string();
+            if let Some(other) = seen.insert(id[..7].to_string(), content.clone()) {
+                return (id[..7].to_string(), other, content);
+            }
+        }
+        unreachable!()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_object_id_is_looked_up_as_a_commit_a_other_object_missing_or_ambiguous() {
+        let (_dir, git, blob) = repo_with_base_file();
+        let commit = git.base.unwrap().to_string();
+        assert_eq!(
+            git.lookup_commit(&commit).unwrap(),
+            CommitLookup::Commit(commit.clone())
+        );
+        // An abbreviation resolves to the full id.
+        assert_eq!(
+            git.lookup_commit(&commit[..7]).unwrap(),
+            CommitLookup::Commit(commit.clone())
+        );
+        assert_eq!(
+            git.lookup_commit(&blob.to_string()).unwrap(),
+            CommitLookup::NotACommit
+        );
+        let absent = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(git.lookup_commit(absent).unwrap(), CommitLookup::Missing);
+        // A branch whose name is hexadecimal is a name, not an id.
+        let head = git.repo.find_commit(git.base.unwrap()).unwrap();
+        git.repo.branch("abcdef0", &head, false).unwrap();
+        assert_eq!(git.lookup_commit("abcdef0").unwrap(), CommitLookup::Missing);
+
+        let (prefix, one, two) = blobs_sharing_a_prefix();
+        git.repo.blob(one.as_bytes()).unwrap();
+        // Control: one object under the prefix is found, and is not a commit.
+        assert_eq!(
+            git.lookup_commit(&prefix).unwrap(),
+            CommitLookup::NotACommit
+        );
+        git.repo.blob(two.as_bytes()).unwrap();
+        assert_eq!(git.lookup_commit(&prefix).unwrap(), CommitLookup::Ambiguous);
+        assert!(!git.is_shallow());
     }
 }

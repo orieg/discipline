@@ -1589,6 +1589,46 @@ fn is_placeholder(reason: &str) -> bool {
     false
 }
 
+/// Words that stand for a field of a `(measured: <host>, <commit>)` tag without naming a
+/// host or a commit. They are read only for those fields: as a directive's reason,
+/// `commit` or `host` is a word like any other.
+const MEASURED_FIELD_PLACEHOLDERS: &[&str] = &[
+    "host",
+    "hostname",
+    "machine",
+    "commit",
+    "sha",
+    "hash",
+    "rev",
+    "revision",
+    "unknown",
+    "unset",
+    "undefined",
+];
+
+/// Whether a field of a `(measured: <host>, <commit>)` tag is a placeholder: anything a
+/// directive's reason is refused for (empty, `<...>`, `tbd`, `n/a`, ...; confusable and
+/// invisible characters folded the same way), or a word naming the field itself.
+pub fn is_placeholder_field(field: &str) -> bool {
+    if is_placeholder(field) {
+        return true;
+    }
+    let words: Vec<String> = field
+        .split(|c: char| c.is_whitespace() || is_invisible(c) || matches!(c, '-' | '_' | '/'))
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            normalize_placeholder_token(w.trim_matches(|c: char| !c.is_alphanumeric()))
+                .to_lowercase()
+        })
+        .collect();
+    !words.is_empty()
+        && words.iter().all(|w| {
+            w.is_empty()
+                || MEASURED_FIELD_PLACEHOLDERS.contains(&w.as_str())
+                || PLACEHOLDERS.contains(&w.as_str())
+        })
+}
+
 static CITATION_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(r"(?i)https?://[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+/(?:actions/runs/\d+|pipelines/\d+|jobs/\d+)|(?:results|docs|crates|scripts|benches|tests|src|target)/[a-zA-Z0-9_./-]+\.(?:json|txt|csv|md|svg|log|out)").expect("valid regex")
 });
@@ -1743,6 +1783,47 @@ removes: tests/old.rs inside a fence
         // still does not mistake a non-placeholder for one.
         assert!(!is_valid_rationale("todotbd"));
         assert!(is_valid_rationale("caf\u{e9} au lait, kept on purpose"));
+    }
+
+    #[test]
+    fn a_measured_tag_field_is_a_placeholder_when_it_names_nothing() {
+        for field in [
+            "",
+            "host",
+            "HOST",
+            "hostname",
+            "commit",
+            "sha",
+            "commit sha",
+            "commit-sha",
+            "tbd",
+            "TODO",
+            "unknown",
+            "n/a",
+            "<host>",
+            "<commit>",
+            "...",
+            "h0st",
+            "unknown host",
+            "\u{0441}ommit",
+        ] {
+            assert!(is_placeholder_field(field), "{field:?} names nothing");
+        }
+        for field in [
+            "bench-box",
+            "build-07.corp.example",
+            "Apple M1",
+            "ci runner 3",
+            "abc1234",
+            "host-07",
+            "committed",
+            "shared host 2",
+        ] {
+            assert!(!is_placeholder_field(field), "{field:?} names something");
+        }
+        // The field words are not placeholders for a directive's reason.
+        assert!(is_valid_rationale("unknown host"));
+        assert!(is_valid_rationale("commit"));
     }
 
     #[test]

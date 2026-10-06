@@ -387,7 +387,12 @@ pub fn generate_schema() -> Value {
                     "pending_issue_repos": { "$ref": "#/$defs/StringListOrReset", "description": "Other repositories (owner/name) whose issues a pending statement may cite; by default only this repository's issues count" },
                     "ratio_satisfied_by": { "$ref": "#/$defs/StringListOrReset", "description": "What satisfies a published wall-clock ratio, replacing the built-in list when set: interval, marker:<word>, artifact:<glob>, regex:<pattern> (paragraph-scoped)" },
                     "deterministic_units": { "$ref": "#/$defs/StringListOrReset", "description": "Units whose figures are deterministic and exempt from the interval requirement, added to the built-in list" },
-                    "diff_only": { "type": "boolean", "description": "Judge only paragraphs that contain an added line (default: false, the whole changed file)" }
+                    "diff_only": { "type": "boolean", "description": "Judge only paragraphs that contain an added line (default: false, the whole changed file)" },
+                    "verify_measured_commit": { "type": "boolean", "description": "A (measured: <host>, <commit>) tag on an added line must name a host and a commit (7 to 40 hexadecimal digits) that resolves to a commit in the local object database" },
+                    "record_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Globs of JSON / JSONL result records; the commit key of every added or changed record must be a full object id that resolves to a commit" },
+                    "record_commit_key": { "type": "string", "description": "Key of a result record that holds the commit it was measured at (default: commit)" },
+                    "verify_cited_figures": { "type": "boolean", "description": "Each figure of a paragraph or table carrying a measured tag must equal a numeric value of the tracked data artifact (.json, .jsonl, .csv) the paragraph cites" },
+                    "figure_tolerance_pct": { "type": "number", "minimum": 0, "description": "Relative tolerance in percent added to rounding when a tagged figure is compared with the cited artifact's values (default: 0)" }
                 }
             },
             "UnsafeSafetyCommentGate": {
