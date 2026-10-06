@@ -19,6 +19,9 @@
 use std::collections::{BTreeSet, HashMap};
 use tree_sitter::Node;
 
+mod more;
+pub use more::{read_skip, Grammar, SkipRead};
+
 /// What a language pack decided about a conditional skip.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CiVerdict {
@@ -60,8 +63,9 @@ pub struct Site {
     /// The condition as reported: the nearest `if`, negated in its `else` branch, or the
     /// whole chain when an outer `if` is what makes the skip CI-conditional.
     pub text: String,
-    /// Whether the nearest `if` holds the site in its `else` branch.
-    pub in_else: bool,
+    /// Whether every enclosing condition is a constant under which the site runs
+    /// (`if True:`, the `else` of `if False:`): no condition at all.
+    pub always: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1250,6 +1254,42 @@ impl<'t, 's> Eval<'t, 's> {
         }
     }
 
+    /// What `assumeThat(actual, matcher)` does: the test runs when `actual` satisfies
+    /// the matcher.
+    fn assume_that(
+        &self,
+        actual: Node<'t>,
+        matcher: Node<'t>,
+        locals: &Bindings<'t>,
+    ) -> SkipCondition {
+        let value = self.eval(actual, locals, 0);
+        let Some(read) = value.clone() else {
+            return SkipCondition::When(CiVerdict::NotCi);
+        };
+        let decided = self.jvm_call(matcher).and_then(|m| {
+            match (m.name, m.args.first()) {
+                // Runs when the value equals the constant: skipped when the variable is
+                // set, for a constant that reads as unset or off.
+                ("is" | "equalTo", Some(constant)) => {
+                    let falsy = self.literal_is_falsy(*constant)?;
+                    Some(if falsy {
+                        value.clone()
+                    } else {
+                        flip(value.clone())
+                    })
+                }
+                ("notNullValue", None) => Some(flip(value.clone())),
+                ("nullValue", None) => Some(value.clone()),
+                _ => None,
+            }
+        });
+        let skip = decided.unwrap_or(Some(Ci {
+            truth: Truth::Mixed,
+            vars: read.vars,
+        }));
+        SkipCondition::When(verdict_of(&skip))
+    }
+
     fn condition_text(&self, if_node: Node<'t>, cond: Node<'t>) -> String {
         let cond_text =
             if self.lang == Lang::JavaScript && cond.kind() == "parenthesized_expression" {
@@ -1328,6 +1368,7 @@ pub fn site(lang: Lang, site: Node, src: &[u8]) -> Option<Site> {
     let (eval, locals) = evaluator(lang, site, src);
     // Innermost first: (condition text, value, in the else branch).
     let mut chain: Vec<(String, Val, bool)> = Vec::new();
+    let mut always = true;
     let mut cur = site;
     while let Some(p) = cur.parent() {
         if FUNCTION_KINDS.contains(&p.kind()) {
@@ -1340,11 +1381,20 @@ pub fn site(lang: Lang, site: Node, src: &[u8]) -> Option<Site> {
                     .child_by_field_name("initializer")
                     .is_some_and(|i| i.id() == cur.id());
                 if !in_condition && !in_initializer {
-                    let in_else = p
-                        .child_by_field_name("consequence")
-                        .is_none_or(|c| c.id() != cur.id());
+                    let in_else = if lang == Lang::Kotlin {
+                        // The grammar names no branch: the second stands after `else`.
+                        let mut cursor = p.walk();
+                        let after_else = p
+                            .children(&mut cursor)
+                            .any(|c| c.kind() == "else" && c.end_byte() <= cur.start_byte());
+                        after_else
+                    } else {
+                        p.child_by_field_name("consequence")
+                            .is_none_or(|c| c.id() != cur.id())
+                    };
                     let value = eval.eval(cond, &locals, 0);
                     let text = eval.condition_text(p, cond);
+                    always &= eval.constant(cond, &locals, 0) == Some(!in_else);
                     if in_else {
                         chain.push((eval.negated_text(&text), flip(value), true));
                     } else {
@@ -1355,7 +1405,7 @@ pub fn site(lang: Lang, site: Node, src: &[u8]) -> Option<Site> {
         }
         cur = p;
     }
-    let (nearest_text, nearest_value, in_else) = chain.first()?.clone();
+    let (nearest_text, nearest_value, _) = chain.first()?.clone();
     let whole = chain
         .iter()
         .fold(None, |acc, (_, value, _)| and(acc, value.clone()));
@@ -1380,15 +1430,17 @@ pub fn site(lang: Lang, site: Node, src: &[u8]) -> Option<Site> {
         verdict,
         related: whole.is_some(),
         text,
-        in_else,
+        always,
     })
 }
 
 /// Joins what a pack already reports for a skip with what the syntax tree says about it.
 /// `legacy` is the condition the pack reports (the nearest `if` holding the skip in its
 /// body), `None` where the pack reads the skip as unconditional. Returns the condition
-/// and verdict to record, or `None` to leave the skip unconditional: a skip in the
-/// `else` branch of an `if` is conditional here only when a CI variable is involved.
+/// and verdict to record, or `None` to leave the skip unconditional. A skip in the `else`
+/// branch of an `if` runs under the negated condition: a conditional skip, and a CI one
+/// when the negation holds in CI. Under conditions that are all constants that hold it
+/// is unconditional.
 pub fn conditional(legacy: Option<String>, site: Option<Site>) -> Option<(String, CiVerdict)> {
     match (legacy, site) {
         (Some(text), Some(site)) => Some(match site.verdict {
@@ -1396,7 +1448,7 @@ pub fn conditional(legacy: Option<String>, site: Option<Site>) -> Option<(String
             CiVerdict::NotCi => (text, site.verdict),
         }),
         (Some(text), None) => Some((text, CiVerdict::NotCi)),
-        (None, Some(site)) if site.related => Some((site.text, site.verdict)),
+        (None, Some(site)) if !site.always => Some((site.text, site.verdict)),
         (None, _) => None,
     }
 }
@@ -1480,8 +1532,11 @@ pub fn jvm_annotation(
 
 /// The skip a JUnit assumption makes, for one statement of a test body: `assumeTrue(c)`
 /// and `assumingThat(c, ..)` skip when `c` does not hold, `assumeFalse(c)` when it does,
-/// bare or on `Assumptions` / `Assume`. Returns the call as reported and what it does;
-/// `None` for any other statement.
+/// `assumeNotNull(v)` when `v` is not set, and `assumeThat(v, matcher)` by the matcher
+/// (`is(..)` and `equalTo(..)` of a constant, `nullValue()`, `notNullValue()`; with any
+/// other matcher a CI variable in `v` decides the skip undecidedly), bare or on
+/// `Assumptions` / `Assume`. Returns the call as reported and what it does; `None` for
+/// any other statement.
 pub fn jvm_assumption(lang: Lang, statement: Node, src: &[u8]) -> Option<(String, SkipCondition)> {
     let mut call = statement;
     if call.kind() == "expression_statement" {
@@ -1497,7 +1552,7 @@ pub fn jvm_assumption(lang: Lang, statement: Node, src: &[u8]) -> Option<(String
     {
         call = call.named_child(0)?;
     }
-    let (eval, _) = evaluator(lang, call, src);
+    let (eval, locals) = evaluator(lang, call, src);
     let parts = eval.jvm_call(call)?;
     if parts.negated
         || !matches!(
@@ -1508,8 +1563,19 @@ pub fn jvm_assumption(lang: Lang, statement: Node, src: &[u8]) -> Option<(String
         return None;
     }
     let runs_when = match parts.name {
-        "assumeTrue" | "assumingThat" => true,
+        "assumeTrue" | "assumingThat" | "assumeNotNull" => true,
         "assumeFalse" => false,
+        "assumeThat" => {
+            // JUnit 4 also takes a message first.
+            let (actual, matcher) = match parts.args.as_slice() {
+                [actual, matcher] | [_, actual, matcher] => (*actual, *matcher),
+                _ => return None,
+            };
+            return Some((
+                eval.text(call).trim().to_string(),
+                eval.assume_that(actual, matcher, &locals),
+            ));
+        }
         _ => return None,
     };
     let condition = *parts.args.first()?;
@@ -1517,6 +1583,118 @@ pub fn jvm_assumption(lang: Lang, statement: Node, src: &[u8]) -> Option<(String
         eval.text(call).trim().to_string(),
         skip_condition(lang, condition, src, runs_when),
     ))
+}
+
+/// What two conditions that both have to hold for a skip decide together.
+fn both(a: CiVerdict, b: CiVerdict) -> CiVerdict {
+    match (a, b) {
+        (CiVerdict::Skips(mut vars), CiVerdict::Skips(more)) => {
+            for var in more {
+                if !vars.contains(&var) {
+                    vars.push(var);
+                }
+            }
+            CiVerdict::Skips(vars)
+        }
+        (CiVerdict::Skips(vars), CiVerdict::NotCi) | (CiVerdict::NotCi, CiVerdict::Skips(vars)) => {
+            CiVerdict::Skips(vars)
+        }
+        (CiVerdict::NotCi, CiVerdict::NotCi) => CiVerdict::NotCi,
+    }
+}
+
+/// The JUnit assumptions of a test body that stand under an `if`: each is a skip under
+/// the conditions around it and its own.
+pub fn jvm_assumptions_under_if(
+    lang: Lang,
+    body: Node,
+    src: &[u8],
+) -> Vec<(String, SkipCondition)> {
+    let is_assumption = |n: Node| jvm_assumption(lang, n, src).is_some();
+    let mut out = Vec::new();
+    for statement in exits_under_if(body, &is_assumption) {
+        let Some((own_text, own)) = jvm_assumption(lang, statement, src) else {
+            continue;
+        };
+        let Some(around) = site(lang, statement, src) else {
+            continue;
+        };
+        out.push(match own {
+            SkipCondition::Never => continue,
+            own if around.always => (own_text, own),
+            SkipCondition::Always => (around.text, SkipCondition::When(around.verdict)),
+            SkipCondition::When(verdict) => (
+                format!("{} && {own_text}", around.text),
+                SkipCondition::When(both(around.verdict, verdict)),
+            ),
+        });
+    }
+    out
+}
+
+/// What `@DisabledIf("method")` or `@EnabledIf("method")` does when the method it names
+/// is one of the class the annotation stands in: a skip when the method returns true
+/// (`enabled`: when it returns false), read from what its body reads. `None` when the
+/// annotation names no method of that class: a method of another class
+/// (`"com.example.Conditions#onCi"`) is not followed.
+pub fn jvm_condition_method(
+    lang: Lang,
+    annotation: Node,
+    src: &[u8],
+    enabled: bool,
+) -> Option<SkipCondition> {
+    let (eval, _) = evaluator(lang, annotation, src);
+    // The method name: the only argument, or the one named `value`.
+    let mut name = None;
+    let mut cursor = annotation.walk();
+    let mut stack: Vec<Node> = annotation.named_children(&mut cursor).collect();
+    while let Some(n) = stack.pop() {
+        if let Some(value) = eval.string_value(n) {
+            name = Some(value);
+            continue;
+        }
+        let mut inner = n.walk();
+        let children: Vec<Node> = n.named_children(&mut inner).collect();
+        let keyed = n.kind() == "element_value_pair"
+            || (n.kind() == "value_argument" && children.len() == 2);
+        if keyed && children.first().map(|k| eval.text(*k)) != Some("value") {
+            continue;
+        }
+        stack.extend(children);
+    }
+    let name = name?;
+    let mut class = annotation;
+    loop {
+        class = class.parent()?;
+        if matches!(
+            class.kind(),
+            "class_declaration"
+                | "interface_declaration"
+                | "record_declaration"
+                | "enum_declaration"
+                | "object_declaration"
+        ) {
+            break;
+        }
+    }
+    // The annotation of a method stands in that method's class; the annotation of a
+    // class names a method of the class it is on.
+    let mut members = Bindings::new();
+    eval.collect_bindings(class, &mut members, true);
+    let methods: Vec<Node> = members
+        .get(&name)?
+        .iter()
+        .filter_map(|b| match b {
+            Bound::Expr(e) if FUNCTION_KINDS.contains(&e.kind()) => Some(*e),
+            _ => None,
+        })
+        .collect();
+    if methods.is_empty() {
+        return None;
+    }
+    let value = combine(methods.iter().map(|m| eval.eval_function(*m, 0)).collect());
+    let value = if enabled { flip(value) } else { value };
+    Some(SkipCondition::When(verdict_of(&value)))
 }
 
 /// Statements `is_exit` accepts that sit directly in a branch of an `if` of `body`,
@@ -1556,10 +1734,16 @@ pub fn exits_under_if<'t>(body: Node<'t>, is_exit: &dyn Fn(Node<'t>) -> bool) ->
         }
         for stmt in stmts {
             if IF_KINDS.contains(&stmt.kind()) {
+                // A grammar that names no branch (Kotlin): every child but the condition.
+                let unnamed = ["consequence", "alternative", "body"]
+                    .iter()
+                    .all(|f| stmt.child_by_field_name(f).is_none());
                 let mut cursor = stmt.walk();
                 for (i, branch) in stmt.children(&mut cursor).enumerate() {
                     let field = stmt.field_name_for_child(i as u32);
-                    if matches!(field, Some("consequence" | "alternative" | "body")) {
+                    if matches!(field, Some("consequence" | "alternative" | "body"))
+                        || (unnamed && field.is_none() && branch.is_named())
+                    {
                         walk(branch, true, is_exit, out);
                     }
                 }
@@ -1574,9 +1758,15 @@ pub fn exits_under_if<'t>(body: Node<'t>, is_exit: &dyn Fn(Node<'t>) -> bool) ->
 }
 
 /// The value of a Rust `cfg` predicate, from its token nodes: `not`, `all` and `any` over
-/// bare cfg names, where `flag` says which names count. A `key = "value"` predicate
-/// (`feature = "ci"`) is not a bare name and counts for nothing.
-fn cfg_value(nodes: &[Node], src: &[u8], flag: &dyn Fn(&str) -> Option<String>) -> Val {
+/// bare cfg names, where `flag` says which names count, and over `feature = "<name>"`,
+/// where `feature` says which Cargo features do. Any other `key = "value"` predicate
+/// (`target_os = "linux"`) counts for nothing.
+fn cfg_value(
+    nodes: &[Node],
+    src: &[u8],
+    flag: &dyn Fn(&str) -> Option<String>,
+    feature: &dyn Fn(&str) -> Option<String>,
+) -> Val {
     fn split<'t>(nodes: &[Node<'t>]) -> Vec<Vec<Node<'t>>> {
         let mut out = vec![Vec::new()];
         for n in nodes {
@@ -1609,15 +1799,25 @@ fn cfg_value(nodes: &[Node], src: &[u8], flag: &dyn Fn(&str) -> Option<String>) 
         Some(tree) if tree.kind() == "token_tree" => {
             let parts = split(&inner(*tree));
             match name {
-                "not" => flip(parts.first().and_then(|p| cfg_value(p, src, flag))),
+                "not" => flip(parts.first().and_then(|p| cfg_value(p, src, flag, feature))),
                 "all" => parts
                     .iter()
-                    .fold(None, |acc, p| and(acc, cfg_value(p, src, flag))),
+                    .fold(None, |acc, p| and(acc, cfg_value(p, src, flag, feature))),
                 "any" => parts
                     .iter()
-                    .fold(None, |acc, p| or(acc, cfg_value(p, src, flag))),
+                    .fold(None, |acc, p| or(acc, cfg_value(p, src, flag, feature))),
                 _ => None,
             }
+        }
+        // `feature = "ci"`: the predicate holds where that feature is enabled.
+        Some(equals) if equals.kind() == "=" && name == "feature" && items.len() == 3 => {
+            let literal = items[2];
+            if literal.kind() != "string_literal" {
+                return None;
+            }
+            let value = literal.utf8_text(src).ok()?;
+            let value = value.strip_prefix('"')?.strip_suffix('"')?;
+            feature(value).and_then(|var| one(Truth::InCi, &var))
         }
         // A bare cfg name: `ci`, `github_actions`.
         None => flag(name).and_then(|var| one(Truth::InCi, &var)),
@@ -1630,10 +1830,11 @@ fn ci_flag(name: &str) -> Option<String> {
 }
 
 /// The verdict for a Rust `cfg` predicate under which a test is ignored
-/// (`#[cfg_attr(<predicate>, ignore)]`), from the predicate's token nodes. `None` when it
-/// names no CI cfg.
+/// (`#[cfg_attr(<predicate>, ignore)]`), from the predicate's token nodes: a bare CI
+/// cfg name (`ci`, `github_actions`) or a Cargo feature of such a name (`feature = "ci"`).
+/// `None` when it names neither.
 pub fn rust_cfg_predicate(nodes: &[Node], src: &[u8]) -> Option<CiVerdict> {
-    let value = cfg_value(nodes, src, &ci_flag);
+    let value = cfg_value(nodes, src, &ci_flag, &ci_flag);
     value.as_ref()?;
     Some(verdict_of(&value))
 }
@@ -1659,16 +1860,19 @@ pub fn rust_cfg_leaves_out_in_ci(nodes: &[Node], src: &[u8]) -> bool {
             _ => false,
         })
     }
-    let absent = flip(cfg_value(nodes, src, &ci_flag));
+    let absent = flip(cfg_value(nodes, src, &ci_flag, &ci_flag));
     matches!(verdict_of(&absent), CiVerdict::Skips(_)) || names_skip_flag(nodes, src)
 }
 
 /// Whether an item under `#[cfg(<predicate>)]` is left out of a test build: the
 /// predicate holds only where `test` is off (`not(test)`, `all(not(test), unix)`).
 pub fn rust_cfg_leaves_out_of_tests(nodes: &[Node], src: &[u8]) -> bool {
-    let value = cfg_value(nodes, src, &|name| {
-        (name == "test").then(|| name.to_string())
-    });
+    let value = cfg_value(
+        nodes,
+        src,
+        &|name| (name == "test").then(|| name.to_string()),
+        &|_| None,
+    );
     value.is_some_and(|c| c.truth == Truth::NotInCi)
 }
 
