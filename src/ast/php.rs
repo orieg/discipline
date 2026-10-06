@@ -265,9 +265,9 @@ impl<'a> PhpExtractor<'a> {
         }
         let mut h = TestFn::default();
         let mut wraps = None;
+        let mut calls = Vec::new();
         if let Some(body) = node.child_by_field_name("body") {
             let class_name = key.rsplit_once("::").map_or("", |(c, _)| c);
-            let mut calls = Vec::new();
             self.collect_calls(body, class_name, &mut calls);
             wraps =
                 super::forwarding_wrapper_callee(body, &PHP_WRAPPER, &PHP_LOCALS, &calls, self.src);
@@ -292,16 +292,19 @@ impl<'a> PhpExtractor<'a> {
         );
         let line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
-        self.facts.test_helpers.push(super::TestHelperFacts {
-            name: key,
-            line,
-            end_line,
-            total_asserts: h.total_asserts,
-            strong_asserts: h.strong_asserts,
-            tautologies: h.tautologies,
-            fatal_asserts: h.fatal_asserts,
-            helper_checks: 0,
-        });
+        self.facts.push_helper(
+            super::TestHelperFacts {
+                name: key,
+                line,
+                end_line,
+                total_asserts: h.total_asserts,
+                strong_asserts: h.strong_asserts,
+                tautologies: h.tautologies,
+                fatal_asserts: h.fatal_asserts,
+                helper_checks: 0,
+            },
+            calls,
+        );
     }
 
     /// The same-file callees a test body runs: `$this->m()`, `self::m()`,
@@ -362,7 +365,8 @@ impl<'a> PhpExtractor<'a> {
 
     fn walk_top_level(&mut self, node: Node) {
         let kind = node.kind();
-        if kind == "class_declaration" {
+        // A trait's methods are the shared helpers of the test classes that `use` it.
+        if kind == "class_declaration" || kind == "trait_declaration" {
             let name_node = node.child_by_field_name("name");
             let c_name = name_node.map(|n| self.text(n)).unwrap_or("");
             let (_, class_ignored) = self.check_doc_or_attrs_for_test(node);

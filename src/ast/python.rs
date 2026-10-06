@@ -681,7 +681,9 @@ impl<'a> PythonExtractor<'a> {
         let wraps = node.child_by_field_name("body").and_then(|b| {
             super::forwarding_wrapper_callee(b, &PY_WRAPPER, &PY_LOCALS, &calls, self.src)
         });
-        self.helper_calls.entry(key.clone()).or_insert(calls);
+        self.helper_calls
+            .entry(key.clone())
+            .or_insert_with(|| calls.clone());
         self.helpers.entry(key.clone()).or_insert(HelperFacts {
             total_asserts: facts.total_asserts,
             strong_asserts: facts.strong_asserts,
@@ -691,16 +693,19 @@ impl<'a> PythonExtractor<'a> {
         });
         let line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
-        self.facts.test_helpers.push(TestHelperFacts {
-            name: key,
-            line,
-            end_line,
-            total_asserts: facts.total_asserts,
-            strong_asserts: facts.strong_asserts,
-            tautologies: facts.tautologies,
-            fatal_asserts: facts.fatal_asserts,
-            helper_checks: 0,
-        });
+        self.facts.push_helper(
+            TestHelperFacts {
+                name: key,
+                line,
+                end_line,
+                total_asserts: facts.total_asserts,
+                strong_asserts: facts.strong_asserts,
+                tautologies: facts.tautologies,
+                fatal_asserts: facts.fatal_asserts,
+                helper_checks: 0,
+            },
+            calls,
+        );
     }
 
     /// Collects the same-file callees of a test body: `name(...)` resolves to

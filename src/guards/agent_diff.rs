@@ -128,7 +128,7 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
             Some(bytes) => {
                 if let Some(pack) = registry.find_pack(&file.old_path) {
                     let src = String::from_utf8_lossy(&bytes);
-                    Some(pack.extract(&file.old_path, &src, &base_vocab)?)
+                    Some(extract_facts(pack, &file.old_path, &src, &base_vocab)?)
                 } else {
                     None
                 }
@@ -144,7 +144,7 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
                     if let Some(pack) = registry.find_pack(&file.path) {
                         let src = String::from_utf8_lossy(&bytes);
                         (
-                            Some(pack.extract(&file.path, &src, &head_vocab)?),
+                            Some(extract_facts(pack, &file.path, &src, &head_vocab)?),
                             newly_added,
                         )
                     } else {
@@ -163,7 +163,7 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
     }
 
     let (pairs, removed, added) = match_tests(&analyzed_files);
-    let helpers = match_helpers(&analyzed_files);
+    let helpers = pair_helpers(&analyzed_files, &pairs);
 
     let is_staged = ctx.staged && ctx.pr_body.is_none();
     let mut ast_gates = vec![
@@ -549,68 +549,230 @@ pub struct HelperPair<'a> {
     pub head: Option<&'a crate::ast::TestHelperFacts>,
 }
 
+/// One side of a changed file as the test gates read it: the pack's facts, with the
+/// checks of the helpers each helper calls counted into it.
+pub fn extract_facts(
+    pack: &dyn crate::ast::LanguagePack,
+    path: &str,
+    src: &str,
+    vocab: &AssertVocabulary,
+) -> Result<ParsedFileFacts> {
+    let mut facts = pack.extract(path, src, vocab)?;
+    facts.resolve_tracked_helpers();
+    Ok(facts)
+}
+
+/// The helper pairs `assertion-reduction` judges: [`match_helpers`], less the helpers a
+/// dropping test of their own file already shows.
+pub fn pair_helpers<'a>(files: &'a [FileFacts], pairs: &[TestPair<'a>]) -> Vec<HelperPair<'a>> {
+    let mut helpers = match_helpers(files);
+    leave_helpers_shown_by_tests(&mut helpers, pairs, files);
+    helpers
+}
+
+/// One side of a file's helpers: each helper with its callees' checks counted in
+/// (`tracked`), and its own body's checks and calls (`own`, `calls`).
+struct HelperSide<'a> {
+    tracked: &'a [crate::ast::TestHelperFacts],
+    own: &'a [crate::ast::TestHelperFacts],
+    calls: &'a [Vec<String>],
+}
+
+impl<'a> HelperSide<'a> {
+    fn of(facts: Option<&'a crate::ast::ParsedFileFacts>) -> Self {
+        let Some(facts) = facts else {
+            return HelperSide {
+                tracked: &[],
+                own: &[],
+                calls: &[],
+            };
+        };
+        // Facts built without the resolving pass count each helper's own body.
+        let tracked = if facts.tracked_helpers.len() == facts.test_helpers.len() {
+            &facts.tracked_helpers[..]
+        } else {
+            &facts.test_helpers[..]
+        };
+        HelperSide {
+            tracked,
+            own: &facts.test_helpers,
+            calls: &facts.helper_calls,
+        }
+    }
+
+    fn calls_of(&self, at: usize) -> Vec<&'a str> {
+        let mut calls: Vec<&'a str> = self
+            .calls
+            .get(at)
+            .map(|c| c.iter().map(String::as_str).collect())
+            .unwrap_or_default();
+        calls.sort_unstable();
+        calls
+    }
+}
+
+fn helper_counts(h: &crate::ast::TestHelperFacts) -> (usize, usize, usize, usize) {
+    (
+        h.total_asserts,
+        h.strong_asserts,
+        h.tautologies,
+        h.fatal_asserts,
+    )
+}
+
+fn helper_has_checks(h: &crate::ast::TestHelperFacts) -> bool {
+    h.effective_asserts() > 0 || h.strong_asserts > 0 || h.fatal_asserts > 0
+}
+
+/// Pairs each helper of the changed test-support files ([`test_support_path`]) across the
+/// change. A file that also holds tests is tracked like one that holds none: tests in
+/// other files call its helpers too.
+///
+/// In order: (1) helpers of one file with the same name, the ones whose checks did not
+/// change first, so two same-named methods or overloads pair with themselves; (2) a
+/// helper renamed within its file, by a similar name or by the same checks, calls and
+/// length; (3) a helper that left its file with one of the same name that is new in
+/// another changed file; (4) what is left on the base side is deleted. A helper that is
+/// new on the head side is paired with itself: nothing was lost, and a test that starts
+/// calling it gets its checks ([`helper_call_gain`]).
+///
+/// [`test_support_path`]: crate::ast::functions::test_support_path
 pub fn match_helpers<'a>(files: &'a [FileFacts]) -> Vec<HelperPair<'a>> {
     let mut pairs = Vec::new();
-    let mut taken_head: std::collections::HashSet<(&'a str, &'a str)> =
-        std::collections::HashSet::new();
+    let sides: Vec<(HelperSide<'a>, HelperSide<'a>)> = files
+        .iter()
+        .map(|ff| {
+            (
+                HelperSide::of(ff.base.as_ref()),
+                HelperSide::of(ff.head.as_ref()),
+            )
+        })
+        .collect();
+    let tracked_file = |ff: &FileFacts| {
+        crate::ast::functions::test_support_path(&ff.file.path)
+            || crate::ast::functions::test_support_path(&ff.file.old_path)
+    };
+    // Head helpers already paired, and base helpers of tracked files still unpaired.
+    let mut head_taken: Vec<Vec<bool>> = sides
+        .iter()
+        .map(|(_, head)| vec![false; head.tracked.len()])
+        .collect();
+    let mut unpaired_base: Vec<(usize, usize)> = Vec::new();
 
-    for ff in files {
-        let in_test = crate::ast::functions::test_path(&ff.file.path)
-            || crate::ast::functions::test_path(&ff.file.old_path);
-        if !in_test {
-            continue;
-        }
-        let Some(base_facts) = &ff.base else { continue };
-        // A helper file has no tests of its own; helpers in a file with tests are
-        // same-file helpers whose checks are already resolved into those tests.
-        if !base_facts.tests.is_empty() {
-            continue;
-        }
-        let head_facts = ff.head.as_ref();
-        for b in &base_facts.test_helpers {
-            if b.effective_asserts() == 0 && b.strong_asserts == 0 && b.fatal_asserts == 0 {
-                continue;
-            }
-            if let Some(h_facts) = head_facts {
-                if let Some(h) = h_facts.test_helpers.iter().find(|h| {
-                    h.name == b.name
-                        && !taken_head.contains(&(ff.file.path.as_str(), h.name.as_str()))
-                }) {
-                    taken_head.insert((ff.file.path.as_str(), h.name.as_str()));
-                    pairs.push(HelperPair {
-                        path: &ff.file.path,
-                        base: b,
-                        head: Some(h),
-                    });
-                    continue;
-                }
-            }
-            let mut matched_cross = false;
-            for other in files {
-                if other.file.path == ff.file.path {
-                    continue;
-                }
-                if let Some(other_head) = &other.head {
-                    if let Some(h) = other_head.test_helpers.iter().find(|h| {
-                        h.name == b.name
-                            && !taken_head.contains(&(other.file.path.as_str(), h.name.as_str()))
-                    }) {
-                        taken_head.insert((other.file.path.as_str(), h.name.as_str()));
-                        pairs.push(HelperPair {
-                            path: &other.file.path,
-                            base: b,
-                            head: Some(h),
-                        });
-                        matched_cross = true;
-                        break;
+    for (fi, ff) in files.iter().enumerate() {
+        let (base, head) = (&sides[fi].0, &sides[fi].1);
+        let mut matched: Vec<(usize, usize)> = Vec::new();
+        let mut base_left: Vec<usize> = (0..base.tracked.len()).collect();
+        // (1) Same name: unchanged checks first, then in the order they are declared.
+        for unchanged_only in [true, false] {
+            base_left.retain(|&bi| {
+                let b = &base.tracked[bi];
+                let found = (0..head.tracked.len()).find(|&hi| {
+                    let h = &head.tracked[hi];
+                    !head_taken[fi][hi]
+                        && h.name == b.name
+                        && (!unchanged_only || helper_counts(h) == helper_counts(b))
+                });
+                match found {
+                    Some(hi) => {
+                        head_taken[fi][hi] = true;
+                        matched.push((bi, hi));
+                        false
                     }
+                    None => true,
+                }
+            });
+        }
+        // (2) Renamed in place: the most similar name first.
+        let mut renames: Vec<(usize, usize, f64)> = Vec::new();
+        for &bi in &base_left {
+            let b = &base.tracked[bi];
+            for hi in (0..head.tracked.len()).filter(|&hi| !head_taken[fi][hi]) {
+                let h = &head.tracked[hi];
+                let sim = name_similarity(
+                    crate::ast::helper_leaf(&b.name),
+                    crate::ast::helper_leaf(&h.name),
+                );
+                let same_body = helper_has_checks(b)
+                    && helper_counts(b) == helper_counts(h)
+                    && b.end_line.saturating_sub(b.line) == h.end_line.saturating_sub(h.line)
+                    && base.calls_of(bi) == head.calls_of(hi);
+                if sim >= RENAME_NAME_SIMILARITY_THRESHOLD || same_body {
+                    renames.push((bi, hi, if same_body { sim + 1.0 } else { sim }));
                 }
             }
-            if !matched_cross {
+        }
+        renames.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)).then(a.1.cmp(&b.1)));
+        for (bi, hi, _) in renames {
+            if base_left.contains(&bi) && !head_taken[fi][hi] {
+                head_taken[fi][hi] = true;
+                base_left.retain(|&left| left != bi);
+                matched.push((bi, hi));
+            }
+        }
+        if !tracked_file(ff) {
+            continue;
+        }
+        matched.sort_unstable();
+        for (bi, hi) in matched {
+            let (b, h) = (&base.tracked[bi], &head.tracked[hi]);
+            // Its own body and its calls are as they were: what it lost, a helper it
+            // calls lost, and that helper is paired and reported on its own.
+            let inherited = helper_counts(b) != helper_counts(h)
+                && base.own.get(bi).map(helper_counts) == head.own.get(hi).map(helper_counts)
+                && base.calls_of(bi) == head.calls_of(hi);
+            pairs.push(HelperPair {
+                path: &ff.file.path,
+                base: if inherited { h } else { b },
+                head: Some(h),
+            });
+        }
+        unpaired_base.extend(base_left.into_iter().map(|bi| (fi, bi)));
+    }
+
+    // (3) Moved to another changed file, where a helper of that name is new.
+    for (fi, bi) in unpaired_base {
+        let b = &sides[fi].0.tracked[bi];
+        if !helper_has_checks(b) {
+            continue;
+        }
+        let moved = (0..files.len())
+            .filter(|&other| other != fi)
+            .find_map(|other| {
+                let head = &sides[other].1;
+                (0..head.tracked.len())
+                    .find(|&hi| !head_taken[other][hi] && head.tracked[hi].name == b.name)
+                    .map(|hi| (other, hi))
+            });
+        match moved {
+            Some((other, hi)) => {
+                head_taken[other][hi] = true;
+                pairs.push(HelperPair {
+                    path: &files[other].file.path,
+                    base: b,
+                    head: Some(&sides[other].1.tracked[hi]),
+                });
+            }
+            // (4) Deleted.
+            None => pairs.push(HelperPair {
+                path: &files[fi].file.path,
+                base: b,
+                head: None,
+            }),
+        }
+    }
+
+    // New on the head side of a tracked file.
+    for (fi, ff) in files.iter().enumerate() {
+        if !tracked_file(ff) {
+            continue;
+        }
+        for (hi, h) in sides[fi].1.tracked.iter().enumerate() {
+            if !head_taken[fi][hi] {
                 pairs.push(HelperPair {
                     path: &ff.file.path,
-                    base: b,
-                    head: None,
+                    base: h,
+                    head: Some(h),
                 });
             }
         }
@@ -618,44 +780,145 @@ pub fn match_helpers<'a>(files: &'a [FileFacts]) -> Vec<HelperPair<'a>> {
     pairs
 }
 
+/// A helper in a file that holds tests is counted in the tests of that file that call
+/// it, so when it loses checks those tests lose them too and are reported for it. Such a
+/// helper is not reported a second time: its pair is kept, with nothing lost, for every
+/// test of the file that drops and reaches it, directly or through the file's helpers.
+/// A helper no dropping test of its file reaches is reported on its own; tests in other
+/// files may call it.
+///
+/// A test whose drop may be read as a move is not reported for it, so it shows nothing
+/// and does not count here: one that calls more same-file helpers that fail than before,
+/// and one that a helper of another file gives checks to. The helper is then reported
+/// itself.
+fn leave_helpers_shown_by_tests<'a>(
+    helpers: &mut Vec<HelperPair<'a>>,
+    pairs: &[TestPair<'a>],
+    files: &'a [FileFacts],
+) {
+    let lost = |hp: &HelperPair| match hp.head {
+        None => true,
+        Some(h) => {
+            h.effective_asserts() < hp.base.effective_asserts()
+                || h.strong_asserts < hp.base.strong_asserts
+                || h.fatal_asserts < hp.base.fatal_asserts
+        }
+    };
+    for ff in files {
+        let path = ff.file.path.as_str();
+        if !helpers.iter().any(|hp| hp.path == path && lost(hp)) {
+            continue;
+        }
+        let mut calls: Vec<&str> = Vec::new();
+        for p in pairs.iter().filter(|p| p.path == path) {
+            let (b, h) = (p.base, p.head);
+            let drops = h.effective_asserts() < b.effective_asserts()
+                || h.strong_asserts < b.strong_asserts
+                || h.fatal_asserts < b.fatal_asserts;
+            // Nor does a test whose drop a helper of another file accounts for.
+            let moved = helper_call_gain(b, h, path, helpers, &[]);
+            if drops && h.helper_checks <= b.helper_checks && moved.total == 0 && moved.strong == 0
+            {
+                let both = b.direct_calls.iter().chain(&h.direct_calls);
+                calls.extend(both.flat_map(|c| c.split('|')));
+            }
+        }
+        // Every helper of the file those calls reach, on either side of the change.
+        let mut reached: Vec<&str> = Vec::new();
+        while let Some(call) = calls.pop() {
+            for facts in [ff.base.as_ref(), ff.head.as_ref()].into_iter().flatten() {
+                for (at, helper) in facts.test_helpers.iter().enumerate() {
+                    if call_names_helper(call, &helper.name)
+                        && !reached.contains(&helper.name.as_str())
+                    {
+                        reached.push(&helper.name);
+                        let own = facts.helper_calls.get(at).into_iter().flatten();
+                        calls.extend(own.flat_map(|c| c.split('|')));
+                    }
+                }
+            }
+        }
+        helpers.retain_mut(|hp| {
+            if hp.path != path || !lost(hp) || !reached.contains(&hp.base.name.as_str()) {
+                return true;
+            }
+            match hp.head {
+                Some(h) => {
+                    hp.base = h;
+                    true
+                }
+                None => false,
+            }
+        });
+    }
+}
+
 /// What a test's calls to paired helpers add to it across a change.
 struct HelperCallGain<'a> {
     total: usize,
     strong: usize,
+    fatal: usize,
     names: Vec<&'a str>,
+}
+
+fn call_names_helper(call: &str, helper: &str) -> bool {
+    crate::ast::helper_call_matches(call, helper)
+        || crate::ast::helper_call_matches(call, crate::ast::helper_leaf(helper))
 }
 
 /// The checks the calls of `head` to paired helpers account for beyond those of `base`.
 ///
-/// Each call is resolved to the first pair whose head helper it names exactly
-/// ([`crate::ast::helper_call_matches`], on the helper's name or its last `::` segment).
-/// A pair contributes its head count for every head call site less its base count for
-/// every base call site: the head count for a helper the test newly calls, the count the
-/// helper gained for one the base test already called. A call to a helper listed in
+/// Only a helper whose body was read counts: one in another changed test-support file.
+/// A helper in the test's own file (`test_path`) is already counted in the test, so a call
+/// that names one adds nothing here; a call to a helper in a file outside the change, or
+/// through a receiver the pack does not resolve, names no pair and adds nothing either.
+/// The drop such a call would explain stays reported.
+///
+/// Each call is resolved to the pair whose helper it names
+/// ([`crate::ast::helper_call_matches`], on the helper's name or its last `::` / `.`
+/// segment): a head call by the head name, a base call by the base name, which differ for
+/// a renamed helper. When several helpers have that name, the one with the fewest checks
+/// counts. A pair contributes its head count for every head call site less its base count
+/// for every base call site: the head count for a helper the test newly calls, the count
+/// the helper gained for one the base test already called. A call to a helper listed in
 /// `configured` (`assert_helper_fns`) is already one assertion of the test and counts one
 /// less.
 fn helper_call_gain<'a>(
     base: &TestFn,
     head: &TestFn,
+    test_path: &str,
     helpers: &[HelperPair<'a>],
     configured: &[String],
 ) -> HelperCallGain<'a> {
     let paired: Vec<(
         &'a crate::ast::TestHelperFacts,
         &'a crate::ast::TestHelperFacts,
+        bool,
     )> = helpers
         .iter()
-        .filter_map(|hp| hp.head.map(|head_helper| (hp.base, head_helper)))
+        .filter_map(|hp| {
+            hp.head
+                .map(|head_helper| (hp.base, head_helper, hp.path == test_path))
+        })
         .collect();
-    let sites = |calls: &[String]| -> Vec<(usize, usize)> {
+    let sites = |calls: &[String], head_side: bool| -> Vec<(usize, usize)> {
         let mut per_pair = vec![(0usize, 0usize); paired.len()];
         for call in calls {
-            let named = paired.iter().position(|(_, helper)| {
-                let leaf = helper.name.rsplit("::").next().unwrap_or(&helper.name);
-                crate::ast::helper_call_matches(call, &helper.name)
-                    || crate::ast::helper_call_matches(call, leaf)
+            let named: Vec<usize> = (0..paired.len())
+                .filter(|&i| {
+                    let (base_helper, head_helper, _) = paired[i];
+                    let helper = if head_side { head_helper } else { base_helper };
+                    call_names_helper(call, &helper.name)
+                })
+                .collect();
+            if named.iter().any(|&i| paired[i].2) {
+                continue;
+            }
+            let fewest = named.into_iter().min_by_key(|&i| {
+                let helper = paired[i].1;
+                (helper.effective_asserts(), helper.strong_asserts)
             });
-            if let Some(i) = named {
+            if let Some(i) = fewest {
                 per_pair[i].0 += 1;
                 if configured
                     .iter()
@@ -667,13 +930,17 @@ fn helper_call_gain<'a>(
         }
         per_pair
     };
-    let (base_sites, head_sites) = (sites(&base.direct_calls), sites(&head.direct_calls));
+    let (base_sites, head_sites) = (
+        sites(&base.direct_calls, false),
+        sites(&head.direct_calls, true),
+    );
     let mut gain = HelperCallGain {
         total: 0,
         strong: 0,
+        fatal: 0,
         names: Vec::new(),
     };
-    for (i, &(base_helper, head_helper)) in paired.iter().enumerate() {
+    for (i, &(base_helper, head_helper, _)) in paired.iter().enumerate() {
         let (base_calls, base_counted) = base_sites[i];
         let (head_calls, head_counted) = head_sites[i];
         let total = (head_calls * head_helper.effective_asserts())
@@ -683,9 +950,12 @@ fn helper_call_gain<'a>(
             );
         let strong = (head_calls * head_helper.strong_asserts)
             .saturating_sub(base_calls * base_helper.strong_asserts);
+        let fatal = (head_calls * head_helper.fatal_asserts)
+            .saturating_sub(base_calls * base_helper.fatal_asserts);
         if total > 0 || strong > 0 {
             gain.total += total;
             gain.strong += strong;
+            gain.fatal += fatal;
             gain.names.push(head_helper.name.as_str());
         }
     }
@@ -1121,8 +1391,10 @@ pub fn evaluate_assertion_reduction(
         // share counted in.
         let mut helper_total = 0;
         let mut helper_strong = 0;
+        let mut helper_fatal = 0;
         if total_drop || strong_drop {
-            let moved = helper_call_gain(b, h, helpers, &settings.assert_helper_fns);
+            let moved = helper_call_gain(b, h, p.path, helpers, &settings.assert_helper_fns);
+            helper_fatal = moved.fatal;
             if total_drop && h_eff + newly_caught.len() + moved.total >= b_eff {
                 total_drop = false;
             }
@@ -1145,30 +1417,55 @@ pub fn evaluate_assertion_reduction(
             }
         }
 
-        // If the test's drop is entirely accounted for by weakened helpers that were already reported
+        // A helper in the test's own file is counted in the test, so a helper that lost
+        // checks lowers the count of every test that calls it. That drop is the helper's,
+        // reported once on the helper: the test is not reported for it when everything the
+        // test lost, in count and in strength, is what its calls to those helpers lost. A
+        // helper in another file is not counted in the test, so a drop in the test beside
+        // one is the test's own and stays reported.
+        let mut attributed_fatal = 0;
         if total_drop || strong_drop {
-            let mut total_weakened_helper_drop = 0;
+            let (mut lost_total, mut lost_strong, mut lost_fatal) = (0, 0, 0);
             let mut weakened_helper_names = Vec::new();
             for call in &h.direct_calls {
-                let call_leaf = call.rsplit("::").next().unwrap_or(call);
-                let call_leaf = call_leaf.rsplit('.').next().unwrap_or(call_leaf);
-                if let Some(hp) = helpers.iter().find(|hp| {
-                    let h_leaf = hp.base.name.rsplit("::").next().unwrap_or(&hp.base.name);
-                    (hp.base.name == *call || h_leaf == call_leaf)
-                        && hp.head.is_some_and(|head| {
-                            head.effective_asserts() < hp.base.effective_asserts()
-                        })
-                }) {
-                    let delta_helper = hp
+                let weakened = helpers.iter().find_map(|hp| {
+                    let head_helper = hp.head?;
+                    let lost = hp
                         .base
                         .effective_asserts()
-                        .saturating_sub(hp.head.unwrap().effective_asserts());
-                    total_weakened_helper_drop += delta_helper;
-                    weakened_helper_names.push(hp.base.name.as_str());
+                        .saturating_sub(head_helper.effective_asserts());
+                    let lost_strength = hp
+                        .base
+                        .strong_asserts
+                        .saturating_sub(head_helper.strong_asserts);
+                    (hp.path == p.path
+                        && call_names_helper(call, &hp.base.name)
+                        && (lost > 0 || lost_strength > 0))
+                        .then(|| {
+                            (
+                                hp.base.name.as_str(),
+                                lost,
+                                lost_strength,
+                                hp.base
+                                    .fatal_asserts
+                                    .saturating_sub(head_helper.fatal_asserts),
+                            )
+                        })
+                });
+                if let Some((name, lost, lost_strength, lost_fatality)) = weakened {
+                    lost_total += lost;
+                    lost_strong += lost_strength;
+                    lost_fatal += lost_fatality;
+                    weakened_helper_names.push(name);
                 }
             }
             let delta_test = b_eff.saturating_sub(h_eff);
-            if delta_test > 0 && delta_test <= total_weakened_helper_drop {
+            let delta_strong = b.strong_asserts.saturating_sub(h.strong_asserts);
+            if !weakened_helper_names.is_empty()
+                && delta_test <= lost_total
+                && delta_strong <= lost_strong
+            {
+                weakened_helper_names.dedup();
                 out.notes.push(format!(
                     "`{}` in `{}`: assertion drop {} -> {} attributed to weakened helper `{}`",
                     h.name,
@@ -1179,9 +1476,10 @@ pub fn evaluate_assertion_reduction(
                 ));
                 total_drop = false;
                 strong_drop = false;
+                attributed_fatal = lost_fatal;
             }
         }
-        let fatal_drop = h.fatal_asserts < b.fatal_asserts;
+        let fatal_drop = h.fatal_asserts + helper_fatal + attributed_fatal < b.fatal_asserts;
         // More doubles in the test, and no stronger assertion on what the code produced:
         // the shape of an integration failure sidestepped by mocking it away.
         let mock_growth = h.mock_setups > b.mock_setups
@@ -3887,6 +4185,492 @@ mod tests {
             .notes
             .iter()
             .any(|n| n.contains("attributed to weakened helper `helper`")));
+    }
+
+    /// The facts of a change given as `(path, base source, head source)`; an empty
+    /// source is a side on which the file does not exist.
+    fn change_facts(files: &[(&str, &str, &str)]) -> Vec<FileFacts> {
+        let registry = default_registry();
+        let vocab = AssertVocabulary::default();
+        files
+            .iter()
+            .map(|(path, base, head)| {
+                let side = |src: &str| {
+                    (!src.is_empty()).then(|| {
+                        extract_facts(registry.find_pack(path).unwrap(), path, src, &vocab).unwrap()
+                    })
+                };
+                FileFacts {
+                    file: ChangedFile {
+                        path: path.to_string(),
+                        old_path: path.to_string(),
+                        kind: ChangeKind::Modified,
+                        added_lines: Default::default(),
+                    },
+                    base: side(base),
+                    head: side(head),
+                    newly_added_nul: false,
+                }
+            })
+            .collect()
+    }
+
+    /// What `assertion-reduction` reports for such a change: `(code, file)` per finding.
+    fn reduction(files: &[(&str, &str, &str)], body: &str) -> Vec<(String, String)> {
+        let facts = change_facts(files);
+        let (pairs, _, added) = match_tests(&facts);
+        let helpers = pair_helpers(&facts, &pairs);
+        let directives =
+            crate::tokens::parse_directives(body, crate::tokens::OverrideSource::PrBody);
+        let settings = crate::config::AssertionGate::default();
+        evaluate_assertion_reduction(&pairs, &added, &helpers, &settings, &directives, false)
+            .unwrap()
+            .violations
+            .iter()
+            .map(|v| (v.code.to_string(), v.file.clone().unwrap_or_default()))
+            .collect()
+    }
+
+    type PairedHelper = (String, usize, Option<(String, usize)>);
+
+    /// Each pair as `(base name, base checks, head name and checks)`.
+    fn paired(files: &[FileFacts]) -> Vec<PairedHelper> {
+        match_helpers(files)
+            .iter()
+            .map(|hp| {
+                (
+                    hp.base.name.clone(),
+                    hp.base.effective_asserts(),
+                    hp.head.map(|h| (h.name.clone(), h.effective_asserts())),
+                )
+            })
+            .collect()
+    }
+
+    const HELPER_WEAKENED: &str = "assertion-reduction/test-helper-weakened";
+    const TEST_REDUCED: &str = "assertion-reduction/assertions-reduced";
+    const PY_CHECK_2: &str = "def check(r):\n    assert r.a == 1\n    assert r.b == 2\n";
+    const PY_CHECK_1: &str = "def check(r):\n    assert r.a == 1\n";
+
+    /// #562: two methods named `check` in one file pair each with itself, so a comment
+    /// added to the file loses nothing; one of them losing a check is one drop.
+    #[test]
+    fn two_helpers_of_one_name_pair_with_themselves() {
+        let two = "impl A {\n    pub fn check(&self, v: u32) {\n        assert_eq!(v, 1);\n    }\n}\nimpl B {\n    pub fn check(&self, v: u32) {\n        assert_eq!(v, 2);\n        assert_eq!(v % 2, 0);\n    }\n}\n";
+        let commented = format!("// shared\n{two}");
+        let facts = change_facts(&[("tests/common/mod.rs", two, &commented)]);
+        assert_eq!(
+            paired(&facts),
+            vec![
+                ("check".to_string(), 1, Some(("check".to_string(), 1))),
+                ("check".to_string(), 2, Some(("check".to_string(), 2))),
+            ]
+        );
+        let weaker = two.replace("        assert_eq!(v % 2, 0);\n", "");
+        let facts = change_facts(&[("tests/common/mod.rs", two, &weaker)]);
+        assert_eq!(
+            paired(&facts),
+            vec![
+                ("check".to_string(), 1, Some(("check".to_string(), 1))),
+                ("check".to_string(), 2, Some(("check".to_string(), 1))),
+            ]
+        );
+        // The first of the two is deleted: the second is unchanged and pairs with itself.
+        let second_only = two.split_once("impl B").map(|(_, b)| format!("impl B{b}"));
+        let facts = change_facts(&[("tests/common/mod.rs", two, &second_only.unwrap())]);
+        assert_eq!(
+            paired(&facts),
+            vec![
+                ("check".to_string(), 2, Some(("check".to_string(), 2))),
+                ("check".to_string(), 1, None),
+            ]
+        );
+    }
+
+    /// #562: a helper renamed in place is paired with its new name, by the name's
+    /// similarity or, for an unrelated name, by an unchanged body; what it lost under the
+    /// new name is a drop. An unrelated new helper with other checks is no rename.
+    #[test]
+    fn a_renamed_helper_is_paired_with_its_new_name() {
+        let renamed = PY_CHECK_2.replace("def check(", "def check_response(");
+        let facts = change_facts(&[("tests/helpers.py", PY_CHECK_2, &renamed)]);
+        assert_eq!(
+            paired(&facts),
+            vec![(
+                "check".to_string(),
+                2,
+                Some(("check_response".to_string(), 2))
+            )]
+        );
+        let weaker = PY_CHECK_1.replace("def check(", "def check_response(");
+        let facts = change_facts(&[("tests/helpers.py", PY_CHECK_2, &weaker)]);
+        assert_eq!(
+            paired(&facts),
+            vec![(
+                "check".to_string(),
+                2,
+                Some(("check_response".to_string(), 1))
+            )]
+        );
+        let unrelated = PY_CHECK_2.replace("def check(", "def verify(");
+        let facts = change_facts(&[("tests/helpers.py", PY_CHECK_2, &unrelated)]);
+        assert_eq!(
+            paired(&facts),
+            vec![("check".to_string(), 2, Some(("verify".to_string(), 2)))]
+        );
+        let other =
+            "def verify(r):\n    assert r.x == 9\n    assert r.y == 8\n    assert r.z == 7\n";
+        let facts = change_facts(&[("tests/helpers.py", PY_CHECK_2, other)]);
+        assert_eq!(
+            paired(&facts),
+            vec![
+                ("check".to_string(), 2, None),
+                ("verify".to_string(), 3, Some(("verify".to_string(), 3))),
+            ]
+        );
+    }
+
+    /// #562: a helper that leaves its file is paired with one of its name in another
+    /// changed file only where that helper is new; an unchanged helper of the same name
+    /// there is its own pair, and the first is deleted in its own file.
+    #[test]
+    fn a_helper_moves_only_to_a_file_where_its_name_is_new() {
+        let other =
+            "def check(r):\n    assert r.x == 9\n    assert r.y == 8\n    assert r.z == 7\n";
+        let facts = change_facts(&[
+            (
+                "tests/helpers.py",
+                PY_CHECK_2,
+                "def unrelated():\n    pass\n",
+            ),
+            (
+                "tests/zother/helpers.py",
+                other,
+                &format!("# shared\n{other}"),
+            ),
+        ]);
+        let pairs = match_helpers(&facts);
+        let deleted: Vec<&str> = pairs
+            .iter()
+            .filter(|hp| hp.head.is_none())
+            .map(|hp| hp.path)
+            .collect();
+        assert_eq!(deleted, vec!["tests/helpers.py"]);
+
+        let facts = change_facts(&[
+            (
+                "tests/helpers.py",
+                PY_CHECK_2,
+                "def unrelated():\n    pass\n",
+            ),
+            (
+                "tests/zother/helpers.py",
+                "def other(r):\n    pass\n",
+                PY_CHECK_2,
+            ),
+        ]);
+        let pairs = match_helpers(&facts);
+        assert!(pairs.iter().all(|hp| hp.head.is_some()));
+        let moved = pairs.iter().find(|hp| hp.base.name == "check").unwrap();
+        assert_eq!(moved.path, "tests/zother/helpers.py");
+    }
+
+    /// #562: a file that holds a test is tracked like one that holds none; a file under
+    /// `examples/` or `benches/` is not test support and is not tracked.
+    #[test]
+    fn helpers_are_tracked_beside_tests_and_not_under_examples() {
+        let with_test =
+            |helper: &str| format!("{helper}\ndef test_unrelated():\n    assert 1 + 1 == 2\n");
+        let files = [(
+            "tests/helpers.py",
+            with_test(PY_CHECK_2),
+            with_test(PY_CHECK_1),
+        )];
+        let files: Vec<(&str, &str, &str)> = files
+            .iter()
+            .map(|(p, b, h)| (*p, b.as_str(), h.as_str()))
+            .collect();
+        assert_eq!(
+            reduction(&files, ""),
+            vec![(HELPER_WEAKENED.to_string(), "tests/helpers.py".to_string())]
+        );
+        for path in ["examples/helpers.py", "benches/helpers.py"] {
+            assert_eq!(reduction(&[(path, PY_CHECK_2, PY_CHECK_1)], ""), Vec::new());
+        }
+        assert_eq!(
+            reduction(&[("tests/helpers.py", PY_CHECK_2, PY_CHECK_1)], ""),
+            vec![(HELPER_WEAKENED.to_string(), "tests/helpers.py".to_string())]
+        );
+    }
+
+    /// #562: a helper counts the helpers it calls. Dropping the call is a drop; moving
+    /// checks into a helper it calls is none; and when a called helper loses a check, that
+    /// helper alone is reported, not each helper that calls it.
+    #[test]
+    fn a_helper_counts_the_helpers_it_calls() {
+        let whole =
+            "def check(r):\n    assert r.a == 1\n    assert r.b == 2\n    assert r.c == 3\n";
+        let split = "def check(r):\n    assert r.a == 1\n    check_body(r)\n\ndef check_body(r):\n    assert r.b == 2\n    assert r.c == 3\n";
+        let uncalled = split.replace("    check_body(r)\n", "");
+        let weaker_body = split.replace("    assert r.c == 3\n", "");
+        let path = "tests/helpers.py";
+        assert_eq!(reduction(&[(path, whole, split)], ""), Vec::new());
+        assert_eq!(
+            reduction(&[(path, split, &uncalled)], ""),
+            vec![(HELPER_WEAKENED.to_string(), path.to_string())]
+        );
+        let facts = change_facts(&[(path, split, &weaker_body)]);
+        let lost: Vec<(String, usize, usize)> = match_helpers(&facts)
+            .iter()
+            .map(|hp| {
+                (
+                    hp.base.name.clone(),
+                    hp.base.effective_asserts(),
+                    hp.head.unwrap().effective_asserts(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            lost,
+            vec![
+                ("check".to_string(), 2, 2),
+                ("check_body".to_string(), 2, 1)
+            ]
+        );
+    }
+
+    const PY_TEST_3: &str = "def test_create():\n    r = create()\n    assert r.a == 1\n    assert r.b == 2\n    assert r.c == 3\n";
+    const PY_TEST_CALL: &str = "def test_create():\n    r = create()\n    check(r)\n";
+
+    /// #562: a helper the change adds stands for its checks in a test that starts calling
+    /// it, whether its file is new or also holds a test; a helper that holds fewer than
+    /// the test dropped does not cover the drop.
+    #[test]
+    fn a_helper_added_by_the_change_stands_for_the_checks_it_holds() {
+        let three =
+            "def check(r):\n    assert r.a == 1\n    assert r.b == 2\n    assert r.c == 3\n";
+        let test = "tests/test_api.py";
+        assert_eq!(
+            reduction(
+                &[
+                    ("tests/helpers.py", "", three),
+                    (test, PY_TEST_3, PY_TEST_CALL)
+                ],
+                ""
+            ),
+            Vec::new()
+        );
+        assert_eq!(
+            reduction(
+                &[
+                    ("tests/helpers.py", "", PY_CHECK_1),
+                    (test, PY_TEST_3, PY_TEST_CALL)
+                ],
+                ""
+            ),
+            vec![(TEST_REDUCED.to_string(), test.to_string())]
+        );
+        let beside = format!("{three}\ndef test_unrelated():\n    assert 1 + 1 == 2\n");
+        assert_eq!(
+            reduction(
+                &[
+                    (
+                        "tests/test_shared.py",
+                        &beside,
+                        &format!("# shared\n{beside}")
+                    ),
+                    (test, PY_TEST_3, PY_TEST_CALL)
+                ],
+                ""
+            ),
+            Vec::new()
+        );
+    }
+
+    /// #562: a helper of the test's own file is already counted in the test, so a pair
+    /// for it adds nothing. The test here read three checks and now reads two, both of
+    /// them its same-file helper's: counting the helper again would read four and hide
+    /// the drop. The same helper in another file is not counted in the test and adds two.
+    #[test]
+    fn a_helper_of_the_tests_own_file_is_not_counted_twice() {
+        let b = calling_test(3, 3, &[]);
+        let h = calling_test(2, 2, &["check"]);
+        let own = helper_facts("check", 2, 2);
+        let helpers = [HelperPair {
+            path: "tests/test_api.py",
+            base: &own,
+            head: Some(&own),
+        }];
+        let settings = crate::config::AssertionGate::default();
+        let gain = helper_call_gain(&b, &h, "tests/test_api.py", &helpers, &[]);
+        assert_eq!((gain.total, gain.strong), (0, 0));
+        let gain = helper_call_gain(&b, &h, "tests/test_other.py", &helpers, &[]);
+        assert_eq!((gain.total, gain.strong), (2, 2));
+        let pairs = [TestPair {
+            path: "tests/test_api.py",
+            base: &b,
+            head: &h,
+            forced: false,
+        }];
+        let out =
+            evaluate_assertion_reduction(&pairs, &[], &helpers, &settings, &[], false).unwrap();
+        assert_eq!(out.violations.len(), 1, "{:?}", out.violations);
+    }
+
+    /// #562: of two helpers a call can name, the one with fewer checks counts; and a
+    /// renamed helper the test already called under its old name adds only what it gained.
+    #[test]
+    fn a_call_counts_the_least_helper_it_names_and_a_rename_adds_nothing() {
+        let (small, large) = (
+            helper_facts("A::check", 1, 1),
+            helper_facts("B::check", 3, 3),
+        );
+        let helpers = [
+            HelperPair {
+                path: "tests/helpers.py",
+                base: &large,
+                head: Some(&large),
+            },
+            HelperPair {
+                path: "tests/helpers.py",
+                base: &small,
+                head: Some(&small),
+            },
+        ];
+        let gain = helper_call_gain(
+            &calling_test(3, 3, &[]),
+            &calling_test(0, 0, &["check"]),
+            "tests/test_api.py",
+            &helpers,
+            &[],
+        );
+        assert_eq!(gain.total, 1);
+
+        let (old, new) = (
+            helper_facts("check", 3, 3),
+            helper_facts("check_response", 3, 3),
+        );
+        let helpers = [HelperPair {
+            path: "tests/helpers.py",
+            base: &old,
+            head: Some(&new),
+        }];
+        let gain = helper_call_gain(
+            &calling_test(3, 3, &["check"]),
+            &calling_test(0, 0, &["check_response"]),
+            "tests/test_api.py",
+            &helpers,
+            &[],
+        );
+        assert_eq!((gain.total, gain.strong), (0, 0));
+    }
+
+    /// #562: a helper in another file is not counted in the test, so a drop in the test
+    /// beside a weakened helper is the test's own: it is reported, and a directive naming
+    /// the helper lifts the helper's finding only.
+    #[test]
+    fn a_weakened_helper_in_another_file_does_not_stand_for_the_tests_own_drop() {
+        let test = |own: &str| {
+            format!(
+                "def test_create():\n    r = create()\n    check(r)\n    assert r.s == 200\n{own}"
+            )
+        };
+        let (base, head) = (test("    assert r.id == 1\n"), test(""));
+        let files = [
+            ("tests/helpers.py", PY_CHECK_2, PY_CHECK_1),
+            ("tests/test_api.py", base.as_str(), head.as_str()),
+        ];
+        assert_eq!(
+            reduction(&files, ""),
+            vec![
+                (HELPER_WEAKENED.to_string(), "tests/helpers.py".to_string()),
+                (TEST_REDUCED.to_string(), "tests/test_api.py".to_string()),
+            ]
+        );
+        assert_eq!(
+            reduction(&files, "allow-assertion-drop: check moved to the model\n"),
+            vec![(TEST_REDUCED.to_string(), "tests/test_api.py".to_string())]
+        );
+        // Control: the test keeps its own assertions, and the directive lifts all there is.
+        let kept = [
+            ("tests/helpers.py", PY_CHECK_2, PY_CHECK_1),
+            ("tests/test_api.py", base.as_str(), base.as_str()),
+        ];
+        assert_eq!(
+            reduction(&kept, "allow-assertion-drop: check moved to the model\n"),
+            Vec::new()
+        );
+    }
+
+    /// #562: a same-file helper that lost a truthiness check does not stand for an
+    /// equality the test lost: the count is covered, the strength is not.
+    #[test]
+    fn a_weakened_same_file_helper_covers_count_and_strength_or_nothing() {
+        let base_helper = helper_facts("check", 2, 1);
+        let head_helper = helper_facts("check", 1, 1);
+        let helpers = [HelperPair {
+            path: "tests/test_api.py",
+            base: &base_helper,
+            head: Some(&head_helper),
+        }];
+        let settings = crate::config::AssertionGate::default();
+        let run = |b: &TestFn, h: &TestFn| {
+            let pairs = [TestPair {
+                path: "tests/test_api.py",
+                base: b,
+                head: h,
+                forced: false,
+            }];
+            evaluate_assertion_reduction(&pairs, &[], &helpers, &settings, &[], false)
+                .unwrap()
+                .violations
+                .iter()
+                .map(|v| v.code.to_string())
+                .collect::<Vec<_>>()
+        };
+        // The test lost one check and one equality; the helper lost one check, no equality.
+        assert_eq!(
+            run(
+                &calling_test(4, 3, &["check"]),
+                &calling_test(3, 2, &["check"])
+            ),
+            vec![HELPER_WEAKENED.to_string(), TEST_REDUCED.to_string()]
+        );
+        // Control: the test lost exactly the helper's check.
+        assert_eq!(
+            run(
+                &calling_test(4, 3, &["check"]),
+                &calling_test(3, 3, &["check"])
+            ),
+            vec![HELPER_WEAKENED.to_string()]
+        );
+    }
+
+    /// #562: a helper beside the tests that call it, when it loses a check: the tests
+    /// that drop with it carry the finding, as before, and the helper is not reported a
+    /// second time. A helper no test of the file reaches is reported itself.
+    #[test]
+    fn a_helper_shown_by_a_dropping_test_of_its_file_is_left_to_the_test() {
+        let file = |helper: &str, test_body: &str| {
+            format!("{helper}\ndef test_create():\n    r = create()\n{test_body}")
+        };
+        let path = "tests/test_api.py";
+        let (called_base, called_head) = (
+            file(PY_CHECK_2, "    check(r)\n"),
+            file(PY_CHECK_1, "    check(r)\n"),
+        );
+        assert_eq!(
+            reduction(&[(path, &called_base, &called_head)], ""),
+            vec![(TEST_REDUCED.to_string(), path.to_string())]
+        );
+        let (uncalled_base, uncalled_head) = (
+            file(PY_CHECK_2, "    assert r.s == 200\n"),
+            file(PY_CHECK_1, "    assert r.s == 200\n"),
+        );
+        assert_eq!(
+            reduction(&[(path, &uncalled_base, &uncalled_head)], ""),
+            vec![(HELPER_WEAKENED.to_string(), path.to_string())]
+        );
     }
 
     #[test]

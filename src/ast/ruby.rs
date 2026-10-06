@@ -282,16 +282,19 @@ impl<'a> RubyExtractor<'a> {
                         self.helpers.insert(method_name.to_string(), facts);
                         let line = child.start_position().row + 1;
                         let end_line = child.end_position().row + 1;
-                        self.facts.test_helpers.push(super::TestHelperFacts {
-                            name: method_name.to_string(),
-                            line,
-                            end_line,
-                            total_asserts: helper_fn.total_asserts,
-                            strong_asserts: helper_fn.strong_asserts,
-                            tautologies: helper_fn.tautologies,
-                            fatal_asserts: helper_fn.fatal_asserts,
-                            helper_checks: 0,
-                        });
+                        self.facts.push_helper(
+                            super::TestHelperFacts {
+                                name: method_name.to_string(),
+                                line,
+                                end_line,
+                                total_asserts: helper_fn.total_asserts,
+                                strong_asserts: helper_fn.strong_asserts,
+                                tautologies: helper_fn.tautologies,
+                                fatal_asserts: helper_fn.fatal_asserts,
+                                helper_checks: 0,
+                            },
+                            dummy_calls,
+                        );
                     }
                 }
             } else if kind == "call" {

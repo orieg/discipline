@@ -448,16 +448,19 @@ impl<'a> ScalaExtractor<'a> {
             });
         let line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
-        self.facts.test_helpers.push(super::TestHelperFacts {
-            name: name.to_string(),
-            line,
-            end_line,
-            total_asserts: helper.total_asserts,
-            strong_asserts: helper.strong_asserts,
-            tautologies: helper.tautologies,
-            fatal_asserts: helper.fatal_asserts,
-            helper_checks: 0,
-        });
+        self.facts.push_helper(
+            super::TestHelperFacts {
+                name: name.to_string(),
+                line,
+                end_line,
+                total_asserts: helper.total_asserts,
+                strong_asserts: helper.strong_asserts,
+                tautologies: helper.tautologies,
+                fatal_asserts: helper.fatal_asserts,
+                helper_checks: 0,
+            },
+            dummy,
+        );
     }
 
     fn args<'b>(&self, call: Node<'b>) -> Vec<Node<'b>> {
