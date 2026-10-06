@@ -358,9 +358,7 @@ fn py_name_reach(name: &str, classes: &PyClasses, seen: &mut Vec<String>) -> Rea
     }
     if PY_CATCHING.contains(&name) {
         Reach::Always
-    } else if python_standard_exception(name)
-        || PY_STDLIB_UNRELATED.contains(&name)
-    {
+    } else if python_standard_exception(name) || PY_STDLIB_UNRELATED.contains(&name) {
         Reach::Never
     } else {
         Reach::Maybe
