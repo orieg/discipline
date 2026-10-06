@@ -327,7 +327,8 @@ pub struct HookInstallArgs {
     /// Rewrite a file an earlier discipline release generated to this release: one with the
     /// `Written by \`discipline hook install\`` header (the Claude Code bootstrap, the Copilot
     /// setup step, the OpenCode plugin), or a JSON hook file holding only the entries a
-    /// release writes, whose observe mode and longer check timeout are kept. A file with
+    /// release writes. A hook file keeps its mode (observe or enforcing; --observe can only
+    /// turn observe mode on) and a JSON file its longer check timeout. A file with
     /// hooks or settings of its own is never rewritten; one missing an entry is refused
     /// with the snippet to merge. With --user, the same for the user-level file
     #[arg(long)]

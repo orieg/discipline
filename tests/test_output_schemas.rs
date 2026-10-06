@@ -476,20 +476,12 @@ fn mcp_check_schema_fields_match_snapshot() {
 fn mcp_check_diff_conforms_to_its_output_schema() {
     use std::io::Write;
     let call = |repo: &Repo| -> Value {
-        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_discipline"));
-        cmd.arg("mcp")
-            .current_dir(repo.path())
-            .env("DISCIPLINE_NO_NETWORK", "1")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped());
         // A CI run's event payload names its own pull request, whose body the check
         // would read: the fixture repository is judged on its own.
-        for var in common::ISOLATED_ENV_VARS
-            .iter()
-            .chain(common::GIT_REPOSITORY_ENV_VARS)
-        {
-            cmd.env_remove(var);
-        }
+        let mut cmd = common::discipline_cmd(repo.path());
+        cmd.arg("mcp")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped());
         let mut child = cmd.spawn().unwrap();
         writeln!(
             child.stdin.take().unwrap(),

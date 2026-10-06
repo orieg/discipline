@@ -1092,6 +1092,12 @@ pub enum Installed {
     /// A bootstrap pinned to release digests, kept: without `--pin-sums` it would be
     /// replaced by one that trusts the release's own `SHA256SUMS`.
     PinKept(PathBuf),
+    /// This release's enforcing file, when observe mode was asked for without
+    /// `--upgrade`; left as it is.
+    ModeDiffers(PathBuf),
+    /// A file with the generated header whose mode cannot be read ([`opencode_plugin_mode`]),
+    /// when no mode was asked for; left as it is.
+    ModeUnreadable(PathBuf),
 }
 
 /// Set by [`run_check`] for the check a hook runs: the only run in which a hook file
@@ -1159,8 +1165,10 @@ static TIMEOUT_VALUE: std::sync::LazyLock<regex::Regex> =
 /// a changed template); a file without it was written or merged by a person.
 pub const GENERATED_HEADER: &str = "Written by `discipline hook install";
 
-/// For an existing generated file: rewritten to `content` with `upgrade` (the mode is
-/// kept), else reported as outdated. `None` when it is not generated, or already current.
+/// For an existing generated file that has no mode (the Claude Code bootstrap, the Copilot
+/// setup-steps workflow): rewritten to `content` with `upgrade`, else reported as
+/// outdated. `None` when it is not generated, or already current. A file that has a mode
+/// goes through [`refresh_in_mode`], which keeps it.
 fn refresh_generated(
     path: &Path,
     existing: &str,
@@ -1175,6 +1183,74 @@ fn refresh_generated(
     }
     std::fs::write(path, content).with_context(|| format!("cannot write {}", path.display()))?;
     Ok(Some(Installed::Upgraded(path.to_path_buf())))
+}
+
+/// For an existing generated file that has a mode: `was` is the mode read back from it
+/// (`None` when it cannot be read, which the caller allows only with `observe`), and
+/// `write` gives this release's content in a mode. The file keeps its mode; `observe` can
+/// only turn observe mode on. It is rewritten only with `upgrade`.
+fn refresh_in_mode(
+    path: PathBuf,
+    existing: &str,
+    was: Option<bool>,
+    observe: bool,
+    upgrade: bool,
+    write: impl Fn(bool) -> Result<String>,
+) -> Result<Installed> {
+    let content = write(observe || was == Some(true))?;
+    if existing == content {
+        return Ok(Installed::AlreadyPresent(path));
+    }
+    if !upgrade {
+        // This release's own file in the other mode is not an earlier release's.
+        return Ok(match was {
+            Some(mode) if existing == write(mode)? => Installed::ModeDiffers(path),
+            _ => Installed::Outdated(path),
+        });
+    }
+    std::fs::write(&path, content).with_context(|| format!("cannot write {}", path.display()))?;
+    Ok(Installed::Upgraded(path))
+}
+
+/// The mode of an OpenCode plugin `hook install` generated, read back from it: `true` for
+/// observe, `false` for enforcing. Two things say it, and they must agree: the marker line
+/// ([`OPENCODE_OBSERVE_NEVER_BLOCKS`], written once in observe mode and never otherwise)
+/// and the `--observe` flag of the check and pre-tool commands (on all of them, or on
+/// none). `None` when they disagree or the plugin runs no such command: the caller then
+/// refuses to choose a mode for it.
+pub fn opencode_plugin_mode(text: &str) -> Option<bool> {
+    let markers = text
+        .lines()
+        .filter(|l| *l == OPENCODE_OBSERVE_NEVER_BLOCKS)
+        .count();
+    let run = format!("discipline hook run --agent {}", Agent::Opencode.id());
+    let commands: Vec<bool> = text
+        .lines()
+        .filter(|l| l.contains(&run) && !l.contains("--event session-start"))
+        .map(|l| l.contains(" --observe"))
+        .collect();
+    let observing = commands.iter().filter(|o| **o).count();
+    match (markers, observing) {
+        (1, n) if n > 0 && n == commands.len() => Some(true),
+        (0, 0) if !commands.is_empty() && !text.contains("// Observe mode") => Some(false),
+        _ => None,
+    }
+}
+
+/// The mode of the hook file `text` that `hook install --agent <agent>` generated (the
+/// user-level one with `user`): `Some(true)` for observe, `Some(false)` for enforcing.
+/// `None` for a file that was not generated, or whose mode cannot be read.
+pub fn generated_mode(agent: Agent, user: bool, text: &str) -> Option<bool> {
+    if user {
+        return generated_user_json_hooks(agent, text).map(|g| g.observe);
+    }
+    if agent == Agent::Opencode {
+        return text
+            .contains(GENERATED_HEADER)
+            .then(|| opencode_plugin_mode(text))
+            .flatten();
+    }
+    generated_json_hooks(agent, text).map(|g| g.observe)
 }
 
 /// What a JSON hook file a release generated was written with, read back from it.
@@ -1421,11 +1497,13 @@ pub fn install(agent: Agent, root: &Path, observe: bool) -> Result<Installed> {
 /// `install`, rewriting a generated file an earlier release wrote when `upgrade`.
 /// `timeout` replaces [`default_timeout`] in the agents whose file carries one.
 ///
-/// A JSON hook file some release generated ([`generated_json_hooks`]) keeps the mode it
-/// was written in (`observe` can only turn observe mode on) and a check timeout longer
-/// than the default, unless `timeout` is given. Any other file that runs discipline is
-/// left as it is: `upgrade` refuses it, with the snippet to merge, when it lacks a hook
-/// command this release writes.
+/// A file some release generated keeps the mode it was written in (`observe` can only
+/// turn observe mode on): a JSON hook file ([`generated_json_hooks`]), which also keeps a
+/// check timeout longer than the default unless `timeout` is given, and the OpenCode
+/// plugin, by its generated header ([`opencode_plugin_mode`]). A plugin whose mode cannot
+/// be read is left as it is unless `observe` says which mode to write. Any other file that
+/// runs discipline is left as it is: `upgrade` refuses it, with the snippet to merge, when
+/// it lacks a hook command this release writes.
 pub fn install_with(
     agent: Agent,
     root: &Path,
@@ -1438,6 +1516,15 @@ pub fn install_with(
     if path.exists() {
         let existing = std::fs::read_to_string(&path)
             .with_context(|| format!("cannot read {}", path.display()))?;
+        if agent == Agent::Opencode && existing.contains(GENERATED_HEADER) {
+            let was = opencode_plugin_mode(&existing);
+            if was.is_none() && !observe {
+                return Ok(Installed::ModeUnreadable(path));
+            }
+            return refresh_in_mode(path, &existing, was, observe, upgrade, |mode| {
+                Ok(config_for_opts(agent, mode, timeout).1)
+            });
+        }
         if let Some(r) = refresh_generated(&path, &existing, &content, upgrade)? {
             return Ok(r);
         }
@@ -1445,16 +1532,14 @@ pub fn install_with(
             let timeout = timeout.or(was
                 .timeout
                 .filter(|t| default_timeout(agent).is_some_and(|d| *t > d)));
-            let (_, content) = config_for_opts(agent, observe || was.observe, timeout);
-            if existing == content {
-                return Ok(Installed::AlreadyPresent(path));
-            }
-            if !upgrade {
-                return Ok(Installed::Outdated(path));
-            }
-            std::fs::write(&path, content)
-                .with_context(|| format!("cannot write {}", path.display()))?;
-            return Ok(Installed::Upgraded(path));
+            return refresh_in_mode(
+                path,
+                &existing,
+                Some(was.observe),
+                observe,
+                upgrade,
+                |mode| Ok(config_for_opts(agent, mode, timeout).1),
+            );
         }
         if !existing.contains(&format!("discipline hook run --agent {}", agent.id())) {
             return Ok(Installed::Refused(path, content));
@@ -1754,16 +1839,14 @@ pub fn install_user(
             let timeout = timeout.or(was
                 .timeout
                 .filter(|t| default_timeout(agent).is_some_and(|d| *t > d)));
-            let (_, content) = user_config_for(agent, observe || was.observe, timeout)?;
-            if existing == content {
-                return Ok(Installed::AlreadyPresent(path));
-            }
-            if !upgrade {
-                return Ok(Installed::Outdated(path));
-            }
-            std::fs::write(&path, content)
-                .with_context(|| format!("cannot write {}", path.display()))?;
-            return Ok(Installed::Upgraded(path));
+            return refresh_in_mode(
+                path,
+                &existing,
+                Some(was.observe),
+                observe,
+                upgrade,
+                |mode| Ok(user_config_for(agent, mode, timeout)?.1),
+            );
         }
         if !existing.contains(&format!("discipline hook run --agent {}", agent.id())) {
             return Ok(Installed::Refused(path, content));

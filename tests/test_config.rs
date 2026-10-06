@@ -723,19 +723,12 @@ fn capped_at_warning_lowers_only_an_error() {
     assert_eq!(Severity::Note.capped_at_warning(), Severity::Note);
 }
 
-/// Every environment variable the binary reads must be isolated by the test harness, or a
-/// developer's shell (or a CI runner's own variables) could decide a test's verdict.
-#[test]
-fn test_harness_isolates_every_environment_variable_the_binary_reads() {
-    let family = regex::Regex::new(
-        r#""((?:DISCIPLINE|GITHUB|GITEA|FORGEJO|GITLAB|CI|PR|GH|DOCS)_[A-Z0-9_]+)""#,
-    )
-    .unwrap();
-    // Set explicitly by the harness rather than removed.
-    // Read when the binary is compiled (`option_env!`), not when it runs: the release
-    // pipeline sets it, and no run of the binary sees it.
-    let set_by_harness = ["DISCIPLINE_NO_NETWORK", "DISCIPLINE_RELEASE_SHA"];
-    let mut missing = std::collections::BTreeSet::new();
+/// Names the harness sets for every spawn instead of removing them.
+const SET_BY_HARNESS: &[&str] = &["DISCIPLINE_NO_NETWORK", "COPILOT_HOME", "HOME"];
+
+/// Every `.rs` file under `src`, with its text.
+fn binary_sources() -> Vec<(String, String)> {
+    let mut found = Vec::new();
     let mut stack = vec![std::path::PathBuf::from("src")];
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir).unwrap() {
@@ -744,20 +737,147 @@ fn test_harness_isolates_every_environment_variable_the_binary_reads() {
                 stack.push(path);
             } else if path.extension().is_some_and(|e| e == "rs") {
                 let text = std::fs::read_to_string(&path).unwrap();
-                for c in family.captures_iter(&text) {
-                    let name = c[1].to_string();
-                    if !common::ISOLATED_ENV_VARS.contains(&name.as_str())
-                        && !set_by_harness.contains(&name.as_str())
-                    {
-                        missing.insert(format!("{name} ({})", path.display()));
-                    }
-                }
+                found.push((path.to_string_lossy().replace('\\', "/"), text));
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// Every environment variable the binary reads must be isolated by the test harness, or a
+/// developer's shell (or a CI runner's own variables) could decide a test's verdict.
+/// This one finds a name by its family prefix, wherever the literal stands (a constant, a
+/// table, an argument); a bare `CI` is a name too (#572: the underscore the expression
+/// required after the prefix hid it).
+#[test]
+fn test_harness_isolates_every_environment_variable_the_binary_reads() {
+    let family = regex::Regex::new(
+        r#""(CI|(?:DISCIPLINE|GITHUB|GITEA|FORGEJO|GITLAB|CI|PR|GH|DOCS)_[A-Z0-9_]+)""#,
+    )
+    .unwrap();
+    // Read when the binary is compiled (`option_env!`), not when it runs: the release
+    // pipeline sets it, and no run of the binary sees it.
+    let compile_time = ["DISCIPLINE_RELEASE_SHA"];
+    let mut missing = std::collections::BTreeSet::new();
+    for (path, text) in binary_sources() {
+        for c in family.captures_iter(&text) {
+            let name = &c[1];
+            if !common::ISOLATED_ENV_VARS.contains(&name)
+                && !SET_BY_HARNESS.contains(&name)
+                && !compile_time.contains(&name)
+            {
+                missing.insert(format!("{name} ({path})"));
             }
         }
     }
     assert!(
         missing.is_empty(),
         "add to tests/common/mod.rs ISOLATED_ENV_VARS: {missing:?}"
+    );
+}
+
+/// #572: a name outside the families (`HOME`, `NO_COLOR`, `USERPROFILE`) was invisible to
+/// the check above. This one finds a literal name by the call that reads it: `var(..)`,
+/// `var_os(..)`, the `env(..)` / `get_env(..)` closures the readers are handed, and an
+/// argument's `env = ".."` attribute.
+#[test]
+fn test_harness_isolates_names_read_without_a_family_prefix() {
+    let read = regex::Regex::new(
+        r#"\b(?:var|var_os|env|get_env)\)?\(\s*"([A-Za-z_][A-Za-z0-9_]*)"\s*\)|\benv\s*=\s*"([A-Za-z_][A-Za-z0-9_]*)""#,
+    )
+    .unwrap();
+    // Inside source text the Rust pack's own unit tests parse: no run reads it.
+    let fixture_text = ["SKIP_SLOW"];
+    let mut missing = std::collections::BTreeSet::new();
+    for (path, text) in binary_sources() {
+        for c in read.captures_iter(&text) {
+            let name = c.get(1).or(c.get(2)).unwrap().as_str();
+            if !common::ISOLATED_ENV_VARS.contains(&name)
+                && !SET_BY_HARNESS.contains(&name)
+                && !fixture_text.contains(&name)
+            {
+                missing.insert(format!("{name} ({path})"));
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "add to tests/common/mod.rs ISOLATED_ENV_VARS, or set it in isolate_env: {missing:?}"
+    );
+}
+
+/// Reads whose name is not a literal at the call, and sweeps of the whole environment:
+/// file, the argument as written, and how the harness covers the names it can take. The
+/// two checks above cannot see through these, so a new one fails here until it is read
+/// and recorded.
+const REVIEWED_DYNAMIC_READS: &[(&str, &str, &str)] = &[
+    ("src/audit.rs", "k", ENV_CLOSURE),
+    ("src/forge.rs", "k", ENV_CLOSURE),
+    ("src/gitctx.rs", "k", ENV_CLOSURE),
+    ("src/main.rs", "k", ENV_CLOSURE),
+    ("src/replay.rs", "k", ENV_CLOSURE),
+    (
+        "src/guards/mod.rs",
+        "k",
+        "the CI markers of `pull_request_for`: a literal table (`CI`, `GITHUB_ACTIONS`, ...) the family check sees",
+    ),
+    (
+        "src/guards/ci_skip_set.rs",
+        "var",
+        "the `GITHUB_FIELDS` table: literals of the GITHUB_ family, which is also swept by prefix",
+    ),
+    ("src/guards/ci_skip_set.rs", "CONTEXT_ENV", NAMED_CONSTANT),
+    (
+        "src/guards/instruction_smuggling.rs",
+        "crate::hook::HOOK_RUN_ENV",
+        NAMED_CONSTANT,
+    ),
+    ("src/guards/mod.rs", "REPLAY_CASE_ENV", NAMED_CONSTANT),
+    ("src/main.rs", "HOSTNAME_DENYLIST_ENV", NAMED_CONSTANT),
+    (
+        "src/guards/command.rs",
+        "&env_key",
+        "`DISCIPLINE_COMMAND_<GATE>`, built from the gate's name: in no list, removed by the DISCIPLINE_ prefix sweep",
+    ),
+    (
+        "src/replay.rs",
+        "vars()",
+        "names to remove from the environment of the check a replay starts; nothing is read from them",
+    ),
+];
+
+const ENV_CLOSURE: &str = "handed to a reader as its `env` / `get_env` closure; every name the reader asks for is a literal the two checks above see";
+const NAMED_CONSTANT: &str =
+    "a constant whose value is a DISCIPLINE_ literal the family check sees";
+
+/// #572: a name built at run time (`DISCIPLINE_COMMAND_<GATE>`) or handed to a closure is
+/// in no list; each such read site is pinned with the reason the harness covers it.
+#[test]
+fn every_environment_read_by_a_computed_name_is_reviewed() {
+    let dynamic = regex::Regex::new(
+        r#"\benv::(var|var_os)\(\s*([^"\\\s)][^)]*)\)|\benv::(vars|vars_os)\(\)"#,
+    )
+    .unwrap();
+    let mut found = std::collections::BTreeSet::new();
+    for (path, text) in binary_sources() {
+        for c in dynamic.captures_iter(&text) {
+            let argument = match c.get(2) {
+                Some(a) => a.as_str().trim().to_string(),
+                None => format!("{}()", &c[3]),
+            };
+            found.insert((path.clone(), argument));
+        }
+    }
+    let reviewed: std::collections::BTreeSet<(String, String)> = REVIEWED_DYNAMIC_READS
+        .iter()
+        .map(|(path, argument, _)| (path.to_string(), argument.to_string()))
+        .collect();
+    let unreviewed: Vec<_> = found.difference(&reviewed).collect();
+    let stale: Vec<_> = reviewed.difference(&found).collect();
+    assert!(
+        unreviewed.is_empty() && stale.is_empty(),
+        "record in REVIEWED_DYNAMIC_READS how the harness isolates each: {unreviewed:#?}\nentries that no longer match: {stale:#?}"
     );
 }
 
