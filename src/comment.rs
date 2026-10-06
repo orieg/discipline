@@ -23,12 +23,20 @@ const MAX_ROWS: usize = 50;
 const MAX_PAGES: usize = 20;
 
 /// Text from the change, safe inside a markdown table cell: what
-/// [`crate::report::text::markdown_cell`] neutralises (HTML, a mention, a link, a pipe,
-/// a line break, control characters), and a backtick becomes an apostrophe, so the cell
-/// has no code span for the text to open or close.
+/// [`crate::report::text::markdown_cell`] neutralises (HTML, a mention, a link, emphasis,
+/// a pipe, a line break, control characters; a word a renderer would link by itself
+/// becomes a code span), and a backtick becomes an apostrophe, so the cell has no code
+/// span for the text to open or close.
 pub fn cell(text: &str) -> String {
     let escaped = crate::report::text::markdown_cell(&text.replace('`', "'"));
     crate::report::scrub_override_directives(&escaped)
+}
+
+/// Text from the change as one code span of a table cell or a list item: a ref name, a
+/// directive's subject. The span is fenced so the text cannot close it
+/// ([`crate::report::text::code_span_cell`]), and nothing inside one is rendered.
+fn span(text: &str) -> String {
+    crate::report::text::code_span_cell(&crate::report::scrub_override_directives(text))
 }
 
 /// The comment body for `summary`.
@@ -45,8 +53,8 @@ pub fn render(summary: &CheckSummary, success: bool) -> String {
         "### discipline: failed\n\n".to_string()
     });
     out.push_str(&format!(
-        "Base `{}` · {passed} gate(s) passed · {examined} item(s) examined · {} warning(s) · {} override(s)\n\n",
-        cell(&summary.base),
+        "Base {} · {passed} gate(s) passed · {examined} item(s) examined · {} warning(s) · {} override(s)\n\n",
+        span(&summary.base),
         summary.warnings,
         summary.total_overrides()
     ));
@@ -87,9 +95,9 @@ pub fn render(summary: &CheckSummary, success: bool) -> String {
         out.push_str("**Findings lifted by an override:**\n\n");
         for o in overrides {
             out.push_str(&format!(
-                "- `{}` on `{}`: {}\n",
+                "- `{}` on {}: {}\n",
                 o.gate,
-                cell(&o.subject),
+                span(&o.subject),
                 cell(&o.reason)
             ));
         }

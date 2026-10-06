@@ -198,7 +198,12 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                             })
                             .collect();
                         if added_steps.is_none() && !verification.is_empty() {
-                            added_steps = Some(added_job_steps(ctx, &workflow_filter, &filter)?);
+                            added_steps = Some(added_job_steps(
+                                ctx,
+                                &workflow_filter,
+                                &filter,
+                                &mut out.notes,
+                            )?);
                         }
                         let added = added_steps.as_deref().unwrap_or(&[]);
                         if !verification.is_empty()
@@ -511,8 +516,12 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                         {
                             if !is_rollup {
                                 if added_steps.is_none() {
-                                    added_steps =
-                                        Some(added_job_steps(ctx, &workflow_filter, &filter)?);
+                                    added_steps = Some(added_job_steps(
+                                        ctx,
+                                        &workflow_filter,
+                                        &filter,
+                                        &mut out.notes,
+                                    )?);
                                 }
                                 if job_moved(job_v, added_steps.as_deref().unwrap_or(&[])) {
                                     out.notes.push(format!(
@@ -1437,11 +1446,21 @@ fn deletion_reason(
 
 /// Steps of the jobs this change added, in every workflow file in head: where a
 /// removed job's steps may have moved (a rename, a split, a move to another file).
+///
+/// A file with a side that does not parse contributes nothing, and `notes` names it: its
+/// head side has no jobs to read, and without its base side no job of it can be shown to
+/// be one the change added.
 fn added_job_steps(
     ctx: &Context,
     globs: &crate::guards::PathFilter,
     filter: &crate::guards::PathFilter,
+    notes: &mut Vec<String>,
 ) -> Result<Vec<serde_yaml::Value>> {
+    let unparsed = |path: &str, side: &str| {
+        format!(
+            "{path}: the {side} side could not be parsed, so its jobs were not compared as the place a removed job's steps moved to"
+        )
+    };
     let mut paths = ctx.git.tracked_files()?;
     paths.extend(ctx.git.changed_files()?.into_iter().map(|f| f.path));
     paths.sort();
@@ -1454,12 +1473,21 @@ fn added_job_steps(
             continue;
         };
         let Ok(head) = serde_yaml::from_str::<serde_yaml::Value>(&head) else {
+            notes.push(unparsed(p, "head"));
             continue;
         };
-        let base_jobs: HashSet<String> = ctx
-            .git
-            .base_content(p)?
-            .and_then(|b| serde_yaml::from_str::<serde_yaml::Value>(&b).ok())
+        let base = match ctx.git.base_content(p)? {
+            None => None,
+            Some(b) => match serde_yaml::from_str::<serde_yaml::Value>(&b) {
+                Ok(b) => Some(b),
+                // Every job of the file would read as added.
+                Err(_) => {
+                    notes.push(unparsed(p, "base"));
+                    continue;
+                }
+            },
+        };
+        let base_jobs: HashSet<String> = base
             .and_then(|b| {
                 b.get("jobs").and_then(|j| j.as_mapping()).map(|m| {
                     m.keys()
@@ -1655,7 +1683,17 @@ fn evaluate_gitlab_file(ctx: &Context, path: &str, out: &mut GateOutcome) -> Res
     let settings = &ctx.config.gates.ci_integrity;
     let base = ctx.git.base_content(path)?;
     let Some(head) = ctx.git.head_content(path)? else {
-        if let Some(jobs) = base.as_deref().and_then(|b| verification_jobs(b).ok()) {
+        let jobs = match base.as_deref().map(verification_jobs) {
+            Some(Ok(jobs)) => Some(jobs),
+            Some(Err(_)) => {
+                out.notes.push(format!(
+                    "{path}: the base side of this deleted pipeline could not be parsed, so its verification jobs were not compared"
+                ));
+                None
+            }
+            None => None,
+        };
+        if let Some(jobs) = jobs {
             if !jobs.is_empty() {
                 record_or_excuse(
                     ctx,
