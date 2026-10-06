@@ -402,11 +402,11 @@ pub fn generate_schema() -> Value {
                     "timeout_seconds": { "type": "integer", "description": "Execution timeout in seconds (default: 60s)" },
                     "count_pattern": { "type": "string", "description": "Regex pattern to extract an integer count from its first capture group; a pattern that does not compile or has no capture group is a configuration error" },
                     "min_count": { "type": "integer", "description": "Minimum count required" },
-                    "forbid_output": { "$ref": "#/$defs/StringListOrReset", "description": "Output patterns that must not appear in stdout or stderr" },
-                    "zero_items_pattern": { "type": "string", "description": "Pattern that indicates zero items were executed" },
+                    "forbid_output": { "$ref": "#/$defs/StringListOrReset", "description": "Regular expressions that must not match stdout or stderr; a value that does not compile is a configuration error, never matched as literal text" },
+                    "zero_items_pattern": { "type": "string", "description": "Regular expression whose match in the output means zero items were executed; a value that does not compile is a configuration error, never matched as literal text" },
                     "allow_zero": { "type": "boolean", "description": "Whether zero items selected is allowed" },
                     "canary_command": { "type": "string", "description": "Optional negative-control canary command" },
-                    "canary_expected_diagnostic": { "type": "string", "description": "Expected diagnostic string that canary must produce" },
+                    "canary_expected_diagnostic": { "type": "string", "description": "Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text" },
                     "snapshot": { "type": "string", "description": "Repository-relative path of a committed file the command's stdout must match" },
                     "snapshot_ignore": { "$ref": "#/$defs/StringListOrReset", "description": "Regexes for lines left out of the snapshot comparison, on both sides" },
                     "commands": {
@@ -427,11 +427,11 @@ pub fn generate_schema() -> Value {
                     "timeout_seconds": { "type": "integer", "description": "Execution timeout in seconds" },
                     "count_pattern": { "type": "string", "description": "Regex pattern to extract an integer count from its first capture group; a pattern that does not compile or has no capture group is a configuration error" },
                     "min_count": { "type": "integer", "description": "Minimum count required" },
-                    "forbid_output": { "$ref": "#/$defs/StringListOrReset", "description": "Output patterns that must not appear in stdout or stderr" },
-                    "zero_items_pattern": { "type": "string", "description": "Pattern that indicates zero items were executed" },
+                    "forbid_output": { "$ref": "#/$defs/StringListOrReset", "description": "Regular expressions that must not match stdout or stderr; a value that does not compile is a configuration error, never matched as literal text" },
+                    "zero_items_pattern": { "type": "string", "description": "Regular expression whose match in the output means zero items were executed; a value that does not compile is a configuration error, never matched as literal text" },
                     "allow_zero": { "type": "boolean", "description": "Whether zero items selected is allowed" },
                     "canary_command": { "type": "string", "description": "Optional negative-control canary command" },
-                    "canary_expected_diagnostic": { "type": "string", "description": "Expected diagnostic string that canary must produce" },
+                    "canary_expected_diagnostic": { "type": "string", "description": "Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text" },
                     "snapshot": { "type": "string", "description": "Repository-relative path of a committed file the command's stdout must match" },
                     "snapshot_ignore": { "$ref": "#/$defs/StringListOrReset", "description": "Regexes for lines left out of the snapshot comparison, on both sides" }
                 }
@@ -459,7 +459,7 @@ pub fn generate_schema() -> Value {
                     "severity": { "$ref": "#/$defs/Severity" },
                     "exempt_paths": { "$ref": "#/$defs/StringListOrReset" },
                     "corpus_dirs": { "$ref": "#/$defs/StringListOrReset", "description": "Corpus directory patterns to monitor for seed file shrink" },
-                    "fuzz_targets": { "$ref": "#/$defs/StringListOrReset", "description": "Fuzz manifest and harness globs" },
+                    "fuzz_targets": { "$ref": "#/$defs/StringListOrReset", "description": "Globs of fuzz manifests (a Cargo.toml) and Rust harness files outside the root fuzz/ crate, which is always watched" },
                     "scan_workflows": { "type": "boolean", "description": "Whether to scan workflow files" },
                     "scan_scripts": { "type": "boolean", "description": "Whether to scan shell scripts" }
                 }
@@ -579,7 +579,7 @@ pub fn generate_schema() -> Value {
                     "forbid_continue_on_error": { "type": "boolean", "description": "Forbid continue-on-error: true in workflow jobs or steps" },
                     "forbid_or_true": { "type": "boolean", "description": "Forbid || true and set +e error masking in run commands" },
                     "diff_only": { "type": "boolean", "description": "When true, scans only modified workflow files rather than all workflows, and pins only references new relative to the base; false reports every unpinned reference, pre-existing ones included" },
-                    "documented_job_count_path": { "type": "string", "description": "Path to catalog documentation stating job count" },
+                    "documented_job_count_path": { "type": "string", "description": "Path to catalog documentation stating job count; set together with documented_job_count_pattern, one without the other is a configuration error" },
                     "documented_job_count_pattern": { "type": "string", "description": "Regex pattern to extract job count from documentation, from its first capture group; a pattern that does not compile or has no capture group is a configuration error" },
                     "first_party_action_prefixes": { "$ref": "#/$defs/StringListOrReset", "description": "Action owner prefixes (for example `actions/`) excused from commit SHA pinning; empty by default, so every remote action needs a SHA" },
                     "banned_actions": {

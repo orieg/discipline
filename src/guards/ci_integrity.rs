@@ -40,32 +40,65 @@ pub const GATE: &str = "ci-integrity";
 /// The configuration key of the pattern that reads the documented job count.
 pub const JOB_COUNT_PATTERN_KEY: &str = "gates.ci-integrity.documented_job_count_pattern";
 
-/// The job count `doc_path` states, read from the first capture group of `pattern`.
-/// `Err` is a note for the report: the document could not be read as text, the pattern
-/// does not match it, or what it captured is not a number, so nothing was compared. A
-/// pattern that cannot capture is a configuration error.
+/// The configuration key of the document the job count is read from.
+pub const JOB_COUNT_PATH_KEY: &str = "gates.ci-integrity.documented_job_count_path";
+
+/// The configuration error of a documented job count with only one of its two keys set:
+/// the count is compared only with both, so one alone would be a setting that does
+/// nothing. `None` when both are set or neither is.
+pub fn half_configured_job_count(
+    settings: &crate::config::CiIntegrityGate,
+) -> Option<anyhow::Error> {
+    let (set, unset) = match (
+        &settings.documented_job_count_path,
+        &settings.documented_job_count_pattern,
+    ) {
+        (Some(_), None) => (JOB_COUNT_PATH_KEY, JOB_COUNT_PATTERN_KEY),
+        (None, Some(_)) => (JOB_COUNT_PATTERN_KEY, JOB_COUNT_PATH_KEY),
+        _ => return None,
+    };
+    Some(crate::could_not_check::tag(
+        crate::could_not_check::Reason::Configuration,
+        anyhow::anyhow!(
+            "`{set}` is set without `{unset}`: the documented job count is compared only when both are set, so this would compare nothing; set both or remove both"
+        ),
+    ))
+}
+
+/// Why a documented job count was not compared, for the report.
+const NOT_COMPARED: &str = "the documented job count was not compared with the workflow";
+
+/// The job count the head side of `doc_path` states, read from the first capture group of
+/// `pattern`. `Ok(None)` when the head side has no such file. `Err` is a note for the
+/// report: the document could not be read as text, the pattern does not match it, or what
+/// it captured is not a number, so nothing was compared. A pattern that cannot capture is
+/// a configuration error.
 fn documented_job_count(
-    doc_full: &Path,
+    ctx: &Context,
     doc_path: &str,
     pattern: &str,
-) -> Result<std::result::Result<usize, String>> {
+) -> Result<Option<std::result::Result<usize, String>>> {
     let re = super::capture_pattern(pattern, JOB_COUNT_PATTERN_KEY)?;
-    let not_compared = "the documented job count was not compared with the workflow";
-    let Ok(doc) = std::fs::read_to_string(doc_full) else {
-        return Ok(Err(format!(
+    let not_compared = NOT_COMPARED;
+    // The head side: the index under `--staged`, else the working tree.
+    let Some(bytes) = ctx.git.head_bytes(doc_path)? else {
+        return Ok(None);
+    };
+    let Ok(doc) = String::from_utf8(bytes) else {
+        return Ok(Some(Err(format!(
             "`{doc_path}` could not be read as text; {not_compared}"
-        )));
+        ))));
     };
     let Some(captured) = re.captures(&doc).and_then(|caps| caps.get(1)) else {
-        return Ok(Err(format!(
+        return Ok(Some(Err(format!(
             "`documented_job_count_pattern` does not match `{doc_path}`; {not_compared}"
-        )));
+        ))));
     };
-    Ok(captured.as_str().parse::<usize>().map_err(|_| {
+    Ok(Some(captured.as_str().parse::<usize>().map_err(|_| {
         format!(
             "`documented_job_count_pattern` captured text in `{doc_path}` that is not a number; {not_compared}"
         )
-    }))
+    })))
 }
 
 /// Evaluates CI workflow integrity and rollup invariants.
@@ -132,6 +165,9 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
     // Steps of the jobs this change added, read once and only when a job or workflow
     // was removed.
     let mut added_steps: Option<Vec<serde_yaml::Value>> = None;
+    // Whether a workflow examined here has the rollup job the documented count is
+    // compared under.
+    let mut rollup_seen = false;
 
     for path in &workflow_files {
         // GitLab pipelines are a different document shape; they have their own diff.
@@ -313,6 +349,7 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
 
         if let Some(ref rollup) = settings.rollup_job {
             if jobs.contains(rollup) {
+                rollup_seen = true;
                 let expected: HashSet<String> = jobs
                     .iter()
                     .filter(|j| *j != rollup && !settings.excluded_jobs.contains(j))
@@ -340,9 +377,8 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                     &settings.documented_job_count_path,
                     &settings.documented_job_count_pattern,
                 ) {
-                    let doc_full = Path::new(ctx.git.root()).join(doc_path);
-                    if !doc_full.is_file() {
-                        out.violations.push(Violation {
+                    match documented_job_count(ctx, doc_path, doc_pattern)? {
+                        None => out.violations.push(Violation {
                             gate: GATE,
                             severity: ctx.overridable(settings.severity),
                             code: crate::findings::full_code(
@@ -362,36 +398,33 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
                                 "Restore the documentation catalog or update configuration."
                                     .to_string(),
                             ),
-                        });
-                    } else {
-                        match documented_job_count(&doc_full, doc_path, doc_pattern)? {
-                            Ok(doc_count) if doc_count != jobs.len() => {
-                                out.violations.push(Violation {
-                                    gate: GATE,
-                                    severity: ctx.overridable(settings.severity),
-                                    code: crate::findings::full_code(
-                                        GATE,
-                                        &crate::findings::JOB_COUNT_MISMATCH,
-                                    ),
-                                    fingerprint: String::new(),
-                                    title: crate::findings::JOB_COUNT_MISMATCH.title.to_string(),
-                                    anchor: None,
-                                    legacy_title: crate::findings::JOB_COUNT_MISMATCH.was_title(),
-                                    file: Some(doc_path.clone()),
-                                    line: None,
-                                    message: format!(
-                                        "Documented job count in '{doc_path}' ({doc_count}) does not match workflow jobs count ({}).",
-                                        jobs.len()
-                                    ),
-                                    remediation: Some(format!(
-                                        "Update the documented count in '{doc_path}' to {} jobs.",
-                                        jobs.len()
-                                    )),
-                                });
-                            }
-                            Ok(_) => {}
-                            Err(note) => out.notes.push(note),
+                        }),
+                        Some(Ok(doc_count)) if doc_count != jobs.len() => {
+                            out.violations.push(Violation {
+                                gate: GATE,
+                                severity: ctx.overridable(settings.severity),
+                                code: crate::findings::full_code(
+                                    GATE,
+                                    &crate::findings::JOB_COUNT_MISMATCH,
+                                ),
+                                fingerprint: String::new(),
+                                title: crate::findings::JOB_COUNT_MISMATCH.title.to_string(),
+                                anchor: None,
+                                legacy_title: crate::findings::JOB_COUNT_MISMATCH.was_title(),
+                                file: Some(doc_path.clone()),
+                                line: None,
+                                message: format!(
+                                    "Documented job count in '{doc_path}' ({doc_count}) does not match workflow jobs count ({}).",
+                                    jobs.len()
+                                ),
+                                remediation: Some(format!(
+                                    "Update the documented count in '{doc_path}' to {} jobs.",
+                                    jobs.len()
+                                )),
+                            });
                         }
+                        Some(Ok(_)) => {}
+                        Some(Err(note)) => out.notes.push(note),
                     }
                 }
             }
@@ -1212,6 +1245,19 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
         }
     }
 
+    if !rollup_seen
+        && settings.documented_job_count_path.is_some()
+        && settings.documented_job_count_pattern.is_some()
+    {
+        // The count is compared under the rollup job only; say so when there was none.
+        let why = match &settings.rollup_job {
+            Some(rollup) => {
+                format!("no workflow examined in this run has the `rollup_job` (`{rollup}`)")
+            }
+            None => "`rollup_job` is not set".to_string(),
+        };
+        out.notes.push(format!("{why}; {NOT_COMPARED}"));
+    }
     Ok(out)
 }
 
@@ -2690,14 +2736,29 @@ fn evaluate_action_file(ctx: &Context, path: &str, out: &mut GateOutcome) -> Res
     let Some(head) = ctx.git.head_content(path)? else {
         return Ok(());
     };
-    out.examined += 1;
+    let base = ctx.git.base_content(path)?;
     let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(&head) else {
         out.notes.push(format!(
             "{path}: action metadata does not parse as YAML; its nested `uses:` and `run:` steps were not checked"
         ));
+        // An action file that no longer parses checks none of the steps its base side
+        // had: a finding, as for a workflow. A new file has nothing to be weakened
+        // against and keeps the note alone.
+        if base.is_some() {
+            out.push(
+                settings.severity,
+                &crate::findings::PIPELINE_FILE_UNREADABLE,
+                Some(path),
+                None,
+                format!(
+                    "`{path}` does not parse as YAML on the head side, so its steps could not be compared with its base side."
+                ),
+                "Fix the YAML so the action can be checked.",
+            );
+        }
         return Ok(());
     };
-    let base = ctx.git.base_content(path)?;
+    out.examined += 1;
     let base_doc = parse_yaml_side(out, path, "base", base.as_deref());
     if settings.pin_actions {
         let base_refs = base_pin_set(

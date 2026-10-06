@@ -235,7 +235,7 @@
           "type": "boolean"
         },
         "documented_job_count_path": {
-          "description": "Path to catalog documentation stating job count",
+          "description": "Path to catalog documentation stating job count; set together with documented_job_count_pattern, one without the other is a configuration error",
           "type": "string"
         },
         "documented_job_count_pattern": {
@@ -339,7 +339,7 @@
           "type": "string"
         },
         "canary_expected_diagnostic": {
-          "description": "Expected diagnostic string that canary must produce",
+          "description": "Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text",
           "type": "string"
         },
         "command": {
@@ -352,7 +352,7 @@
         },
         "forbid_output": {
           "$ref": "#/$defs/StringListOrReset",
-          "description": "Output patterns that must not appear in stdout or stderr"
+          "description": "Regular expressions that must not match stdout or stderr; a value that does not compile is a configuration error, never matched as literal text"
         },
         "min_count": {
           "description": "Minimum count required",
@@ -379,7 +379,7 @@
           "type": "integer"
         },
         "zero_items_pattern": {
-          "description": "Pattern that indicates zero items were executed",
+          "description": "Regular expression whose match in the output means zero items were executed; a value that does not compile is a configuration error, never matched as literal text",
           "type": "string"
         }
       },
@@ -400,7 +400,7 @@
           "type": "string"
         },
         "canary_expected_diagnostic": {
-          "description": "Expected diagnostic string that canary must produce",
+          "description": "Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text",
           "type": "string"
         },
         "command": {
@@ -427,7 +427,7 @@
         },
         "forbid_output": {
           "$ref": "#/$defs/StringListOrReset",
-          "description": "Output patterns that must not appear in stdout or stderr"
+          "description": "Regular expressions that must not match stdout or stderr; a value that does not compile is a configuration error, never matched as literal text"
         },
         "min_count": {
           "description": "Minimum count required",
@@ -453,7 +453,7 @@
           "type": "integer"
         },
         "zero_items_pattern": {
-          "description": "Pattern that indicates zero items were executed",
+          "description": "Regular expression whose match in the output means zero items were executed; a value that does not compile is a configuration error, never matched as literal text",
           "type": "string"
         }
       },
@@ -1222,7 +1222,7 @@
         },
         "fuzz_targets": {
           "$ref": "#/$defs/StringListOrReset",
-          "description": "Fuzz manifest and harness globs"
+          "description": "Globs of fuzz manifests (a Cargo.toml) and Rust harness files outside the root fuzz/ crate, which is always watched"
         },
         "scan_scripts": {
           "description": "Whether to scan shell scripts",
