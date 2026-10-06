@@ -89,6 +89,7 @@ impl LanguagePack for RubyPack {
                 f.is_test = true;
             }
         }
+        super::method_checks::count(root, src, &mut extractor.facts, &RUBY_RECEIVER_CALLS);
         super::calls::count(
             root,
             src,
@@ -131,6 +132,13 @@ pub const RUBY_FUNCTIONS: FunctionSpec = FunctionSpec {
     is_test: ruby_fn_is_test,
     classify: functions::classify_ruby,
 };
+
+/// A method called on a receiver (`method_checks`).
+pub const RUBY_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
+    super::method_checks::ReceiverCalls {
+        member: &[],
+        direct: &[("call", "receiver", "method")],
+    };
 
 pub const RUBY_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
     call_kinds: &["call"],

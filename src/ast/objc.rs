@@ -122,6 +122,7 @@ impl LanguagePack for ObjcPack {
                 f.is_test = true;
             }
         }
+        super::method_checks::count(root, src, &mut extractor.facts, &OBJC_RECEIVER_CALLS);
         super::calls::count(
             root,
             src,
@@ -492,6 +493,13 @@ pub const OBJC_FUNCTIONS: FunctionSpec = FunctionSpec {
     is_test: objc_fn_is_test,
     classify: functions::classify_objc,
 };
+
+/// A method called on a receiver (`method_checks`).
+pub const OBJC_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
+    super::method_checks::ReceiverCalls {
+        member: &[],
+        direct: &[("message_expression", "receiver", "method")],
+    };
 
 pub const OBJC_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
     call_kinds: &["call_expression"],

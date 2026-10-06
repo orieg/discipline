@@ -227,6 +227,7 @@ fn shared_facts(
             f.is_test = true;
         }
     }
+    super::method_checks::count(root, src, facts, &C_RECEIVER_CALLS);
     super::calls::count(
         root,
         src,
@@ -292,6 +293,13 @@ pub const C_FUNCTIONS: FunctionSpec = FunctionSpec {
     is_test: c_fn_is_test,
     classify: functions::classify_c,
 };
+
+/// A method called on a receiver (`method_checks`).
+pub const C_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
+    super::method_checks::ReceiverCalls {
+        member: &[("call_expression", "function", "field_expression", "field")],
+        direct: &[],
+    };
 
 pub const C_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
     call_kinds: &["call_expression"],

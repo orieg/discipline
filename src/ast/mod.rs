@@ -30,6 +30,7 @@ pub mod java;
 pub mod javascript;
 #[cfg(feature = "lang-kotlin")]
 pub mod kotlin;
+pub mod method_checks;
 pub mod mocks;
 #[cfg(feature = "lang-objc")]
 pub mod objc;
@@ -287,19 +288,57 @@ pub struct TestFn {
     pub non_literal_cases: bool,
     /// Functions called directly in the body of the test.
     pub direct_calls: Vec<String>,
+    /// Byte ranges of the assertions counted in `tautologies`, where the pack reads them
+    /// (`mark_tautologies`): what tells a swallowed assertion that is also a tautology
+    /// from two assertions, so it is taken out of the effective count once.
+    pub tautology_spans: Vec<(usize, usize)>,
+    /// Checks the test reaches only through a method called on a receiver (`v.done()`)
+    /// that a same-file method of that name makes (`method_checks`). `vacuous-tests`
+    /// reads them: a test that asserts through such a method is not vacuous. They are not
+    /// part of `total_asserts`, so `assertion-reduction` counts what it counted before.
+    pub method_checks: usize,
+    /// The calls `resolve_test_same_file_helpers` counted into this test, so a helper
+    /// the pack already followed is not followed a second time as a receiver call.
+    pub counted_helper_calls: Vec<String>,
 }
 
 impl TestFn {
-    /// Assertions that can actually fail.
+    /// Assertions that can actually fail: not a tautology, and not swallowed by a handler.
+    /// An assertion that is both counts against the test once.
     pub fn effective_asserts(&self) -> usize {
-        self.total_asserts
-            .saturating_sub(self.tautologies + self.caught_assertions.len())
+        let caught = self
+            .caught_assertions
+            .iter()
+            .filter(|c| !c.tautology)
+            .count();
+        self.total_asserts.saturating_sub(self.tautologies + caught)
+    }
+
+    /// The counts a pack's visitor compares against after reading `node`
+    /// (`mark_tautologies`).
+    pub fn tautology_mark(&self) -> (usize, usize) {
+        (self.tautologies, self.tautology_spans.len())
+    }
+
+    /// Records `node` as the place of every tautology counted since `mark` that no node
+    /// inside it was recorded for. Called by a pack's visitor after it has read `node`
+    /// and its children, so the innermost node read is the one recorded.
+    pub fn mark_tautologies(&mut self, mark: (usize, usize), node: tree_sitter::Node) {
+        let counted = self.tautologies.saturating_sub(mark.0);
+        while self.tautology_spans.len().saturating_sub(mark.1) < counted {
+            self.tautology_spans
+                .push((node.start_byte(), node.end_byte()));
+        }
+    }
+
+    /// What `vacuous-tests` judges a test by: its effective assertions and the checks it
+    /// makes through same-file methods called on a receiver.
+    pub fn checks(&self) -> usize {
+        self.effective_asserts() + self.method_checks
     }
 
     pub fn is_vacuous(&self) -> bool {
-        self.effective_asserts() == 0
-            && self.should_panic.is_none()
-            && self.expected_exceptions.is_empty()
+        self.checks() == 0 && self.should_panic.is_none() && self.expected_exceptions.is_empty()
     }
 
     /// Whether this test is conditionally skipped under a CI environment check.
@@ -576,6 +615,17 @@ impl ParsedFileFacts {
             .map(|i| self.tracked_helper(i, path))
             .min_by_key(|h| (h.effective_asserts(), h.strong_asserts, h.fatal_asserts))
     }
+
+    /// What a call of a method named `method` on some receiver is sure to check: the
+    /// effective assertions of the one helper of this file with that last name segment,
+    /// its own callees counted in (`tracked_helper`), or the least over several helpers
+    /// of that name. `None` when the file has no helper of that name.
+    pub fn least_helper_named(&self, method: &str) -> Option<usize> {
+        (0..self.test_helpers.len())
+            .filter(|i| helper_leaf(&self.test_helpers[*i].name) == method)
+            .map(|i| self.tracked_helper(i, &mut Vec::new()).effective_asserts())
+            .min()
+    }
 }
 
 /// A helper's own name without the type or module it is recorded under
@@ -737,6 +787,7 @@ pub fn resolve_test_same_file_helpers<F>(
     test.direct_calls = calls.to_vec();
     for call in calls {
         if let Some(h) = resolve_fn(call) {
+            test.counted_helper_calls.push(call.clone());
             if vocab
                 .helper_fns
                 .iter()
@@ -1223,6 +1274,9 @@ impl Default for ParsedFileFacts {
                 cases: None,
                 non_literal_cases: false,
                 direct_calls: Vec::new(),
+                tautology_spans: Vec::new(),
+                method_checks: 0,
+                counted_helper_calls: Vec::new(),
             }),
             has_parse_errors: false,
             first_parse_error_line: None,
@@ -1260,6 +1314,9 @@ impl ParsedFileFacts {
             cases: None,
             non_literal_cases: false,
             direct_calls: Vec::new(),
+            tautology_spans: Vec::new(),
+            method_checks: 0,
+            counted_helper_calls: Vec::new(),
         });
     }
 }
