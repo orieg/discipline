@@ -386,20 +386,25 @@ fn autotests_false_leaves_out_a_test_file_no_target_names() {
 
 #[test]
 fn lib_test_false_leaves_out_the_unit_tests_of_a_library_only_package() {
+    // The library root declares the module, so `src/checks.rs` is library code.
+    let lib = ("src/lib.rs", "mod checks;\n");
     let manifest = format!("{PACKAGE}\n[lib]\ntest = false\n");
-    let (n, run) = counted(&[("Cargo.toml", &manifest), ("src/checks.rs", RS_3)]);
+    let (n, run) = counted(&[("Cargo.toml", &manifest), lib, ("src/checks.rs", RS_3)]);
     assert_eq!(n, 2, "{}", run.stdout);
     assert!(!has_unknown_note(&run), "{:?}", notes(&run));
-    // With a binary target the file may be a module of the binary, whose tests run.
+    // A binary beside the library runs its own unit tests, and this one declares no
+    // module: the library's file is still left out. `cargo test -- --list` on this
+    // package lists the two tests of `tests/a.rs` and nothing from `src/checks.rs`.
     let (n, run) = counted(&[
         ("Cargo.toml", &manifest),
+        lib,
         ("src/checks.rs", RS_3),
         ("src/main.rs", "fn main() {}\n"),
     ]);
-    assert_eq!(n, 5, "{}", run.stdout);
-    assert!(has_unknown_note(&run), "{:?}", notes(&run));
+    assert_eq!(n, 2, "{}", run.stdout);
+    assert!(!has_unknown_note(&run), "{:?}", notes(&run));
     // Control: the default.
-    let (n, run) = counted(&[("Cargo.toml", PACKAGE), ("src/checks.rs", RS_3)]);
+    let (n, run) = counted(&[("Cargo.toml", PACKAGE), lib, ("src/checks.rs", RS_3)]);
     assert_eq!(n, 5, "{}", run.stdout);
 }
 
@@ -660,16 +665,17 @@ fn removing_a_go_package_test_file_is_still_a_count_drop() {
     );
 }
 
-/// Not decided (#557): `//go:build ignore` keeps a file out of every build by
-/// convention, and any other tag may be set by the test invocation. It still counts.
+/// Decided (#593): `//go:build ignore` keeps a file out of every build by convention,
+/// so its tests are not counted. A tag the test invocation may set still counts, with a
+/// note (`tests/test_runner_collection_decisions.rs`).
 #[test]
-fn a_go_file_behind_a_build_constraint_still_counts() {
+fn a_go_file_behind_build_ignore_is_not_counted() {
     let src = format!("//go:build ignore\n\n{GO_3}");
     let (n, run) = counted(&[
         ("go.mod", "module example.test/m\n\ngo 1.21\n"),
         ("pkg/a_test.go", &src),
     ]);
-    assert_eq!(n, 5, "{}", run.stdout);
+    assert_eq!(n, 2, "{}", run.stdout);
 }
 
 // ---------------------------------------------------------------- pytest
