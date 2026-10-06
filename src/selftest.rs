@@ -3292,6 +3292,29 @@ test tests::c: test
         },
     ),
     (
+        "command, test-floor: a difference in any executed key is a modification, a compared key is not",
+        || {
+            use crate::config::DisciplineConfig;
+            use crate::guards::command::executed_definitions_differ;
+            use crate::guards::test_floor::test_command_supplied_by_change;
+            let gate = |body: &str| -> Result<crate::config::CommandGate> {
+                Ok(DisciplineConfig::from_toml_str(&format!("[gates.command]\n{body}"))?
+                    .gates
+                    .command)
+            };
+            let base = gate("command = \"true\"\n")?;
+            let table_canary = gate("command = \"true\"\ncanary_command = \"false\"\n")?;
+            let compared_only = gate("command = \"true\"\nforbid_output = [\"x\"]\ntimeout_seconds = 5\n")?;
+            Ok(executed_definitions_differ(&table_canary, &base)
+                && !executed_definitions_differ(&compared_only, &base)
+                && !executed_definitions_differ(&base, &base)
+                && test_command_supplied_by_change(Some("echo 9"), None)
+                && test_command_supplied_by_change(Some("echo 9"), Some("echo 7"))
+                && !test_command_supplied_by_change(Some("echo 7"), Some("echo 7"))
+                && !test_command_supplied_by_change(None, Some("echo 7")))
+        },
+    ),
+    (
         "test-floor: runner collection rules filter uncollected files and undeclared feature cfgs",
         || {
             use crate::ast::runner_collection::{

@@ -307,6 +307,7 @@ findings! {
     REQUIRED_SUITE_MISSING = ["test-floor"], "required-suite-missing", "Required Test Suite Missing", Same;
     TEST_COUNT_BELOW_FLOOR = ["test-floor"], "test-count-below-floor", "Test Count Below Floor", Same;
     TEST_IDENTITY_DROPPED = ["test-floor"], "test-dropped-from-suite", "Test Dropped From Suite", Same;
+    UNTRUSTED_TEST_COMMAND = ["test-floor"], "untrusted-test-command", "Untrusted Test Command", Same;
 
     // dependency-delta
     LOCKFILE_DELETED = ["dependency-delta"], "lockfile-deleted", "Lockfile Deleted", Same;
