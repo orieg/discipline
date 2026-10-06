@@ -60,6 +60,11 @@ mod swift_tree {
         })
     }
 
+    /// The grammar, for a caller that reads its node kinds and parses nothing.
+    pub(super) fn language() -> tree_sitter::Language {
+        tree_sitter_swift::LANGUAGE.into()
+    }
+
     /// The syntax tree of the text; its byte ranges are the text's.
     pub(super) fn parse(text: &LineEndedSource) -> Result<tree_sitter::Tree> {
         debug_assert!(
@@ -68,11 +73,18 @@ mod swift_tree {
         );
         let mut parser = tree_sitter::Parser::new();
         parser
-            .set_language(&tree_sitter_swift::LANGUAGE.into())
+            .set_language(&language())
             .map_err(|e| anyhow!("failed to load the Swift grammar: {e}"))?;
         crate::ast::source_text::parse(&mut parser, &text.0)
             .ok_or_else(|| anyhow!("tree-sitter returned no tree"))
     }
+}
+
+/// The Swift grammar's node kinds, for tests that check a list of kinds against it.
+/// Nothing is parsed through this: parsing goes through `swift_tree::parse` only.
+#[cfg(test)]
+pub(crate) fn grammar_for_node_kinds() -> tree_sitter::Language {
+    swift_tree::language()
 }
 
 /// Swift language pack implementing [`LanguagePack`].

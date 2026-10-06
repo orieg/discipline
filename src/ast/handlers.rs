@@ -2463,7 +2463,7 @@ mod constant_tests {
             (
                 "swift",
                 &crate::ast::swift::SWIFT_CONSTANTS,
-                vec![tree_sitter_swift::LANGUAGE.into()],
+                vec![crate::ast::swift::grammar_for_node_kinds()],
             ),
             (
                 "objective-c",
