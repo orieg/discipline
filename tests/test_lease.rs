@@ -172,10 +172,7 @@ fn a_corrupt_lease_file_could_not_check() {
 /// Plain `git` in `dir` with the installed hooks (the harness's own git runs without
 /// hooks), `discipline` first on `PATH`.
 fn git_with_hooks(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
-    let bin = std::path::Path::new(env!("CARGO_BIN_EXE_discipline"))
-        .parent()
-        .unwrap()
-        .to_path_buf();
+    let bin = common::discipline_bin().parent().unwrap().to_path_buf();
     git_with_hooks_in(dir, args, &bin)
 }
 
@@ -190,8 +187,10 @@ fn git_with_hooks_in(
         bin.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let mut cmd = std::process::Command::new("git");
-    // An explicit identity: the runner has no global one, and GIT_* is cleared below.
+    // The harness's isolated `git`: the hooks it runs start `discipline` with the same
+    // environment a test's own spawn of the binary gets.
+    let mut cmd = common::git_command();
+    // An explicit identity: the runner has no global one, and GIT_* is cleared.
     cmd.args([
         "-c",
         "commit.gpgsign=false",
@@ -203,11 +202,6 @@ fn git_with_hooks_in(
     .args(args)
     .current_dir(dir)
     .env("PATH", path);
-    for (k, _) in std::env::vars() {
-        if k.starts_with("GIT_") || k.starts_with("DISCIPLINE_") {
-            cmd.env_remove(k);
-        }
-    }
     cmd.output().unwrap()
 }
 

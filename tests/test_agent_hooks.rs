@@ -1639,7 +1639,7 @@ fn hook_run_on_shallow_clone_refuses_when_base_cannot_measure_change() {
     let tmp = tempfile::tempdir().unwrap();
     let shallow = tmp.path().join("shallow");
     let repo_url = format!("file://{}", repo.path().display());
-    let clone_status = std::process::Command::new("git")
+    let clone_status = common::git_command()
         .args([
             "clone",
             "-q",
