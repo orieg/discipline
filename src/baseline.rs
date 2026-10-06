@@ -203,30 +203,62 @@ where
     fingerprint_for_version(v, read_file, FINGERPRINT_VERSION)
 }
 
+/// The trimmed source line a finding is on, and which occurrence of that line in its file
+/// it is on, counted from 1 over the lines above it that are identical once trimmed.
+/// `None` when the finding has no line or the line cannot be read.
+fn line_and_occurrence<F>(v: &Violation, read_file: F) -> Option<(String, usize)>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let (file, line) = (v.file.as_deref()?, v.line.filter(|l| *l > 0)?);
+    let content = read_file(file)?;
+    let own = content.lines().nth(line - 1)?.trim();
+    let above = content
+        .lines()
+        .take(line - 1)
+        .filter(|l| l.trim() == own)
+        .count();
+    Some((own.to_string(), above + 1))
+}
+
+/// What tells a finding on the `occurrence`-th of several identical lines from the one
+/// on the first: nothing for the first, so a finding on a line that does not repeat, or
+/// on the first of those that do, keeps the fingerprint it always had. A finding with an
+/// anchor is told apart by the anchor.
+fn occurrence_suffix(v: &Violation, occurrence: usize) -> String {
+    if occurrence > 1 && v.anchor.is_none() {
+        format!("\noccurrence:{occurrence}")
+    } else {
+        String::new()
+    }
+}
+
 /// The fingerprint of a finding under a given baseline version: 1 keys on the title, 2 on
 /// the code.
 ///
 /// What is hashed besides the code and path: the trimmed source line when the finding has
 /// one that can be read, and in version 2 the finding's anchor ([`Violation::anchor`], a
-/// typed source datum) with it. With no line, version 2 hashes the anchor alone, or
-/// nothing when there is none, so a reworded message never changes a fingerprint;
-/// version 1 hashed the message.
+/// typed source datum) with it, or, with no anchor, the line's occurrence number when it
+/// is not the first of its text in the file ([`line_and_occurrence`]). With no line,
+/// version 2 hashes the anchor alone, or nothing when there is none, so a reworded
+/// message never changes a fingerprint; version 1 hashed the message.
 pub fn fingerprint_for_version<F>(v: &Violation, read_file: F, version: u32) -> String
 where
     F: Fn(&str) -> Option<String>,
 {
+    let located = line_and_occurrence(v, read_file);
+    fingerprint_of(v, located.as_ref().map(|(l, n)| (l.as_str(), *n)), version)
+}
+
+/// [`fingerprint_for_version`] for a finding whose line and occurrence are known.
+fn fingerprint_of(v: &Violation, located: Option<(&str, usize)>, version: u32) -> String {
     let path = v.file.as_deref().unwrap_or("");
-    let source_line = match (&v.file, v.line) {
-        (Some(f), Some(l)) if l > 0 => {
-            read_file(f).and_then(|c| c.lines().nth(l - 1).map(|s| s.trim().to_string()))
-        }
-        _ => None,
-    };
-    let content = match (source_line, version >= 2, &v.anchor) {
+    let content = match (located, version >= 2, &v.anchor) {
         // The anchor goes in with the line: two tests reported at identical lines (an
         // `@Test` attribute) stay apart.
-        (Some(line), true, Some(a)) => format!("{line}\nanchor:{a}"),
-        (Some(line), _, _) => line,
+        (Some((line, _)), true, Some(a)) => format!("{line}\nanchor:{a}"),
+        (Some((line, n)), true, None) => format!("{line}{}", occurrence_suffix(v, n)),
+        (Some((line, _)), false, _) => line.to_string(),
         (None, true, Some(a)) => format!("anchor:{a}"),
         (None, true, None) => String::new(),
         (None, false, _) => v.message.trim().to_string(),
@@ -240,6 +272,50 @@ where
         format!("{}:{}:{}:{}", v.gate, title, path, content_hash)
     };
     sha256_hex(source.as_bytes())
+}
+
+/// The fingerprint two findings that share one fall back to: their messages, and the
+/// occurrence number of their line as in [`fingerprint_of`].
+fn message_fingerprint(v: &Violation, occurrence: usize) -> String {
+    let source = format!(
+        "v2:{}:{}:{}",
+        v.code,
+        v.file.as_deref().unwrap_or(""),
+        sha256_hex(
+            format!(
+                "message:{}{}",
+                v.message.trim(),
+                occurrence_suffix(v, occurrence)
+            )
+            .as_bytes()
+        )
+    );
+    sha256_hex(source.as_bytes())
+}
+
+/// For a finding on a later occurrence of a repeated line: the occurrence number, and the
+/// fingerprint the finding would have on the first occurrence. A baseline written before
+/// occurrences were told apart recorded every occurrence under that one fingerprint, one
+/// entry each. `None` for a first occurrence, an anchored finding, or a fingerprint that
+/// is not built from the line.
+fn first_occurrence_twin<F>(v: &Violation, read_file: F) -> Option<(usize, String)>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let (line, occurrence) = line_and_occurrence(v, read_file)?;
+    if occurrence < 2 || v.anchor.is_some() {
+        return None;
+    }
+    if v.fingerprint == fingerprint_of(v, Some((&line, occurrence)), FINGERPRINT_VERSION) {
+        Some((
+            occurrence,
+            fingerprint_of(v, Some((&line, 1)), FINGERPRINT_VERSION),
+        ))
+    } else if v.fingerprint == message_fingerprint(v, occurrence) {
+        Some((occurrence, message_fingerprint(v, 1)))
+    } else {
+        None
+    }
 }
 
 /// Version-2 fingerprints for every finding of a run. Two findings with no line and no
@@ -271,8 +347,15 @@ where
     F: Fn(&str) -> Option<String>,
 {
     let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut occurrences = Vec::with_capacity(violations.len());
     for (i, v) in violations.iter_mut().enumerate() {
-        v.fingerprint = fingerprint_for_version(v, &read_file, FINGERPRINT_VERSION);
+        let located = line_and_occurrence(v, &read_file);
+        v.fingerprint = fingerprint_of(
+            v,
+            located.as_ref().map(|(l, n)| (l.as_str(), *n)),
+            FINGERPRINT_VERSION,
+        );
+        occurrences.push(located.map_or(1, |(_, n)| n));
         groups.entry(v.fingerprint.clone()).or_default().push(i);
     }
     let mut collided = Vec::new();
@@ -294,14 +377,7 @@ where
             ));
         }
         for &i in &idx {
-            let v = &mut *violations[i];
-            let source = format!(
-                "v2:{}:{}:{}",
-                v.code,
-                v.file.as_deref().unwrap_or(""),
-                sha256_hex(format!("message:{}", v.message.trim()).as_bytes())
-            );
-            v.fingerprint = sha256_hex(source.as_bytes());
+            violations[i].fingerprint = message_fingerprint(violations[i], occurrences[i]);
         }
     }
     collided
@@ -430,6 +506,8 @@ where
         *available_fps.entry(entry.fingerprint.clone()).or_insert(0) += 1;
     }
 
+    let recorded = available_fps.clone();
+
     let mut total_baselined = 0;
     let mut matched_by_entry: HashMap<String, usize> = HashMap::new();
 
@@ -447,14 +525,29 @@ where
             } else {
                 fingerprint_for_version(&v, &read_file, baseline.version)
             };
-            if let Some(count) = available_fps.get_mut(&fp) {
-                if *count > 0 {
-                    *count -= 1;
-                    *matched_by_entry.entry(fp).or_insert(0) += 1;
-                    gate_baselined += 1;
-                    total_baselined += 1;
-                    continue;
+            // An entry recorded before occurrences of a repeated line were told apart
+            // carries the first occurrence's fingerprint: `n` such entries accept the
+            // first `n` occurrences, wherever this run reports them.
+            let recorded_as_first = || {
+                if baseline.version < FINGERPRINT_VERSION {
+                    return None;
                 }
+                let (occurrence, first) = first_occurrence_twin(&v, &read_file)?;
+                (recorded.get(&first).copied().unwrap_or(0) >= occurrence).then_some(first)
+            };
+            let matched = if available_fps.get(&fp).is_some_and(|n| *n > 0) {
+                Some(fp)
+            } else {
+                recorded_as_first().filter(|first| available_fps.get(first).is_some_and(|n| *n > 0))
+            };
+            if let Some(entry) = matched {
+                if let Some(count) = available_fps.get_mut(&entry) {
+                    *count -= 1;
+                }
+                *matched_by_entry.entry(entry).or_insert(0) += 1;
+                gate_baselined += 1;
+                total_baselined += 1;
+                continue;
             }
             remaining_violations.push(v);
         }
@@ -708,6 +801,32 @@ mod tests {
         };
         fill_fingerprints(&mut [&mut a, &mut b], |_| Some("x\ny\nz\n".to_string()));
         assert_ne!(a.fingerprint, b.fingerprint);
+    }
+
+    /// Two hits on each of two identical lines are four findings: the message keeps the
+    /// two of a line apart, the occurrence the two lines, and the first line's keep the
+    /// fingerprints they have with no second line.
+    #[test]
+    fn two_hits_on_each_of_two_identical_lines_have_four_fingerprints() {
+        let hit = |line, message: &str| Violation {
+            line: Some(line),
+            message: message.into(),
+            ..finding("t", "c/x")
+        };
+        let prints = |content: &'static str, lines: &[usize]| {
+            let mut found: Vec<Violation> = lines
+                .iter()
+                .flat_map(|l| [hit(*l, "first hit"), hit(*l, "second hit")])
+                .collect();
+            fill_fingerprints(&mut found.iter_mut().collect::<Vec<_>>(), |_| {
+                Some(content.to_string())
+            });
+            found.into_iter().map(|v| v.fingerprint).collect::<Vec<_>>()
+        };
+        let both = prints("a, b\nother\na, b\n", &[1, 3]);
+        let distinct: std::collections::HashSet<&String> = both.iter().collect();
+        assert_eq!(distinct.len(), 4, "{both:?}");
+        assert_eq!(both[..2], prints("a, b\nother\n", &[1])[..]);
     }
 
     #[test]

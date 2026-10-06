@@ -349,7 +349,7 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
         deprecated: None,
         gate: "instruction-smuggling",
         subject_kind: DirectiveSubjectKind::FilePath,
-        subject_doc: "File path, or `path:line`",
+        subject_doc: "File path (every finding in the file), or `path:line` (the finding on that line only)",
     },
     DirectiveSpec {
         canonical: "allow-citation-metadata",

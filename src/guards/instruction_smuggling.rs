@@ -559,6 +559,20 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
     let lift = |lifts: &crate::findings::FindingKind, subject: &str| {
         ctx.find_override(GATE, lifts, tokens::ALLOW_SMUGGLING, subject)
     };
+    // A file, by its path or its name, from a directive that names no line: one that
+    // does (`docs/table.md:9`) names the finding on that line and no other, and is
+    // offered that finding's own `path:line` through `lift`.
+    let lift_file = |lifts: &crate::findings::FindingKind, path: &str| {
+        let by = |subject: &str| {
+            ctx.find_whole_file_override(GATE, lifts, tokens::ALLOW_SMUGGLING, subject)
+        };
+        by(path).or_else(|| path.rsplit('/').next().and_then(by))
+    };
+    // The finding's own `path:line`, written with the path or with the file name.
+    let lift_line = |lifts: &crate::findings::FindingKind, path: &str, line: usize| {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        lift(lifts, &format!("{path}:{line}")).or_else(|| lift(lifts, &format!("{name}:{line}")))
+    };
     let own_files = PathFilter::new(&settings.instruction_files)?;
     let instructs = |p: &str| is_instruction_file(p) || own_files.matches(p);
     // A path `agent-scratch` reports as tracked scratch state (`.claude/*.lock`) is not
@@ -579,13 +593,10 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
         if file.kind == ChangeKind::Deleted {
             if instructs(&file.path) && !is_scratch(&file.path) && !ctx.git.is_whole_tree() {
                 out.examined += 1;
-                if let Some(ov) = lift(&crate::findings::AGENT_INSTRUCTIONS_CHANGED, &file.path)
-                    .or_else(|| {
-                        file.path
-                            .rsplit('/')
-                            .next()
-                            .and_then(|n| lift(&crate::findings::AGENT_INSTRUCTIONS_CHANGED, n))
-                    })
+                // The finding has no line: a directive written as `path:line` names a
+                // line of the file, not its removal.
+                if let Some(ov) =
+                    lift_file(&crate::findings::AGENT_INSTRUCTIONS_CHANGED, &file.path)
                 {
                     out.overrides.push(ov);
                 } else {
@@ -625,14 +636,7 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
                 file.path
             ));
         } else if instructs(&file.path) && !ctx.git.is_whole_tree() {
-            if let Some(ov) = lift(&crate::findings::AGENT_INSTRUCTIONS_CHANGED, &file.path)
-                .or_else(|| {
-                    file.path
-                        .rsplit('/')
-                        .next()
-                        .and_then(|n| lift(&crate::findings::AGENT_INSTRUCTIONS_CHANGED, n))
-                })
-            {
+            if let Some(ov) = lift_file(&crate::findings::AGENT_INSTRUCTIONS_CHANGED, &file.path) {
                 out.overrides.push(ov);
             } else {
                 out.push(
@@ -663,13 +667,8 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
             if classes.is_empty() {
                 continue;
             }
-            if let Some(ov) = lift(&crate::findings::INVISIBLE_CHARACTERS_ADDED, &file.path)
-                .or_else(|| {
-                    lift(
-                        &crate::findings::INVISIBLE_CHARACTERS_ADDED,
-                        &format!("{}:{n}", file.path),
-                    )
-                })
+            if let Some(ov) = lift_line(&crate::findings::INVISIBLE_CHARACTERS_ADDED, &file.path, n)
+                .or_else(|| lift_file(&crate::findings::INVISIBLE_CHARACTERS_ADDED, &file.path))
             {
                 out.overrides.push(ov);
                 continue;
@@ -726,15 +725,16 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
         // One finding at `lines[0]`; a directive naming the path or any of `lines` lifts it.
         let report = |out: &mut GateOutcome, lines: &[usize], classes: &[&str]| {
             let line = lines[0];
-            let lifted =
-                lift(&crate::findings::INSTRUCTION_LIKE_TEXT_ADDED, &file.path).or_else(|| {
-                    lines.iter().find_map(|l| {
-                        lift(
-                            &crate::findings::INSTRUCTION_LIKE_TEXT_ADDED,
-                            &format!("{}:{l}", file.path),
-                        )
-                    })
-                });
+            let lifted = lines
+                .iter()
+                .find_map(|l| {
+                    lift_line(
+                        &crate::findings::INSTRUCTION_LIKE_TEXT_ADDED,
+                        &file.path,
+                        *l,
+                    )
+                })
+                .or_else(|| lift_file(&crate::findings::INSTRUCTION_LIKE_TEXT_ADDED, &file.path));
             if let Some(ov) = lifted {
                 out.overrides.push(ov);
                 return;
@@ -899,6 +899,18 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
         if invisible.is_empty() && classes.is_empty() {
             continue;
         }
+        // The title, the body and each commit message are separate subjects. A commit
+        // is named by its hash; the title and the body are the same two names in every
+        // pull request, so the anchor carries a hash of what this one says (never the
+        // text) and a finding on one pull request is not the finding on the next.
+        let anchor = if where_.starts_with("commit:") {
+            where_.clone()
+        } else {
+            format!(
+                "{where_}:{}",
+                crate::report::gitlab::sha256_hex(text.trim().as_bytes())
+            )
+        };
         let lifts = if invisible.is_empty() {
             &crate::findings::INSTRUCTION_LIKE_TEXT_IN_DESCRIPTION
         } else {
@@ -920,8 +932,7 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
                 ),
                 &format!("Remove the invisible characters, or record them: `allow-agent-instructions: {where_} <reason>`."),
             );
-            // The title, the body and each commit message are separate subjects.
-            out.anchor_last(where_.clone());
+            out.anchor_last(anchor.clone());
         }
         if !classes.is_empty() {
             out.push(
@@ -935,7 +946,7 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
                 ),
                 &format!("Read it as an instruction to a reviewer bot and decide whether it belongs; record a legitimate one: `allow-agent-instructions: {where_} <reason>`."),
             );
-            out.anchor_last(where_.clone());
+            out.anchor_last(anchor);
         }
     }
     if out.examined == 0 {
