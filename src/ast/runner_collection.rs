@@ -1877,6 +1877,35 @@ pub fn rust_cfg_ci_verdict(node: Node, src: &[u8]) -> Option<super::ci_condition
     super::ci_condition::rust_cfg_predicate(&get_predicate_nodes(node, src), src)
 }
 
+/// Whether `node` is a `#[cfg(<predicate>)]` attribute whose item is left out of a CI
+/// build. Any other attribute (`cfg_attr`, `doc`) is not one, whatever its text.
+pub fn rust_cfg_leaves_out_in_ci(node: Node, src: &[u8]) -> bool {
+    is_cfg_attribute(node, src)
+        && super::ci_condition::rust_cfg_leaves_out_in_ci(&get_predicate_nodes(node, src), src)
+}
+
+/// Whether `node` is a `#[cfg(<predicate>)]` attribute whose item is left out of a test
+/// build (`not(test)`).
+pub fn rust_cfg_leaves_out_of_tests(node: Node, src: &[u8]) -> bool {
+    is_cfg_attribute(node, src)
+        && super::ci_condition::rust_cfg_leaves_out_of_tests(&get_predicate_nodes(node, src), src)
+}
+
+/// Whether an attribute node (`attribute_item` or `attribute`) is named `cfg`.
+fn is_cfg_attribute(node: Node, src: &[u8]) -> bool {
+    let attribute = if node.kind() == "attribute" {
+        Some(node)
+    } else {
+        let mut cursor = node.walk();
+        let found = node.children(&mut cursor).find(|c| c.kind() == "attribute");
+        found
+    };
+    attribute
+        .and_then(|a| a.child(0))
+        .and_then(|name| name.utf8_text(src).ok())
+        == Some("cfg")
+}
+
 /// Combined collection rules across supported runners.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunnerCollectionRules {

@@ -50,7 +50,8 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
     let vocab = super::agent_diff::assert_vocabulary(ctx.config);
     let mut unsupported: Vec<String> = Vec::new();
 
-    for file in ctx.git.changed_files()? {
+    let changed = ctx.git.changed_files()?;
+    for file in changed.iter().cloned() {
         if file.kind == ChangeKind::Deleted || exempt.matches(&file.path) {
             continue;
         }
@@ -71,6 +72,7 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
         // A rename out of test scope into it is reported once, here, before any
         // head-side early exit; `stub-bodies` judges the same file's bodies and
         // skips it. Paths only, no contents.
+        let mut lifted_reclassification = false;
         if anchored.reclassified {
             let lift = |subject: &str| {
                 ctx.find_override(
@@ -84,6 +86,7 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
                 lift(&file.path).or_else(|| file.path.rsplit('/').next().and_then(lift))
             {
                 out.overrides.push(ov);
+                lifted_reclassification = true;
             } else {
                 out.push(
                     ctx.overridable(settings.severity()),
@@ -112,7 +115,38 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
                 .chain(anchored.declared_scope_note),
         );
         let head = match pack.extract(&anchored.classify_path, &head_src, &vocab) {
-            Ok(f) => f.swallowed,
+            Ok(f) => {
+                // A deleted production file added again under a test name, with no test.
+                let as_production = f
+                    .tests
+                    .is_empty()
+                    .then(|| {
+                        super::replaced_production_file(
+                            &file,
+                            &changed,
+                            pack,
+                            &registry,
+                            &vocab.test_paths,
+                        )
+                    })
+                    .flatten()
+                    .and_then(|replaced| {
+                        let facts = pack
+                            .extract(&replaced.classify_path, &head_src, &vocab)
+                            .ok()?;
+                        (!facts.swallowed.is_empty()).then_some((replaced, facts))
+                    });
+                match as_production {
+                    Some((replaced, production)) => {
+                        out.notes.push(super::replaced_production_note(
+                            &file.path,
+                            &replaced.deleted,
+                        ));
+                        production.swallowed
+                    }
+                    None => f.swallowed,
+                }
+            }
             Err(e) => {
                 out.notes.push(format!(
                     "`{}`: not analysed, the head side does not parse ({e})",
@@ -129,7 +163,30 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
             None => Vec::new(),
         };
         out.examined += head.len();
-        for site in new_sites(&base, &head) {
+        let new = new_sites(&base, &head);
+        if lifted_reclassification {
+            // The override line of a report shows the directive and the path, and one
+            // `allow-swallow` on a path lifts the move and every handler in the file.
+            let handlers = new
+                .iter()
+                .filter(|site| {
+                    !super::line_allows(
+                        head_src
+                            .lines()
+                            .nth(site.line.saturating_sub(1))
+                            .unwrap_or(""),
+                        GATE,
+                    )
+                })
+                .count();
+            out.notes.push(format!(
+                "`allow-swallow` lifted `{}` for `{}` (renamed from `{}` into test scope); a lift by path also covers the handlers of the file, each with its own override record: {handlers} handler finding(s) here",
+                out.code_of(&crate::findings::TEST_PATH_RECLASSIFIED),
+                file.path,
+                file.old_path
+            ));
+        }
+        for site in new {
             let line_text = head_src
                 .lines()
                 .nth(site.line.saturating_sub(1))
