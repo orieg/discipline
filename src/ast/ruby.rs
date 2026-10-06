@@ -148,6 +148,8 @@ pub const RUBY_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
     super::method_checks::ReceiverCalls {
         member: &[],
         direct: &[("call", "receiver", "method")],
+        bare: &[],
+        tokens: &[],
     };
 
 pub const RUBY_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {

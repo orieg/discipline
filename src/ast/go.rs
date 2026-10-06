@@ -55,6 +55,7 @@ impl LanguagePack for GoPack {
             test_calls: Vec::new(),
             suites: suite_types(root, src),
             suite_receiver: None,
+            suite_package: suite_package(root, src),
         };
 
         extractor.collect_comments_and_escape_hatches(root);
@@ -111,7 +112,7 @@ impl LanguagePack for GoPack {
         );
         super::bounds::go(root, src, &mut extractor.facts.tests);
         super::expectations::go(root, src, &mut extractor.facts.tests);
-        super::caught_assertions::go(root, src, &mut extractor.facts.tests);
+        super::caught_assertions::go(root, src, &mut extractor.facts.tests, vocab);
         extractor.facts.prose = super::prose::extract(
             root,
             src,
@@ -173,6 +174,8 @@ struct GoExtractor<'a> {
     /// The receiver of the suite method being read (`s` of `func (s *Suite) TestAdd()`):
     /// an assertion called on it is counted.
     suite_receiver: Option<String>,
+    /// The name the file calls testify's `suite` package by ([`suite_package`]).
+    suite_package: String,
 }
 
 /// The assertion methods of testify's `assert` and `require` packages, which a suite
@@ -291,6 +294,31 @@ fn method_head<'t>(node: Node<'t>, src: &'t str) -> Option<(&'t str, Option<&'t 
         && no_parameter
         && node.child_by_field_name("result").is_none();
     Some((text(ty), name, shaped))
+}
+
+/// The name a file calls testify's `suite` package by: the name its import gives it
+/// (`import ts "github.com/stretchr/testify/suite"`), else `suite`.
+fn suite_package(root: Node, src: &str) -> String {
+    let mut name = None;
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "import_spec" {
+            let path = node
+                .child_by_field_name("path")
+                .and_then(|p| p.utf8_text(src.as_bytes()).ok())
+                .unwrap_or("");
+            if path.trim_matches(['"', '`']).ends_with("testify/suite") {
+                name = node
+                    .child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(src.as_bytes()).ok())
+                    .map(str::to_string);
+            }
+            continue;
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.children(&mut cursor));
+    }
+    name.unwrap_or_else(|| "suite".to_string())
 }
 
 /// The types of a file that are testify suites: tests are their `Test*` methods, run by
@@ -525,6 +553,21 @@ impl<'a> GoExtractor<'a> {
         self.test_calls.push(direct_calls);
     }
 
+    /// Whether a call is `suite.Run(t, <suite value>)`: `Run` of testify's `suite`
+    /// package, under the name the file imports it by, with a second argument that is
+    /// not a function written in place.
+    fn is_suite_run(&self, callee: Node, args: &[Node]) -> bool {
+        callee.kind() == "selector_expression"
+            && callee
+                .child_by_field_name("field")
+                .is_some_and(|f| self.text(f) == "Run")
+            && callee
+                .child_by_field_name("operand")
+                .is_some_and(|on| on.kind() == "identifier" && self.text(on) == self.suite_package)
+            && args.len() == 2
+            && args[1].kind() != "func_literal"
+    }
+
     /// The assertion a call makes on the suite being read, and whether it stops the
     /// test: `s.Equal(..)` and `s.Assert().Equal(..)` do not, `s.Require().Equal(..)`
     /// does, as `assert.Equal` and `require.Equal` do.
@@ -732,6 +775,16 @@ impl<'a> GoExtractor<'a> {
         let call_text = self.text(func_node);
         let args_node = node.child_by_field_name("arguments");
         let args = Self::collect_arguments(args_node);
+
+        // The entry point of a testify suite: `suite.Run(t, new(CalcSuite))` runs the
+        // suite's `Test*` methods, each of which is read as a test of its own where it
+        // is declared. The call is not a subtest with a body to read; it is what the
+        // entry function does, whether the suite is declared in this file or elsewhere.
+        if self.is_suite_run(func_node, &args) {
+            test_fn.total_asserts += 1;
+            test_fn.strong_asserts += 1;
+            return;
+        }
 
         // Subtests: t.Run("subtest", func(t *testing.T) { ... })
         if (call_text.ends_with(".Run") || call_text == "Run") && args.len() >= 2 {
@@ -1132,6 +1185,8 @@ pub const GO_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
             "field",
         )],
         direct: &[],
+        bare: &[],
+        tokens: &[],
     };
 
 pub const GO_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {

@@ -167,6 +167,178 @@ const CASES: &[Case] = &[
                 )? == 1)
         },
     ),
+    (
+        "ast: a Go recover() swallows a check that panics, not an assertion that ends the test through t.FailNow",
+        || {
+            let v = AssertVocabulary::default();
+            let reg = crate::ast::default_registry();
+            let pack = reg
+                .find_pack("p_test.go")
+                .ok_or_else(|| anyhow::anyhow!("no pack for Go"))?;
+            let test = |deferred: &str, check: &str| -> Result<(usize, bool)> {
+                let src = format!(
+                    "package p\n\nfunc TestA(t *testing.T) {{\n\tdefer func() {{\n\t\tif r := recover(); r != nil {{\n\t\t\t{deferred}\n\t\t}}\n\t}}()\n\t{check}\n}}\n\nfunc mustEqual(a, b int) {{\n\tif a != b {{\n\t\tpanic(\"not equal\")\n\t}}\n}}\n"
+                );
+                let facts = pack.extract("p_test.go", &src, &v)?;
+                let t = &facts.tests[0];
+                Ok((t.caught_assertions.len(), t.is_vacuous()))
+            };
+            Ok(test("log.Println(r)", "require.Equal(t, 4, add(2, 2))")? == (0, false)
+                && test("log.Println(r)", "assert.Equal(t, 4, add(2, 2))")? == (0, false)
+                && test("log.Println(r)", "mustEqual(4, add(2, 2))")? == (1, true)
+                && test("log.Println(r.(error).Error())", "mustEqual(4, add(2, 2))")? == (1, true)
+                && test("t.Fatal(r)", "mustEqual(4, add(2, 2))")? == (0, false)
+                && test("require.Fail(t, \"panicked\")", "mustEqual(4, add(2, 2))")? == (0, false))
+        },
+    ),
+    (
+        "ast: a Python handler for a class that may be an assertion failure is reported when it only swallows; a standard class beside AssertionError is not",
+        || {
+            let v = AssertVocabulary::default();
+            let reg = crate::ast::default_registry();
+            let pack = reg
+                .find_pack("test_x.py")
+                .ok_or_else(|| anyhow::anyhow!("no pack for Python"))?;
+            let caught = |classes: &str, handler: &str| -> Result<usize> {
+                let src = format!(
+                    "{classes}def test_x():\n    try:\n        assert f()\n    {handler}\n"
+                );
+                Ok(pack
+                    .extract("test_x.py", &src, &v)?
+                    .tests
+                    .iter()
+                    .map(|t| t.caught_assertions.len())
+                    .sum())
+            };
+            Ok(caught("", "except CheckFailed:\n        pass")? == 1
+                && caught("", "except CheckFailed as e:\n        logger.warning(e)")? == 1
+                && caught("", "except CheckFailed:\n        raise")? == 0
+                && caught("", "except CheckFailed:\n        seen = True")? == 0
+                && caught("", "except KeyError:\n        pass")? == 0
+                && caught("", "except OSError:\n        pass")? == 0
+                && caught("class Local(ValueError):\n    pass\n\n", "except Local:\n        pass")? == 0
+                && caught("class Local(AssertionError):\n    pass\n\n", "except Local:\n        pass")? == 1
+                && caught("", "finally:\n        return")? == 1
+                && caught("", "finally:\n        cleanup()")? == 0)
+        },
+    ),
+    (
+        "ast: an assertion in a callback inside a swallowing try is read only when the callback is known to run before the try ends; a named promise handler is judged by its body; a finally that returns discards the failure",
+        || {
+            let v = AssertVocabulary::default();
+            let reg = crate::ast::default_registry();
+            let caught = |path: &str, src: &str| -> Result<usize> {
+                let pack = reg
+                    .find_pack(path)
+                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
+                Ok(pack
+                    .extract(path, src, &v)?
+                    .tests
+                    .iter()
+                    .map(|t| t.caught_assertions.len())
+                    .sum())
+            };
+            let js = |body: &str| format!("test('a', () => {{\n{body}\n}});\nfunction ignore(e) {{}}\nfunction rethrow(e) {{ throw e; }}\n");
+            let java = |body: &str| format!("class ATest {{ @Test void t() {{ {body} }} }}");
+            let kotlin = |body: &str| format!("class ATest {{\n @Test\n fun t() {{\n{body}\n }}\n}}\n");
+            let csharp = |body: &str| format!("public class ATests {{ [Test] public void T() {{ {body} }} }}");
+            Ok(caught("a.test.js", &js("  try {\n    [4].forEach((v) => expect(f()).toBe(v));\n  } catch (e) {}"))? == 1
+                && caught("a.test.js", &js("  try {\n    setTimeout(() => expect(f()).toBe(4), 0);\n  } catch (e) {}"))? == 0
+                && caught("a.test.js", &js("  return load().then((v) => expect(v).toBe(4)).catch(ignore);"))? == 1
+                && caught("a.test.js", &js("  return load().then((v) => expect(v).toBe(4)).catch(rethrow);"))? == 0
+                && caught("a.test.js", &js("  return load().then((v) => expect(v).toBe(4)).catch(done);"))? == 0
+                && caught("a.test.js", &js("  try {\n    expect(f()).toBe(4);\n  } finally {\n    return;\n  }"))? == 1
+                && caught("a.test.js", &js("  try {\n    expect(f()).toBe(4);\n  } finally {\n    cleanup();\n  }"))? == 0
+                && caught("ATest.java", &java("try { items.forEach(v -> assertEquals(v, f())); } catch (AssertionError e) { }"))? == 1
+                && caught("ATest.java", &java("try { pool.submit(() -> assertEquals(4, f())); } catch (AssertionError e) { }"))? == 0
+                && caught("ATest.java", &java("try { assertEquals(4, f()); } finally { return; }"))? == 1
+                && caught("ATest.java", &java("try { assertEquals(4, f()); } finally { cleanup(); }"))? == 0
+                && caught("ATest.kt", &kotlin("  try {\n   f().let { assertEquals(4, it) }\n  } catch (e: AssertionError) {\n  }"))? == 1
+                && caught("ATest.kt", &kotlin("  try {\n   thread { assertEquals(4, f()) }\n  } catch (e: AssertionError) {\n  }"))? == 0
+                && caught("ATests.cs", &csharp("try { items.ForEach(v => Assert.AreEqual(v, F())); } catch (Exception) { }"))? == 1
+                && caught("ATests.cs", &csharp("try { Task.Run(() => Assert.AreEqual(4, F())); } catch (Exception) { }"))? == 0
+                && caught("ATests.cs", &csharp("try { Assert.AreEqual(4, F()); } catch (Exception) { Assert.Pass(); }"))? == 1
+                && caught("ATests.cs", &csharp("try { Assert.AreEqual(4, F()); } catch (Exception) { Assert.Inconclusive(); }"))? == 1
+                && caught("ATests.cs", &csharp("try { Assert.AreEqual(4, F()); } catch (Exception) { Assert.Fail(); }"))? == 0)
+        },
+    ),
+    (
+        "ast: a catch_unwind result is checked only when the branch taken for a failure fails; a configured helper is an assertion to the caught-assertion reading",
+        || {
+            let plain = AssertVocabulary::default();
+            let mut configured = AssertVocabulary::default();
+            configured.helper_fns.push("check_total".to_string());
+            let reg = crate::ast::default_registry();
+            let caught = |path: &str, src: &str, v: &AssertVocabulary| -> Result<usize> {
+                let pack = reg
+                    .find_pack(path)
+                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
+                Ok(pack
+                    .extract(path, src, v)?
+                    .tests
+                    .iter()
+                    .map(|t| t.caught_assertions.len())
+                    .sum())
+            };
+            let rust = |after: &str| {
+                format!("#[test] fn t() {{ let r = std::panic::catch_unwind(|| assert_eq!(1, 2)); {after} }}")
+            };
+            let py = "def test_x():\n    try:\n        check_total(f())\n    except AssertionError:\n        pass\n";
+            let unwind = "#[test] fn t() { let _ = std::panic::catch_unwind(|| check_total(f())); }";
+            Ok(caught("t.rs", &rust("if r.is_err() { panic!(\"failed\"); }"), &plain)? == 0
+                && caught("t.rs", &rust("if r.is_ok() { panic!(\"no panic\"); }"), &plain)? == 1
+                && caught("t.rs", &rust("if r.is_ok() { done(); } else { panic!(\"failed\"); }"), &plain)? == 0
+                && caught("t.rs", &rust("if let Ok(()) = r { panic!(\"no panic\"); }"), &plain)? == 1
+                && caught("t.rs", &rust("match r { Ok(()) => {} Err(e) => std::panic::resume_unwind(e) }"), &plain)? == 0
+                && caught("t.rs", &rust("match r { Ok(()) => panic!(\"no panic\"), Err(_) => {} }"), &plain)? == 1
+                && caught("test_x.py", py, &configured)? == 1
+                && caught("test_x.py", py, &plain)? == 0
+                && caught("t.rs", unwind, &configured)? == 1
+                && caught("t.rs", unwind, &plain)? == 0)
+        },
+    ),
+    (
+        "ast: suite.Run is the entry point of a testify suite, not a subtest; a receiver call is followed into a C++ member function, through a Rust macro's arguments, and without parentheses in Scala",
+        || {
+            let v = AssertVocabulary::default();
+            let reg = crate::ast::default_registry();
+            let tests = |path: &str, src: &str| -> Result<Vec<crate::ast::TestFn>> {
+                let pack = reg
+                    .find_pack(path)
+                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
+                Ok(pack.extract(path, src, &v)?.tests)
+            };
+            let suite = tests(
+                "calc_test.go",
+                "package calc\n\ntype S struct {\n\tsuite.Suite\n}\n\nfunc (s *S) TestAdd() {\n\ts.Equal(4, Add(2, 2))\n}\n\nfunc TestS(t *testing.T) {\n\tsuite.Run(t, new(S))\n}\n",
+            )?;
+            let subtest = tests(
+                "calc_test.go",
+                "package calc\n\nfunc TestS(t *testing.T) {\n\tt.Run(\"empty\", func(t *testing.T) {\n\t\tAdd(2, 2)\n\t})\n}\n",
+            )?;
+            let checks = |path: &str, src: &str| -> Result<usize> {
+                Ok(tests(path, src)?.iter().map(|t| t.method_checks).sum())
+            };
+            let cpp = |body: &str| {
+                format!("struct Checker {{\n  int n;\n  void done() {{ {body} }}\n}};\n\nTEST(Api, Create) {{\n  Checker c = Make();\n  c.done();\n}}\n")
+            };
+            let rust = |body: &str| {
+                format!("struct A(Vec<u8>);\nimpl A {{ fn done(&self) -> usize {{ {body} self.0.len() }} }}\n#[test]\nfn t() {{\n    let v = make();\n    println!(\"{{}}\", v.done());\n}}\n")
+            };
+            let scala = |body: &str| {
+                format!("class Checker(r: R) {{\n  def done: Unit = {{\n    {body}\n  }}\n}}\n\nclass ApiSpec extends AnyFunSuite {{\n  test(\"create\") {{\n    val c = new Checker(make())\n    c.done\n  }}\n}}\n")
+            };
+            Ok(suite.iter().all(|t| !t.is_vacuous())
+                && suite.iter().map(|t| t.name.as_str()).collect::<Vec<_>>() == ["S.TestAdd", "TestS"]
+                && subtest.iter().any(|t| t.name == "TestS/empty" && t.is_vacuous())
+                && checks("tests/api_test.cc", &cpp("EXPECT_EQ(n, 1);"))? == 1
+                && checks("tests/api_test.cc", &cpp("Log(n);"))? == 0
+                && checks("tests/t.rs", &rust("assert_eq!(self.0.capacity(), 0);"))? == 1
+                && checks("tests/t.rs", &rust("log(&self.0);"))? == 0
+                && checks("src/test/scala/ApiSpec.scala", &scala("assert(r.f1 == 1)"))? == 1
+                && checks("src/test/scala/ApiSpec.scala", &scala("log(r)"))? == 0)
+        },
+    ),
     ("ast: assert inside a comment is not an assertion", || {
         let f = analyze(
             "#[test] fn t() { // assert_eq!(1, 2);\n }",

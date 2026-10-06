@@ -643,6 +643,8 @@ pub const SCALA_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
     super::method_checks::ReceiverCalls {
         member: &[("call_expression", "function", "field_expression", "field")],
         direct: &[],
+        bare: &[("field_expression", "field")],
+        tokens: &[],
     };
 
 pub const SCALA_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {

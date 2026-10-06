@@ -142,7 +142,7 @@ impl LanguagePack for PythonPack {
         );
         super::bounds::python(root, src, &mut extractor.facts.tests);
         super::expectations::python(root, src, &mut extractor.facts.tests);
-        super::caught_assertions::python(root, src, &mut extractor.facts.tests);
+        super::caught_assertions::python(root, src, &mut extractor.facts.tests, vocab);
         super::expected_exceptions::python(root, src, &mut extractor.facts.tests);
         super::calls::count_python_assert_statements(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(root, src, &["comment", "string"]);
@@ -1610,6 +1610,8 @@ pub const PYTHON_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
     super::method_checks::ReceiverCalls {
         member: &[("call", "function", "attribute", "attribute")],
         direct: &[],
+        bare: &[],
+        tokens: &[],
     };
 
 pub const PYTHON_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {

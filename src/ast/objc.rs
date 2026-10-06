@@ -515,6 +515,8 @@ pub const OBJC_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
     super::method_checks::ReceiverCalls {
         member: &[],
         direct: &[("message_expression", "receiver", "method")],
+        bare: &[],
+        tokens: &[],
     };
 
 pub const OBJC_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
