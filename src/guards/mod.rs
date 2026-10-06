@@ -2179,13 +2179,14 @@ mod tests {
         "canary_command",
         "command",
         "test_command",
-        // Names: jobs, steps, constants, presets, sanitizers, groups, actions.
+        // Names: jobs, steps, constants, presets, sanitizers, groups, actions, record keys.
         "change_job",
         "constant_name",
         "guard",
         "job",
         "name",
         "preset",
+        "record_commit_key",
         "rollup_job",
         "sanitizer",
         "uses",
