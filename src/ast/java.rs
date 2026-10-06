@@ -292,7 +292,19 @@ impl<'a> JavaExtractor<'a> {
                     }
                 }
             }
-            match super::ci_condition::jvm_annotation(name, named, matches) {
+            // `@DisabledIf("method")`: read by the method, where the class has it.
+            let by_method = match name {
+                "DisabledIf" | "EnabledIf" => super::ci_condition::jvm_condition_method(
+                    Lang::Java,
+                    annotation,
+                    self.src,
+                    name == "EnabledIf",
+                ),
+                _ => None,
+            };
+            let read =
+                by_method.or_else(|| super::ci_condition::jvm_annotation(name, named, matches));
+            match read {
                 Some(SkipCondition::Always) => always = true,
                 Some(SkipCondition::When(verdict)) => {
                     conditional.push((self.text(annotation).trim().to_string(), verdict));
@@ -314,6 +326,15 @@ impl<'a> JavaExtractor<'a> {
                     test.record_conditional_skip(text, verdict);
                 }
                 Some((_, SkipCondition::Never)) | None => {}
+            }
+        }
+        for (text, outcome) in
+            super::ci_condition::jvm_assumptions_under_if(Lang::Java, body, self.src)
+        {
+            match outcome {
+                SkipCondition::Always => test.ignored = true,
+                SkipCondition::When(verdict) => test.record_conditional_skip(text, verdict),
+                SkipCondition::Never => {}
             }
         }
     }
