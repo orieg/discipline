@@ -10892,7 +10892,7 @@ fn test_calc() {
     let out = run.stdout;
 
     assert!(out.contains("Discipline gatekeeper detected violations in your changes"));
-    assert!(out.contains("Location: tests/calc.rs:3"));
+    assert!(out.contains("Location: `tests/calc.rs:3`"));
     assert!(out.contains(
         "- Problem:\n```text\nTest `test_calc`: equality / pattern assertions dropped from 2 to 1"
     ));

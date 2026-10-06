@@ -423,6 +423,10 @@ pub struct ForgeError {
     /// one: what the forge said, apart from the status it said it with. For deciding what
     /// a refusal means; `message` is the text to print.
     pub forge_message: Option<String>,
+    /// The forge's JSON error body, when it sent one: the fields beside `message` that
+    /// say what answered and about what (GitHub's `status`, `documentation_url`,
+    /// `errors`). For deciding what a refusal means, never for printing.
+    pub forge_body: Option<serde_json::Value>,
 }
 
 impl ForgeError {
@@ -433,6 +437,7 @@ impl ForgeError {
             attempts: 1,
             status: None,
             forge_message: None,
+            forge_body: None,
         }
     }
 
@@ -445,6 +450,12 @@ impl ForgeError {
     /// The same error, recording the `message` of the forge's error body.
     pub fn with_forge_message(mut self, message: Option<String>) -> Self {
         self.forge_message = message;
+        self
+    }
+
+    /// The same error, recording the forge's JSON error body.
+    pub fn with_forge_body(mut self, body: Option<serde_json::Value>) -> Self {
+        self.forge_body = body.filter(|b| b.is_object());
         self
     }
 
@@ -677,12 +688,52 @@ pub fn error_body_message(body: &serde_json::Value) -> Option<String> {
 /// validation failure, a proxy and a replica that has not yet seen a push answer 422 too.
 const GITHUB_NO_COMMIT: &str = "No commit found for SHA";
 
-/// Whether a 422 from GitHub says the repository does not have the commit.
-fn github_says_no_commit(e: &ForgeError) -> bool {
-    e.status == Some(422)
-        && e.forge_message
-            .as_deref()
-            .is_some_and(|m| m.starts_with(GITHUB_NO_COMMIT))
+/// The fragment of `documentation_url` in an error GitHub's "List pull requests
+/// associated with a commit" endpoint answers with.
+const GITHUB_PULLS_OF_COMMIT_DOC: &str = "#list-pull-requests-associated-with-a-commit";
+
+/// Whether a 422 from GitHub says the repository does not have commit `sha`. Two shapes
+/// are recognised, and nothing else is:
+///
+/// 1. the words: `message` begins with [`GITHUB_NO_COMMIT`];
+/// 2. the fields, for a message worded another way: the body's own `status` is `"422"`,
+///    its `documentation_url` is this endpoint's ([`GITHUB_PULLS_OF_COMMIT_DOC`]), it
+///    carries no `errors` member (a validation failure lists them), and its `message`
+///    names the commit asked for in full.
+///
+/// A proxy's 422 has none of GitHub's fields, and a 422 about anything else does not
+/// name the commit.
+fn github_says_no_commit(e: &ForgeError, sha: &str) -> bool {
+    if e.status != Some(422) {
+        return false;
+    }
+    let Some(message) = e.forge_message.as_deref() else {
+        return false;
+    };
+    if message.starts_with(GITHUB_NO_COMMIT) {
+        return true;
+    }
+    let Some(body) = e.forge_body.as_ref() else {
+        return false;
+    };
+    let text = |key: &str| body.get(key).and_then(|v| v.as_str());
+    text("status") == Some("422")
+        && text("documentation_url").is_some_and(|u| u.ends_with(GITHUB_PULLS_OF_COMMIT_DOC))
+        && body.get("errors").is_none()
+        && sha.len() >= 40
+        && message
+            .to_ascii_lowercase()
+            .contains(&sha.to_ascii_lowercase())
+}
+
+/// Whether `body`, the 200 answer of a "get a single commit" request for `sha`, is about
+/// that commit: an object whose `sha` (Gitea, Forgejo) or `id` (GitLab) is `sha`.
+fn names_commit(body: &serde_json::Value, sha: &str) -> bool {
+    ["sha", "id"].iter().any(|key| {
+        body.get(key)
+            .and_then(|v| v.as_str())
+            .is_some_and(|named| named.eq_ignore_ascii_case(sha))
+    })
 }
 
 /// The paging query for `page` (1-based) of a list endpoint. Gitea and Forgejo read
@@ -828,7 +879,8 @@ impl CannedApi {
             // 404: a test that recorded that lookup is about a commit the forge has,
             // unless it records the commit's own answer.
             None if self.records_the_pulls_of(key) => {
-                return Ok((200, Vec::new(), serde_json::json!({})))
+                let sha = key.rsplit('/').next().unwrap_or_default();
+                return Ok((200, Vec::new(), serde_json::json!({"sha": sha, "id": sha})));
             }
             None => return Err(format!("no recorded response for `{key}`")),
         };
@@ -893,7 +945,8 @@ impl ForgeApi for CannedApi {
             None => Ok(body),
             Some(kind) => Err(ForgeError::new(kind, canned_refusal(status, path, &body))
                 .with_status(status)
-                .with_forge_message(error_body_message(&body))),
+                .with_forge_message(error_body_message(&body))
+                .with_forge_body(Some(body))),
         }
     }
 
@@ -1452,9 +1505,10 @@ impl HttpApi<'_> {
                     attempts: attempt,
                     status: None,
                     forge_message: None,
+                    forge_body: None,
                 });
             }
-            let (kind, message, headers, status, forge_message) =
+            let (kind, message, headers, status, forge_message, forge_body) =
                 match self.exchange(forge, url, base_host, insecure_ok, post) {
                     Ok(a) => match classify_status(a.status, &a.headers) {
                         None => return Ok(a),
@@ -1466,11 +1520,12 @@ impl HttpApi<'_> {
                                 .trim_end()
                                 .to_string();
                             let said = body.as_ref().and_then(error_body_message);
-                            (kind, text, a.headers, Some(a.status), said)
+                            let body = body.filter(|b| b.is_object());
+                            (kind, text, a.headers, Some(a.status), said, body)
                         }
                     },
                     Err(e) if e.kind == ForgeErrorKind::Unavailable => {
-                        (e.kind, e.message, Vec::new(), None, None)
+                        (e.kind, e.message, Vec::new(), None, None, None)
                     }
                     Err(mut e) => {
                         e.attempts = attempt;
@@ -1493,6 +1548,7 @@ impl HttpApi<'_> {
                         attempts: attempt,
                         status,
                         forge_message,
+                        forge_body,
                     })
                 }
             }
@@ -1645,15 +1701,25 @@ pub struct MergedPull {
     pub merged_at: Option<i64>,
 }
 
-/// The merged pull request (or merge request) that carried `sha`, if the forge knows one.
+/// What the forge says about where a commit came from.
 ///
 /// GitHub lists every pull request a commit belongs to (`commits/{sha}/pulls`); the
 /// merged one is taken, and a commit in several merged pull requests is refused rather
 /// than guessed. Gitea and Forgejo answer with the one merged pull request
 /// (`commits/{sha}/pull`, 404 when none). GitLab lists the merge requests
 /// (`repository/commits/:sha/merge_requests`), filtered to `state == "merged"`.
-/// `Ok(None)` is a direct push: no merged pull request carried the commit.
-/// What the forge says about where a commit came from.
+///
+/// Each reading needs an answer that is positively recognised; any other answer is a
+/// lookup that failed:
+///
+/// | Forge | No merged pull request carries the commit | The forge does not have the commit |
+/// |---|---|---|
+/// | GitHub | 200 and a list, each entry with a `merged_at` (a time or `null`), none merged | 422 and a body that says so ([`github_says_no_commit`]) |
+/// | Gitea, Forgejo | 200 and a pull request whose `merged` is `false`; or 404, then 200 for the commit itself with a body that names it | 404, then 404 for the commit itself |
+/// | GitLab | 200 and a list, each entry with a `state`, none `merged`; or 404, then 200 for the commit itself with a body that names it | 404, then 404 for the commit itself |
+///
+/// A 404 from GitHub's lookup is in neither column: GitHub answers it for a repository
+/// that is not there or that the token cannot see.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommitOrigin {
     /// It arrived through this merged pull request.
@@ -1709,7 +1775,7 @@ pub fn merged_pull_lookup(
 /// merged pull request carries: Gitea and Forgejo "Get a single commit"
 /// (`GET /repos/{owner}/{repo}/git/commits/{sha}`), GitLab "Get a single commit"
 /// (`GET /projects/:id/repository/commits/:sha`). GitHub tells the two apart in its
-/// first answer ([`github_says_no_commit`]) and is not asked again.
+/// first answer (an empty list, or [`github_says_no_commit`]) and is not asked again.
 fn commit_path(forge: &Forge, sha: &str) -> Option<String> {
     match forge.kind {
         ForgeKind::GitHub => None,
@@ -1723,20 +1789,35 @@ fn commit_path(forge: &Forge, sha: &str) -> Option<String> {
     }
 }
 
-/// What a 404 from the merged pull request lookup of `sha` means, by asking for the
-/// commit itself: the forge has it and no merged pull request carries it (a direct
-/// push), or the forge does not have it. Any other answer is a lookup that failed. One
-/// more read-only request, made only after that 404.
+/// What a 404 from the merged pull request lookup of `sha` means on Gitea, Forgejo and
+/// GitLab, by asking for the commit itself. A 200 whose body names the commit
+/// ([`names_commit`]): the forge has it and no merged pull request carries it (a direct
+/// push). A 404: the forge does not have it. Any other answer, a 200 that does not name
+/// the commit included, is a lookup that failed. One more read-only request, made only
+/// after that 404.
 fn origin_without_pull(
     api: &dyn ForgeApi,
     forge: &Forge,
     sha: &str,
 ) -> Result<CommitOrigin, ForgeError> {
+    let short: String = sha.chars().take(10).collect();
     let Some(path) = commit_path(forge, sha) else {
-        return Ok(CommitOrigin::DirectPush);
+        // GitHub has no second request: its 404 is never an answer about the commit.
+        return Err(ForgeError::new(
+            ForgeErrorKind::NotFound,
+            format!(
+                "the forge answered HTTP 404 for the pull requests of commit {short}: the repository is not there, or this run cannot see it"
+            ),
+        )
+        .with_status(404));
     };
     match api.fetch(forge, &path) {
-        Ok(_) => Ok(CommitOrigin::DirectPush),
+        Ok(body) if names_commit(&body, sha) => Ok(CommitOrigin::DirectPush),
+        // The description is fixed: nothing the body said is repeated.
+        Ok(_) => Err(ForgeError::new(
+            ForgeErrorKind::Malformed,
+            format!("the forge answered for commit {short} without naming it"),
+        )),
         Err(e) if e.kind == ForgeErrorKind::NotFound => Ok(CommitOrigin::NotOnForge),
         Err(e) => Err(e),
     }
@@ -1755,6 +1836,14 @@ pub fn commit_origin_read(
     sha: &str,
 ) -> Result<CommitOrigin, ForgeError> {
     let malformed = |why: String| ForgeError::new(ForgeErrorKind::Malformed, why);
+    // A 200 is "no merged pull request" only when every pull request it names says
+    // whether it merged. The description is fixed: nothing the body said is repeated.
+    let unsaid = || {
+        let short: String = sha.chars().take(10).collect();
+        malformed(format!(
+            "the forge answered for the pull requests of commit {short} without saying whether one merged"
+        ))
+    };
     let str_of = |v: &serde_json::Value, keys: &[&str]| -> String {
         let mut cur = v;
         for k in keys {
@@ -1770,12 +1859,18 @@ pub fn commit_origin_read(
             let path = format!("repos/{}/commits/{sha}/pulls", forge.repo);
             let list = match api.fetch(forge, &path) {
                 Ok(list) => list,
+                // GitHub answers a commit no pull request carries with 200 and an empty
+                // list. Its 404 is for a repository that is not there or that the token
+                // cannot see: a lookup that failed, whatever the body says (#634).
                 Err(e) if e.kind == ForgeErrorKind::NotFound => {
-                    return Ok(CommitOrigin::DirectPush)
+                    return origin_without_pull(api, forge, sha).map_err(|mut failed| {
+                        failed.attempts = e.attempts;
+                        failed
+                    })
                 }
                 // GitHub's answer for a commit it does not have; a definite answer, not a
                 // failed lookup. It is told by the body, never by the status (#568).
-                Err(e) if github_says_no_commit(&e) => return Ok(CommitOrigin::NotOnForge),
+                Err(e) if github_says_no_commit(&e, sha) => return Ok(CommitOrigin::NotOnForge),
                 // Any other 422 is a lookup that failed. The description is fixed: a 422
                 // body can repeat what the request carried, so none of it is printed.
                 Err(e) if e.status == Some(422) => {
@@ -1790,6 +1885,13 @@ pub fn commit_origin_read(
             let list = list.as_array().ok_or_else(|| {
                 malformed(format!("pull requests of commit {sha} are not a list"))
             })?;
+            // `merged_at` is a time for a merged pull request and `null` for any other.
+            if !list
+                .iter()
+                .all(|pr| matches!(pr.get("merged_at"), Some(m) if m.is_null() || m.is_string()))
+            {
+                return Err(unsaid());
+            }
             let merged: Vec<&serde_json::Value> = list
                 .iter()
                 .filter(|pr| pr.get("merged_at").is_some_and(|m| !m.is_null()))
@@ -1820,7 +1922,9 @@ pub fn commit_origin_read(
                 }
                 Err(e) => return Err(e),
             };
-            let merged = pr.get("merged").and_then(|m| m.as_bool()).unwrap_or(false);
+            let Some(merged) = pr.get("merged").and_then(|m| m.as_bool()) else {
+                return Err(unsaid());
+            };
             if !merged {
                 return Ok(CommitOrigin::DirectPush);
             }
@@ -1847,6 +1951,12 @@ pub fn commit_origin_read(
             let list = list.as_array().ok_or_else(|| {
                 malformed(format!("merge requests of commit {sha} are not a list"))
             })?;
+            if !list
+                .iter()
+                .all(|mr| mr.get("state").is_some_and(|s| s.is_string()))
+            {
+                return Err(unsaid());
+            }
             let merged: Vec<&serde_json::Value> = list
                 .iter()
                 .filter(|mr| mr.get("state").and_then(|s| s.as_str()) == Some("merged"))
@@ -2208,7 +2318,9 @@ mod tests {
             // A commit with no recorded lookup has no default either.
             assert!(commit_origin(&api, &forge, "none").is_err(), "{label}");
         }
-        // GitHub says which it is in its first answer and is not asked again.
+        // GitHub says which it is in its first answer and is not asked again: an empty
+        // list is a direct push, and a 404 is a lookup that failed (#634), never settled
+        // by a second request.
         let gh = Forge {
             kind: ForgeKind::GitHub,
             url: "https://github.com".into(),
@@ -2217,13 +2329,27 @@ mod tests {
         let mut api = CannedApi::default();
         api.responses.insert(
             "github:repos/o/r/commits/aaa/pulls".into(),
+            serde_json::json!([]),
+        );
+        api.responses.insert(
+            "github:repos/o/r/commits/bbb/pulls".into(),
             serde_json::Value::Null,
         );
         assert_eq!(
             commit_origin(&api, &gh, "aaa"),
             Ok(CommitOrigin::DirectPush)
         );
-        assert_eq!(api.log(), ["github:repos/o/r/commits/aaa/pulls"]);
+        assert_eq!(
+            commit_origin(&api, &gh, "bbb").unwrap_err(),
+            "the forge answered HTTP 404 for the pull requests of commit bbb: the repository is not there, or this run cannot see it"
+        );
+        assert_eq!(
+            api.log(),
+            [
+                "github:repos/o/r/commits/aaa/pulls",
+                "github:repos/o/r/commits/bbb/pulls"
+            ]
+        );
     }
 
     #[test]
@@ -3003,14 +3129,14 @@ mod tests {
                 .map(|p| p.number),
             Some(12)
         );
-        // A direct push, as an empty list and as a 404.
+        // A direct push is an empty list. A 404 is a lookup that failed (#634).
         assert_eq!(
             merged_pull_on_forge(&api, &gh, "bbbbbbbbbbbbbbbb").unwrap(),
             None
         );
         assert_eq!(
-            merged_pull_on_forge(&api, &gh, "cccccccccccccccc").unwrap(),
-            None
+            merged_pull_on_forge(&api, &gh, "cccccccccccccccc").unwrap_err(),
+            "the forge answered HTTP 404 for the pull requests of commit cccccccccc: the repository is not there, or this run cannot see it"
         );
         // The forge says it does not have the commit: an error that says so.
         assert_eq!(
