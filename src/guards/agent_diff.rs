@@ -2128,18 +2128,16 @@ pub fn evaluate_ignored_tests(
     // had one that no CI variable decided and the head side's is CI-conditional: the test
     // stops running in CI. The two sides are compared by that classification, never by
     // their text, so a reworded or reordered condition is not a change. A condition that
-    // was already CI-conditional on the base side is not reported again.
+    // was already CI-conditional on the base side is not reported again. A skip that
+    // holds only outside CI (`if os.Getenv("CI") == ""`) is not CI-conditional: the test
+    // still runs there.
     let newly_cond_ignored = pairs
         .iter()
         .filter(|p| {
             p.head.conditional_ignore.is_some()
                 && !p.head.ignored
-                && match p.base.conditional_ignore.as_deref() {
-                    None => true,
-                    Some(base_cond) => {
-                        p.head.is_ci_skip() && !crate::ast::is_ci_condition(base_cond)
-                    }
-                }
+                && (p.base.conditional_ignore.is_none()
+                    || (p.head.is_ci_skip() && !p.base.is_ci_skip()))
         })
         .map(|p| (p.path, p.head))
         .chain(
@@ -2153,8 +2151,8 @@ pub fn evaluate_ignored_tests(
             continue;
         }
         let cond = test.conditional_ignore.as_deref().unwrap_or("condition");
-        let ci_vars = crate::ast::ci_vars_in_condition(cond);
-        let is_ci = !ci_vars.is_empty();
+        let ci_vars = test.ci_skip_vars();
+        let is_ci = test.is_ci_skip();
 
         let is_approved = if is_ci {
             !settings.approved_predicates.is_empty()
@@ -2206,10 +2204,20 @@ pub fn evaluate_ignored_tests(
             &crate::findings::TEST_CONDITIONALLY_SKIPPED,
             Some(path),
             Some(test.line),
-            format!(
-                "Test `{}` is conditionally skipped under predicate `{}`.",
-                test.name, cond
-            ),
+            if is_ci && !ci_vars.iter().any(|v| crate::ast::cond_contains_ident(cond, v)) {
+                // The condition reaches the variable through a name of its own.
+                format!(
+                    "Test `{}` is conditionally skipped under predicate `{}`, which reads CI variable `{}`.",
+                    test.name,
+                    cond,
+                    ci_vars.join("`, `")
+                )
+            } else {
+                format!(
+                    "Test `{}` is conditionally skipped under predicate `{}`.",
+                    test.name, cond
+                )
+            },
             &remediation,
         );
     }
