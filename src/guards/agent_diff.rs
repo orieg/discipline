@@ -550,6 +550,7 @@ pub fn extract_facts(
 ) -> Result<ParsedFileFacts> {
     let mut facts = pack.extract(path, src, vocab)?;
     facts.resolve_tracked_helpers();
+    facts.resolve_helper_reach(&vocab.helper_fns);
     Ok(facts)
 }
 
@@ -779,9 +780,9 @@ pub fn match_helpers<'a>(files: &'a [FileFacts]) -> Vec<HelperPair<'a>> {
 /// files may call it.
 ///
 /// A test whose drop may be read as a move is not reported for it, so it shows nothing
-/// and does not count here: one that calls more same-file helpers that fail than before,
-/// and one that a helper of another file gives checks to. The helper is then reported
-/// itself.
+/// and does not count here: one that calls more same-file helpers that check in a loop
+/// than before ([`moved_into_looping_helpers`]), and one that a helper gives checks to
+/// ([`helper_call_gain`]). The helper is then reported itself.
 fn leave_helpers_shown_by_tests<'a>(
     helpers: &mut Vec<HelperPair<'a>>,
     pairs: &[TestPair<'a>],
@@ -808,7 +809,16 @@ fn leave_helpers_shown_by_tests<'a>(
                 || h.fatal_asserts < b.fatal_asserts;
             // Nor does a test whose drop a helper of another file accounts for.
             let moved = helper_call_gain(b, h, path, helpers, &[]);
-            if drops && h.helper_checks <= b.helper_checks && moved.total == 0 && moved.strong == 0
+            // Nor one whose only shortfall is equality checks now written by hand.
+            let by_hand = h.effective_asserts() >= b.effective_asserts()
+                && h.fatal_asserts >= b.fatal_asserts
+                && equality_exits_gained(b, h) > 0
+                && h.strong_asserts + equality_exits_gained(b, h) >= b.strong_asserts;
+            if drops
+                && !moved_into_looping_helpers(b, h)
+                && !by_hand
+                && moved.total == 0
+                && moved.strong == 0
             {
                 let both = b.direct_calls.iter().chain(&h.direct_calls);
                 calls.extend(both.flat_map(|c| c.split('|')));
@@ -845,11 +855,11 @@ fn leave_helpers_shown_by_tests<'a>(
 }
 
 /// What a test's calls to paired helpers add to it across a change.
-struct HelperCallGain<'a> {
+struct HelperCallGain {
     total: usize,
     strong: usize,
     fatal: usize,
-    names: Vec<&'a str>,
+    names: Vec<String>,
 }
 
 fn call_names_helper(call: &str, helper: &str) -> bool {
@@ -857,30 +867,54 @@ fn call_names_helper(call: &str, helper: &str) -> bool {
         || crate::ast::helper_call_matches(call, crate::ast::helper_leaf(helper))
 }
 
-/// The checks the calls of `head` to paired helpers account for beyond those of `base`.
+/// A drop in a test that calls more same-file helpers that fail than before, where more
+/// of those calls check in a loop (`crate::ast::helper_loops`): one check that runs once
+/// per element stands for many inline assertions, so the count is not compared. A helper
+/// that checks in a straight line is held to what it has ([`helper_call_gain`]).
+fn moved_into_looping_helpers(base: &TestFn, head: &TestFn) -> bool {
+    head.helper_checks > base.helper_checks && head.helper_reach.looped > base.helper_reach.looped
+}
+
+/// Equality checks written by hand that the change added to the same-file helpers the
+/// test calls: failure exits guarded by an equality comparison
+/// (`HelperReach::equality_exits`).
+fn equality_exits_gained(base: &TestFn, head: &TestFn) -> usize {
+    let (base, head) = (&base.helper_reach, &head.helper_reach);
+    head.equality_exits.saturating_sub(base.equality_exits)
+}
+
+/// The checks the helper calls of `head` account for beyond those of `base`, which the
+/// tests' own counts do not hold.
 ///
-/// Only a helper whose body was read counts: one in another changed test-support file.
-/// A helper in the test's own file (`test_path`) is already counted in the test, so a call
-/// that names one adds nothing here; a call to a helper in a file outside the change, or
-/// through a receiver the pack does not resolve, names no pair and adds nothing either.
-/// The drop such a call would explain stays reported.
+/// **A helper of the test's own file** is counted into the test by the pack as far as
+/// the pack follows it. What it holds beyond that is in `TestFn::helper_reach`: the
+/// checks of a method called through a type or an object (`Checks.check(r)`), which
+/// stands for the least-checking same-file method of that name, and the checks a helper
+/// reaches more calls down than the pack follows, `HELPER_DEPTH` calls from the test.
+/// The head's less the base's is what the change moved there.
 ///
-/// Each call is resolved to the pair whose helper it names
-/// ([`crate::ast::helper_call_matches`], on the helper's name or its last `::` / `.`
-/// segment): a head call by the head name, a base call by the base name, which differ for
-/// a renamed helper. When several helpers have that name, the one with the fewest checks
-/// counts. A pair contributes its head count for every head call site less its base count
-/// for every base call site: the head count for a helper the test newly calls, the count
-/// the helper gained for one the base test already called. A call to a helper listed in
-/// `configured` (`assert_helper_fns`) is already one assertion of the test and counts one
-/// less.
+/// **A helper in another changed test-support file** counts through its pair. A call
+/// that names a helper of the test's own file (`HelperReach::own_file_calls`) resolves
+/// there and is given nothing by a helper of the same name elsewhere; a call to a helper
+/// in a file outside the change names no pair and adds nothing. The drop such a call
+/// would explain stays reported.
+///
+/// Each remaining call, direct or on a receiver, is resolved to the pair whose helper it
+/// names ([`crate::ast::helper_call_matches`], on the helper's name or its last `::` /
+/// `.` segment): a head call by the head name, a base call by the base name, which
+/// differ for a renamed helper. When several helpers have that name, the one with the
+/// fewest checks counts. A pair contributes its head count for every head call site less
+/// its base count for every base call site: the head count for a helper the test newly
+/// calls, the count the helper gained for one the base test already called. A call to a
+/// helper listed in `configured` (`assert_helper_fns`) is already one assertion of the
+/// test and counts one less.
 fn helper_call_gain<'a>(
     base: &TestFn,
     head: &TestFn,
     test_path: &str,
     helpers: &[HelperPair<'a>],
     configured: &[String],
-) -> HelperCallGain<'a> {
+) -> HelperCallGain {
     let paired: Vec<(
         &'a crate::ast::TestHelperFacts,
         &'a crate::ast::TestHelperFacts,
@@ -892,9 +926,13 @@ fn helper_call_gain<'a>(
                 .map(|head_helper| (hp.base, head_helper, hp.path == test_path))
         })
         .collect();
-    let sites = |calls: &[String], head_side: bool| -> Vec<(usize, usize)> {
+    let sites = |test: &TestFn, head_side: bool| -> Vec<(usize, usize)> {
         let mut per_pair = vec![(0usize, 0usize); paired.len()];
-        for call in calls {
+        let reach = &test.helper_reach;
+        for call in test.direct_calls.iter().chain(&reach.receiver_calls) {
+            if reach.own_file_calls.contains(call) {
+                continue;
+            }
             let named: Vec<usize> = (0..paired.len())
                 .filter(|&i| {
                     let (base_helper, head_helper, _) = paired[i];
@@ -921,16 +959,17 @@ fn helper_call_gain<'a>(
         }
         per_pair
     };
-    let (base_sites, head_sites) = (
-        sites(&base.direct_calls, false),
-        sites(&head.direct_calls, true),
-    );
+    let (base_sites, head_sites) = (sites(base, false), sites(head, true));
+    let (own_base, own_head) = (&base.helper_reach, &head.helper_reach);
     let mut gain = HelperCallGain {
-        total: 0,
-        strong: 0,
-        fatal: 0,
+        total: own_head.total.saturating_sub(own_base.total),
+        strong: own_head.strong.saturating_sub(own_base.strong),
+        fatal: own_head.fatal.saturating_sub(own_base.fatal),
         names: Vec::new(),
     };
+    if gain.total > 0 || gain.strong > 0 {
+        gain.names.extend(own_head.names.iter().cloned());
+    }
     for (i, &(base_helper, head_helper, _)) in paired.iter().enumerate() {
         let (base_calls, base_counted) = base_sites[i];
         let (head_calls, head_counted) = head_sites[i];
@@ -947,7 +986,7 @@ fn helper_call_gain<'a>(
             gain.total += total;
             gain.strong += strong;
             gain.fatal += fatal;
-            gain.names.push(head_helper.name.as_str());
+            gain.names.push(head_helper.name.clone());
         }
     }
     gain
@@ -1364,11 +1403,12 @@ pub fn evaluate_assertion_reduction(
         if total_drop && h_eff + newly_caught.len() >= b_eff {
             total_drop = false;
         }
-        // Checks moved into same-file helpers that fail (assert, raise, throw, panic): one
-        // `raise` in a helper's loop stands for many inline assertions, so the count drops
-        // while the test calls more failing helpers than before. Deleting a helper call
-        // lowers `helper_checks` and is still a drop.
-        if (total_drop || strong_drop) && h.helper_checks > b.helper_checks {
+        // Checks moved into same-file helpers that fail (assert, raise, throw, panic) in a
+        // loop: one `raise` in a helper's loop stands for many inline assertions, so the
+        // count drops while the test calls more such helpers than before. A helper that
+        // checks in a straight line stands for what it holds, which the pack counted into
+        // the test. Deleting a helper call lowers `helper_checks` and is still a drop.
+        if (total_drop || strong_drop) && moved_into_looping_helpers(b, h) {
             out.notes.push(format!(
                 "`{}` in `{}`: assertions {} -> {} read as moved into same-file helpers that fail ({} -> {} calls)",
                 h.name, p.path, b_eff, h_eff, b.helper_checks, h.helper_checks
@@ -1377,16 +1417,18 @@ pub fn evaluate_assertion_reduction(
             strong_drop = false;
         }
 
-        // Checks moved into a paired helper (in another file or same file): the helper stands
-        // for the checks its calls add to this test, and no more. A helper the test newly
-        // calls adds its head checks per call; one the base already called adds what it
-        // gained. What that does not cover is still a drop, reported with the helper's
-        // share counted in.
+        // Checks moved into a helper the test's own count does not hold (one in another
+        // file, a same-file method called on a receiver, a same-file helper reached deeper
+        // than the pack follows): the helper stands for the checks its calls add to this
+        // test, and no more. A helper the test newly calls adds its head checks per call;
+        // one the base already called adds what it gained. What that does not cover is
+        // still a drop, reported with the helper's share counted in.
         let mut helper_total = 0;
         let mut helper_strong = 0;
         let mut helper_fatal = 0;
         if total_drop || strong_drop {
             let moved = helper_call_gain(b, h, p.path, helpers, &settings.assert_helper_fns);
+            let mut note_the_move = true;
             helper_fatal = moved.fatal;
             if total_drop && h_eff + newly_caught.len() + moved.total >= b_eff {
                 total_drop = false;
@@ -1394,10 +1436,24 @@ pub fn evaluate_assertion_reduction(
             if strong_drop && h.strong_asserts + moved.strong >= b.strong_asserts {
                 strong_drop = false;
             }
+            // The count is covered and only strength falls short: an equality assertion
+            // rewritten in a same-file helper as a failure exit under an equality
+            // comparison (`if a != b { panic!() }`) is still an equality check.
+            if strong_drop && !total_drop {
+                let by_hand = equality_exits_gained(b, h);
+                if by_hand > 0 && h.strong_asserts + moved.strong + by_hand >= b.strong_asserts {
+                    strong_drop = false;
+                    note_the_move = false;
+                    out.notes.push(format!(
+                        "`{}` in `{}`: equality assertions {} -> {} read as moved into same-file helpers that fail on an equality comparison ({} exit(s))",
+                        h.name, p.path, b.strong_asserts, h.strong_asserts, by_hand
+                    ));
+                }
+            }
             if total_drop || strong_drop {
                 helper_total = moved.total;
                 helper_strong = moved.strong;
-            } else {
+            } else if note_the_move {
                 out.notes.push(format!(
                     "`{}` in `{}`: assertions {} -> {} read as moved into helper `{}` ({} check(s))",
                     h.name,
@@ -4767,5 +4823,147 @@ mod tests {
             .unwrap();
         assert_eq!(cross.path, "tests/utils.py");
         assert_eq!(cross.head.unwrap().line, 25);
+    }
+
+    /// #595: growth in calls to same-file helpers that fail excuses a drop only when
+    /// more of those calls check in a loop; a straight-line helper is held to its count.
+    #[test]
+    fn a_drop_is_read_as_a_refactor_only_into_helpers_that_check_in_a_loop() {
+        let settings = crate::config::AssertionGate::default();
+        let outcome = |looped: usize| {
+            let b = calling_test(3, 3, &[]);
+            let mut h = calling_test(1, 1, &["check"]);
+            h.helper_checks = 1;
+            h.helper_reach.looped = looped;
+            helper_move_outcome(&b, &h, &[], &settings)
+        };
+        let straight = outcome(0);
+        assert_eq!(straight.violations.len(), 1, "{:?}", straight.violations);
+        assert!(straight.violations[0]
+            .message
+            .contains("effective assertions dropped from 3 to 1"));
+        let looped = outcome(1);
+        assert!(looped.violations.is_empty(), "{:?}", looped.violations);
+        assert!(looped.notes.iter().any(|n| n.contains(
+            "assertions 3 -> 1 read as moved into same-file helpers that fail (0 -> 1 calls)"
+        )));
+        // A looped call the base already made is no growth.
+        let mut b = calling_test(3, 3, &["check"]);
+        b.helper_checks = 1;
+        b.helper_reach.looped = 1;
+        let mut h = calling_test(1, 1, &["check"]);
+        h.helper_checks = 1;
+        h.helper_reach.looped = 1;
+        assert_eq!(
+            helper_move_outcome(&b, &h, &[], &settings).violations.len(),
+            1
+        );
+    }
+
+    /// #595: what the test's same-file helpers hold beyond its own count excuses a drop
+    /// up to that amount, in count and in strength, and only for what the change added.
+    #[test]
+    fn the_reach_of_same_file_helpers_excuses_a_drop_up_to_what_they_hold() {
+        let reaching = |total: usize, strong: usize| {
+            let mut h = calling_test(0, 0, &[]);
+            h.helper_reach.receiver_calls = vec!["check".to_string()];
+            h.helper_reach.own_file_calls = vec!["check".to_string()];
+            h.helper_reach.total = total;
+            h.helper_reach.strong = strong;
+            h.helper_reach.names = vec!["Checker.check".to_string()];
+            h
+        };
+        let settings = crate::config::AssertionGate::default();
+        let b = calling_test(3, 3, &[]);
+        let out = helper_move_outcome(&b, &reaching(3, 3), &[], &settings);
+        assert!(out.violations.is_empty(), "{:?}", out.violations);
+        assert!(moved_note(&out), "{:?}", out.notes);
+        // Fewer checks than were dropped, and enough checks of a weaker kind.
+        assert_eq!(
+            helper_move_outcome(&b, &reaching(2, 2), &[], &settings)
+                .violations
+                .len(),
+            1
+        );
+        assert_eq!(
+            helper_move_outcome(&b, &reaching(3, 1), &[], &settings)
+                .violations
+                .len(),
+            1
+        );
+        // The base test already reached them: nothing was moved.
+        let mut already = reaching(3, 3);
+        already.total_asserts = 3;
+        already.strong_asserts = 3;
+        assert_eq!(
+            helper_move_outcome(&already, &reaching(3, 3), &[], &settings)
+                .violations
+                .len(),
+            1
+        );
+    }
+
+    /// #595: a call that names a helper of the test's own file is given nothing by a
+    /// helper of the same name in another changed file.
+    #[test]
+    fn a_call_to_a_same_file_helper_is_not_credited_by_another_files_helper() {
+        let b = calling_test(3, 3, &[]);
+        let mut h = calling_test(0, 0, &["check"]);
+        let other = helper_facts("check", 3, 3);
+        let helpers = [HelperPair {
+            path: "tests/common/mod.rs",
+            base: &other,
+            head: Some(&other),
+        }];
+        // Control: no helper of that name in the calling file.
+        let gain = helper_call_gain(&b, &h, "src/lib.rs", &helpers, &[]);
+        assert_eq!((gain.total, gain.strong), (3, 3));
+        h.helper_reach.own_file_calls = vec!["check".to_string()];
+        let gain = helper_call_gain(&b, &h, "src/lib.rs", &helpers, &[]);
+        assert_eq!((gain.total, gain.strong), (0, 0));
+        // A receiver call names a helper of another changed file like a direct one.
+        let mut h = calling_test(0, 0, &[]);
+        h.helper_reach.receiver_calls = vec!["check".to_string()];
+        let gain = helper_call_gain(&b, &h, "src/lib.rs", &helpers, &[]);
+        assert_eq!((gain.total, gain.strong), (3, 3));
+    }
+
+    /// #595: equality checks written by hand in same-file helpers cover a shortfall in
+    /// strength when the count holds, and nothing else.
+    #[test]
+    fn equality_exits_cover_a_strength_only_shortfall() {
+        let settings = crate::config::AssertionGate::default();
+        let b = calling_test(2, 2, &[]);
+        let head = |total: usize, strong: usize, exits: usize| {
+            let mut h = calling_test(total, strong, &["check"]);
+            h.helper_checks = 1;
+            h.helper_reach.equality_exits = exits;
+            h
+        };
+        let out = helper_move_outcome(&b, &head(2, 1, 1), &[], &settings);
+        assert!(out.violations.is_empty(), "{:?}", out.violations);
+        assert!(out
+            .notes
+            .iter()
+            .any(|n| n.contains("equality assertions 2 -> 1 read as moved into same-file helpers that fail on an equality comparison (1 exit(s))")));
+        // Controls: no such exit; fewer exits than equalities lost; a count that drops
+        // as well; exits the base test's helpers already held.
+        let weakened =
+            |h: &TestFn, b: &TestFn| helper_move_outcome(b, h, &[], &settings).violations.len();
+        assert_eq!(weakened(&head(2, 1, 0), &b), 1);
+        assert_eq!(weakened(&head(2, 0, 1), &b), 1);
+        assert_eq!(weakened(&head(1, 0, 2), &b), 1);
+        // There the count dropped, so the exits are not set against the strength: the
+        // finding is the count's, and no equality is noted as moved.
+        let out = helper_move_outcome(&b, &head(1, 0, 2), &[], &settings);
+        assert!(
+            !out.notes.iter().any(|n| n.contains("equality comparison")),
+            "{:?}",
+            out.notes
+        );
+        let mut held = calling_test(2, 2, &["check"]);
+        held.helper_checks = 1;
+        held.helper_reach.equality_exits = 1;
+        assert_eq!(weakened(&head(2, 1, 1), &held), 1);
     }
 }

@@ -91,6 +91,7 @@ impl LanguagePack for JavaPack {
             }
         }
         super::method_checks::count(root, src, &mut extractor.facts, &JAVA_RECEIVER_CALLS);
+        super::helper_loops::count(root, src, &mut extractor.facts, &super::helper_loops::JAVA);
         super::calls::count(
             root,
             src,

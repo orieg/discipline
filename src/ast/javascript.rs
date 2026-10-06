@@ -100,6 +100,12 @@ impl LanguagePack for JavaScriptPack {
             }
         }
         super::method_checks::count(root, src, &mut extractor.facts, &JS_RECEIVER_CALLS);
+        super::helper_loops::count(
+            root,
+            src,
+            &mut extractor.facts,
+            &super::helper_loops::JAVASCRIPT,
+        );
         super::calls::count(
             root,
             src,

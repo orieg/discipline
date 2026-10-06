@@ -93,6 +93,7 @@ impl LanguagePack for SwiftPack {
             }
         }
         super::method_checks::count(root, src, &mut extractor.facts, &SWIFT_RECEIVER_CALLS);
+        super::helper_loops::count(root, src, &mut extractor.facts, &super::helper_loops::SWIFT);
         super::calls::count(
             root,
             src,

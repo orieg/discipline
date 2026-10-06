@@ -94,6 +94,12 @@ impl LanguagePack for CSharpPack {
             }
         }
         super::method_checks::count(root, src, &mut extractor.facts, &CSHARP_RECEIVER_CALLS);
+        super::helper_loops::count(
+            root,
+            src,
+            &mut extractor.facts,
+            &super::helper_loops::CSHARP,
+        );
         super::calls::count(
             root,
             src,
