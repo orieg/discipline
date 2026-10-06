@@ -494,6 +494,46 @@ impl ReadRecorder {
     }
 }
 
+/// `Ok(None)` when the filesystem says there is nothing at the path (no such entry, or a
+/// parent that is not a directory); any other error stays an error.
+fn absent_or<T>(looked: std::io::Result<T>) -> std::io::Result<Option<T>> {
+    use std::io::ErrorKind;
+    match looked {
+        Ok(v) => Ok(Some(v)),
+        Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// What is at `path` in the working tree, following a symlink: `None` when nothing is
+/// there, and for a symlink whose target cannot be reached (dangling or looping), which
+/// names no file. A path that cannot be looked at (a parent directory that cannot be
+/// searched, an I/O error) is an error: `Path::exists` and `is_file` answer `false` for
+/// that too, which reads a failed look as an absent file.
+fn worktree_metadata(path: &std::path::Path) -> std::io::Result<Option<std::fs::Metadata>> {
+    let Some(link) = absent_or(std::fs::symlink_metadata(path))? else {
+        return Ok(None);
+    };
+    if link.file_type().is_symlink() {
+        return Ok(std::fs::metadata(path).ok());
+    }
+    Ok(Some(link))
+}
+
+/// The id of the entry at `path` in `tree`; `None` when the tree has no such entry. A tree
+/// object that cannot be read on the way is an error, not an absent entry.
+fn tree_entry_id(tree: &Tree<'_>, path: &str) -> Result<Option<Oid>> {
+    match tree.get_path(std::path::Path::new(path.trim_matches('/'))) {
+        Ok(entry) => Ok(Some(entry.id())),
+        Err(e) if e.code() == git2::ErrorCode::NotFound && e.class() == git2::ErrorClass::Tree => {
+            Ok(None)
+        }
+        Err(e) => {
+            Err(anyhow::Error::from(e).context(format!("failed to look up `{path}` in a tree")))
+        }
+    }
+}
+
 pub fn discover_repository(path: impl AsRef<std::path::Path>) -> Result<Repository> {
     let trust_workspace = std::env::var("DISCIPLINE_TRUST_WORKSPACE")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -865,16 +905,22 @@ impl GitCtx {
                 .workdir()
                 .ok_or_else(|| anyhow!("repository has no working tree"))?;
             let full_path = root.join(rel_path);
-            if !full_path.exists() || full_path.is_dir() {
+            let Some(meta) = worktree_metadata(&full_path)
+                .with_context(|| format!("failed to read `{path}`"))?
+            else {
+                return Ok(None);
+            };
+            if meta.is_dir() {
                 return Ok(None);
             }
-            if let Ok(canon) = full_path.canonicalize() {
-                let root_canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-                if !canon.starts_with(&root_canon) {
-                    // Path escapes repository root (symlink traversal)
-                    return Ok(None);
-                }
-            } else {
+            let Some(canon) = absent_or(full_path.canonicalize())
+                .with_context(|| format!("failed to read `{path}`"))?
+            else {
+                return Ok(None);
+            };
+            let root_canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+            if !canon.starts_with(&root_canon) {
+                // Path escapes repository root (symlink traversal)
                 return Ok(None);
             }
             Ok(Some(
@@ -920,10 +966,14 @@ impl GitCtx {
                 continue;
             }
             let path = String::from_utf8_lossy(&entry.path).replace('\\', "/");
-            // Deleted in the worktree but not yet staged: nothing to scan.
+            // Deleted in the worktree but not yet staged: nothing to scan. A path that
+            // cannot be looked at is not a deleted one.
             if !self.staged {
                 if let Some(root) = &root {
-                    if !root.join(&path).is_file() {
+                    let is_file = worktree_metadata(&root.join(&path))
+                        .with_context(|| format!("failed to read `{path}`"))?
+                        .is_some_and(|m| m.is_file());
+                    if !is_file {
                         continue;
                     }
                 }
@@ -945,10 +995,10 @@ impl GitCtx {
             if entry.kind() == Some(git2::ObjectType::Blob) {
                 let mode = entry.filemode();
                 if mode != MODE_SYMLINK && mode != MODE_GITLINK {
-                    if let Ok(name) = entry.name() {
-                        let path = format!("{}{}", root, name).replace('\\', "/");
-                        out.push(path);
-                    }
+                    // A name that is not UTF-8 is still a file: listed lossily, as the
+                    // head side lists it.
+                    let name = String::from_utf8_lossy(entry.name_bytes());
+                    out.push(format!("{root}{name}").replace('\\', "/"));
                 }
             }
             TreeWalkResult::Ok
@@ -1020,12 +1070,6 @@ impl GitCtx {
         if branch_only && (self.base.is_none() || self.staged) {
             bail!("no base commit to bound the branch's changes");
         }
-        let entry_id = |tree: &Tree<'_>, path: &str| -> Option<Oid> {
-            let trimmed = path.trim_matches('/');
-            tree.get_path(std::path::Path::new(trimmed))
-                .ok()
-                .map(|e| e.id())
-        };
         let mut walk = self.repo.revwalk()?;
         walk.set_sorting(git2::Sort::TIME)?;
         walk.push_head()?;
@@ -1042,14 +1086,22 @@ impl GitCtx {
                 .parents()
                 .map(|p| p.tree())
                 .collect::<std::result::Result<_, _>>()?;
-            let touched = paths.iter().any(|path| {
-                let here = entry_id(&tree, path);
-                if parents.is_empty() {
+            let mut touched = false;
+            for path in paths {
+                let here = tree_entry_id(&tree, path)?;
+                let mut changed = if parents.is_empty() {
                     here.is_some()
                 } else {
-                    parents.iter().all(|pt| entry_id(pt, path) != here)
+                    true
+                };
+                for pt in &parents {
+                    changed = changed && tree_entry_id(pt, path)? != here;
                 }
-            });
+                if changed {
+                    touched = true;
+                    break;
+                }
+            }
             if touched {
                 let t = commit.committer().when().seconds();
                 newest = Some(newest.map_or(t, |n: i64| n.max(t)));
@@ -1066,19 +1118,14 @@ impl GitCtx {
         let Some(base) = self.base else {
             return Ok(None);
         };
-        let entry_id = |tree: &Tree<'_>| -> Option<Oid> {
-            tree.get_path(std::path::Path::new(path.trim_matches('/')))
-                .ok()
-                .map(|e| e.id())
-        };
         let mut walk = self.repo.revwalk()?;
         walk.simplify_first_parent()?;
         walk.push(base)?;
         for oid in walk {
             let commit = self.repo.find_commit(oid?)?;
-            let here = entry_id(&commit.tree()?);
+            let here = tree_entry_id(&commit.tree()?, path)?;
             let before = match commit.parent(0) {
-                Ok(p) => entry_id(&p.tree()?),
+                Ok(p) => tree_entry_id(&p.tree()?, path)?,
                 Err(_) => None,
             };
             if here != before {
@@ -2202,6 +2249,128 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&obj, std::fs::Permissions::from_mode(0o644)).unwrap();
         std::fs::remove_file(obj).unwrap();
+    }
+
+    /// A base commit holding `sub/a.txt`; returns the id of the `sub` tree.
+    fn repo_with_base_subdir() -> (tempfile::TempDir, GitCtx, Oid) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/a.txt"), "base\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("sub/a.txt")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.invalid").unwrap();
+        let commit = repo
+            .commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+            .unwrap();
+        let sub = tree.get_name("sub").unwrap().id();
+        drop(tree);
+        let git = GitCtx {
+            repo,
+            base: Some(commit),
+            base_label: "base".to_string(),
+            staged: false,
+        };
+        (dir, git, sub)
+    }
+
+    /// A subtree object that cannot be read is not "the tree has no such entry" (#567).
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_subtree_object_is_a_failed_read_not_an_absent_entry() {
+        let (dir, git, sub) = repo_with_base_subdir();
+        let paths = ["sub/a.txt".to_string()];
+        let absent = ["sub/nope.txt".to_string()];
+        // Controls: with the tree readable, a present entry is found and an absent one is
+        // `None`, never an error.
+        assert_eq!(
+            git.base_content("sub/a.txt").unwrap().as_deref(),
+            Some("base\n")
+        );
+        assert_eq!(git.base_content("sub/nope.txt").unwrap(), None);
+        assert_eq!(git.base_content("other/nope.txt").unwrap(), None);
+        assert!(git.last_change_on_base("sub/a.txt").unwrap().is_some());
+        assert_eq!(git.last_change_on_base("sub/nope.txt").unwrap(), None);
+        assert!(git
+            .newest_commit_time_touching(&paths, false)
+            .unwrap()
+            .is_some());
+        assert_eq!(
+            git.newest_commit_time_touching(&absent, false).unwrap(),
+            None
+        );
+
+        remove_loose_object(dir.path(), sub);
+        // A fresh handle: the one above has the tree in its object cache.
+        let git = GitCtx {
+            repo: Repository::open(dir.path()).unwrap(),
+            base: git.base,
+            base_label: "base".to_string(),
+            staged: false,
+        };
+        let shown = format!("{:#}", git.base_content("sub/a.txt").unwrap_err());
+        assert!(shown.contains("`sub/a.txt` on the base side"), "{shown}");
+        assert!(git.last_change_on_base("sub/a.txt").is_err());
+        assert!(git.newest_commit_time_touching(&paths, false).is_err());
+    }
+
+    /// A base file whose name is not UTF-8 is still a base file (#567): it was dropped
+    /// from the list, while the head side lists such a name lossily.
+    #[test]
+    fn a_base_file_with_a_name_that_is_not_utf8_is_listed() {
+        let (_dir, mut git, blob) = repo_with_base_file();
+        let commit = {
+            let base = git.repo.find_commit(git.base.unwrap()).unwrap();
+            let mut builder = git.repo.treebuilder(Some(&base.tree().unwrap())).unwrap();
+            builder.insert(&b"caf\xe9.txt"[..], blob, 0o100644).unwrap();
+            let tree = git.repo.find_tree(builder.write().unwrap()).unwrap();
+            let sig = git2::Signature::now("t", "t@example.invalid").unwrap();
+            git.repo
+                .commit(None, &sig, &sig, "name", &tree, &[&base])
+                .unwrap()
+        };
+        git.base = Some(commit);
+        let mut files = git.base_tracked_files().unwrap();
+        files.sort();
+        assert_eq!(
+            files,
+            vec!["a.txt".to_string(), "caf\u{fffd}.txt".to_string()]
+        );
+    }
+
+    /// A path that cannot be looked at is a failed read; `exists()` said "absent" (#567).
+    #[cfg(unix)]
+    #[test]
+    fn an_unsearchable_parent_directory_is_a_failed_read_on_the_head_side() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, git, _) = repo_with_base_subdir();
+        let sub = dir.path().join("sub");
+        // Controls: present, absent, a directory, and a dangling symlink.
+        assert_eq!(
+            git.head_content("sub/a.txt").unwrap().as_deref(),
+            Some("base\n")
+        );
+        assert_eq!(git.head_content("sub/nope.txt").unwrap(), None);
+        assert_eq!(git.head_content("sub/a.txt/under-a-file").unwrap(), None);
+        assert_eq!(git.head_content("sub").unwrap(), None);
+        std::os::unix::fs::symlink("nowhere", dir.path().join("dangling")).unwrap();
+        assert_eq!(git.head_content("dangling").unwrap(), None);
+        assert_eq!(git.tracked_files().unwrap(), vec!["sub/a.txt".to_string()]);
+
+        std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // A process that can search the directory anyway (root) cannot show the defect.
+        let enforced = std::fs::metadata(sub.join("a.txt")).is_err();
+        let head = git.head_content("sub/a.txt");
+        let tracked = git.tracked_files();
+        std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if !enforced {
+            return;
+        }
+        let shown = format!("{:#}", head.unwrap_err());
+        assert!(shown.contains("`sub/a.txt`"), "{shown}");
+        assert!(tracked.is_err());
     }
 
     #[cfg(unix)]

@@ -1592,8 +1592,14 @@ const CASES: &[Case] = &[
                 "github:repos/o/r/commits/ddd/pulls".into(),
                 serde_json::json!({"__status": 403, "__body": {}}),
             );
+            // A 422 that says something else is a failed lookup, like the 403 (#568).
+            api.responses.insert(
+                "github:repos/o/r/commits/eee/pulls".into(),
+                serde_json::json!({"__status": 422, "__body": {"message": "Validation Failed"}}),
+            );
             Ok(commit_origin(&api, &forge, "fff").ok() == Some(CommitOrigin::NotOnForge)
-                && commit_origin(&api, &forge, "ddd").is_err())
+                && commit_origin(&api, &forge, "ddd").is_err()
+                && commit_origin(&api, &forge, "eee").is_err())
         },
     ),
     (
@@ -3543,6 +3549,99 @@ test tests::c: test
         },
     ),
     (
+        "test-floor: runner configurations that stop tests running leave the count",
+        || {
+            use crate::ast::runner_collection::{
+                check_runner_collected, is_runner_collected, RunnerCollectionRules,
+                RunnerCollectionStatus,
+            };
+            use crate::ast::AssertVocabulary;
+
+            let tree = |files: &[(&str, &str)]| {
+                let tracked: Vec<String> = files.iter().map(|(name, _)| name.to_string()).collect();
+                AssertVocabulary {
+                    runner_rules: RunnerCollectionRules::from_tree(
+                        |p| {
+                            files
+                                .iter()
+                                .find(|(name, _)| *name == p)
+                                .map(|(_, content)| content.to_string())
+                        },
+                        &tracked,
+                    ),
+                    ..Default::default()
+                }
+            };
+
+            // Go: the directories `go test ./...` never descends into.
+            let go = tree(&[]);
+            let go_ok = is_runner_collected("pkg/a_test.go", &go)
+                && is_runner_collected("vendor/a_test.go", &go)
+                && !is_runner_collected("vendor/dep/a_test.go", &go)
+                && !is_runner_collected("pkg/testdata/a_test.go", &go)
+                && !is_runner_collected("_old/a_test.go", &go);
+
+            // Jest: ignore patterns, negated globs, and a group that cannot be evaluated.
+            let jest = tree(&[(
+                "package.json",
+                r#"{"jest": {"testMatch": ["**/*.test.js", "!**/parked/**"], "testPathIgnorePatterns": ["/legacy/"]}}"#,
+            )]);
+            let grouped = tree(&[(
+                "package.json",
+                r#"{"jest": {"testMatch": ["**/*.(test|spec).js"]}}"#,
+            )]);
+            let jest_ok = is_runner_collected("src/a.test.js", &jest)
+                && !is_runner_collected("legacy/a.test.js", &jest)
+                && !is_runner_collected("parked/a.test.js", &jest)
+                && matches!(
+                    check_runner_collected("src/a.test.js", &grouped),
+                    RunnerCollectionStatus::Unknown(_)
+                );
+
+            // Cargo: a switched-off target, and a file under `tests/` no target declares.
+            let cargo = tree(&[
+                (
+                    "Cargo.toml",
+                    "[package]\nname = \"p\"\n\n[[test]]\nname = \"off\"\ntest = false\n",
+                ),
+                ("tests/off.rs", ""),
+                ("tests/it/main.rs", "mod foo;\n"),
+                ("tests/it/foo.rs", ""),
+                ("tests/it/orphan.rs", ""),
+            ]);
+            let cargo_ok = !is_runner_collected("tests/off.rs", &cargo)
+                && is_runner_collected("tests/it/main.rs", &cargo)
+                && is_runner_collected("tests/it/foo.rs", &cargo)
+                && !is_runner_collected("tests/it/orphan.rs", &cargo);
+
+            // pytest: an empty `pytest.ini` shadows `pyproject.toml`; `./tests` is `tests`.
+            let shadowed = tree(&[
+                ("pytest.ini", ""),
+                (
+                    "pyproject.toml",
+                    "[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\n",
+                ),
+            ]);
+            let dotted = tree(&[(
+                "pyproject.toml",
+                "[tool.pytest.ini_options]\ntestpaths = [\"./tests\"]\n",
+            )]);
+            let pytest_ok = is_runner_collected("other/test_o.py", &shadowed)
+                && is_runner_collected("tests/test_a.py", &dotted)
+                && !is_runner_collected("other/test_o.py", &dotted);
+
+            // JavaScript with no manifest anywhere is left out; one manifest brings it back.
+            let no_js = tree(&[("pytest.ini", "")]);
+            let some_js = tree(&[("web/package.json", "{}")]);
+            let manifest_ok = matches!(
+                check_runner_collected("site/bundle.js", &no_js),
+                RunnerCollectionStatus::NoRunner(_)
+            ) && is_runner_collected("site/bundle.js", &some_js);
+
+            Ok(go_ok && jest_ok && cargo_ok && pytest_ok && manifest_ok)
+        },
+    ),
+    (
         "ci-integrity: rollup needs detection, pinning, and error masks",
         || {
             use crate::guards::ci_integrity::parse_workflow_jobs;
@@ -4512,6 +4611,44 @@ smoke_cost::set_contains
                 && names(&rule, "gates.manifest-sync.rules.watched_paths")
                 && names(&tests, "tests.paths")
                 && check_configured_globs(&good, &ids).is_ok())
+        },
+    ),
+    (
+        "configuration: a capture pattern with no group or that does not compile, and a malformed exempt_arms glob, are found before any gate runs",
+        || {
+            use crate::config::DisciplineConfig;
+            use crate::guards::check_configured_patterns;
+            let head = "[meta]\nversion = 1\nname = \"t\"\n";
+            let load = |body: &str| DisciplineConfig::from_toml_str(&format!("{head}{body}"));
+            let ids = ["ci-integrity", "command", "bench-regression"];
+            let names = |body: &str, needle: &str| -> Result<bool> {
+                Ok(check_configured_patterns(&load(body)?, &ids)
+                    .err()
+                    .is_some_and(|e| format!("{e:#}").contains(needle)))
+            };
+            let passes = |body: &str| -> Result<bool> {
+                Ok(check_configured_patterns(&load(body)?, &ids).is_ok())
+            };
+            Ok(names(
+                "[gates.ci-integrity]\ndocumented_job_count_pattern = '\\d+ jobs'\n",
+                "gates.ci-integrity.documented_job_count_pattern",
+            )? && names(
+                "[gates.ci-integrity]\ndocumented_job_count_pattern = '(\\d+ jobs'\n",
+                "not a valid regular expression",
+            )? && names(
+                "[gates.command]\nenabled = true\ncommand = \"true\"\ncount_pattern = '\\d+ passed'\n",
+                "gates.command.count_pattern",
+            )? && names(
+                "[gates.command]\nenabled = true\n[[gates.command.commands]]\nname = \"unit\"\ncommand = \"true\"\ncount_pattern = '(a'\n",
+                "gates.command.commands[unit].count_pattern",
+            )? && names(
+                "[gates.bench-regression]\nenabled = true\nexempt_arms = [\"heap[\"]\n",
+                "gates.bench-regression.exempt_arms",
+            )? && passes(
+                "[gates.ci-integrity]\nenabled = false\ndocumented_job_count_pattern = '(a'\n",
+            )? && passes(
+                "[gates.ci-integrity]\ndocumented_job_count_pattern = '(\\d+) jobs'\n[gates.command]\nenabled = true\ncommand = \"true\"\ncount_pattern = '(\\d+) passed'\n[gates.bench-regression]\nenabled = true\nexempt_arms = [\"*.heap.*\", \"map_get/random\"]\n",
+            )?)
         },
     ),
     (
