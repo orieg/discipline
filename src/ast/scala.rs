@@ -11,6 +11,7 @@
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
+use super::ci_condition::{read_skip, Grammar};
 use super::functions::{self, FunctionSpec};
 use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
@@ -46,8 +47,7 @@ impl LanguagePack for ScalaPack {
         parser
             .set_language(&tree_sitter_scala::LANGUAGE.into())
             .map_err(|e| anyhow!("failed to load the Scala grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse(&mut parser, src)
-            .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
+        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
         let root = tree.root_node();
 
         let mut extractor = ScalaExtractor {
@@ -503,11 +503,15 @@ impl<'a> ScalaExtractor<'a> {
             "call_expression" => self.inspect_call(node, test_fn, calls),
             "infix_expression" => self.inspect_matcher(node, test_fn),
             "identifier" if self.text(node) == "pending" => {
-                let standalone = node
-                    .parent()
-                    .is_some_and(|p| matches!(p.kind(), "block" | "template_body"));
+                // A statement of a block, or the whole branch of an `if`.
+                let standalone = node.parent().is_some_and(|p| {
+                    matches!(p.kind(), "block" | "template_body")
+                        || (p.kind() == "if_expression"
+                            && p.child_by_field_name("condition")
+                                .is_none_or(|c| c.id() != node.id()))
+                });
                 if standalone {
-                    test_fn.ignored = true;
+                    test_fn.record_skip(read_skip(Grammar::Scala, node, None, self.src));
                 }
             }
             _ => {}
@@ -584,7 +588,12 @@ impl<'a> ScalaExtractor<'a> {
                 test_fn.total_asserts += 1;
                 test_fn.strong_asserts += 1;
             }
-            "cancel" => test_fn.ignored = true,
+            "cancel" => test_fn.record_skip(read_skip(Grammar::Scala, node, None, self.src)),
+            // `assume(c)` cancels the test when `c` does not hold.
+            "assume" => {
+                let own = args.first().map(|c| (*c, true));
+                test_fn.record_skip(read_skip(Grammar::Scala, node, own, self.src));
+            }
             other => {
                 if self
                     .vocab
@@ -633,6 +642,8 @@ pub const SCALA_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
     super::method_checks::ReceiverCalls {
         member: &[("call_expression", "function", "field_expression", "field")],
         direct: &[],
+        bare: &[("field_expression", "field")],
+        tokens: &[],
     };
 
 pub const SCALA_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {

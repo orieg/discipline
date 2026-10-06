@@ -50,8 +50,7 @@ impl LanguagePack for JavaScriptPack {
         parser
             .set_language(&lang)
             .map_err(|e| anyhow!("failed to load JS/TS grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse(&mut parser, src)
-            .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
+        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
         let root = tree.root_node();
 
         let mut extractor = JsExtractor {
@@ -133,7 +132,7 @@ impl LanguagePack for JavaScriptPack {
         );
         super::bounds::javascript(root, src, &mut extractor.facts.tests);
         super::expectations::javascript(root, src, &mut extractor.facts.tests);
-        super::caught_assertions::javascript(root, src, &mut extractor.facts.tests);
+        super::caught_assertions::javascript(root, src, &mut extractor.facts.tests, vocab);
         super::expected_exceptions::javascript(root, src, &mut extractor.facts.tests);
         extractor.facts.prose =
             super::prose::extract(root, src, &["comment", "string", "template_string"]);
@@ -776,9 +775,9 @@ impl<'a> JsExtractor<'a> {
     }
 
     /// Mocha's `this.skip()`. As a statement of the test it is an unconditional skip;
-    /// under an `if` it is a conditional skip read by its condition, and in the `else`
-    /// branch of a condition on no CI variable it is unconditional, as a skip call is in
-    /// the other packs. Elsewhere (a loop, a nested callback) it is not read.
+    /// under an `if` it is a conditional skip read by its condition, in the `else` branch
+    /// by the negated condition, as a skip call is in the other packs. Elsewhere (a loop,
+    /// a nested callback) it is not read.
     fn record_this_skip(&self, call: Node, test: &mut TestFn) {
         use super::ci_condition::{self, Lang};
         let Some(func) = call.child_by_field_name("function") else {
@@ -791,7 +790,7 @@ impl<'a> JsExtractor<'a> {
             return;
         }
         match ci_condition::site(Lang::JavaScript, call, self.src) {
-            Some(site) if site.in_else && !site.related => test.ignored = true,
+            Some(site) if site.always => test.ignored = true,
             Some(site) => test.record_conditional_skip(site.text, site.verdict),
             None => {
                 // `this.skip();` directly in the body of the test callback.
@@ -1121,6 +1120,8 @@ pub const JS_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
             "property",
         )],
         direct: &[],
+        bare: &[],
+        tokens: &[],
     };
 
 pub const JS_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
@@ -1760,7 +1761,7 @@ it('another receiver', function () {
                     Some("process.platform === 'win32'"),
                     false
                 ),
-                row("else of another condition", true, None, false),
+                row("else of another condition", false, Some("!(haveDb)"), false),
                 row("nested callback", false, None, false),
                 row("another receiver", false, None, false),
             ]

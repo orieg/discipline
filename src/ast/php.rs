@@ -3,6 +3,7 @@
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
+use super::ci_condition::{read_skip, CiVerdict, Grammar};
 use super::functions::{self, FunctionSpec};
 use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
@@ -38,8 +39,7 @@ impl LanguagePack for PhpPack {
         parser
             .set_language(&tree_sitter_php::LANGUAGE_PHP.into())
             .map_err(|e| anyhow!("failed to load the PHP grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse(&mut parser, src)
-            .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
+        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
         let root = tree.root_node();
 
         let mut extractor = PhpExtractor {
@@ -154,6 +154,8 @@ pub const PHP_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
             ("nullsafe_member_call_expression", "object", "name"),
             ("scoped_call_expression", "scope", "name"),
         ],
+        bare: &[],
+        tokens: &[],
     };
 
 pub const PHP_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
@@ -420,12 +422,12 @@ impl<'a> PhpExtractor<'a> {
         if kind == "class_declaration" || kind == "trait_declaration" {
             let name_node = node.child_by_field_name("name");
             let c_name = name_node.map(|n| self.text(n)).unwrap_or("");
-            let (_, class_ignored) = self.check_doc_or_attrs_for_test(node);
+            let (_, class_ignored, class_requires) = self.check_doc_or_attrs_for_test(node);
             if let Some(body) = node.child_by_field_name("body") {
                 let mut cursor = body.walk();
                 for child in body.children(&mut cursor) {
                     if child.kind() == "method_declaration" {
-                        self.visit_method(child, c_name, class_ignored);
+                        self.visit_method(child, c_name, class_ignored, &class_requires);
                     }
                 }
             }
@@ -454,9 +456,14 @@ impl<'a> PhpExtractor<'a> {
         }
     }
 
-    fn check_doc_or_attrs_for_test(&self, node: Node) -> (bool, bool) {
+    /// Whether a declaration is marked as a test, whether it is skipped, and the
+    /// `#[Requires..]` attributes on it: PHPUnit runs the test only where each holds
+    /// (an operating system, a PHP version, an extension), which is a conditional skip
+    /// on no CI variable.
+    fn check_doc_or_attrs_for_test(&self, node: Node) -> (bool, bool, Vec<String>) {
         let mut is_test = false;
         let mut is_ignored = false;
+        let mut requires = Vec::new();
 
         // Check attributes (PHP 8 #[Test], #[Requires*])
         let mut cursor = node.walk();
@@ -466,11 +473,24 @@ impl<'a> PhpExtractor<'a> {
                 if attr_text.contains("Test") {
                     is_test = true;
                 }
-                if attr_text.contains("Requires") || attr_text.contains("Skip") {
-                    is_ignored = true;
+                let mut stack = vec![child];
+                while let Some(n) = stack.pop() {
+                    if n.kind() != "attribute" {
+                        let mut inner = n.walk();
+                        stack.extend(n.named_children(&mut inner));
+                        continue;
+                    }
+                    let name = n.named_child(0).map(|c| self.text(c)).unwrap_or("");
+                    let name = name.rsplit('\\').next().unwrap_or(name);
+                    if name.starts_with("Requires") {
+                        requires.push(self.text(n).trim().to_string());
+                    } else if name.contains("Skip") {
+                        is_ignored = true;
+                    }
                 }
             }
         }
+        requires.reverse();
 
         // Check preceding comments / docblocks
         if let Some(prev) = node.prev_sibling() {
@@ -489,14 +509,20 @@ impl<'a> PhpExtractor<'a> {
             }
         }
 
-        (is_test, is_ignored)
+        (is_test, is_ignored, requires)
     }
 
-    fn visit_method(&mut self, node: Node, class_name: &str, class_ignored: bool) {
+    fn visit_method(
+        &mut self,
+        node: Node,
+        class_name: &str,
+        class_ignored: bool,
+        class_requires: &[String],
+    ) {
         let name_node = node.child_by_field_name("name");
         let method_name = name_node.map(|n| self.text(n)).unwrap_or("");
 
-        let (annotated_as_test, is_ignored) = self.check_doc_or_attrs_for_test(node);
+        let (annotated_as_test, is_ignored, requires) = self.check_doc_or_attrs_for_test(node);
         let name_is_test = method_name.starts_with("test");
 
         if !name_is_test && !annotated_as_test {
@@ -523,6 +549,9 @@ impl<'a> PhpExtractor<'a> {
             should_panic: None,
             ..Default::default()
         };
+        for attribute in class_requires.iter().chain(&requires) {
+            test_fn.record_conditional_skip(attribute.clone(), CiVerdict::NotCi);
+        }
 
         let mut calls = Vec::new();
         if let Some(body) = node.child_by_field_name("body") {
@@ -538,7 +567,7 @@ impl<'a> PhpExtractor<'a> {
         let name_node = node.child_by_field_name("name");
         let func_name = name_node.map(|n| self.text(n)).unwrap_or("");
 
-        let (annotated_as_test, is_ignored) = self.check_doc_or_attrs_for_test(node);
+        let (annotated_as_test, is_ignored, requires) = self.check_doc_or_attrs_for_test(node);
         // No PHP runner collects a top-level function by its name, so `testsCovering()`
         // in `examples/` is not a test; the name counts only under a declared test path.
         let name_is_test = func_name.starts_with("test") && self.declared_test_path;
@@ -563,6 +592,9 @@ impl<'a> PhpExtractor<'a> {
             should_panic: None,
             ..Default::default()
         };
+        for attribute in requires {
+            test_fn.record_conditional_skip(attribute, CiVerdict::NotCi);
+        }
 
         let mut calls = Vec::new();
         if let Some(body) = node.child_by_field_name("body") {
@@ -692,7 +724,7 @@ impl<'a> PhpExtractor<'a> {
 
         // Test skip: $this->markTestSkipped(...), $this->markTestIncomplete(...)
         if call_name == "markTestSkipped" || call_name == "markTestIncomplete" {
-            test_fn.ignored = true;
+            test_fn.record_skip(read_skip(Grammar::Php, node, None, self.src));
             return;
         }
 

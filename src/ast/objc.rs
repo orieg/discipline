@@ -13,6 +13,7 @@
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
+use super::ci_condition::{read_skip, Grammar};
 use super::functions::{self, FunctionSpec};
 use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
@@ -69,8 +70,7 @@ impl LanguagePack for ObjcPack {
         // repository's own `[languages.c]` macros, `extern "C"` guards.
         let masked = mask_objc_macros(src, vocab);
         let src = masked.as_deref().unwrap_or(src);
-        let tree = crate::ast::source_text::parse(&mut parser, src)
-            .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
+        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
         let root = tree.root_node();
         let (has_errors, first_line, error_count) = super::collect_error_nodes_info(root);
 
@@ -413,7 +413,14 @@ impl<'a> ObjcExtractor<'a> {
         let name = self.text(f);
         calls.push(name.to_string());
         if name.starts_with("XCTSkip") {
-            test_fn.ignored = true;
+            // `XCTSkipIf(c, ..)` skips when `c` holds, `XCTSkipUnless(c, ..)` when not.
+            let condition = self.args(node).first().copied();
+            let own = match name {
+                "XCTSkipIf" => condition.map(|c| (c, false)),
+                "XCTSkipUnless" => condition.map(|c| (c, true)),
+                _ => None,
+            };
+            test_fn.record_skip(read_skip(Grammar::ObjC, node, own, self.src));
             return;
         }
         let args = self.args(node);
@@ -507,6 +514,8 @@ pub const OBJC_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
     super::method_checks::ReceiverCalls {
         member: &[],
         direct: &[("message_expression", "receiver", "method")],
+        bare: &[],
+        tokens: &[],
     };
 
 pub const OBJC_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {

@@ -3,7 +3,6 @@
 //!
 //! Every test wraps the one assertion of an existing test and reads the lines reported.
 //! The sources below are fixtures: text handed to the binary, never code of this repository.
-//! A test named `pinned_...` records behaviour that is left as it is, with the reason.
 
 mod common;
 use common::{Repo, Run};
@@ -293,13 +292,13 @@ fn python_context_managers_that_do_not_suppress_an_assertion_failure_are_not_rep
     );
 }
 
-/// Left as it is: a class the file does not explain is read as unrelated to
-/// `AssertionError` in Python, while Java, Kotlin and C# report a type they do not know.
+/// A handler that only swallows a class the file does not explain is reported, as in
+/// Java, Kotlin and C# (#627): the class may derive from `AssertionError`.
 #[test]
-fn pinned_python_handler_for_a_user_defined_type_is_not_reported() {
+fn python_swallowing_handler_for_a_user_defined_type_is_reported() {
     check_each(
         &PY,
-        &[silent(py_try("    except CheckFailed:\n        pass\n"))],
+        &[at(3, py_try("    except CheckFailed:\n        pass\n"))],
     );
 }
 
@@ -314,6 +313,8 @@ const UNWIND: &str = "    let r = std::panic::catch_unwind(|| assert_eq!(add(2, 
 const RESULT_ASSERTED: &str = "    assert!(r.is_err());\n";
 const RESULT_BRANCHED: &str =
     "    if r.is_ok() {\n        panic!(\"should have panicked\");\n    }\n";
+const RESULT_BRANCHED_ON_FAILURE: &str =
+    "    if r.is_err() {\n        panic!(\"the assertion failed\");\n    }\n";
 const OTHER_BINDING_ASSERTED: &str =
     "    let other_r: Result<(), ()> = Ok(());\n    assert!(other_r.is_ok());\n";
 
@@ -331,9 +332,9 @@ fn rust_catch_unwind_result_that_is_checked_is_not_reported() {
                 "{UNWIND}    if let Err(e) = r {{\n        std::panic::resume_unwind(e);\n    }}\n"
             )),
             silent(format!(
-                "{UNWIND}    match r {{\n        Ok(()) => panic!(\"should have panicked\"),\n        Err(_) => {{}}\n    }}\n"
+                "{UNWIND}    match r {{\n        Ok(()) => {{}}\n        Err(e) => std::panic::resume_unwind(e),\n    }}\n"
             )),
-            silent(format!("{UNWIND}{RESULT_BRANCHED}")),
+            silent(format!("{UNWIND}{RESULT_BRANCHED_ON_FAILURE}")),
             silent(
                 "    let r = std::panic::catch_unwind(|| assert_eq!(add(2, 2), 4)).is_err();\n    assert!(r);\n",
             ),
@@ -363,6 +364,12 @@ fn rust_catch_unwind_result_that_is_dropped_stays_reported() {
             at(3, "    _ = std::panic::catch_unwind(|| assert_eq!(add(2, 2), 4));\n"),
             at(3, "    std::panic::catch_unwind(|| assert_eq!(add(2, 2), 4)).ok();\n"),
             at(3, "    let _r = std::panic::catch_unwind(|| assert_eq!(add(2, 2), 4));\n"),
+            // The branch that fails is the one taken when the assertion held (#627).
+            at(
+                3,
+                format!("{UNWIND}    match r {{\n        Ok(()) => panic!(\"should have panicked\"),\n        Err(_) => {{}}\n    }}\n"),
+            ),
+            at(3, format!("{UNWIND}{RESULT_BRANCHED}")),
             at(3, format!("{UNWIND}    let _ = r;\n")),
             at(3, format!("{UNWIND}    drop(r);\n")),
             at(
@@ -797,102 +804,120 @@ fn go_recovered(action: &str) -> String {
     ))
 }
 
-/// Does not depend on how `recover()` is read: a deferred function that fails the test is
-/// not a swallowing handler under either reading.
+/// A check that panics, and the function of the file that makes it. The check is on
+/// line 6 of the base and five lines lower behind a `defer` of `go_recovered`.
+const GO_PANICKING_CHECK: &str = "\tmustEqual(4, add(2, 2))\n";
+const GO_PANICKING_HELPER: &str =
+    "}\n\nfunc mustEqual(want, got int) {\n\tif want != got {\n\t\tpanic(\"not equal\")\n\t}\n";
+
+/// The lines reported when the panicking check gains a deferred function that runs
+/// `action` on what it recovered.
+fn go_panicking_check_recovered(action: &str) -> Vec<u64> {
+    let test = |body: &str| format!("{}{}{}{}", GO.before, body, GO_PANICKING_HELPER, GO.after);
+    let deferred = format!(
+        "\tdefer func() {{\n\t\tif r := recover(); r != nil {{\n\t\t\t{action}\n\t\t}}\n\t}}()\n{GO_PANICKING_CHECK}"
+    );
+    caught_in(&run_files(&GO, &test(GO_PANICKING_CHECK), &test(&deferred)))
+}
+
+/// A deferred function that fails the test is not a swallowing handler: the check that
+/// panics into it still fails the test.
 #[test]
 fn go_deferred_function_that_fails_the_test_is_not_reported() {
+    // Control: the same check behind a deferred function that only logs is reported.
+    assert_eq!(go_panicking_check_recovered("log.Println(r)"), vec![11]);
+    for action in [
+        "t.Fail()",
+        "require.Fail(t, \"panicked\")",
+        "assert.Fail(t, \"panicked\")",
+        "assert.Failf(t, \"panicked\", \"%v\", r)",
+    ] {
+        assert_eq!(go_panicking_check_recovered(action), NONE, "{action}");
+    }
+}
+
+/// `require` ends the test through `t.FailNow`, which `recover()` does not intercept
+/// (#627): it is not reported, whatever the deferred function does.
+#[test]
+fn go_require_after_a_recovering_defer_is_not_reported() {
     check_each(
         &GO,
         &[
-            silent(go_recovered("t.Fail()")),
-            silent(go_recovered("require.Fail(t, \"panicked\")")),
-            silent(go_recovered("assert.Fail(t, \"panicked\")")),
-            silent(go_recovered("assert.Failf(t, \"panicked\", \"%v\", r)")),
+            silent(go_defer("\t\t_ = recover()\n")),
+            silent(go_recovered("log.Println(r)")),
         ],
     );
 }
 
-/// Pending the decision on `recover()`: `require` ends the test through `t.FailNow`, which
-/// `recover()` does not intercept, and it is reported all the same. So is a deferred
-/// function that only logs.
+/// `assert` marks the test failed through `t.Errorf` and never panics (#627): it is not
+/// reported.
 #[test]
-fn pinned_go_require_after_a_recovering_defer_is_reported() {
-    check_each(
-        &GO,
-        &[
-            at(9, go_defer("\t\t_ = recover()\n")),
-            at(11, go_recovered("log.Println(r)")),
-        ],
-    );
-}
-
-/// Pending the decision on `recover()`: `assert` marks the test failed through `t.Errorf`
-/// and never panics, and it is reported all the same.
-#[test]
-fn pinned_go_assert_after_a_recovering_defer_is_reported() {
+fn go_assert_after_a_recovering_defer_is_not_reported() {
     let test = |body: &str| format!("{}{}{}", GO.before, body, GO.after);
     let run = run_files(
         &GO,
         &test("\tassert.Equal(t, 4, add(2, 2))\n"),
         &test("\tdefer func() {\n\t\t_ = recover()\n\t}()\n\tassert.Equal(t, 4, add(2, 2))\n"),
     );
-    assert_eq!(caught_in(&run), vec![9]);
+    assert_eq!(caught_in(&run), NONE);
 }
 
-/// Pending the decision on `recover()`: handlers that already read as failing the test.
+/// A deferred function that calls `t.Fatal`, `t.Errorf`, `t.FailNow` or panics again
+/// fails the test: the check that panics into it is not reported.
 #[test]
-fn pinned_go_recovering_defer_that_calls_fatal_or_panics_is_not_reported() {
-    check_each(
-        &GO,
-        &[
-            silent(go_recovered("t.Fatal(r)")),
-            silent(go_recovered("t.Errorf(\"%v\", r)")),
-            silent(go_recovered("panic(r)")),
-            silent(go_recovered("t.FailNow()")),
-        ],
+fn go_recovering_defer_that_calls_fatal_or_panics_is_not_reported() {
+    for action in [
+        "t.Fatal(r)",
+        "t.Errorf(\"%v\", r)",
+        "panic(r)",
+        "t.FailNow()",
+    ] {
+        assert_eq!(go_panicking_check_recovered(action), NONE, "{action}");
+    }
+}
+
+/// `err.Error()` in the deferred function formats the error and does not fail the test
+/// (#627): the check that panics into it is reported.
+#[test]
+fn go_recovering_defer_that_formats_an_error_is_reported() {
+    assert_eq!(
+        go_panicking_check_recovered("log.Println(r.(error).Error())"),
+        vec![11]
     );
 }
 
-/// Pending the decision on `recover()`: `err.Error()` in the deferred function reads as a
-/// call that fails the test, because the callee text contains `.Error`.
+/// The assertions after a recovering `defer` can still fail the test (#627): a test the
+/// change adds with one is neither reported as swallowed nor as vacuous.
 #[test]
-fn pinned_go_recovering_defer_that_formats_an_error_is_not_reported() {
-    check_each(
-        &GO,
-        &[silent(go_recovered("log.Println(r.(error).Error())"))],
-    );
-}
-
-/// Pending the decision on `recover()`: the assertions after a recovering `defer` leave
-/// the effective count, so a test the change adds with one is also reported as vacuous.
-#[test]
-fn pinned_go_added_test_with_a_recovering_defer_reads_as_vacuous() {
+fn go_added_test_with_a_recovering_defer_is_not_vacuous() {
     let base = format!("{}{}{}", GO.before, GO.plain, GO.after);
     let added = format!(
         "{base}\nfunc TestSub(t *testing.T) {{\n\tdefer func() {{\n\t\t_ = recover()\n\t}}()\n\trequire.Equal(t, 0, sub(2, 2))\n}}\n"
     );
     let run = run_files(&GO, &base, &added);
-    assert_eq!(run.titles(GATE), vec![CAUGHT.to_string()], "{}", run.stdout);
-    assert_eq!(run.violations("vacuous-tests").len(), 1, "{}", run.stdout);
+    assert_eq!(run.titles(GATE), Vec::<String>::new(), "{}", run.stdout);
+    assert_eq!(run.violations("vacuous-tests").len(), 0, "{}", run.stdout);
 }
 
 // ---------------------------------------------------------------------------
-// Left as they are (each needs a decision; the reason is on the test)
+// Callbacks inside the `try`
 // ---------------------------------------------------------------------------
 
-/// Left: an assertion inside a callback in the `try` is not read, because whether the
-/// callback runs before the `try` ends depends on the function it is passed to.
+/// An assertion inside a callback in the `try` is read when the function the callback is
+/// passed to is known to run it before returning (#627): `forEach` does.
 #[test]
-fn pinned_assertion_in_a_callback_inside_the_try_is_not_reported() {
+fn assertion_in_a_for_each_callback_inside_the_try_is_reported() {
     check_each(
         &JS,
-        &[silent(
+        &[at(
+            3,
             "  try {\n    [4].forEach((v) => expect(add(2, 2)).toBe(v));\n  } catch (e) {}\n",
         )],
     );
     check_each(
         &JAVA,
-        &[silent(
+        &[at(
+            8,
             "        try {\n            java.util.List.of(4).forEach(v -> assertEquals(v, add(2, 2)));\n        } catch (AssertionError e) {\n        }\n",
         )],
     );

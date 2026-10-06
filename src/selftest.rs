@@ -167,6 +167,178 @@ const CASES: &[Case] = &[
                 )? == 1)
         },
     ),
+    (
+        "ast: a Go recover() swallows a check that panics, not an assertion that ends the test through t.FailNow",
+        || {
+            let v = AssertVocabulary::default();
+            let reg = crate::ast::default_registry();
+            let pack = reg
+                .find_pack("p_test.go")
+                .ok_or_else(|| anyhow::anyhow!("no pack for Go"))?;
+            let test = |deferred: &str, check: &str| -> Result<(usize, bool)> {
+                let src = format!(
+                    "package p\n\nfunc TestA(t *testing.T) {{\n\tdefer func() {{\n\t\tif r := recover(); r != nil {{\n\t\t\t{deferred}\n\t\t}}\n\t}}()\n\t{check}\n}}\n\nfunc mustEqual(a, b int) {{\n\tif a != b {{\n\t\tpanic(\"not equal\")\n\t}}\n}}\n"
+                );
+                let facts = pack.extract("p_test.go", &src, &v)?;
+                let t = &facts.tests[0];
+                Ok((t.caught_assertions.len(), t.is_vacuous()))
+            };
+            Ok(test("log.Println(r)", "require.Equal(t, 4, add(2, 2))")? == (0, false)
+                && test("log.Println(r)", "assert.Equal(t, 4, add(2, 2))")? == (0, false)
+                && test("log.Println(r)", "mustEqual(4, add(2, 2))")? == (1, true)
+                && test("log.Println(r.(error).Error())", "mustEqual(4, add(2, 2))")? == (1, true)
+                && test("t.Fatal(r)", "mustEqual(4, add(2, 2))")? == (0, false)
+                && test("require.Fail(t, \"panicked\")", "mustEqual(4, add(2, 2))")? == (0, false))
+        },
+    ),
+    (
+        "ast: a Python handler for a class that may be an assertion failure is reported when it only swallows; a standard class beside AssertionError is not",
+        || {
+            let v = AssertVocabulary::default();
+            let reg = crate::ast::default_registry();
+            let pack = reg
+                .find_pack("test_x.py")
+                .ok_or_else(|| anyhow::anyhow!("no pack for Python"))?;
+            let caught = |classes: &str, handler: &str| -> Result<usize> {
+                let src = format!(
+                    "{classes}def test_x():\n    try:\n        assert f()\n    {handler}\n"
+                );
+                Ok(pack
+                    .extract("test_x.py", &src, &v)?
+                    .tests
+                    .iter()
+                    .map(|t| t.caught_assertions.len())
+                    .sum())
+            };
+            Ok(caught("", "except CheckFailed:\n        pass")? == 1
+                && caught("", "except CheckFailed as e:\n        logger.warning(e)")? == 1
+                && caught("", "except CheckFailed:\n        raise")? == 0
+                && caught("", "except CheckFailed:\n        seen = True")? == 0
+                && caught("", "except KeyError:\n        pass")? == 0
+                && caught("", "except OSError:\n        pass")? == 0
+                && caught("class Local(ValueError):\n    pass\n\n", "except Local:\n        pass")? == 0
+                && caught("class Local(AssertionError):\n    pass\n\n", "except Local:\n        pass")? == 1
+                && caught("", "finally:\n        return")? == 1
+                && caught("", "finally:\n        cleanup()")? == 0)
+        },
+    ),
+    (
+        "ast: an assertion in a callback inside a swallowing try is read only when the callback is known to run before the try ends; a named promise handler is judged by its body; a finally that returns discards the failure",
+        || {
+            let v = AssertVocabulary::default();
+            let reg = crate::ast::default_registry();
+            let caught = |path: &str, src: &str| -> Result<usize> {
+                let pack = reg
+                    .find_pack(path)
+                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
+                Ok(pack
+                    .extract(path, src, &v)?
+                    .tests
+                    .iter()
+                    .map(|t| t.caught_assertions.len())
+                    .sum())
+            };
+            let js = |body: &str| format!("test('a', () => {{\n{body}\n}});\nfunction ignore(e) {{}}\nfunction rethrow(e) {{ throw e; }}\n");
+            let java = |body: &str| format!("class ATest {{ @Test void t() {{ {body} }} }}");
+            let kotlin = |body: &str| format!("class ATest {{\n @Test\n fun t() {{\n{body}\n }}\n}}\n");
+            let csharp = |body: &str| format!("public class ATests {{ [Test] public void T() {{ {body} }} }}");
+            Ok(caught("a.test.js", &js("  try {\n    [4].forEach((v) => expect(f()).toBe(v));\n  } catch (e) {}"))? == 1
+                && caught("a.test.js", &js("  try {\n    setTimeout(() => expect(f()).toBe(4), 0);\n  } catch (e) {}"))? == 0
+                && caught("a.test.js", &js("  return load().then((v) => expect(v).toBe(4)).catch(ignore);"))? == 1
+                && caught("a.test.js", &js("  return load().then((v) => expect(v).toBe(4)).catch(rethrow);"))? == 0
+                && caught("a.test.js", &js("  return load().then((v) => expect(v).toBe(4)).catch(done);"))? == 0
+                && caught("a.test.js", &js("  try {\n    expect(f()).toBe(4);\n  } finally {\n    return;\n  }"))? == 1
+                && caught("a.test.js", &js("  try {\n    expect(f()).toBe(4);\n  } finally {\n    cleanup();\n  }"))? == 0
+                && caught("ATest.java", &java("try { items.forEach(v -> assertEquals(v, f())); } catch (AssertionError e) { }"))? == 1
+                && caught("ATest.java", &java("try { pool.submit(() -> assertEquals(4, f())); } catch (AssertionError e) { }"))? == 0
+                && caught("ATest.java", &java("try { assertEquals(4, f()); } finally { return; }"))? == 1
+                && caught("ATest.java", &java("try { assertEquals(4, f()); } finally { cleanup(); }"))? == 0
+                && caught("ATest.kt", &kotlin("  try {\n   f().let { assertEquals(4, it) }\n  } catch (e: AssertionError) {\n  }"))? == 1
+                && caught("ATest.kt", &kotlin("  try {\n   thread { assertEquals(4, f()) }\n  } catch (e: AssertionError) {\n  }"))? == 0
+                && caught("ATests.cs", &csharp("try { items.ForEach(v => Assert.AreEqual(v, F())); } catch (Exception) { }"))? == 1
+                && caught("ATests.cs", &csharp("try { Task.Run(() => Assert.AreEqual(4, F())); } catch (Exception) { }"))? == 0
+                && caught("ATests.cs", &csharp("try { Assert.AreEqual(4, F()); } catch (Exception) { Assert.Pass(); }"))? == 1
+                && caught("ATests.cs", &csharp("try { Assert.AreEqual(4, F()); } catch (Exception) { Assert.Inconclusive(); }"))? == 1
+                && caught("ATests.cs", &csharp("try { Assert.AreEqual(4, F()); } catch (Exception) { Assert.Fail(); }"))? == 0)
+        },
+    ),
+    (
+        "ast: a catch_unwind result is checked only when the branch taken for a failure fails; a configured helper is an assertion to the caught-assertion reading",
+        || {
+            let plain = AssertVocabulary::default();
+            let mut configured = AssertVocabulary::default();
+            configured.helper_fns.push("check_total".to_string());
+            let reg = crate::ast::default_registry();
+            let caught = |path: &str, src: &str, v: &AssertVocabulary| -> Result<usize> {
+                let pack = reg
+                    .find_pack(path)
+                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
+                Ok(pack
+                    .extract(path, src, v)?
+                    .tests
+                    .iter()
+                    .map(|t| t.caught_assertions.len())
+                    .sum())
+            };
+            let rust = |after: &str| {
+                format!("#[test] fn t() {{ let r = std::panic::catch_unwind(|| assert_eq!(1, 2)); {after} }}")
+            };
+            let py = "def test_x():\n    try:\n        check_total(f())\n    except AssertionError:\n        pass\n";
+            let unwind = "#[test] fn t() { let _ = std::panic::catch_unwind(|| check_total(f())); }";
+            Ok(caught("t.rs", &rust("if r.is_err() { panic!(\"failed\"); }"), &plain)? == 0
+                && caught("t.rs", &rust("if r.is_ok() { panic!(\"no panic\"); }"), &plain)? == 1
+                && caught("t.rs", &rust("if r.is_ok() { done(); } else { panic!(\"failed\"); }"), &plain)? == 0
+                && caught("t.rs", &rust("if let Ok(()) = r { panic!(\"no panic\"); }"), &plain)? == 1
+                && caught("t.rs", &rust("match r { Ok(()) => {} Err(e) => std::panic::resume_unwind(e) }"), &plain)? == 0
+                && caught("t.rs", &rust("match r { Ok(()) => panic!(\"no panic\"), Err(_) => {} }"), &plain)? == 1
+                && caught("test_x.py", py, &configured)? == 1
+                && caught("test_x.py", py, &plain)? == 0
+                && caught("t.rs", unwind, &configured)? == 1
+                && caught("t.rs", unwind, &plain)? == 0)
+        },
+    ),
+    (
+        "ast: suite.Run is the entry point of a testify suite, not a subtest; a receiver call is followed into a C++ member function, through a Rust macro's arguments, and without parentheses in Scala",
+        || {
+            let v = AssertVocabulary::default();
+            let reg = crate::ast::default_registry();
+            let tests = |path: &str, src: &str| -> Result<Vec<crate::ast::TestFn>> {
+                let pack = reg
+                    .find_pack(path)
+                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
+                Ok(pack.extract(path, src, &v)?.tests)
+            };
+            let suite = tests(
+                "calc_test.go",
+                "package calc\n\ntype S struct {\n\tsuite.Suite\n}\n\nfunc (s *S) TestAdd() {\n\ts.Equal(4, Add(2, 2))\n}\n\nfunc TestS(t *testing.T) {\n\tsuite.Run(t, new(S))\n}\n",
+            )?;
+            let subtest = tests(
+                "calc_test.go",
+                "package calc\n\nfunc TestS(t *testing.T) {\n\tt.Run(\"empty\", func(t *testing.T) {\n\t\tAdd(2, 2)\n\t})\n}\n",
+            )?;
+            let checks = |path: &str, src: &str| -> Result<usize> {
+                Ok(tests(path, src)?.iter().map(|t| t.method_checks).sum())
+            };
+            let cpp = |body: &str| {
+                format!("struct Checker {{\n  int n;\n  void done() {{ {body} }}\n}};\n\nTEST(Api, Create) {{\n  Checker c = Make();\n  c.done();\n}}\n")
+            };
+            let rust = |body: &str| {
+                format!("struct A(Vec<u8>);\nimpl A {{ fn done(&self) -> usize {{ {body} self.0.len() }} }}\n#[test]\nfn t() {{\n    let v = make();\n    println!(\"{{}}\", v.done());\n}}\n")
+            };
+            let scala = |body: &str| {
+                format!("class Checker(r: R) {{\n  def done: Unit = {{\n    {body}\n  }}\n}}\n\nclass ApiSpec extends AnyFunSuite {{\n  test(\"create\") {{\n    val c = new Checker(make())\n    c.done\n  }}\n}}\n")
+            };
+            Ok(suite.iter().all(|t| !t.is_vacuous())
+                && suite.iter().map(|t| t.name.as_str()).collect::<Vec<_>>() == ["S.TestAdd", "TestS"]
+                && subtest.iter().any(|t| t.name == "TestS/empty" && t.is_vacuous())
+                && checks("tests/api_test.cc", &cpp("EXPECT_EQ(n, 1);"))? == 1
+                && checks("tests/api_test.cc", &cpp("Log(n);"))? == 0
+                && checks("tests/t.rs", &rust("assert_eq!(self.0.capacity(), 0);"))? == 1
+                && checks("tests/t.rs", &rust("log(&self.0);"))? == 0
+                && checks("src/test/scala/ApiSpec.scala", &scala("assert(r.f1 == 1)"))? == 1
+                && checks("src/test/scala/ApiSpec.scala", &scala("log(r)"))? == 0)
+        },
+    ),
     ("ast: assert inside a comment is not an assertion", || {
         let f = analyze(
             "#[test] fn t() { // assert_eq!(1, 2);\n }",
@@ -1018,6 +1190,50 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "commit-provenance: a required trailer is judged for each entry of a squash, and for the whole message when the entries cannot be placed",
+        || {
+            use crate::guards::commit_provenance::{judge, squash_entries, Entries};
+            let commit = |message: &str| crate::gitctx::CommitDetail {
+                sha: "1".repeat(40),
+                author_name: "A".to_string(),
+                author_email: "a@x".to_string(),
+                committer_email: "a@x".to_string(),
+                message: message.to_string(),
+                parent_count: 1,
+            };
+            let required = ["Signed-off-by".to_string()];
+            let found = |message: &str| judge(&[commit(message)], &required, &[], "");
+            let half = "feat: x (#7)\n\n* feat: x\n\nSigned-off-by: A <a@x>\n\n* test: x\n\nBody.\n\n---------\n\nSigned-off-by: A <a@x>\n";
+            let both = half.replace("Body.", "Signed-off-by: A <a@x>");
+            // The same entries under a subject with no pull request number: a list.
+            let unplaced = half.replace(" (#7)", "");
+            let one = found(half);
+            Ok(one.len() == 1
+                && one[0].entry == Some(2)
+                && one[0].what.contains("`test: x`")
+                && one[0].anchor.ends_with(":signed-off-by:entry:2")
+                && found(&both).is_empty()
+                && found(&unplaced).is_empty()
+                && matches!(squash_entries(&unplaced), Entries::Undelimited(_))
+                && squash_entries("fix: x\n\n* one\n* two\n") == Entries::None)
+        },
+    ),
+    (
+        "audit: a configuration key a later release removed is set aside by name, and a name that was never a key is refused",
+        || {
+            use crate::config::DisciplineConfig;
+            let head = "[meta]\nversion = 1\nname = \"t\"\n[gates.commit-provenance]\n";
+            let removed = format!("{head}allow_author_review = true\n");
+            let never = format!("{head}never_a_key = true\n");
+            let (_, set_aside) = DisciplineConfig::from_history_toml_str(&removed)?;
+            Ok(set_aside.len() == 1
+                && set_aside[0].0 == "gates.commit-provenance.allow_author_review"
+                && DisciplineConfig::from_toml_str(&removed).is_err()
+                && DisciplineConfig::from_history_toml_str(&never).is_err()
+                && DisciplineConfig::from_history_toml_str(head)?.1.is_empty())
+        },
+    ),
+    (
         "commit-provenance: a finding is anchored by its commit, a missing trailer by its key too",
         || {
             use crate::guards::commit_provenance::judge;
@@ -1271,6 +1487,38 @@ const CASES: &[Case] = &[
                 && comment.tests[1].line == 5
                 && stray.tests.len() == 2
                 && stray.has_parse_errors)
+        },
+    ),
+    (
+        "ast: a parse the grammar does not finish is cut at its budget and names the file",
+        || {
+            let v = AssertVocabulary::default();
+            if crate::ast::default_registry().find_pack("src/m.rs").is_none() {
+                return Ok(true);
+            }
+            // On a thread of its own: a parse with no budget does not return, and this
+            // case then fails instead of waiting for it.
+            let (done, result) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let reg = crate::ast::default_registry();
+                let outcome = reg.find_pack("src/m.rs").map(|pack| {
+                    pack.extract("src/m.rs", "(>\u{fffd}t(0(.t();}", &v)
+                        .map(|_| ())
+                        .map_err(|e| e.to_string())
+                });
+                // The thread's own result: the receiver is gone only once the case has failed.
+                done.send(outcome)
+            });
+            let Ok(Some(Err(cut))) = result.recv_timeout(std::time::Duration::from_secs(240)) else {
+                return Ok(false);
+            };
+            let reg = crate::ast::default_registry();
+            let Some(pack) = reg.find_pack("src/m.rs") else {
+                return Ok(true);
+            };
+            let twin = pack.extract("src/m.rs", "(>\u{e9}t(0(.t();}", &AssertVocabulary::default())?;
+            Ok(cut == "could not parse `src/m.rs`: the parser did not finish within its budget of 316 steps for 15 bytes"
+                && twin.has_parse_errors)
         },
     ),
     #[cfg(feature = "lang-swift")]
@@ -4401,6 +4649,183 @@ command = "cargo test"
                     "class QTest {\n    @Test\n    fun adds() {\n        assumeFalse(System.getenv(\"CI\") != null)\n        assertEquals(2, 1 + 1)\n    }\n}\n".to_string(),
                     conditional(Severity::Error),
                 ),
+            ];
+            for (path, src, want) in cases {
+                if finding_of(path, &src)? != want {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        },
+    ),
+    (
+        "ignored-tests: C#, Ruby, PHP, Swift, Scala, C / C++ and Objective-C read a skip under a condition: CI is an error, another condition a note",
+        || {
+            use crate::ast::default_registry;
+            use crate::config::{IgnoredTestsGate, Severity};
+            use crate::guards::agent_diff::{evaluate_ignored_tests, Located};
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            // `(title, severity)` of the finding for the one test of a file that arrives.
+            type Finding = Option<(String, Severity)>;
+            let finding_of = |path: &str, src: &str| -> anyhow::Result<Finding> {
+                let pack = reg
+                    .find_pack(path)
+                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
+                let tests = pack.extract(path, src, &v)?.tests;
+                let test = tests
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("no test in {path}"))?;
+                let added = [Located {
+                    path,
+                    file_survives: true,
+                    test,
+                }];
+                let out =
+                    evaluate_ignored_tests(&[], &added, &IgnoredTestsGate::default(), &[], false)?;
+                Ok(out.violations.first().map(|v| (v.title.to_string(), v.severity)))
+            };
+            let conditional = |severity: Severity| Some(("Test Conditionally Skipped".to_string(), severity));
+            let unconditional = Some(("Ignored Test Added".to_string(), Severity::Error));
+            let cs = |body: &str| {
+                format!("public class QTests\n{{\n    [Test]\n    public void Adds()\n    {{\n        {body}\n        Assert.AreEqual(2, 1 + 1);\n    }}\n}}\n")
+            };
+            let rb = |body: &str| {
+                format!("class QTest < Minitest::Test\n  def test_adds\n    {body}\n    assert_equal 2, 1 + 1\n  end\nend\n")
+            };
+            let php = |attribute: &str, body: &str| {
+                format!("<?php\nclass QTest extends TestCase\n{{\n    {attribute}\n    public function testAdds(): void\n    {{\n        {body}\n        $this->assertSame(2, 1 + 1);\n    }}\n}}\n")
+            };
+            let swift = |body: &str| {
+                format!("import XCTest\n\nfinal class QTests: XCTestCase {{\n    func testAdds() throws {{\n        {body}\n        XCTAssertEqual(1 + 1, 2)\n    }}\n}}\n")
+            };
+            let swift_testing = |attribute: &str| {
+                format!("import Testing\n\n{attribute} func adds() {{\n    #expect(1 + 1 == 2)\n}}\n")
+            };
+            let scala = |body: &str| {
+                format!("class QSuite extends AnyFunSuite {{\n  test(\"adds\") {{\n    {body}\n    assert(1 + 1 == 2)\n  }}\n}}\n")
+            };
+            let cpp = |body: &str| format!("TEST(Q, Adds) {{\n  {body}\n  EXPECT_EQ(1 + 1, 2);\n}}\n");
+            let unity = |body: &str| {
+                format!("#include \"unity.h\"\n\nvoid test_adds(void) {{\n  {body}\n  TEST_ASSERT_EQUAL(2, 1 + 1);\n}}\n")
+            };
+            let objc = |body: &str| {
+                format!("@implementation QTests\n- (void)testAdds {{\n  {body}\n  XCTAssertEqual(1 + 1, 2);\n}}\n@end\n")
+            };
+            const CS: &str = "tests/QTests.cs";
+            const RB: &str = "test/q_test.rb";
+            const PHP: &str = "tests/QTest.php";
+            const SWIFT: &str = "Tests/QTests/QTests.swift";
+            const SCALA: &str = "src/test/scala/QSuite.scala";
+            const CPP: &str = "tests/q_test.cpp";
+            const UNITY: &str = "test/test_q.c";
+            const OBJC: &str = "Tests/QTests.m";
+            let cases: Vec<(&str, String, Finding)> = vec![
+                (CS, cs("if (Environment.GetEnvironmentVariable(\"CI\") != null) { Assert.Ignore(\"x\"); }"), conditional(Severity::Error)),
+                (CS, cs("if (Environment.GetEnvironmentVariable(\"CI\") == null) { Assert.Ignore(\"x\"); }"), conditional(Severity::Note)),
+                (CS, cs("Assume.That(Environment.GetEnvironmentVariable(\"CI\") == null);"), conditional(Severity::Error)),
+                (CS, cs("Skip.If(OperatingSystem.IsWindows());"), conditional(Severity::Note)),
+                (CS, cs("Assert.Ignore(\"x\");"), unconditional.clone()),
+                (RB, rb("skip \"x\" if ENV[\"CI\"]"), conditional(Severity::Error)),
+                (RB, rb("skip \"x\" unless ENV[\"CI\"]"), conditional(Severity::Note)),
+                (RB, rb("if File.exist?(\"db\")\n      puts 1\n    else\n      skip \"x\"\n    end"), conditional(Severity::Note)),
+                (RB, rb("skip \"x\""), unconditional.clone()),
+                (PHP, php("", "if (getenv('CI')) { $this->markTestSkipped('x'); }"), conditional(Severity::Error)),
+                (PHP, php("", "if (!getenv('CI')) { $this->markTestSkipped('x'); }"), conditional(Severity::Note)),
+                (PHP, php("#[RequiresOperatingSystem('Linux')]", ""), conditional(Severity::Note)),
+                (PHP, php("", "$this->markTestSkipped('x');"), unconditional.clone()),
+                (SWIFT, swift("try XCTSkipIf(ProcessInfo.processInfo.environment[\"CI\"] != nil)"), conditional(Severity::Error)),
+                (SWIFT, swift("try XCTSkipUnless(ProcessInfo.processInfo.environment[\"CI\"] != nil)"), conditional(Severity::Note)),
+                (SWIFT, swift("guard ProcessInfo.processInfo.environment[\"CI\"] == nil else { throw XCTSkip(\"x\") }"), conditional(Severity::Error)),
+                (SWIFT, swift("throw XCTSkip(\"x\")"), unconditional.clone()),
+                (SWIFT, swift_testing("@Test(.disabled(if: ProcessInfo.processInfo.environment[\"CI\"] != nil))"), conditional(Severity::Error)),
+                (SWIFT, swift_testing("@Test(.enabled(if: ProcessInfo.processInfo.environment[\"CI\"] != nil))"), conditional(Severity::Note)),
+                (SWIFT, swift_testing("@Test(.disabled(\"x\"))"), unconditional.clone()),
+                (SCALA, scala("assume(!sys.env.contains(\"CI\"))"), conditional(Severity::Error)),
+                (SCALA, scala("assume(sys.env.contains(\"CI\"))"), conditional(Severity::Note)),
+                (SCALA, scala("if (sys.env.contains(\"CI\")) cancel(\"x\")"), conditional(Severity::Error)),
+                (SCALA, scala("cancel(\"x\")"), unconditional.clone()),
+                (CPP, cpp("if (std::getenv(\"CI\") != nullptr) { GTEST_SKIP(); }"), conditional(Severity::Error)),
+                (CPP, cpp("if (std::getenv(\"CI\") == nullptr) { GTEST_SKIP(); }"), conditional(Severity::Note)),
+                (CPP, cpp("GTEST_SKIP();"), unconditional.clone()),
+                (UNITY, unity("if (getenv(\"CI\") != NULL) { TEST_IGNORE(); }"), conditional(Severity::Error)),
+                (UNITY, unity("if (getenv(\"CI\") == NULL) { TEST_IGNORE(); }"), conditional(Severity::Note)),
+                (UNITY, unity("TEST_IGNORE();"), unconditional.clone()),
+                (OBJC, objc("XCTSkipIf(NSProcessInfo.processInfo.environment[@\"CI\"] != nil, @\"x\");"), conditional(Severity::Error)),
+                (OBJC, objc("XCTSkipUnless(NSProcessInfo.processInfo.environment[@\"CI\"] != nil, @\"x\");"), conditional(Severity::Note)),
+                (OBJC, objc("XCTSkip(@\"x\");"), unconditional.clone()),
+            ];
+            for (path, src, want) in cases {
+                if finding_of(path, &src)? != want {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        },
+    ),
+    (
+        "ignored-tests: a mark bound to a name, xfail with a condition, a `ci` feature, an else branch and JUnit's method conditions are read by their condition",
+        || {
+            use crate::ast::default_registry;
+            use crate::config::{IgnoredTestsGate, Severity};
+            use crate::guards::agent_diff::{evaluate_ignored_tests, Located};
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            // `(title, severity)` of the finding for the one test of a file that arrives.
+            type Finding = Option<(String, Severity)>;
+            let finding_of = |path: &str, src: &str| -> anyhow::Result<Finding> {
+                let pack = reg
+                    .find_pack(path)
+                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
+                let tests = pack.extract(path, src, &v)?.tests;
+                let test = tests
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("no test in {path}"))?;
+                let added = [Located {
+                    path,
+                    file_survives: true,
+                    test,
+                }];
+                let out =
+                    evaluate_ignored_tests(&[], &added, &IgnoredTestsGate::default(), &[], false)?;
+                Ok(out.violations.first().map(|v| (v.title.to_string(), v.severity)))
+            };
+            let conditional = |severity: Severity| Some(("Test Conditionally Skipped".to_string(), severity));
+            let unconditional = Some(("Ignored Test Added".to_string(), Severity::Error));
+            let py = |module: &str, decorator: &str, body: &str| {
+                format!("import os\nimport sys\nimport pytest\n\n{module}\n\n{decorator}\ndef test_q():\n    {body}\n    assert 1 + 1 == 2\n")
+            };
+            let rs = |attribute: &str| format!("{attribute}\n#[test]\nfn adds() {{\n    assert_eq!(1 + 1, 2);\n}}\n");
+            let java = |member: &str, annotation: &str, first: &str| {
+                format!("class QTest {{\n    {member}\n    {annotation}\n    @Test\n    void adds() {{\n        {first}\n        assertEquals(2, 1 + 1);\n    }}\n}}\n")
+            };
+            const PY: &str = "test_q.py";
+            const RS: &str = "tests/q.rs";
+            const JAVA: &str = "src/test/java/QTest.java";
+            let on_ci = "boolean onCi() { return System.getenv(\"CI\") != null; }";
+            let cases: Vec<(&str, String, Finding)> = vec![
+                (PY, py("off_ci = pytest.mark.skipif(os.environ.get(\"CI\"), reason=\"x\")", "@off_ci", "pass"), conditional(Severity::Error)),
+                (PY, py("posix = pytest.mark.skipif(sys.platform == \"win32\", reason=\"x\")", "@posix", "pass"), conditional(Severity::Note)),
+                (PY, py("parked = pytest.mark.skip(reason=\"x\")", "@parked", "pass"), unconditional.clone()),
+                (PY, py("from marks import posix", "@posix", "pass"), None),
+                (PY, py("", "@pytest.mark.xfail(os.environ.get(\"CI\"), reason=\"x\")", "pass"), conditional(Severity::Error)),
+                (PY, py("", "@pytest.mark.xfail(sys.platform == \"win32\", reason=\"x\")", "pass"), conditional(Severity::Note)),
+                (PY, py("", "@pytest.mark.xfail(reason=\"x\")", "pass"), unconditional.clone()),
+                (PY, py("", "", "if sys.platform == \"linux\":\n        pass\n    else:\n        pytest.skip(\"x\")"), conditional(Severity::Note)),
+                (PY, py("", "", "if not os.environ.get(\"CI\"):\n        pass\n    else:\n        pytest.skip(\"x\")"), conditional(Severity::Error)),
+                (PY, py("", "", "if os.environ.get(\"CI\"):\n        pass\n    else:\n        pytest.skip(\"x\")"), conditional(Severity::Note)),
+                (RS, rs("#[cfg_attr(feature = \"ci\", ignore)]"), conditional(Severity::Error)),
+                (RS, rs("#[cfg_attr(not(feature = \"ci\"), ignore)]"), conditional(Severity::Note)),
+                (RS, rs("#[cfg_attr(feature = \"ci-tools\", ignore)]"), conditional(Severity::Note)),
+                (RS, rs("#[cfg(feature = \"ci\")]"), conditional(Severity::Note)),
+                (RS, rs("#[cfg(not(feature = \"ci\"))]"), unconditional.clone()),
+                (JAVA, java(on_ci, "@DisabledIf(\"onCi\")", ""), conditional(Severity::Error)),
+                (JAVA, java(on_ci, "@EnabledIf(\"onCi\")", ""), conditional(Severity::Note)),
+                (JAVA, java("", "@DisabledIf(\"onCi\")", ""), conditional(Severity::Note)),
+                (JAVA, java("", "", "assumeThat(System.getenv(\"CI\"), nullValue());"), conditional(Severity::Error)),
+                (JAVA, java("", "", "assumeThat(System.getenv(\"CI\"), notNullValue());"), conditional(Severity::Note)),
+                (JAVA, java("", "", "if (System.getenv(\"CI\") != null) { assumeTrue(up()); }"), conditional(Severity::Error)),
+                (JAVA, java("", "", "if (isLinux()) { assumeTrue(up()); }"), conditional(Severity::Note)),
             ];
             for (path, src, want) in cases {
                 if finding_of(path, &src)? != want {

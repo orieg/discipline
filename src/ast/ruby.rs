@@ -3,6 +3,7 @@
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
+use super::ci_condition::{read_skip, Grammar};
 use super::functions::{self, FunctionSpec};
 use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
@@ -40,8 +41,7 @@ impl LanguagePack for RubyPack {
         parser
             .set_language(&tree_sitter_ruby::LANGUAGE.into())
             .map_err(|e| anyhow!("failed to load the Ruby grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse(&mut parser, src)
-            .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
+        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
         let root = tree.root_node();
 
         let mut extractor = RubyExtractor {
@@ -147,6 +147,8 @@ pub const RUBY_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
     super::method_checks::ReceiverCalls {
         member: &[],
         direct: &[("call", "receiver", "method")],
+        bare: &[],
+        tokens: &[],
     };
 
 pub const RUBY_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
@@ -529,7 +531,7 @@ impl<'a> RubyExtractor<'a> {
         if kind == "identifier" {
             let name = self.text(node);
             if matches!(name, "skip" | "omit" | "pending") {
-                test_fn.ignored = true;
+                test_fn.record_skip(read_skip(Grammar::Ruby, node, None, self.src));
                 return;
             }
         }
@@ -550,7 +552,18 @@ impl<'a> RubyExtractor<'a> {
             }
 
             if matches!(method_name, "skip" | "omit" | "pending") {
-                test_fn.ignored = true;
+                test_fn.record_skip(read_skip(Grammar::Ruby, node, None, self.src));
+                return;
+            }
+            // test-unit: `omit_if(c)` skips when `c` holds, `omit_unless(c)` when not.
+            if is_local_call && matches!(method_name, "omit_if" | "omit_unless") {
+                let condition = node.child_by_field_name("arguments").and_then(|args| {
+                    let mut cursor = args.walk();
+                    let first = args.named_children(&mut cursor).next();
+                    first
+                });
+                let own = condition.map(|c| (c, method_name == "omit_unless"));
+                test_fn.record_skip(read_skip(Grammar::Ruby, node, own, self.src));
                 return;
             }
 

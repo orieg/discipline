@@ -733,10 +733,15 @@ fn swallows() -> Vec<Swallow> {
         },
         Swallow {
             name: "go",
-            handler: |a| format!("\tdefer func() {{ recover() }}()\n\t{a}\n"),
+            // A `recover()` swallows a check that panics, not one that ends the test
+            // through `t.FailNow`. The handler closes the test and declares the function
+            // that panics; the file's own closing brace then closes that function.
+            handler: |a| {
+                format!("\tdefer func() {{ recover() }}()\n\t{a}\n}}\n\nfunc mustEqual(want, got int) {{\n\tif want != got {{\n\t\tpanic(\"not equal\")\n\t}}\n")
+            },
             tautology: "require.True(t, true)",
-            one: "require.Equal(t, 2, g())",
-            two_on_a_line: "require.Equal(t, 2, g()); require.Equal(t, 3, h())",
+            one: "mustEqual(2, g())",
+            two_on_a_line: "mustEqual(2, g()); mustEqual(3, h())",
         },
     ]
 }

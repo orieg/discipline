@@ -49,8 +49,7 @@ impl LanguagePack for KotlinPack {
         parser
             .set_language(&tree_sitter_kotlin_ng::LANGUAGE.into())
             .map_err(|e| anyhow!("failed to load the Kotlin grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse(&mut parser, src)
-            .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
+        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
         let root = tree.root_node();
 
         let mut extractor = KotlinExtractor {
@@ -129,7 +128,7 @@ impl LanguagePack for KotlinPack {
             super::calls::TRIVIAL_ASSERT_VOCAB,
             super::calls::trivial_asserts,
         );
-        super::caught_assertions::kotlin(root, src, &mut extractor.facts.tests);
+        super::caught_assertions::kotlin(root, src, &mut extractor.facts.tests, vocab);
         extractor.facts.prose = super::prose::extract(
             root,
             src,
@@ -287,7 +286,19 @@ impl<'a> KotlinExtractor<'a> {
                 stack.extend(n.named_children(&mut inner));
             }
             let name = self.annotation_name(annotation);
-            match super::ci_condition::jvm_annotation(name, named, matches) {
+            // `@DisabledIf("method")`: read by the method, where the class has it.
+            let by_method = match name {
+                "DisabledIf" | "EnabledIf" => super::ci_condition::jvm_condition_method(
+                    Lang::Kotlin,
+                    annotation,
+                    self.src,
+                    name == "EnabledIf",
+                ),
+                _ => None,
+            };
+            let read =
+                by_method.or_else(|| super::ci_condition::jvm_annotation(name, named, matches));
+            match read {
                 Some(SkipCondition::Always) => always = true,
                 Some(SkipCondition::When(verdict)) => {
                     conditional.push((self.text(annotation).trim().to_string(), verdict));
@@ -314,6 +325,15 @@ impl<'a> KotlinExtractor<'a> {
                     test.record_conditional_skip(text, verdict);
                 }
                 Some((_, SkipCondition::Never)) | None => {}
+            }
+        }
+        for (text, outcome) in
+            super::ci_condition::jvm_assumptions_under_if(Lang::Kotlin, block, self.src)
+        {
+            match outcome {
+                SkipCondition::Always => test.ignored = true,
+                SkipCondition::When(verdict) => test.record_conditional_skip(text, verdict),
+                SkipCondition::Never => {}
             }
         }
     }
@@ -868,6 +888,8 @@ pub const KOTLIN_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
     super::method_checks::ReceiverCalls {
         member: &[("call_expression", "", "navigation_expression", "")],
         direct: &[],
+        bare: &[],
+        tokens: &[],
     };
 
 pub const KOTLIN_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {

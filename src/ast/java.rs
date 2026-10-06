@@ -39,8 +39,7 @@ impl LanguagePack for JavaPack {
         parser
             .set_language(&tree_sitter_java::LANGUAGE.into())
             .map_err(|e| anyhow!("failed to load the Java grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse(&mut parser, src)
-            .ok_or_else(|| anyhow!("tree-sitter returned no tree"))?;
+        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
         let root = tree.root_node();
 
         let mut extractor = JavaExtractor {
@@ -117,7 +116,7 @@ impl LanguagePack for JavaPack {
             super::calls::TRIVIAL_ASSERT_VOCAB,
             super::calls::trivial_asserts,
         );
-        super::caught_assertions::java(root, src, &mut extractor.facts.tests);
+        super::caught_assertions::java(root, src, &mut extractor.facts.tests, vocab);
         super::expected_exceptions::java(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
@@ -293,7 +292,19 @@ impl<'a> JavaExtractor<'a> {
                     }
                 }
             }
-            match super::ci_condition::jvm_annotation(name, named, matches) {
+            // `@DisabledIf("method")`: read by the method, where the class has it.
+            let by_method = match name {
+                "DisabledIf" | "EnabledIf" => super::ci_condition::jvm_condition_method(
+                    Lang::Java,
+                    annotation,
+                    self.src,
+                    name == "EnabledIf",
+                ),
+                _ => None,
+            };
+            let read =
+                by_method.or_else(|| super::ci_condition::jvm_annotation(name, named, matches));
+            match read {
                 Some(SkipCondition::Always) => always = true,
                 Some(SkipCondition::When(verdict)) => {
                     conditional.push((self.text(annotation).trim().to_string(), verdict));
@@ -315,6 +326,15 @@ impl<'a> JavaExtractor<'a> {
                     test.record_conditional_skip(text, verdict);
                 }
                 Some((_, SkipCondition::Never)) | None => {}
+            }
+        }
+        for (text, outcome) in
+            super::ci_condition::jvm_assumptions_under_if(Lang::Java, body, self.src)
+        {
+            match outcome {
+                SkipCondition::Always => test.ignored = true,
+                SkipCondition::When(verdict) => test.record_conditional_skip(text, verdict),
+                SkipCondition::Never => {}
             }
         }
     }
@@ -774,6 +794,8 @@ pub const JAVA_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
     super::method_checks::ReceiverCalls {
         member: &[],
         direct: &[("method_invocation", "object", "name")],
+        bare: &[],
+        tokens: &[],
     };
 
 pub const JAVA_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
