@@ -814,10 +814,11 @@ mod tests {
                     without.lines().count(),
                     "{what}: {with}"
                 );
-                assert!(
-                    !with.chars().any(|c| c.is_control() && c != '\n'),
-                    "{what}: {with:?}"
-                );
+                // The report styles its own text when it runs in a CI log, so the
+                // rendering without hostile text is the measure: quoted text adds no
+                // control character to it.
+                let controls = |s: &str| s.chars().filter(|c| c.is_control() && *c != '\n').count();
+                assert_eq!(controls(&with), controls(&without), "{what}: {with:?}");
                 assert_eq!(
                     with.lines().filter(|l| *l == "Status: PASS").count(),
                     0,
