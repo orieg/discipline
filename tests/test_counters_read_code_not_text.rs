@@ -627,16 +627,36 @@ fn a_followed_method_counts_beside_a_trivial_assertion() {
     assert_eq!(run.titles(VACUOUS), vec![TRIVIAL], "{}", run.stdout);
 }
 
-/// Control for the other gate: `assertion-reduction` counts a test as it did. Assertions
-/// replaced by a call to a same-file method on a receiver are still a decrease there.
+/// The other gate. `assertion-reduction` counts a test as it did (the test's own count
+/// goes from three to none here), and since #595 it reads the call as a move: a call to a
+/// same-file method on a receiver stands for the checks that method holds. Assertions
+/// replaced by a call to a method holding the same three report nothing, with a note.
+/// Control: a method that holds fewer than the test dropped leaves a decrease.
 #[test]
-fn assertion_reduction_does_not_count_a_method_called_on_a_receiver() {
-    let helper = "struct Checker;\n\nimpl Checker {\n    fn check(&self, r: &R) {\n        assert_eq!(r.a, 1);\n        assert_eq!(r.b, 2);\n        assert_eq!(r.c, 3);\n    }\n}\n\n";
-    let base = format!("{helper}#[test]\nfn create() {{\n    let r = &make();\n    assert_eq!(r.a, 1);\n    assert_eq!(r.b, 2);\n    assert_eq!(r.c, 3);\n}}\n");
-    let head = format!(
-        "{helper}#[test]\nfn create() {{\n    let r = &make();\n    Checker.check(r);\n}}\n"
+fn assertion_reduction_reads_a_move_into_a_method_called_on_a_receiver() {
+    let file = |checks: &str, body: &str| {
+        format!("struct Checker;\n\nimpl Checker {{\n    fn check(&self, r: &R) {{\n{checks}    }}\n}}\n\n#[test]\nfn create() {{\n    let r = &make();\n{body}}}\n")
+    };
+    let three =
+        "        assert_eq!(r.a, 1);\n        assert_eq!(r.b, 2);\n        assert_eq!(r.c, 3);\n";
+    let inline = "    assert_eq!(r.a, 1);\n    assert_eq!(r.b, 2);\n    assert_eq!(r.c, 3);\n";
+    let call = "    Checker.check(r);\n";
+
+    let run = changed("tests/t.rs", &file(three, inline), &file(three, call));
+    assert_eq!(
+        run.titles(REDUCTION),
+        Vec::<String>::new(),
+        "{}",
+        run.stdout
     );
-    let run = changed("tests/t.rs", &base, &head);
+    let notes = run.outcome(REDUCTION)["notes"].to_string();
+    assert!(
+        notes.contains("assertions 3 -> 0 read as moved into helper `check` (3 check(s))"),
+        "{notes}"
+    );
+
+    let one = "        assert_eq!(r.a, 1);\n";
+    let run = changed("tests/t.rs", &file(one, inline), &file(one, call));
     assert_eq!(
         run.titles(REDUCTION),
         vec!["Assertion Count Decreased In Existing Test"],

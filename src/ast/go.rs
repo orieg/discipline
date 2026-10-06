@@ -54,6 +54,8 @@ impl LanguagePack for GoPack {
             },
             helpers: std::collections::HashMap::new(),
             test_calls: Vec::new(),
+            suites: suite_types(root, src),
+            suite_receiver: None,
         };
 
         extractor.collect_comments_and_escape_hatches(root);
@@ -91,6 +93,7 @@ impl LanguagePack for GoPack {
             }
         }
         super::method_checks::count(root, src, &mut extractor.facts, &GO_RECEIVER_CALLS);
+        super::helper_loops::count(root, src, &mut extractor.facts, &super::helper_loops::GO);
         super::calls::count(
             root,
             src,
@@ -166,6 +169,232 @@ struct GoExtractor<'a> {
     facts: ParsedFileFacts,
     helpers: std::collections::HashMap<String, super::HelperFacts>,
     test_calls: Vec<Vec<String>>,
+    /// The types of this file read as testify suites ([`suite_types`]).
+    suites: std::collections::HashSet<String>,
+    /// The receiver of the suite method being read (`s` of `func (s *Suite) TestAdd()`):
+    /// an assertion called on it is counted.
+    suite_receiver: Option<String>,
+}
+
+/// The assertion methods of testify's `assert` and `require` packages, which a suite
+/// carries as methods of its own (`s.Equal(..)`). Each also exists with a trailing `f`
+/// (`Equalf`). `Fail`, `FailNow` and `Error` are read with the `testing.T` calls of the
+/// same names.
+const TESTIFY_ASSERTIONS: &[&str] = &[
+    "Condition",
+    "Contains",
+    "DirExists",
+    "ElementsMatch",
+    "Empty",
+    "Equal",
+    "EqualError",
+    "EqualExportedValues",
+    "EqualValues",
+    "ErrorAs",
+    "ErrorContains",
+    "ErrorIs",
+    "Eventually",
+    "EventuallyWithT",
+    "Exactly",
+    "False",
+    "FileExists",
+    "Greater",
+    "GreaterOrEqual",
+    "HTTPBodyContains",
+    "HTTPBodyNotContains",
+    "HTTPError",
+    "HTTPRedirect",
+    "HTTPStatusCode",
+    "HTTPSuccess",
+    "Implements",
+    "InDelta",
+    "InDeltaMapValues",
+    "InDeltaSlice",
+    "InEpsilon",
+    "InEpsilonSlice",
+    "IsDecreasing",
+    "IsIncreasing",
+    "IsNonDecreasing",
+    "IsNonIncreasing",
+    "IsNotType",
+    "IsType",
+    "JSONEq",
+    "Len",
+    "Less",
+    "LessOrEqual",
+    "Negative",
+    "Never",
+    "Nil",
+    "NoDirExists",
+    "NoError",
+    "NoFileExists",
+    "NotContains",
+    "NotElementsMatch",
+    "NotEmpty",
+    "NotEqual",
+    "NotEqualValues",
+    "NotErrorAs",
+    "NotErrorIs",
+    "NotImplements",
+    "NotNil",
+    "NotPanics",
+    "NotRegexp",
+    "NotSame",
+    "NotSubset",
+    "NotZero",
+    "Panics",
+    "PanicsWithError",
+    "PanicsWithValue",
+    "Positive",
+    "Regexp",
+    "Same",
+    "Subset",
+    "True",
+    "WithinDuration",
+    "WithinRange",
+    "YAMLEq",
+    "Zero",
+];
+
+fn is_testify_assertion(method: &str) -> bool {
+    TESTIFY_ASSERTIONS.contains(&method)
+        || method
+            .strip_suffix('f')
+            .is_some_and(|plain| TESTIFY_ASSERTIONS.contains(&plain))
+}
+
+/// The receiver type of a method declaration (`Suite` of `func (s *Suite) m()`), the
+/// receiver's name when it has one, and whether the method has the shape testify runs
+/// as a test: named as a Go test, with no parameter and no result.
+fn method_head<'t>(node: Node<'t>, src: &'t str) -> Option<(&'t str, Option<&'t str>, bool)> {
+    let text = |n: Node<'t>| n.utf8_text(src.as_bytes()).unwrap_or("");
+    let receiver = node.child_by_field_name("receiver")?;
+    let mut cursor = receiver.walk();
+    let declared = receiver
+        .named_children(&mut cursor)
+        .find(|c| c.kind() == "parameter_declaration")?;
+    let mut ty = declared.child_by_field_name("type")?;
+    if ty.kind() == "pointer_type" {
+        ty = ty.named_child(0)?;
+    }
+    if ty.kind() == "generic_type" {
+        ty = ty.child_by_field_name("type")?;
+    }
+    if ty.kind() != "type_identifier" {
+        return None;
+    }
+    let name = declared.child_by_field_name("name").map(text);
+    let method = node.child_by_field_name("name").map(text).unwrap_or("");
+    let no_parameter = node
+        .child_by_field_name("parameters")
+        .is_some_and(|p| p.named_child_count() == 0);
+    let shaped = is_go_test_function_name(method)
+        && no_parameter
+        && node.child_by_field_name("result").is_none();
+    Some((text(ty), name, shaped))
+}
+
+/// The types of a file that are testify suites: tests are their `Test*` methods, run by
+/// `suite.Run`, and assertions are methods of the suite itself.
+///
+/// A struct declared in the file is a suite when it embeds `suite.Suite` (or
+/// `*suite.Suite`), directly or through embedded structs declared in the file. A type
+/// the file cannot settle (declared in another file of the package, or embedding a type
+/// declared elsewhere) is read as a suite when the file gives it a method of the shape
+/// testify runs (`Test*`, no parameter, no result): nothing else calls such a method.
+/// A struct of the file that embeds nothing from outside it and no suite is not one.
+fn suite_types(root: Node, src: &str) -> std::collections::HashSet<String> {
+    use std::collections::{HashMap, HashSet};
+    let text = |n: Node| n.utf8_text(src.as_bytes()).unwrap_or("").to_string();
+    // Every type the file declares, with the types a struct embeds.
+    let mut declared: HashMap<String, Vec<String>> = HashMap::new();
+    let mut shaped: HashSet<String> = HashSet::new();
+    let mut cursor = root.walk();
+    for child in root.children(&mut cursor) {
+        if child.kind() == "method_declaration" {
+            if let Some((ty, _, true)) = method_head(child, src) {
+                shaped.insert(ty.to_string());
+            }
+            continue;
+        }
+        if child.kind() != "type_declaration" {
+            continue;
+        }
+        let mut specs = child.walk();
+        for spec in child.named_children(&mut specs) {
+            let Some(name) = spec.child_by_field_name("name") else {
+                continue;
+            };
+            let mut embedded = Vec::new();
+            let fields = spec
+                .child_by_field_name("type")
+                .filter(|t| t.kind() == "struct_type")
+                .and_then(|t| t.named_child(0));
+            if let Some(fields) = fields {
+                let mut each = fields.walk();
+                for field in fields.named_children(&mut each) {
+                    // An embedded field has a type and no name.
+                    if field.kind() != "field_declaration"
+                        || field.child_by_field_name("name").is_some()
+                    {
+                        continue;
+                    }
+                    let Some(mut ty) = field.child_by_field_name("type") else {
+                        continue;
+                    };
+                    if ty.kind() == "pointer_type" {
+                        ty = ty.named_child(0).unwrap_or(ty);
+                    }
+                    if ty.kind() == "generic_type" {
+                        ty = ty.child_by_field_name("type").unwrap_or(ty);
+                    }
+                    embedded.push(text(ty));
+                }
+            }
+            declared.insert(text(name), embedded);
+        }
+    }
+
+    /// `Some(true)`: a suite. `Some(false)`: not one. `None`: not settled in this file.
+    fn settle(
+        ty: &str,
+        declared: &HashMap<String, Vec<String>>,
+        path: &mut Vec<String>,
+    ) -> Option<bool> {
+        if ty == "suite.Suite" {
+            return Some(true);
+        }
+        let embedded = declared.get(ty)?;
+        if path.iter().any(|seen| seen == ty) {
+            return Some(false);
+        }
+        path.push(ty.to_string());
+        let mut verdict = Some(false);
+        for inner in embedded {
+            match settle(inner, declared, path) {
+                Some(true) => {
+                    verdict = Some(true);
+                    break;
+                }
+                None => verdict = None,
+                Some(false) => {}
+            }
+        }
+        path.pop();
+        verdict
+    }
+
+    let mut suites = HashSet::new();
+    for ty in declared.keys().chain(&shaped) {
+        let is_suite = match settle(ty, &declared, &mut Vec::new()) {
+            Some(settled) => settled,
+            None => shaped.contains(ty),
+        };
+        if is_suite {
+            suites.insert(ty.clone());
+        }
+    }
+    suites
 }
 
 impl<'a> GoExtractor<'a> {
@@ -228,36 +457,7 @@ impl<'a> GoExtractor<'a> {
         let is_test = is_go_test_function_name(func_name) && self.is_unit_test_signature(node);
 
         if is_test {
-            let line = node.start_position().row + 1;
-            let end_line = node.end_position().row + 1;
-            let mut test_fn = TestFn {
-                name: func_name.to_string(),
-                line,
-                end_line,
-                total_asserts: 0,
-                strong_asserts: 0,
-                tautologies: 0,
-                ignored: false,
-                should_panic: None,
-                ..Default::default()
-            };
-
-            let mut direct_calls = Vec::new();
-            if let Some(body) = node.child_by_field_name("body") {
-                let (cases, non_literal_cases, case_rows) =
-                    super::test_cases::extract_go_cases(body, self.src).into_parts();
-                test_fn.cases = cases;
-                test_fn.non_literal_cases = non_literal_cases;
-                test_fn.case_rows = case_rows;
-                self.scan_block(body, &mut test_fn, func_name, &mut direct_calls);
-                super::dispatch_calls(body, self.src, &GO_DISPATCH, &mut direct_calls);
-                if !test_fn.ignored {
-                    self.record_conditional_early_exits(body, &mut test_fn);
-                }
-            }
-
-            self.facts.tests.push(test_fn);
-            self.test_calls.push(direct_calls);
+            self.record_test(node, func_name);
         } else if self.is_test_path {
             self.record_helper(node, func_name.to_string(), true);
         }
@@ -266,6 +466,12 @@ impl<'a> GoExtractor<'a> {
     /// A method of a type in a test file (`func (s Suite) check(t *testing.T)`): a helper
     /// tracked under `Type.method`. A call through a receiver is not resolved to it, since
     /// the receiver's type is not known where the call is read.
+    ///
+    /// A method of a testify suite ([`suite_types`]) counts the assertions made on its
+    /// receiver. One of the shape testify runs is a test, named `Type.Method`: the name
+    /// it had as a helper, and what tells `Suite.TestAdd` from another suite's `TestAdd`.
+    /// The suite's other methods (`SetupTest`, `TearDownSuite`, `BeforeTest`, its own
+    /// checks) stay helpers.
     fn visit_method(&mut self, node: Node) {
         let method = node
             .child_by_field_name("name")
@@ -279,7 +485,76 @@ impl<'a> GoExtractor<'a> {
         if method.is_empty() || receiver.is_empty() {
             return;
         }
-        self.record_helper(node, format!("{receiver}.{method}"), false);
+        let name = format!("{receiver}.{method}");
+        let src = std::str::from_utf8(self.src).unwrap_or("");
+        let suite = method_head(node, src).filter(|(ty, _, _)| self.suites.contains(*ty));
+        let Some((_, on, shaped)) = suite else {
+            self.record_helper(node, name, false);
+            return;
+        };
+        self.suite_receiver = on.map(str::to_string);
+        if shaped {
+            self.record_test(node, &name);
+        } else {
+            self.record_helper(node, name, false);
+        }
+        self.suite_receiver = None;
+    }
+
+    /// Records the function or method `node` as the test `name`.
+    fn record_test(&mut self, node: Node, name: &str) {
+        let mut test_fn = TestFn {
+            name: name.to_string(),
+            line: node.start_position().row + 1,
+            end_line: node.end_position().row + 1,
+            ..Default::default()
+        };
+        let mut direct_calls = Vec::new();
+        if let Some(body) = node.child_by_field_name("body") {
+            let (cases, non_literal_cases, case_rows) =
+                super::test_cases::extract_go_cases(body, self.src).into_parts();
+            test_fn.cases = cases;
+            test_fn.non_literal_cases = non_literal_cases;
+            test_fn.case_rows = case_rows;
+            self.scan_block(body, &mut test_fn, name, &mut direct_calls);
+            super::dispatch_calls(body, self.src, &GO_DISPATCH, &mut direct_calls);
+            if !test_fn.ignored {
+                self.record_conditional_early_exits(body, &mut test_fn);
+            }
+        }
+        self.facts.tests.push(test_fn);
+        self.test_calls.push(direct_calls);
+    }
+
+    /// The assertion a call makes on the suite being read, and whether it stops the
+    /// test: `s.Equal(..)` and `s.Assert().Equal(..)` do not, `s.Require().Equal(..)`
+    /// does, as `assert.Equal` and `require.Equal` do.
+    fn suite_assertion(&self, callee: Node) -> Option<(&'a str, bool)> {
+        let suite = self.suite_receiver.as_deref()?;
+        if callee.kind() != "selector_expression" {
+            return None;
+        }
+        let on = callee.child_by_field_name("operand")?;
+        let method = self.text(callee.child_by_field_name("field")?);
+        if on.kind() == "identifier" {
+            return (self.text(on) == suite && is_testify_assertion(method))
+                .then_some((method, false));
+        }
+        // `s.Require().X(..)` / `s.Assert().X(..)`: every method of those is an assertion.
+        if on.kind() != "call_expression" {
+            return None;
+        }
+        let through = on.child_by_field_name("function")?;
+        if through.kind() != "selector_expression"
+            || self.text(through.child_by_field_name("operand")?) != suite
+        {
+            return None;
+        }
+        match self.text(through.child_by_field_name("field")?) {
+            "Require" => Some((method, true)),
+            "Assert" => Some((method, false)),
+            _ => None,
+        }
     }
 
     fn first_of_kind<'t>(node: Node<'t>, kind: &str) -> Option<Node<'t>> {
@@ -525,6 +800,12 @@ impl<'a> GoExtractor<'a> {
             return;
         }
 
+        // An assertion made on a testify suite: `s.Equal(..)`, `s.Require().NoError(..)`.
+        if let Some((method, fatal)) = self.suite_assertion(func_node) {
+            self.count_testify(test_fn, method, &args, 0, fatal);
+            return;
+        }
+
         // Standard testing methods: t.Fatalf, t.Fatal, t.Errorf, t.Error, t.FailNow
         if call_text.ends_with(".Fatalf")
             || call_text.ends_with(".Fatal")
@@ -550,51 +831,9 @@ impl<'a> GoExtractor<'a> {
         // Testify assert / require
         let method_name = call_text.rsplit('.').next().unwrap_or(call_text);
         if call_text.starts_with("assert.") || call_text.starts_with("require.") {
-            let is_require = call_text.starts_with("require.");
-            if is_require {
-                test_fn.fatal_asserts += 1;
-            }
-            match method_name {
-                "True" => {
-                    test_fn.total_asserts += 1;
-                    // First arg is typically `t`, second is condition
-                    if args.len() >= 2 && self.text(args[1]).trim() == "true" {
-                        test_fn.tautologies += 1;
-                    }
-                }
-                "False" => {
-                    test_fn.total_asserts += 1;
-                    if args.len() >= 2 && self.text(args[1]).trim() == "false" {
-                        test_fn.tautologies += 1;
-                    }
-                }
-                "Equal" | "Same" => {
-                    test_fn.total_asserts += 1;
-                    if args.len() >= 3 {
-                        let a = self.text(args[1]).trim();
-                        let b = self.text(args[2]).trim();
-                        if a == b {
-                            test_fn.tautologies += 1;
-                        } else {
-                            test_fn.strong_asserts += 1;
-                        }
-                    } else {
-                        test_fn.strong_asserts += 1;
-                    }
-                }
-                "Nil" | "NotNil" => {
-                    test_fn.total_asserts += 1;
-                }
-                "NotEqual" | "NotSame" | "NoError" | "Error" | "Contains" | "NotContains"
-                | "Len" | "Panics" | "NotPanics" | "ElementsMatch" => {
-                    test_fn.total_asserts += 1;
-                    test_fn.strong_asserts += 1;
-                }
-                _ => {
-                    test_fn.total_asserts += 1;
-                    test_fn.strong_asserts += 1;
-                }
-            }
+            // The first argument is `t`.
+            let fatal = call_text.starts_with("require.");
+            self.count_testify(test_fn, method_name, &args, 1, fatal);
             return;
         }
 
@@ -620,6 +859,50 @@ impl<'a> GoExtractor<'a> {
         for child in node.children(&mut cursor) {
             if child != func_node {
                 self.scan_node(child, test_fn, parent_name, direct_calls);
+            }
+        }
+    }
+
+    /// Counts the testify assertion `method` into `test_fn`. `first` is the position of
+    /// its first value argument: 1 for `assert.Equal(t, a, b)`, 0 for `s.Equal(a, b)`.
+    fn count_testify(
+        &self,
+        test_fn: &mut TestFn,
+        method: &str,
+        args: &[Node],
+        first: usize,
+        fatal: bool,
+    ) {
+        if fatal {
+            test_fn.fatal_asserts += 1;
+        }
+        let value = |at: usize| args.get(first + at).map(|a| self.text(*a).trim());
+        match method {
+            "True" => {
+                test_fn.total_asserts += 1;
+                if value(0) == Some("true") {
+                    test_fn.tautologies += 1;
+                }
+            }
+            "False" => {
+                test_fn.total_asserts += 1;
+                if value(0) == Some("false") {
+                    test_fn.tautologies += 1;
+                }
+            }
+            "Equal" | "Same" => {
+                test_fn.total_asserts += 1;
+                match (value(0), value(1)) {
+                    (Some(a), Some(b)) if a == b => test_fn.tautologies += 1,
+                    _ => test_fn.strong_asserts += 1,
+                }
+            }
+            "Nil" | "NotNil" => {
+                test_fn.total_asserts += 1;
+            }
+            _ => {
+                test_fn.total_asserts += 1;
+                test_fn.strong_asserts += 1;
             }
         }
     }
@@ -1339,5 +1622,130 @@ func TestCaller(t *testing.T) {
         assert_eq!(t.strong_asserts, 1);
         assert_eq!(t.fatal_asserts, 1);
         assert!(!t.is_vacuous());
+    }
+
+    fn go_facts(src: &str) -> ParsedFileFacts {
+        GoPack
+            .extract("calc_test.go", src, &AssertVocabulary::default())
+            .unwrap()
+    }
+
+    const SUITE: &str = "package calc\n\ntype Suite struct {\n\tsuite.Suite\n}\n\n";
+
+    /// #595: a `Test*` method of a testify suite is a test named `Type.Method`; the
+    /// suite's other methods are helpers; every way a suite spells an assertion counts,
+    /// with `Require` forms fatal.
+    #[test]
+    fn testify_suite_methods_are_tests_and_their_assertions_count() {
+        let src = format!("{SUITE}func (s *Suite) SetupTest() {{\n\ts.Require().NoError(open())\n}}\n\nfunc (s *Suite) TestAdd() {{\n\ts.Equal(2, Add(1, 1))\n\ts.Equalf(3, Add(1, 2), \"case %d\", 3)\n\ts.Len(items(), 2)\n\ts.Nil(err)\n\ts.Assert().True(ok())\n\ts.Require().NoError(run())\n\ts.Require().Error(fail())\n\tassert.Equal(s.T(), 4, Add(2, 2))\n\trequire.Equal(s.T(), 5, Add(2, 3))\n\ts.Equal(7, 7)\n\ts.True(true)\n\ts.helper(1)\n\ts.T().Log(\"x\")\n}}\n\nfunc (s *Suite) helper(n int) {{\n\ts.Equal(n, 1)\n}}\n\nfunc (s *Suite) TestWith(n int) {{\n\ts.Equal(n, 1)\n}}\n\nfunc TestSuite(t *testing.T) {{\n\tsuite.Run(t, new(Suite))\n}}\n");
+        let facts = go_facts(&src);
+        let t = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "Suite.TestAdd")
+            .unwrap_or_else(|| panic!("{:?}", facts.tests));
+        // Eleven assertions, two of them tautologies; three made through `Require`.
+        assert_eq!(
+            (t.total_asserts, t.tautologies, t.fatal_asserts),
+            (11, 2, 3),
+            "{t:?}"
+        );
+        // `Nil` and `True` are not strong; the tautologies are not either.
+        assert_eq!(t.strong_asserts, 7, "{t:?}");
+        let helpers: Vec<(&str, usize, usize)> = facts
+            .test_helpers
+            .iter()
+            .map(|h| (h.name.as_str(), h.total_asserts, h.fatal_asserts))
+            .collect();
+        assert_eq!(
+            helpers,
+            vec![
+                ("Suite.SetupTest", 1, 1),
+                ("Suite.helper", 1, 0),
+                ("Suite.TestWith", 1, 0)
+            ]
+        );
+        assert!(!facts.tests.iter().any(|t| t.name.contains("Setup")));
+    }
+
+    /// Which types are suites: one that embeds `suite.Suite`, directly, by pointer or
+    /// through a struct of the file; and one the file cannot settle that has a method of
+    /// the shape testify runs. A struct of the file that embeds no suite is not one,
+    /// whatever its methods are called.
+    #[test]
+    fn suite_types_are_settled_in_the_file_or_read_by_the_shape_of_their_methods() {
+        let names = |src: &str| -> Vec<String> {
+            let mut names: Vec<String> = go_facts(src).tests.into_iter().map(|t| t.name).collect();
+            names.sort();
+            names
+        };
+        let method =
+            |ty: &str, head: &str| format!("func (s *{ty}) {head} {{\n\ts.Equal(1, 1+0)\n}}\n\n");
+        // Embedded by pointer, and through a struct of the file.
+        let src = format!("package x\n\ntype Base struct {{\n\t*suite.Suite\n\tdb DB\n}}\n\ntype Api struct {{\n\tBase\n}}\n\n{}{}", method("Api", "TestA()"), method("Base", "TestB()"));
+        assert_eq!(names(&src), ["Api.TestA", "Base.TestB"]);
+        // Declared in another file, or embedding a type declared elsewhere: read by the
+        // shape. A value receiver and a generic one are receivers too.
+        let src = format!("package x\n\ntype Remote struct {{\n\thelp.Harness\n}}\n\n{}{}func (s Elsewhere) TestV() {{\n\ts.Equal(1, 1+0)\n}}\n\nfunc (s *Gen[T]) TestG() {{\n\ts.Equal(1, 1+0)\n}}\n", method("Remote", "TestR()"), method("Elsewhere", "TestE()"));
+        assert_eq!(
+            names(&src),
+            [
+                "Elsewhere.TestE",
+                "Elsewhere.TestV",
+                "Gen.TestG",
+                "Remote.TestR"
+            ]
+        );
+        // Not the shape: a parameter, a result, a lowercase letter after `Test`.
+        let src = format!(
+            "package x\n\n{}{}{}",
+            method("Elsewhere", "TestP(n int)"),
+            method("Elsewhere", "TestR() error"),
+            method("Elsewhere", "Testify()")
+        );
+        assert_eq!(names(&src), Vec::<String>::new());
+        // With no method of the shape, a type the file cannot settle is not read as a
+        // suite: a call on its receiver is no assertion.
+        let src = format!(
+            "{src}type Remote struct {{\n\thelp.Harness\n}}\n\n{}",
+            method("Remote", "check()")
+        );
+        let unshaped = go_facts(&src);
+        assert_eq!(
+            unshaped.test_helpers.len(),
+            4,
+            "{:?}",
+            unshaped.test_helpers
+        );
+        assert!(
+            unshaped.test_helpers.iter().all(|h| h.total_asserts == 0),
+            "{:?}",
+            unshaped.test_helpers
+        );
+        // Settled as no suite: a plain struct, a named non-struct type, and two structs
+        // that embed each other.
+        let src = format!("package x\n\ntype Plain struct {{\n\tn int\n}}\n\ntype Count int\n\ntype A struct {{\n\tB\n}}\n\ntype B struct {{\n\tA\n}}\n\n{}{}{}", method("Plain", "TestA()"), method("Count", "TestB()"), method("A", "TestC()"));
+        assert_eq!(names(&src), Vec::<String>::new());
+        // There, a call on the receiver is no assertion either.
+        let facts = go_facts(&src);
+        assert!(
+            facts.test_helpers.iter().all(|h| h.total_asserts == 0),
+            "{:?}",
+            facts.test_helpers
+        );
+    }
+
+    /// Control: an assertion method called on something other than the suite's receiver
+    /// is not an assertion, and a plain test function is read as before.
+    #[test]
+    fn only_the_suite_receiver_carries_assertions() {
+        let src = format!("{SUITE}func (s *Suite) TestAdd() {{\n\tother.Equal(1, 2)\n\tv.Require().NoError(err)\n\ts.db.Len(3)\n\ts.Other().Equal(1, 2)\n}}\n\nfunc TestPlain(t *testing.T) {{\n\ts := newThing()\n\ts.Equal(1, 2)\n\tassert.Equal(t, 1, one())\n}}\n");
+        let facts = go_facts(&src);
+        let counts: Vec<(&str, usize)> = facts
+            .tests
+            .iter()
+            .map(|t| (t.name.as_str(), t.total_asserts))
+            .collect();
+        assert_eq!(counts, vec![("Suite.TestAdd", 0), ("TestPlain", 1)]);
     }
 }

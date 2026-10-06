@@ -115,6 +115,7 @@ impl LanguagePack for RustPack {
             }
         }
         super::method_checks::count(root, src, &mut cx.facts, &RUST_RECEIVER_CALLS);
+        super::helper_loops::count(root, src, &mut cx.facts, &super::helper_loops::RUST);
         let counted: [(super::calls::Vocab, super::calls::Pick); 2] = [
             (super::calls::SLEEP_VOCAB, super::calls::sleeps),
             (
@@ -570,6 +571,7 @@ impl<'a> Extractor<'a> {
             tautology_spans: Vec::new(),
             method_checks: 0,
             counted_helper_calls: Vec::new(),
+            helper_reach: super::HelperReach::default(),
         };
         let is_fallible_return = node
             .child_by_field_name("return_type")
