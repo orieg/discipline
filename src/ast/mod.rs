@@ -122,10 +122,6 @@ impl LanguageRegistry {
     pub fn is_supported(&self, path: &str) -> bool {
         self.find_pack(path).is_some()
     }
-
-    pub fn packs(&self) -> &[Box<dyn LanguagePack>] {
-        &self.packs
-    }
 }
 
 /// Constructs the default registry containing all built-in packs enabled by Cargo features.
@@ -215,6 +211,7 @@ pub fn language_for(path: &str) -> Option<Language> {
     }
 }
 
+#[cfg(test)]
 pub fn is_unsupported_source(path: &str) -> bool {
     is_unsupported_source_in(path, &default_registry())
 }
@@ -361,34 +358,6 @@ impl TestFn {
     }
 }
 
-/// Returns whether the given variable or identifier represents a known CI environment variable name.
-pub fn is_ci_env_var_name(name: &str) -> bool {
-    let trimmed = name
-        .trim()
-        .trim_matches('"')
-        .trim_matches('\'')
-        .trim_matches('`');
-    let upper = trimmed.to_ascii_uppercase();
-    matches!(
-        upper.as_str(),
-        "CI" | "GITHUB_ACTIONS"
-            | "GITLAB_CI"
-            | "GITEA_ACTIONS"
-            | "FORGEJO_ACTIONS"
-            | "CONTINUOUS_INTEGRATION"
-            | "TRAVIS"
-            | "CIRCLECI"
-            | "BITBUCKET_BUILD_NUMBER"
-            | "BUILDKITE"
-            | "TEAMCITY_VERSION"
-            | "TF_BUILD"
-            | "APPVEYOR"
-            | "CIRRUS_CI"
-            | "JENKINS_URL"
-            | "JENKINS_HOME"
-    )
-}
-
 pub const CI_VARS: &[&str] = &[
     "CI",
     "GITHUB_ACTIONS",
@@ -466,7 +435,7 @@ pub struct HelperFacts {
     pub tautologies: usize,
     pub fatal_asserts: usize,
     /// The one same-file function this helper's whole body calls, when it is a thin
-    /// wrapper ([`thin_wrapper_callee`]); its checks are resolved as the wrapper's.
+    /// wrapper (`thin_wrapper_callee`); its checks are resolved as the wrapper's.
     pub wraps: Option<String>,
 }
 
@@ -782,6 +751,7 @@ pub struct WrapperSpec {
 /// so the first of `callees` (the same-file calls the pack collected from the body)
 /// names it; `None` when the pack collected none (a call on another object). A body
 /// that does any other work, or makes any other call, is not a wrapper.
+#[cfg(test)]
 pub fn thin_wrapper_callee(
     body: tree_sitter::Node,
     spec: &WrapperSpec,
@@ -815,7 +785,7 @@ pub struct LocalSpec {
     pub refused: &'static [&'static str],
 }
 
-/// A [`thin_wrapper_callee`] that may first compute locals and forward them with its
+/// A `thin_wrapper_callee` that may first compute locals and forward them with its
 /// own parameters: `{ let bin = locate(dir).unwrap(); run_in(dir, &bin) }`. Before
 /// the call the body holds only bindings of one name each, and every name bound is
 /// forwarded to the call or used by a later binding; a binding nothing reads, or any
@@ -1291,6 +1261,7 @@ pub fn collect_error_nodes_info(root: tree_sitter::Node) -> (bool, Option<usize>
 }
 
 /// Backwards compatibility alias for [`ParsedFileFacts`].
+#[cfg(test)]
 pub type RustFacts = ParsedFileFacts;
 
 #[derive(Debug, Clone, Default)]

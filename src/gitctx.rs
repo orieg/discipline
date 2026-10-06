@@ -719,10 +719,6 @@ impl GitCtx {
         self.base.is_some()
     }
 
-    pub fn base_oid(&self) -> Option<Oid> {
-        self.base
-    }
-
     pub fn root(&self) -> &std::path::Path {
         self.repo
             .workdir()
@@ -1190,11 +1186,6 @@ impl GitCtx {
         Ok(out)
     }
 
-    /// Messages of the commits between the base and `HEAD` (empty when staged).
-    pub fn commit_messages(&self) -> Result<Vec<String>> {
-        Ok(self.commits()?.into_iter().map(|(_, m)| m).collect())
-    }
-
     /// Returns the HEAD commit subject (`%s`), if available.
     pub fn head_commit_subject(&self) -> Result<String> {
         let head = self.repo.head()?.peel_to_commit()?;
@@ -1211,14 +1202,6 @@ impl GitCtx {
         lines.next(); // Skip subject line
         let body: String = lines.collect::<Vec<_>>().join("\n").trim().to_string();
         Ok(body)
-    }
-
-    /// Returns the HEAD commit author name (`%an`), if available.
-    pub fn head_commit_author(&self) -> Result<String> {
-        let head = self.repo.head()?.peel_to_commit()?;
-        let author = head.author();
-        let name = author.name().unwrap_or("").to_string();
-        Ok(name)
     }
 }
 
