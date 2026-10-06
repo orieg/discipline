@@ -85,8 +85,16 @@ impl LanguagePack for ScalaPack {
                 || functions::declared_test_path(path, &vocab.test_paths);
             let is_test_line =
                 |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            extractor.facts.swallowed =
-                super::handlers::extract(root, src, &SCALA_HANDLERS, &is_test_line);
+            (
+                extractor.facts.swallowed,
+                extractor.facts.constant_fallbacks,
+            ) = super::handlers::extract_with_constants(
+                root,
+                src,
+                &SCALA_HANDLERS,
+                Some(&SCALA_CONSTANTS),
+                &is_test_line,
+            );
         }
         super::retries::mark(root, src, &mut extractor.facts.tests, &SCALA_RETRIES);
         if functions::declared_test_path(path, &vocab.test_paths) {
@@ -647,6 +655,27 @@ pub const SCALA_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handle
     silence_kinds: &["call_expression", "field_expression"],
     silences: super::handlers::scala_silences,
     silence_node: None,
+};
+
+/// A handler statement that puts a number in place of the result (`constant-fallback`):
+/// `ops = 150000.0`, `rec.ops = -1` (the grammar reads `-1` as one literal),
+/// `return 150000.0`, and a number or a tuple of numbers as the arm's last expression.
+/// `None` and `Double.NaN` are not numeric literals; `d(0) = 3` is a call on the left and
+/// `List(1.5)` a call, so neither is read.
+pub const SCALA_CONSTANTS: super::handlers::ConstantSpec = super::handlers::ConstantSpec {
+    blocks: &["block", "indented_block"],
+    wrappers: &["parenthesized_expression"],
+    numbers: &["integer_literal", "floating_point_literal"],
+    signs: &["prefix_expression"],
+    assignments: &["assignment_expression"],
+    targets: &["identifier", "field_expression"],
+    calls: &["call_expression", "instance_expression"],
+    returns: &["return_expression"],
+    value_is_last_expression: true,
+    collections: &["tuple_expression"],
+    collection_holders: &[],
+    pairs: &[],
+    keys: &[],
 };
 
 pub const SCALA_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {

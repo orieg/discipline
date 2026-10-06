@@ -83,8 +83,16 @@ impl LanguagePack for SwiftPack {
                 || functions::declared_test_path(path, &vocab.test_paths);
             let is_test_line =
                 |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            extractor.facts.swallowed =
-                super::handlers::extract(root, src, &SWIFT_HANDLERS, &is_test_line);
+            (
+                extractor.facts.swallowed,
+                extractor.facts.constant_fallbacks,
+            ) = super::handlers::extract_with_constants(
+                root,
+                src,
+                &SWIFT_HANDLERS,
+                Some(&SWIFT_CONSTANTS),
+                &is_test_line,
+            );
         }
         super::retries::mark(root, src, &mut extractor.facts.tests, &SWIFT_RETRIES);
         if functions::declared_test_path(path, &vocab.test_paths) {
@@ -582,6 +590,32 @@ pub const SWIFT_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handle
     silence_kinds: &[],
     silences: super::handlers::no_discard,
     silence_node: None,
+};
+
+/// A handler statement that puts a number in place of the result (`constant-fallback`):
+/// `ops = 150000.0`, `rec.ops = -1`, `return 150000.0`, `return [1.5, 2.0]`,
+/// `return ["ops": 1.5]`. `nil` and `Double.nan` are not numeric literals; the grammar
+/// reads `raw[0]` as a call, so a subscript on the left is not read.
+pub const SWIFT_CONSTANTS: super::handlers::ConstantSpec = super::handlers::ConstantSpec {
+    blocks: &["statements"],
+    wrappers: &["directly_assignable_expression"],
+    numbers: &[
+        "integer_literal",
+        "real_literal",
+        "hex_literal",
+        "oct_literal",
+        "bin_literal",
+    ],
+    signs: &["prefix_expression"],
+    assignments: &["assignment"],
+    targets: &["simple_identifier", "navigation_expression"],
+    calls: &["call_expression"],
+    returns: &["control_transfer_statement"],
+    value_is_last_expression: false,
+    collections: &["array_literal", "dictionary_literal"],
+    collection_holders: &[],
+    pairs: &[],
+    keys: &["line_string_literal", "integer_literal"],
 };
 
 pub const SWIFT_RETRIES: super::retries::RetrySpec = super::retries::RetrySpec {
