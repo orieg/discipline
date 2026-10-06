@@ -2600,6 +2600,84 @@ const CASES: &[Case] = &[
                 && weak_facts.tests[0].total_asserts == 2)
         },
     ),
+    #[cfg(feature = "lang-go")]
+    (
+        "go: a testify suite method is a test, its lifecycle methods are not, and assertions on the suite count",
+        || {
+            use crate::ast::LanguagePack;
+            let go_pack = crate::ast::r#go::GoPack;
+            let vocab = AssertVocabulary::default();
+            let src = "package pkg\n\ntype Suite struct {\n\tsuite.Suite\n}\n\nfunc (s *Suite) SetupTest() {\n\ts.Require().NoError(open())\n}\n\nfunc (s *Suite) TestAdd() {\n\ts.Equal(2, Add(1, 1))\n\ts.Require().NoError(run())\n\ts.Assert().True(ok())\n}\n\nfunc (s *Suite) TestEmpty() {\n\t_ = Add(1, 1)\n}\n\ntype Plain struct{ n int }\n\nfunc (p *Plain) TestConn() {\n\tp.Equal(1, 2)\n}\n";
+            let facts = go_pack.extract("pkg_test.go", src, &vocab)?;
+            let by = |n: &str| facts.tests.iter().find(|t| t.name == n);
+            Ok(facts.tests.len() == 2
+                && by("Suite.TestAdd").is_some_and(|t| {
+                    (t.total_asserts, t.strong_asserts, t.fatal_asserts) == (3, 2, 1)
+                })
+                && by("Suite.TestEmpty").is_some_and(|t| t.is_vacuous())
+                && facts.test_helpers.iter().any(|h| {
+                    h.name == "Suite.SetupTest" && (h.total_asserts, h.fatal_asserts) == (1, 1)
+                })
+                && facts
+                    .test_helpers
+                    .iter()
+                    .any(|h| h.name == "Plain.TestConn" && h.total_asserts == 0))
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
+        "assertion-reduction: a same-file helper stands for the checks it holds, unless it checks in a loop",
+        || {
+            use crate::guards::agent_diff::{evaluate_assertion_reduction, extract_facts, TestPair};
+            let pack = crate::ast::python::PythonPack;
+            let vocab = AssertVocabulary::default();
+            let settings = crate::config::AssertionGate::default();
+            let base = "def test_create():\n    r = create()\n    assert r.a == 1\n    assert r.b == 2\n    assert r.c == 3\n";
+            let run = |head: &str| -> anyhow::Result<(usize, bool)> {
+                let b = extract_facts(&pack, "tests/test_api.py", base, &vocab)?;
+                let h = extract_facts(&pack, "tests/test_api.py", head, &vocab)?;
+                let pair = [TestPair {
+                    path: "tests/test_api.py",
+                    base: &b.tests[0],
+                    head: &h.tests[0],
+                    forced: false,
+                }];
+                let out = evaluate_assertion_reduction(&pair, &[], &[], &settings, &[], false)?;
+                let noted = out.notes.iter().any(|n| n.contains("read as moved into"));
+                Ok((out.violations.len(), noted))
+            };
+            let test = "def test_create():\n    r = create()\n";
+            // One check in a straight line for three dropped: a drop.
+            let fewer = run(&format!(
+                "def check(r):\n    assert r.a == 1\n\n{test}    check(r)\n"
+            ))?;
+            // The same helper called once per element, and a helper that checks in a
+            // loop of its own: read as a refactor.
+            let called_in_loop = run(&format!(
+                "def check(r):\n    assert r.a == 1\n\n{test}    for x in r:\n        check(x)\n"
+            ))?;
+            let loops = run(&format!(
+                "def check(r):\n    for x in r:\n        assert x == 1\n\n{test}    check(r)\n"
+            ))?;
+            // Three checks behind a method called on an object: nothing lost. Two of
+            // three behind it: a drop.
+            let method = |held: usize| {
+                let body: String = (0..held)
+                    .map(|i| format!("        assert r.f{i} == {i}\n"))
+                    .collect();
+                format!(
+                    "class Checker:\n    def check(self, r):\n{body}\n{test}    Checker().check(r)\n"
+                )
+            };
+            let behind_receiver = run(&method(3))?;
+            let behind_receiver_fewer = run(&method(2))?;
+            Ok(fewer == (1, false)
+                && called_in_loop == (0, true)
+                && loops == (0, true)
+                && behind_receiver == (0, true)
+                && behind_receiver_fewer == (1, false))
+        },
+    ),
     #[cfg(feature = "lang-php")]
     (
         "php: PHPUnit extraction catches assertions, vacuous tests, and markTestSkipped",
