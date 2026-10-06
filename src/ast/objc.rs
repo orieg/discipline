@@ -114,8 +114,16 @@ impl LanguagePack for ObjcPack {
                 || functions::declared_test_path(path, &vocab.test_paths);
             let is_test_line =
                 |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            extractor.facts.swallowed =
-                super::handlers::extract(root, src, &OBJC_HANDLERS, &is_test_line);
+            (
+                extractor.facts.swallowed,
+                extractor.facts.constant_fallbacks,
+            ) = super::handlers::extract_with_constants(
+                root,
+                src,
+                &OBJC_HANDLERS,
+                Some(&OBJC_CONSTANTS),
+                &is_test_line,
+            );
         }
         if functions::declared_test_path(path, &vocab.test_paths) {
             for f in &mut extractor.facts.functions {
@@ -528,6 +536,30 @@ pub const OBJC_HANDLERS: super::handlers::HandlerSpec = super::handlers::Handler
     silence_kinds: &[],
     silences: super::handlers::no_discard,
     silence_node: None,
+};
+
+/// A handler statement that puts a number in place of the result (`constant-fallback`):
+/// `ops = 150000.0`, `rec.ops = -1` (the grammar reads `-1` as one literal),
+/// `rec->raw[0] = 2.5e5`, `return 150000`, `return @150000`, `return @[@1.5, @2]`. `nil` and
+/// `NAN` are not numeric literals.
+pub const OBJC_CONSTANTS: super::handlers::ConstantSpec = super::handlers::ConstantSpec {
+    blocks: &["compound_statement"],
+    wrappers: &[
+        "expression_statement",
+        "parenthesized_expression",
+        "at_expression",
+    ],
+    numbers: &["number_literal"],
+    signs: &["unary_expression"],
+    assignments: &["assignment_expression"],
+    targets: &["identifier", "field_expression", "subscript_expression"],
+    calls: &["call_expression", "message_expression"],
+    returns: &["return_statement"],
+    value_is_last_expression: false,
+    collections: &["array_literal"],
+    collection_holders: &[],
+    pairs: &[],
+    keys: &[],
 };
 
 pub const OBJC_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
