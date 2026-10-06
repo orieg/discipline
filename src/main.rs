@@ -42,9 +42,13 @@ fn main() -> ExitCode {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::from(1),
         Err(e) => {
+            // An error can quote a forge's answer or a file of the change. Its own line
+            // breaks are kept (a parse error shows an excerpt under it); nothing else
+            // that drives a terminal is.
             eprintln!(
-                "{}: {e:#}",
-                style::red(&format!("discipline {cmd_name}: error"))
+                "{}: {}",
+                style::red(&format!("discipline {cmd_name}: error")),
+                discipline::report::text::terminal_text(&format!("{e:#}"))
             );
             ExitCode::from(2)
         }
@@ -656,6 +660,20 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
     } else {
         (config, None)
     };
+    // A base copy whose only fault is a glob or pattern that does not compile would stop
+    // the change that repairs it. Such a key is read from the change's copy, and said so.
+    let repaired = match &head_config {
+        Some(head) => discipline::guards::base_policy_repaired_by_head(&config, head, args.suite)?,
+        None => None,
+    };
+    let (config, head_values) = repaired.unwrap_or((config, Vec::new()));
+    for taken in &head_values {
+        eprintln!(
+            "{} --policy-from base: {}.",
+            style::yellow("note:"),
+            taken.note
+        );
+    }
 
     let is_push_or_commit = discipline::gitctx::is_push_event_environment()
         || args.commit.is_some()
@@ -745,14 +763,20 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
 
     let (baseline_path_ref, loaded_baseline) = if !no_baseline {
         let baseline_path = git.root().join(&baseline_filename);
+        // Named relative to the repository root when it is inside it: an absolute path
+        // carries the runner's directory layout into the report.
+        let shown = discipline::baseline::path_for_message(git.root(), &baseline_path);
         if baseline_path.exists() {
-            let b = discipline::baseline::DisciplineBaseline::load_from_file(&baseline_path)
-                .map_err(|e| tag(Reason::Baseline, e))?;
+            let b = discipline::baseline::DisciplineBaseline::load_from_file_named(
+                &baseline_path,
+                &shown,
+            )
+            .map_err(|e| tag(Reason::Baseline, e))?;
             (Some(baseline_filename), Some(b))
         } else if explicit_baseline.is_some() {
             return Err(tag(
                 Reason::Baseline,
-                anyhow::anyhow!("baseline file `{}` does not exist", baseline_path.display()),
+                anyhow::anyhow!("baseline file `{shown}` does not exist"),
             ));
         } else {
             (None, None)
@@ -789,6 +813,7 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
         }),
     };
     let mut summary = run_checks(&config, args.suite, &ctx)?;
+    discipline::guards::note_head_values(&mut summary, &head_values);
 
     // A push run reads no pull-request body. A finding whose remediation points at a
     // PR-body directive would send a maintainer to edit a body this run never reads;
@@ -979,8 +1004,9 @@ fn post_comment(
         Posted::Denied(e) => eprintln!(
             "{}",
             style::yellow(&format!(
-                "comment: not posted on #{}: {e}. A pull request from a fork runs with a token that cannot write; the check's status still carries the verdict",
-                pull.number
+                "comment: not posted on #{}: {}. A pull request from a fork runs with a token that cannot write; the check's status still carries the verdict",
+                pull.number,
+                discipline::report::text::terminal_line(&e)
             ))
         ),
     }

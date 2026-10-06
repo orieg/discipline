@@ -140,10 +140,6 @@ pub const VERIFY_VOCAB: &[&str] = &[
     "have_received",
 ];
 
-fn text<'a>(node: Node, src: &'a str) -> &'a str {
-    node.utf8_text(src.as_bytes()).unwrap_or("")
-}
-
 /// Count mock setups and mock assertions per test in place.
 pub fn count(
     root: Node,
@@ -159,17 +155,19 @@ pub fn count(
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
         if spec.call_kinds.contains(&node.kind()) {
+            // Code only (`calls::code_text`): the text of a string literal or a comment
+            // in the callee chain names no double.
             let callee = spec
                 .callee_fields
                 .iter()
                 .find_map(|f| node.child_by_field_name(f))
-                .map(|n| text(n, src))
-                .unwrap_or_else(|| text(node, src));
+                .map(|n| super::calls::code_text(n, src))
+                .unwrap_or_else(|| super::calls::code_text(node, src));
             // Judge the callee (for a chained matcher, `expect(f).toHaveBeenCalled`, it
             // carries the matcher) and the call text up to its first argument list
             // (`verify(`, `new Mock<T>(`, `every {`). Never the arguments: a test's own
             // body would otherwise make the enclosing `test(...)` call a match.
-            let whole = text(node, src);
+            let whole = super::calls::code_text(node, src);
             let cut = whole.find(['(', '{']).map_or(whole.len(), |i| i + 1);
             let head = &whole[..cut.min(whole.len())];
             let hit = |v: &str| callee.contains(v) || head.contains(v);
@@ -278,5 +276,20 @@ mod tests {
             .unwrap()
             .tests;
         assert_eq!((t[0].mock_setups, t[0].mock_asserts), (1, 1));
+    }
+
+    /// The text of a string literal in a call chain names no double (`calls::code_text`).
+    #[test]
+    fn a_mock_call_spelled_in_a_string_literal_is_not_counted() {
+        let t = tests_of(
+            "tests/test_svc.py",
+            "def test_a():\n    src = \"repo.save.assert_called_once_with(1)\".strip()\n    made = \"Mock()\".lower()\n    assert render() == src + made\n",
+        );
+        assert_eq!((t[0].mock_setups, t[0].mock_asserts), (0, 0), "{:?}", t[0]);
+        let t = tests_of(
+            "src/a.test.ts",
+            "test('a', () => {\n  const src = \"expect(fn).toHaveBeenCalledWith(1)\".trim();\n  expect(render()).toBe(src);\n});\n",
+        );
+        assert_eq!((t[0].mock_setups, t[0].mock_asserts), (0, 0), "{:?}", t[0]);
     }
 }

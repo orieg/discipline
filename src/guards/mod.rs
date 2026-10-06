@@ -13,6 +13,8 @@ pub mod claim_registry;
 pub mod command;
 pub mod commit_provenance;
 pub mod confusables;
+#[cfg(test)]
+mod confusables_tests;
 pub mod dependency;
 pub mod error_swallowing;
 pub mod hygiene;
@@ -617,12 +619,9 @@ impl Context<'_> {
     }
 }
 
-pub fn run_checks(
-    config: &DisciplineConfig,
-    suite: SuiteChoice,
-    ctx: &Context,
-) -> Result<CheckSummary> {
-    let wanted: Vec<Suite> = match suite {
+/// The suites a `--suite` choice runs.
+fn wanted_suites(suite: SuiteChoice) -> Vec<Suite> {
+    match suite {
         SuiteChoice::All => vec![
             Suite::AgentGuard,
             Suite::Hygiene,
@@ -637,7 +636,26 @@ pub fn run_checks(
         SuiteChoice::Quality => vec![Suite::Quality],
         SuiteChoice::Verification => vec![Suite::Verification],
         SuiteChoice::Bench => vec![Suite::Bench],
-    };
+    }
+}
+
+/// Ids of the gates a `--suite` choice runs: the ones whose configured values are checked
+/// before any gate runs.
+fn selected_gate_ids(suite: SuiteChoice) -> Vec<&'static str> {
+    let wanted = wanted_suites(suite);
+    GATES
+        .iter()
+        .filter(|g| g.available && wanted.contains(&g.suite))
+        .map(|g| g.id)
+        .collect()
+}
+
+pub fn run_checks(
+    config: &DisciplineConfig,
+    suite: SuiteChoice,
+    ctx: &Context,
+) -> Result<CheckSummary> {
+    let wanted = wanted_suites(suite);
 
     let selected: Vec<_> = GATES
         .iter()
@@ -659,12 +677,11 @@ pub fn run_checks(
     // Compile every configured glob before any gate runs: a gate that returns early would
     // not, and the change's own copy is not otherwise read when the policy comes from the
     // base side.
-    let selected_ids: Vec<&str> = selected.iter().map(|g| g.id).collect();
-    check_configured_globs(config, &selected_ids)?;
-    check_configured_patterns(config, &selected_ids)?;
-    if let Some(head) = ctx.head_config {
-        check_configured_globs(head, &selected_ids)?;
-        check_configured_patterns(head, &selected_ids)?;
+    let selected_ids: Vec<&'static str> = selected.iter().map(|g| g.id).collect();
+    for checked in std::iter::once(config).chain(ctx.head_config) {
+        check_configured_globs(checked, &selected_ids)?;
+        check_configured_patterns(checked, &selected_ids)?;
+        check_configured_pairs(checked, &selected_ids)?;
     }
 
     // Gates whose rule describes a change (base against head). A whole-tree run has no
@@ -1069,61 +1086,132 @@ const GLOB_LIST_KEYS: &[&str] = &[
     "watched_paths",
     "exclude_paths",
     "corpus_dirs",
+    "fuzz_targets",
     "instruction_files",
     "superseded_json_paths",
     "required_paths",
 ];
 
-/// The first glob under `value` that does not compile, with the dotted key it sits at.
-fn first_invalid_glob(value: &toml::Value, at: &str) -> Option<(String, String, globset::Error)> {
+/// One step of the way to a configured value: a table key or an array index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Seg {
+    Key(String),
+    Index(usize),
+}
+
+fn key_path(keys: &[&str]) -> Vec<Seg> {
+    keys.iter().map(|k| Seg::Key(k.to_string())).collect()
+}
+
+/// A configured value that fails the check made before any gate runs.
+struct UnusableValue {
+    /// The gate whose table holds it; `None` for `[tests]`.
+    gate: Option<&'static str>,
+    /// Where it sits in the serialised configuration.
+    path: Vec<Seg>,
+    /// The key as a message names it.
+    key: String,
+    /// The error the run stops with.
+    error: anyhow::Error,
+}
+
+/// Every glob list under `value` holding a glob that does not compile: where the list
+/// sits, its dotted key, and its first such glob. An entry of an array of tables is named
+/// by the array's key, as before; its index is in the path only.
+fn invalid_globs(
+    value: &toml::Value,
+    at: &str,
+    path: &mut Vec<Seg>,
+    out: &mut Vec<(Vec<Seg>, String, String, globset::Error)>,
+) {
     match value {
-        toml::Value::Table(table) => table.iter().find_map(|(key, v)| {
-            let here = format!("{at}.{key}");
-            if GLOB_LIST_KEYS.contains(&key.as_str()) {
-                if let Some(globs) = v.as_array() {
-                    return globs.iter().filter_map(toml::Value::as_str).find_map(|g| {
-                        Glob::new(g).err().map(|e| (here.clone(), g.to_string(), e))
-                    });
+        toml::Value::Table(table) => {
+            for (key, v) in table {
+                let here = format!("{at}.{key}");
+                path.push(Seg::Key(key.clone()));
+                let listed = GLOB_LIST_KEYS.contains(&key.as_str());
+                match v.as_array().filter(|_| listed) {
+                    Some(globs) => {
+                        let bad = globs
+                            .iter()
+                            .filter_map(toml::Value::as_str)
+                            .find_map(|g| Glob::new(g).err().map(|e| (g.to_string(), e)));
+                        if let Some((glob, e)) = bad {
+                            out.push((path.clone(), here, glob, e));
+                        }
+                    }
+                    None => invalid_globs(v, &here, path, out),
                 }
+                path.pop();
             }
-            first_invalid_glob(v, &here)
-        }),
-        toml::Value::Array(items) => items.iter().find_map(|v| first_invalid_glob(v, at)),
-        _ => None,
+        }
+        toml::Value::Array(items) => {
+            for (i, v) in items.iter().enumerate() {
+                path.push(Seg::Index(i));
+                invalid_globs(v, at, path, out);
+                path.pop();
+            }
+        }
+        _ => {}
     }
 }
 
-/// Fails on the first glob that does not compile in `[tests] paths` or in the table of an
-/// enabled gate among `gate_ids`. A glob in a gate's table is that gate's failure, as it
-/// is when the gate compiles it; `[tests] paths` belongs to no gate.
-pub fn check_configured_globs(config: &DisciplineConfig, gate_ids: &[&str]) -> Result<()> {
+/// Every glob list that does not compile in `[tests]` or in the table of an enabled gate
+/// among `gate_ids`, in the order the run reports them.
+fn unusable_globs(
+    config: &DisciplineConfig,
+    gate_ids: &[&'static str],
+) -> Result<Vec<UnusableValue>> {
     let value = toml::Value::try_from(config)?;
-    if let Some((key, glob, e)) = value
-        .get("tests")
-        .and_then(|tests| first_invalid_glob(tests, "tests"))
-    {
-        return Err(crate::could_not_check::tag(
+    let message = |glob: &str, key: &str, e: &globset::Error| {
+        anyhow!("invalid glob `{glob}` in configuration (`{key}`): {e}")
+    };
+    let mut out = Vec::new();
+    let mut found = Vec::new();
+    if let Some(tests) = value.get("tests") {
+        invalid_globs(tests, "tests", &mut key_path(&["tests"]), &mut found);
+    }
+    for (path, key, glob, e) in found.drain(..) {
+        let error = crate::could_not_check::tag(
             crate::could_not_check::Reason::Configuration,
-            anyhow!("invalid glob `{glob}` in configuration (`{key}`): {e}"),
-        ));
+            message(&glob, &key, &e),
+        );
+        out.push(UnusableValue {
+            gate: None,
+            path,
+            key,
+            error,
+        });
     }
     for id in gate_ids {
         if !config.gates.settings(id).is_some_and(|s| s.enabled()) {
             continue;
         }
-        let at = format!("gates.{id}");
-        if let Some((key, glob, e)) = value
-            .get("gates")
-            .and_then(|gates| gates.get(*id))
-            .and_then(|gate| first_invalid_glob(gate, &at))
-        {
-            return Err(crate::could_not_check::tag_gate(
-                id,
-                anyhow!("invalid glob `{glob}` in configuration (`{key}`): {e}"),
-            ));
+        if let Some(gate) = value.get("gates").and_then(|gates| gates.get(*id)) {
+            let at = format!("gates.{id}");
+            invalid_globs(gate, &at, &mut key_path(&["gates", id]), &mut found);
+        }
+        for (path, key, glob, e) in found.drain(..) {
+            let error = crate::could_not_check::tag_gate(id, message(&glob, &key, &e));
+            out.push(UnusableValue {
+                gate: Some(id),
+                path,
+                key,
+                error,
+            });
         }
     }
-    Ok(())
+    Ok(out)
+}
+
+/// Fails on the first glob that does not compile in `[tests] paths` or in the table of an
+/// enabled gate among `gate_ids`. A glob in a gate's table is that gate's failure, as it
+/// is when the gate compiles it; `[tests] paths` belongs to no gate.
+pub fn check_configured_globs(config: &DisciplineConfig, gate_ids: &[&'static str]) -> Result<()> {
+    match unusable_globs(config, gate_ids)?.into_iter().next() {
+        Some(first) => Err(first.error),
+        None => Ok(()),
+    }
 }
 
 /// Compiles a configured regular expression whose first capture group is read. A pattern
@@ -1147,44 +1235,287 @@ pub fn capture_pattern(pattern: &str, key: &str) -> Result<regex::Regex> {
     Ok(re)
 }
 
-/// Fails on a configured pattern that an enabled gate among `gate_ids` compiles only once
-/// a change reaches the code that uses it: the capture patterns of `ci-integrity` and
-/// `command`, and the globs among `bench-regression`'s `exempt_arms` (a list of names and
-/// globs, so not one of [`GLOB_LIST_KEYS`]). The error is the gate's, with the reason
-/// `configuration`.
-pub fn check_configured_patterns(config: &DisciplineConfig, gate_ids: &[&str]) -> Result<()> {
+/// Every configured value, other than a glob list, that an enabled gate among `gate_ids`
+/// could not use, in the order the run reports them: the capture patterns of
+/// `ci-integrity` and `command`, the output patterns of `command`, and the globs among `bench-regression`'s
+/// `exempt_arms` (a list of names and globs, so not one of [`GLOB_LIST_KEYS`]). Each
+/// error is the gate's, with the reason `configuration`.
+fn unusable_patterns(config: &DisciplineConfig, gate_ids: &[&'static str]) -> Vec<UnusableValue> {
     let on =
         |id: &str| gate_ids.contains(&id) && config.gates.settings(id).is_some_and(|s| s.enabled());
-    let gate_error = |id: &str, e: anyhow::Error| crate::could_not_check::tag_gate(id, e);
+    let mut out = Vec::new();
+    let mut push = |gate: &'static str, path: Vec<Seg>, key: String, e: anyhow::Error| {
+        out.push(UnusableValue {
+            gate: Some(gate),
+            path,
+            key,
+            error: crate::could_not_check::tag_gate(gate, e),
+        });
+    };
     if on(ci_integrity::GATE) {
-        if let Some(p) = &config.gates.ci_integrity.documented_job_count_pattern {
-            capture_pattern(p, ci_integrity::JOB_COUNT_PATTERN_KEY)
-                .map_err(|e| gate_error(ci_integrity::GATE, e))?;
+        let gate = ci_integrity::GATE;
+        let settings = &config.gates.ci_integrity;
+        let at = |key: &str| key_path(&["gates", gate, key]);
+        if let Some(p) = &settings.documented_job_count_pattern {
+            if let Err(e) = capture_pattern(p, ci_integrity::JOB_COUNT_PATTERN_KEY) {
+                push(
+                    gate,
+                    at("documented_job_count_pattern"),
+                    ci_integrity::JOB_COUNT_PATTERN_KEY.to_string(),
+                    e,
+                );
+            }
         }
     }
     if on(command::GATE) {
-        let gate = &config.gates.command;
-        let entries = gate
-            .commands
-            .iter()
-            .map(|c| (command::count_pattern_key(Some(&c.name)), &c.count_pattern));
-        for (key, pattern) in
-            std::iter::once((command::count_pattern_key(None), &gate.count_pattern)).chain(entries)
-        {
-            if let Some(p) = pattern {
-                capture_pattern(p, &key).map_err(|e| gate_error(command::GATE, e))?;
+        let gate = command::GATE;
+        let settings = &config.gates.command;
+        let at = |entry: Option<usize>, key: &str| {
+            let mut path = key_path(&["gates", gate]);
+            if let Some(i) = entry {
+                path.push(Seg::Key("commands".to_string()));
+                path.push(Seg::Index(i));
+            }
+            path.push(Seg::Key(key.to_string()));
+            path
+        };
+        let tables = || {
+            std::iter::once((None, None)).chain(
+                settings
+                    .commands
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| (Some(i), Some(c))),
+            )
+        };
+        for (index, entry) in tables() {
+            let name = entry.map(|c| c.name.as_str());
+            let pattern = entry.map_or(&settings.count_pattern, |c| &c.count_pattern);
+            let key = command::count_pattern_key(name);
+            if let Some(Err(e)) = pattern.as_ref().map(|p| capture_pattern(p, &key)) {
+                push(gate, at(index, "count_pattern"), key, e);
+            }
+        }
+        for (index, entry) in tables() {
+            let name = entry.map(|c| c.name.as_str());
+            let forbid = entry.map_or(&settings.forbid_output, |c| &c.forbid_output);
+            let single = [
+                (
+                    "zero_items_pattern",
+                    entry.map_or(&settings.zero_items_pattern, |c| &c.zero_items_pattern),
+                ),
+                (
+                    "canary_expected_diagnostic",
+                    entry.map_or(&settings.canary_expected_diagnostic, |c| {
+                        &c.canary_expected_diagnostic
+                    }),
+                ),
+            ];
+            let listed = forbid.iter().map(|p| ("forbid_output", p));
+            let mut reported = Vec::new();
+            for (key, pattern) in listed.chain(
+                single
+                    .iter()
+                    .filter_map(|(k, p)| p.as_ref().map(|p| (*k, p))),
+            ) {
+                // One entry per key: a repair replaces the whole value.
+                if reported.contains(&key) {
+                    continue;
+                }
+                let dotted = command::entry_key(name, key);
+                if let Err(e) = command::output_pattern(pattern, &dotted) {
+                    reported.push(key);
+                    push(gate, at(index, key), dotted, e);
+                }
             }
         }
     }
     if on(perf::GATE) {
-        perf::ArmExemptions::new(&config.gates.bench_regression.exempt_arms).map_err(|e| {
-            gate_error(
+        if let Err(e) = perf::ArmExemptions::new(&config.gates.bench_regression.exempt_arms) {
+            push(
                 perf::GATE,
+                key_path(&["gates", perf::GATE, "exempt_arms"]),
+                format!("gates.{}.exempt_arms", perf::GATE),
                 crate::could_not_check::tag(crate::could_not_check::Reason::Configuration, e),
-            )
-        })?;
+            );
+        }
     }
-    Ok(())
+    out
+}
+
+/// Settings of an enabled gate among `gate_ids` that only work together and are set apart:
+/// a documented job count with one of its two keys. Both keys are named, and both are
+/// what a repair replaces.
+fn unusable_pairs(config: &DisciplineConfig, gate_ids: &[&'static str]) -> Vec<UnusableValue> {
+    let gate = ci_integrity::GATE;
+    let settings = &config.gates.ci_integrity;
+    let mut out = Vec::new();
+    if !gate_ids.contains(&gate) || !settings.enabled {
+        return out;
+    }
+    for (key, dotted) in [
+        (
+            "documented_job_count_path",
+            ci_integrity::JOB_COUNT_PATH_KEY,
+        ),
+        (
+            "documented_job_count_pattern",
+            ci_integrity::JOB_COUNT_PATTERN_KEY,
+        ),
+    ] {
+        if let Some(e) = ci_integrity::half_configured_job_count(settings) {
+            out.push(UnusableValue {
+                gate: Some(gate),
+                path: key_path(&["gates", gate, key]),
+                key: dotted.to_string(),
+                error: crate::could_not_check::tag_gate(gate, e),
+            });
+        }
+    }
+    out
+}
+
+/// Fails on a setting [`unusable_pairs`] finds: one that, set without its partner, would
+/// do nothing and say nothing.
+pub fn check_configured_pairs(config: &DisciplineConfig, gate_ids: &[&'static str]) -> Result<()> {
+    match unusable_pairs(config, gate_ids).into_iter().next() {
+        Some(first) => Err(first.error),
+        None => Ok(()),
+    }
+}
+
+/// Fails on the first configured value [`unusable_patterns`] finds.
+pub fn check_configured_patterns(
+    config: &DisciplineConfig,
+    gate_ids: &[&'static str],
+) -> Result<()> {
+    match unusable_patterns(config, gate_ids).into_iter().next() {
+        Some(first) => Err(first.error),
+        None => Ok(()),
+    }
+}
+
+/// A key of the base ref's configuration that this run reads from the change's copy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeadValue {
+    /// The gate whose table holds the key; `None` for `[tests]`.
+    pub gate: Option<&'static str>,
+    /// What the report says about it.
+    pub note: String,
+}
+
+fn value_at<'v>(value: &'v toml::Value, path: &[Seg]) -> Option<&'v toml::Value> {
+    path.iter().try_fold(value, |v, seg| match seg {
+        Seg::Key(k) => v.get(k.as_str()),
+        Seg::Index(i) => v.get(*i),
+    })
+}
+
+/// Puts `new` at `path` in `value`, or removes the key there when `new` is `None`. `false`
+/// when the path does not lead to a table key that can hold it.
+fn replace_at(value: &mut toml::Value, path: &[Seg], new: Option<toml::Value>) -> bool {
+    let Some((Seg::Key(last), parents)) = path.split_last() else {
+        return false;
+    };
+    let mut at = value;
+    for seg in parents {
+        let next = match seg {
+            Seg::Key(k) => at.get_mut(k.as_str()),
+            Seg::Index(i) => at.get_mut(*i),
+        };
+        let Some(next) = next else {
+            return false;
+        };
+        at = next;
+    }
+    let Some(table) = at.as_table_mut() else {
+        return false;
+    };
+    match new {
+        Some(v) => {
+            table.insert(last.clone(), v);
+        }
+        None => {
+            table.remove(last);
+        }
+    }
+    true
+}
+
+/// `--policy-from base` with a base configuration whose only fault is a glob or pattern
+/// that does not compile: the configuration this run is judged by, when the change repairs
+/// it (#600).
+///
+/// The base copy is the one in force, so without this the change that repairs it stops
+/// like every other (exit 2) and the repair can never be checked. When the change's own
+/// copy passes the up-front check, each key that fails it in the base copy is read from
+/// the change's copy, and nothing else is: the result is the base copy with those keys
+/// replaced. `None`, which leaves the run to stop on the base copy's error, when the base
+/// copy has nothing to repair, when the change's copy fails the check too, when a key
+/// cannot be replaced (the change has no table at that place), or when the result still
+/// fails the check (the change left the value as it was, or switched the gate off
+/// instead of repairing it).
+pub fn base_policy_repaired_by_head(
+    base: &DisciplineConfig,
+    head: &DisciplineConfig,
+    suite: SuiteChoice,
+) -> Result<Option<(DisciplineConfig, Vec<HeadValue>)>> {
+    let ids = selected_gate_ids(suite);
+    let unusable = |config: &DisciplineConfig| -> Result<Vec<UnusableValue>> {
+        let mut found = unusable_globs(config, &ids)?;
+        found.extend(unusable_patterns(config, &ids));
+        found.extend(unusable_pairs(config, &ids));
+        Ok(found)
+    };
+    let broken = unusable(base)?;
+    if broken.is_empty() || !unusable(head)?.is_empty() {
+        return Ok(None);
+    }
+    let mut value = toml::Value::try_from(base)?;
+    let head_value = toml::Value::try_from(head)?;
+    let mut taken: Vec<HeadValue> = Vec::new();
+    for b in &broken {
+        // The table the key sits in must exist in the change's copy; the key itself may be
+        // unset there, which unsets it here.
+        let parent = &b.path[..b.path.len() - 1];
+        if value_at(&head_value, parent).is_none_or(|p| !p.is_table()) {
+            return Ok(None);
+        }
+        if !replace_at(&mut value, &b.path, value_at(&head_value, &b.path).cloned()) {
+            return Ok(None);
+        }
+        let note = format!(
+            "`{}` does not compile in the base ref's configuration ({:#}); this change's own value for it is in force for this run, and every other setting is the base ref's",
+            b.key, b.error
+        );
+        if !taken.iter().any(|t| t.note == note) {
+            taken.push(HeadValue { gate: b.gate, note });
+        }
+    }
+    let Ok(mut repaired) = value.clone().try_into::<DisciplineConfig>() else {
+        return Ok(None);
+    };
+    repaired.deprecations = base.deprecations.clone();
+    // The rebuilt configuration must be the base copy with those keys replaced and nothing
+    // else: a setting the round trip changed would be one the base ref never chose.
+    if toml::Value::try_from(&repaired)? != value || !unusable(&repaired)?.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some((repaired, taken)))
+}
+
+/// Records, on the gate that owns each key and on `config-integrity`, that the key was
+/// read from the change's copy ([`base_policy_repaired_by_head`]).
+pub fn note_head_values(summary: &mut CheckSummary, taken: &[HeadValue]) {
+    for t in taken {
+        let note = format!("base policy: {}", t.note);
+        for outcome in &mut summary.outcomes {
+            let owner = t.gate == Some(outcome.gate);
+            if outcome.enabled && (owner || outcome.gate == "config-integrity") {
+                outcome.notes.push(note.clone());
+            }
+        }
+    }
 }
 
 pub fn exempt_filter(settings: &dyn GateSettings) -> Result<PathFilter> {
@@ -1248,6 +1579,39 @@ pub fn toolchain_unavailable(stdout: &str, stderr: &str) -> Option<String> {
     None
 }
 
+/// A [`Context`] for unit tests that call a gate function directly.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::Context;
+    use crate::config::DisciplineConfig;
+    use crate::gitctx::GitCtx;
+
+    /// A local run over `git` under `config`: no pull request, no directives, no forge.
+    pub(crate) fn context<'a>(config: &'a DisciplineConfig, git: &'a GitCtx) -> Context<'a> {
+        Context {
+            config,
+            head_config: None,
+            git,
+            config_path: "discipline.toml",
+            baseline_path: None,
+            baseline: None,
+            staged: false,
+            pr_title: None,
+            pr_body: None,
+            directives: Vec::new(),
+            directive_notes: Vec::new(),
+            bench_provenance: None,
+            allow_cross_host_bench: false,
+            bench_base_file: None,
+            bench_head_file: None,
+            test_base_report: None,
+            test_head_report: None,
+            test_report: None,
+            forge: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1279,38 +1643,278 @@ mod tests {
         }
     }
 
-    /// `GLOB_LIST_KEYS` is written by hand (#567). This ties it to the schema: a list the
-    /// schema describes as globs is compiled before any gate runs, or is named here with
-    /// the reason it is not; and every key in the list is a list the schema declares.
+    /// String lists of the schema whose entries are not globs, by what they are. Every
+    /// string list is here or in `GLOB_LIST_KEYS`.
+    const NOT_GLOB_LISTS: &[&str] = &[
+        // Names: functions, macros, jobs, packages, logins, repositories, trailers, units.
+        "agent_logins",
+        "allow_dependencies",
+        "allowed_override_actors",
+        "allowed_users",
+        "approved_predicates",
+        "assert_helper_fns",
+        "closing_keywords",
+        "deny_dependencies",
+        "deterministic_units",
+        "excluded_jobs",
+        "exempt_authors",
+        "extra_assert_macros",
+        "function_macros",
+        "functions",
+        "hostname_denylist",
+        "macros",
+        "pending_issue_repos",
+        "ratification_repos",
+        "ratifiers",
+        "reference_repos",
+        "required_trailers",
+        "sources",
+        "unconditional_jobs",
+        // Text matched as a substring or a prefix.
+        "agent_markers",
+        "allowed_suppressions",
+        "first_party_action_prefixes",
+        "mock_assert_fns",
+        "mock_setup_fns",
+        "placeholders",
+        // Regular expressions, compiled by the gate that reads them or, for
+        // `forbid_output`, by `check_configured_patterns`.
+        "allow_patterns",
+        "extra_patterns",
+        "extra_secret_patterns",
+        "forbid_output",
+        "forbidden_patterns",
+        "snapshot_ignore",
+        // Command-line arguments.
+        "args",
+        // Literal files or directories.
+        "citation_source_paths",
+        "required_suites",
+        // Names and globs mixed, compiled by `check_configured_patterns`; prefixed forms
+        // (`artifact:<glob>`, `regex:<pattern>`) the gate compiles itself.
+        "exempt_arms",
+        "ratio_satisfied_by",
+    ];
+
+    /// The lists above whose description says "glob" although the list is not a plain
+    /// glob list.
+    const GLOBS_AMONG_OTHER_FORMS: &[&str] = &["exempt_arms", "ratio_satisfied_by"];
+
+    /// `GLOB_LIST_KEYS` is written by hand (#567). This ties it to the schema: every
+    /// string list the schema declares is classified, as a glob list compiled before any
+    /// gate runs or, by name, as something else. A list added to the schema is in neither
+    /// and fails here, whatever its description says (#600: `workflows` and `corpus_dirs`
+    /// are described as "patterns", and a check on the word "glob" did not see them).
     #[test]
-    fn every_list_the_schema_calls_a_glob_is_compiled_up_front() {
-        // Not plain glob lists: names and globs mixed, compiled by
-        // `check_configured_patterns`; prefixed forms the gate compiles itself; a list
-        // matched by literal prefix, never compiled as a glob.
-        const NOT_GLOB_LISTS: &[&str] = &["exempt_arms", "ratio_satisfied_by", "fuzz_targets"];
+    fn every_string_list_of_the_schema_is_a_glob_list_compiled_up_front_or_named_otherwise() {
         let mut lists = Vec::new();
         schema_string_lists(&crate::schema::generate_schema(), &mut lists);
         assert!(
             lists.len() > GLOB_LIST_KEYS.len(),
             "the schema walk found too little"
         );
-        for (name, glob) in &lists {
-            if *glob && !NOT_GLOB_LISTS.contains(&name.as_str()) {
+        for (name, says_glob) in &lists {
+            let name = name.as_str();
+            let compiled = GLOB_LIST_KEYS.contains(&name);
+            assert!(
+                compiled || NOT_GLOB_LISTS.contains(&name),
+                "`{name}` is a string list in the schema and is not classified: add it to \
+                 GLOB_LIST_KEYS if its entries are globs (they are then compiled before any \
+                 gate runs), else to NOT_GLOB_LISTS under what its entries are"
+            );
+            if *says_glob {
                 assert!(
-                    GLOB_LIST_KEYS.contains(&name.as_str()),
+                    compiled || GLOBS_AMONG_OTHER_FORMS.contains(&name),
                     "the schema describes `{name}` as globs; add it to GLOB_LIST_KEYS"
                 );
             }
         }
-        for key in GLOB_LIST_KEYS {
+        for key in GLOB_LIST_KEYS.iter().chain(NOT_GLOB_LISTS) {
             assert!(
                 lists.iter().any(|(name, _)| name == key),
-                "GLOB_LIST_KEYS names `{key}`, which is no string list in the schema"
+                "`{key}` is classified here and is no string list in the schema"
             );
         }
         for key in NOT_GLOB_LISTS {
             assert!(!GLOB_LIST_KEYS.contains(key), "`{key}` is listed twice");
         }
+        for key in GLOBS_AMONG_OTHER_FORMS {
+            assert!(
+                NOT_GLOB_LISTS.contains(key),
+                "`{key}` is not in NOT_GLOB_LISTS"
+            );
+        }
+    }
+
+    /// A glob list is compiled wherever it sits: every key of `GLOB_LIST_KEYS`, set to a
+    /// glob that does not compile in a gate's table, is found.
+    #[test]
+    fn every_glob_list_key_is_compiled_wherever_it_sits() {
+        for key in GLOB_LIST_KEYS {
+            let mut gate = toml::Table::new();
+            gate.insert(
+                key.to_string(),
+                toml::Value::Array(vec![toml::Value::String("[".to_string())]),
+            );
+            let value = toml::Value::Table(gate);
+            let mut found = Vec::new();
+            invalid_globs(
+                &value,
+                "gates.x",
+                &mut key_path(&["gates", "x"]),
+                &mut found,
+            );
+            assert_eq!(found.len(), 1, "{key}");
+            assert_eq!(found[0].1, format!("gates.x.{key}"));
+            let mut path = key_path(&["gates", "x"]);
+            path.push(Seg::Key(key.to_string()));
+            assert_eq!(found[0].0, path);
+        }
+        // Control: a list that is not a glob list is not compiled as one.
+        let mut gate = toml::Table::new();
+        gate.insert(
+            "extra_patterns".to_string(),
+            toml::Value::Array(vec![toml::Value::String("[".to_string())]),
+        );
+        let mut found = Vec::new();
+        invalid_globs(
+            &toml::Value::Table(gate),
+            "gates.x",
+            &mut key_path(&["gates", "x"]),
+            &mut found,
+        );
+        assert!(found.is_empty());
+    }
+
+    const POLICY_HEAD: &str = "[meta]\nversion = 1\nname = \"t\"\n";
+    const BAD_SCOPE: &str =
+        "[gates.scope-confinement]\nenabled = true\nforbidden_paths = [\"secrets/**\", \"keys/[a-z\"]\n";
+    const GOOD_SCOPE: &str =
+        "[gates.scope-confinement]\nenabled = true\nforbidden_paths = [\"secrets/**\", \"keys/[a-z]*\"]\n";
+    const RULE_BAD: &str = "[gates.manifest-sync]\nenabled = true\n[[gates.manifest-sync.rules]]\nmanifest = \"a.toml\"\nextract_regex = \"x\"\nwatched_paths = [\"a/**\"]\n[[gates.manifest-sync.rules]]\nmanifest = \"b.toml\"\nextract_regex = \"x\"\nwatched_paths = [\"src/[a-z\"]\n";
+    const RULE_GOOD: &str = "[gates.manifest-sync]\nenabled = true\n[[gates.manifest-sync.rules]]\nmanifest = \"a.toml\"\nextract_regex = \"x\"\nwatched_paths = [\"a/**\"]\n[[gates.manifest-sync.rules]]\nmanifest = \"b.toml\"\nextract_regex = \"x\"\nwatched_paths = [\"src/[a-z]*\"]\n";
+    const RULE_ONE_LEFT: &str = "[gates.manifest-sync]\nenabled = true\n[[gates.manifest-sync.rules]]\nmanifest = \"a.toml\"\nextract_regex = \"x\"\nwatched_paths = [\"a/**\"]\n";
+    const COUNT_HALF: &str = "[gates.ci-integrity]\ndocumented_job_count_path = \"docs/ci.md\"\n";
+    const COUNT_NONE: &str = "[gates.ci-integrity]\nrollup_job = \"gate\"\n";
+    const COMMAND_BAD: &str = "[gates.command]\nenabled = true\ncommand = \"true\"\nmin_count = 4\nforbid_output = ['ok', '(a']\n";
+    const COMMAND_GOOD: &str = "[gates.command]\nenabled = true\ncommand = \"other\"\nmin_count = 1\nforbid_output = ['ok', 'a+']\n";
+
+    fn policy(body: &str) -> DisciplineConfig {
+        DisciplineConfig::from_toml_str(&format!("{POLICY_HEAD}{body}")).unwrap()
+    }
+
+    fn repaired(base: &str, head: &str) -> Option<(DisciplineConfig, Vec<HeadValue>)> {
+        base_policy_repaired_by_head(&policy(base), &policy(head), SuiteChoice::All).unwrap()
+    }
+
+    /// The serialised form is what the repair edits, so a configuration must come back
+    /// from it unchanged: the defaults, and one with every kind of table set.
+    #[test]
+    fn a_configuration_survives_the_round_trip_the_repair_makes() {
+        for body in ["", GOOD_SCOPE, RULE_GOOD, COMMAND_GOOD, COUNT_NONE] {
+            let config = policy(body);
+            let value = toml::Value::try_from(&config).unwrap();
+            let back: DisciplineConfig = value.clone().try_into().unwrap();
+            assert_eq!(toml::Value::try_from(&back).unwrap(), value, "{body}");
+        }
+    }
+
+    #[test]
+    fn the_repair_replaces_only_the_keys_that_do_not_compile() {
+        let head = format!("{GOOD_SCOPE}[gates.time-estimates]\nenabled = false\n[gates.pii]\nseverity = \"warning\"\n");
+        let (config, taken) = repaired(BAD_SCOPE, &head).expect("a repair");
+        assert_eq!(
+            config.gates.scope_confinement.forbidden_paths,
+            ["secrets/**", "keys/[a-z]*"]
+        );
+        assert_eq!(taken.len(), 1);
+        assert_eq!(taken[0].gate, Some("scope-confinement"));
+        assert!(taken[0]
+            .note
+            .contains("`gates.scope-confinement.forbidden_paths`"));
+        // Everything else is the base copy: serialised, the result differs from it in
+        // that one key.
+        let mut expected = toml::Value::try_from(policy(BAD_SCOPE)).unwrap();
+        expected["gates"]["scope-confinement"]["forbidden_paths"] =
+            toml::Value::try_from(["secrets/**", "keys/[a-z]*"]).unwrap();
+        assert_eq!(toml::Value::try_from(&config).unwrap(), expected);
+        assert!(config.gates.time_estimates.enabled);
+    }
+
+    #[test]
+    fn the_repair_reaches_an_entry_of_an_array_of_tables_and_one_key_of_a_command() {
+        let (config, taken) = repaired(RULE_BAD, RULE_GOOD).expect("a repair");
+        assert_eq!(
+            config.gates.manifest_sync.rules[1].watched_paths,
+            ["src/[a-z]*"]
+        );
+        assert_eq!(taken[0].gate, Some("manifest-sync"));
+        // The same key of the other entry is untouched, and so is every other key of the
+        // command table the change also edited.
+        assert_eq!(config.gates.manifest_sync.rules[0].watched_paths, ["a/**"]);
+        let (config, taken) = repaired(COMMAND_BAD, COMMAND_GOOD).expect("a repair");
+        assert_eq!(config.gates.command.forbid_output, ["ok", "a+"]);
+        assert_eq!(config.gates.command.command.as_deref(), Some("true"));
+        assert_eq!(config.gates.command.min_count, Some(4));
+        assert!(taken[0].note.contains("`gates.command.forbid_output`"));
+    }
+
+    /// A half-configured pair is repaired by setting the other key or removing the one.
+    #[test]
+    fn the_repair_covers_a_half_configured_job_count() {
+        let (config, taken) = repaired(COUNT_HALF, COUNT_NONE).expect("a repair");
+        assert_eq!(config.gates.ci_integrity.documented_job_count_path, None);
+        // Nothing else of the change's table came along.
+        assert_eq!(
+            config.gates.ci_integrity.rollup_job,
+            policy(COUNT_HALF).gates.ci_integrity.rollup_job
+        );
+        assert_eq!(taken.len(), 2);
+    }
+
+    #[test]
+    fn nothing_is_repaired_when_the_change_does_not_repair_it() {
+        // Nothing to repair.
+        assert!(repaired(GOOD_SCOPE, GOOD_SCOPE).is_none());
+        // The change leaves the value, or breaks its own copy elsewhere.
+        assert!(repaired(BAD_SCOPE, BAD_SCOPE).is_none());
+        assert!(repaired(BAD_SCOPE, &format!("{GOOD_SCOPE}{COUNT_HALF}")).is_none());
+        // The change switches the gate off: its copy passes, the value is still bad.
+        let off = BAD_SCOPE.replace("enabled = true", "enabled = false");
+        assert!(repaired(BAD_SCOPE, &off).is_none());
+        // The change dropped the table the value sits in.
+        assert!(repaired(RULE_BAD, RULE_ONE_LEFT).is_none());
+    }
+
+    #[test]
+    fn the_checks_made_before_any_gate_runs_name_the_key() {
+        let ids = ["ci-integrity", "command"];
+        let shown = |body: &str| {
+            let config = policy(body);
+            let e = check_configured_patterns(&config, &ids)
+                .and_then(|()| check_configured_pairs(&config, &ids))
+                .unwrap_err();
+            let (reason, gate) = crate::could_not_check::classify(&e);
+            assert_eq!(reason, crate::could_not_check::Reason::Configuration);
+            (format!("{e:#}"), gate)
+        };
+        let (text, gate) = shown(COMMAND_BAD);
+        assert!(text.contains("`gates.command.forbid_output`"), "{text}");
+        assert!(text.contains("never as literal text"), "{text}");
+        assert_eq!(gate.as_deref(), Some("command"));
+        let (text, gate) = shown(COUNT_HALF);
+        assert!(text.contains("`gates.ci-integrity.documented_job_count_path`"));
+        assert!(text.contains("`gates.ci-integrity.documented_job_count_pattern`"));
+        assert_eq!(gate.as_deref(), Some("ci-integrity"));
+        // Controls.
+        let good = policy(&format!("{COMMAND_GOOD}{COUNT_NONE}"));
+        assert!(check_configured_patterns(&good, &ids).is_ok());
+        assert!(check_configured_pairs(&good, &ids).is_ok());
+        let off = policy(&COUNT_HALF.replace(
+            "[gates.ci-integrity]\n",
+            "[gates.ci-integrity]\nenabled = false\n",
+        ));
+        assert!(check_configured_pairs(&off, &ids).is_ok());
     }
 
     #[test]

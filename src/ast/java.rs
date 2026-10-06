@@ -90,6 +90,7 @@ impl LanguagePack for JavaPack {
                 f.is_test = true;
             }
         }
+        super::method_checks::count(root, src, &mut extractor.facts, &JAVA_RECEIVER_CALLS);
         super::calls::count(
             root,
             src,
@@ -439,7 +440,19 @@ impl<'a> JavaExtractor<'a> {
         }
     }
 
+    /// Records where the tautologies counted under `node` are (`TestFn::mark_tautologies`).
     fn scan_statement_or_expr(
+        &self,
+        node: Node,
+        test_fn: &mut TestFn,
+        direct_calls: &mut Vec<String>,
+    ) {
+        let mark = test_fn.tautology_mark();
+        self.scan_statement_or_expr_unmarked(node, test_fn, direct_calls);
+        test_fn.mark_tautologies(mark, node);
+    }
+
+    fn scan_statement_or_expr_unmarked(
         &self,
         node: Node,
         test_fn: &mut TestFn,
@@ -669,6 +682,13 @@ pub const JAVA_FUNCTIONS: FunctionSpec = FunctionSpec {
     is_test: java_fn_is_test,
     classify: functions::classify_jvm,
 };
+
+/// A method called on a receiver (`method_checks`).
+pub const JAVA_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
+    super::method_checks::ReceiverCalls {
+        member: &[],
+        direct: &[("method_invocation", "object", "name")],
+    };
 
 pub const JAVA_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
     call_kinds: &["method_invocation", "object_creation_expression"],
@@ -957,26 +977,24 @@ class EntireClassDisabledTest {
         assert!(facts.tests[1].ignored);
     }
 
+    /// The helper is defined in no file the pack reads, so only the configured
+    /// vocabulary can make its call count.
     #[test]
     fn test_assertj_and_custom_vocab() {
         let src = r#"
 import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.Test;
 
-class AssertJTest {
-    private void customAssertHelper(int x) {
-        assertEquals(42, x);
-    }
-
+class AssertJTest extends SharedChecks {
     @Test
     void testAssertJ() {
         assertThat("foo").isEqualTo("foo");
-        customAssertHelper(42);
+        customCheckHelper(42);
     }
 }
 "#;
         let vocab = AssertVocabulary {
-            helper_fns: vec!["customAssertHelper".to_string()],
+            helper_fns: vec!["customCheckHelper".to_string()],
             ..Default::default()
         };
         let pack = JavaPack;
@@ -986,9 +1004,19 @@ class AssertJTest {
 
         assert_eq!(facts.tests.len(), 1);
         let t = &facts.tests[0];
+        // assertThat(..).isEqualTo(..) is one strong assertion; the configured helper
+        // adds one to the total and none to the strong count.
         assert_eq!(t.total_asserts, 2);
-        assert_eq!(t.strong_asserts, 2);
+        assert_eq!(t.strong_asserts, 1);
         assert!(!t.is_vacuous());
+
+        // Control: without the vocabulary the helper call is not an assertion.
+        let plain = pack
+            .extract("AssertJTest.java", src, &AssertVocabulary::default())
+            .expect("extraction must succeed");
+        assert_eq!(plain.tests.len(), 1);
+        assert_eq!(plain.tests[0].total_asserts, 1);
+        assert_eq!(plain.tests[0].strong_asserts, 1);
     }
 
     #[test]

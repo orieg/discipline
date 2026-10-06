@@ -749,7 +749,8 @@ mod tests {
         Ok((format, names))
     }
 
-    fn contents(path: &Path) -> Vec<(String, Vec<u8>)> {
+    /// Every entry with its bytes read to the end, as a gate that scans contents reads it.
+    fn try_contents(path: &Path) -> Result<Vec<(String, Vec<u8>)>> {
         let mut out = Vec::new();
         walk(path, &mut |e| {
             let mut bytes = Vec::new();
@@ -758,9 +759,12 @@ mod tests {
             }
             out.push((e.name, bytes));
             Ok(())
-        })
-        .unwrap();
-        out
+        })?;
+        Ok(out)
+    }
+
+    fn contents(path: &Path) -> Vec<(String, Vec<u8>)> {
+        try_contents(path).unwrap()
     }
 
     const FILES: &[(&str, &[u8])] = &[
@@ -1120,11 +1124,18 @@ mod tests {
         let full = fixtures::zip(FILES);
         // Cut the zip roughly in half — should fail, not panic.
         let path = write(&dir, "trunc.zip", &full[..full.len() / 2]);
-        let err = format!("{:#}", names(&path).unwrap_err());
-        // Error message must be queryable by operators (observability).
+        let err = names(&path).unwrap_err();
+        // The zip reader's own refusal is the root cause, under the context that names
+        // the format: a refusal with the cause dropped or replaced does not pass.
         assert!(
-            err.contains("zip") || err.contains("central directory"),
-            "{err}"
+            err.root_cause()
+                .downcast_ref::<zip::result::ZipError>()
+                .is_some_and(|e| matches!(e, zip::result::ZipError::InvalidArchive(_))),
+            "{err:#}"
+        );
+        assert!(
+            format!("{err:#}").starts_with("reading it as a zip archive: "),
+            "{err:#}"
         );
     }
 
@@ -1224,18 +1235,44 @@ mod tests {
         assert_eq!(names_out.1, vec!["empty.txt"]);
     }
 
+    /// A stored (uncompressed) zip of one 256-byte entry.
+    fn stored_zip() -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        writer.start_file("data.bin", options).unwrap();
+        std::io::Write::write_all(&mut writer, &[0u8; 256]).unwrap();
+        writer.finish().unwrap().into_inner()
+    }
+
     #[test]
     fn zip_truncated_in_middle_of_entry_data_fails() {
-        // Build a valid zip, then truncate the file data mid-entry.
         let dir = TempDir::new().unwrap();
-        let full = fixtures::zip(&[("data.bin", &[0u8; 256])]);
-        // The zip central directory is at the end; truncate before it.
-        // A minimal zip with one entry: local header + data + (no central dir).
-        // Cut off the last 10 bytes to remove the EOCD record.
-        let truncated = &full[..full.len() - 10];
-        let path = write(&dir, "mid_entry.zip", truncated);
-        // Should fail because the EOCD is missing or the entry is incomplete.
-        assert!(names(&path).is_err());
+        let full = stored_zip();
+        // Control: the untouched archive is read to the end.
+        let path = write(&dir, "whole.zip", &full);
+        assert_eq!(
+            try_contents(&path).unwrap(),
+            vec![("data.bin".to_string(), vec![0u8; 256])]
+        );
+
+        // Remove the last 16 bytes of the entry's data and move the central directory
+        // up by as much: the directory and its end record are intact and still say 256
+        // bytes, so the archive opens and lists; only reading the entry can tell.
+        let eocd = full.len() - 22;
+        assert_eq!(&full[eocd..eocd + 4], b"PK\x05\x06");
+        let at = |i: usize| u32::from_le_bytes(full[i..i + 4].try_into().unwrap());
+        let directory = at(eocd + 16) as usize;
+        assert_eq!(&full[directory..directory + 4], b"PK\x01\x02");
+        let mut cut = full[..directory - 16].to_vec();
+        cut.extend_from_slice(&full[directory..]);
+        let eocd = cut.len() - 22;
+        cut[eocd + 16..eocd + 20].copy_from_slice(&(directory as u32 - 16).to_le_bytes());
+        let path = write(&dir, "mid_entry.zip", &cut);
+
+        assert_eq!(names(&path).unwrap().1, vec!["data.bin"]);
+        let err = format!("{:#}", try_contents(&path).unwrap_err());
+        assert!(err.contains("reading it as a zip archive"), "{err}");
     }
 
     #[test]
@@ -1299,16 +1336,39 @@ mod tests {
     #[test]
     fn completely_random_bytes_fails_gracefully() {
         let dir = TempDir::new().unwrap();
-        // 1024 random bytes with a .zip extension.
-        let path = write(&dir, "random.zip", &vec![0u8; 1024]);
-        assert!(names(&path).is_err());
+        // A valid magic number, then bytes that are no archive: detection accepts each
+        // file, so the refusal has to come from the format's reader.
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let junk: Vec<u8> = (0..1024)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state >> 24) as u8
+            })
+            .collect();
+        let with_magic = |name: &str, magic: &[u8]| {
+            let mut bytes = magic.to_vec();
+            bytes.extend_from_slice(&junk);
+            write(&dir, name, &bytes)
+        };
 
-        // Same with .deb extension (not a valid ar archive).
-        let path = write(&dir, "random.deb", &vec![0u8; 1024]);
+        let path = with_magic("random.zip", b"PK\x03\x04");
+        assert_eq!(detect(&path).unwrap(), Format::Zip);
         assert!(names(&path).is_err());
+        let err = format!("{:#}", names(&path).unwrap_err());
+        assert!(err.starts_with("reading it as a zip archive: "), "{err}");
 
-        // Same with .rpm extension (not a valid rpm).
-        let path = write(&dir, "random.rpm", &vec![0u8; 1024]);
+        let path = with_magic("random.deb", b"!<arch>\n");
+        assert_eq!(detect(&path).unwrap(), Format::Deb);
         assert!(names(&path).is_err());
+        let err = format!("{:#}", names(&path).unwrap_err());
+        assert!(err.starts_with("reading it as a Debian package: "), "{err}");
+
+        let path = with_magic("random.rpm", &[0xed, 0xab, 0xee, 0xdb]);
+        assert_eq!(detect(&path).unwrap(), Format::Rpm);
+        assert!(names(&path).is_err());
+        let err = format!("{:#}", names(&path).unwrap_err());
+        assert!(err.starts_with("reading it as a RPM package: "), "{err}");
     }
 }

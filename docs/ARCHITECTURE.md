@@ -438,6 +438,22 @@ Discipline exports standard structured formats:
 - **SARIF (`discipline.sarif`):** OASIS Static Analysis Results Interchange Format v2.1.0 schema-compliant report.
 - **Terminal & GitHub Job Summaries:** ANSI-styled summaries and GitHub workflow annotations.
 
+**Text from outside is neutralised where it is written, once per output format.** A report quotes text the binary did not choose and its reader did not write: what a forge answered (a refusal message, a login, a branch name), a pull request's title and body, a commit subject, a file name, a line of a changed file, the output of a tool a gate ran. Whoever wrote that text must not be able to write the report. The rule is applied at the output, not at each source, so a new source is covered without a change (`src/report/text.rs`; `tests/test_untrusted_text_in_reports.rs` delivers hostile text through each source and reads each format):
+
+| Output | What is done to quoted text |
+|---|---|
+| Text report, `audit`, `replay` and `doctor` summaries | Every control character but a tab becomes U+FFFD, so the reader sees something was there: C0, C1 and DEL (ESC, CSI, OSC, the bell, backspace, a carriage return), the bidirectional override and isolate controls, and the Unicode line and paragraph separators. A note, a title, a location and an override stay one line. A finding's message and remediation may hold several lines (a quoted tool output): each line after the first is indented under the finding, so none starts where the report's own lines start |
+| Error message on standard error | The same, with the message's own line breaks kept (a parse error shows an excerpt under it). A forge's refusal reason is one line before it reaches any message (`forge::refusal_message`) |
+| Job summary (Markdown) | Line breaks become a space and other control characters U+FFFD. The text is read as CommonMark reads it: a backtick run and the next run of the same length are a code span and are written as they are, since nothing in one is active; a run with no partner is escaped. Outside a span `&`, `<` and `>` become entities (no tag, no comment, no autolink), `@` becomes `&#64;` (no mention), `]` before `(` or `[` is escaped (no link, no image), and a backslash before any of these is escaped so it cannot undo the escape. In a table cell a pipe is escaped too. A value the report itself sets in a code span (a location, a directive, a base ref) gets a fence one backtick longer than the longest run in it |
+| Pull-request comment (Markdown) | As a table cell of the job summary, and a backtick becomes an apostrophe: the comment has no code span from quoted text. Directive syntax is removed (§7.3) |
+| Workflow annotations (`::error ...::`) | `%`, a carriage return and a line break are percent-encoded as the runner expects, `:` and `,` in a property; other control characters become U+FFFD |
+| `agent-prompt` | A title and a location are one line; a message is inside a fenced block it cannot close, with control characters other than its line breaks replaced |
+| JSON, SARIF, GitLab Code Quality | Nothing: the serialiser encodes the text and a consumer reads back what was quoted, byte for byte |
+| JUnit XML | `&`, `<`, `>` and both quotes become entities; the characters XML 1.0 forbids (C0 other than tab, line feed and carriage return; U+FFFE and U+FFFF) are dropped |
+| Audit page (HTML) | `&`, `<`, `>` and both quotes become entities in content and in attribute values; every link is built from the repository's own forge address |
+
+A message with none of these characters is written byte for byte. What is left as it is, on purpose: emphasis markers (`*`, `_`, `~`) outside a code span, which can restyle the quoted text itself and nothing after it, and a bare URL, which a Markdown renderer links as the address it shows.
+
 ### 7.1 Pure-Rust SHA-256 Implementation & Cryptographic Hygiene
 
 GitLab Code Quality issue tracking and Discipline's grandfathering baseline engine require unique, deterministic 32-byte hex fingerprints:
@@ -463,7 +479,7 @@ To support brownfield adoption without weakening gates or ignoring violations, D
 
 - **Opt-in:** off unless `--comment` / `DISCIPLINE_COMMENT` / the action's `comment` input; the action passes its token to the binary only then.
 - **One comment:** found by the marker `<!-- discipline:report -->` at the start of its body, paging through the pull request's comments (GitHub and Gitea / Forgejo issue comments, GitLab merge-request notes); edited with `PATCH` (`PUT` on GitLab), created with `POST` when none exists or the marked one belongs to someone the token cannot edit.
-- **Safety:** same path checks, https rule and `DISCIPLINE_NO_NETWORK` as the reads; a write is never replayed against a redirect. Text from the change is escaped (no `@` mention, no HTML, no table break, no forged marker), and the comment carries no directive syntax, since agents read pull-request comments too.
+- **Safety:** same path checks, https rule and `DISCIPLINE_NO_NETWORK` as the reads; a write is never replayed against a redirect. Text from the change is escaped as §7 describes (no `@` mention, no HTML, no link, no table break, no control character, no forged marker), and the comment carries no directive syntax, since agents read pull-request comments too.
 - **Failure:** a token that cannot write (HTTP 401 / 403 / 404, the fork case) is a named note and the gates' verdict stands; a forge that cannot be identified or reached stops the run (exit 2), because a comment was asked for. The comment never decides the verdict: the check's status does.
 
 ## 8. CI and Release Pipelines
