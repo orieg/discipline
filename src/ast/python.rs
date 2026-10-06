@@ -66,6 +66,7 @@ impl LanguagePack for PythonPack {
             class_bases: HashMap::new(),
             collected_classes: HashSet::new(),
             class_stack: Vec::new(),
+            unittest_stack: Vec::new(),
             inherited_cases: Vec::new(),
             inherited_skips: Vec::new(),
             helpers: HashMap::new(),
@@ -163,6 +164,10 @@ struct PythonExtractor<'a> {
     collected_classes: HashSet<String>,
     /// For each enclosing class, whether pytest or unittest collects its methods.
     class_stack: Vec<bool>,
+    /// For each enclosing class, whether it derives from a `TestCase`: unittest names
+    /// the methods of such a class by its own `test` prefix, whatever pytest's
+    /// `python_functions` says.
+    unittest_stack: Vec<bool>,
     /// The case counts the enclosing module and classes give each of their tests: a
     /// `parametrize` decorator on a class, a `pytestmark` in a class body or the module.
     inherited_cases: Vec<(Option<usize>, bool)>,
@@ -354,7 +359,14 @@ impl<'a> PythonExtractor<'a> {
         name: &'n str,
         visited: &mut HashSet<&'n str>,
     ) -> bool {
-        if name.starts_with("Test") {
+        // pytest's `python_classes`, when the repository's configuration sets it.
+        if self
+            .vocab
+            .runner_rules
+            .pytest
+            .class_name_override(name)
+            .unwrap_or_else(|| name.starts_with("Test"))
+        {
             return true;
         }
         if !visited.insert(name) {
@@ -366,6 +378,29 @@ impl<'a> PythonExtractor<'a> {
         bases.iter().any(|base| {
             if self.class_bases.contains_key(base.as_str()) {
                 self.class_is_collected_inner(base, visited)
+            } else {
+                base.starts_with("Test") || base.ends_with("TestCase")
+            }
+        })
+    }
+
+    /// Whether class `name` derives from a `TestCase`, through classes defined in this
+    /// file or by the name of a base defined elsewhere (as in
+    /// [`Self::class_is_test_case`]).
+    fn class_inherits_test_case<'n>(
+        &'n self,
+        name: &'n str,
+        visited: &mut HashSet<&'n str>,
+    ) -> bool {
+        if !visited.insert(name) {
+            return false;
+        }
+        let Some(bases) = self.class_bases.get(name) else {
+            return false;
+        };
+        bases.iter().any(|base| {
+            if self.class_bases.contains_key(base.as_str()) {
+                self.class_inherits_test_case(base, visited)
             } else {
                 base.starts_with("Test") || base.ends_with("TestCase")
             }
@@ -681,8 +716,10 @@ impl<'a> PythonExtractor<'a> {
         self.inherited_skips.push(marks.conditional);
 
         let collected = self.collected_classes.contains(&class_name);
+        let unittest = self.class_inherits_test_case(&class_name, &mut HashSet::new());
         scope.push(class_name);
         self.class_stack.push(collected);
+        self.unittest_stack.push(unittest);
         let body_cases = node
             .child_by_field_name("body")
             .map(|body| super::test_cases::extract_python_pytestmark_cases(body, self.src))
@@ -730,6 +767,7 @@ impl<'a> PythonExtractor<'a> {
         self.inherited_skips.pop();
         self.inherited_cases.pop();
         self.class_stack.pop();
+        self.unittest_stack.pop();
         scope.pop();
     }
 
@@ -915,13 +953,28 @@ impl<'a> PythonExtractor<'a> {
         if decorators.is_some_and(|decs| decs.iter().any(|d| self.is_non_test_decorator(*d))) {
             return false;
         }
+        // pytest's `python_functions`, when the repository's configuration sets it,
+        // names the test functions and the test methods of a class that is not a
+        // `TestCase`. Unset, the defaults below apply.
+        let configured = self
+            .vocab
+            .runner_rules
+            .pytest
+            .function_name_override(fn_name);
         match self.class_stack.last() {
-            Some(&collected) => (collected || self.is_test_path) && fn_name.starts_with("test"),
-            None => {
+            Some(&collected) => {
+                let unittest = self.unittest_stack.last().copied().unwrap_or(false);
+                let named = match configured {
+                    Some(named) if !unittest => named,
+                    _ => fn_name.starts_with("test"),
+                };
+                (collected || self.is_test_path) && named
+            }
+            None => configured.unwrap_or_else(|| {
                 fn_name.starts_with("test_")
                     || fn_name == "test"
                     || (self.is_test_path && fn_name.starts_with("test"))
-            }
+            }),
         }
     }
 
@@ -2365,6 +2418,93 @@ def helper_guard():
         assert_eq!(no_exit_test.conditional_ignore, None);
 
         assert!(facts.tests.iter().all(|t| t.name != "helper_guard"));
+    }
+
+    const PYTEST_NAMED_SOURCE: &str = "\
+import unittest
+
+
+def test_default():
+    assert a() == 1
+
+
+def check_custom():
+    assert b() == 2
+
+
+class TestDefault:
+    def test_m(self):
+        assert c() == 3
+
+    def check_m(self):
+        assert d() == 4
+
+
+class SuiteCustom:
+    def check_n(self):
+        assert e() == 5
+
+    def test_n(self):
+        assert f() == 6
+
+
+class LegacyCase(unittest.TestCase):
+    def test_u(self):
+        self.assertEqual(g(), 7)
+
+    def check_u(self):
+        self.assertEqual(h(), 8)
+";
+
+    fn named_tests(config: &str) -> Vec<String> {
+        let mut vocab = AssertVocabulary::default();
+        vocab.runner_rules.pytest =
+            crate::ast::runner_collection::PytestCollectionRules::parse_ini(config);
+        let facts = PythonPack
+            .extract("checks/spec_names.py", PYTEST_NAMED_SOURCE, &vocab)
+            .unwrap();
+        let mut names: Vec<String> = facts.tests.into_iter().map(|t| t.name).collect();
+        names.sort();
+        names
+    }
+
+    /// pytest `python_functions` / `python_classes` (#593): set, they replace the
+    /// default names for functions and for the methods of a class that is not a
+    /// `TestCase`; a `TestCase` keeps unittest's `test` prefix.
+    #[test]
+    fn pytest_python_functions_and_classes_name_the_tests() {
+        // Unset: the defaults.
+        assert_eq!(
+            named_tests("[pytest]\n"),
+            ["LegacyCase::test_u", "TestDefault::test_m", "test_default"]
+        );
+        assert_eq!(
+            named_tests("[pytest]\npython_functions = check_*\n"),
+            ["LegacyCase::test_u", "TestDefault::check_m", "check_custom"]
+        );
+        assert_eq!(
+            named_tests("[pytest]\npython_classes = Suite*\n"),
+            ["LegacyCase::test_u", "SuiteCustom::test_n", "test_default"]
+        );
+        assert_eq!(
+            named_tests(
+                "[pytest]\npython_functions = check_* test_*\npython_classes = Suite Test\n"
+            ),
+            [
+                "LegacyCase::test_u",
+                "SuiteCustom::check_n",
+                "SuiteCustom::test_n",
+                "TestDefault::check_m",
+                "TestDefault::test_m",
+                "check_custom",
+                "test_default"
+            ]
+        );
+        // A section that is not a pytest configuration sets nothing.
+        assert_eq!(
+            named_tests("[flake8]\npython_functions = check_*\n"),
+            ["LegacyCase::test_u", "TestDefault::test_m", "test_default"]
+        );
     }
 }
 

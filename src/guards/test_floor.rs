@@ -481,6 +481,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     }
 
     // 7. Calculate measured test count.
+    let mut head_static: Option<AstTestCount> = None;
     let measured_count = if let Some(cmd) = &settings.test_command {
         count_tests_via_command(cmd, Path::new(ctx.git.root()))?
     } else if let Some(head_cases) = &head_cases_opt {
@@ -492,7 +493,9 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
                 out.notes.push(note);
             }
         }
-        head.running
+        let running = head.running;
+        head_static = Some(head);
+        running
     };
     out.examined = measured_count;
 
@@ -560,6 +563,9 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
             if !out.notes.contains(&note) {
                 out.notes.push(note);
             }
+        }
+        if let Some(head) = &head_static {
+            out.notes.extend(head.transition_notes(&base));
         }
         let base_count = base.running;
         if base_count > 0 && measured_count + settings.tolerance < base_count {
@@ -688,9 +694,15 @@ pub struct AstTestCount {
     /// Files with tests that were counted although runner collection was not
     /// determined, by reason.
     pub unknown_collection: std::collections::BTreeMap<String, usize>,
-    /// Files with tests that were left out because nothing tracked in the repository
-    /// could run a test in their language, by reason.
+    /// Files with tests that were left out with a note, by reason: nothing tracked in
+    /// the repository could run a test in their language, or `.gitattributes` marks
+    /// them as vendored or generated.
     pub no_runner: std::collections::BTreeMap<String, usize>,
+    /// Each file with tests whose runner collection is determined, and that counts.
+    pub collected_files: std::collections::BTreeSet<String>,
+    /// Each file with tests that counts although collection was not determined, with
+    /// the reason.
+    pub unknown_files: std::collections::BTreeMap<String, String>,
 }
 
 impl AstTestCount {
@@ -723,12 +735,47 @@ impl AstTestCount {
         };
         let before = self.running + self.ignored;
         self.add(path, content()?, registry, v);
-        if let Some(reason) = unknown {
-            if self.running + self.ignored > before {
-                *self.unknown_collection.entry(reason).or_default() += 1;
+        if self.running + self.ignored > before {
+            match unknown {
+                Some(reason) => {
+                    *self.unknown_collection.entry(reason.clone()).or_default() += 1;
+                    self.unknown_files.insert(path.to_string(), reason);
+                }
+                None => {
+                    self.collected_files.insert(path.to_string());
+                }
             }
         }
         Ok(())
+    }
+
+    /// Notes for the files the change takes out of determined collection while they
+    /// keep counting: collected on the base side, and on the head side counted with
+    /// collection not determined. The count cannot show it, so each file is named (the
+    /// first few), with the reason.
+    fn transition_notes(&self, base: &AstTestCount) -> Vec<String> {
+        const NAMED: usize = 5;
+        let moved: Vec<(&String, &String)> = self
+            .unknown_files
+            .iter()
+            .filter(|(path, _)| base.collected_files.contains(*path))
+            .collect();
+        let mut notes: Vec<String> = moved
+            .iter()
+            .take(NAMED)
+            .map(|(path, reason)| {
+                format!(
+                    "head: `{path}` was collected on the base side, and the change leaves whether its tests run not determined ({reason}); they are still counted, so the count does not show the change"
+                )
+            })
+            .collect();
+        if moved.len() > NAMED {
+            notes.push(format!(
+                "head: {} more file(s) were collected on the base side and are counted with collection not determined on the head side",
+                moved.len() - NAMED
+            ));
+        }
+        notes
     }
 
     fn add(
