@@ -170,7 +170,7 @@ struct PythonExtractor<'a> {
     unittest_stack: Vec<bool>,
     /// The case counts the enclosing module and classes give each of their tests: a
     /// `parametrize` decorator on a class, a `pytestmark` in a class body or the module.
-    inherited_cases: Vec<(Option<usize>, bool)>,
+    inherited_cases: Vec<super::test_cases::CaseList>,
     /// Conditional skips of the enclosing module and classes (`pytestmark =
     /// pytest.mark.skipif(..)`, a `skipif` decorator on a class), outermost first.
     inherited_skips: Vec<Vec<(String, CiVerdict)>>,
@@ -723,7 +723,7 @@ impl<'a> PythonExtractor<'a> {
         let body_cases = node
             .child_by_field_name("body")
             .map(|body| super::test_cases::extract_python_pytestmark_cases(body, self.src))
-            .unwrap_or((None, false));
+            .unwrap_or_default();
         self.inherited_cases.push(super::test_cases::multiply_cases(
             super::test_cases::extract_python_cases(class_decorators, self.src),
             body_cases,
@@ -803,10 +803,14 @@ impl<'a> PythonExtractor<'a> {
 
         let line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
-        let (cases, non_literal_cases) = self.inherited_cases.iter().fold(
-            super::test_cases::extract_python_cases(decorators, self.src),
-            |own, outer| super::test_cases::multiply_cases(*outer, own),
-        );
+        let (cases, non_literal_cases, case_rows) = self
+            .inherited_cases
+            .iter()
+            .fold(
+                super::test_cases::extract_python_cases(decorators, self.src),
+                |own, outer| super::test_cases::multiply_cases(outer.clone(), own),
+            )
+            .into_parts();
 
         let mut test_fn = TestFn {
             name: full_name,
@@ -819,6 +823,7 @@ impl<'a> PythonExtractor<'a> {
             should_panic: None,
             cases,
             non_literal_cases,
+            case_rows,
             ..Default::default()
         };
 

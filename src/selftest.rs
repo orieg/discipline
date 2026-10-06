@@ -3397,6 +3397,154 @@ command = "cargo test"
         },
     ),
     (
+        "assertion-reduction: a case dropped beside an unrelated new test is a reduction, and one that arrives in another test of the file is not",
+        || {
+            let file = |first: &str, second: &str| {
+                let mut src = format!(
+                    "import pytest\n\n@pytest.mark.parametrize(\"x\", [{first}])\ndef test_x(x):\n    assert x > 0\n"
+                );
+                if !second.is_empty() {
+                    src.push_str(&format!(
+                        "\n@pytest.mark.parametrize(\"x\", [{second}])\ndef test_other(x):\n    assert x > 0\n"
+                    ));
+                }
+                src
+            };
+            let change = |head: &str| {
+                helper_change(&[("tests/test_a.py", &file("1, 2, 3, 4", ""), head)], "")
+            };
+            let reduced = vec!["assertion-reduction/test-cases-reduced".to_string()];
+            Ok(change(&file("1", "7, 8, 9"))? == reduced
+                && change(&file("1", "2, 3, 9"))? == reduced
+                && change(&file("1", "MORE"))? == reduced
+                // Control: the three cases, as written, in the other test.
+                && change(&file("1", "4,3 , 2"))?.is_empty())
+        },
+    ),
+    (
+        "assertion-reduction: a case list holding a spread or splat is not a literal list; a one-column test.each template is counted; Go and Rust case names are whole names",
+        || {
+            let py = |values: &str| {
+                first_test_cases(
+                    "tests/test_a.py",
+                    &format!("import pytest\n\n@pytest.mark.parametrize(\"x\", {values})\ndef test_x(x):\n    assert x\n"),
+                )
+            };
+            let js = |each: &str| {
+                first_test_cases(
+                    "tests/a.test.js",
+                    &format!("test.each{each}('x', (x) => {{ expect(x).toBe(1); }});\n"),
+                )
+            };
+            let go = |ty: &str| {
+                first_test_cases(
+                    "a_test.go",
+                    &format!("package p\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) {{\n\trows := {ty}{{{{1}}, {{2}}, {{3}}}}\n\tif len(rows) == 0 {{\n\t\tt.Fatal(\"empty\")\n\t}}\n}}\n"),
+                )
+            };
+            let rs = |attrs: &str, param: &str| {
+                first_test_cases(
+                    "tests/a.rs",
+                    &format!("#[rstest]\n{attrs}fn t({param} a: i32) {{\n    assert!(a > 0);\n}}\n"),
+                )
+            };
+            Ok(py("[1, *MORE]")? == (None, true)
+                && py("[1, 2, 3]")? == (Some(3), false)
+                && py("[(1, *MORE), (2,)]")? == (Some(2), false)
+                && js("([[1], ...more])")? == (None, true)
+                && js("([[1], [...more]])")? == (Some(2), false)
+                && js("`\n  n\n  ${1}\n  ${2}\n  ${3}\n`")? == (Some(3), false)
+                && js("`\n  a | b\n  ${1} | ${2}\n`")? == (Some(1), false)
+                && go("[]testCase")? == (Some(3), false)
+                && go("[]Showcase")? == (None, false)
+                && go("[]Contestant")? == (None, false)
+                && rs("#[case(1)]\n#[rstest::case::two(2)]\n", "#[case]")? == (Some(2), false)
+                && rs("#[case_x(1)]\n#[case_x(2)]\n", "")? == (None, false)
+                && rs("", "#[values(1, 2)]")? == (Some(2), false)
+                && rs("", "#[values_x(1, 2)]")? == (None, false))
+        },
+    ),
+    (
+        "assertion-reduction: a function in proptest! is a test only with #[test]; a quickcheck result that is always true is a tautology in the macro and the attribute form",
+        || {
+            use crate::ast::LanguagePack;
+            let vocab = AssertVocabulary::default();
+            let facts = |src: &str| crate::ast::rust::RustPack.extract("tests/prop.rs", src, &vocab);
+            let proptest = facts("proptest! {\n    #[test]\n    fn runs(a in 0..10i32) {\n        prop_assert!(a < 10);\n    }\n\n    fn not_run(a in 0..10i32) {\n        prop_assert!(a < 10);\n    }\n}\n")?;
+            let names: Vec<&str> = proptest.tests.iter().map(|t| t.name.as_str()).collect();
+            let forms = |ty: &str, body: &str| {
+                [
+                    format!("quickcheck! {{\n    fn holds(x: u32) -> {ty} {{\n{body}\n    }}\n}}\n"),
+                    format!("#[quickcheck]\nfn holds(x: u32) -> {ty} {{\n{body}\n}}\n"),
+                ]
+            };
+            let mut always_true = true;
+            for (ty, body) in [
+                ("bool", "true"),
+                ("bool", "x == x"),
+                ("bool", "let ok = true;\nok"),
+                ("bool", "if x > 0 { true } else { true }"),
+                ("bool", "match x { 0 => true, _ => true }"),
+                ("TestResult", "TestResult::passed()"),
+            ] {
+                for src in forms(ty, body) {
+                    let f = facts(&src)?;
+                    always_true &= f.tests[0].total_asserts == 1 && f.tests[0].tautologies == 1;
+                }
+            }
+            let mut checks = true;
+            for (ty, body) in [
+                ("bool", "double(x) == x + x"),
+                ("bool", "if x > 0 { double(x) > x } else { true }"),
+                ("bool", "let ok = double(x) > x;\nok"),
+                ("TestResult", "TestResult::from_bool(double(x) > x)"),
+            ] {
+                for src in forms(ty, body) {
+                    let f = facts(&src)?;
+                    checks &= f.tests[0].total_asserts == 1 && f.tests[0].tautologies == 0;
+                }
+            }
+            Ok(names == ["runs"] && always_true && checks)
+        },
+    ),
+    (
+        "assertion-reduction: a bound, an expected value and a caught assertion are read in a proptest! body and in the closure form, on the lines of the file",
+        || {
+            let function = |body: &str| {
+                format!("proptest! {{\n    #[test]\n    fn p(a in 0..10i32) {{\n{body}    }}\n}}\n")
+            };
+            let closure = |body: &str| {
+                format!("#[test]\nfn p() {{\n    proptest!(|(a in 0..10i32)| {{\n{body}    }});\n}}\n")
+            };
+            let base = "        prop_assert!(a < 10);\n        prop_assert_eq!(digits(a), 1);\n";
+            let mut ok = true;
+            for form in [&function as &dyn Fn(&str) -> String, &closure] {
+                let change = |head: &str| {
+                    helper_change(&[("tests/prop.rs", &form(base), &form(head))], "")
+                };
+                ok &= change("        prop_assert!(a < 1000);\n        prop_assert_eq!(digits(a), 1);\n")?
+                    == ["assertion-reduction/assertion-bound-loosened"];
+                ok &= change("        prop_assert!(a < 10);\n        prop_assert_eq!(digits(a), 2);\n")?
+                    == ["assertion-reduction/expected-value-changed"];
+                ok &= change("        prop_assert!(a < 10);\n")?
+                    == ["assertion-reduction/assertions-reduced"];
+                ok &= change("        let _ = std::panic::catch_unwind(|| {\n            assert!(a < 10);\n        });\n        prop_assert_eq!(digits(a), 1);\n")?
+                    .contains(&"assertion-reduction/assertion-failure-caught".to_string());
+                // Control: a statement added above, every check kept.
+                ok &= change("        let _b = a;\n        prop_assert!(a < 10);\n        prop_assert_eq!(digits(a), 1);\n")?
+                    .is_empty();
+            }
+            use crate::ast::LanguagePack;
+            let facts = crate::ast::rust::RustPack.extract(
+                "tests/prop.rs",
+                &closure(base),
+                &AssertVocabulary::default(),
+            )?;
+            let lines: Vec<usize> = facts.tests[0].bounds.iter().map(|b| b.line).collect();
+            Ok(ok && lines == [4])
+        },
+    ),
+    (
         "assertion-reduction: shared assertion helper weakened in test path reports finding, waived by allow-assertion-drop",
         || {
             use crate::ast::TestHelperFacts;
@@ -5798,7 +5946,7 @@ proptest! {
 }
 quickcheck! {
     fn prop_qc(x: u32) -> bool {
-        x == x
+        decode(encode(x)) == x
     }
     fn prop_tautology(_x: u32) -> bool {
         true

@@ -1296,6 +1296,10 @@ pub fn evaluate_assertion_reduction(
         std::collections::HashMap::new();
     let mut file_head_cases: std::collections::HashMap<&str, usize> =
         std::collections::HashMap::new();
+    // The cases that arrived on a test of each file: what a case dropped from another
+    // test of that file can have moved to.
+    let mut file_arrived_rows: std::collections::HashMap<&str, Vec<&str>> =
+        std::collections::HashMap::new();
 
     for p in pairs.iter().filter(|p| !exempt.matches(p.path)) {
         if let Some(c) = p.base.cases {
@@ -1304,10 +1308,20 @@ pub fn evaluate_assertion_reduction(
         if let Some(c) = p.head.cases {
             *file_head_cases.entry(p.path).or_default() += c;
         }
+        file_arrived_rows
+            .entry(p.path)
+            .or_default()
+            .extend(arrived_case_rows(p.base, p.head));
     }
     for a in added.iter().filter(|a| !exempt.matches(a.path)) {
         if let Some(c) = a.test.cases {
             *file_head_cases.entry(a.path).or_default() += c;
+        }
+        if let Some(rows) = &a.test.case_rows {
+            file_arrived_rows
+                .entry(a.path)
+                .or_default()
+                .extend(rows.iter().map(String::as_str));
         }
     }
 
@@ -1336,10 +1350,26 @@ pub fn evaluate_assertion_reduction(
         let mut cases_drop = false;
         let mut cases_drop_info = None;
         if let Some(change) = case_change {
-            let base_file_total = file_base_cases.get(p.path).copied().unwrap_or(0);
-            let head_file_total = file_head_cases.get(p.path).copied().unwrap_or(0);
-            if head_file_total >= base_file_total {
-                let moved = match change {
+            // A dropped case is excused as moved when the same case, by its content,
+            // arrived on another test of the file. The file holding as many cases as
+            // before says nothing: three cases dropped beside an unrelated new test of
+            // three are three cases dropped.
+            let dropped = match change {
+                CaseDrop::Fewer(b_cases, h_cases) => b_cases - h_cases,
+                CaseDrop::NotLiteral(b_cases) | CaseDrop::NotParametrized(b_cases) => b_cases,
+            };
+            let left = left_case_rows(b, h, change);
+            let moved = match &left {
+                Some(left) => {
+                    let arrived = file_arrived_rows.entry(p.path).or_default();
+                    take_moved_rows(left, arrived, dropped)
+                }
+                None => 0,
+            };
+            let file_keeps_its_total = file_head_cases.get(p.path).copied().unwrap_or(0)
+                >= file_base_cases.get(p.path).copied().unwrap_or(0);
+            if moved >= dropped {
+                let what = match change {
                     CaseDrop::Fewer(b_cases, h_cases) => {
                         format!("test cases {b_cases} -> {h_cases}")
                     }
@@ -1348,10 +1378,25 @@ pub fn evaluate_assertion_reduction(
                     }
                 };
                 out.notes.push(format!(
-                    "`{}` in `{}`: {} read as preserved across tests in same file ({} -> {} total cases)",
-                    h.name, p.path, moved, base_file_total, head_file_total
+                    "`{}` in `{}`: {} read as preserved across tests in same file ({} of {} dropped case(s) found moved to another test of the file, 0 not found)",
+                    h.name, p.path, what, moved, dropped
                 ));
             } else {
+                if left.is_none() && file_keeps_its_total {
+                    out.notes.push(format!(
+                        "`{}` in `{}`: the file holds as many cases as before, but the cases dropped from this test cannot be compared by content (its case list is not literal rows on the side that had them, or is no longer a literal list), so none is read as moved",
+                        h.name, p.path
+                    ));
+                } else if moved > 0 || file_keeps_its_total {
+                    out.notes.push(format!(
+                        "`{}` in `{}`: {} of {} dropped case(s) found moved to another test of the file, {} not found",
+                        h.name,
+                        p.path,
+                        moved,
+                        dropped,
+                        dropped - moved
+                    ));
+                }
                 cases_drop = true;
                 cases_drop_info = Some(change);
             }
@@ -1792,6 +1837,78 @@ pub fn evaluate_assertion_reduction(
         );
     }
     Ok(out)
+}
+
+/// The cases that arrived on a paired test: on its head side and not on its base side,
+/// by content, each as many times as it arrived. A side whose cases are not literal rows
+/// cannot be compared, so such a test supplies none.
+fn arrived_case_rows<'a>(base: &'a TestFn, head: &'a TestFn) -> Vec<&'a str> {
+    let Some(head_rows) = &head.case_rows else {
+        return Vec::new();
+    };
+    let mut before: Vec<&str> = match &base.case_rows {
+        Some(rows) => rows.iter().map(String::as_str).collect(),
+        // No case source on the base side: every head case arrived.
+        None if base.cases.is_none() && !base.non_literal_cases => Vec::new(),
+        None => return Vec::new(),
+    };
+    let mut arrived = Vec::new();
+    for row in head_rows {
+        match before.iter().position(|b| *b == row) {
+            Some(i) => {
+                before.swap_remove(i);
+            }
+            None => arrived.push(row.as_str()),
+        }
+    }
+    arrived
+}
+
+/// The cases that left a paired test whose literal count went down: on its base side and
+/// not on its head side, by content. `None` when they cannot be compared: a side whose
+/// cases are not literal rows, or a head whose case source is no longer a literal list.
+fn left_case_rows<'a>(
+    base: &'a TestFn,
+    head: &'a TestFn,
+    change: CaseDrop,
+) -> Option<Vec<&'a str>> {
+    let base_rows = base.case_rows.as_ref()?;
+    let mut still_there: Vec<&str> = match change {
+        CaseDrop::NotLiteral(_) => return None,
+        CaseDrop::NotParametrized(_) => Vec::new(),
+        CaseDrop::Fewer(..) => head
+            .case_rows
+            .as_ref()?
+            .iter()
+            .map(String::as_str)
+            .collect(),
+    };
+    let mut left = Vec::new();
+    for row in base_rows {
+        match still_there.iter().position(|h| *h == row) {
+            Some(i) => {
+                still_there.swap_remove(i);
+            }
+            None => left.push(row.as_str()),
+        }
+    }
+    Some(left)
+}
+
+/// Takes out of `arrived` the cases of `left` found there, one arrival for one case, up
+/// to `dropped` of them, and returns how many were found.
+fn take_moved_rows(left: &[&str], arrived: &mut Vec<&str>, dropped: usize) -> usize {
+    let mut moved = 0;
+    for row in left {
+        if moved == dropped {
+            break;
+        }
+        if let Some(i) = arrived.iter().position(|a| a == row) {
+            arrived.swap_remove(i);
+            moved += 1;
+        }
+    }
+    moved
 }
 
 /// How the literal case count of a paired parametrized test went down.
@@ -3636,6 +3753,13 @@ mod tests {
             name: "test_param_1".to_string(),
             line: 10,
             cases: Some(5),
+            case_rows: Some(vec![
+                "1".to_string(),
+                "2".to_string(),
+                "3".to_string(),
+                "4".to_string(),
+                "5".to_string(),
+            ]),
             total_asserts: 1,
             strong_asserts: 1,
             ..Default::default()
@@ -3644,6 +3768,7 @@ mod tests {
             name: "test_param_1".to_string(),
             line: 10,
             cases: Some(2),
+            case_rows: Some(vec!["1".to_string(), "2".to_string()]),
             total_asserts: 1,
             strong_asserts: 1,
             ..Default::default()
@@ -3652,6 +3777,7 @@ mod tests {
             name: "test_param_2".to_string(),
             line: 30,
             cases: Some(2),
+            case_rows: Some(vec!["6".to_string(), "7".to_string()]),
             total_asserts: 1,
             strong_asserts: 1,
             ..Default::default()
@@ -3660,6 +3786,13 @@ mod tests {
             name: "test_param_2".to_string(),
             line: 30,
             cases: Some(5),
+            case_rows: Some(vec![
+                "6".to_string(),
+                "7".to_string(),
+                "3".to_string(),
+                "4".to_string(),
+                "5".to_string(),
+            ]),
             total_asserts: 1,
             strong_asserts: 1,
             ..Default::default()
@@ -3683,7 +3816,7 @@ mod tests {
         let out = evaluate_assertion_reduction(&pairs, &[], &[], &settings, &[], false).unwrap();
         assert_eq!(out.violations.len(), 0);
         assert!(out.notes.iter().any(|n| n.contains(
-            "test cases 5 -> 2 read as preserved across tests in same file (7 -> 7 total cases)"
+            "test cases 5 -> 2 read as preserved across tests in same file (3 of 3 dropped case(s) found moved to another test of the file, 0 not found)"
         )));
     }
 
@@ -3811,9 +3944,16 @@ mod tests {
     /// reappear on another test of the file are a note.
     #[test]
     fn an_uncounted_head_whose_cases_reappear_in_the_file_is_a_note() {
-        let b = case_test("test_param", Some(3), false);
+        let rows = Some(vec!["1".to_string(), "2".to_string(), "3".to_string()]);
+        let b = TestFn {
+            case_rows: rows.clone(),
+            ..case_test("test_param", Some(3), false)
+        };
         let h = case_test("test_param", None, false);
-        let moved = case_test("test_param_table", Some(3), false);
+        let moved = TestFn {
+            case_rows: rows,
+            ..case_test("test_param_table", Some(3), false)
+        };
         let added = [Located {
             path: "tests/test_foo.py",
             file_survives: true,
@@ -3823,7 +3963,159 @@ mod tests {
         assert!(out.violations.is_empty());
         assert!(
             out.notes.iter().any(|n| n.contains(
-                "3 literal test cases no longer counted on it read as preserved across tests in same file (3 -> 3 total cases)"
+                "3 literal test cases no longer counted on it read as preserved across tests in same file (3 of 3 dropped case(s) found moved to another test of the file, 0 not found)"
+            )),
+            "{:?}",
+            out.notes
+        );
+    }
+
+    /// A paired test with one assertion on each side and these literal case rows.
+    fn rows_test(name: &str, rows: &[&str]) -> TestFn {
+        TestFn {
+            case_rows: Some(rows.iter().map(|r| r.to_string()).collect()),
+            ..case_test(name, Some(rows.len()), false)
+        }
+    }
+
+    fn rows_outcome(pairs: &[(&TestFn, &TestFn)], added: &[&TestFn]) -> GateOutcome {
+        let pairs: Vec<TestPair> = pairs
+            .iter()
+            .map(|(base, head)| TestPair {
+                path: "tests/test_foo.py",
+                base,
+                head,
+                forced: false,
+            })
+            .collect();
+        let added: Vec<Located> = added
+            .iter()
+            .map(|test| Located {
+                path: "tests/test_foo.py",
+                file_survives: true,
+                test,
+            })
+            .collect();
+        let settings = crate::config::AssertionGate::default();
+        evaluate_assertion_reduction(&pairs, &added, &[], &settings, &[], false).unwrap()
+    }
+
+    #[test]
+    fn cases_dropped_beside_unrelated_new_cases_are_a_reduction() {
+        let b = rows_test("test_param", &["1", "2", "3", "4"]);
+        let h = rows_test("test_param", &["1"]);
+        let unrelated = rows_test("test_other", &["7", "8", "9"]);
+        let out = rows_outcome(&[(&b, &h)], &[&unrelated]);
+        assert_eq!(out.violations.len(), 1, "{:?}", out.notes);
+        assert_eq!(
+            out.violations[0].message,
+            "Test `test_param`: test cases in parametrized / table-driven test dropped from 4 to 1."
+        );
+        assert_eq!(
+            out.notes,
+            ["`test_param` in `tests/test_foo.py`: 0 of 3 dropped case(s) found moved to another test of the file, 3 not found"]
+        );
+    }
+
+    #[test]
+    fn cases_that_arrive_on_another_test_of_the_file_are_moved() {
+        let b = rows_test("test_param", &["1", "2", "3", "4"]);
+        let h = rows_test("test_param", &["1"]);
+        let moved = rows_test("test_other", &["4", "3", "2"]);
+        let out = rows_outcome(&[(&b, &h)], &[&moved]);
+        assert!(out.violations.is_empty(), "{:?}", out.violations);
+        assert_eq!(
+            out.notes,
+            ["`test_param` in `tests/test_foo.py`: test cases 4 -> 1 read as preserved across tests in same file (3 of 3 dropped case(s) found moved to another test of the file, 0 not found)"]
+        );
+
+        // Two of the three arrive.
+        let partly = rows_test("test_other", &["2", "3", "9"]);
+        let out = rows_outcome(&[(&b, &h)], &[&partly]);
+        assert_eq!(out.violations.len(), 1);
+        assert_eq!(
+            out.notes,
+            ["`test_param` in `tests/test_foo.py`: 2 of 3 dropped case(s) found moved to another test of the file, 1 not found"]
+        );
+    }
+
+    /// A case another test already ran on the base side did not arrive there, and one
+    /// arrival stands for one dropped case.
+    #[test]
+    fn a_case_moves_only_to_where_it_was_not_before() {
+        let b = rows_test("test_param", &["1", "2", "3"]);
+        let h = rows_test("test_param", &["1"]);
+        let other_b = rows_test("test_other", &["2", "3"]);
+        let other_h = rows_test("test_other", &["2", "3", "7", "8"]);
+        let out = rows_outcome(&[(&b, &h), (&other_b, &other_h)], &[]);
+        assert_eq!(out.violations.len(), 1, "{:?}", out.notes);
+
+        // Control: the other test did not have them.
+        let other_b = rows_test("test_other", &["7", "8"]);
+        let out = rows_outcome(&[(&b, &h), (&other_b, &other_h)], &[]);
+        assert!(out.violations.is_empty(), "{:?}", out.violations);
+
+        let b = rows_test("test_param", &["1", "1", "1"]);
+        let h = rows_test("test_param", &["1"]);
+        let once = rows_test("test_other", &["1"]);
+        let out = rows_outcome(&[(&b, &h)], &[&once]);
+        assert_eq!(out.violations.len(), 1, "{:?}", out.notes);
+        let twice = rows_test("test_other", &["1", "1"]);
+        let out = rows_outcome(&[(&b, &h)], &[&twice]);
+        assert!(out.violations.is_empty(), "{:?}", out.violations);
+    }
+
+    /// A row edited in place is not a dropped case: only as many cases as the count
+    /// went down by must be found.
+    #[test]
+    fn a_row_edited_beside_moved_rows_is_not_a_dropped_case() {
+        let b = rows_test("test_param", &["1", "2", "3"]);
+        let h = rows_test("test_param", &["1 + 0"]);
+        let moved = rows_test("test_other", &["2", "3"]);
+        let out = rows_outcome(&[(&b, &h)], &[&moved]);
+        assert!(out.violations.is_empty(), "{:?}", out.violations);
+    }
+
+    /// Cases whose content is not held cannot be compared: a count alone excuses nothing,
+    /// on the side that drops or on the side that would supply.
+    #[test]
+    fn cases_without_content_neither_supply_nor_receive_the_excusal() {
+        let b = rows_test("test_param", &["1", "2", "3"]);
+        let h = rows_test("test_param", &["1"]);
+        let counted_only = case_test("test_other", Some(2), false);
+        let out = rows_outcome(&[(&b, &h)], &[&counted_only]);
+        assert_eq!(out.violations.len(), 1);
+
+        let b = case_test("test_param", Some(3), false);
+        let h = case_test("test_param", Some(1), false);
+        let supplies = rows_test("test_other", &["2", "3"]);
+        let out = rows_outcome(&[(&b, &h)], &[&supplies]);
+        assert_eq!(out.violations.len(), 1);
+        assert!(
+            out.notes
+                .iter()
+                .any(|n| n.contains("cannot be compared by content")),
+            "{:?}",
+            out.notes
+        );
+
+        // A head that is no longer a literal list is not excused by rows elsewhere.
+        let b = rows_test("test_param", &["1", "2", "3"]);
+        let h = case_test("test_param", None, true);
+        let all = rows_test("test_other", &["1", "2", "3"]);
+        let out = rows_outcome(&[(&b, &h)], &[&all]);
+        assert_eq!(out.violations.len(), 1);
+        assert!(out.violations[0]
+            .message
+            .contains("no longer a literal list"));
+
+        // Control: a head with no case source at all, whose rows arrived elsewhere.
+        let h = case_test("test_param", None, false);
+        let out = rows_outcome(&[(&b, &h)], &[&all]);
+        assert!(out.violations.is_empty(), "{:?}", out.violations);
+        assert!(
+            out.notes.iter().any(|n| n.contains(
+                "3 literal test cases no longer counted on it read as preserved across tests in same file (3 of 3 dropped case(s) found moved to another test of the file, 0 not found)"
             )),
             "{:?}",
             out.notes

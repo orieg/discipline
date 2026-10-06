@@ -236,7 +236,7 @@ struct JsExtractor<'a> {
     test_calls: Vec<Vec<String>>,
     /// The case counts of the enclosing suites: a `describe.each` table runs every test
     /// of its suite once per row.
-    suite_cases: Vec<(Option<usize>, bool)>,
+    suite_cases: Vec<super::test_cases::CaseList>,
     /// Conditional skips of the enclosing suites (`describe.skipIf(..)`), outermost first:
     /// the condition as reported and what a CI variable decides about it.
     suite_skips: Vec<Vec<(String, super::ci_condition::CiVerdict)>>,
@@ -370,10 +370,14 @@ impl<'a> JsExtractor<'a> {
 
                     let line = node.start_position().row + 1;
                     let end_line = node.end_position().row + 1;
-                    let (cases, non_literal_cases) = self.suite_cases.iter().fold(
-                        super::test_cases::extract_javascript_cases(func_node, self.src),
-                        |own, suite| super::test_cases::multiply_cases(*suite, own),
-                    );
+                    let (cases, non_literal_cases, case_rows) = self
+                        .suite_cases
+                        .iter()
+                        .fold(
+                            super::test_cases::extract_javascript_cases(func_node, self.src),
+                            |own, suite| super::test_cases::multiply_cases(suite.clone(), own),
+                        )
+                        .into_parts();
 
                     let mut test_fn = TestFn {
                         name: full_name,
@@ -386,6 +390,7 @@ impl<'a> JsExtractor<'a> {
                         should_panic: None,
                         cases,
                         non_literal_cases,
+                        case_rows,
                         ..Default::default()
                     };
 

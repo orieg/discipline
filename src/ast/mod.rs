@@ -286,6 +286,11 @@ pub struct TestFn {
     /// Whether the test has dynamic / non-literal test cases (fixture, generator, or function call)
     /// that cannot be statically counted.
     pub non_literal_cases: bool,
+    /// The literal cases as text, `cases` of them (`test_cases::CaseList::rows`): what
+    /// tells a case moved to another test of the file from one dropped beside an
+    /// unrelated new one. `None` when the cases are not literal rows whose content can
+    /// be compared.
+    pub case_rows: Option<Vec<String>>,
     /// Functions called directly in the body of the test.
     pub direct_calls: Vec<String>,
     /// Byte ranges of the assertions counted in `tautologies`, where the pack reads them
@@ -1246,6 +1251,7 @@ impl Default for ParsedFileFacts {
                 expected_exceptions: Vec::new(),
                 cases: None,
                 non_literal_cases: false,
+                case_rows: None,
                 direct_calls: Vec::new(),
                 tautology_spans: Vec::new(),
                 method_checks: 0,
@@ -1286,6 +1292,7 @@ impl ParsedFileFacts {
             expected_exceptions: Vec::new(),
             cases: None,
             non_literal_cases: false,
+            case_rows: None,
             direct_calls: Vec::new(),
             tautology_spans: Vec::new(),
             method_checks: 0,
