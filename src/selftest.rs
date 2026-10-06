@@ -1392,6 +1392,122 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "assertion-reduction: an expected failure widened in a rewritten block, or one of several, is reported; a reorder is not, and a dropped one is reported as dropped",
+        || {
+            use crate::ast::default_registry;
+            use crate::ast::expected_exceptions::widened;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let pack = reg
+                .find_pack("tests/test_t.py")
+                .ok_or_else(|| anyhow::anyhow!("no python pack"))?;
+            let at = |body: &str| -> Result<_> {
+                let src = format!("def test_t():\n{body}");
+                Ok(pack.extract("tests/test_t.py", &src, &v)?.tests[0]
+                    .expected_exceptions
+                    .clone())
+            };
+            let narrow = "    with pytest.raises(ValueError):\n        f(-1)\n";
+            let other = "    with pytest.raises(Exception):\n        g()\n";
+            let base = at(&format!("{narrow}{other}"))?;
+            let reordered = at(&format!("{other}{narrow}"))?;
+            let rewritten_same = at(&format!("{other}    with pytest.raises(ValueError):\n        f(-2)\n"))?;
+            let rewritten_wide = at(&format!("{other}    with pytest.raises(Exception):\n        f(-2)\n"))?;
+            let gone = at(&format!("{other}    assert f(1) == 1\n"))?;
+            let dropped = widened(&base, &gone);
+            Ok(widened(&base, &reordered).is_empty()
+                && widened(&base, &rewritten_same).is_empty()
+                && widened(&base, &rewritten_wide).len() == 1
+                && dropped.len() == 1
+                && dropped[0].dropped)
+        },
+    ),
+    (
+        "assertion-reduction: an expected exception moved to a parent class of the language's standard hierarchy is reported; a subclass, a sibling and an unlisted class are not",
+        || {
+            use crate::ast::default_registry;
+            use crate::ast::expected_exceptions::widened;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let py_pack = reg
+                .find_pack("tests/test_t.py")
+                .ok_or_else(|| anyhow::anyhow!("no python pack"))?;
+            let java_pack = reg
+                .find_pack("src/test/java/T.java")
+                .ok_or_else(|| anyhow::anyhow!("no java pack"))?;
+            let py = |class: &str| -> Result<_> {
+                let src = format!("def test_t():\n    with pytest.raises({class}):\n        f()\n");
+                Ok(py_pack.extract("tests/test_t.py", &src, &v)?.tests[0]
+                    .expected_exceptions
+                    .clone())
+            };
+            let java = |class: &str| -> Result<_> {
+                let src = format!(
+                    "class T {{\n    @Test\n    void t() {{\n        assertThrows({class}.class, () -> f());\n    }}\n}}\n"
+                );
+                Ok(java_pack.extract("src/test/java/T.java", &src, &v)?.tests[0]
+                    .expected_exceptions
+                    .clone())
+            };
+            Ok(widened(&py("KeyError")?, &py("LookupError")?).len() == 1
+                && widened(&py("LookupError")?, &py("KeyError")?).is_empty()
+                && widened(&py("KeyError")?, &py("IndexError")?).is_empty()
+                && widened(&py("OrderError")?, &py("PaymentError")?).is_empty()
+                && widened(&py("ValueError")?, &py("(ValueError, TypeError)")?).len() == 1
+                && widened(&py("(ValueError, TypeError)")?, &py("(TypeError, ValueError)")?).is_empty()
+                && widened(&java("FileNotFoundException")?, &java("IOException")?).len() == 1
+                && widened(&java("IOException")?, &java("java.io.IOException")?).is_empty())
+        },
+    ),
+    (
+        "assertion-reduction: a matcher that accepts every message is read as none, and a negated expectation losing its type is not a widening",
+        || {
+            use crate::ast::default_registry;
+            use crate::ast::expected_exceptions::widened;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let rust_pack = reg
+                .find_pack("tests/t.rs")
+                .ok_or_else(|| anyhow::anyhow!("no rust pack"))?;
+            let js_pack = reg
+                .find_pack("tests/t.test.js")
+                .ok_or_else(|| anyhow::anyhow!("no javascript pack"))?;
+            let rs = |attr: &str| -> Result<_> {
+                let src = format!("#[test]\n{attr}\nfn t() {{ f(); }}");
+                Ok(rust_pack.extract("tests/t.rs", &src, &v)?.tests[0]
+                    .expected_exceptions
+                    .clone())
+            };
+            let js = |call: &str| -> Result<_> {
+                let src = format!("test(\"t\", () => {{\n  {call}\n}});\n");
+                Ok(js_pack.extract("tests/t.test.js", &src, &v)?.tests[0]
+                    .expected_exceptions
+                    .clone())
+            };
+            let named = rs("#[should_panic(expected = \"overflow\")]")?;
+            Ok(widened(&named, &rs("#[should_panic(expected = \"\")]")?).len() == 1
+                && widened(&rs("#[should_panic = \"overflow\"]")?, &rs("#[should_panic]")?).len() == 1
+                && widened(&rs("#[should_panic = \"overflow\"]")?, &named).is_empty()
+                && widened(
+                    &js("expect(() => f()).toThrow(/negative/);")?,
+                    &js("expect(() => f()).toThrow(/.*/);")?,
+                )
+                .len()
+                    == 1
+                && widened(
+                    &js("expect(() => f()).not.toThrow(TypeError);")?,
+                    &js("expect(() => f()).not.toThrow();")?,
+                )
+                .is_empty()
+                && widened(
+                    &js("expect(() => f()).not.toThrow();")?,
+                    &js("expect(() => f()).not.toThrow(TypeError);")?,
+                )
+                .len()
+                    == 1)
+        },
+    ),
+    (
         "error-swallowing: a Python handler for SystemExit or KeyboardInterrupt alone is not a site",
         || {
             use crate::ast::default_registry;

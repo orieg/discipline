@@ -1183,10 +1183,14 @@ pub fn evaluate_assertion_reduction(
         // The same assertion expecting a different value: the count and strength hold.
         let changed = crate::ast::expectations::changed(&b.expectations, &h.expectations);
         // The same assertion with widened expected exception or dropped matcher.
-        let widened = crate::ast::expected_exceptions::widened(
+        let mut widened = crate::ast::expected_exceptions::widened(
             &b.expected_exceptions,
             &h.expected_exceptions,
         );
+        // An expectation that is gone along with a lower count is the reduction below.
+        if total_drop || strong_drop {
+            widened.retain(|w| !w.dropped);
+        }
         let dropped = total_drop || strong_drop || fatal_drop || mock_growth || cases_drop;
         if !dropped
             && loosened.is_empty()
@@ -1346,11 +1350,19 @@ pub fn evaluate_assertion_reduction(
                 },
                 &crate::findings::EXPECTED_EXCEPTION_WIDENED,
                 Some(p.path),
-                Some(w.line),
-                format!(
-                    "{test_label}: the expected failure on line {} was widened ({}); it now accepts more failures.",
-                    w.line, w.detail
-                ),
+                Some(if w.dropped { h.line } else { w.line }),
+                if w.dropped {
+                    // The base expectation has no line at head: the test is the location.
+                    format!(
+                        "{test_label}: {}; no expectation at head stands for it, so the test passes without that failure.",
+                        w.detail
+                    )
+                } else {
+                    format!(
+                        "{test_label}: the expected failure on line {} was widened ({}); it now accepts more failures.",
+                        w.line, w.detail
+                    )
+                },
                 &format!(
                     "Restore the expected failure or matcher, or justify the change on its own line in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
                     directive_name

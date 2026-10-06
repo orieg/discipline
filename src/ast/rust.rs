@@ -924,7 +924,8 @@ impl<'a> Extractor<'a> {
                     end_line,
                     ignored,
                     conditional_ignore,
-                    should_panic,
+                    should_panic: should_panic.clone(),
+                    expected_exceptions: should_panic.into_iter().collect(),
                     ..Default::default()
                 };
 
