@@ -92,6 +92,81 @@ const CASES: &[Case] = &[
                 && good_py.tests[0].caught_assertions.is_empty())
         },
     ),
+    (
+        "ast: a handler swallows an assertion failure only when it catches the failure type and nothing looks at the outcome",
+        || {
+            let v = AssertVocabulary::default();
+            let reg = crate::ast::default_registry();
+            let caught = |path: &str, src: &str| -> Result<usize> {
+                let pack = reg
+                    .find_pack(path)
+                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
+                Ok(pack
+                    .extract(path, src, &v)?
+                    .tests
+                    .iter()
+                    .map(|t| t.caught_assertions.len())
+                    .sum())
+            };
+            let java = |catch: &str| {
+                format!("class ATest {{ @Test void t() {{ try {{ assertEquals(4, add(2, 2)); }} {catch} }} }}")
+            };
+            let kotlin = |body: &str| format!("class ATest {{\n @Test\n fun t() {{\n{body}\n }}\n}}\n");
+            let csharp = |body: &str| format!("public class ATests {{ [Fact] public void T() {{ {body} }} }}");
+            let rust = |after: &str| {
+                format!("#[test] fn t() {{ let r = std::panic::catch_unwind(|| assert_eq!(1, 2)); {after} }}")
+            };
+            Ok(caught("ATest.java", &java("catch (AssertionError e) { }"))? == 1
+                && caught("ATest.java", &java("catch (Exception e) { }"))? == 0
+                && caught("ATest.java", &java("catch (java.io.IOException myError) { }"))? == 0
+                && caught("ATest.java", &java("catch (CheckFailure e) { }"))? == 1
+                && caught(
+                    "ATest.java",
+                    "class ATest { @Test void t() { try (AutoCloseable r = open()) { assertEquals(4, add(2, 2)); } catch (AssertionError e) { } } }",
+                )? == 1
+                && caught(
+                    "ATest.kt",
+                    &kotlin("  try {\n   assertEquals(4, add(2, 2))\n  } catch (e: AssertionError) {\n  }"),
+                )? == 1
+                && caught(
+                    "ATest.kt",
+                    &kotlin("  try {\n   assertEquals(4, add(2, 2))\n  } catch (e: AssertionError) {\n   throw e\n  }"),
+                )? == 0
+                && caught("ATest.kt", &kotlin("  runCatching {\n   assertEquals(4, add(2, 2))\n  }"))? == 1
+                && caught(
+                    "ATest.kt",
+                    &kotlin("  runCatching {\n   assertEquals(4, add(2, 2))\n  }.getOrThrow()"),
+                )? == 0
+                && caught(
+                    "ATests.cs",
+                    &csharp("try { Assert.Equal(4, Add(2, 2)); } catch (IOException) { }"),
+                )? == 0
+                && caught(
+                    "ATests.cs",
+                    &csharp("try { Console.WriteLine(\"Assert.Equal done\"); } catch (Exception) { }"),
+                )? == 0
+                && caught("ATests.cs", &csharp("try { Assert.Equal(4, Add(2, 2)); } catch { }"))? == 1
+                && caught("t.rs", &rust("assert!(matches!(r, Err(_)));"))? == 0
+                && caught("t.rs", &rust("if let Err(e) = r { std::panic::resume_unwind(e); }"))? == 0
+                && caught("t.rs", &rust("/* r.is_err() is not looked at */"))? == 1
+                && caught(
+                    "test_x.py",
+                    "def test_x():\n    try:\n        assert f()\n    except (\n        ValueError,\n        AssertionError,\n    ):\n        pass\n",
+                )? == 1
+                && caught(
+                    "test_x.py",
+                    "def test_x():\n    with contextlib.suppress(AssertionError):\n        assert f()\n",
+                )? == 1
+                && caught(
+                    "a.test.js",
+                    "test('a', (done) => {\n  try {\n    expect(1).toBe(2);\n  } catch (e) {\n    done(e);\n  }\n});\n",
+                )? == 0
+                && caught(
+                    "a.test.js",
+                    "test('a', () => {\n  return load().then((v) => expect(v).toBe(4)).catch(() => {});\n});\n",
+                )? == 1)
+        },
+    ),
     ("ast: assert inside a comment is not an assertion", || {
         let f = analyze(
             "#[test] fn t() { // assert_eq!(1, 2);\n }",
