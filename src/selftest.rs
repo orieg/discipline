@@ -1577,8 +1577,14 @@ const CASES: &[Case] = &[
                 "github:repos/o/r/commits/ddd/pulls".into(),
                 serde_json::json!({"__status": 403, "__body": {}}),
             );
+            // A 422 that says something else is a failed lookup, like the 403 (#568).
+            api.responses.insert(
+                "github:repos/o/r/commits/eee/pulls".into(),
+                serde_json::json!({"__status": 422, "__body": {"message": "Validation Failed"}}),
+            );
             Ok(commit_origin(&api, &forge, "fff").ok() == Some(CommitOrigin::NotOnForge)
-                && commit_origin(&api, &forge, "ddd").is_err())
+                && commit_origin(&api, &forge, "ddd").is_err()
+                && commit_origin(&api, &forge, "eee").is_err())
         },
     ),
     (
