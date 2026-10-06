@@ -1127,14 +1127,16 @@ fn a_file_that_only_ends_like_a_test_utility_is_not_test_code() {
     assert!(failures.is_empty(), "\n{}\n", failures.join("\n"));
 }
 
-// ---- left as they are --------------------------------------------------------------------
+// ---- the same-file helper rule (#595) ------------------------------------------------------
 
-/// Pin of a documented rule this change leaves alone: a test that drops assertions while
-/// it starts calling a same-file helper that fails is read as a refactor whatever the
-/// helper holds, with a note. Three assertions replaced by a call to a same-file helper
-/// that holds one are not reported as a count drop.
+/// This was the pin of a documented rule: a test that dropped assertions while it started
+/// calling a same-file helper that fails was read as a refactor whatever the helper held.
+/// A same-file helper now stands for the checks it holds, as a helper in another file
+/// does: three assertions replaced by a call to a same-file helper that holds one are a
+/// drop to one. (A helper that checks in a loop still excuses the drop:
+/// `tests/test_helper_resolution.rs`.)
 #[test]
-fn a_new_call_to_a_same_file_helper_that_fails_still_excuses_the_whole_drop() {
+fn a_new_call_to_a_same_file_helper_that_holds_fewer_checks_is_reported() {
     let base = "def test_create():\n    r = create()\n    assert r.a == 1\n    assert r.b == 2\n    assert r.c == 3\n";
     let head = "def check(r):\n    assert r.a == 1\n\ndef test_create():\n    r = create()\n    check(r)\n";
     let run = change(
@@ -1142,40 +1144,57 @@ fn a_new_call_to_a_same_file_helper_that_fails_still_excuses_the_whole_drop() {
         &[("tests/test_api.py", head)],
         "",
     );
-    assert_eq!(reported(&run), Vec::new(), "{}", run.stdout);
+    assert_eq!(
+        reported(&run),
+        vec![(DECREASED.to_string(), "tests/test_api.py".to_string())],
+        "{}",
+        run.stdout
+    );
+    let message = run.violations("assertion-reduction")[0]["message"].to_string();
+    assert!(
+        message.contains("effective assertions dropped from 3 to 1"),
+        "{message}"
+    );
     let notes = run.outcome("assertion-reduction")["notes"].to_string();
     assert!(
-        notes.contains("read as moved into same-file helpers that fail"),
+        !notes.contains("read as moved into same-file helpers that fail"),
         "{notes}"
     );
 }
 
-/// Pin: a helper called through a type or an object (`Checks.check(r)`, `s.check(t, r)`,
-/// `checker.check(r)`) is not resolved in the packs that read only bare and `this` calls,
-/// so a lossless move behind such a call stays reported there. The packs that match a
-/// method call by its name read the move.
+/// A helper called through a type or an object (`Checks.check(r)`, `s.check(t, r)`,
+/// `checker.check(r)`), in the packs that read only bare and `this` calls themselves.
+fn qualified_move(l: &Lang) -> Option<(String, String)> {
+    Some(match l.name {
+        "go" => (
+            "\tSuite{}.check(t, r)\n".into(),
+            (l.file)(&(l.method.unwrap())("check", &l.checks(3))),
+        ),
+        "typescript" => (
+            "  checker.check(r);\n".into(),
+            (l.file)(&(l.method.unwrap())("check", &l.checks(3))),
+        ),
+        "java" => ("        Checks.check(r);\n".into(), l.helper_file(3)),
+        "csharp" => ("        Checks.check(r);\n".into(), l.helper_file(3)),
+        "kotlin" => (
+            "    Checks.check(r)\n".into(),
+            (l.file)(&(l.method.unwrap())("check", &l.checks(3))),
+        ),
+        "scala" => ("    Checks.check(r)\n".into(), l.helper_file(3)),
+        "ruby" => ("    Checks.check(r)\n".into(), l.helper_file(3)),
+        _ => return None,
+    })
+}
+
+/// This was the pin of a limit: a lossless move behind such a call was reported in those
+/// packs. The call now stands for the method of that name in a changed test-support
+/// file, so the move reports nothing.
 #[test]
-fn a_move_behind_a_qualified_call_is_reported_where_the_pack_does_not_resolve_it() {
+fn a_move_behind_a_qualified_call_into_a_changed_helper_file_reports_nothing() {
     let mut v = Verdicts::default();
     for l in langs() {
-        let (qualified, helper): (String, String) = match l.name {
-            "go" => (
-                "\tSuite{}.check(t, r)\n".into(),
-                (l.file)(&(l.method.unwrap())("check", &l.checks(3))),
-            ),
-            "typescript" => (
-                "  checker.check(r);\n".into(),
-                (l.file)(&(l.method.unwrap())("check", &l.checks(3))),
-            ),
-            "java" => ("        Checks.check(r);\n".into(), l.helper_file(3)),
-            "csharp" => ("        Checks.check(r);\n".into(), l.helper_file(3)),
-            "kotlin" => (
-                "    Checks.check(r)\n".into(),
-                (l.file)(&(l.method.unwrap())("check", &l.checks(3))),
-            ),
-            "scala" => ("    Checks.check(r)\n".into(), l.helper_file(3)),
-            "ruby" => ("    Checks.check(r)\n".into(), l.helper_file(3)),
-            _ => continue,
+        let Some((qualified, helper)) = qualified_move(&l) else {
+            continue;
         };
         let run = change(
             &[(l.helpers, &helper), (l.tests, &l.inline_test(3))],
@@ -1183,6 +1202,25 @@ fn a_move_behind_a_qualified_call_is_reported_where_the_pack_does_not_resolve_it
                 (l.helpers, &format!("{helper}{}", l.comment.trim_start())),
                 (l.tests, &(l.test)(&qualified)),
             ],
+            "",
+        );
+        v.clean(l.name, &run);
+    }
+    assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
+}
+
+/// The rows of that pin that still hold: the method is defined in a file the change does
+/// not touch, so no method of that name was read and the call stands for nothing.
+#[test]
+fn a_move_behind_a_qualified_call_into_a_file_outside_the_change_is_reported() {
+    let mut v = Verdicts::default();
+    for l in langs() {
+        let Some((qualified, helper)) = qualified_move(&l) else {
+            continue;
+        };
+        let run = change(
+            &[(l.helpers, &helper), (l.tests, &l.inline_test(3))],
+            &[(l.tests, &(l.test)(&qualified))],
             "",
         );
         v.reports(l.name, &run, DECREASED, l.tests);
