@@ -282,6 +282,8 @@ pub fn scan_superseded(
 }
 
 /// Sweep a JSON dataset for registered figures. Returns `(key path, message)` pairs.
+/// The gate calls [`scan_superseded_json_by_figure`]; this form is kept for the unit tests.
+#[cfg(test)]
 pub fn scan_superseded_json(
     value: &serde_json::Value,
     registry: &[SupersededFigure],
@@ -292,7 +294,7 @@ pub fn scan_superseded_json(
         .collect())
 }
 
-/// [`scan_superseded_json`] with the id of the figure each hit is about: `(key path,
+/// `scan_superseded_json` with the id of the figure each hit is about: `(key path,
 /// figure id, message)`. The key path and the figure id together name a hit, which has
 /// no line.
 pub fn scan_superseded_json_by_figure(
