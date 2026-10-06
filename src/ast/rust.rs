@@ -114,22 +114,29 @@ impl LanguagePack for RustPack {
                 f.is_test = true;
             }
         }
-        super::calls::count(
-            root,
-            src,
-            &mut cx.facts.tests,
-            &RUST_MOCKS,
-            super::calls::SLEEP_VOCAB,
-            super::calls::sleeps,
-        );
-        super::calls::count(
-            root,
-            src,
-            &mut cx.facts.tests,
-            &RUST_MOCKS,
-            super::calls::TRIVIAL_ASSERT_VOCAB,
-            super::calls::trivial_asserts,
-        );
+        super::method_checks::count(root, src, &mut cx.facts, &RUST_RECEIVER_CALLS);
+        let counted: [(super::calls::Vocab, super::calls::Pick); 2] = [
+            (super::calls::SLEEP_VOCAB, super::calls::sleeps),
+            (
+                super::calls::TRIVIAL_ASSERT_VOCAB,
+                super::calls::trivial_asserts,
+            ),
+        ];
+        for (counted_vocab, pick) in counted {
+            super::calls::count_with(
+                root,
+                src,
+                &mut cx.facts.tests,
+                &RUST_MOCKS,
+                counted_vocab,
+                pick,
+                // A macro's arguments are a token tree, not call nodes.
+                &|node| {
+                    (node.kind() == "macro_invocation")
+                        .then(|| macro_code(node, src, counted_vocab, &vocab.extra_macros))
+                },
+            );
+        }
         super::bounds::rust(root, src, &mut cx.facts.tests);
         super::expectations::rust(root, src, &mut cx.facts.tests);
         super::caught_assertions::rust(root, src, &mut cx.facts.tests);
@@ -546,6 +553,9 @@ impl<'a> Extractor<'a> {
             cases,
             non_literal_cases,
             direct_calls: Vec::new(),
+            tautology_spans: Vec::new(),
+            method_checks: 0,
+            counted_helper_calls: Vec::new(),
         };
         let is_fallible_return = node
             .child_by_field_name("return_type")
@@ -1166,7 +1176,20 @@ impl<'a> Extractor<'a> {
         }
     }
 
+    /// Records where the tautologies counted under `node` are (`TestFn::mark_tautologies`).
     fn count_asserts(
+        &self,
+        node: Node,
+        test: &mut TestFn,
+        is_fallible_return: bool,
+        direct_calls: &mut Vec<String>,
+    ) {
+        let mark = test.tautology_mark();
+        self.count_asserts_unmarked(node, test, is_fallible_return, direct_calls);
+        test.mark_tautologies(mark, node);
+    }
+
+    fn count_asserts_unmarked(
         &self,
         node: Node,
         test: &mut TestFn,
@@ -1305,10 +1328,7 @@ impl<'a> Extractor<'a> {
     }
 
     fn is_assert_macro(&self, name: &str) -> bool {
-        name.starts_with("assert")
-            || name.starts_with("debug_assert")
-            || name.starts_with("prop_assert")
-            || self.vocab.extra_macros.iter().any(|m| m == name)
+        is_assert_macro_name(name, &self.vocab.extra_macros)
     }
 
     fn unsafe_site(&mut self, node: Node, kind: &'static str) {
@@ -1758,43 +1778,151 @@ fn is_constant_argument(arg: &str) -> bool {
     if trimmed == "true" || trimmed == "false" {
         return true;
     }
-    let code = format!("fn _discipline_check() {{ let _ = ({trimmed}); }}");
+    reparsed_expression(trimmed, |value_node, _| {
+        let mut has_literal = false;
+        let mut has_forbidden = false;
+        check_constant_node(value_node, &mut has_literal, &mut has_forbidden);
+        has_literal && !has_forbidden
+    })
+    .unwrap_or(false)
+}
+
+/// Reads one macro argument as an expression. A macro's arguments are a token tree, so
+/// the argument's text is parsed again as the value of a `let`; `read` gets the value's
+/// node and the text it was parsed from. `None` when the argument is not an expression
+/// (a pattern, a format specification, tokens of the macro's own grammar).
+fn reparsed_expression<R>(arg: &str, read: impl FnOnce(Node, &str) -> R) -> Option<R> {
+    let code = format!("fn _discipline_check() {{ let _ = ({arg}); }}");
     let mut parser = Parser::new();
-    if parser
+    parser
         .set_language(&tree_sitter_rust::LANGUAGE.into())
-        .is_err()
-    {
-        return false;
-    }
-    let Some(tree) = parser.parse(&code, None) else {
-        return false;
-    };
+        .ok()?;
+    let tree = parser.parse(&code, None)?;
     let root = tree.root_node();
     if root.has_error() {
-        return false;
+        return None;
     }
-    let Some(fn_item) = root.child(0) else {
-        return false;
-    };
-    let Some(body) = fn_item.child_by_field_name("body") else {
-        return false;
-    };
+    let body = root.child(0)?.child_by_field_name("body")?;
     let mut cursor = body.walk();
-    let let_decl = body
+    let let_node = body
         .children(&mut cursor)
-        .find(|c| c.kind() == "let_declaration");
-    let Some(let_node) = let_decl else {
-        return false;
-    };
-    let Some(value_node) = let_node.child_by_field_name("value") else {
-        return false;
-    };
+        .find(|c| c.kind() == "let_declaration")?;
+    let value_node = let_node.child_by_field_name("value")?;
+    Some(read(value_node, &code))
+}
 
-    let mut has_literal = false;
-    let mut has_forbidden = false;
+fn is_assert_macro_name(name: &str, extra: &[String]) -> bool {
+    name.starts_with("assert")
+        || name.starts_with("debug_assert")
+        || name.starts_with("prop_assert")
+        || extra.iter().any(|m| m == name)
+}
 
-    check_constant_node(value_node, &mut has_literal, &mut has_forbidden);
-    has_literal && !has_forbidden
+/// The code a call counter (`calls::count_with`) judges a macro invocation by.
+///
+/// A delay is counted wherever the macro's tokens spell one, so the whole invocation is
+/// read, less its string literals and comments. A vocabulary that describes what an
+/// assertion checks (`Vocab::assertions`) is matched against asserted conditions only:
+/// the condition arguments of this macro when it is an assertion, or of the assertion
+/// macros its tokens invoke (`select! { r = f => assert!(r.is_ok()) }`). The message
+/// arguments of an assertion and the arguments of any other macro (`format!`, `vec!`,
+/// `println!`) are not what a test asserts. A macro that runs none of its arguments
+/// (`NON_EVALUATING_MACROS`) spells no code.
+fn macro_code(node: Node, src: &str, vocab: super::calls::Vocab, extra: &[String]) -> String {
+    let text = |n: Node| n.utf8_text(src.as_bytes()).unwrap_or("");
+    let name = node
+        .child_by_field_name("macro")
+        .map(|m| last_segment(text(m)))
+        .unwrap_or("");
+    if NON_EVALUATING_MACROS.contains(&name) {
+        return String::new();
+    }
+    if !vocab.assertions {
+        return super::calls::code_text(node, src);
+    }
+    let mut out = String::new();
+    let mut cursor = node.walk();
+    for tree in node
+        .children(&mut cursor)
+        .filter(|c| c.kind() == "token_tree")
+    {
+        asserted_conditions(name, tree, src, extra, &mut out);
+    }
+    out
+}
+
+/// How many leading arguments of an assertion macro are what it asserts: the rest is the
+/// failure message. A macro whose arguments are not known (`assert_matches!`, a
+/// configured one) is read whole.
+fn condition_arguments(name: &str) -> usize {
+    let plain = name
+        .strip_prefix("debug_")
+        .or_else(|| name.strip_prefix("prop_"))
+        .unwrap_or(name);
+    match plain {
+        "assert" => 1,
+        "assert_eq" | "assert_ne" => 2,
+        _ => usize::MAX,
+    }
+}
+
+/// Appends to `out` the asserted conditions under the token tree `tree` of the macro
+/// `name` (empty for a group of tokens that is no macro's arguments), one per line.
+///
+/// Arguments are the token runs between the commas that are direct children of the tree.
+/// Each is read as an expression (`reparsed_expression`) and contributes its code
+/// (`calls::code_text`: no string literal, no comment). An argument that is not an
+/// expression contributes its tokens with the string and comment tokens blanked.
+fn asserted_conditions(name: &str, tree: Node, src: &str, extra: &[String], out: &mut String) {
+    let mut cursor = tree.walk();
+    let tokens: Vec<Node> = tree.children(&mut cursor).collect();
+    if is_assert_macro_name(name, extra) {
+        let inner = tokens
+            .get(1..tokens.len().saturating_sub(1))
+            .unwrap_or_default();
+        let blanked = super::calls::code_text(tree, src);
+        for argument in inner
+            .split(|t| t.kind() == ",")
+            .filter(|a| !a.is_empty())
+            .take(condition_arguments(name))
+        {
+            let (start, end) = (
+                argument[0].start_byte(),
+                argument[argument.len() - 1].end_byte(),
+            );
+            let code = src
+                .get(start..end)
+                .and_then(|arg| {
+                    reparsed_expression(arg, |value, code| {
+                        // The value is the argument in the parentheses it was parsed in.
+                        let inner = value.named_child(0).unwrap_or(value);
+                        super::calls::code_text(inner, code)
+                    })
+                })
+                .or_else(|| {
+                    blanked
+                        .get(start - tree.start_byte()..end - tree.start_byte())
+                        .map(str::to_string)
+                })
+                .unwrap_or_default();
+            out.push_str(&code);
+            out.push('\n');
+        }
+        return;
+    }
+    for (i, token) in tokens.iter().enumerate() {
+        if token.kind() != "token_tree" {
+            continue;
+        }
+        let invoked =
+            (i >= 2 && tokens[i - 1].kind() == "!" && tokens[i - 2].kind() == "identifier")
+                .then(|| tokens[i - 2].utf8_text(src.as_bytes()).unwrap_or(""));
+        match invoked {
+            Some(nested) if NON_EVALUATING_MACROS.contains(&nested) => {}
+            Some(nested) => asserted_conditions(nested, *token, src, extra, out),
+            None => asserted_conditions("", *token, src, extra, out),
+        }
+    }
 }
 
 fn check_constant_node(n: Node, has_literal: &mut bool, has_forbidden: &mut bool) {
@@ -1936,6 +2064,13 @@ pub const RUST_FUNCTIONS: FunctionSpec = FunctionSpec {
     classify: functions::classify_rust,
 };
 
+/// A method called on a receiver (`method_checks`).
+pub const RUST_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
+    super::method_checks::ReceiverCalls {
+        member: &[("call_expression", "function", "field_expression", "field")],
+        direct: &[],
+    };
+
 pub const RUST_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
     call_kinds: &["call_expression", "macro_invocation"],
     callee_fields: &["function", "macro"],
@@ -2051,6 +2186,83 @@ pub const RS_LOCALS: super::LocalSpec = super::LocalSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the counters read of a macro: `macro_code` of the first macro in `body`.
+    fn read_macro(body: &str, vocab: crate::ast::calls::Vocab) -> String {
+        let src = format!("fn t() {{ {body} }}");
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(&src, None).unwrap();
+        let mut found = None;
+        let mut stack = vec![tree.root_node()];
+        while let Some(n) = stack.pop() {
+            if n.kind() == "macro_invocation" {
+                found = Some(n);
+                break;
+            }
+            let mut cursor = n.walk();
+            let children: Vec<Node> = n.children(&mut cursor).collect();
+            stack.extend(children.into_iter().rev());
+        }
+        let extra = vec!["verify".to_string()];
+        macro_code(found.expect("a macro"), &src, vocab, &extra)
+    }
+
+    #[test]
+    fn an_assertion_vocabulary_reads_the_asserted_condition_of_a_macro() {
+        let read = |body: &str| read_macro(body, crate::ast::calls::TRIVIAL_ASSERT_VOCAB);
+        // The condition, re-parsed as an expression: its strings and comments are blank.
+        assert_eq!(read("assert!(r.is_ok());"), "r.is_ok()\n");
+        assert_eq!(
+            read("assert!(out.contains(\"x.is_ok()\") /* y.is_some() */);"),
+            "out.contains(           )\n"
+        );
+        // The failure message and its arguments are not what is asserted.
+        assert_eq!(read("assert!(n == 3, \"ok={}\", r.is_ok());"), "n == 3\n");
+        assert_eq!(
+            read("assert_eq!(a.is_some(), b, \"{}\", c.is_ok());"),
+            "a.is_some()\nb\n"
+        );
+        assert_eq!(
+            read("debug_assert_ne!(a, b.is_ok(), \"m\");"),
+            "a\nb.is_ok()\n"
+        );
+        // A macro whose arguments are not known is read whole; a configured one too.
+        assert_eq!(
+            read("assert_matches!(r.is_ok(), true);"),
+            "r.is_ok()\ntrue\n"
+        );
+        assert_eq!(read("verify!(r.is_ok());"), "r.is_ok()\n");
+        // An argument that is not an expression keeps its tokens, less the strings.
+        assert_eq!(
+            read("assert_matches!(r, Some(\"x.is_ok()\") | None);"),
+            "r\nSome(           ) | None\n"
+        );
+        // Any other macro asserts nothing itself; an assertion among its tokens does.
+        assert_eq!(read("println!(\"{}\", r.is_ok());"), "");
+        assert_eq!(read("let s = format!(\"assert!(r.is_ok())\");"), "");
+        assert_eq!(
+            read("tokio::select! { r = f() => { assert!(r.is_ok(), \"m\") } }"),
+            "r.is_ok()\n"
+        );
+        assert_eq!(read("wrap! { stringify!(assert!(r.is_ok())) }"), "");
+    }
+
+    #[test]
+    fn a_delay_vocabulary_reads_the_code_tokens_of_a_macro() {
+        let read = |body: &str| read_macro(body, crate::ast::calls::SLEEP_VOCAB);
+        assert_eq!(
+            read("select! { _ = sleep(d) => {} }"),
+            "select! { _ = sleep(d) => {} }"
+        );
+        assert_eq!(
+            read("format!(\"thread::sleep(d)\" /* sleep(1) */)"),
+            "format!(                                 )"
+        );
+        assert_eq!(read("stringify!(thread::sleep(d))"), "");
+    }
 
     /// A test calling a thin wrapper gets the credit of one calling the wrapped function
     /// (`crate::ast::thin_wrapper_counts` names the controls).

@@ -90,6 +90,7 @@ impl LanguagePack for JavaPack {
                 f.is_test = true;
             }
         }
+        super::method_checks::count(root, src, &mut extractor.facts, &JAVA_RECEIVER_CALLS);
         super::calls::count(
             root,
             src,
@@ -432,7 +433,19 @@ impl<'a> JavaExtractor<'a> {
         }
     }
 
+    /// Records where the tautologies counted under `node` are (`TestFn::mark_tautologies`).
     fn scan_statement_or_expr(
+        &self,
+        node: Node,
+        test_fn: &mut TestFn,
+        direct_calls: &mut Vec<String>,
+    ) {
+        let mark = test_fn.tautology_mark();
+        self.scan_statement_or_expr_unmarked(node, test_fn, direct_calls);
+        test_fn.mark_tautologies(mark, node);
+    }
+
+    fn scan_statement_or_expr_unmarked(
         &self,
         node: Node,
         test_fn: &mut TestFn,
@@ -662,6 +675,13 @@ pub const JAVA_FUNCTIONS: FunctionSpec = FunctionSpec {
     is_test: java_fn_is_test,
     classify: functions::classify_jvm,
 };
+
+/// A method called on a receiver (`method_checks`).
+pub const JAVA_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
+    super::method_checks::ReceiverCalls {
+        member: &[],
+        direct: &[("method_invocation", "object", "name")],
+    };
 
 pub const JAVA_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
     call_kinds: &["method_invocation", "object_creation_expression"],

@@ -94,6 +94,7 @@ impl LanguagePack for ScalaPack {
                 f.is_test = true;
             }
         }
+        super::method_checks::count(root, src, &mut extractor.facts, &SCALA_RECEIVER_CALLS);
         super::calls::count(
             root,
             src,
@@ -618,6 +619,13 @@ pub const SCALA_FUNCTIONS: FunctionSpec = FunctionSpec {
     is_test: scala_fn_is_test,
     classify: functions::classify_scala,
 };
+
+/// A method called on a receiver (`method_checks`).
+pub const SCALA_RECEIVER_CALLS: super::method_checks::ReceiverCalls =
+    super::method_checks::ReceiverCalls {
+        member: &[("call_expression", "function", "field_expression", "field")],
+        direct: &[],
+    };
 
 pub const SCALA_MOCKS: super::mocks::MockSpec = super::mocks::MockSpec {
     call_kinds: &["call_expression"],
