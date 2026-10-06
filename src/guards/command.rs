@@ -5,7 +5,9 @@
 //! - Bounded runtime: exceeding `timeout_seconds` triggers exit code 2 (bail)
 //! - Missing tool binary in PATH triggers exit code 2 (bail)
 //! - Negative-control canary that must produce a declared diagnostic
-//! - `forbid_output` patterns that must not appear in stdout or stderr
+//! - `forbid_output` patterns that must not appear in stdout or stderr (regular expressions,
+//!   like `zero_items_pattern` and `canary_expected_diagnostic`; one that does not compile is
+//!   a configuration error, never matched as literal text)
 //! - `zero_items_pattern` and zero-count guard (failure unless `allow_zero = true`)
 //! - `count_pattern` + `min_count` ratchet read from BASE ref
 //! - Untrusted PR text guard: commands cannot be modified in PR diff without runner authorization
@@ -25,13 +27,34 @@ use std::time::{Duration, Instant};
 
 pub const GATE: &str = "command";
 
+/// The dotted name of `key` in `[gates.command]`, or in the `commands` entry named `entry`.
+pub fn entry_key(entry: Option<&str>, key: &str) -> String {
+    match entry {
+        Some(name) => format!("gates.command.commands[{name}].{key}"),
+        None => format!("gates.command.{key}"),
+    }
+}
+
 /// The configuration key of a `count_pattern`: the gate's own, or that of the `commands`
 /// entry named `entry`.
 pub fn count_pattern_key(entry: Option<&str>) -> String {
-    match entry {
-        Some(name) => format!("gates.command.commands[{name}].count_pattern"),
-        None => "gates.command.count_pattern".to_string(),
-    }
+    entry_key(entry, "count_pattern")
+}
+
+/// Compiles a value of `forbid_output`, `zero_items_pattern` or
+/// `canary_expected_diagnostic`. Each is a regular expression and nothing else: a value
+/// that does not compile is a configuration error naming `key`, never matched as literal
+/// text. A pattern its author wrote as an expression would, as text, match nothing the
+/// expression was written for, so the guard would silently never fire.
+pub fn output_pattern(pattern: &str, key: &str) -> Result<regex::Regex> {
+    regex::Regex::new(pattern).map_err(|e| {
+        tag(
+            Reason::Configuration,
+            anyhow!(
+                "`{key}` pattern `{pattern}` is not a valid regular expression: {e}. The value is matched as a regular expression, never as literal text: escape the characters meant literally (`\\(` for `(`)"
+            ),
+        )
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -764,12 +787,11 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
             )?;
             let canary_output = format!("{}\n{}", canary_res.stdout, canary_res.stderr);
             if let Some(ref expected_diag) = item.canary_expected_diagnostic {
-                let matched = if let Ok(re) = regex::Regex::new(expected_diag) {
-                    re.is_match(&canary_output)
-                } else {
-                    canary_output.contains(expected_diag)
-                };
-                if !matched {
+                let expected = output_pattern(
+                    expected_diag,
+                    &entry_key(None, "canary_expected_diagnostic"),
+                )?;
+                if !expected.is_match(&canary_output) {
                     command_violations.push(Violation::new(
                         &crate::findings::CANARY_DIAGNOSTIC_MISSING,
                         format!(
@@ -835,12 +857,11 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
 
         // Check forbid_output patterns
         for pattern in &item.forbid_output {
-            let matched = if let Ok(re) = regex::Regex::new(pattern) {
-                re.is_match(&combined_output)
-            } else {
-                combined_output.contains(pattern)
-            };
-            if matched {
+            // Checked with the configuration before any gate runs; compiled the same way
+            // here so a caller that skips that check gets the error, not a literal match.
+            if output_pattern(pattern, &entry_key(None, "forbid_output"))?
+                .is_match(&combined_output)
+            {
                 command_violations.push(Violation::new(
                     &crate::findings::FORBIDDEN_OUTPUT,
                     format!(
@@ -855,14 +876,8 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
         // Check count pattern & zero-items detection
         let mut zero_items = false;
         if let Some(ref zpat) = item.zero_items_pattern {
-            let matched = if let Ok(re) = regex::Regex::new(zpat) {
-                re.is_match(&combined_output)
-            } else {
-                combined_output.contains(zpat)
-            };
-            if matched {
-                zero_items = true;
-            }
+            zero_items = output_pattern(zpat, &entry_key(None, "zero_items_pattern"))?
+                .is_match(&combined_output);
         }
 
         // Checked with the configuration before any gate runs; compiled the same way here
@@ -1387,6 +1402,31 @@ fn evaluate_base_tests(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_output_pattern_is_a_regular_expression_or_a_configuration_error() {
+        let e = output_pattern("(FAILED", "gates.command.forbid_output").unwrap_err();
+        let (reason, _) = crate::could_not_check::classify(&e);
+        assert_eq!(reason, Reason::Configuration);
+        let shown = format!("{e:#}");
+        assert!(shown.contains("`gates.command.forbid_output`"), "{shown}");
+        assert!(shown.contains("never as literal text"), "{shown}");
+        // The escaped form matches the text; the expression form matches what it describes.
+        let escaped = output_pattern(r"\(FAILED", "k").unwrap();
+        assert!(escaped.is_match("1 test (FAILED)"));
+        assert!(output_pattern(r"FAILED\d", "k")
+            .unwrap()
+            .is_match("FAILED7"));
+        assert!(!output_pattern(r"FAILED\d", "k").unwrap().is_match("FAILED"));
+        assert_eq!(
+            entry_key(Some("unit"), "forbid_output"),
+            "gates.command.commands[unit].forbid_output"
+        );
+        assert_eq!(
+            entry_key(None, "zero_items_pattern"),
+            "gates.command.zero_items_pattern"
+        );
+    }
 
     fn gate(body: &str) -> crate::config::CommandGate {
         DisciplineConfig::from_toml_str(&format!("[gates.command]\n{body}"))

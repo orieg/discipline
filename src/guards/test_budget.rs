@@ -11,7 +11,8 @@
 //!   - `-max_total_time`
 //!   - `-runs`
 //!   - Go fuzz `-fuzztime`
-//! - Fuzz targets are not removed from harness manifests (`fuzz/Cargo.toml`, `fuzz/fuzz_targets/`)
+//! - Fuzz targets are not removed from harness manifests (`fuzz/Cargo.toml` and Rust files
+//!   under `fuzz/`, plus the manifests and harness files `fuzz_targets` globs name elsewhere)
 //! - Seed corpus directories do not shrink without a directive (`fuzz/corpus/**`, `corpus/**`)
 
 use crate::config::GateSettings;
@@ -180,6 +181,23 @@ pub fn extract_fuzz_manifest_targets(content: &str) -> HashSet<String> {
     targets
 }
 
+/// Whether `path` is a fuzz crate's manifest: the root crate's `fuzz/Cargo.toml`, or a
+/// `Cargo.toml` outside `fuzz/` that a `fuzz_targets` glob names. Inside `fuzz/` the
+/// built-in rule decides alone, so the default list reports what the gate reported before
+/// the list was read.
+fn is_fuzz_manifest(fuzz: &PathFilter, path: &str) -> bool {
+    if path.starts_with("fuzz/") {
+        return path == "fuzz/Cargo.toml";
+    }
+    Path::new(path).file_name().and_then(|n| n.to_str()) == Some("Cargo.toml") && fuzz.matches(path)
+}
+
+/// Whether `path` is a fuzz harness source: a Rust file under the root `fuzz/`, or one
+/// that a `fuzz_targets` glob names.
+fn is_fuzz_harness(fuzz: &PathFilter, path: &str) -> bool {
+    path.ends_with(".rs") && (path.starts_with("fuzz/") || fuzz.matches(path))
+}
+
 /// Extracts budgets for any supported file type based on extension / path.
 pub fn extract_budgets_for_file(content: &str, path: &str) -> Vec<BudgetMetric> {
     let p = Path::new(path);
@@ -214,6 +232,10 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
     // Build corpus directory matcher (`**/x` already matches a bare `x`, so no
     // stripped duplicate is added).
     let corpus = PathFilter::new(&gate.corpus_dirs)?;
+
+    // `fuzz_targets` names fuzz manifests and harness files beside the built-in `fuzz/`
+    // crate, which is watched whatever the list says.
+    let fuzz = PathFilter::new(&gate.fuzz_targets)?;
 
     let changed = ctx.git.changed_files()?;
     let mut examined_count = 0usize;
@@ -250,7 +272,8 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
         }
 
         // Check fuzz target manifest deletion (e.g. fuzz/Cargo.toml)
-        let is_fuzz_manifest = f.path == "fuzz/Cargo.toml" || f.old_path == "fuzz/Cargo.toml";
+        let is_fuzz_manifest =
+            is_fuzz_manifest(&fuzz, &f.path) || is_fuzz_manifest(&fuzz, &f.old_path);
         if is_fuzz_manifest {
             let base_content = ctx.git.base_content(&f.old_path)?.unwrap_or_default();
             let head_content = ctx.git.head_content(&f.path)?.unwrap_or_default();
@@ -303,10 +326,7 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
         }
 
         // Check if individual fuzz target file was deleted (e.g. fuzz/fuzz_targets/*.rs)
-        if (f.old_path.starts_with("fuzz/fuzz_targets/") || f.old_path.starts_with("fuzz/"))
-            && f.kind == ChangeKind::Deleted
-            && f.old_path.ends_with(".rs")
-        {
+        if f.kind == ChangeKind::Deleted && is_fuzz_harness(&fuzz, &f.old_path) {
             let target_name = Path::new(&f.old_path)
                 .file_stem()
                 .and_then(|s| s.to_str())
@@ -659,5 +679,91 @@ mod tests {
         assert_eq!(targets.len(), 2);
         assert!(targets.contains("parse_target"));
         assert!(targets.contains("encode_target"));
+    }
+    /// What the gate matched before `fuzz_targets` was read: the root manifest, and a
+    /// Rust file anywhere under `fuzz/`.
+    fn literal_manifest(path: &str) -> bool {
+        path == "fuzz/Cargo.toml"
+    }
+
+    fn literal_harness(path: &str) -> bool {
+        (path.starts_with("fuzz/fuzz_targets/") || path.starts_with("fuzz/"))
+            && path.ends_with(".rs")
+    }
+
+    const FUZZ_PATHS: &[&str] = &[
+        "fuzz/Cargo.toml",
+        "fuzz/fuzz_targets/parse.rs",
+        "fuzz/fuzz_targets/nested/encode.rs",
+        "fuzz/fuzz_targets/Cargo.toml",
+        "fuzz/fuzz_targets/README.md",
+        "fuzz/src/support.rs",
+        "fuzz/build.rs",
+        "fuzz/afl/Cargo.toml",
+        "fuzz/corpus/parse/seed.bin",
+        "fuzz.rs",
+        "Cargo.toml",
+        "src/fuzz/Cargo.toml",
+        "src/fuzz/fuzz_targets/parse.rs",
+        "crates/core/fuzz/Cargo.toml",
+        "crates/core/fuzz/fuzz_targets/parse.rs",
+        "crates/core/fuzz/fuzz_targets/notes.md",
+        "crates/core/src/lib.rs",
+        "afuzz/Cargo.toml",
+        "afuzz/fuzz_targets/parse.rs",
+    ];
+
+    /// With the default `fuzz_targets` the gate matches exactly the paths it matched
+    /// when the list was not read.
+    #[test]
+    fn the_default_fuzz_targets_match_what_the_literal_prefixes_matched() {
+        let defaults = crate::config::TestBudgetGate::default().fuzz_targets;
+        assert_eq!(defaults, ["fuzz/Cargo.toml", "fuzz/fuzz_targets/**"]);
+        let fuzz = PathFilter::new(&defaults).unwrap();
+        for path in FUZZ_PATHS {
+            assert_eq!(
+                is_fuzz_manifest(&fuzz, path),
+                literal_manifest(path),
+                "manifest: {path}"
+            );
+            assert_eq!(
+                is_fuzz_harness(&fuzz, path),
+                literal_harness(path),
+                "harness: {path}"
+            );
+        }
+        // The sample has paths on both sides of each rule.
+        assert!(FUZZ_PATHS.iter().any(|p| literal_harness(p)));
+        assert!(FUZZ_PATHS.iter().any(|p| !literal_harness(p)));
+    }
+
+    /// A configured glob adds the fuzz crate it names; the root `fuzz/` crate stays.
+    #[test]
+    fn a_fuzz_targets_glob_names_a_crate_outside_the_root_fuzz_directory() {
+        let fuzz = PathFilter::new(&[
+            "crates/*/fuzz/Cargo.toml".to_string(),
+            "crates/*/fuzz/fuzz_targets/**".to_string(),
+        ])
+        .unwrap();
+        assert!(is_fuzz_manifest(&fuzz, "crates/core/fuzz/Cargo.toml"));
+        assert!(is_fuzz_harness(
+            &fuzz,
+            "crates/core/fuzz/fuzz_targets/parse.rs"
+        ));
+        // Named by the glob, but neither a manifest nor a Rust harness.
+        assert!(!is_fuzz_manifest(
+            &fuzz,
+            "crates/core/fuzz/fuzz_targets/parse.rs"
+        ));
+        assert!(!is_fuzz_harness(
+            &fuzz,
+            "crates/core/fuzz/fuzz_targets/notes.md"
+        ));
+        assert!(!is_fuzz_harness(&fuzz, "crates/core/src/lib.rs"));
+        assert!(is_fuzz_manifest(&fuzz, "fuzz/Cargo.toml"));
+        assert!(is_fuzz_harness(&fuzz, "fuzz/src/support.rs"));
+        let none = PathFilter::new(&[]).unwrap();
+        assert!(!is_fuzz_manifest(&none, "crates/core/fuzz/Cargo.toml"));
+        assert!(is_fuzz_harness(&none, "fuzz/fuzz_targets/parse.rs"));
     }
 }

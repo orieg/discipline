@@ -57,10 +57,15 @@ impl Default for DisciplineBaseline {
 impl DisciplineBaseline {
     pub fn load_from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("failed to read baseline file `{}`", path.display()))?;
-        toml::from_str(&content)
-            .with_context(|| format!("failed to parse baseline file `{}`", path.display()))
+        Self::load_from_file_named(path, &path.display().to_string())
+    }
+
+    /// [`Self::load_from_file`], naming the file `shown` in an error (see
+    /// [`path_for_message`]).
+    pub fn load_from_file_named(path: impl AsRef<Path>, shown: &str) -> Result<Self> {
+        let content = std::fs::read_to_string(path.as_ref())
+            .with_context(|| format!("failed to read baseline file `{shown}`"))?;
+        toml::from_str(&content).with_context(|| format!("failed to parse baseline file `{shown}`"))
     }
 
     pub fn write_to_file(&self, path: impl AsRef<Path>) -> Result<()> {
@@ -74,6 +79,25 @@ impl DisciplineBaseline {
         std::fs::write(path, out)
             .with_context(|| format!("failed to write baseline file `{}`", path.display()))?;
         Ok(())
+    }
+}
+
+/// How a message names the file at `path`: relative to `root` and `/`-separated when the
+/// file is inside it, as every other message names a file; the path as given when it is
+/// outside, or reaches inside through `..`.
+pub fn path_for_message(root: &Path, path: &Path) -> String {
+    use std::path::Component;
+    match path.strip_prefix(root) {
+        Ok(rel)
+            if rel.components().next().is_some()
+                && rel.components().all(|c| matches!(c, Component::Normal(_))) =>
+        {
+            rel.components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/")
+        }
+        _ => path.display().to_string(),
     }
 }
 
@@ -716,6 +740,24 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_message_names_a_file_inside_the_root_by_its_relative_path() {
+        let root = Path::new("/work/repo");
+        let shown = |p: &str| path_for_message(root, Path::new(p));
+        assert_eq!(
+            shown("/work/repo/discipline-baseline.toml"),
+            "discipline-baseline.toml"
+        );
+        assert_eq!(shown("/work/repo/policy/known.toml"), "policy/known.toml");
+        // Outside the root, or inside only by way of `..`: as given.
+        assert_eq!(shown("/elsewhere/known.toml"), "/elsewhere/known.toml");
+        assert_eq!(
+            shown("/work/repo/../known.toml"),
+            "/work/repo/../known.toml"
+        );
+        assert_eq!(shown("/work/repo"), "/work/repo");
+    }
 
     #[test]
     fn record_policy_follows_what_would_block() {
