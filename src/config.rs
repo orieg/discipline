@@ -456,6 +456,41 @@ pub struct KeyAlias {
 /// the 1.0 promise (docs/ARCHITECTURE.md §3.2) is kept by code, not by hand.
 pub const KEY_ALIASES: &[KeyAlias] = &[];
 
+/// Configuration keys this project accepted on its default branch and later removed, as
+/// dotted paths. A `discipline.toml` in a repository's history can still carry one, and
+/// `discipline audit` reads history: [`DisciplineConfig::from_history_toml_str`] drops
+/// these keys so the rest of such a file can be compared. `check` never reads this list;
+/// to it a removed key is an unknown key (exit 2).
+///
+/// A key goes here when it is removed, with the change that removed it. A name that was
+/// never a key is not listed and stays an error everywhere.
+pub const REMOVED_KEYS: &[&str] = &[
+    // Added in #504, removed in #513, between two releases.
+    "gates.commit-provenance.allow_author_review",
+];
+
+/// Removes every [`REMOVED_KEYS`] entry from `value` and returns each one found with its
+/// value as written, in the order of the list.
+fn take_removed_keys(value: &mut Value) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    for dotted in REMOVED_KEYS {
+        let Some((tables, key)) = dotted.rsplit_once('.') else {
+            continue;
+        };
+        let mut at = Some(&mut *value);
+        for segment in tables.split('.') {
+            at = at.and_then(|v| v.get_mut(segment));
+        }
+        if let Some(removed) = at
+            .and_then(Value::as_table_mut)
+            .and_then(|table| table.remove(key))
+        {
+            found.push((dotted.to_string(), removed.to_string()));
+        }
+    }
+    found
+}
+
 /// Reads an empty `gates.commit-provenance.review_trailer` as `require_agent_review = false`.
 /// Through v0.17 the empty name was the rule's switch, so a configuration written for it
 /// must still load: refusing it stops every run that reads such a base configuration,
@@ -2288,6 +2323,25 @@ impl DisciplineConfig {
                 Err(orig_err)
             }
         }
+    }
+
+    /// Parse a `discipline.toml` body read from a repository's history, for
+    /// `discipline audit`: a key in [`REMOVED_KEYS`] is dropped instead of refused, and
+    /// returned by its dotted name with the value it had. Everything else is validated as
+    /// [`Self::from_toml_str`] validates it, so a name that was never a key is an error.
+    pub fn from_history_toml_str(content: &str) -> Result<(Self, Vec<(String, String)>)> {
+        let removed = match toml::from_str::<Value>(content) {
+            Ok(mut value) => {
+                let removed = take_removed_keys(&mut value);
+                if !removed.is_empty() {
+                    return Ok((Self::from_value(value)?, removed));
+                }
+                removed
+            }
+            // Not TOML: the strict reader below says so.
+            Err(_) => Vec::new(),
+        };
+        Ok((Self::from_toml_str(content)?, removed))
     }
 
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
