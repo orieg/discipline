@@ -129,10 +129,13 @@ fn an_unreadable_historical_configuration_is_a_record_not_a_failure() {
     assert_eq!(run.code, 0, "{}", run.stderr);
     let s: Value = serde_json::from_str(&run.stdout).unwrap();
     assert_eq!(s["records"][0]["kind"], "config-unreadable", "{s:#}");
-    assert!(s["records"][0]["detail"]
-        .as_str()
-        .unwrap()
-        .starts_with("parent: "));
+    let detail = s["records"][0]["detail"].as_str().unwrap();
+    assert!(detail.starts_with("parent: "), "{detail}");
+    // The record names the key the parser stopped on (#599).
+    assert!(
+        detail.ends_with(": unknown key `retired_option`"),
+        "{detail}"
+    );
 }
 
 #[test]
