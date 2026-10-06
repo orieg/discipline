@@ -84,6 +84,7 @@ impl LanguagePack for GoldenPack {
                 kind: "xfail".to_string(),
                 exception_type: None,
                 matcher: None,
+                ..Default::default()
             })
         } else {
             None

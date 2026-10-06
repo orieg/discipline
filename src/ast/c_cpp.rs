@@ -178,6 +178,7 @@ impl LanguagePack for CppPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         shared_facts(root, src, path, vocab, &mut extractor.facts);
+        super::expected_exceptions::cpp(root, src, &mut extractor.facts.tests);
         Ok(extractor.facts)
     }
 }

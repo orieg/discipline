@@ -16,6 +16,7 @@ pub mod caught_assertions;
 pub mod ci_condition;
 #[cfg(feature = "lang-csharp")]
 pub mod csharp;
+pub mod exception_tables;
 pub mod expectations;
 pub mod expected_exceptions;
 pub mod functions;

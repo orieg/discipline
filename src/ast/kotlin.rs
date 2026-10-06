@@ -127,6 +127,7 @@ impl LanguagePack for KotlinPack {
                 "multiline_string_literal",
             ],
         );
+        super::expected_exceptions::kotlin(root, src, &mut extractor.facts.tests);
         Ok(extractor.facts)
     }
 }
