@@ -19,8 +19,10 @@ pub mod csharp;
 pub mod expectations;
 pub mod expected_exceptions;
 pub mod functions;
+pub mod gitattributes;
 #[cfg(feature = "lang-go")]
 pub mod r#go;
+pub mod go_build;
 #[cfg(feature = "lang-golden")]
 pub mod golden;
 pub mod handlers;
@@ -44,6 +46,7 @@ pub mod retries;
 #[cfg(feature = "lang-ruby")]
 pub mod ruby;
 pub mod runner_collection;
+pub mod runner_config;
 #[cfg(feature = "lang-rust")]
 pub mod rust;
 #[cfg(feature = "lang-scala")]
