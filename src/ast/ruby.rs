@@ -37,6 +37,11 @@ impl LanguagePack for RubyPack {
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
+        // The Ruby grammar's scanner aborts, or mis-reads the file, on a here-document word
+        // its serialized state cannot hold (#636). It is refused before the parser sees it,
+        // by name, the way an over-budget parse is (`crate::ast::scanner_limits`).
+        crate::ast::scanner_limits::ruby_heredoc_word(src)
+            .map_err(|why| anyhow!("could not parse `{path}`: {why}"))?;
         let mut parser = Parser::new();
         parser
             .set_language(&tree_sitter_ruby::LANGUAGE.into())

@@ -45,6 +45,11 @@ impl LanguagePack for PythonPack {
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
+        // The Python grammar's scanner overflows its serialization buffer on a deep enough
+        // indentation stack (#636). It is refused before the parser sees it, by name, the way
+        // an over-budget parse is (`crate::ast::scanner_limits`).
+        crate::ast::scanner_limits::python_indent_nesting(src)
+            .map_err(|why| anyhow!("could not parse `{path}`: {why}"))?;
         let mut parser = Parser::new();
         parser
             .set_language(&tree_sitter_python::LANGUAGE.into())

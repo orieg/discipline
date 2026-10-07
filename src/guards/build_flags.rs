@@ -689,6 +689,9 @@ fn cmake_flags(src: &str) -> Result<Vec<FlagUse>, ExtractError> {
 
 #[cfg(feature = "lang-python")]
 fn setup_py_flags(src: &str) -> Result<Vec<FlagUse>, ExtractError> {
+    // The Python scanner overflows its serialization buffer on a deep enough indentation
+    // stack (#636); refuse before the parser sees it, as the pack does.
+    crate::ast::scanner_limits::python_indent_nesting(src).map_err(|_| ExtractError::Unparsed)?;
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_python::LANGUAGE.into())
