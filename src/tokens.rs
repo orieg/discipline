@@ -338,6 +338,13 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
         subject_doc: "Function name, or the file path",
     },
     DirectiveSpec {
+        canonical: "allow-harness-tampering",
+        deprecated: None,
+        gate: "harness-tampering",
+        subject_kind: DirectiveSubjectKind::FilePath,
+        subject_doc: "File path (every finding in the file), or `path:line` of the finding (that finding only)",
+    },
+    DirectiveSpec {
         canonical: "allow-swallow",
         deprecated: None,
         gate: "error-swallowing",
@@ -530,9 +537,9 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
     },
 ];
 
-/// The 45 named directives recognized by discipline (35 canonical + 10 deprecated aliases).
+/// The 46 named directives recognized by discipline (36 canonical + 10 deprecated aliases).
 pub const KNOWN_DIRECTIVES: &[&str] = &[
-    // 35 Canonical
+    // 36 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-case-drop",
@@ -568,6 +575,7 @@ pub const KNOWN_DIRECTIVES: &[&str] = &[
     "allow-miri",
     "allow-sanitizers",
     "allow-vacuous-test",
+    "allow-harness-tampering",
     // 10 Deprecated aliases
     "deletes",
     "allow-floor-drop",
@@ -618,6 +626,7 @@ pub const ALLOW_STUB: &[&str] = &[
     "discipline:allow(stub-bodies)",
     "allow(stub-bodies)",
 ];
+pub const ALLOW_HARNESS_TAMPERING: &[&str] = &["allow-harness-tampering"];
 pub const ALLOW_SWALLOW: &[&str] = &[
     "allow-swallow",
     "discipline:allow(error-swallowing)",
@@ -793,6 +802,7 @@ pub fn names_for_directive(name: &str) -> &'static [&'static str] {
         "allow-sandbox-widening" => ALLOW_SANDBOX_WIDENING,
         "allow-stub" => ALLOW_STUB,
         "allow-swallow" => ALLOW_SWALLOW,
+        "allow-harness-tampering" => ALLOW_HARNESS_TAMPERING,
         "allow-agent-instructions" => ALLOW_SMUGGLING,
         "allow-commit-provenance" => ALLOW_COMMIT_PROVENANCE,
         "allow-citation-metadata" => ALLOW_CITATION_METADATA,
@@ -832,7 +842,7 @@ pub fn spec_for_directive(name: &str) -> Option<&'static DirectiveSpec> {
 }
 
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
-    // 35 Canonical
+    // 36 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-case-drop",
@@ -868,6 +878,7 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow-miri",
     "allow-sanitizers",
     "allow-vacuous-test",
+    "allow-harness-tampering",
     // 10 Deprecated aliases
     "deletes",
     "allow-floor-drop",

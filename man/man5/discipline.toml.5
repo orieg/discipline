@@ -226,6 +226,9 @@ a change cannot weaken its own discipline.toml without a token (integrity; defau
 .B [gates.stub-bodies]
 added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null (agent-guard; default: on, error; languages: Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala, Objective\-C)
 .TP
+.B [gates.harness-tampering]
+a file the test runner loads does not make a failing run pass (agent-guard; default: off; languages: Go, Python, JS/TS, Rust)
+.TP
 .B [gates.error-swallowing]
 no new empty error handler or discarded Result outside tests (agent-guard; default: on, error; languages: Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala, Objective\-C)
 .TP
