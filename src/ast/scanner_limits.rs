@@ -178,14 +178,14 @@ mod tests {
     #[cfg(feature = "lang-ruby")]
     #[test]
     fn a_short_here_document_word_is_allowed() {
-        assert!(ruby_heredoc_word("x = <<END\nbody\nEND\n").is_ok());
-        assert!(ruby_heredoc_word("x = <<~SQL\n  select 1\nSQL\n").is_ok());
-        assert!(ruby_heredoc_word("x = <<-'done'\nbody\ndone\n").is_ok());
+        assert_eq!(ruby_heredoc_word("x = <<END\nbody\nEND\n"), Ok(()));
+        assert_eq!(ruby_heredoc_word("x = <<~SQL\n  select 1\nSQL\n"), Ok(()));
+        assert_eq!(ruby_heredoc_word("x = <<-'done'\nbody\ndone\n"), Ok(()));
         // The left-shift operator with short operands.
-        assert!(ruby_heredoc_word("list << item\nx = a<<b\n").is_ok());
+        assert_eq!(ruby_heredoc_word("list << item\nx = a<<b\n"), Ok(()));
         // A word of exactly the maximum round-trips.
         let at_max = format!("x = <<{}\n", "A".repeat(RUBY_HEREDOC_WORD_MAX));
-        assert!(ruby_heredoc_word(&at_max).is_ok());
+        assert_eq!(ruby_heredoc_word(&at_max), Ok(()));
     }
 
     #[cfg(feature = "lang-ruby")]
@@ -219,11 +219,11 @@ mod tests {
     fn a_long_run_that_is_not_a_here_document_word_is_not_refused() {
         // A space after `<<` means the word does not begin there.
         let w = "A".repeat(RUBY_HEREDOC_WORD_MAX + 1);
-        assert!(ruby_heredoc_word(&format!("x = << {w}\n")).is_ok());
+        assert_eq!(ruby_heredoc_word(&format!("x = << {w}\n")), Ok(()));
         // An unterminated quote on the line is read as no here-document word.
-        assert!(ruby_heredoc_word(&format!("x = <<\"{w}\n")).is_ok());
+        assert_eq!(ruby_heredoc_word(&format!("x = <<\"{w}\n")), Ok(()));
         // A long identifier not after `<<`.
-        assert!(ruby_heredoc_word(&format!("{w} = 1\n")).is_ok());
+        assert_eq!(ruby_heredoc_word(&format!("{w} = 1\n")), Ok(()));
     }
 
     /// Enforced by construction: the Ruby pack checks the here-document word limit before
@@ -254,7 +254,10 @@ mod tests {
     fn the_word_just_past_the_limit_is_the_one_that_aborts_the_scanner() {
         // The scanner stores the length in one byte, so 256 round-trips as 0.
         assert_eq!(RUBY_HEREDOC_WORD_MAX, 255);
-        assert!(ruby_heredoc_word(&format!("x = <<{}\n", "A".repeat(255))).is_ok());
+        assert_eq!(
+            ruby_heredoc_word(&format!("x = <<{}\n", "A".repeat(255))),
+            Ok(())
+        );
         assert!(ruby_heredoc_word(&format!("x = <<{}\n", "A".repeat(256))).is_err());
     }
 
@@ -282,11 +285,14 @@ mod tests {
     #[cfg(feature = "lang-python")]
     #[test]
     fn python_indentation_within_the_limit_is_allowed() {
-        assert!(python_indent_nesting("def f():\n    return 1\n").is_ok());
+        assert_eq!(python_indent_nesting("def f():\n    return 1\n"), Ok(()));
         // Flat files with many short prefixes stay well under the limit.
-        assert!(python_indent_nesting(&"x = 1\n".repeat(1000)).is_ok());
+        assert_eq!(python_indent_nesting(&"x = 1\n".repeat(1000)), Ok(()));
         // Exactly the limit of distinct prefixes round-trips (measured: 655 bytes).
-        assert!(python_indent_nesting(&python_nested(PYTHON_INDENT_NESTING_MAX, 255)).is_ok());
+        assert_eq!(
+            python_indent_nesting(&python_nested(PYTHON_INDENT_NESTING_MAX, 255)),
+            Ok(())
+        );
     }
 
     #[cfg(feature = "lang-python")]
@@ -299,7 +305,10 @@ mod tests {
             "{err}"
         );
         // The control at the limit is accepted; one more prefix is refused.
-        assert!(python_indent_nesting(&python_nested(PYTHON_INDENT_NESTING_MAX, 0)).is_ok());
+        assert_eq!(
+            python_indent_nesting(&python_nested(PYTHON_INDENT_NESTING_MAX, 0)),
+            Ok(())
+        );
         assert!(python_indent_nesting(&python_nested(PYTHON_INDENT_NESTING_MAX + 1, 0)).is_err());
     }
 
@@ -315,7 +324,7 @@ mod tests {
         }
         assert!(python_indent_nesting(&s).is_err());
         // Blank lines and the empty prefix do not multiply the count.
-        assert!(python_indent_nesting("x = 1\n\n\n    y = 2\n").is_ok());
+        assert_eq!(python_indent_nesting("x = 1\n\n\n    y = 2\n"), Ok(()));
     }
 
     /// Enforced by construction: the Python pack checks the indentation limit before it
