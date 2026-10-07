@@ -15,11 +15,6 @@ pub fn evaluate_miri(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.miri;
     let mut out = GateOutcome::new(GATE);
 
-    if !settings.enabled {
-        out.enabled = false;
-        return Ok(out);
-    }
-
     // `args` reach `cargo`: a change cannot supply them (`configured_execution`).
     let Some(execution_notes) = crate::guards::command::vouched_execution(
         ctx,

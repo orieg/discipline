@@ -18,10 +18,6 @@ pub const GATE: &str = "test-floor";
 pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     let mut out = GateOutcome::new(GATE);
     let settings = &ctx.config.gates.test_floor;
-    if !settings.enabled {
-        out.enabled = false;
-        return Ok(out);
-    }
 
     let filter = exempt_filter(settings)?;
     let sides = SideVocabularies::new(ctx);

@@ -17,11 +17,6 @@ pub fn evaluate_version_lockstep(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.version_lockstep;
     let mut out = GateOutcome::new(GATE);
 
-    if !settings.enabled {
-        out.enabled = false;
-        return Ok(out);
-    }
-
     if settings.groups.is_empty() {
         bail!("version-lockstep gate is enabled but no groups are configured");
     }

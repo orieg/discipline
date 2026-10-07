@@ -14,11 +14,6 @@ pub fn evaluate_msrv(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.msrv;
     let mut out = GateOutcome::new(GATE);
 
-    if !settings.enabled {
-        out.enabled = false;
-        return Ok(out);
-    }
-
     // `command` is executed: a change cannot supply it (`configured_execution`).
     let Some(execution_notes) = crate::guards::command::vouched_execution(
         ctx,
