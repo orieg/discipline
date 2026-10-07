@@ -1,0 +1,285 @@
+{
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "invocations": [
+        {
+          "executionSuccessful": true,
+          "properties": {
+            "totalExamined": 1,
+            "totalOverrides": 0
+          },
+          "ruleConfigurationOverrides": []
+        }
+      ],
+      "results": [
+        {
+          "level": "error",
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "directives.max_inline_overrides"
+                }
+              ]
+            }
+          ],
+          "message": {
+            "text": "The change applies more inline overrides than `directives.max_inline_overrides` allows, so the run is refused. The counts are in the JSON report (`policy_failures`)."
+          },
+          "partialFingerprints": {
+            "disciplineFingerprint/v2": "650990c540a71fbd2bdc551e9db6580d43627ddf3ecf1acf168cd8e7cb57fffa"
+          },
+          "ruleId": "policy/max-inline-overrides-exceeded"
+        },
+        {
+          "level": "error",
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "directives.max_overrides"
+                }
+              ]
+            }
+          ],
+          "message": {
+            "text": "The change applies more directive overrides than `directives.max_overrides` allows, so the run is refused. The counts are in the JSON report (`policy_failures`)."
+          },
+          "partialFingerprints": {
+            "disciplineFingerprint/v2": "6287ff8b206e25276ebd027e3bb0ccf661a3baba5a927c73281a66bcc1f3f6b5"
+          },
+          "ruleId": "policy/max-overrides-exceeded"
+        },
+        {
+          "level": "error",
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "directives.require_approval"
+                }
+              ]
+            }
+          ],
+          "message": {
+            "text": "The change applies directive overrides under `directives.require_approval`, and its checked head has no approving review from a reviewer `directives.allowed_override_actors` lists (the author's own approval does not count), so the run is refused. The detail is in the JSON report (`policy_failures`)."
+          },
+          "partialFingerprints": {
+            "disciplineFingerprint/v2": "13f0038b25b5aab201f6e976fb4014a990c41b3a775109f93b58f681ce7d62d5"
+          },
+          "ruleId": "policy/approval-required"
+        },
+        {
+          "level": "note",
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "PR body"
+                }
+              ],
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pr-body"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "A directive written where the rendered text does not show it was not read (`allow_hidden` is false). It lifts no finding; a finding it was written for is reported by its gate."
+          },
+          "partialFingerprints": {
+            "disciplineFingerprint/v2": "608ccaf03b1e28bec0d81bba1c0834382fc22ec75b870126ce99ebc7e9255b40"
+          },
+          "ruleId": "policy/hidden-directive-refused"
+        },
+        {
+          "level": "note",
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "commit 0123456789abcdef0123456789abcdef01234567"
+                }
+              ]
+            }
+          ],
+          "message": {
+            "text": "A directive written where the rendered text does not show it was not read (`allow_hidden` is false). It lifts no finding; a finding it was written for is reported by its gate."
+          },
+          "partialFingerprints": {
+            "disciplineFingerprint/v2": "771e30a725d428a192a7da3bf0f4dec9166b06e4953d63c55492627197bbb1b8"
+          },
+          "ruleId": "policy/hidden-directive-refused"
+        },
+        {
+          "level": "note",
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "PR body, hidden directive 2"
+                }
+              ],
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pr-body"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "A directive written where the rendered text does not show it was not read (`allow_hidden` is false). It lifts no finding; a finding it was written for is reported by its gate."
+          },
+          "partialFingerprints": {
+            "disciplineFingerprint/v2": "02b5a625f8052dd38b38032b8cff37b1042b229a01ad68ff002863795950077d"
+          },
+          "ruleId": "policy/hidden-directive-refused"
+        },
+        {
+          "level": "note",
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "merged pull request #7 body"
+                }
+              ]
+            }
+          ],
+          "message": {
+            "text": "A directive written where the rendered text does not show it was not read (`allow_hidden` is false). It lifts no finding; a finding it was written for is reported by its gate."
+          },
+          "partialFingerprints": {
+            "disciplineFingerprint/v2": "2d751e75324f832f36633b466cbeda0af560888cfd22710232d226696fb2b993"
+          },
+          "ruleId": "policy/hidden-directive-refused"
+        }
+      ],
+      "tool": {
+        "driver": {
+          "informationUri": "https://github.com/orieg/discipline",
+          "name": "discipline",
+          "rules": [
+            {
+              "fullDescription": {
+                "text": "AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it"
+              },
+              "helpUri": "https://orieg.github.io/discipline/gates/#agents-md",
+              "id": "agents-md/agents-md-missing",
+              "name": "AgentsMd/agentsMdMissing",
+              "properties": {
+                "examined": 1,
+                "gate": "agents-md",
+                "tags": [
+                  "agents-md"
+                ]
+              },
+              "shortDescription": {
+                "text": "AGENTS.md Missing"
+              }
+            },
+            {
+              "fullDescription": {
+                "text": "AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it"
+              },
+              "helpUri": "https://orieg.github.io/discipline/gates/#agents-md",
+              "id": "agents-md/agent-guide-forked",
+              "name": "AgentsMd/agentGuideForked",
+              "properties": {
+                "examined": 1,
+                "gate": "agents-md",
+                "tags": [
+                  "agents-md"
+                ]
+              },
+              "shortDescription": {
+                "text": "Forked Agent Guide"
+              }
+            },
+            {
+              "fullDescription": {
+                "text": "The change applies more directive overrides than `directives.max_overrides` allows, so the run is refused. The counts are in the JSON report (`policy_failures`)."
+              },
+              "helpUri": "https://orieg.github.io/discipline/configuration/#policy-refusals",
+              "id": "policy/max-overrides-exceeded",
+              "name": "Policy/maxOverridesExceeded",
+              "properties": {
+                "configurationKey": "directives.max_overrides",
+                "failsRun": true,
+                "tags": [
+                  "policy"
+                ]
+              },
+              "shortDescription": {
+                "text": "Directive Override Budget Exceeded"
+              }
+            },
+            {
+              "fullDescription": {
+                "text": "The change applies more inline overrides than `directives.max_inline_overrides` allows, so the run is refused. The counts are in the JSON report (`policy_failures`)."
+              },
+              "helpUri": "https://orieg.github.io/discipline/configuration/#policy-refusals",
+              "id": "policy/max-inline-overrides-exceeded",
+              "name": "Policy/maxInlineOverridesExceeded",
+              "properties": {
+                "configurationKey": "directives.max_inline_overrides",
+                "failsRun": true,
+                "tags": [
+                  "policy"
+                ]
+              },
+              "shortDescription": {
+                "text": "Inline Override Budget Exceeded"
+              }
+            },
+            {
+              "fullDescription": {
+                "text": "The change applies directive overrides under `directives.require_approval`, and its checked head has no approving review from a reviewer `directives.allowed_override_actors` lists (the author's own approval does not count), so the run is refused. The detail is in the JSON report (`policy_failures`)."
+              },
+              "helpUri": "https://orieg.github.io/discipline/configuration/#policy-refusals",
+              "id": "policy/approval-required",
+              "name": "Policy/approvalRequired",
+              "properties": {
+                "configurationKey": "directives.require_approval",
+                "failsRun": true,
+                "tags": [
+                  "policy"
+                ]
+              },
+              "shortDescription": {
+                "text": "Directive Overrides Await Approval"
+              }
+            },
+            {
+              "fullDescription": {
+                "text": "A directive written where the rendered text does not show it was not read (`allow_hidden` is false). It lifts no finding; a finding it was written for is reported by its gate."
+              },
+              "helpUri": "https://orieg.github.io/discipline/configuration/#policy-refusals",
+              "id": "policy/hidden-directive-refused",
+              "name": "Policy/hiddenDirectiveRefused",
+              "properties": {
+                "configurationKey": "directives.allow_hidden",
+                "failsRun": false,
+                "tags": [
+                  "policy"
+                ]
+              },
+              "shortDescription": {
+                "text": "Hidden Directive Not Read"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "version": "2.1.0"
+}
