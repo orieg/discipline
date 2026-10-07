@@ -295,6 +295,18 @@ fn render_step_summary(
     render_step_summary_to_writer(&mut file, summary, fail_on_warnings, fail_on_overrides)
 }
 
+/// Where a directive was read, for a Markdown sentence. The pull request number is the
+/// report's own (the one the forge gave for the change), so that reference stays one;
+/// every other source is quoted, since it carries a file name or a commit id.
+fn source_in_markdown(source: &crate::tokens::OverrideSource) -> String {
+    match source {
+        crate::tokens::OverrideSource::MergedPrBody(n) => {
+            format!("merged pull request #{n} body")
+        }
+        other => text::markdown(&other.to_string()),
+    }
+}
+
 pub fn render_step_summary_to_writer(
     mut file: impl std::io::Write,
     summary: &CheckSummary,
@@ -327,7 +339,7 @@ pub fn render_step_summary_to_writer(
             file,
             "**Unused directive:** {} in {} lifted no finding\n",
             text::code_span(&d.directive),
-            text::markdown(&d.source.to_string())
+            source_in_markdown(&d.source)
         )?;
     }
 
@@ -863,6 +875,43 @@ mod tests {
             "{plain}"
         );
         assert!(plain.contains("Base: `plain`\n"), "{plain}");
+    }
+
+    /// A reference quoted text writes is a code span; the pull request the report itself
+    /// names as the source of a directive stays a reference.
+    #[test]
+    fn a_quoted_reference_is_a_code_span_and_the_reports_own_stays_one() {
+        use crate::tokens::{OverrideSource, UnusedDirective};
+        let mut summary = quoting("fixes #5 for a@b.co at deadbeef1");
+        summary.outcomes[0].overrides[0].source = OverrideSource::MergedPrBody(12);
+        summary.unused_directives.push(UnusedDirective {
+            directive: "allow-x".into(),
+            source: OverrideSource::MergedPrBody(12),
+            hidden: false,
+        });
+        let out = step_summary_of(&summary);
+        let quoted = "fixes `#5` for `a@b.co` at `deadbeef1`";
+        assert!(
+            out.contains(&format!("| {quoted} | merged pull request #12 body |\n")),
+            "{out}"
+        );
+        assert!(out.contains(&format!("**Refused:** {quoted}\n")), "{out}");
+        assert!(
+            out.contains(&format!("**Directives:** {quoted}\n")),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "**Unused directive:** `allow-x` in merged pull request #12 body lifted no finding\n"
+            ),
+            "{out}"
+        );
+        // The terminal report writes the same text as it is.
+        assert!(
+            terminal_of(&summary).contains("fixes #5 for a@b.co at deadbeef1"),
+            "{}",
+            terminal_of(&summary)
+        );
     }
 
     /// Warnings follow the blocking issues under their own heading: an agent told to

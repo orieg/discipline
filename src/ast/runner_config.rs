@@ -381,11 +381,41 @@ pub fn read_jest_scripts(package: &serde_json::Value) -> JestScripts {
 /// The `include` and `exclude` lists `deno test` reads from a `deno.json` / `deno.jsonc`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DenoTest {
-    /// `test.include`, when it is in force: `None` when the key is unset, and when a
-    /// task passes `deno test` paths of its own, which replace it.
+    /// `test.include`, when the key is set.
     pub include: Option<Vec<String>>,
-    /// `test.exclude` and the top-level `exclude`, which both apply.
-    pub exclude: Vec<String>,
+    /// The top-level `exclude` then `test.exclude`, which both apply, in that order.
+    /// The last entry that holds a path decides for it.
+    pub exclude: Vec<DenoExclude>,
+    /// A task passes `deno test` paths of its own, which replace `test.include`.
+    pub task_paths: bool,
+    /// `"vendor": true`: the root `vendor` directory is left out.
+    pub vendor: bool,
+    /// A `workspace` key: a member's own configuration applies below it.
+    pub workspace: bool,
+}
+
+/// One `exclude` entry of a Deno configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DenoExclude {
+    /// The path or glob, without the `!` of a negated entry.
+    pub entry: String,
+    /// `!path`: the entry brings back what an earlier one left out.
+    pub negated: bool,
+}
+
+/// Why the lists of a Deno configuration cannot be told from the file.
+pub const DENO_UNPARSED: &str =
+    "the Deno configuration does not parse, or a list in it holds something that is not a string";
+pub const DENO_OTHER_CONFIG: &str =
+    "a task runs `deno test` with `--config` or `--no-config`, so the root Deno configuration is not the one in force";
+pub const DENO_NEGATED_GLOB: &str =
+    "a negated `exclude` entry of the Deno configuration is a glob, or a glob follows a negated entry, which is not evaluated";
+pub const DENO_NEGATION_UNREACHED: &str =
+    "a negated `exclude` entry of the Deno configuration comes before an entry that excludes it, and `deno test` refuses to run with that";
+
+/// Whether a Deno list entry is a glob.
+pub fn deno_entry_is_glob(entry: &str) -> bool {
+    entry.contains(['*', '?', '[', '{'])
 }
 
 /// JSON with comments and trailing commas (`deno.jsonc`, and `deno.json`, which Deno
@@ -497,35 +527,81 @@ fn deno_test_tasks(config: &serde_json::Value) -> (bool, bool) {
 }
 
 /// Reads the lists `deno test` takes from a `deno.json` / `deno.jsonc`: `test.include`,
-/// `test.exclude` and the top-level `exclude`. `None` when they cannot be told from the
-/// file: it does not parse, a list holds something that is not a string, an `exclude`
-/// entry is negated (`!path` brings a path back), or a task runs `deno test` with a
-/// configuration file of its own. The top-level `include` does not limit `deno test`.
-pub fn parse_deno_config(source: &str) -> Option<DenoTest> {
-    let config: serde_json::Value = serde_json::from_str(&strip_jsonc(source)?).ok()?;
-    let (other_config, paths) = deno_test_tasks(&config);
+/// `test.exclude` and the top-level `exclude`. `Err` with the reason when they cannot be
+/// told from the file: it does not parse, a list holds something that is not a string,
+/// a task runs `deno test` with a configuration file of its own, or the `exclude` list
+/// holds a negation this does not evaluate. The top-level `include` does not limit
+/// `deno test`.
+///
+/// A negated entry (`!path`) is read when it is a plain path and only plain paths
+/// follow it: `deno test` (deno 2.6) then lets the last entry that holds a file decide.
+/// It refuses to run (`Invalid exclude: The negation of '!a/b' is never reached`) when
+/// a later plain entry holds the negated path.
+pub fn parse_deno_config(source: &str) -> Result<DenoTest, &'static str> {
+    let stripped = strip_jsonc(source).ok_or(DENO_UNPARSED)?;
+    let config: serde_json::Value = serde_json::from_str(&stripped).map_err(|_| DENO_UNPARSED)?;
+    let (other_config, task_paths) = deno_test_tasks(&config);
     if other_config {
-        return None;
+        return Err(DENO_OTHER_CONFIG);
     }
     let test = config.get("test");
-    let mut exclude = Vec::new();
+    let mut exclude: Vec<DenoExclude> = Vec::new();
     for list in [config.get("exclude"), test.and_then(|t| t.get("exclude"))]
         .into_iter()
         .flatten()
     {
-        exclude.extend(json_strings(list)?);
+        for raw in json_strings(list).ok_or(DENO_UNPARSED)? {
+            exclude.push(match raw.strip_prefix('!') {
+                Some(rest) => DenoExclude {
+                    entry: rest.to_string(),
+                    negated: true,
+                },
+                None => DenoExclude {
+                    entry: raw,
+                    negated: false,
+                },
+            });
+        }
     }
-    if exclude
-        .iter()
-        .any(|entry| entry.trim_start().starts_with('!'))
-    {
-        return None;
+    for (at, entry) in exclude.iter().enumerate() {
+        if !entry.negated {
+            continue;
+        }
+        // A negated glob does not bring a file back the way a negated path does, and
+        // a path written with surrounding white space names another path.
+        if deno_entry_is_glob(&entry.entry) || entry.entry.trim() != entry.entry {
+            return Err(DENO_NEGATED_GLOB);
+        }
+        let negated = deno_path_words(&entry.entry);
+        for later in exclude[at + 1..].iter().filter(|e| !e.negated) {
+            if deno_entry_is_glob(&later.entry) {
+                return Err(DENO_NEGATED_GLOB);
+            }
+            let holder = deno_path_words(&later.entry);
+            if negated.len() >= holder.len() && negated[..holder.len()] == holder[..] {
+                return Err(DENO_NEGATION_UNREACHED);
+            }
+        }
     }
     let include = match test.and_then(|t| t.get("include")) {
-        Some(list) if !paths => Some(json_strings(list)?),
-        _ => None,
+        Some(list) => Some(json_strings(list).ok_or(DENO_UNPARSED)?),
+        None => None,
     };
-    Some(DenoTest { include, exclude })
+    Ok(DenoTest {
+        include,
+        exclude,
+        task_paths,
+        vendor: config.get("vendor").and_then(|v| v.as_bool()) == Some(true),
+        workspace: config.get("workspace").is_some_and(|w| !w.is_null()),
+    })
+}
+
+/// The segments of a path entry, without `.` and empty ones.
+fn deno_path_words(entry: &str) -> Vec<&str> {
+    entry
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect()
 }
 
 /// Whether a script of a parsed `package.json` runs Node's own test runner: a command
@@ -1420,5 +1496,87 @@ export default { test: { include: ['a/**'] } };
         ] {
             assert_eq!(parse_conftest(source), ConftestIgnores::Dynamic, "{source}");
         }
+    }
+
+    fn deno_excludes(config: &str) -> Vec<(String, bool)> {
+        parse_deno_config(config)
+            .unwrap()
+            .exclude
+            .into_iter()
+            .map(|e| (e.entry, e.negated))
+            .collect()
+    }
+
+    /// Each list was run with `deno test` (deno 2.6): the first group runs, with the
+    /// last entry that holds a file deciding; the others are refused by Deno or leave a
+    /// file out by a rule that is not read.
+    #[test]
+    fn a_negated_deno_exclude_entry_is_read_when_it_is_a_plain_path() {
+        assert_eq!(
+            deno_excludes(r#"{"exclude": ["a"], "test": {"exclude": ["!a/keep", "b"]}}"#),
+            [
+                ("a".to_string(), false),
+                ("a/keep".to_string(), true),
+                ("b".to_string(), false)
+            ]
+        );
+        for config in [
+            r#"{"test": {"exclude": ["a", "!a/keep"]}}"#,
+            r#"{"test": {"exclude": ["a", "!./a/keep/"]}}"#,
+            r#"{"test": {"exclude": ["a", "!a/keep", "a/keep/x_test.ts"]}}"#,
+            r#"{"test": {"exclude": ["a/keep", "!a/keep"]}}"#,
+            r#"{"test": {"exclude": ["a*", "!a/keep"]}}"#,
+            r#"{"test": {"exclude": ["!a/keep", "b"]}}"#,
+        ] {
+            assert!(parse_deno_config(config).is_ok(), "{config}");
+        }
+        for (config, reason) in [
+            (
+                r#"{"test": {"exclude": ["!a/keep", "a"]}}"#,
+                DENO_NEGATION_UNREACHED,
+            ),
+            (
+                r#"{"test": {"exclude": ["!a/keep", "a/keep"]}}"#,
+                DENO_NEGATION_UNREACHED,
+            ),
+            (
+                r#"{"test": {"exclude": ["a"]}, "exclude": ["!a/keep"]}"#,
+                DENO_NEGATION_UNREACHED,
+            ),
+            (
+                r#"{"test": {"exclude": ["a/**", "!a/keep/**"]}}"#,
+                DENO_NEGATED_GLOB,
+            ),
+            (
+                r#"{"test": {"exclude": ["!a/keep", "**/x"]}}"#,
+                DENO_NEGATED_GLOB,
+            ),
+            (
+                r#"{"test": {"exclude": ["a", "! a/keep"]}}"#,
+                DENO_NEGATED_GLOB,
+            ),
+            (r#"{"test": {"exclude": ["a", 1]}}"#, DENO_UNPARSED),
+            (r#"{"test": {"include": "a"}}"#, DENO_UNPARSED),
+            (r#"{"test": "#, DENO_UNPARSED),
+            (
+                r#"{"tasks": {"t": "deno test --no-config"}}"#,
+                DENO_OTHER_CONFIG,
+            ),
+        ] {
+            assert_eq!(parse_deno_config(config), Err(reason), "{config}");
+        }
+    }
+
+    #[test]
+    fn deno_keys_beside_the_lists_are_read() {
+        let read = parse_deno_config(
+            r#"{"vendor": true, "workspace": ["./a"], "tasks": {"t": "deno test src/"}, "test": {"include": ["src"]}}"#,
+        )
+        .unwrap();
+        assert!(read.vendor && read.workspace && read.task_paths);
+        assert_eq!(read.include, Some(vec!["src".to_string()]));
+        let plain = parse_deno_config("{}").unwrap();
+        assert!(!plain.vendor && !plain.workspace && !plain.task_paths);
+        assert_eq!(plain.include, None);
     }
 }

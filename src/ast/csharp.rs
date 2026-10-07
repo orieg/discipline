@@ -347,12 +347,17 @@ impl<'a> CSharpExtractor<'a> {
 
     /// What an xUnit attribute with `Skip = ".."` and `SkipWhen = nameof(X)` or
     /// `SkipUnless = nameof(X)` does: a skip under the member of this file it names.
-    /// `None` when the attribute carries no such pair.
-    fn attribute_skip_condition(&self, attr: Node) -> Option<SkipRead> {
+    /// Returns whether the attribute has an argument named `Skip`, and the conditional
+    /// skip when it carries such a pair. The argument is found by its name in the tree:
+    /// a display name whose text contains `Skip` is not one.
+    fn attribute_skip_condition(&self, attr: Node) -> (bool, Option<SkipRead>) {
         let mut cursor = attr.walk();
-        let list = attr
+        let Some(list) = attr
             .children(&mut cursor)
-            .find(|c| c.kind() == "attribute_argument_list")?;
+            .find(|c| c.kind() == "attribute_argument_list")
+        else {
+            return (false, None);
+        };
         let mut skips = false;
         let mut condition = None;
         let mut cursor = list.walk();
@@ -370,8 +375,10 @@ impl<'a> CSharpExtractor<'a> {
                 _ => {}
             }
         }
-        let condition = condition.filter(|_| skips)?;
-        Some(read_skip(Grammar::CSharp, attr, Some(condition), self.src))
+        let read = condition
+            .filter(|_| skips)
+            .map(|condition| read_skip(Grammar::CSharp, attr, Some(condition), self.src));
+        (skips, read)
     }
 
     /// The condition a call that skips under one takes, with whether the test runs when
@@ -454,19 +461,9 @@ impl<'a> CSharpExtractor<'a> {
                             // xUnit `Skip = "..."` skips the test; with `SkipWhen` or
                             // `SkipUnless` beside it, under the condition they name.
                             match self.attribute_skip_condition(attr) {
-                                Some(read) => attribute_skips.push(read),
-                                None => {
-                                    let mut arg_cursor = attr.walk();
-                                    for arg in attr.children(&mut arg_cursor) {
-                                        if matches!(
-                                            arg.kind(),
-                                            "attribute_argument_list" | "attribute_argument"
-                                        ) && self.text(arg).contains("Skip")
-                                        {
-                                            is_ignored = true;
-                                        }
-                                    }
-                                }
+                                (_, Some(read)) => attribute_skips.push(read),
+                                (true, None) => is_ignored = true,
+                                (false, None) => {}
                             }
                         }
 

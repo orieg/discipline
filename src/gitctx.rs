@@ -62,12 +62,36 @@ pub const REPLAY_BASE_EMAIL: &str = "replay@discipline.invalid";
 /// Message of that base commit.
 pub const REPLAY_BASE_MESSAGE: &str = "replay base";
 
+/// A commit's message as every command reads it: bytes that are not UTF-8 become U+FFFD
+/// each, so a directive in a message with one such byte is still read. A message is never
+/// read as empty because it is not UTF-8.
+pub fn commit_message(commit: &git2::Commit) -> String {
+    String::from_utf8_lossy(commit.message_bytes()).into_owned()
+}
+
+/// A commit's subject, read the same way as [`commit_message`].
+pub fn commit_subject(commit: &git2::Commit) -> String {
+    commit
+        .summary_bytes()
+        .map(|b| String::from_utf8_lossy(b).into_owned())
+        .unwrap_or_default()
+}
+
 pub struct GitCtx {
     repo: Repository,
     /// Tree the change is measured against; `None` = empty tree (first commit).
     base: Option<Oid>,
     base_label: String,
     staged: bool,
+    /// A number no other `GitCtx` of this process has ([`GitCtx::run_id`]).
+    run: u64,
+}
+
+/// The next [`GitCtx::run_id`].
+static NEXT_RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_run() -> u64 {
+    NEXT_RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Detect the target base git ref for diff inspection.
@@ -593,10 +617,54 @@ pub fn discover_repository(path: impl AsRef<std::path::Path>) -> Result<Reposito
         }
     }
 
+    let configured = user_configured_worktree();
     match Repository::discover(path.as_ref()) {
-        Ok(repo) => Ok(repo),
-        Err(err) => Err(format_discover_error(&err, path.as_ref())),
+        Ok(repo) => {
+            // The setting applies to every repository the user opens. When it names a
+            // directory this path is not in, the files read would be another tree's.
+            if let Some(worktree) = &configured {
+                let inside = match (repo.workdir(), path.as_ref().canonicalize()) {
+                    (Some(workdir), Ok(here)) => workdir
+                        .canonicalize()
+                        .is_ok_and(|workdir| here.starts_with(workdir)),
+                    _ => false,
+                };
+                if !inside {
+                    bail!(
+                        "git's user configuration sets `core.worktree` to a directory (`{}`) that is not the directory this repository is in, so its files cannot be read as the change; unset it (`git config --global --unset core.worktree`) or set it only in the repository it belongs to",
+                        last_component(worktree)
+                    );
+                }
+            }
+            Ok(repo)
+        }
+        Err(err) => match configured.filter(|worktree| !worktree.exists()) {
+            // The library's error names the whole path, which can be a home directory.
+            Some(worktree) => Err(anyhow!(
+                "git's user configuration sets `core.worktree` to a directory (`{}`) that does not exist, so no repository can be opened; unset it (`git config --global --unset core.worktree`) or set it only in the repository it belongs to",
+                last_component(&worktree)
+            )),
+            None => Err(format_discover_error(&err, path.as_ref())),
+        },
     }
+}
+
+/// `core.worktree` as the configuration outside any repository sets it (the user's, the
+/// XDG and the system files): there it applies to every repository opened. `None` when
+/// it is not set there, which is the usual case.
+fn user_configured_worktree() -> Option<std::path::PathBuf> {
+    git2::Config::open_default()
+        .ok()?
+        .get_path("core.worktree")
+        .ok()
+}
+
+/// The last component of `path`, for a message: the directories above it can be a home
+/// directory.
+fn last_component(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "(unnamed)".to_string())
 }
 
 impl GitCtx {
@@ -632,6 +700,7 @@ impl GitCtx {
             base: None,
             base_label: "empty tree (whole-tree baseline)".to_string(),
             staged: false,
+            run: next_run(),
         })
     }
 
@@ -746,6 +815,7 @@ impl GitCtx {
             base,
             base_label,
             staged,
+            run: next_run(),
         })
     }
 
@@ -774,6 +844,26 @@ impl GitCtx {
             Some(oid) => Ok(Some(self.repo.find_commit(oid)?.tree()?)),
             None => Ok(None),
         }
+    }
+
+    /// An opened repository over `repo`, measured against `base`, for a unit test that
+    /// needs one outside this module.
+    #[cfg(test)]
+    pub(crate) fn for_test(repo: Repository, base: Option<Oid>) -> Self {
+        Self {
+            repo,
+            base,
+            base_label: "base".to_string(),
+            staged: false,
+            run: next_run(),
+        }
+    }
+
+    /// A number that names this opened repository among all those of the process. One
+    /// run opens one, and neither side of the change moves while it runs, so what was
+    /// read from the head side for this number holds for the rest of the run.
+    pub fn run_id(&self) -> u64 {
+        self.run
     }
 
     /// The object id of the base side's tree, which names its whole content. `None`
@@ -1672,6 +1762,7 @@ pub(crate) mod test_support {
             base: Some(commit),
             base_label: "base".to_string(),
             staged: false,
+            run: super::next_run(),
         };
         (dir, git)
     }
@@ -2329,6 +2420,7 @@ mod tests {
             base: Some(commit),
             base_label: "base".to_string(),
             staged: false,
+            run: next_run(),
         };
         (dir, git, blob)
     }
@@ -2363,6 +2455,7 @@ mod tests {
             base: Some(commit),
             base_label: "base".to_string(),
             staged: false,
+            run: next_run(),
         };
         (dir, git, sub)
     }
@@ -2400,6 +2493,7 @@ mod tests {
             base: git.base,
             base_label: "base".to_string(),
             staged: false,
+            run: next_run(),
         };
         let shown = format!("{:#}", git.base_content("sub/a.txt").unwrap_err());
         assert!(shown.contains("`sub/a.txt` on the base side"), "{shown}");
@@ -2579,6 +2673,7 @@ mod tests {
                 base: Some(commit),
                 base_label: "base".to_string(),
                 staged,
+                run: next_run(),
             };
             for path in ["somedir", "vendor/sub"] {
                 assert_eq!(git.base_content(path).unwrap(), None, "{path} base");

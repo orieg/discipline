@@ -40,7 +40,7 @@
           "type": "array"
         },
         "pr": {
-          "description": "Pull request number, from the forge or the subject's `(#N)`",
+          "description": "Pull request number, from the forge or from a `(#N)` the subject ends with",
           "minimum": 1,
           "type": [
             "integer",
@@ -169,7 +169,7 @@
           "type": "boolean"
         },
         "source": {
-          "description": "Where the directive was read: `PR body` (under replay, the merged pull request's body), `commit <sha>`, `merged pull request #N body` or `inline <file>:<line>`",
+          "description": "Where the directive was read: `PR body` (under replay, the merged pull request's body), `commit <sha>` (the replayed commit, never the scratch commit replay builds), `merged pull request #N body` or `inline <file>:<line>`",
           "type": "string"
         },
         "subject": {
