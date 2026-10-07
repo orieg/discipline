@@ -724,6 +724,11 @@ pub fn parse_conftest(source: &str) -> ConftestIgnores {
     if !source.contains("collect_ignore") && !source.contains("pytest_ignore_collect") {
         return none;
     }
+    // The Python scanner overflows its serialization buffer on a deep enough indentation
+    // stack (#636); refuse before the parser sees it, as the pack does.
+    if crate::ast::scanner_limits::python_indent_nesting(source).is_err() {
+        return ConftestIgnores::Dynamic;
+    }
     let mut parser = tree_sitter::Parser::new();
     if parser
         .set_language(&tree_sitter_python::LANGUAGE.into())

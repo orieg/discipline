@@ -54,6 +54,8 @@ pub mod runner_config;
 pub mod rust;
 #[cfg(feature = "lang-scala")]
 pub mod scala;
+#[cfg(any(feature = "lang-ruby", feature = "lang-python"))]
+pub(crate) mod scanner_limits;
 pub(crate) mod source_text;
 #[cfg(feature = "lang-swift")]
 pub mod swift;
