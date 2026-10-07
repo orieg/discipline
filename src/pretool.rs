@@ -10,7 +10,7 @@
 //! | Claude Code | `Write`, `Edit`, `MultiEdit`, `NotebookEdit`    | `tool_input.file_path` / `notebook_path` | `session_id` | exit 2, reason on stderr                                |
 //! | Copilot CLI | `create`, `edit`, `str_replace_editor`, `apply_patch` | `toolArgs.path`         | `sessionId`       | exit 0, `{"permissionDecision":"deny", ...}`              |
 //! | agy         | a tool whose arguments name a `TargetFile`      | `toolCall.args.TargetFile`  | `conversationId`  | exit 0, `{"decision":"deny","reason": ...}`               |
-//! | OpenCode    | `write`, `edit`, `apply_patch`                  | `output.args.filePath`, or the patch's file lines | `input.sessionID` | exit 1, the plugin throws with the reason |
+//! | OpenCode    | `write`, `edit`, `apply_patch`                  | `output.args.filePath` or `.path`, or the patch's file lines | `input.sessionID` | exit 1, the plugin throws with the reason |
 //! | Qwen Code   | `write_file`, `edit`, `replace`                 | `tool_input.file_path`      | `session_id`      | exit 2, reason on stderr (Claude Code's contract) |
 //! | Codex       | `apply_patch`, `Edit`, `Write`                  | the patch's file lines (`tool_input.command`) | `session_id` | exit 2, reason on stderr (Claude Code's contract) |
 //!
@@ -147,6 +147,8 @@ pub fn parse(agent: Agent, raw: &str) -> Option<ToolCall> {
             call.tool = s(&v, "/input/tool").unwrap_or_default();
             call.edits = matches!(call.tool.as_str(), "write" | "edit" | "apply_patch");
             call.targets.extend(s(&v, "/output/args/filePath"));
+            // OpenCode 2.x names the target `path`; `filePath` is its legacy spelling.
+            call.targets.extend(s(&v, "/output/args/path"));
             if let Some(p) = s(&v, "/output/args/patchText") {
                 call.targets.extend(patch_targets(&p));
             }
