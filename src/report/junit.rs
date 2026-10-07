@@ -5,6 +5,12 @@ use crate::guards::CheckSummary;
 
 /// Format CheckSummary as standard JUnit XML.
 pub fn format_junit(summary: &CheckSummary, fail_on_warnings: bool) -> String {
+    // A finding fails its test case when it is an error, or a warning that fails the run.
+    let fails = |severity: Severity| match severity {
+        Severity::Error => true,
+        Severity::Warning => fail_on_warnings,
+        Severity::Note => false,
+    };
     let mut out = String::new();
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
 
@@ -12,17 +18,9 @@ pub fn format_junit(summary: &CheckSummary, fail_on_warnings: bool) -> String {
     let mut total_failures = 0;
 
     for o in &summary.outcomes {
-        if !o.enabled {
-            // Skipped counts belong to individual testsuite elements
-        } else if !o.violations.is_empty() {
-            let has_failure = o.violations.iter().any(|v| match v.severity {
-                Severity::Error => true,
-                Severity::Warning => fail_on_warnings,
-                Severity::Note => false,
-            });
-            if has_failure {
-                total_failures += 1;
-            }
+        // Skipped counts belong to individual testsuite elements
+        if o.enabled && o.violations.iter().any(|v| fails(v.severity)) {
+            total_failures += 1;
         }
     }
 
@@ -47,15 +45,8 @@ pub fn format_junit(summary: &CheckSummary, fail_on_warnings: bool) -> String {
         for o in &outcomes {
             if !o.enabled {
                 suite_skipped += 1;
-            } else if !o.violations.is_empty() {
-                let has_failure = o.violations.iter().any(|v| match v.severity {
-                    Severity::Error => true,
-                    Severity::Warning => fail_on_warnings,
-                    Severity::Note => false,
-                });
-                if has_failure {
-                    suite_failures += 1;
-                }
+            } else if o.violations.iter().any(|v| fails(v.severity)) {
+                suite_failures += 1;
             }
         }
 
@@ -121,16 +112,8 @@ pub fn format_junit(summary: &CheckSummary, fail_on_warnings: bool) -> String {
                     o.overrides.len()
                 ));
                 for v in &o.violations {
-                    let is_failure = match v.severity {
-                        Severity::Error => true,
-                        Severity::Warning => fail_on_warnings,
-                        Severity::Note => false,
-                    };
-                    let sev_type = match v.severity {
-                        Severity::Error => "error",
-                        Severity::Warning => "warning",
-                        Severity::Note => "note",
-                    };
+                    let is_failure = fails(v.severity);
+                    let sev_type = v.severity;
                     let title = escape_xml(&v.title);
                     let mut details = String::new();
                     if let Some(file) = &v.file {

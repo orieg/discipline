@@ -39,7 +39,7 @@ pub const REVIEW_THREADS_QUERY: &str = "query ReviewThreads($owner: String!, $na
 
 /// The variables of [`REVIEW_THREADS_QUERY`].
 pub fn review_threads_vars(repo: &str, number: u64, after: Option<&str>) -> Value {
-    let (owner, name) = repo.split_once('/').unwrap_or((repo, ""));
+    let (owner, name) = crate::ratification::owner_and_name(repo);
     json!({"owner": owner, "name": name, "number": number, "after": after})
 }
 

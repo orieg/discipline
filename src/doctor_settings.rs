@@ -942,6 +942,12 @@ fn pattern_matches(pattern: &str, name: &str, slash_literal: bool) -> bool {
     if !slash_literal && pattern.len() > 1 && pattern.starts_with('/') && pattern.ends_with('/') {
         return regex::Regex::new(&pattern[1..pattern.len() - 1]).is_ok_and(|re| re.is_match(name));
     }
+    glob_matches(pattern, name, slash_literal)
+}
+
+/// Whether the glob `pattern` matches `name`; with `slash_literal`, `*` does not cross a
+/// `/`. A pattern that is not a glob matches nothing.
+pub(crate) fn glob_matches(pattern: &str, name: &str, slash_literal: bool) -> bool {
     globset::GlobBuilder::new(pattern)
         .literal_separator(slash_literal)
         .build()
