@@ -1481,6 +1481,50 @@ mod tests {
         assert_eq!(judge_shell(&long, &cwd, &scene), Verdict::Allow);
     }
 
+    /// A command whose tree nests past the depth every parse is held to has no tree, and
+    /// is refused with the reason of a command that does not parse; the deepest one read
+    /// is judged as any other command. The shell reader's own walk keeps a list of the
+    /// nodes left to read, so it is the bound that refuses here, not the stack.
+    #[test]
+    fn a_shell_command_nested_past_the_depth_limit_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        let wts = scene_with(&[("main", &main)], "main");
+        let scene = Scene {
+            worktrees: &wts,
+            leases: &[],
+            forbidden: None,
+            branch: None,
+        };
+        let cwd = main.canonicalize().unwrap();
+        // `subshells` nested subshells around one command: a tree of four levels (the
+        // program, the command, its name, the word) and one for each subshell.
+        let nested =
+            |subshells: usize| format!("{}true{}", "( ".repeat(subshells), " )".repeat(subshells));
+        let limit = crate::ast::source_text::TREE_DEPTH_LIMIT;
+        let refused =
+            Verdict::Deny("discipline could not parse this shell command, so it is refused".into());
+        // On the deep stack, as the hook judges every command.
+        crate::deep_stack::on_deep_stack(|| {
+            assert_eq!(judge_shell(&nested(1), &cwd, &scene), Verdict::Allow);
+            assert_eq!(
+                judge_shell(&nested(limit - 4), &cwd, &scene),
+                Verdict::Allow
+            );
+            assert_eq!(judge_shell(&nested(limit - 3), &cwd, &scene), refused);
+            assert_eq!(judge_shell(&nested(20_000), &cwd, &scene), refused);
+            // Command substitutions nest the same way, two levels each.
+            let substituted =
+                |n: usize| format!("echo {}true{}", "$(echo ".repeat(n), ")".repeat(n));
+            assert_eq!(judge_shell(&substituted(20), &cwd, &scene), Verdict::Allow);
+            assert_eq!(judge_shell(&substituted(20_000), &cwd, &scene), refused);
+            // The command after a refused one is read on its own.
+            assert_eq!(judge_shell("true", &cwd, &scene), Verdict::Allow);
+        })
+        .unwrap();
+    }
+
     /// `shell_tree::parse` takes an `AsciiParseText`, whose field is private to that
     /// module, so the compiler refuses any other text. What it cannot refuse is a
     /// second parser built somewhere else: the grammar and the parser type are named

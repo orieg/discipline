@@ -139,60 +139,7 @@ impl LanguagePack for SwiftPack {
         extractor.collect_escape_hatches(root);
         extractor.visit_node(root, &mut Vec::new(), false, false);
         extractor.resolve_same_file_helpers();
-        extractor.facts.functions = functions::extract(root, src, path, &SWIFT_FUNCTIONS);
-        super::mocks::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &SWIFT_MOCKS,
-            &vocab.mock_setup_fns,
-            &vocab.mock_assert_fns,
-        );
-        {
-            let tests = &extractor.facts.tests;
-            let spans: Vec<(usize, usize)> = tests
-                .iter()
-                .map(|t| (t.line, t.end_line.max(t.line)))
-                .collect();
-            let whole_file = functions::is_test_file(path, Some(is_swift_test_path))
-                || functions::declared_test_path(path, &vocab.test_paths);
-            let is_test_line =
-                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            (
-                extractor.facts.swallowed,
-                extractor.facts.constant_fallbacks,
-            ) = super::handlers::extract_with_constants(
-                root,
-                src,
-                &SWIFT_HANDLERS,
-                Some(&SWIFT_CONSTANTS),
-                &is_test_line,
-            );
-        }
-        super::retries::mark(root, src, &mut extractor.facts.tests, &SWIFT_RETRIES);
-        if functions::declared_test_path(path, &vocab.test_paths) {
-            for f in &mut extractor.facts.functions {
-                f.is_test = true;
-            }
-        }
-        super::method_checks::count(root, src, &mut extractor.facts, &SWIFT_RECEIVER_CALLS);
-        super::helper_loops::count(root, src, &mut extractor.facts, &super::helper_loops::SWIFT);
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &SWIFT_MOCKS,
-            super::calls::SLEEP_VOCAB,
-            super::calls::sleeps,
-        );
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &SWIFT_MOCKS,
-            super::calls::TRIVIAL_ASSERT_VOCAB,
-            super::calls::trivial_asserts,
-        );
+        SWIFT_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
         super::expected_exceptions::swift(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
@@ -493,33 +440,20 @@ impl<'a> SwiftExtractor<'a> {
             );
             self.helpers
                 .entry(name.to_string())
-                .or_insert(super::HelperFacts {
-                    total_asserts: helper_fn.total_asserts,
-                    strong_asserts: helper_fn.strong_asserts,
-                    tautologies: helper_fn.tautologies,
-                    fatal_asserts: helper_fn.fatal_asserts,
-                    wraps: super::forwarding_wrapper_callee(
+                .or_insert(super::HelperFacts::from_scan(
+                    &helper_fn,
+                    super::forwarding_wrapper_callee(
                         body,
                         &SWIFT_WRAPPER,
                         &SWIFT_LOCALS,
                         &dummy_calls,
                         self.src,
                     ),
-                });
+                ));
             let line = node.start_position().row + 1;
             let end_line = node.end_position().row + 1;
             self.facts.push_helper(
-                super::TestHelperFacts {
-                    name: name.to_string(),
-                    line,
-                    end_line,
-                    total_asserts: helper_fn.total_asserts,
-                    strong_asserts: helper_fn.strong_asserts,
-                    tautologies: helper_fn.tautologies,
-                    fatal_asserts: helper_fn.fatal_asserts,
-                    helper_checks: 0,
-                    equality_exits: 0,
-                },
+                super::TestHelperFacts::from_scan(name.to_string(), line, end_line, &helper_fn),
                 dummy_calls,
             );
         }
@@ -614,9 +548,21 @@ impl<'a> SwiftExtractor<'a> {
         match first.kind() {
             "boolean_literal" if self.text(*first) == "true" => test_fn.tautologies += 1,
             "equality_expression" | "comparison_expression" => {
-                let lhs = first.child_by_field_name("lhs").map(|n| self.text(n));
-                let rhs = first.child_by_field_name("rhs").map(|n| self.text(n));
-                if lhs.is_some() && lhs == rhs {
+                let lhs = first.child_by_field_name("lhs");
+                let rhs = first.child_by_field_name("rhs");
+                // `a == a` is recorded; `a != a` and `a <= a` are counted as before.
+                let mut cursor = first.walk();
+                let equality = first
+                    .children(&mut cursor)
+                    .any(|c| matches!(self.text(c).trim(), "==" | "==="));
+                let same = match (lhs, rhs) {
+                    (Some(l), Some(r)) if equality => {
+                        super::self_comparison::note(&mut test_fn.equality_operands, l, r, self.src)
+                    }
+                    (Some(l), Some(r)) => super::self_comparison::same(l, r, self.src),
+                    _ => false,
+                };
+                if same {
                     test_fn.tautologies += 1;
                 } else {
                     test_fn.strong_asserts += 1;
@@ -648,7 +594,14 @@ impl<'a> SwiftExtractor<'a> {
         match name {
             n if XCT_EQUALITY.contains(&n) => {
                 test_fn.total_asserts += 1;
-                if args.len() >= 2 && arg(0) == arg(1) {
+                if args.len() >= 2
+                    && super::self_comparison::note(
+                        &mut test_fn.equality_operands,
+                        args[0],
+                        args[1],
+                        self.src,
+                    )
+                {
                     test_fn.tautologies += 1;
                 } else {
                     test_fn.strong_asserts += 1;
@@ -713,6 +666,20 @@ fn swift_fn_is_test(node: Node, src: &str, path: &str) -> bool {
     });
     annotated || functions::is_test_file(path, Some(is_swift_test_path))
 }
+
+/// What the steps every pack shares read of this pack (`PackSpec::shared_facts`).
+const SWIFT_PACK: super::PackSpec = super::PackSpec {
+    functions: &SWIFT_FUNCTIONS,
+    own_test_path: Some(is_swift_test_path),
+    handlers: &SWIFT_HANDLERS,
+    constants: Some(&SWIFT_CONSTANTS),
+    retries: Some(&SWIFT_RETRIES),
+    receiver_calls: &SWIFT_RECEIVER_CALLS,
+    helper_loops: &super::helper_loops::SWIFT,
+    calls: &SWIFT_MOCKS,
+    vocabs: super::calls::SLEEPS_AND_TRIVIAL_ASSERTS,
+    judged: None,
+};
 
 pub const SWIFT_FUNCTIONS: FunctionSpec = FunctionSpec {
     // A protocol requirement has no body.

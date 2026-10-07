@@ -119,14 +119,16 @@ fn is_dashed_rule(paragraph: &[&str]) -> bool {
     paragraph.len() == 1 && first.len() >= 3 && first.chars().all(|c| c == '-')
 }
 
-/// Whether a subject ends with a pull request number in parentheses, `(#12)`: what a
-/// forge appends to the title of the commit it writes for a squash.
-fn ends_with_a_pull_number(subject: &str) -> bool {
-    subject
-        .trim_end()
-        .strip_suffix(')')
-        .and_then(|rest| rest.rsplit_once("(#"))
-        .is_some_and(|(_, n)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+/// The pull request number a subject ends with, `(#12)`: what a forge appends to the
+/// title of the commit it writes for a squash. A `(#12)` anywhere else in the subject is
+/// text of the subject, and `(#0)` is no pull request. The one reading of a number from a
+/// subject: `replay` and `audit` use it too.
+pub fn trailing_pull_number(subject: &str) -> Option<u64> {
+    let (_, digits) = subject.trim_end().strip_suffix(')')?.rsplit_once("(#")?;
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok().filter(|n| *n > 0)
 }
 
 /// The entries of a forge's message for a squash of several commits, when each can be
@@ -149,7 +151,7 @@ pub fn squash_entries(message: &str) -> Entries {
     let Some(&first) = openers.first() else {
         return Entries::None;
     };
-    let numbered = ends_with_a_pull_number(paragraphs[0][0]);
+    let numbered = trailing_pull_number(paragraphs[0][0]).is_some();
     if !numbered || first != 1 {
         // One such paragraph is a list item in a body far more often than a squash.
         if openers.len() < 2 {

@@ -1,7 +1,7 @@
 //! C# language pack: tree-sitter AST extraction of tests, assertions, and escape hatches.
 
-use anyhow::{anyhow, Result};
-use tree_sitter::{Node, Parser};
+use anyhow::Result;
+use tree_sitter::Node;
 
 use super::ci_condition::{read_skip, Grammar, SkipRead};
 use super::functions::{self, FunctionSpec};
@@ -35,11 +35,12 @@ impl LanguagePack for CSharpPack {
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
-            .map_err(|e| anyhow!("failed to load the C# grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
+        let tree = crate::ast::source_text::parse_file_as(
+            &tree_sitter_c_sharp::LANGUAGE.into(),
+            "the C#",
+            path,
+            src,
+        )?;
         let root = tree.root_node();
 
         let (has_errors, first_line, error_count) = super::collect_error_nodes_info(root);
@@ -61,68 +62,7 @@ impl LanguagePack for CSharpPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
-        extractor.facts.functions = functions::extract(root, src, path, &CSHARP_FUNCTIONS);
-        super::mocks::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &CSHARP_MOCKS,
-            &vocab.mock_setup_fns,
-            &vocab.mock_assert_fns,
-        );
-        {
-            let tests = &extractor.facts.tests;
-            let spans: Vec<(usize, usize)> = tests
-                .iter()
-                .map(|t| (t.line, t.end_line.max(t.line)))
-                .collect();
-            // A file matching the shared test-path conventions, this pack's own test-file
-            // convention, or one the repository declares as test scope, is test code
-            // line for line.
-            let whole_file = super::functions::is_test_file(path, Some(is_csharp_test_path))
-                || super::functions::declared_test_path(path, &vocab.test_paths);
-            let is_test_line =
-                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            (
-                extractor.facts.swallowed,
-                extractor.facts.constant_fallbacks,
-            ) = super::handlers::extract_with_constants(
-                root,
-                src,
-                &CSHARP_HANDLERS,
-                Some(&CSHARP_CONSTANTS),
-                &is_test_line,
-            );
-        }
-        super::retries::mark(root, src, &mut extractor.facts.tests, &CSHARP_RETRIES);
-        if super::functions::declared_test_path(path, &vocab.test_paths) {
-            for f in &mut extractor.facts.functions {
-                f.is_test = true;
-            }
-        }
-        super::method_checks::count(root, src, &mut extractor.facts, &CSHARP_RECEIVER_CALLS);
-        super::helper_loops::count(
-            root,
-            src,
-            &mut extractor.facts,
-            &super::helper_loops::CSHARP,
-        );
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &CSHARP_MOCKS,
-            super::calls::SLEEP_VOCAB,
-            super::calls::sleeps,
-        );
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &CSHARP_MOCKS,
-            super::calls::TRIVIAL_ASSERT_VOCAB,
-            super::calls::trivial_asserts,
-        );
+        CSHARP_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
         super::caught_assertions::csharp(root, src, &mut extractor.facts.tests, vocab);
         super::expected_exceptions::csharp(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
@@ -163,164 +103,163 @@ struct CSharpExtractor<'a> {
     test_calls: Vec<Vec<String>>,
 }
 
+/// The comments that suppress a C# analyser; a `#pragma` directive and a
+/// `SuppressMessage` attribute are read from their own nodes.
+const CS_SUPPRESSIONS: super::CommentSuppressions = super::CommentSuppressions {
+    hash_comments: false,
+    markers: &[
+        "#pragma warning disable",
+        "pragma warning disable",
+        "NOLINT",
+    ],
+};
+
 impl<'a> CSharpExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
         node.utf8_text(self.src).unwrap_or("")
     }
 
     fn collect_comments_and_escape_hatches(&mut self, node: Node) {
-        let kind = node.kind();
-        if kind == "comment" {
-            let text = self.text(node);
-            let line = node.start_position().row + 1;
-            let trimmed = text
-                .trim_start_matches("//")
-                .trim_start_matches("/*")
-                .trim_end_matches("*/")
-                .trim();
-
-            if trimmed.starts_with("#pragma warning disable")
-                || trimmed.starts_with("pragma warning disable")
-                || trimmed.starts_with("NOLINT")
-            {
-                self.facts
-                    .escape_hatches
-                    .push(EscapeHatchSite::LinterDisable {
-                        line,
-                        rule: trimmed.to_string(),
-                        snippet: text.to_string(),
-                    });
-            }
-            return;
-        }
-
-        // C# preprocessor directive: pragma_directive / preproc_pragma
-        if kind == "pragma_directive" || kind == "preproc_pragma" {
-            let text = self.text(node);
-            let line = node.start_position().row + 1;
-            if text.contains("warning disable") {
-                self.facts
-                    .escape_hatches
-                    .push(EscapeHatchSite::LinterDisable {
+        let src = self.src;
+        super::collect_comment_suppressions(
+            node,
+            src,
+            &CS_SUPPRESSIONS,
+            &mut |node, sites| {
+                let kind = node.kind();
+                let text = node.utf8_text(src).unwrap_or("");
+                let line = node.start_position().row + 1;
+                // C# preprocessor directive: pragma_directive / preproc_pragma
+                if (kind == "pragma_directive" || kind == "preproc_pragma")
+                    && text.contains("warning disable")
+                {
+                    sites.push(EscapeHatchSite::LinterDisable {
                         line,
                         rule: text.trim().to_string(),
                         snippet: text.to_string(),
                     });
-            }
-        }
-
-        // C# SuppressMessageAttribute on declarations
-        if kind == "attribute" {
-            let attr_name = node
-                .child_by_field_name("name")
-                .map(|n| self.text(n))
-                .unwrap_or("");
-            if attr_name == "SuppressMessage" || attr_name == "SuppressMessageAttribute" {
-                let line = node.start_position().row + 1;
-                self.facts
-                    .escape_hatches
-                    .push(EscapeHatchSite::LinterDisable {
-                        line,
-                        rule: self.text(node).to_string(),
-                        snippet: self.text(node).to_string(),
-                    });
-            }
-        }
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.collect_comments_and_escape_hatches(child);
-        }
+                }
+                // C# SuppressMessageAttribute on declarations
+                if kind == "attribute" {
+                    let attr_name = node
+                        .child_by_field_name("name")
+                        .map(|n| n.utf8_text(src).unwrap_or(""))
+                        .unwrap_or("");
+                    if attr_name == "SuppressMessage" || attr_name == "SuppressMessageAttribute" {
+                        sites.push(EscapeHatchSite::LinterDisable {
+                            line,
+                            rule: text.to_string(),
+                            snippet: text.to_string(),
+                        });
+                    }
+                }
+                true
+            },
+            &mut self.facts.escape_hatches,
+        );
     }
 
     fn visit_root(&mut self, root: Node) {
         self.walk_scope(root, false);
     }
 
-    fn walk_scope(&mut self, scope: Node, class_ignored: bool) {
-        let mut cursor = scope.walk();
-        for child in scope.children(&mut cursor) {
-            let kind = child.kind();
-            if matches!(
-                kind,
-                "class_declaration"
-                    | "struct_declaration"
-                    | "record_declaration"
-                    | "interface_declaration"
-            ) {
-                let is_ignored = class_ignored || self.has_ignore_attribute(child);
+    /// Reads every declaration under `root` in source order. The scopes still open are
+    /// kept in a list, not on the thread's stack, so a deep tree costs the walk no stack
+    /// (`source_text::TREE_DEPTH_LIMIT`).
+    fn walk_scope(&mut self, root: Node, class_ignored: bool) {
+        fn children(scope: Node) -> std::vec::IntoIter<Node> {
+            let mut cursor = scope.walk();
+            scope.children(&mut cursor).collect::<Vec<_>>().into_iter()
+        }
+        let mut open = vec![(children(root), class_ignored)];
+        while let Some((rest, class_ignored)) = open.last_mut() {
+            let class_ignored = *class_ignored;
+            let Some(child) = rest.next() else {
+                open.pop();
+                continue;
+            };
+            if let Some((scope, ignored)) = self.read_member(child, class_ignored) {
+                open.push((children(scope), ignored));
+            }
+        }
+    }
+
+    /// Reads one child of a scope. `Some` is a scope under it to read next, and whether
+    /// the class around that scope is ignored.
+    fn read_member<'t>(
+        &mut self,
+        child: Node<'t>,
+        class_ignored: bool,
+    ) -> Option<(Node<'t>, bool)> {
+        let kind = child.kind();
+        if matches!(
+            kind,
+            "class_declaration"
+                | "struct_declaration"
+                | "record_declaration"
+                | "interface_declaration"
+        ) {
+            let is_ignored = class_ignored || self.has_ignore_attribute(child);
+            child
+                .child_by_field_name("body")
+                .map(|body| (body, is_ignored))
+        } else if kind == "method_declaration" {
+            let name_node = child.child_by_field_name("name");
+            let method_name = name_node.map(|n| self.text(n)).unwrap_or("");
+            if let Some((test_fn, calls)) = self.try_extract_method_test(child, class_ignored) {
+                self.facts.tests.push(test_fn);
+                self.test_calls.push(calls);
+            } else if self.is_test_path {
+                let mut helper_fn = TestFn::default();
+                let mut dummy_calls = Vec::new();
+                let mut wrap_body = None;
                 if let Some(body) = child.child_by_field_name("body") {
-                    self.walk_scope(body, is_ignored);
-                }
-            } else if kind == "method_declaration" {
-                let name_node = child.child_by_field_name("name");
-                let method_name = name_node.map(|n| self.text(n)).unwrap_or("");
-                if let Some((test_fn, calls)) = self.try_extract_method_test(child, class_ignored) {
-                    self.facts.tests.push(test_fn);
-                    self.test_calls.push(calls);
-                } else if self.is_test_path {
-                    let mut helper_fn = TestFn::default();
-                    let mut dummy_calls = Vec::new();
-                    let mut wrap_body = None;
-                    if let Some(body) = child.child_by_field_name("body") {
-                        wrap_body = Some(body);
-                        self.extract_assertions_in_body(body, &mut helper_fn, &mut dummy_calls);
-                    } else {
-                        let mut cursor = child.walk();
-                        for c in child.children(&mut cursor) {
-                            if c.kind() == "arrow_expression_clause" {
-                                wrap_body = Some(c);
-                                self.extract_assertions_in_body(
-                                    c,
-                                    &mut helper_fn,
-                                    &mut dummy_calls,
-                                );
-                            }
+                    wrap_body = Some(body);
+                    self.extract_assertions_in_body(body, &mut helper_fn, &mut dummy_calls);
+                } else {
+                    let mut cursor = child.walk();
+                    for c in child.children(&mut cursor) {
+                        if c.kind() == "arrow_expression_clause" {
+                            wrap_body = Some(c);
+                            self.extract_assertions_in_body(c, &mut helper_fn, &mut dummy_calls);
                         }
                     }
-                    helper_fn.total_asserts += super::count_failure_exits(
-                        child,
-                        self.src,
-                        &["throw_statement", "throw_expression"],
-                        &[],
-                        &["lambda_expression", "local_function_statement"],
-                    );
-                    let facts = super::HelperFacts {
-                        total_asserts: helper_fn.total_asserts,
-                        strong_asserts: helper_fn.strong_asserts,
-                        tautologies: helper_fn.tautologies,
-                        fatal_asserts: helper_fn.fatal_asserts,
-                        wraps: wrap_body.and_then(|b| {
-                            super::forwarding_wrapper_callee(
-                                b,
-                                &CS_WRAPPER,
-                                &CS_LOCALS,
-                                &dummy_calls,
-                                self.src,
-                            )
-                        }),
-                    };
-                    self.helpers.insert(method_name.to_string(), facts);
-                    let line = child.start_position().row + 1;
-                    let end_line = child.end_position().row + 1;
-                    self.facts.push_helper(
-                        super::TestHelperFacts {
-                            name: method_name.to_string(),
-                            line,
-                            end_line,
-                            total_asserts: helper_fn.total_asserts,
-                            strong_asserts: helper_fn.strong_asserts,
-                            tautologies: helper_fn.tautologies,
-                            fatal_asserts: helper_fn.fatal_asserts,
-                            helper_checks: 0,
-                            equality_exits: 0,
-                        },
-                        dummy_calls,
-                    );
                 }
-            } else {
-                self.walk_scope(child, class_ignored);
+                helper_fn.total_asserts += super::count_failure_exits(
+                    child,
+                    self.src,
+                    &["throw_statement", "throw_expression"],
+                    &[],
+                    &["lambda_expression", "local_function_statement"],
+                );
+                let facts = super::HelperFacts::from_scan(
+                    &helper_fn,
+                    wrap_body.and_then(|b| {
+                        super::forwarding_wrapper_callee(
+                            b,
+                            &CS_WRAPPER,
+                            &CS_LOCALS,
+                            &dummy_calls,
+                            self.src,
+                        )
+                    }),
+                );
+                self.helpers.insert(method_name.to_string(), facts);
+                let line = child.start_position().row + 1;
+                let end_line = child.end_position().row + 1;
+                self.facts.push_helper(
+                    super::TestHelperFacts::from_scan(
+                        method_name.to_string(),
+                        line,
+                        end_line,
+                        &helper_fn,
+                    ),
+                    dummy_calls,
+                );
             }
+            None
+        } else {
+            Some((child, class_ignored))
         }
     }
 
@@ -347,12 +286,17 @@ impl<'a> CSharpExtractor<'a> {
 
     /// What an xUnit attribute with `Skip = ".."` and `SkipWhen = nameof(X)` or
     /// `SkipUnless = nameof(X)` does: a skip under the member of this file it names.
-    /// `None` when the attribute carries no such pair.
-    fn attribute_skip_condition(&self, attr: Node) -> Option<SkipRead> {
+    /// Returns whether the attribute has an argument named `Skip`, and the conditional
+    /// skip when it carries such a pair. The argument is found by its name in the tree:
+    /// a display name whose text contains `Skip` is not one.
+    fn attribute_skip_condition(&self, attr: Node) -> (bool, Option<SkipRead>) {
         let mut cursor = attr.walk();
-        let list = attr
+        let Some(list) = attr
             .children(&mut cursor)
-            .find(|c| c.kind() == "attribute_argument_list")?;
+            .find(|c| c.kind() == "attribute_argument_list")
+        else {
+            return (false, None);
+        };
         let mut skips = false;
         let mut condition = None;
         let mut cursor = list.walk();
@@ -370,8 +314,10 @@ impl<'a> CSharpExtractor<'a> {
                 _ => {}
             }
         }
-        let condition = condition.filter(|_| skips)?;
-        Some(read_skip(Grammar::CSharp, attr, Some(condition), self.src))
+        let read = condition
+            .filter(|_| skips)
+            .map(|condition| read_skip(Grammar::CSharp, attr, Some(condition), self.src));
+        (skips, read)
     }
 
     /// The condition a call that skips under one takes, with whether the test runs when
@@ -454,19 +400,9 @@ impl<'a> CSharpExtractor<'a> {
                             // xUnit `Skip = "..."` skips the test; with `SkipWhen` or
                             // `SkipUnless` beside it, under the condition they name.
                             match self.attribute_skip_condition(attr) {
-                                Some(read) => attribute_skips.push(read),
-                                None => {
-                                    let mut arg_cursor = attr.walk();
-                                    for arg in attr.children(&mut arg_cursor) {
-                                        if matches!(
-                                            arg.kind(),
-                                            "attribute_argument_list" | "attribute_argument"
-                                        ) && self.text(arg).contains("Skip")
-                                        {
-                                            is_ignored = true;
-                                        }
-                                    }
-                                }
+                                (_, Some(read)) => attribute_skips.push(read),
+                                (true, None) => is_ignored = true,
+                                (false, None) => {}
                             }
                         }
 
@@ -674,6 +610,11 @@ impl<'a> CSharpExtractor<'a> {
                 | "NotStrictEqual"
                 | "Same"
                 | "NotSame"
+                // NUnit's classic model and MSTest: `Assert.AreEqual(expected, actual)`.
+                | "AreEqual"
+                | "AreNotEqual"
+                | "AreSame"
+                | "AreNotSame"
                 | "Contains"
                 | "DoesNotContain"
                 | "Matches"
@@ -698,19 +639,46 @@ impl<'a> CSharpExtractor<'a> {
                 | "AreEquivalent"
         );
 
+        // NUnit's constraint model: `Assert.That(actual, Is.EqualTo(expected))` and
+        // `Is.SameAs(expected)` are equality assertions; any other constraint is counted
+        // as it was.
+        if method_name == "That" {
+            if let Some(expected) = args.get(1).and_then(|c| self.nunit_equality_operand(*c)) {
+                if super::self_comparison::note(
+                    &mut test_fn.equality_operands,
+                    args[0],
+                    expected,
+                    self.src,
+                ) {
+                    test_fn.tautologies += 1;
+                } else {
+                    test_fn.strong_asserts += 1;
+                }
+            }
+            return;
+        }
+
         if is_strong {
             test_fn.strong_asserts += 1;
-            // Equality tautology check: 2 args with identical text
+            // Equality tautology check: 2 args with the same tokens
             if matches!(
                 method_name,
-                "Equal" | "StrictEqual" | "Same" | "Equivalent" | "AreEquivalent"
+                "Equal"
+                    | "StrictEqual"
+                    | "Same"
+                    | "Equivalent"
+                    | "AreEquivalent"
+                    | "AreEqual"
+                    | "AreSame"
             ) && args.len() >= 2
+                && super::self_comparison::note(
+                    &mut test_fn.equality_operands,
+                    args[0],
+                    args[1],
+                    self.src,
+                )
             {
-                let left = self.text(args[0]).trim();
-                let right = self.text(args[1]).trim();
-                if !left.is_empty() && left == right {
-                    test_fn.tautologies += 1;
-                }
+                test_fn.tautologies += 1;
             }
         } else if method_name == "True" {
             if let Some(arg) = args.first() {
@@ -725,6 +693,20 @@ impl<'a> CSharpExtractor<'a> {
                 }
             }
         }
+    }
+
+    /// The operand of `Is.EqualTo(x)` / `Is.SameAs(x)`, written as exactly that call.
+    fn nunit_equality_operand<'b>(&self, constraint: Node<'b>) -> Option<Node<'b>> {
+        if constraint.kind() != "invocation_expression" {
+            return None;
+        }
+        let callee = constraint.child_by_field_name("function")?;
+        let callee: String = self.text(callee).split_whitespace().collect();
+        if !matches!(callee.as_str(), "Is.EqualTo" | "Is.SameAs") {
+            return None;
+        }
+        let args = self.get_invocation_arguments(constraint);
+        (args.len() == 1).then(|| args[0])
     }
 
     fn is_literal_true(&self, node: Node) -> bool {
@@ -804,6 +786,20 @@ fn csharp_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
     });
     found
 }
+
+/// What the steps every pack shares read of this pack (`PackSpec::shared_facts`).
+const CSHARP_PACK: super::PackSpec = super::PackSpec {
+    functions: &CSHARP_FUNCTIONS,
+    own_test_path: Some(is_csharp_test_path),
+    handlers: &CSHARP_HANDLERS,
+    constants: Some(&CSHARP_CONSTANTS),
+    retries: Some(&CSHARP_RETRIES),
+    receiver_calls: &CSHARP_RECEIVER_CALLS,
+    helper_loops: &super::helper_loops::CSHARP,
+    calls: &CSHARP_MOCKS,
+    vocabs: super::calls::SLEEPS_AND_TRIVIAL_ASSERTS,
+    judged: None,
+};
 
 pub const CSHARP_FUNCTIONS: FunctionSpec = FunctionSpec {
     function_kinds: &[
@@ -1164,6 +1160,68 @@ public class NUnitTests
         assert_eq!(facts.tests.len(), 2);
         assert_eq!(facts.tests[0].name, "NUnitTest");
         assert!(facts.tests[1].ignored);
+    }
+
+    /// A class's `[Ignore]` reaches the tests of the classes nested in it and no test
+    /// after it: the scope walk reads a class's members before the next sibling, and
+    /// the classes read after an ignored one are not ignored.
+    #[test]
+    fn an_ignored_class_ignores_the_tests_nested_in_it_and_none_after_it() {
+        let src = r#"
+using NUnit.Framework;
+
+public class Before
+{
+    [Test]
+    public void First() { Assert.AreEqual(1, One()); }
+}
+
+[Ignore("not run")]
+public class Skipped
+{
+    [Test]
+    public void Second() { Assert.AreEqual(1, One()); }
+
+    public class Inner
+    {
+        public class Innermost
+        {
+            [Test]
+            public void Third() { Assert.AreEqual(1, One()); }
+        }
+    }
+
+    [Test]
+    public void Fourth() { Assert.AreEqual(1, One()); }
+}
+
+public class After
+{
+    public class Inner
+    {
+        [Test]
+        public void Fifth() { Assert.AreEqual(1, One()); }
+    }
+}
+"#;
+        let facts = CSharpPack
+            .extract("tests/ScopeTests.cs", src, &AssertVocabulary::default())
+            .expect("extract succeeds");
+        let read: Vec<(&str, bool)> = facts
+            .tests
+            .iter()
+            .map(|t| (t.name.as_str(), t.ignored))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                ("First", false),
+                ("Second", true),
+                ("Third", true),
+                ("Fourth", true),
+                ("Fifth", false),
+            ]
+        );
     }
 
     #[test]

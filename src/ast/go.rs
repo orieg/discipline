@@ -4,7 +4,7 @@ use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
 use super::functions::{self, FunctionSpec};
-use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
+use super::{AssertVocabulary, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
 /// Go language pack implementing [`LanguagePack`].
 pub struct GoPack;
@@ -34,11 +34,12 @@ impl LanguagePack for GoPack {
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_go::LANGUAGE.into())
-            .map_err(|e| anyhow!("failed to load the Go grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
+        let tree = crate::ast::source_text::parse_file_as(
+            &tree_sitter_go::LANGUAGE.into(),
+            "the Go",
+            path,
+            src,
+        )?;
         let root = tree.root_node();
 
         let mut extractor = GoExtractor {
@@ -63,55 +64,7 @@ impl LanguagePack for GoPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
-        extractor.facts.functions = functions::extract(root, src, path, &GO_FUNCTIONS);
-        super::mocks::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &GO_MOCKS,
-            &vocab.mock_setup_fns,
-            &vocab.mock_assert_fns,
-        );
-        {
-            let tests = &extractor.facts.tests;
-            let spans: Vec<(usize, usize)> = tests
-                .iter()
-                .map(|t| (t.line, t.end_line.max(t.line)))
-                .collect();
-            // A file matching the shared test-path conventions, this pack's own test-file
-            // convention, or one the repository declares as test scope, is test code
-            // line for line.
-            let whole_file = super::functions::is_test_file(path, Some(is_go_test_path))
-                || super::functions::declared_test_path(path, &vocab.test_paths);
-            let is_test_line =
-                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            extractor.facts.swallowed =
-                super::handlers::extract(root, src, &GO_HANDLERS, &is_test_line);
-        }
-        super::retries::mark(root, src, &mut extractor.facts.tests, &GO_RETRIES);
-        if super::functions::declared_test_path(path, &vocab.test_paths) {
-            for f in &mut extractor.facts.functions {
-                f.is_test = true;
-            }
-        }
-        super::method_checks::count(root, src, &mut extractor.facts, &GO_RECEIVER_CALLS);
-        super::helper_loops::count(root, src, &mut extractor.facts, &super::helper_loops::GO);
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &GO_MOCKS,
-            super::calls::SLEEP_VOCAB,
-            super::calls::sleeps,
-        );
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &GO_MOCKS,
-            super::calls::TRIVIAL_ASSERT_VOCAB,
-            super::calls::trivial_asserts,
-        );
+        GO_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
         super::bounds::go(root, src, &mut extractor.facts.tests);
         super::expectations::go(root, src, &mut extractor.facts.tests);
         super::expected_exceptions::go(root, src, &mut extractor.facts.tests, &extractor.imports);
@@ -562,41 +515,25 @@ fn suite_types(root: Node, src: &str) -> std::collections::HashSet<String> {
     suites
 }
 
+/// The comments that suppress a Go linter.
+const GO_SUPPRESSIONS: super::CommentSuppressions = super::CommentSuppressions {
+    hash_comments: false,
+    markers: &["nolint", "lint:ignore", "revive:disable"],
+};
+
 impl<'a> GoExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
         node.utf8_text(self.src).unwrap_or("")
     }
 
     fn collect_comments_and_escape_hatches(&mut self, node: Node) {
-        let kind = node.kind();
-        if kind == "comment" {
-            let text = self.text(node);
-            let line = node.start_position().row + 1;
-            let trimmed = text
-                .trim_start_matches("//")
-                .trim_start_matches("/*")
-                .trim_end_matches("*/")
-                .trim();
-
-            if trimmed.starts_with("nolint")
-                || trimmed.starts_with("lint:ignore")
-                || trimmed.starts_with("revive:disable")
-            {
-                self.facts
-                    .escape_hatches
-                    .push(EscapeHatchSite::LinterDisable {
-                        line,
-                        rule: trimmed.to_string(),
-                        snippet: text.to_string(),
-                    });
-            }
-            return;
-        }
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.collect_comments_and_escape_hatches(child);
-        }
+        super::collect_comment_suppressions(
+            node,
+            self.src,
+            &GO_SUPPRESSIONS,
+            &mut |_, _| true,
+            &mut self.facts.escape_hatches,
+        );
     }
 
     fn visit_root(&mut self, root: Node) {
@@ -842,7 +779,19 @@ impl<'a> GoExtractor<'a> {
         if fatal {
             test_fn.fatal_asserts += 1;
         }
-        let same = args.len() == 3 && self.text(args[0]).trim() == self.text(args[2]).trim();
+        // `Equals` and `DeepEquals` are the equality checkers whose identical operands
+        // are recorded; the same operands under another checker are counted only.
+        let same = args.len() == 3
+            && if matches!(checker, "Equals" | "DeepEquals") {
+                super::self_comparison::note(
+                    &mut test_fn.equality_operands,
+                    args[0],
+                    args[2],
+                    self.src,
+                )
+            } else {
+                super::self_comparison::same(args[0], args[2], self.src)
+            };
         if same {
             test_fn.tautologies += 1;
         } else if !GOCHECK_WEAK_CHECKERS.contains(&checker) {
@@ -949,35 +898,22 @@ impl<'a> GoExtractor<'a> {
             &["func_literal"],
         );
         if resolvable {
-            let facts = super::HelperFacts {
-                total_asserts: helper_fn.total_asserts,
-                strong_asserts: helper_fn.strong_asserts,
-                tautologies: helper_fn.tautologies,
-                fatal_asserts: helper_fn.fatal_asserts,
-                wraps: super::forwarding_wrapper_callee(
+            let facts = super::HelperFacts::from_scan(
+                &helper_fn,
+                super::forwarding_wrapper_callee(
                     body,
                     &GO_WRAPPER,
                     &GO_LOCALS,
                     &dummy_calls,
                     self.src,
                 ),
-            };
+            );
             self.helpers.insert(name.clone(), facts);
         }
         let line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
         self.facts.push_helper(
-            super::TestHelperFacts {
-                name,
-                line,
-                end_line,
-                total_asserts: helper_fn.total_asserts,
-                strong_asserts: helper_fn.strong_asserts,
-                tautologies: helper_fn.tautologies,
-                fatal_asserts: helper_fn.fatal_asserts,
-                helper_checks: 0,
-                equality_exits: 0,
-            },
+            super::TestHelperFacts::from_scan(name, line, end_line, &helper_fn),
             dummy_calls,
         );
     }
@@ -1297,8 +1233,17 @@ impl<'a> GoExtractor<'a> {
             }
             "Equal" | "Same" => {
                 test_fn.total_asserts += 1;
-                match (value(0), value(1)) {
-                    (Some(a), Some(b)) if a == b => test_fn.tautologies += 1,
+                match (args.get(first), args.get(first + 1)) {
+                    (Some(a), Some(b))
+                        if super::self_comparison::note(
+                            &mut test_fn.equality_operands,
+                            *a,
+                            *b,
+                            self.src,
+                        ) =>
+                    {
+                        test_fn.tautologies += 1
+                    }
                     _ => test_fn.strong_asserts += 1,
                 }
             }
@@ -1382,14 +1327,11 @@ impl<'a> GoExtractor<'a> {
         }
 
         for stmt in statements {
-            if stmt.kind() == "short_var_declaration" {
-                let text = self.text(stmt);
-                if is_go_env_check(text) {
-                    if let Some(left) = stmt.child_by_field_name("left") {
-                        let name = self.text(left).trim();
-                        if !name.is_empty() {
-                            env_bindings.insert(name.to_string());
-                        }
+            if stmt.kind() == "short_var_declaration" && is_go_env_check(stmt, self.src) {
+                if let Some(left) = stmt.child_by_field_name("left") {
+                    let name = self.text(left).trim();
+                    if !name.is_empty() {
+                        env_bindings.insert(name.to_string());
                     }
                 }
             }
@@ -1406,13 +1348,10 @@ impl<'a> GoExtractor<'a> {
                     .unwrap_or("")
                     .trim();
 
-                let is_env = is_go_env_check(init_str)
-                    || is_go_env_check(cond_str)
-                    || env_bindings.iter().any(|v| {
-                        cond_str == v
-                            || cond_str
-                                .split(|c: char| !c.is_alphanumeric() && c != '_')
-                                .any(|t| t == v)
+                let is_env = init.is_some_and(|n| is_go_env_check(n, self.src))
+                    || cond.is_some_and(|n| {
+                        is_go_env_check(n, self.src)
+                            || super::code_names_one_of(n, self.src, &GO_NOT_CODE, &env_bindings)
                     });
 
                 if is_env {
@@ -1441,12 +1380,23 @@ fn go_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
     functions::is_test_file(path, Some(is_go_test_path)) || is_go_test_function_name(name)
 }
 
-fn is_go_env_check(text: &str) -> bool {
-    text.contains("os.Getenv")
-        || text.contains("os.LookupEnv")
-        || text.contains("Getenv")
-        || text.contains("LookupEnv")
-        || super::is_ci_condition(text)
+const GO_NOT_CODE: super::NotCode = super::NotCode {
+    strings: &[
+        "interpreted_string_literal",
+        "raw_string_literal",
+        "rune_literal",
+    ],
+    comments: &["comment"],
+    interpolations: &[],
+};
+
+/// Whether `node` is a candidate for a condition on the environment: its code, outside
+/// string literals and comments, spells an environment read or names a CI variable. A CI
+/// variable named in a string (`os.Getenv("CI")`, `lookup("CI")`) is read by
+/// `ci_condition::site`, from the tree.
+fn is_go_env_check(node: Node, src: &[u8]) -> bool {
+    let code = super::code_text(node, src, &GO_NOT_CODE);
+    code.contains("Getenv") || code.contains("LookupEnv") || super::is_ci_condition(&code)
 }
 
 fn go_consequence_returns_early(consequence: Node, src: &[u8]) -> bool {
@@ -1517,6 +1467,20 @@ fn enclosing_if_condition(node: Node, src: &[u8]) -> Option<String> {
     }
     None
 }
+
+/// What the steps every pack shares read of this pack (`PackSpec::shared_facts`).
+const GO_PACK: super::PackSpec = super::PackSpec {
+    functions: &GO_FUNCTIONS,
+    own_test_path: Some(is_go_test_path),
+    handlers: &GO_HANDLERS,
+    constants: None,
+    retries: Some(&GO_RETRIES),
+    receiver_calls: &GO_RECEIVER_CALLS,
+    helper_loops: &super::helper_loops::GO,
+    calls: &GO_MOCKS,
+    vocabs: super::calls::SLEEPS_AND_TRIVIAL_ASSERTS,
+    judged: None,
+};
 
 pub const GO_FUNCTIONS: FunctionSpec = FunctionSpec {
     function_kinds: &["function_declaration", "method_declaration"],

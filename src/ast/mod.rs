@@ -28,6 +28,7 @@ pub mod go_work;
 #[cfg(feature = "lang-golden")]
 pub mod golden;
 pub mod handlers;
+pub mod harness;
 pub mod helper_loops;
 #[cfg(feature = "lang-java")]
 pub mod java;
@@ -56,6 +57,7 @@ pub mod rust;
 pub mod scala;
 #[cfg(any(feature = "lang-ruby", feature = "lang-python"))]
 pub(crate) mod scanner_limits;
+pub mod self_comparison;
 pub(crate) mod source_text;
 #[cfg(feature = "lang-swift")]
 pub mod swift;
@@ -315,6 +317,10 @@ pub struct TestFn {
     pub counted_helper_calls: Vec<String>,
     /// What the test's helper calls reach beyond the checks counted into it.
     pub helper_reach: HelperReach,
+    /// The operands of its equality assertions: which compare an expression with itself
+    /// (`self_comparison`), reported by line, and which operands are compared with
+    /// another.
+    pub equality_operands: self_comparison::EqualityOperands,
 }
 
 /// What `assertion-reduction` reads about the helpers a test calls, beside the checks
@@ -349,6 +355,15 @@ pub struct HelperReach {
     /// same-file helpers the test calls and the pack counted (`helper_loops`): equality
     /// checks written by hand, which the pack counts as checks and not as equality ones.
     pub equality_exits: usize,
+}
+
+/// The innermost test whose lines hold `line`: the shortest such span, and the first of
+/// two as short. A test whose end line is not tracked holds its own line alone.
+pub(crate) fn innermost_test(tests: &mut [TestFn], line: usize) -> Option<&mut TestFn> {
+    tests
+        .iter_mut()
+        .filter(|t| t.line <= line && line <= t.end_line.max(t.line))
+        .min_by_key(|t| t.end_line.saturating_sub(t.line))
 }
 
 impl TestFn {
@@ -557,7 +572,36 @@ pub struct TestHelperFacts {
     pub equality_exits: usize,
 }
 
+impl HelperFacts {
+    /// A helper's facts from a pack's scan of its body, and the function it wraps.
+    pub(crate) fn from_scan(scan: &TestFn, wraps: Option<String>) -> Self {
+        Self {
+            total_asserts: scan.total_asserts,
+            strong_asserts: scan.strong_asserts,
+            tautologies: scan.tautologies,
+            fatal_asserts: scan.fatal_asserts,
+            wraps,
+        }
+    }
+}
+
 impl TestHelperFacts {
+    /// A helper as a pack's scan of its body counted it, before the checks of the
+    /// helpers it calls and its equality exits are added.
+    pub(crate) fn from_scan(name: String, line: usize, end_line: usize, scan: &TestFn) -> Self {
+        Self {
+            name,
+            line,
+            end_line,
+            total_asserts: scan.total_asserts,
+            strong_asserts: scan.strong_asserts,
+            tautologies: scan.tautologies,
+            fatal_asserts: scan.fatal_asserts,
+            helper_checks: 0,
+            equality_exits: 0,
+        }
+    }
+
     pub fn effective_asserts(&self) -> usize {
         self.total_asserts.saturating_sub(self.tautologies)
     }
@@ -731,6 +775,129 @@ impl ParsedFileFacts {
         }
         self.tests = tests;
     }
+}
+
+/// The source text of `node` without the text of any descendant whose kind is in
+/// `left_out`, each replaced by one space. A marker searched for in the result is one
+/// the code spells, never one a string literal, a comment or an argument list contains.
+pub(crate) fn text_without(node: tree_sitter::Node, src: &[u8], left_out: &[&str]) -> String {
+    code_parts(node, src, left_out, &[])
+}
+
+/// The node kinds of one grammar that hold text which is not code.
+pub(crate) struct NotCode {
+    /// String literals of every form.
+    pub strings: &'static [&'static str],
+    /// Comments.
+    pub comments: &'static [&'static str],
+    /// The parts of a string literal that are code again (`${..}`, `{..}` of an
+    /// f-string).
+    pub interpolations: &'static [&'static str],
+}
+
+/// The text of `node` that is code: outside its comments and its string literals, with
+/// the interpolated expressions of a string kept.
+pub(crate) fn code_text(node: tree_sitter::Node, src: &[u8], grammar: &NotCode) -> String {
+    let left_out: Vec<&str> = grammar
+        .strings
+        .iter()
+        .chain(grammar.comments)
+        .copied()
+        .collect();
+    code_parts(node, src, &left_out, grammar.interpolations)
+}
+
+/// The text of `node` with each descendant of a kind in `left_out` replaced by a space,
+/// except the descendants of it whose kind is in `kept`, which are read as code again.
+fn code_parts(node: tree_sitter::Node, src: &[u8], left_out: &[&str], kept: &[&str]) -> String {
+    fn kept_inside<'t>(
+        node: tree_sitter::Node<'t>,
+        kept: &[&str],
+        out: &mut Vec<tree_sitter::Node<'t>>,
+    ) {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if kept.contains(&child.kind()) {
+                out.push(child);
+            } else {
+                kept_inside(child, kept, out);
+            }
+        }
+    }
+    fn collect(
+        node: tree_sitter::Node,
+        left_out: &[&str],
+        kept: &[&str],
+        spans: &mut Vec<(usize, usize)>,
+    ) {
+        if left_out.contains(&node.kind()) {
+            let mut inside = Vec::new();
+            kept_inside(node, kept, &mut inside);
+            let mut at = node.start_byte();
+            for part in inside {
+                spans.push((at, part.start_byte()));
+                at = part.end_byte();
+                let mut cursor = part.walk();
+                for child in part.children(&mut cursor) {
+                    collect(child, left_out, kept, spans);
+                }
+            }
+            spans.push((at, node.end_byte()));
+            return;
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            collect(child, left_out, kept, spans);
+        }
+    }
+    let mut spans = Vec::new();
+    collect(node, left_out, kept, &mut spans);
+    spans.sort_unstable();
+    let mut out = Vec::new();
+    let mut at = node.start_byte();
+    for (start, end) in spans {
+        if start < at {
+            continue;
+        }
+        out.extend_from_slice(src.get(at..start).unwrap_or_default());
+        out.push(b' ');
+        at = end;
+    }
+    out.extend_from_slice(src.get(at..node.end_byte()).unwrap_or_default());
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Whether one of `bound` (names a test binds to an environment read) is a word of the
+/// code of `node`.
+pub(crate) fn code_names_one_of(
+    node: tree_sitter::Node,
+    src: &[u8],
+    grammar: &NotCode,
+    bound: &std::collections::HashSet<String>,
+) -> bool {
+    let code = code_text(node, src, grammar);
+    code.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+        .any(|word| bound.contains(word))
+}
+
+/// Whether a TestNG `@Test(..)` annotation carries `enabled = false`, at any spacing and
+/// outside its string literals and comments: a description that contains the words is
+/// not the element.
+pub(crate) fn annotation_disables(
+    annotation: tree_sitter::Node,
+    src: &[u8],
+    not_code: &[&str],
+) -> bool {
+    let code: String = text_without(annotation, src, not_code)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    code.match_indices("enabled=false").any(|(at, found)| {
+        let before = code[..at].chars().next_back();
+        let after = code[at + found.len()..].chars().next();
+        let word = |c: char| c.is_alphanumeric() || c == '_';
+        !before.is_some_and(word) && !after.is_some_and(word)
+    })
 }
 
 /// A helper's own name without the type or module it is recorded under
@@ -1307,6 +1474,163 @@ pub enum EscapeHatchSite {
     },
 }
 
+/// The code a pack judges one of its call nodes by for a call vocabulary, or `None`
+/// for a node read the ordinary way.
+pub(crate) type Judged =
+    fn(tree_sitter::Node, &str, calls::Vocab, &AssertVocabulary) -> Option<String>;
+
+/// What the steps every pack takes after it has read its tests and helpers read of the
+/// pack: its tables for each step, and the steps it does not take.
+pub(crate) struct PackSpec {
+    pub functions: &'static functions::FunctionSpec,
+    /// The pack's own test-file convention, beside the shared one (`functions::test_path`).
+    pub own_test_path: Option<fn(&str) -> bool>,
+    pub handlers: &'static handlers::HandlerSpec,
+    /// `None` for a pack that reads no constant fallback.
+    pub constants: Option<&'static handlers::ConstantSpec>,
+    /// `None` for a pack that reads no retry marker.
+    pub retries: Option<&'static retries::RetrySpec>,
+    pub receiver_calls: &'static method_checks::ReceiverCalls,
+    pub helper_loops: &'static helper_loops::LoopSpec,
+    /// The grammar's call nodes, for the mock counts and the call vocabularies.
+    pub calls: &'static mocks::MockSpec,
+    pub vocabs: &'static [(calls::Vocab, calls::Pick)],
+    /// `calls::Counted::judged`, given the source and the assertion vocabulary as well.
+    pub judged: Option<Judged>,
+}
+
+impl PackSpec {
+    /// The steps every pack takes, in their order, once `facts` holds the file's tests
+    /// and helpers: [`Self::facts_to_method_checks`], then
+    /// [`Self::facts_from_helper_loops`]. A pack with a step of its own between the two
+    /// calls them one after the other.
+    pub(crate) fn shared_facts(
+        &self,
+        root: tree_sitter::Node,
+        src: &str,
+        path: &str,
+        vocab: &AssertVocabulary,
+        facts: &mut ParsedFileFacts,
+    ) {
+        self.facts_to_method_checks(root, src, path, vocab, facts);
+        self.facts_from_helper_loops(root, src, vocab, facts);
+    }
+
+    /// The functions of the file, its swallowing handlers outside test code, the retry
+    /// markers of its tests, and the checks its tests reach through a receiver.
+    pub(crate) fn facts_to_method_checks(
+        &self,
+        root: tree_sitter::Node,
+        src: &str,
+        path: &str,
+        vocab: &AssertVocabulary,
+        facts: &mut ParsedFileFacts,
+    ) {
+        facts.functions = functions::extract(root, src, path, self.functions);
+        {
+            let spans: Vec<(usize, usize)> = facts
+                .tests
+                .iter()
+                .map(|t| (t.line, t.end_line.max(t.line)))
+                .collect();
+            // A file matching the shared test-path conventions, the pack's own test-file
+            // convention, or one the repository declares as test scope, is test code
+            // line for line.
+            let whole_file = functions::is_test_file(path, self.own_test_path)
+                || functions::declared_test_path(path, &vocab.test_paths);
+            let is_test_line =
+                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
+            let (swallowed, fallbacks) = handlers::extract_with_constants(
+                root,
+                src,
+                self.handlers,
+                self.constants,
+                &is_test_line,
+            );
+            facts.swallowed = swallowed;
+            if self.constants.is_some() {
+                facts.constant_fallbacks = fallbacks;
+            }
+        }
+        if let Some(retries) = self.retries {
+            retries::mark(root, src, &mut facts.tests, retries);
+        }
+        if functions::declared_test_path(path, &vocab.test_paths) {
+            for f in &mut facts.functions {
+                f.is_test = true;
+            }
+        }
+        method_checks::count(root, src, facts, self.receiver_calls);
+    }
+
+    /// The looped helper calls and equality exits of the file's helpers, and the mock,
+    /// sleep and trivial-assertion counts of its tests.
+    pub(crate) fn facts_from_helper_loops(
+        &self,
+        root: tree_sitter::Node,
+        src: &str,
+        vocab: &AssertVocabulary,
+        facts: &mut ParsedFileFacts,
+    ) {
+        helper_loops::count(root, src, facts, self.helper_loops);
+        calls::count(
+            root,
+            src,
+            &mut facts.tests,
+            &calls::Counted {
+                spec: self.calls,
+                mock_setup: &vocab.mock_setup_fns,
+                mock_verify: &vocab.mock_assert_fns,
+                vocabs: self.vocabs,
+                judged: &|node, counted| {
+                    self.judged
+                        .and_then(|judged| judged(node, src, counted, vocab))
+                },
+            },
+        );
+    }
+}
+
+/// How a pack's comments suppress a linter: by what the comment opens with.
+pub(crate) struct CommentSuppressions {
+    /// Whether `#` opens a comment as `//` does.
+    pub hash_comments: bool,
+    /// What a suppressing comment opens with, inside its `//` or `/* */`.
+    pub markers: &'static [&'static str],
+}
+
+/// The suppressions under `root`, in source order, pushed to `sites`: each `comment`
+/// node whose text inside its markers opens with one of `spec.markers` (the rule is that
+/// text, the snippet the whole comment), and what `other` pushes for a node that is not
+/// a comment. `other` says whether the node's children are walked; a comment's are not.
+pub(crate) fn collect_comment_suppressions(
+    root: tree_sitter::Node,
+    src: &[u8],
+    spec: &CommentSuppressions,
+    other: &mut dyn FnMut(tree_sitter::Node, &mut Vec<EscapeHatchSite>) -> bool,
+    sites: &mut Vec<EscapeHatchSite>,
+) {
+    bounds::walk(root, &mut |node| {
+        if node.kind() != "comment" {
+            return other(node, sites);
+        }
+        let text = node.utf8_text(src).unwrap_or("");
+        let mut body = text.trim_start_matches("//");
+        if spec.hash_comments {
+            body = body.trim_start_matches('#');
+        }
+        let body = body.trim_start_matches("/*").trim_end_matches("*/").trim();
+        if spec.markers.iter().any(|m| body.starts_with(m)) {
+            sites.push(EscapeHatchSite::LinterDisable {
+                line: node.start_position().row + 1,
+                rule: body.to_string(),
+                snippet: text.to_string(),
+            });
+        }
+        false
+    });
+}
+
 #[derive(Debug, Clone)]
 pub struct ParsedFileFacts {
     pub tests: Vec<TestFn>,
@@ -1397,6 +1721,7 @@ impl Default for ParsedFileFacts {
                 method_checks: 0,
                 counted_helper_calls: Vec::new(),
                 helper_reach: HelperReach::default(),
+                equality_operands: Default::default(),
             }),
             has_parse_errors: false,
             first_parse_error_line: None,
@@ -1439,6 +1764,7 @@ impl ParsedFileFacts {
             method_checks: 0,
             counted_helper_calls: Vec::new(),
             helper_reach: HelperReach::default(),
+            equality_operands: Default::default(),
         });
     }
 }

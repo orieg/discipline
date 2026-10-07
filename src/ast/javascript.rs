@@ -1,7 +1,7 @@
 //! JavaScript and TypeScript language pack: tree-sitter AST extraction of tests, assertions, and escape hatches.
 
-use anyhow::{anyhow, Result};
-use tree_sitter::{Node, Parser};
+use anyhow::Result;
+use tree_sitter::Node;
 
 use super::ci_condition::SkipCondition;
 use super::functions::{self, FunctionSpec};
@@ -39,18 +39,13 @@ impl LanguagePack for JavaScriptPack {
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
-        let mut parser = Parser::new();
         let ext = super::extension(path).unwrap_or("js");
         let lang = match ext {
             "ts" | "mts" | "cts" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             "tsx" | "jsx" => tree_sitter_typescript::LANGUAGE_TSX.into(),
             _ => tree_sitter_javascript::LANGUAGE.into(),
         };
-
-        parser
-            .set_language(&lang)
-            .map_err(|e| anyhow!("failed to load JS/TS grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
+        let tree = crate::ast::source_text::parse_file_as(&lang, "JS/TS", path, src)?;
         let root = tree.root_node();
 
         let mut extractor = JsExtractor {
@@ -65,72 +60,14 @@ impl LanguagePack for JavaScriptPack {
             suite_cases: Vec::new(),
             suite_skips: Vec::new(),
             runner_names: runner_names(root, src),
+            deno_global: !binds_name(root, src, "Deno"),
+            std_asserts: std_assert_names(root, src),
         };
 
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers(root);
-        extractor.facts.functions = functions::extract(root, src, path, &JS_FUNCTIONS);
-        super::mocks::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &JS_MOCKS,
-            &vocab.mock_setup_fns,
-            &vocab.mock_assert_fns,
-        );
-        {
-            let tests = &extractor.facts.tests;
-            let spans: Vec<(usize, usize)> = tests
-                .iter()
-                .map(|t| (t.line, t.end_line.max(t.line)))
-                .collect();
-            // A file in a test directory, or one the repository declares as test scope, is
-            // test code line for line.
-            let whole_file = super::functions::test_path(path)
-                || super::functions::declared_test_path(path, &vocab.test_paths);
-            let is_test_line =
-                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            (
-                extractor.facts.swallowed,
-                extractor.facts.constant_fallbacks,
-            ) = super::handlers::extract_with_constants(
-                root,
-                src,
-                &JS_HANDLERS,
-                Some(&JS_CONSTANTS),
-                &is_test_line,
-            );
-        }
-        super::retries::mark(root, src, &mut extractor.facts.tests, &JS_RETRIES);
-        if super::functions::declared_test_path(path, &vocab.test_paths) {
-            for f in &mut extractor.facts.functions {
-                f.is_test = true;
-            }
-        }
-        super::method_checks::count(root, src, &mut extractor.facts, &JS_RECEIVER_CALLS);
-        super::helper_loops::count(
-            root,
-            src,
-            &mut extractor.facts,
-            &super::helper_loops::JAVASCRIPT,
-        );
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &JS_MOCKS,
-            super::calls::SLEEP_VOCAB,
-            super::calls::sleeps,
-        );
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &JS_MOCKS,
-            super::calls::TRIVIAL_ASSERT_VOCAB,
-            super::calls::trivial_asserts,
-        );
+        JS_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
         super::bounds::javascript(root, src, &mut extractor.facts.tests);
         super::expectations::javascript(root, src, &mut extractor.facts.tests);
         super::caught_assertions::javascript(root, src, &mut extractor.facts.tests, vocab);
@@ -205,7 +142,7 @@ pub fn classify_matcher(name: &str) -> MatcherClass {
         | "toHaveBeenCalled" | "toBeCalled" | "toHaveReturned" | "toReturn" => MatcherClass::Weak,
 
         _ => {
-            if name.starts_with("toBe") || name.starts_with("to") || name.starts_with("toHave") {
+            if name.starts_with("to") {
                 MatcherClass::Strong
             } else {
                 MatcherClass::Unknown
@@ -217,9 +154,6 @@ pub fn classify_matcher(name: &str) -> MatcherClass {
 /// True if `name` is a recognized or plausible expect matcher name.
 pub fn is_matcher(name: &str) -> bool {
     classify_matcher(name) != MatcherClass::Unknown
-        || name.starts_with("to")
-        || name.starts_with("toHave")
-        || name.starts_with("toBe")
 }
 
 /// Returns true if `node` is part of an `expect(...)` call or method chain.
@@ -256,6 +190,91 @@ struct JsExtractor<'a> {
     /// The runner function names this file binds to something else
     /// ([`runner_names`]): `.each` on one is not a case source.
     runner_names: super::test_cases::RunnerNames,
+    /// `Deno` is the runtime's global here: the file binds nothing else to the name.
+    deno_global: bool,
+    /// The names the file imports from Deno's standard assertion module, each with the
+    /// `node:assert` call it is counted as ([`std_assert_names`]).
+    std_asserts: Vec<(String, &'static str)>,
+}
+
+/// Whether a module specifier names Deno's standard assertion module: `jsr:@std/assert`
+/// (with or without a version or a sub-path), the same through an import map
+/// (`@std/assert`), or `https://deno.land/std@<version>/assert/...` and its older
+/// `testing/asserts.ts`.
+pub(super) fn is_std_assert_module(module: &str) -> bool {
+    let bare = module.strip_prefix("jsr:").unwrap_or(module);
+    let bare = bare.strip_prefix('/').unwrap_or(bare);
+    if let Some(rest) = bare.strip_prefix("@std/assert") {
+        return rest.is_empty() || rest.starts_with(['@', '/']);
+    }
+    module.starts_with("https://deno.land/std")
+        && (module.contains("/assert/") || module.contains("/testing/asserts"))
+}
+
+/// The names the file imports from Deno's standard assertion module, each with the
+/// `node:assert` call the pack counts it as: `assertEquals(a, b)` is counted, and read
+/// for a tautology, as `assert.equal(a, b)` is. A function of the module with no such
+/// counterpart (`assertExists`, `assertInstanceOf`) is counted as a plain `assert.*`
+/// call. Only a name that starts with `assert` is read: an import under another name
+/// (`assertEquals as eq`) and a namespace import are not.
+fn std_assert_names(root: Node, src: &str) -> Vec<(String, &'static str)> {
+    super::expected_exceptions::js_bindings(root, src)
+        .into_iter()
+        .filter(|(bound, module)| bound.starts_with("assert") && is_std_assert_module(module))
+        .map(|(bound, _)| {
+            let counted_as = match bound.as_str() {
+                "assert" => "assert",
+                "assertEquals" => "assert.equal",
+                "assertStrictEquals" => "assert.strictEqual",
+                "assertNotEquals" => "assert.notEqual",
+                "assertNotStrictEquals" => "assert.notStrictEqual",
+                "assertThrows" => "assert.throws",
+                "assertRejects" => "assert.rejects",
+                "assertMatch" => "assert.match",
+                _ => "assert.ok",
+            };
+            (bound, counted_as)
+        })
+        .collect()
+}
+
+/// Whether the file binds `name` itself: an import or a `require`, a declaration, or a
+/// parameter of that name.
+fn binds_name(root: Node, src: &str, name: &str) -> bool {
+    if !src.contains(name) {
+        return false;
+    }
+    if super::expected_exceptions::js_bindings(root, src)
+        .iter()
+        .any(|(bound, _)| bound == name)
+    {
+        return true;
+    }
+    let text = |n: Node| n.utf8_text(src.as_bytes()).unwrap_or("");
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        let declared = match node.kind() {
+            "function_declaration"
+            | "generator_function_declaration"
+            | "class_declaration"
+            | "variable_declarator" => node.child_by_field_name("name"),
+            "required_parameter" | "optional_parameter" => node.child_by_field_name("pattern"),
+            "identifier"
+                if node
+                    .parent()
+                    .is_some_and(|p| p.kind() == "formal_parameters") =>
+            {
+                Some(node)
+            }
+            _ => None,
+        };
+        if declared.is_some_and(|n| n.kind() == "identifier" && text(n) == name) {
+            return true;
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.children(&mut cursor));
+    }
+    false
 }
 
 /// Reads which of the runner's function names (`it`, `test`, `describe`, ..) the file
@@ -413,6 +432,10 @@ impl<'a> JsExtractor<'a> {
     fn visit_node(&mut self, node: Node, scope: &mut Vec<String>, parent_ignored: bool) {
         if node.kind() == "call_expression" {
             if let Some(func_node) = node.child_by_field_name("function") {
+                if let Some(modifier_skips) = self.deno_test_callee(func_node) {
+                    self.record_deno_test(node, None, scope, parent_ignored || modifier_skips);
+                    return;
+                }
                 let (is_test, is_suite, mut is_ignored, is_todo) = self.classify_call(func_node);
                 // `test.skipIf(<condition>)`, `describe.runIf(<condition>)`: a conditional
                 // skip, read by its condition. The text rule above reads `.skipIf` as
@@ -522,6 +545,202 @@ impl<'a> JsExtractor<'a> {
         }
     }
 
+    /// Whether `func` is the callee of a Deno test registration, read from the tree:
+    /// `Deno.test` (`Some(false)`), or `Deno.test.only` / `Deno.test.ignore`
+    /// (`Some(true)`: a test the run leaves out or that makes the run fail, flagged as
+    /// `it.only` and `it.skip` are). `None` for anything else, and in a file that binds
+    /// `Deno` to something of its own.
+    fn deno_test_callee(&self, func: Node) -> Option<bool> {
+        if !self.deno_global || func.kind() != "member_expression" {
+            return None;
+        }
+        let object = func.child_by_field_name("object")?;
+        let property = self.text(func.child_by_field_name("property")?);
+        let is_deno_test = |node: Node| {
+            node.kind() == "member_expression"
+                && node
+                    .child_by_field_name("object")
+                    .is_some_and(|o| o.kind() == "identifier" && self.text(o) == "Deno")
+                && node
+                    .child_by_field_name("property")
+                    .is_some_and(|p| self.text(p) == "test")
+        };
+        if is_deno_test(func) {
+            return Some(false);
+        }
+        (is_deno_test(object) && matches!(property, "only" | "ignore")).then_some(true)
+    }
+
+    /// The `key: value` pairs and methods of the object literal among the arguments of
+    /// a Deno test or step registration: `(key, value or method)`.
+    fn deno_options<'t>(&self, args: Node<'t>) -> Vec<(&'a str, Node<'t>)> {
+        let mut out = Vec::new();
+        let mut cursor = args.walk();
+        for arg in args.named_children(&mut cursor) {
+            if arg.kind() != "object" {
+                continue;
+            }
+            let mut inner = arg.walk();
+            for member in arg.named_children(&mut inner) {
+                match member.kind() {
+                    "pair" => {
+                        if let (Some(key), Some(value)) = (
+                            member.child_by_field_name("key"),
+                            member.child_by_field_name("value"),
+                        ) {
+                            let key = self.text(key).trim_matches(['"', '\'']);
+                            out.push((key, value));
+                        }
+                    }
+                    "method_definition" => {
+                        if let Some(name) = member.child_by_field_name("name") {
+                            out.push((self.text(name), member));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        out
+    }
+
+    /// Records one `Deno.test(...)` registration, or one `t.step(...)` of it when
+    /// `parent` names the test around it, as a test: `("name", fn)`, `("name", {
+    /// options }, fn)`, `({ name, fn })`, `({ options }, fn)` and `(function name() {})`.
+    /// `ignore: true` and `only: true` in the options flag it as the `.ignore` and
+    /// `.only` forms do; any other `ignore` value is a conditional skip, read by its
+    /// condition. Each step of the callback's first parameter is then recorded as a
+    /// subtest named `<test> > <step>`, as a Go `t.Run` is: `deno test` reports steps
+    /// beside the tests, not among them.
+    fn record_deno_test(
+        &mut self,
+        call: Node,
+        parent: Option<&str>,
+        scope: &[String],
+        mut ignored: bool,
+    ) {
+        let Some(args) = call.child_by_field_name("arguments") else {
+            return;
+        };
+        let options = self.deno_options(args);
+        let option = |key: &str| options.iter().find(|(k, _)| *k == key).map(|(_, v)| *v);
+        let callback = Self::find_callback(args).or_else(|| {
+            option("fn").filter(|f| {
+                matches!(
+                    f.kind(),
+                    "arrow_function" | "function_expression" | "function" | "method_definition"
+                )
+            })
+        });
+        let literal = |node: Node| {
+            matches!(node.kind(), "string" | "template_string")
+                .then(|| self.text(node).trim_matches(['\'', '"', '`']).to_string())
+        };
+        let mut cursor = args.walk();
+        let first = args
+            .named_children(&mut cursor)
+            .find(|n| n.kind() != "comment");
+        let title = first
+            .and_then(literal)
+            .or_else(|| option("name").and_then(literal))
+            .or_else(|| {
+                let name = callback?.child_by_field_name("name")?;
+                // The key of a `fn() {}` method is not the name of the test.
+                (callback?.kind() != "method_definition").then(|| self.text(name).to_string())
+            })
+            .unwrap_or_else(|| "unnamed".to_string());
+        let own_name = match parent {
+            Some(parent) => format!("{parent} > {title}"),
+            None if scope.is_empty() => title,
+            None => format!("{} > {}", scope.join(" > "), title),
+        };
+        let mut conditional = None;
+        if let Some(value) = option("ignore") {
+            use super::ci_condition::{self, Lang};
+            match ci_condition::skip_condition(Lang::JavaScript, value, self.src, false) {
+                SkipCondition::Always => ignored = true,
+                SkipCondition::Never => {}
+                SkipCondition::When(verdict) => {
+                    conditional = Some((self.text(value).trim().to_string(), verdict));
+                }
+            }
+        }
+        if option("only").is_some_and(|value| self.text(value) == "true") {
+            ignored = true;
+        }
+        let mut test_fn = TestFn {
+            name: own_name.clone(),
+            line: call.start_position().row + 1,
+            end_line: call.end_position().row + 1,
+            ignored,
+            ..Default::default()
+        };
+        if !test_fn.ignored {
+            let inherited = self.suite_skips.iter().flatten().cloned();
+            for (text, verdict) in inherited.chain(conditional) {
+                test_fn.record_conditional_skip(text, verdict);
+            }
+        }
+        let mut calls = Vec::new();
+        let body = callback.and_then(|c| c.child_by_field_name("body"));
+        if let Some(callback) = callback {
+            if callback.kind() == "method_definition" {
+                if let Some(body) = body {
+                    self.scan_test_body(body, &mut test_fn);
+                }
+            } else {
+                self.scan_test_body(callback, &mut test_fn);
+            }
+        }
+        if let Some(body) = body {
+            self.collect_calls(body, &mut calls);
+            super::dispatch_calls(body, self.src, &JS_DISPATCH, &mut calls);
+            if !test_fn.ignored {
+                self.record_conditional_early_exits(body, &mut test_fn);
+            }
+        }
+        self.facts.tests.push(test_fn);
+        self.test_calls.push(calls);
+
+        // The steps the callback registers on its first parameter.
+        let context = callback
+            .and_then(|c| c.child_by_field_name("parameters"))
+            .and_then(|p| p.named_child(0))
+            .map(|first| first.child_by_field_name("pattern").unwrap_or(first))
+            .filter(|name| name.kind() == "identifier")
+            .map(|name| self.text(name));
+        if let (Some(context), Some(body)) = (context, body) {
+            let mut steps = Vec::new();
+            self.deno_steps(body, context, &mut steps);
+            for step in steps {
+                self.record_deno_test(step, Some(&own_name), scope, ignored);
+            }
+        }
+    }
+
+    /// The `<context>.step(...)` calls under `node`, outermost only: a step inside
+    /// another step's callback is that step's own.
+    fn deno_steps<'t>(&self, node: Node<'t>, context: &str, out: &mut Vec<Node<'t>>) {
+        if node.kind() == "call_expression" {
+            let is_step = node.child_by_field_name("function").is_some_and(|f| {
+                f.kind() == "member_expression"
+                    && f.child_by_field_name("object")
+                        .is_some_and(|o| o.kind() == "identifier" && self.text(o) == context)
+                    && f.child_by_field_name("property")
+                        .is_some_and(|p| self.text(p) == "step")
+            });
+            if is_step {
+                out.push(node);
+                return;
+            }
+        }
+        let mut cursor = node.walk();
+        let children: Vec<Node<'t>> = node.children(&mut cursor).collect();
+        for child in children {
+            self.deno_steps(child, context, out);
+        }
+    }
+
     /// The same-file callees a test body runs: `name(...)`. A function defined in the
     /// body and not called there (`const f = () => helper()`) runs nothing.
     fn collect_calls(&self, node: Node, calls: &mut Vec<String>) {
@@ -611,29 +830,10 @@ impl<'a> JsExtractor<'a> {
             let line = func.start_position().row + 1;
             let end_line = func.end_position().row + 1;
             self.facts.push_helper(
-                super::TestHelperFacts {
-                    name: name.clone(),
-                    line,
-                    end_line,
-                    total_asserts: h.total_asserts,
-                    strong_asserts: h.strong_asserts,
-                    tautologies: h.tautologies,
-                    fatal_asserts: h.fatal_asserts,
-                    helper_checks: 0,
-                    equality_exits: 0,
-                },
+                super::TestHelperFacts::from_scan(name.clone(), line, end_line, &h),
                 calls,
             );
-            helpers.insert(
-                name,
-                super::HelperFacts {
-                    total_asserts: h.total_asserts,
-                    strong_asserts: h.strong_asserts,
-                    tautologies: h.tautologies,
-                    fatal_asserts: h.fatal_asserts,
-                    wraps,
-                },
-            );
+            helpers.insert(name, super::HelperFacts::from_scan(&h, wraps));
         }
         // A class's methods (`class Checker { check(r) { expect(..) } }`) are tracked as
         // `Class.method`. A call through an object is not resolved to one: which class the
@@ -653,17 +853,12 @@ impl<'a> JsExtractor<'a> {
                 JS_FUNCTION_KINDS,
             );
             self.facts.push_helper(
-                super::TestHelperFacts {
+                super::TestHelperFacts::from_scan(
                     name,
-                    line: body.start_position().row + 1,
-                    end_line: body.end_position().row + 1,
-                    total_asserts: h.total_asserts,
-                    strong_asserts: h.strong_asserts,
-                    tautologies: h.tautologies,
-                    fatal_asserts: h.fatal_asserts,
-                    helper_checks: 0,
-                    equality_exits: 0,
-                },
+                    body.start_position().row + 1,
+                    body.end_position().row + 1,
+                    &h,
+                ),
                 calls,
             );
         }
@@ -708,8 +903,14 @@ impl<'a> JsExtractor<'a> {
 
     fn classify_call(&self, func: Node) -> (bool, bool, bool, bool) {
         // (is_test, is_suite, is_ignored, is_todo)
-        let text = self.text(func);
-        match text {
+        // The names of the chain only: `test.each([".skip"])` is `test.each`, not a skip.
+        let text = super::text_without(
+            func,
+            self.src,
+            &["arguments", "template_string", "string", "comment"],
+        );
+        let text: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        match text.as_str() {
             "it" | "test" => (true, false, false, false),
             "xit" | "xtest" => (true, false, true, false),
             "describe" | "context" => (false, true, false, false),
@@ -929,17 +1130,16 @@ impl<'a> JsExtractor<'a> {
         let mut env_bindings = std::collections::HashSet::new();
 
         for child in body.children(&mut cursor) {
-            if child.kind() == "lexical_declaration" || child.kind() == "variable_declaration" {
-                let text = self.text(child);
-                if is_js_env_check(text) {
-                    let mut decl_cursor = child.walk();
-                    for decl in child.children(&mut decl_cursor) {
-                        if decl.kind() == "variable_declarator" {
-                            if let Some(name_node) = decl.child_by_field_name("name") {
-                                let name = self.text(name_node).trim();
-                                if !name.is_empty() {
-                                    env_bindings.insert(name.to_string());
-                                }
+            if (child.kind() == "lexical_declaration" || child.kind() == "variable_declaration")
+                && is_js_env_check(child, self.src)
+            {
+                let mut decl_cursor = child.walk();
+                for decl in child.children(&mut decl_cursor) {
+                    if decl.kind() == "variable_declarator" {
+                        if let Some(name_node) = decl.child_by_field_name("name") {
+                            let name = self.text(name_node).trim();
+                            if !name.is_empty() {
+                                env_bindings.insert(name.to_string());
                             }
                         }
                     }
@@ -955,13 +1155,8 @@ impl<'a> JsExtractor<'a> {
                     .unwrap_or(cond_text)
                     .trim();
 
-                let is_env_check = is_js_env_check(unwrapped)
-                    || env_bindings.iter().any(|v| {
-                        unwrapped == v
-                            || unwrapped
-                                .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
-                                .any(|t| t == v)
-                    });
+                let is_env_check = is_js_env_check(cond_node, self.src)
+                    || super::code_names_one_of(cond_node, self.src, &JS_NOT_CODE, &env_bindings);
 
                 if is_env_check {
                     let consequence = child.child_by_field_name("consequence")?;
@@ -996,7 +1191,7 @@ impl<'a> JsExtractor<'a> {
                         if class == MatcherClass::Strong {
                             test.strong_asserts += 1;
                         }
-                        if self.is_tautological_expect(call, prop_name) {
+                        if self.is_tautological_expect(call, prop_name, test) {
                             test.tautologies += 1;
                         }
                         return;
@@ -1004,13 +1199,24 @@ impl<'a> JsExtractor<'a> {
                 }
             }
 
+            // A function of Deno's standard assertion module, counted as the
+            // `node:assert` call it corresponds to.
+            let func_text = match self
+                .std_asserts
+                .iter()
+                .find(|(bound, _)| func.kind() == "identifier" && bound == func_text)
+            {
+                Some((_, counted_as)) => counted_as,
+                None => func_text,
+            };
+
             // assert / assert.* calls
             if func_text == "assert" || func_text.starts_with("assert.") {
                 test.total_asserts += 1;
                 if self.is_strong_assert_fn(func_text) {
                     test.strong_asserts += 1;
                 }
-                if self.is_tautological_assert_call(call, func_text) {
+                if self.is_tautological_assert_call(call, func_text, test) {
                     test.tautologies += 1;
                 }
                 return;
@@ -1045,7 +1251,7 @@ impl<'a> JsExtractor<'a> {
         )
     }
 
-    fn is_tautological_expect(&self, call: Node, prop_name: &str) -> bool {
+    fn is_tautological_expect(&self, call: Node, prop_name: &str, test: &mut TestFn) -> bool {
         // Find subject in expect(subject)
         // Structure of call: expect(subject).toBe(expected)
         let call_text = self.text(call);
@@ -1066,6 +1272,18 @@ impl<'a> JsExtractor<'a> {
                     // Check if subject inside expect(...) matches expected
                     if let Some(func) = call.child_by_field_name("function") {
                         if let Some(obj) = func.child_by_field_name("object") {
+                            // `expect(subject).toBe(expected)`: the receiver is the
+                            // `expect` call itself, with one argument.
+                            if let Some(subject) = self.expect_subject(obj) {
+                                if super::self_comparison::note(
+                                    &mut test.equality_operands,
+                                    subject,
+                                    arg_nodes[0],
+                                    self.src,
+                                ) {
+                                    return true;
+                                }
+                            }
                             let obj_text = self.text(obj);
                             if let Some(inner) = obj_text.strip_prefix("expect(") {
                                 if let Some(subject) = inner.strip_suffix(')') {
@@ -1087,7 +1305,23 @@ impl<'a> JsExtractor<'a> {
         false
     }
 
-    fn is_tautological_assert_call(&self, call: Node, func_text: &str) -> bool {
+    /// The one argument of a receiver that is the call `expect(subject)`.
+    fn expect_subject<'b>(&self, receiver: Node<'b>) -> Option<Node<'b>> {
+        if receiver.kind() != "call_expression"
+            || receiver
+                .child_by_field_name("function")
+                .is_none_or(|f| self.text(f) != "expect")
+        {
+            return None;
+        }
+        let args = receiver.child_by_field_name("arguments")?;
+        if args.named_child_count() != 1 {
+            return None;
+        }
+        args.named_child(0).filter(|a| a.kind() != "comment")
+    }
+
+    fn is_tautological_assert_call(&self, call: Node, func_text: &str, test: &mut TestFn) -> bool {
         if let Some(args) = call.child_by_field_name("arguments") {
             let mut cursor = args.walk();
             let arg_nodes: Vec<_> = args
@@ -1101,22 +1335,40 @@ impl<'a> JsExtractor<'a> {
                 if text == "true" || text == "1" {
                     return true;
                 }
-            } else if (func_text == "assert.equal" || func_text == "assert.strictEqual")
-                && arg_nodes.len() >= 2
+            } else if matches!(
+                func_text,
+                "assert.equal"
+                    | "assert.strictEqual"
+                    | "assert.deepEqual"
+                    | "assert.deepStrictEqual"
+            ) && arg_nodes.len() >= 2
+                && super::self_comparison::note(
+                    &mut test.equality_operands,
+                    arg_nodes[0],
+                    arg_nodes[1],
+                    self.src,
+                )
             {
-                let a = self.text(arg_nodes[0]).trim();
-                let b = self.text(arg_nodes[1]).trim();
-                if a == b && !a.is_empty() {
-                    return true;
-                }
+                return true;
             }
         }
         false
     }
 }
 
-fn is_js_env_check(text: &str) -> bool {
-    text.contains("process.env") || text.contains("process?.env") || super::is_ci_condition(text)
+const JS_NOT_CODE: super::NotCode = super::NotCode {
+    strings: &["string", "template_string", "regex"],
+    comments: &["comment"],
+    interpolations: &["template_substitution"],
+};
+
+/// Whether `node` is a candidate for a condition on the environment: its code, outside
+/// string literals and comments, spells an environment read or names a CI variable. A CI
+/// variable named in a string (`os.Getenv("CI")`, `lookup("CI")`) is read by
+/// `ci_condition::site`, from the tree.
+fn is_js_env_check(node: Node, src: &[u8]) -> bool {
+    let code = super::code_text(node, src, &JS_NOT_CODE);
+    code.contains("process.env") || code.contains("process?.env") || super::is_ci_condition(&code)
 }
 
 fn js_consequence_returns_early(consequence: Node) -> bool {
@@ -1177,6 +1429,20 @@ fn js_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
     }
     false
 }
+
+/// What the steps every pack shares read of this pack (`PackSpec::shared_facts`).
+const JS_PACK: super::PackSpec = super::PackSpec {
+    functions: &JS_FUNCTIONS,
+    own_test_path: None,
+    handlers: &JS_HANDLERS,
+    constants: Some(&JS_CONSTANTS),
+    retries: Some(&JS_RETRIES),
+    receiver_calls: &JS_RECEIVER_CALLS,
+    helper_loops: &super::helper_loops::JAVASCRIPT,
+    calls: &JS_MOCKS,
+    vocabs: super::calls::SLEEPS_AND_TRIVIAL_ASSERTS,
+    judged: None,
+};
 
 pub const JS_FUNCTIONS: FunctionSpec = FunctionSpec {
     function_kinds: &[
@@ -1891,5 +2157,149 @@ it('another receiver', function () {
         assert_eq!(skip_if("true && isSlow()"), (false, true, false));
         assert_eq!(skip_if("process.env.CI"), (false, true, true));
         assert_eq!(skip_if("!process.env.CI"), (false, true, false));
+    }
+
+    const DENO_FILE: &str = r#"import { assert, assertEquals, assertExists, assertEquals as same } from "jsr:@std/assert@1";
+import { fail } from "https://deno.land/std@0.224.0/assert/mod.ts";
+
+Deno.test("named", () => { assertEquals(add(1, 2), 3); });
+Deno.test({ name: "object", fn() { assertExists(find()); } });
+Deno.test(function byName() { assert(ready()); });
+Deno.test("tautology", () => { assertEquals(x, x); });
+Deno.test("alias and fail", () => { same(1, 2); fail("no"); });
+Deno.test.ignore("parked", () => { assertEquals(1, 2); });
+Deno.test.only("alone", () => { assertEquals(1, 2); });
+Deno.test({ name: "off", ignore: true, fn: () => {} });
+Deno.test({ name: "on windows", ignore: Deno.build.os === "windows", fn: () => {} });
+Deno.test("steps", async (t) => {
+  await t.step("first", () => { assertEquals(a(), 1); });
+  await t.step("outer", async (inner) => {
+    await inner.step("deep", () => { assertEquals(b(), 2); });
+  });
+  await other.step("not a step of t", () => {});
+});
+"#;
+
+    /// `deno test` (deno 2.6) counts each `Deno.test` registration as one test, whatever
+    /// its shape, and reports steps beside them.
+    #[test]
+    fn deno_test_registrations_and_steps_are_read() {
+        let facts = JavaScriptPack
+            .extract("mod_test.ts", DENO_FILE, &AssertVocabulary::default())
+            .unwrap();
+        let names: Vec<&str> = facts.tests.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "named",
+                "object",
+                "byName",
+                "tautology",
+                "alias and fail",
+                "parked",
+                "alone",
+                "off",
+                "on windows",
+                "steps",
+                "steps > first",
+                "steps > outer",
+                "steps > outer > deep",
+            ]
+        );
+        let test = |name: &str| facts.tests.iter().find(|t| t.name == name).unwrap();
+        // The module's functions count as the `node:assert` calls they correspond to.
+        assert_eq!(
+            (test("named").total_asserts, test("named").strong_asserts),
+            (1, 1)
+        );
+        assert_eq!(
+            (test("object").total_asserts, test("object").strong_asserts),
+            (1, 0)
+        );
+        assert_eq!(test("byName").total_asserts, 1);
+        assert_eq!(test("tautology").tautologies, 1);
+        // An import under another name, and a function that is not an `assert*`.
+        assert_eq!(test("alias and fail").total_asserts, 0);
+        for ignored in ["parked", "alone", "off"] {
+            assert!(test(ignored).ignored, "{ignored}");
+        }
+        let conditional = test("on windows");
+        assert!(!conditional.ignored);
+        assert!(conditional.conditional_ignore.is_some());
+        // A step holds its own assertions; the test around it holds them all.
+        assert_eq!(test("steps > first").total_asserts, 1);
+        assert_eq!(test("steps > outer > deep").total_asserts, 1);
+        assert_eq!(test("steps").total_asserts, 2);
+    }
+
+    #[test]
+    fn deno_test_is_read_from_the_tree_and_only_for_the_runtimes_global() {
+        let count = |src: &str| {
+            JavaScriptPack
+                .extract("mod_test.ts", src, &AssertVocabulary::default())
+                .unwrap()
+                .tests
+                .len()
+        };
+        assert_eq!(count("Deno.test('a', () => {});\n"), 1);
+        // The words in a comment or a string, another object, another member.
+        assert_eq!(count("// Deno.test('a', () => {});\n"), 0);
+        assert_eq!(count("const s = \"Deno.test('a', () => {})\";\n"), 0);
+        assert_eq!(count("NotDeno.test('a', () => {});\n"), 0);
+        assert_eq!(count("Deno.tests('a', () => {});\n"), 0);
+        assert_eq!(count("Deno.test.each('a', () => {});\n"), 0);
+        assert_eq!(count("x.Deno.test('a', () => {});\n"), 0);
+        // A file that binds the name itself.
+        for bound in [
+            "import { Deno } from './shim.ts';",
+            "const Deno = require('./shim');",
+            "const Deno = { test() {} };",
+            "function Deno() {}",
+            "function run(Deno) { Deno.test('b', () => {}); }",
+        ] {
+            assert_eq!(
+                count(&format!("{bound}\nDeno.test('a', () => {{}});\n")),
+                0,
+                "{bound}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_standard_assertion_module_supplies_bare_assertions() {
+        let asserts = |import: &str| {
+            let src = format!("{import}\nDeno.test('a', () => {{ assertEquals(f(), 1); }});\n");
+            JavaScriptPack
+                .extract("mod_test.ts", &src, &AssertVocabulary::default())
+                .unwrap()
+                .tests[0]
+                .total_asserts
+        };
+        for module in [
+            "jsr:@std/assert",
+            "jsr:@std/assert@^1.0.0",
+            "jsr:@std/assert/equals",
+            "@std/assert",
+            "https://deno.land/std@0.224.0/assert/mod.ts",
+            "https://deno.land/std@0.150.0/testing/asserts.ts",
+        ] {
+            assert_eq!(
+                asserts(&format!("import {{ assertEquals }} from '{module}';")),
+                1,
+                "{module}"
+            );
+        }
+        for module in [
+            "./helpers.ts",
+            "jsr:@std/assertions",
+            "jsr:@std/testing/bdd",
+        ] {
+            assert_eq!(
+                asserts(&format!("import {{ assertEquals }} from '{module}';")),
+                0,
+                "{module}"
+            );
+        }
+        assert_eq!(asserts(""), 0);
     }
 }

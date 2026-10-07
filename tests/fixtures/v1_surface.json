@@ -512,6 +512,12 @@
       "gates.golden-output.paths.items",
       "gates.golden-output.paths.reset",
       "gates.golden-output.severity",
+      "gates.harness-tampering",
+      "gates.harness-tampering.enabled",
+      "gates.harness-tampering.exempt_paths",
+      "gates.harness-tampering.exempt_paths.items",
+      "gates.harness-tampering.exempt_paths.reset",
+      "gates.harness-tampering.severity",
       "gates.ignored-tests",
       "gates.ignored-tests.approved_predicates",
       "gates.ignored-tests.approved_predicates.items",
@@ -912,6 +918,7 @@
       "allow-floor-drop",
       "allow-gate-weakening",
       "allow-golden-update",
+      "allow-harness-tampering",
       "allow-ignore",
       "allow-manifest-drift",
       "allow-miri",
@@ -1083,6 +1090,7 @@
       "assertion-reduction/fatal-assertions-weakened",
       "assertion-reduction/mocking-increased-without-stronger-assertions",
       "assertion-reduction/nul-byte-added",
+      "assertion-reduction/self-comparison-assertion-introduced",
       "assertion-reduction/source-parsed-with-errors",
       "assertion-reduction/source-parsed-with-errors-preprocessor",
       "assertion-reduction/test-cases-reduced",
@@ -1216,6 +1224,10 @@
       "golden-output/golden-output-changed-without-directive",
       "golden-output/golden-output-regenerated-without-source-change",
       "golden-output/snapshot-added-for-existing-test",
+      "harness-tampering/harness-exits-zero",
+      "harness-tampering/pytest-hook-masks-results",
+      "harness-tampering/test-main-result-discarded",
+      "harness-tampering/unittest-result-method-replaced",
       "ignored-tests/existing-test-skipped",
       "ignored-tests/ignored-test-added",
       "ignored-tests/skip-justification-insufficient",
@@ -1314,6 +1326,7 @@
       "vacuous-tests/assertion-density-below-floor",
       "vacuous-tests/asserts-only-on-mocks",
       "vacuous-tests/asserts-only-trivial-properties",
+      "vacuous-tests/self-comparison-assertion-added",
       "vacuous-tests/vacuous-test-added",
       "version-lockstep/version-mismatch"
     ],
@@ -1334,6 +1347,7 @@
       "dependency-delta",
       "error-swallowing",
       "golden-output",
+      "harness-tampering",
       "ignored-tests",
       "instruction-smuggling",
       "issue-link",
@@ -1367,6 +1381,12 @@
       "check_diff",
       "explain_finding",
       "list_gates"
+    ],
+    "policy_refusals": [
+      "policy/approval-required",
+      "policy/hidden-directive-refused",
+      "policy/max-inline-overrides-exceeded",
+      "policy/max-overrides-exceeded"
     ]
   }
 }

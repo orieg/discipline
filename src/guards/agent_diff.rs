@@ -66,19 +66,52 @@ pub(crate) fn assert_vocabulary(config: &crate::config::DisciplineConfig) -> Ass
 
 pub(crate) fn assert_vocabulary_for_head(ctx: &Context) -> Result<AssertVocabulary> {
     let mut vocab = assert_vocabulary(ctx.config);
-    let tracked = ctx.git.tracked_files()?;
-    let reads = crate::gitctx::ReadRecorder::new();
-    let head = reads.head(ctx.git);
-    vocab.runner_rules = crate::ast::runner_collection::RunnerCollectionRules::from_tree(
-        |path| {
-            head(path).or_else(|| {
-                std::fs::read_to_string(std::path::Path::new(ctx.git.root()).join(path)).ok()
-            })
-        },
-        &tracked,
-    );
-    reads.finish()?;
+    vocab.runner_rules = head_runner_rules(ctx)?;
     Ok(vocab)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Every path a build of the head-side rules read, in order, for the tests that
+    /// count builds and reads.
+    static HEAD_RULE_READS: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+thread_local! {
+    /// The runner collection rules of the head side of the last run that asked for
+    /// them, by the run's id.
+    static HEAD_RUNNER_RULES: RulesSlot = const { std::cell::RefCell::new(None) };
+}
+
+/// The runner collection rules of the head side. They are read from the working tree
+/// (the index, for a staged run) and from nothing else, and neither changes during a
+/// run, so the rules built for one opened repository are the rules of every later
+/// request in that run: the diff gates and `test-floor` read each manifest, and each
+/// JavaScript or TypeScript file for its `node:test` import, once. The working tree has
+/// no object id to name it, so the key is the run itself ([`crate::gitctx::GitCtx::run_id`]),
+/// which no other opened repository shares. A build that met a read error is not kept.
+fn head_runner_rules(
+    ctx: &Context,
+) -> Result<crate::ast::runner_collection::RunnerCollectionRules> {
+    let run = ctx.git.run_id().to_string();
+    rules_for_key(&HEAD_RUNNER_RULES, Some(&run), || {
+        let tracked = ctx.git.tracked_files()?;
+        let reads = crate::gitctx::ReadRecorder::new();
+        let head = reads.head(ctx.git);
+        let rules = crate::ast::runner_collection::RunnerCollectionRules::from_tree(
+            |path| {
+                #[cfg(test)]
+                HEAD_RULE_READS.with(|reads| reads.borrow_mut().push(path.to_string()));
+                head(path).or_else(|| {
+                    std::fs::read_to_string(std::path::Path::new(ctx.git.root()).join(path)).ok()
+                })
+            },
+            &tracked,
+        );
+        reads.finish()?;
+        Ok(rules)
+    })
 }
 
 /// A base configuration that does not load falls back to the head vocabulary:
@@ -93,11 +126,13 @@ pub(crate) fn assert_vocabulary_for_base(ctx: &Context) -> Result<AssertVocabula
     Ok(vocab)
 }
 
+/// One kept set of runner collection rules, with the key it was built for.
+type RulesSlot =
+    std::cell::RefCell<Option<(String, crate::ast::runner_collection::RunnerCollectionRules)>>;
+
 thread_local! {
     /// The runner collection rules of the last base tree read, by the tree's object id.
-    static BASE_RUNNER_RULES: std::cell::RefCell<
-        Option<(String, crate::ast::runner_collection::RunnerCollectionRules)>,
-    > = const { std::cell::RefCell::new(None) };
+    static BASE_RUNNER_RULES: RulesSlot = const { std::cell::RefCell::new(None) };
 }
 
 /// The rules kept for the tree `id`, or those `build` returns, which are then kept for
@@ -107,10 +142,20 @@ fn rules_for_tree(
     id: Option<&str>,
     build: impl FnOnce() -> Result<crate::ast::runner_collection::RunnerCollectionRules>,
 ) -> Result<crate::ast::runner_collection::RunnerCollectionRules> {
+    rules_for_key(&BASE_RUNNER_RULES, id, build)
+}
+
+/// As [`rules_for_tree`], in the slot `slot` and for any key that names what the rules
+/// were read from.
+fn rules_for_key(
+    slot: &'static std::thread::LocalKey<RulesSlot>,
+    id: Option<&str>,
+    build: impl FnOnce() -> Result<crate::ast::runner_collection::RunnerCollectionRules>,
+) -> Result<crate::ast::runner_collection::RunnerCollectionRules> {
     let Some(id) = id else {
         return build();
     };
-    let kept = BASE_RUNNER_RULES.with(|cache| {
+    let kept = slot.with(|cache| {
         cache
             .borrow()
             .as_ref()
@@ -121,7 +166,7 @@ fn rules_for_tree(
         return Ok(rules);
     }
     let rules = build()?;
-    BASE_RUNNER_RULES.with(|cache| *cache.borrow_mut() = Some((id.to_string(), rules.clone())));
+    slot.with(|cache| *cache.borrow_mut() = Some((id.to_string(), rules.clone())));
     Ok(rules)
 }
 
@@ -2067,12 +2112,16 @@ pub fn evaluate_assertion_reduction(
         if total_drop || strong_drop {
             widened.retain(|w| !w.dropped);
         }
+        // Equality assertions that compare an operand with itself and that the base
+        // side did not hold (`ast::self_comparison`).
+        let self_compared = h.equality_operands.introduced_since(&b.equality_operands);
         let dropped = total_drop || strong_drop || fatal_drop || mock_growth || cases_drop;
         if !dropped
             && loosened.is_empty()
             && changed.is_empty()
             && newly_caught.is_empty()
             && widened.is_empty()
+            && self_compared.is_empty()
         {
             continue;
         }
@@ -2097,8 +2146,10 @@ pub fn evaluate_assertion_reduction(
             &crate::findings::ASSERTION_BOUND_LOOSENED
         } else if !widened.is_empty() {
             &crate::findings::EXPECTED_EXCEPTION_WIDENED
-        } else {
+        } else if !changed.is_empty() {
             &crate::findings::EXPECTED_VALUE_CHANGED
+        } else {
+            &crate::findings::SELF_COMPARISON_ASSERTION_INTRODUCED
         };
         let lift = |subject: &str| {
             tokens::find_override(
@@ -2171,6 +2222,30 @@ pub fn evaluate_assertion_reduction(
                     directive_name
                 ),
             );
+        }
+
+        // One finding for one act: a rewrite that also lowers the count is the
+        // `assertions-reduced` finding below, at the gate's severity, whose message names
+        // these lines. Reported here only while the count holds, as a warning: the form
+        // is exact, and a deliberate reflexivity check is a legitimate test.
+        let folded_into_reduction = total_drop || strong_drop;
+        for s in self_compared.iter().filter(|_| !folded_into_reduction) {
+            out.push(
+                crate::config::Severity::Warning,
+                &crate::findings::SELF_COMPARISON_ASSERTION_INTRODUCED,
+                Some(p.path),
+                Some(s.line),
+                format!(
+                    "{test_label}: the equality assertion on line {} now compares an expression with itself, so it holds whatever the code does. {SELF_COMPARISON_SCOPE}",
+                    s.line
+                ),
+                &format!(
+                    "Compare the value with what is expected of it. A deliberate reflexivity check takes, on its own line in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
+                    directive_name
+                ),
+            );
+            out.anchor_last(h.name.clone());
+            note_self_comparison_scope(&mut out);
         }
 
         for l in &loosened {
@@ -2359,13 +2434,24 @@ pub fn evaluate_assertion_reduction(
             &crate::findings::ASSERTIONS_REDUCED,
             Some(p.path),
             Some(violation_line),
-            format!("{test_label}: {what}."),
+            if self_compared.is_empty() {
+                format!("{test_label}: {what}.")
+            } else {
+                format!(
+                    "{test_label}: {what}; {} equality assertion(s) now compare an expression with itself (line {}). {SELF_COMPARISON_SCOPE}",
+                    self_compared.len(),
+                    lines_of(&self_compared)
+                )
+            },
             &format!(
                 "Restore the assertions, or justify the drop on its own line in the PR body or \
                  a commit message: `allow-assertion-drop: {} <reason>`.",
                 directive_name
             ),
         );
+        if !self_compared.is_empty() {
+            note_self_comparison_scope(&mut out);
+        }
     }
     Ok(out)
 }
@@ -2453,6 +2539,27 @@ enum CaseDrop {
     NotParametrized(usize),
 }
 
+/// What the self-comparison findings do and do not read, stated in each message.
+const SELF_COMPARISON_SCOPE: &str = "Exact form only: the two operands are the same tokens; no alias or value-flow analysis, so two names for one value are not seen.";
+
+/// The note a gate carries, once, when it reports a self-comparison.
+const SELF_COMPARISON_NOTE: &str = "self-comparison findings read the exact form only (an equality assertion whose two operands are the same tokens, with no call in them and outside a macro definition); no alias/value-flow analysis: two names bound to one value, and an assertion whose operands never reach the code under test, are not reported";
+
+fn note_self_comparison_scope(out: &mut GateOutcome) {
+    if !out.notes.iter().any(|n| n == SELF_COMPARISON_NOTE) {
+        out.notes.push(SELF_COMPARISON_NOTE.to_string());
+    }
+}
+
+/// The lines of `found`, in order, as `3, 7`.
+fn lines_of(found: &[&crate::ast::self_comparison::SelfComparison]) -> String {
+    found
+        .iter()
+        .map(|s| s.line.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 pub fn evaluate_vacuous_tests(
     added: &[Located],
     settings: &crate::config::AssertionGate,
@@ -2478,6 +2585,10 @@ pub fn evaluate_vacuous_tests(
         let below_floor = settings
             .min_assertions_per_test
             .is_some_and(|min| a.test.checks() < min);
+        // Equality assertions that compare an operand with itself
+        // (`ast::self_comparison`). One finding a test: a test with nothing else that
+        // can fail is the vacuous test below, which names them.
+        let self_compared = a.test.equality_operands.reportable();
         let lifts = if mocks_only {
             &crate::findings::ASSERTS_ONLY_ON_MOCKS
         } else if trivial_only {
@@ -2486,6 +2597,8 @@ pub fn evaluate_vacuous_tests(
             &crate::findings::VACUOUS_TEST_ADDED
         } else if below_floor {
             &crate::findings::ASSERTION_DENSITY_BELOW_FLOOR
+        } else if !self_compared.is_empty() {
+            &crate::findings::SELF_COMPARISON_ASSERTION_ADDED
         } else {
             continue;
         };
@@ -2546,10 +2659,18 @@ pub fn evaluate_vacuous_tests(
         if a.test.is_vacuous() {
             let why = if a.test.total_asserts == 0 {
                 "contains no assertion".to_string()
-            } else {
+            } else if self_compared.is_empty() {
                 format!(
                     "contains only tautological assertions ({} of {})",
                     a.test.tautologies, a.test.total_asserts
+                )
+            } else {
+                format!(
+                    "contains only tautological assertions ({} of {}), of which {} compare(s) an expression with itself (line {})",
+                    a.test.tautologies,
+                    a.test.total_asserts,
+                    self_compared.len(),
+                    lines_of(&self_compared)
                 )
             };
             out.push(
@@ -2563,7 +2684,29 @@ pub fn evaluate_vacuous_tests(
                  is meant not to assert (a smoke test) takes `allow-vacuous-test: <test> <reason>`.",
             );
             out.anchor_last(a.test.name.clone());
-        } else if let Some(min) = settings.min_assertions_per_test {
+            continue;
+        }
+        if !self_compared.is_empty() {
+            out.push(
+                crate::config::Severity::Warning,
+                &crate::findings::SELF_COMPARISON_ASSERTION_ADDED,
+                Some(a.path),
+                Some(self_compared[0].line),
+                format!(
+                    "New test `{}`: {} equality assertion(s) compare an expression with itself (line {}), so they hold whatever the code does. {SELF_COMPARISON_SCOPE}",
+                    a.test.name,
+                    self_compared.len(),
+                    lines_of(&self_compared)
+                ),
+                &format!(
+                    "Compare the value with what is expected of it. A deliberate reflexivity check takes `allow-vacuous-test: {} <reason>`.",
+                    leaf_name(a.test)
+                ),
+            );
+            out.anchor_last(a.test.name.clone());
+            note_self_comparison_scope(&mut out);
+        }
+        if let Some(min) = settings.min_assertions_per_test {
             if a.test.checks() < min {
                 out.push(
                     settings.severity(),
@@ -5891,5 +6034,106 @@ mod base_rules_cache_tests {
         let after = rules_for_tree(Some("cache-test-tree-c"), build("c")).unwrap();
         assert_eq!(after, rules_with("c"));
         assert_eq!(builds.get(), 6);
+    }
+}
+
+#[cfg(test)]
+mod head_rules_cache_tests {
+    use super::{assert_vocabulary_for_head, HEAD_RULE_READS};
+    use crate::gitctx::GitCtx;
+    use crate::guards::Context;
+
+    const NODE_TEST: &str = "import test from 'node:test';\ntest('one', () => {});\n";
+    const PACKAGE: &str = r#"{"name": "app", "scripts": {"test": "node --test"}}"#;
+
+    /// A repository whose one commit holds a manifest and two JavaScript test files.
+    fn repository() -> (tempfile::TempDir, git2::Oid) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let mut index = repo.index().unwrap();
+        for (path, content) in [
+            ("package.json", PACKAGE),
+            ("test/a.test.js", NODE_TEST),
+            ("test/b.test.js", NODE_TEST),
+        ] {
+            let full = dir.path().join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, content).unwrap();
+            index.add_path(std::path::Path::new(path)).unwrap();
+        }
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.invalid").unwrap();
+        let commit = repo
+            .commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+            .unwrap();
+        (dir, commit)
+    }
+
+    fn context<'a>(config: &'a crate::config::DisciplineConfig, git: &'a GitCtx) -> Context<'a> {
+        Context {
+            config,
+            head_config: None,
+            git,
+            config_path: "discipline.toml",
+            baseline_path: None,
+            baseline: None,
+            staged: false,
+            pr_title: None,
+            pr_body: None,
+            directives: Vec::new(),
+            directive_notes: Vec::new(),
+            bench_provenance: None,
+            allow_cross_host_bench: false,
+            bench_base_file: None,
+            bench_head_file: None,
+            test_base_report: None,
+            test_head_report: None,
+            test_report: None,
+            forge: None,
+        }
+    }
+
+    /// How many times the builds so far read `path`.
+    fn reads_of(path: &str) -> usize {
+        HEAD_RULE_READS.with(|reads| reads.borrow().iter().filter(|p| *p == path).count())
+    }
+
+    /// The diff gates and `test-floor` both ask for the head-side rules. In one run the
+    /// rules are built once: each manifest, and each JavaScript file for its `node:test`
+    /// import, is read once. Another opened repository builds its own.
+    #[test]
+    fn two_gates_in_one_run_build_the_head_side_rules_once() {
+        let (dir, commit) = repository();
+        let config = crate::config::DisciplineConfig::default_for_repo("cache-test");
+        let open = || GitCtx::for_test(git2::Repository::open(dir.path()).unwrap(), Some(commit));
+        HEAD_RULE_READS.with(|reads| reads.borrow_mut().clear());
+        let git = open();
+        let ctx = context(&config, &git);
+
+        // The diff gates.
+        let outcomes = super::run(&ctx).unwrap();
+        assert!(!outcomes.is_empty());
+        assert_eq!(reads_of("test/a.test.js"), 1);
+        assert_eq!(reads_of("test/b.test.js"), 1);
+        let manifest_reads = reads_of("package.json");
+        assert!(manifest_reads >= 1);
+        // `test-floor`, in the same run: nothing is read again.
+        let floor = crate::guards::test_floor::evaluate_test_floor(&ctx).unwrap();
+        assert_eq!(floor.examined, 2, "{:?}", floor.notes);
+        assert_eq!(reads_of("test/a.test.js"), 1);
+        assert_eq!(reads_of("test/b.test.js"), 1);
+        assert_eq!(reads_of("package.json"), manifest_reads);
+        let kept = assert_vocabulary_for_head(&ctx).unwrap();
+        assert!(kept.runner_rules.js.node_test_script);
+        assert_eq!(reads_of("test/a.test.js"), 1);
+
+        // Another run over a changed working tree reads it again, and sees the change.
+        std::fs::write(dir.path().join("package.json"), r#"{"name": "app"}"#).unwrap();
+        let later = open();
+        let ctx = context(&config, &later);
+        let rebuilt = assert_vocabulary_for_head(&ctx).unwrap();
+        assert!(!rebuilt.runner_rules.js.node_test_script);
+        assert_eq!(reads_of("test/a.test.js"), 2);
     }
 }

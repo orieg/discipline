@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use tree_sitter::{Node, Parser};
 
 use super::functions::{self, FunctionSpec};
@@ -40,12 +40,14 @@ impl LanguagePack for RustPack {
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_rust::LANGUAGE.into())
-            .map_err(|e| anyhow!("failed to load the Rust grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
+        let tree = crate::ast::source_text::parse_file_as(
+            &tree_sitter_rust::LANGUAGE.into(),
+            "the Rust",
+            path,
+            src,
+        )?;
         let root = tree.root_node();
+        crate::ast::source_text::forget_unread_part();
 
         let (owning_features, manifest_error) =
             vocab.runner_rules.rust.find_owning_crate_features(path);
@@ -83,59 +85,7 @@ impl LanguagePack for RustPack {
         cx.visit(root, &mut Vec::new());
         cx.resolve_same_file_helpers();
         cx.facts.build_compile_time_test();
-        cx.facts.functions = functions::extract(root, src, path, &RUST_FUNCTIONS);
-        super::mocks::count(
-            root,
-            src,
-            &mut cx.facts.tests,
-            &RUST_MOCKS,
-            &vocab.mock_setup_fns,
-            &vocab.mock_assert_fns,
-        );
-        {
-            let tests = &cx.facts.tests;
-            let spans: Vec<(usize, usize)> = tests
-                .iter()
-                .map(|t| (t.line, t.end_line.max(t.line)))
-                .collect();
-            // A file in a test directory, or one the repository declares as test scope, is
-            // test code line for line.
-            let whole_file = super::functions::test_path(path)
-                || super::functions::declared_test_path(path, &vocab.test_paths);
-            let is_test_line =
-                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            cx.facts.swallowed = super::handlers::extract(root, src, &RUST_HANDLERS, &is_test_line);
-        }
-        super::retries::mark(root, src, &mut cx.facts.tests, &RUST_RETRIES);
-        if super::functions::declared_test_path(path, &vocab.test_paths) {
-            for f in &mut cx.facts.functions {
-                f.is_test = true;
-            }
-        }
-        super::method_checks::count(root, src, &mut cx.facts, &RUST_RECEIVER_CALLS);
-        super::helper_loops::count(root, src, &mut cx.facts, &super::helper_loops::RUST);
-        let counted: [(super::calls::Vocab, super::calls::Pick); 2] = [
-            (super::calls::SLEEP_VOCAB, super::calls::sleeps),
-            (
-                super::calls::TRIVIAL_ASSERT_VOCAB,
-                super::calls::trivial_asserts,
-            ),
-        ];
-        for (counted_vocab, pick) in counted {
-            super::calls::count_with(
-                root,
-                src,
-                &mut cx.facts.tests,
-                &RUST_MOCKS,
-                counted_vocab,
-                pick,
-                // A macro's arguments are a token tree, not call nodes.
-                &|node| {
-                    (node.kind() == "macro_invocation")
-                        .then(|| macro_code(node, src, counted_vocab, &vocab.extra_macros))
-                },
-            );
-        }
+        RUST_PACK.shared_facts(root, src, path, vocab, &mut cx.facts);
         super::bounds::rust(root, src, &mut cx.facts.tests);
         super::expectations::rust(root, src, &mut cx.facts.tests);
         super::caught_assertions::rust(root, src, &mut cx.facts.tests, vocab);
@@ -150,11 +100,22 @@ impl LanguagePack for RustPack {
             ],
         );
         cx.facts.budgets = super::budgets::extract(root, src, &RS_BUDGETS);
+        // A macro argument with no tree was not read: its assertion was counted without
+        // being judged, so the file has no facts, as when the file itself has no tree.
+        crate::ast::source_text::unread_part(path)?;
         Ok(cx.facts)
     }
 }
 
 use super::HelperFacts;
+
+/// What a node opened for the nodes under it (`Extractor::enter`, `Extractor::leave`).
+enum Scope {
+    None,
+    Module,
+    Function { is_test: bool },
+    Const,
+}
 
 struct Comment {
     start_row: usize,
@@ -236,7 +197,52 @@ impl<'a> Extractor<'a> {
         }
     }
 
-    fn visit(&mut self, node: Node, mods: &mut Vec<String>) {
+    /// Reads every node under `root` in source order. The walk keeps its own stack of
+    /// what is still to read, so its depth is the tree's and not the thread's: this
+    /// function took more of the thread's stack for each level than any other walker
+    /// (`source_text::TREE_DEPTH_LIMIT`).
+    fn visit(&mut self, root: Node, mods: &mut Vec<String>) {
+        enum Step<'t> {
+            Enter(Node<'t>),
+            Leave(Scope),
+        }
+        let mut steps = vec![Step::Enter(root)];
+        while let Some(step) = steps.pop() {
+            match step {
+                Step::Leave(scope) => self.leave(scope, mods),
+                Step::Enter(node) => {
+                    let Some(scope) = self.enter(node, mods) else {
+                        continue;
+                    };
+                    steps.push(Step::Leave(scope));
+                    let mut cursor = node.walk();
+                    let children: Vec<Node> = node.children(&mut cursor).collect();
+                    steps.extend(children.into_iter().rev().map(Step::Enter));
+                }
+            }
+        }
+    }
+
+    /// What [`Self::enter`] opened is closed once the node's children are read.
+    fn leave(&mut self, scope: Scope, mods: &mut Vec<String>) {
+        match scope {
+            Scope::None => {}
+            Scope::Module => {
+                mods.pop();
+            }
+            Scope::Function { is_test } => {
+                if is_test {
+                    self.in_test -= 1;
+                }
+                self.in_fn -= 1;
+            }
+            Scope::Const => self.in_const -= 1,
+        }
+    }
+
+    /// Reads `node` itself. `None` when its children are not read; otherwise what it
+    /// opened, which [`Self::leave`] closes after them.
+    fn enter(&mut self, node: Node, mods: &mut Vec<String>) -> Option<Scope> {
         match node.kind() {
             "attribute_item" | "inner_attribute_item" => {
                 let text = self.text(node);
@@ -255,7 +261,7 @@ impl<'a> Extractor<'a> {
                             snippet: text.trim().to_string(),
                         });
                 }
-                return;
+                return None;
             }
             "mod_item" => {
                 let name = node
@@ -263,9 +269,7 @@ impl<'a> Extractor<'a> {
                     .map(|n| self.text(n).to_string())
                     .unwrap_or_default();
                 mods.push(name);
-                self.visit_children(node, mods);
-                mods.pop();
-                return;
+                return Some(Scope::Module);
             }
             "function_item" => {
                 let mut direct_calls = Vec::new();
@@ -326,12 +330,9 @@ impl<'a> Extractor<'a> {
                             &["function_item", "closure_expression"],
                         );
                     }
-                    let facts = HelperFacts {
-                        total_asserts: helper_test.total_asserts,
-                        strong_asserts: helper_test.strong_asserts,
-                        tautologies: helper_test.tautologies,
-                        fatal_asserts: helper_test.fatal_asserts,
-                        wraps: node.child_by_field_name("body").and_then(|b| {
+                    let facts = HelperFacts::from_scan(
+                        &helper_test,
+                        node.child_by_field_name("body").and_then(|b| {
                             super::forwarding_wrapper_callee(
                                 b,
                                 &RS_WRAPPER,
@@ -340,22 +341,12 @@ impl<'a> Extractor<'a> {
                                 self.src,
                             )
                         }),
-                    };
+                    );
                     self.helpers.insert(fn_name.clone(), facts);
                     let line = node.start_position().row + 1;
                     let end_line = node.end_position().row + 1;
                     self.facts.push_helper(
-                        super::TestHelperFacts {
-                            name: fn_name,
-                            line,
-                            end_line,
-                            total_asserts: helper_test.total_asserts,
-                            strong_asserts: helper_test.strong_asserts,
-                            tautologies: helper_test.tautologies,
-                            fatal_asserts: helper_test.fatal_asserts,
-                            helper_checks: 0,
-                            equality_exits: 0,
-                        },
+                        super::TestHelperFacts::from_scan(fn_name, line, end_line, &helper_test),
                         dummy_calls,
                     );
                 }
@@ -363,18 +354,11 @@ impl<'a> Extractor<'a> {
                 if is_test {
                     self.in_test += 1;
                 }
-                self.visit_children(node, mods);
-                if is_test {
-                    self.in_test -= 1;
-                }
-                self.in_fn -= 1;
-                return;
+                return Some(Scope::Function { is_test });
             }
             "const_item" => {
                 self.in_const += 1;
-                self.visit_children(node, mods);
-                self.in_const -= 1;
-                return;
+                return Some(Scope::Const);
             }
             "macro_invocation" => {
                 if self.in_test == 0 {
@@ -413,27 +397,16 @@ impl<'a> Extractor<'a> {
                 if node.children(&mut cursor).any(|c| c.kind() == "unsafe") {
                     self.unsafe_site(node, "unsafe impl");
                 }
-                self.visit_children(node, mods);
-                return;
             }
             "trait_item" => {
                 let mut cursor = node.walk();
                 if node.children(&mut cursor).any(|c| c.kind() == "unsafe") {
                     self.unsafe_site(node, "unsafe trait");
                 }
-                self.visit_children(node, mods);
-                return;
             }
             _ => {}
         }
-        self.visit_children(node, mods);
-    }
-
-    fn visit_children(&mut self, node: Node, mods: &mut Vec<String>) {
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.visit(child, mods);
-        }
+        Some(Scope::None)
     }
 
     fn resolve_same_file_helpers(&mut self) {
@@ -587,6 +560,7 @@ impl<'a> Extractor<'a> {
             method_checks: 0,
             counted_helper_calls: Vec::new(),
             helper_reach: super::HelperReach::default(),
+            equality_operands: Default::default(),
         };
         let is_fallible_return = node
             .child_by_field_name("return_type")
@@ -651,14 +625,11 @@ impl<'a> Extractor<'a> {
                 child
             };
 
-            if stmt.kind() == "let_declaration" {
-                let text = self.text(stmt);
-                if is_rust_env_check(text) {
-                    if let Some(pat) = stmt.child_by_field_name("pattern") {
-                        let name = self.text(pat).trim();
-                        if !name.is_empty() {
-                            env_bindings.insert(name.to_string());
-                        }
+            if stmt.kind() == "let_declaration" && is_rust_env_check(stmt, self.src) {
+                if let Some(pat) = stmt.child_by_field_name("pattern") {
+                    let name = self.text(pat).trim();
+                    if !name.is_empty() {
+                        env_bindings.insert(name.to_string());
                     }
                 }
             }
@@ -667,14 +638,8 @@ impl<'a> Extractor<'a> {
                 let cond_node = stmt.child_by_field_name("condition")?;
                 let cond_text = self.text(cond_node).trim();
 
-                let is_env_check = is_rust_env_check(cond_text)
-                    || super::is_ci_condition(cond_text)
-                    || env_bindings.iter().any(|v| {
-                        cond_text == v
-                            || cond_text
-                                .split(|c: char| !c.is_alphanumeric() && c != '_')
-                                .any(|t| t == v)
-                    });
+                let is_env_check = is_rust_env_check(cond_node, self.src)
+                    || super::code_names_one_of(cond_node, self.src, &RUST_NOT_CODE, &env_bindings);
 
                 if is_env_check {
                     let consequence = stmt.child_by_field_name("consequence")?;
@@ -1221,7 +1186,8 @@ impl<'a> Extractor<'a> {
                             .find(|c| c.kind() == "token_tree")
                             .and_then(|t| t.utf8_text(src).ok())
                             .unwrap_or("");
-                        if is_tautology(macro_ident, args) {
+                        let same = note_macro_operands(node, macro_ident, test, src);
+                        if is_tautology(macro_ident, args) || same {
                             test.tautologies += 1;
                         }
                     }
@@ -1333,7 +1299,8 @@ impl<'a> Extractor<'a> {
                             .find(|c| c.kind() == "token_tree")
                             .map(|t| self.text(t))
                             .unwrap_or("");
-                        if is_tautology(name, args) {
+                        let same = note_macro_operands(node, name, test, self.src);
+                        if is_tautology(name, args) || same {
                             test.tautologies += 1;
                         }
                     }
@@ -1730,14 +1697,22 @@ fn attribute_name(attr_text: &str) -> String {
     last_segment(&path).to_string()
 }
 
-fn is_rust_env_check(text: &str) -> bool {
-    text.contains("env::var")
-        || text.contains("std::env::var")
-        || text.contains("option_env!")
-        || text.contains("env::var_os")
-        || text.contains("std::env::var_os")
-        || text.contains("var_os")
-        || super::is_ci_condition(text)
+const RUST_NOT_CODE: super::NotCode = super::NotCode {
+    strings: &["string_literal", "raw_string_literal", "char_literal"],
+    comments: &["line_comment", "block_comment"],
+    interpolations: &[],
+};
+
+/// Whether `node` is a candidate for a condition on the environment: its code, outside
+/// string literals and comments, spells an environment read or names a CI variable. A CI
+/// variable named in a string (`os.Getenv("CI")`, `lookup("CI")`) is read by
+/// `ci_condition::site`, from the tree.
+fn is_rust_env_check(node: Node, src: &[u8]) -> bool {
+    let code = super::code_text(node, src, &RUST_NOT_CODE);
+    code.contains("env::var")
+        || code.contains("option_env!")
+        || code.contains("var_os")
+        || super::is_ci_condition(&code)
 }
 
 fn rust_block_returns_early(consequence: Node) -> bool {
@@ -2072,6 +2047,40 @@ fn property_result(expr: Node, body: Node, src: &[u8], depth: usize) -> Property
     }
 }
 
+/// Reads the first two arguments of an equality macro (`assert_eq!`, `debug_assert_eq!`,
+/// `prop_assert_eq!`, ..) from its token tree and records them (`self_comparison`).
+/// Returns whether they are the same tokens. Arguments are the runs of tokens between
+/// the commas of the tree; a comma inside `<..>` splits a run, and such an argument is
+/// then never equal to its neighbour.
+fn note_macro_operands(invocation: Node, name: &str, test: &mut TestFn, src: &[u8]) -> bool {
+    if !name.contains("_eq") {
+        return false;
+    }
+    let mut cursor = invocation.walk();
+    let Some(tree) = invocation
+        .children(&mut cursor)
+        .find(|c| c.kind() == "token_tree")
+    else {
+        return false;
+    };
+    let mut tree_cursor = tree.walk();
+    let tokens: Vec<Node> = tree.children(&mut tree_cursor).collect();
+    if tokens.len() < 2 {
+        return false;
+    }
+    let inner = &tokens[1..tokens.len() - 1];
+    let mut runs = inner.split(|t| t.kind() == ",");
+    let (Some(a), Some(b)) = (runs.next(), runs.next()) else {
+        return false;
+    };
+    super::self_comparison::note_operands(
+        &mut test.equality_operands,
+        super::self_comparison::Operand { nodes: a },
+        super::self_comparison::Operand { nodes: b },
+        src,
+    )
+}
+
 fn is_tautology(name: &str, token_tree: &str) -> bool {
     let inner = token_tree
         .trim()
@@ -2113,14 +2122,17 @@ fn is_constant_argument(arg: &str) -> bool {
 /// Reads one macro argument as an expression. A macro's arguments are a token tree, so
 /// the argument's text is parsed again as the value of a `let`; `read` gets the value's
 /// node and the text it was parsed from. `None` when the argument is not an expression
-/// (a pattern, a format specification, tokens of the macro's own grammar).
+/// (a pattern, a format specification, tokens of the macro's own grammar), and when it
+/// has no tree, which `source_text::parse_part` then records.
 fn reparsed_expression<R>(arg: &str, read: impl FnOnce(Node, &str) -> R) -> Option<R> {
     let code = format!("fn _discipline_check() {{ let _ = ({arg}); }}");
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_rust::LANGUAGE.into())
         .ok()?;
-    let tree = crate::ast::source_text::parse(&mut parser, &code).ok()?;
+    // No tree is not "not an expression": it is an argument nobody read, which
+    // `parse_part` records and `RustPack::extract` refuses the file for.
+    let tree = crate::ast::source_text::parse_part(&mut parser, &code)?;
     let root = tree.root_node();
     if root.has_error() {
         return None;
@@ -2141,7 +2153,18 @@ fn is_assert_macro_name(name: &str, extra: &[String]) -> bool {
         || extra.iter().any(|m| m == name)
 }
 
-/// The code a call counter (`calls::count_with`) judges a macro invocation by.
+/// The code a macro invocation is judged by for a call vocabulary; any other node is
+/// read the ordinary way. A macro's arguments are a token tree, not call nodes.
+fn macro_judged(
+    node: Node,
+    src: &str,
+    counted: super::calls::Vocab,
+    vocab: &AssertVocabulary,
+) -> Option<String> {
+    (node.kind() == "macro_invocation").then(|| macro_code(node, src, counted, &vocab.extra_macros))
+}
+
+/// The code a call counter (`calls::count`) judges a macro invocation by.
 ///
 /// A delay is counted wherever the macro's tokens spell one, so the whole invocation is
 /// read, less its string literals and comments. A vocabulary that describes what an
@@ -2376,6 +2399,20 @@ fn rust_fn_skip(node: tree_sitter::Node, src: &str) -> bool {
     }
     false
 }
+
+/// What the steps every pack shares read of this pack (`PackSpec::shared_facts`).
+const RUST_PACK: super::PackSpec = super::PackSpec {
+    functions: &RUST_FUNCTIONS,
+    own_test_path: None,
+    handlers: &RUST_HANDLERS,
+    constants: None,
+    retries: Some(&RUST_RETRIES),
+    receiver_calls: &RUST_RECEIVER_CALLS,
+    helper_loops: &super::helper_loops::RUST,
+    calls: &RUST_MOCKS,
+    vocabs: super::calls::SLEEPS_AND_TRIVIAL_ASSERTS,
+    judged: Some(macro_judged),
+};
 
 pub const RUST_FUNCTIONS: FunctionSpec = FunctionSpec {
     function_kinds: &["function_item"],

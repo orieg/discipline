@@ -95,12 +95,14 @@ findings! {
     ASSERTIONS_REDUCED = ["assertion-reduction"], "assertions-reduced", "Assertion Count Decreased In Existing Test", Was("Assertion Reduction In Existing Test");
     TEST_CASES_REDUCED = ["assertion-reduction"], "test-cases-reduced", "Test Cases Reduced In Parametrized Test", Same;
     TEST_HELPER_WEAKENED = ["assertion-reduction"], "test-helper-weakened", "Test Helper Function Weakened", Same;
+    SELF_COMPARISON_ASSERTION_INTRODUCED = ["assertion-reduction"], "self-comparison-assertion-introduced", "Self-Comparison Assertion Introduced In Existing Test", Same;
 
     // vacuous-tests
     ASSERTS_ONLY_ON_MOCKS = ["vacuous-tests"], "asserts-only-on-mocks", "Test Asserts Only On Mocks", Same;
     ASSERTS_ONLY_TRIVIAL = ["vacuous-tests"], "asserts-only-trivial-properties", "Test Asserts Only Trivial Properties", Same;
     VACUOUS_TEST_ADDED = ["vacuous-tests"], "vacuous-test-added", "Vacuous Test Added", Same;
     ASSERTION_DENSITY_BELOW_FLOOR = ["vacuous-tests"], "assertion-density-below-floor", "Insufficient Assertion Density", Same;
+    SELF_COMPARISON_ASSERTION_ADDED = ["vacuous-tests"], "self-comparison-assertion-added", "Self-Comparison Assertion In New Test", Same;
 
     // ignored-tests
     SKIP_JUSTIFICATION_INSUFFICIENT = ["ignored-tests"], "skip-justification-insufficient", "Skip Justification Insufficient", Was("Unannotated Skip Justification");
@@ -193,6 +195,12 @@ findings! {
     // stub-bodies
     STUB_BODY_ADDED = ["stub-bodies"], "stub-body-added", "Stub Body Added", Same;
     BODY_REPLACED_BY_STUB = ["stub-bodies"], "body-replaced-by-stub", "Function Body Replaced By Stub", Same;
+
+    // harness-tampering
+    TEST_MAIN_RESULT_DISCARDED = ["harness-tampering"], "test-main-result-discarded", "Go TestMain Discards The Test Result", Same;
+    PYTEST_HOOK_MASKS_RESULTS = ["harness-tampering"], "pytest-hook-masks-results", "Pytest Hook Masks Test Results", Same;
+    UNITTEST_RESULT_METHOD_REPLACED = ["harness-tampering"], "unittest-result-method-replaced", "Unittest Result Method Replaced", Same;
+    HARNESS_EXITS_ZERO = ["harness-tampering"], "harness-exits-zero", "Test Harness Exits With Status Zero", Same;
 
     // error-swallowing
     RESULT_DISCARDED = ["error-swallowing"], "result-discarded", "Result Discarded", Same;

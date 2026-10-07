@@ -449,6 +449,53 @@ fn the_618_fuzz_seeds_are_committed_and_their_commands_are_answered() {
     }
 }
 
+/// The seed of the `pretool_payload` fuzz target for #667: a command of 4,200 nested
+/// subshells, past the 4,096 levels a syntax tree may nest. The hook answers it, with a
+/// refusal that says the command was not parsed; the same command nested 100 deep, and
+/// 4,000 deep, is read, and refused only when it acts on the other worktree.
+#[test]
+fn a_shell_command_nested_past_the_depth_limit_is_refused_by_the_hook() {
+    let (_repo, main, _wt2) = two_worktrees();
+    let seed = std::fs::read(format!(
+        "{}/fuzz/corpus/pretool_payload/shell_nested_past_the_depth_limit",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
+    let nested = |subshells: usize, command: &str| {
+        format!(
+            "{}{command}{}",
+            "( ".repeat(subshells),
+            " )".repeat(subshells)
+        )
+    };
+    assert_eq!(seed[0], 0);
+    assert_eq!(String::from_utf8_lossy(&seed[1..]), nested(4_200, "true"));
+    let run = |command: &str| {
+        let payload = shell("claude-code", &main, command);
+        pretool(&main, "claude-code", &payload, &[])
+    };
+    for subshells in [4_200, 20_000] {
+        let o = run(&nested(subshells, "true"));
+        assert!(
+            o.code == 2 && o.stderr.contains("could not parse this shell command"),
+            "{subshells}: {} {}",
+            o.code,
+            o.stderr
+        );
+    }
+    for subshells in [100, 4_000] {
+        let o = run(&nested(subshells, "true"));
+        assert_eq!((o.code, o.stderr.as_str()), (0, ""), "{subshells}");
+        let o = run(&nested(subshells, "cd wt2 && true"));
+        assert!(
+            o.code == 2 && o.stderr.contains("worktree `wt2`"),
+            "{subshells}: {} {}",
+            o.code,
+            o.stderr
+        );
+    }
+}
+
 /// `discipline hook run --agent <agent> --event session-start` in `dir`, `payload` on stdin.
 fn session_start(dir: &Path, agent: &str, payload: &str) -> Out {
     session_start_args(dir, agent, payload, &[])

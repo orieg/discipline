@@ -89,7 +89,33 @@ pub fn generate_gitlab_issues(summary: &CheckSummary) -> Vec<GitlabCodeQualityIs
         }
     }
 
+    // One entry per policy refusal (`crate::refusals`): the rule id, where it is and the
+    // registry's fixed wording. The path is the pull request body's for a directive
+    // written there, else the configuration file, as for a finding with no file.
+    for r in crate::refusals::project(summary) {
+        issues.push(GitlabCodeQualityIssue {
+            description: format!("Policy: {} [{}]", r.info.message, r.place()),
+            check_name: r.info.rule_id(),
+            fingerprint: r.fingerprint(),
+            severity: refusal_severity(r.info).to_string(),
+            location: GitlabLocation {
+                path: r.file().unwrap_or("discipline.toml").to_string(),
+                lines: GitlabLines { begin: 1 },
+            },
+        });
+    }
+
     issues
+}
+
+/// A refusal's code-quality severity: `major`, as an error finding has, for one that
+/// fails the run; `info` for one that does not. `--fail-on-warnings` changes neither.
+pub fn refusal_severity(info: &crate::refusals::RefusalInfo) -> &'static str {
+    if info.blocks {
+        "major"
+    } else {
+        "info"
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -240,6 +266,7 @@ mod tests {
             planned_gates: Vec::new(),
             outcomes: Vec::new(),
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
@@ -277,6 +304,7 @@ mod tests {
             planned_gates: Vec::new(),
             outcomes: vec![outcome],
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
@@ -331,6 +359,7 @@ mod tests {
             planned_gates: Vec::new(),
             outcomes: vec![outcome],
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
@@ -376,6 +405,7 @@ mod tests {
             planned_gates: Vec::new(),
             outcomes: vec![outcome2],
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),

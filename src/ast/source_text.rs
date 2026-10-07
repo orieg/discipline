@@ -19,6 +19,13 @@
 //! [`parse_within_budget`] is the only call of the parser in `src/`; a parse it cuts has
 //! no tree, and its caller reports the file as one it could not parse.
 //!
+//! A parse that finishes can still give a tree no walker here may descend: most of them
+//! call themselves once for each level of the tree, so a source nested deeply enough
+//! would end the process with a stack overflow and no report. [`parse_within_budget`]
+//! measures the tree it parsed ([`tree_depth`], a walk that keeps no stack of its own)
+//! and gives no tree past [`TREE_DEPTH_LIMIT`]. A walker therefore never meets a tree
+//! deeper than the limit, whichever caller parsed it.
+//!
 //! The shell parser of the pre-tool hook (`src/pretool.rs`) parses one command from its
 //! own copy, through [`parse_within_budget`] as well.
 
@@ -46,23 +53,48 @@ pub(crate) fn parse_text(src: &str) -> Cow<'_, str> {
 /// length of the text adds to them.
 pub(crate) const STEP_FLOOR: u64 = 256;
 
-/// Steps a parse may take per byte of text. The sources of this repository take at most
-/// 0.016 steps per byte with their own grammar (`tests/test_gates_e2e.rs`, the largest,
-/// takes 0.010), and at most 0.05 when each is parsed with every other grammar, which is
-/// error recovery from the first line to the last. Four is 250 times the first figure
-/// and 80 times the second.
-pub(crate) const STEPS_PER_BYTE: u64 = 4;
+/// Bytes of text that add one step to a parse's budget. The sources of this repository
+/// take at most 0.016 steps per byte with their own grammar (`tests/test_gates_e2e.rs`,
+/// the largest, takes 0.010), and at most 0.05 when each is parsed with every other
+/// grammar, which is error recovery from the first line to the last. One step for every
+/// four bytes is 16 times the first figure and 5 times the second.
+///
+/// The rate also bounds what a parse that never finishes costs, since it runs its whole
+/// budget: a 34,026-byte input on which the Rust grammar's error recovery did not
+/// finish ran 136,360 steps at four steps per byte, and runs 8,762 at this rate.
+pub(crate) const BYTES_PER_STEP: u64 = 4;
 
 /// The steps a parse of `len` bytes may take.
 pub(crate) fn step_budget(len: usize) -> u64 {
-    STEP_FLOOR.saturating_add(STEPS_PER_BYTE.saturating_mul(len as u64))
+    STEP_FLOOR.saturating_add(len as u64 / BYTES_PER_STEP)
 }
+
+/// The deepest a syntax tree may nest and be read, counted in nodes from the root (the
+/// first level) to the deepest node.
+///
+/// It is set from two measurements. Above it: of 29,795 sources of other projects, the
+/// deepest nests 2,056 levels (a header of generated macros; a table written as one
+/// concatenation of several hundred strings nests 947, the sources of this repository
+/// at most 77), and the limit is twice that. Below it: the walker that takes the most
+/// stack for a level takes 3,400 bytes in a build without optimisation
+/// (`crate::deep_stack::MEASURED_STACK_PER_LEVEL`), so a tree at the limit takes
+/// 4,096 x 3,400 = 13.9 MB of stack there, and the stack the work runs on
+/// (`crate::deep_stack::WORK_STACK_BYTES`, 256 MiB) holds that 19 times; the test
+/// `the_stack_holds_the_deepest_tree_four_times` requires four.
+///
+/// The limit protects a walker on that stack only. On a thread with a default stack a
+/// tree well inside the limit ends the process (623 levels on 2 MiB), so whatever
+/// hands a pack a deeply nested source does it inside `deep_stack::on_deep_stack`, as
+/// the binary does for everything.
+pub(crate) const TREE_DEPTH_LIMIT: usize = 4_096;
 
 /// Why a parse has no tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NoTree {
     /// The parser was still working when its budget ended.
     OverBudget { steps: u64, bytes: usize },
+    /// The tree nests deeper than [`TREE_DEPTH_LIMIT`].
+    TooDeep { depth: usize },
     /// The parser library returned no tree and did not use its budget (no language set).
     NotParsed,
 }
@@ -73,6 +105,10 @@ impl std::fmt::Display for NoTree {
             NoTree::OverBudget { steps, bytes } => write!(
                 f,
                 "the parser did not finish within its budget of {steps} steps for {bytes} bytes"
+            ),
+            NoTree::TooDeep { depth } => write!(
+                f,
+                "the source nests {depth} levels deep, past the {TREE_DEPTH_LIMIT} this tool reads"
             ),
             NoTree::NotParsed => write!(f, "tree-sitter returned no tree"),
         }
@@ -89,20 +125,108 @@ pub(crate) fn parse(parser: &mut Parser, src: &str) -> Result<Tree, NoTree> {
     parse_within_budget(parser, text.as_bytes())
 }
 
+thread_local! {
+    /// Why a part of the file being read had no tree when a pack parsed it again on its
+    /// own ([`parse_part`]).
+    static UNREAD_PART: std::cell::Cell<Option<NoTree>> = const { std::cell::Cell::new(None) };
+}
+
+/// [`parse`] for a part of a file that a pack parses again on its own: the arguments of
+/// a Rust macro read as an expression, a Python skip condition written as a string.
+///
+/// Such a part can nest where the file's tree does not. A macro's arguments are a flat
+/// run of tokens in the file's tree, and a string is one node, so `assert!(!!..!true)`
+/// and `skipif("((..True..))")` pass the file's depth check at any nesting; parsed as an
+/// expression each nests once for every `!` or parenthesis. A part with no tree was not
+/// read, and what it would have said (a constant assertion, an unconditional skip) is
+/// not known. `None` here records why, and [`unread_part`] refuses the whole file.
+pub(crate) fn parse_part(parser: &mut Parser, text: &str) -> Option<Tree> {
+    match parse(parser, text) {
+        Ok(tree) => Some(tree),
+        Err(why) => {
+            UNREAD_PART.with(|unread| unread.set(Some(why)));
+            None
+        }
+    }
+}
+
+/// Forgets what [`parse_part`] recorded: a pack calls it before it reads a file.
+pub(crate) fn forget_unread_part() {
+    UNREAD_PART.with(|unread| unread.set(None));
+}
+
+/// The error of the file at `path` when a part of it had no tree since
+/// [`forget_unread_part`]: a pack calls it once it has read the file, so a file with a
+/// part nobody read has no facts, as a file with no tree has none.
+pub(crate) fn unread_part(path: &str) -> anyhow::Result<()> {
+    match UNREAD_PART.with(|unread| unread.take()) {
+        Some(why) => Err(anyhow::anyhow!(
+            "could not parse `{path}`: in a part of it parsed on its own, {why}"
+        )),
+        None => Ok(()),
+    }
+}
+
 /// [`parse`] for a language pack reading the file at `path`: the error names the file,
 /// so a gate that stops on it, or notes it, says which file it could not parse.
 pub(crate) fn parse_file(parser: &mut Parser, path: &str, src: &str) -> anyhow::Result<Tree> {
     parse(parser, src).map_err(|why| anyhow::anyhow!("could not parse `{path}`: {why}"))
 }
 
-/// The syntax tree of `text` as it stands, within [`step_budget`]. The caller has taken
-/// out what its grammar must not be given ([`parse`] does for source text).
+/// [`parse_file`] with a parser of `language`. `grammar` is the language as the error of
+/// a grammar that cannot be loaded names it (`the Go`).
+pub(crate) fn parse_file_as(
+    language: &tree_sitter::Language,
+    grammar: &str,
+    path: &str,
+    src: &str,
+) -> anyhow::Result<Tree> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(language)
+        .map_err(|e| anyhow::anyhow!("failed to load {grammar} grammar: {e}"))?;
+    parse_file(&mut parser, path, src)
+}
+
+/// The syntax tree of `text` as it stands, within [`step_budget`] and no deeper than
+/// [`TREE_DEPTH_LIMIT`]. The caller has taken out what its grammar must not be given
+/// ([`parse`] does for source text).
 pub(crate) fn parse_within_budget(parser: &mut Parser, text: &[u8]) -> Result<Tree, NoTree> {
     #[cfg(test)]
     let budget = BUDGET_OF_THIS_TEST.with(|b| b.get().unwrap_or(step_budget(text.len())));
     #[cfg(not(test))]
     let budget = step_budget(text.len());
-    parse_counting_steps(parser, text, budget).0
+    let tree = parse_counting_steps(parser, text, budget).0?;
+    // Before any caller has the tree: no walker is handed one it cannot descend.
+    match tree_depth(&tree) {
+        depth if depth > TREE_DEPTH_LIMIT => Err(NoTree::TooDeep { depth }),
+        _ => Ok(tree),
+    }
+}
+
+/// The levels of `tree`: the nodes from its root to its deepest node, both counted.
+///
+/// One walk of the tree with a cursor, which moves to a node's first child, its next
+/// sibling or its parent and keeps the way back in a list of its own. Nothing here
+/// calls itself, so the walk takes the same stack for a tree of any depth; it ends
+/// when the cursor is back at the root, after one visit of each node.
+pub(crate) fn tree_depth(tree: &Tree) -> usize {
+    let mut cursor = tree.walk();
+    // The level is counted here: the cursor's own `depth` walks its list on each call.
+    let (mut level, mut deepest) = (1usize, 1usize);
+    loop {
+        if cursor.goto_first_child() {
+            level += 1;
+            deepest = deepest.max(level);
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return deepest;
+            }
+            level -= 1;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -222,12 +346,15 @@ mod tests {
     #[test]
     fn the_budget_is_a_floor_plus_a_share_per_byte() {
         assert_eq!(step_budget(0), STEP_FLOOR);
-        assert_eq!(step_budget(15), STEP_FLOOR + 15 * STEPS_PER_BYTE);
+        assert_eq!(step_budget(15), STEP_FLOOR + 3);
+        assert_eq!(step_budget(1_000_000), STEP_FLOOR + 250_000);
+        // The largest input the fuzz job gives a target is 64 KiB; a parse of it that
+        // never finishes runs this many steps and no more.
+        assert_eq!(step_budget(64 * 1024), 16_640);
         assert_eq!(
-            step_budget(1_000_000),
-            STEP_FLOOR + 1_000_000 * STEPS_PER_BYTE
+            step_budget(usize::MAX),
+            STEP_FLOOR + usize::MAX as u64 / BYTES_PER_STEP
         );
-        assert_eq!(step_budget(usize::MAX), u64::MAX);
     }
 
     /// `run` on a thread of its own, or a failure when it has not returned in `LIMIT`: a
@@ -280,7 +407,7 @@ mod tests {
         assert_eq!(steps, budget + 1);
         assert_eq!(
             outcome.unwrap_err().to_string(),
-            "the parser did not finish within its budget of 316 steps for 15 bytes"
+            "the parser did not finish within its budget of 259 steps for 15 bytes"
         );
         // The same through `parse`, and a character that starts a name instead is read.
         assert!(returns(|| parse(&mut rust_parser(), UNFINISHED).is_err()));
@@ -345,11 +472,190 @@ mod tests {
         assert_eq!(steps, 0);
     }
 
-    /// The control: every Rust source of this repository, the largest of them 700 kB,
-    /// parses whole and takes less than a hundredth of its budget.
+    /// `depth` nested parentheses as the value of a `let` in a Rust function: a tree
+    /// five levels deep (file, function, block, `let`, the innermost literal) plus one
+    /// for each pair.
+    #[cfg(feature = "lang-rust")]
+    fn nested_rust(pairs: usize) -> String {
+        format!(
+            "fn f() {{ let _x = {}1{}; }}\n",
+            "(".repeat(pairs),
+            ")".repeat(pairs)
+        )
+    }
+
     #[cfg(feature = "lang-rust")]
     #[test]
-    fn the_sources_of_this_repository_take_a_hundredth_of_their_budget() {
+    fn the_depth_of_a_tree_is_its_longest_path_counted_in_nodes() {
+        let depth_of = |text: &str| {
+            let (tree, _) =
+                parse_counting_steps(&mut rust_parser(), text.as_bytes(), step_budget(text.len()));
+            tree_depth(&tree.unwrap())
+        };
+        // The file alone, then a function with an empty body: file, function, and the
+        // function's name, parameters and block beside each other.
+        assert_eq!(depth_of(""), 1);
+        assert_eq!(depth_of("fn f() {}\n"), 4);
+        // A sibling adds no level; a level is added under the deepest node only.
+        assert_eq!(depth_of("fn f() {}\nfn g() {}\nfn h() {}\n"), 4);
+        assert_eq!(depth_of(&nested_rust(0)), 5);
+        assert_eq!(depth_of(&nested_rust(1)), 6);
+        assert_eq!(depth_of(&nested_rust(40)), 45);
+        // The deepest path is found wherever it is among the siblings.
+        let middle = format!("fn a() {{}}\n{}fn z() {{}}\n", nested_rust(40));
+        assert_eq!(depth_of(&middle), 45);
+    }
+
+    /// The deepest tree read and the first one refused, one level apart.
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn a_tree_at_the_limit_is_read_and_one_level_deeper_is_refused() {
+        // On the deep stack, as every source is read.
+        crate::deep_stack::on_deep_stack(|| {
+        let at_limit = nested_rust(TREE_DEPTH_LIMIT - 5);
+        let tree = parse(&mut rust_parser(), &at_limit).unwrap();
+        assert_eq!(tree_depth(&tree), TREE_DEPTH_LIMIT);
+        assert!(!tree.root_node().has_error());
+
+        let over = nested_rust(TREE_DEPTH_LIMIT - 4);
+        let refused = parse(&mut rust_parser(), &over).map(|_| ()).unwrap_err();
+        assert_eq!(
+            refused,
+            NoTree::TooDeep {
+                depth: TREE_DEPTH_LIMIT + 1
+            }
+        );
+        assert_eq!(
+            refused.to_string(),
+            "the source nests 4097 levels deep, past the 4096 this tool reads"
+        );
+        assert_eq!(
+            parse_file(&mut rust_parser(), "src/deep.rs", &over)
+                .map(|_| ())
+                .unwrap_err()
+                .to_string(),
+            "could not parse `src/deep.rs`: the source nests 4097 levels deep, past the 4096 this tool reads"
+        );
+        // The parser is not left holding anything: its next text is read from the start.
+        let mut parser = rust_parser();
+        assert!(parse(&mut parser, &over).is_err());
+        assert_eq!(tree_depth(&parse(&mut parser, "fn f() {}\n").unwrap()), 4);
+        })
+        .unwrap();
+    }
+
+    /// A part of a file parsed on its own: one past the limit has no tree, and the file
+    /// it is part of is refused once, with the reason. A part that is read, or one that
+    /// parses with errors, refuses nothing.
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn a_part_with_no_tree_refuses_its_file_once() {
+        // On the deep stack, as every source is read.
+        crate::deep_stack::on_deep_stack(|| {
+            forget_unread_part();
+            assert!(parse_part(&mut rust_parser(), &nested_rust(10)).is_some());
+            assert!(parse_part(&mut rust_parser(), "fn f( {").is_some());
+            assert!(unread_part("src/a.rs").is_ok());
+
+            assert!(parse_part(&mut rust_parser(), &nested_rust(TREE_DEPTH_LIMIT)).is_none());
+            // A part read after it does not clear what the first one recorded.
+            assert!(parse_part(&mut rust_parser(), &nested_rust(10)).is_some());
+            assert_eq!(
+                unread_part("src/a.rs").unwrap_err().to_string(),
+                "could not parse `src/a.rs`: in a part of it parsed on its own, the source nests \
+             4101 levels deep, past the 4096 this tool reads"
+            );
+            // Taken with the error: the next file starts with nothing recorded.
+            assert!(unread_part("src/b.rs").is_ok());
+
+            // A part cut at its budget is one nobody read as well.
+            let cut = with_step_budget(0, || {
+                parse_part(&mut rust_parser(), &"fn a() -> u8 { 1 }\n".repeat(400))
+            });
+            assert!(cut.is_none());
+            assert!(unread_part("src/c.rs").is_err());
+            assert!(parse_part(&mut rust_parser(), &nested_rust(TREE_DEPTH_LIMIT)).is_none());
+            forget_unread_part();
+            assert!(unread_part("src/c.rs").is_ok());
+        })
+        .unwrap();
+    }
+
+    /// The measurement itself takes no stack for a level: a tree 100,000 levels deep is
+    /// parsed and measured on a thread whose whole stack is 256 KiB, which a walker that
+    /// calls itself for each level exhausts long before (the cheapest one measured takes
+    /// 480 bytes a level in an unoptimised build). The parser is within its budget, so it
+    /// is the depth that refuses such a source, not the budget.
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn measuring_a_tree_takes_no_stack_for_a_level() {
+        const PAIRS: usize = 100_000;
+        let measured = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let text = nested_rust(PAIRS);
+                let budget = step_budget(text.len());
+                let (tree, steps) =
+                    parse_counting_steps(&mut rust_parser(), text.as_bytes(), budget);
+                let depth = tree_depth(&tree.unwrap());
+                let refused = parse(&mut rust_parser(), &text).map(|_| ()).unwrap_err();
+                (depth, steps, budget, refused)
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        let (depth, steps, budget, refused) = measured;
+        assert_eq!(depth, PAIRS + 5);
+        assert!(steps < budget, "{steps} of {budget} steps");
+        assert_eq!(refused, NoTree::TooDeep { depth: PAIRS + 5 });
+    }
+
+    /// The limit against the sources of this repository: fifty times as deep as the
+    /// deepest of them. (Against the stack: `deep_stack`'s
+    /// `the_stack_holds_the_deepest_tree_four_times`.)
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn the_sources_of_this_repository_nest_a_fiftieth_of_the_limit() {
+        let root = env!("CARGO_MANIFEST_DIR");
+        let mut dirs = vec![
+            PathBuf::from(format!("{root}/src")),
+            PathBuf::from(format!("{root}/tests")),
+            PathBuf::from(format!("{root}/fuzz/fuzz_targets")),
+        ];
+        let mut parser = rust_parser();
+        let (mut files, mut deepest, mut deepest_file) = (0usize, 0usize, PathBuf::new());
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    let tree = parse(&mut parser, &text)
+                        .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+                    let depth = tree_depth(&tree);
+                    if depth > deepest {
+                        (deepest, deepest_file) = (depth, path);
+                    }
+                    files += 1;
+                }
+            }
+        }
+        assert!(files > 100, "{files}");
+        assert!(
+            deepest * 50 <= TREE_DEPTH_LIMIT,
+            "{}: {deepest} levels",
+            deepest_file.display()
+        );
+        // A tree is at least a few levels deep, so the walk did measure something.
+        assert!(deepest > 40, "{deepest}");
+    }
+
+    /// The control: every Rust source of this repository, the largest of them 700 kB,
+    /// parses whole and takes less than a tenth of its budget.
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn the_sources_of_this_repository_take_a_tenth_of_their_budget() {
         let root = env!("CARGO_MANIFEST_DIR");
         let mut dirs = vec![
             PathBuf::from(format!("{root}/src")),
@@ -370,7 +676,7 @@ mod tests {
                     let tree = tree.unwrap_or_else(|e| panic!("{}: {e}", path.display()));
                     assert_eq!(tree.root_node().end_byte(), text.len());
                     assert!(
-                        steps * 100 < budget,
+                        steps * 10 < budget,
                         "{}: {steps} of {budget} steps",
                         path.display()
                     );
@@ -382,7 +688,7 @@ mod tests {
         }
         assert!(files > 100, "{files}");
         assert!(largest > 500_000, "{largest}");
-        // The figure `STEPS_PER_BYTE` is set against.
-        assert!(dearest < STEPS_PER_BYTE as f64 / 200.0, "{dearest}");
+        // The figure `BYTES_PER_STEP` is set against.
+        assert!(dearest < 0.1 / BYTES_PER_STEP as f64, "{dearest}");
     }
 }

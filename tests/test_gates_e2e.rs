@@ -7989,7 +7989,7 @@ fn override_record_audit_trail_and_step_outputs() {
     ));
     assert!(
         run.stdout.contains(
-            "gates:  25 passed, 0 failed, 15 disabled, 1 not evaluated (22 items examined)"
+            "gates:  25 passed, 0 failed, 16 disabled, 1 not evaluated (22 items examined)"
         ),
         "{}",
         run.stdout
@@ -8011,7 +8011,7 @@ fn override_record_audit_trail_and_step_outputs() {
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
         step_summary.contains(
-            "**Summary:** 25 passed, 0 failed, 15 disabled, 1 not evaluated (22 items examined)"
+            "**Summary:** 25 passed, 0 failed, 16 disabled, 1 not evaluated (22 items examined)"
         ),
         "{step_summary}"
     );

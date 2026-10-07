@@ -219,7 +219,7 @@ fn render_terminal_to_writer<W: Write>(
         writeln!(
             w,
             "{}",
-            style::red(&format!("failure: {}", text::terminal_line(failure)))
+            style::red(&format!("failure: {}", text::terminal_line(&failure.text)))
         )?;
     }
     for note in &summary.directive_notes {
@@ -295,6 +295,18 @@ fn render_step_summary(
     render_step_summary_to_writer(&mut file, summary, fail_on_warnings, fail_on_overrides)
 }
 
+/// Where a directive was read, for a Markdown sentence. The pull request number is the
+/// report's own (the one the forge gave for the change), so that reference stays one;
+/// every other source is quoted, since it carries a file name or a commit id.
+fn source_in_markdown(source: &crate::tokens::OverrideSource) -> String {
+    match source {
+        crate::tokens::OverrideSource::MergedPrBody(n) => {
+            format!("merged pull request #{n} body")
+        }
+        other => text::markdown(&other.to_string()),
+    }
+}
+
 pub fn render_step_summary_to_writer(
     mut file: impl std::io::Write,
     summary: &CheckSummary,
@@ -314,7 +326,7 @@ pub fn render_step_summary_to_writer(
         text::code_span(&summary.base)
     )?;
     for failure in &summary.policy_failures {
-        writeln!(file, "**Refused:** {}\n", text::markdown(failure))?;
+        writeln!(file, "**Refused:** {}\n", text::markdown(&failure.text))?;
     }
     for note in &summary.directive_notes {
         writeln!(file, "**Directives:** {}\n", text::markdown(note))?;
@@ -327,7 +339,7 @@ pub fn render_step_summary_to_writer(
             file,
             "**Unused directive:** {} in {} lifted no finding\n",
             text::code_span(&d.directive),
-            text::markdown(&d.source.to_string())
+            source_in_markdown(&d.source)
         )?;
     }
 
@@ -740,6 +752,7 @@ mod tests {
             outcomes: vec![o],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
@@ -770,7 +783,12 @@ mod tests {
             },
             hidden: false,
         });
-        summary.policy_failures.push(text.into());
+        summary
+            .policy_failures
+            .push(crate::refusals::PolicyFailure::new(
+                crate::refusals::RefusalKind::MaxOverrides,
+                text,
+            ));
         summary.directive_notes.push(text.into());
         summary.deprecations.push(text.into());
         summary.unused_directives.push(UnusedDirective {
@@ -865,6 +883,43 @@ mod tests {
         assert!(plain.contains("Base: `plain`\n"), "{plain}");
     }
 
+    /// A reference quoted text writes is a code span; the pull request the report itself
+    /// names as the source of a directive stays a reference.
+    #[test]
+    fn a_quoted_reference_is_a_code_span_and_the_reports_own_stays_one() {
+        use crate::tokens::{OverrideSource, UnusedDirective};
+        let mut summary = quoting("fixes #5 for a@b.co at deadbeef1");
+        summary.outcomes[0].overrides[0].source = OverrideSource::MergedPrBody(12);
+        summary.unused_directives.push(UnusedDirective {
+            directive: "allow-x".into(),
+            source: OverrideSource::MergedPrBody(12),
+            hidden: false,
+        });
+        let out = step_summary_of(&summary);
+        let quoted = "fixes `#5` for `a@b.co` at `deadbeef1`";
+        assert!(
+            out.contains(&format!("| {quoted} | merged pull request #12 body |\n")),
+            "{out}"
+        );
+        assert!(out.contains(&format!("**Refused:** {quoted}\n")), "{out}");
+        assert!(
+            out.contains(&format!("**Directives:** {quoted}\n")),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "**Unused directive:** `allow-x` in merged pull request #12 body lifted no finding\n"
+            ),
+            "{out}"
+        );
+        // The terminal report writes the same text as it is.
+        assert!(
+            terminal_of(&summary).contains("fixes #5 for a@b.co at deadbeef1"),
+            "{}",
+            terminal_of(&summary)
+        );
+    }
+
     /// Warnings follow the blocking issues under their own heading: an agent told to
     /// fix each issue otherwise edits files the change never touched.
     #[test]
@@ -916,6 +971,7 @@ mod tests {
             outcomes: vec![o],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
@@ -1060,6 +1116,7 @@ mod tests {
             outcomes: vec![o1, o2, o3, o4, o5],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
@@ -1126,6 +1183,7 @@ mod tests {
             outcomes: vec![o1, o2, o3],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
@@ -1227,6 +1285,7 @@ mod tests {
             outcomes: vec![],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: vec!["`gates.x.old` is deprecated".into()],
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
@@ -1284,6 +1343,7 @@ mod tests {
             outcomes: vec![o1],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
@@ -1320,6 +1380,7 @@ mod tests {
             outcomes: vec![o1, o2],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
@@ -1362,6 +1423,7 @@ mod tests {
             outcomes: vec![o1],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),

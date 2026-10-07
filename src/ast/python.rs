@@ -50,12 +50,14 @@ impl LanguagePack for PythonPack {
         // an over-budget parse is (`crate::ast::scanner_limits`).
         crate::ast::scanner_limits::python_indent_nesting(src)
             .map_err(|why| anyhow!("could not parse `{path}`: {why}"))?;
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_python::LANGUAGE.into())
-            .map_err(|e| anyhow!("failed to load the Python grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
+        let tree = crate::ast::source_text::parse_file_as(
+            &tree_sitter_python::LANGUAGE.into(),
+            "the Python",
+            path,
+            src,
+        )?;
         let root = tree.root_node();
+        crate::ast::source_text::forget_unread_part();
 
         let mut extractor = PythonExtractor {
             dead: super::reach::dead_ranges(root, src, &PY_REACH),
@@ -83,68 +85,7 @@ impl LanguagePack for PythonPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
-        extractor.facts.functions = functions::extract(root, src, path, &PYTHON_FUNCTIONS);
-        super::mocks::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &PYTHON_MOCKS,
-            &vocab.mock_setup_fns,
-            &vocab.mock_assert_fns,
-        );
-        {
-            let tests = &extractor.facts.tests;
-            let spans: Vec<(usize, usize)> = tests
-                .iter()
-                .map(|t| (t.line, t.end_line.max(t.line)))
-                .collect();
-            // A file matching the shared test-path conventions, this pack's own test-file
-            // convention, or one the repository declares as test scope, is test code
-            // line for line.
-            let whole_file = super::functions::is_test_file(path, Some(is_python_test_path))
-                || super::functions::declared_test_path(path, &vocab.test_paths);
-            let is_test_line =
-                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            (
-                extractor.facts.swallowed,
-                extractor.facts.constant_fallbacks,
-            ) = super::handlers::extract_with_constants(
-                root,
-                src,
-                &PYTHON_HANDLERS,
-                Some(&PYTHON_CONSTANTS),
-                &is_test_line,
-            );
-        }
-        super::retries::mark(root, src, &mut extractor.facts.tests, &PYTHON_RETRIES);
-        if super::functions::declared_test_path(path, &vocab.test_paths) {
-            for f in &mut extractor.facts.functions {
-                f.is_test = true;
-            }
-        }
-        super::method_checks::count(root, src, &mut extractor.facts, &PYTHON_RECEIVER_CALLS);
-        super::helper_loops::count(
-            root,
-            src,
-            &mut extractor.facts,
-            &super::helper_loops::PYTHON,
-        );
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &PYTHON_MOCKS,
-            super::calls::SLEEP_VOCAB,
-            super::calls::sleeps,
-        );
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &PYTHON_MOCKS,
-            super::calls::TRIVIAL_ASSERT_VOCAB,
-            super::calls::trivial_asserts,
-        );
+        PYTHON_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
         super::bounds::python(root, src, &mut extractor.facts.tests);
         super::expectations::python(root, src, &mut extractor.facts.tests);
         super::caught_assertions::python(root, src, &mut extractor.facts.tests, vocab);
@@ -152,6 +93,9 @@ impl LanguagePack for PythonPack {
         super::calls::count_python_assert_statements(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(root, src, &["comment", "string"]);
         extractor.facts.budgets = super::budgets::extract(root, src, &PY_BUDGETS);
+        // A skip condition written as a string that had no tree was not read: the skip
+        // it guards was counted as conditional without being judged.
+        crate::ast::source_text::unread_part(path)?;
         Ok(extractor.facts)
     }
 }
@@ -268,7 +212,9 @@ fn python_string_condition(code: &str) -> SkipCondition {
     {
         return undecided;
     }
-    let Ok(tree) = crate::ast::source_text::parse(&mut parser, code) else {
+    // No tree is not "undecided": it is a condition nobody read, which `parse_part`
+    // records and `PythonPack::extract` refuses the file for.
+    let Some(tree) = crate::ast::source_text::parse_part(&mut parser, code) else {
         return undecided;
     };
     let root = tree.root_node();
@@ -286,6 +232,9 @@ fn python_string_condition(code: &str) -> SkipCondition {
         None => undecided,
     }
 }
+
+/// The node kinds whose text is not code a mark can be spelled in.
+const PYTHON_NOT_CODE: &[&str] = &["string", "concatenated_string", "comment"];
 
 fn statement_has_skip_mark(text: &str) -> bool {
     let trimmed = text.trim();
@@ -618,7 +567,7 @@ impl<'a> PythonExtractor<'a> {
             .named_child(0)
             .filter(|a| statement.kind() == "expression_statement" && a.kind() == "assignment");
         let Some(value) = assignment.and_then(|a| a.child_by_field_name("right")) else {
-            if statement_has_skip_mark(self.text(statement)) {
+            if statement_has_skip_mark(&self.code_text(statement)) {
                 marks.ignored = true;
             }
             return;
@@ -647,7 +596,7 @@ impl<'a> PythonExtractor<'a> {
                 }
                 continue;
             }
-            let text = self.text(element);
+            let text = self.code_text(element);
             if !(text.contains("skip") || text.contains("xfail")) {
                 continue;
             }
@@ -978,14 +927,11 @@ impl<'a> PythonExtractor<'a> {
         for child in body.children(&mut cursor) {
             if child.kind() == "expression_statement" {
                 if let Some(assign) = child.child(0) {
-                    if assign.kind() == "assignment" {
-                        let text = self.text(assign);
-                        if is_python_env_check(text) {
-                            if let Some(left) = assign.child_by_field_name("left") {
-                                let name = self.text(left).trim();
-                                if !name.is_empty() {
-                                    env_bindings.insert(name.to_string());
-                                }
+                    if assign.kind() == "assignment" && is_python_env_check(assign, self.src) {
+                        if let Some(left) = assign.child_by_field_name("left") {
+                            let name = self.text(left).trim();
+                            if !name.is_empty() {
+                                env_bindings.insert(name.to_string());
                             }
                         }
                     }
@@ -996,13 +942,8 @@ impl<'a> PythonExtractor<'a> {
                 let cond_node = child.child_by_field_name("condition")?;
                 let cond_text = self.text(cond_node).trim();
 
-                let is_env_check = is_python_env_check(cond_text)
-                    || env_bindings.iter().any(|v| {
-                        cond_text == v
-                            || cond_text
-                                .split(|c: char| !c.is_alphanumeric() && c != '_')
-                                .any(|t| t == v)
-                    });
+                let is_env_check = is_python_env_check(cond_node, self.src)
+                    || super::code_names_one_of(cond_node, self.src, &PYTHON_CODE, &env_bindings);
 
                 let consequence = child.child_by_field_name("consequence")?;
                 let calls_skip = python_block_calls_skip(consequence, self.src);
@@ -1105,27 +1046,13 @@ impl<'a> PythonExtractor<'a> {
         self.helper_calls
             .entry(key.clone())
             .or_insert_with(|| calls.clone());
-        self.helpers.entry(key.clone()).or_insert(HelperFacts {
-            total_asserts: facts.total_asserts,
-            strong_asserts: facts.strong_asserts,
-            tautologies: facts.tautologies,
-            fatal_asserts: facts.fatal_asserts,
-            wraps,
-        });
+        self.helpers
+            .entry(key.clone())
+            .or_insert(HelperFacts::from_scan(&facts, wraps));
         let line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
         self.facts.push_helper(
-            TestHelperFacts {
-                name: key,
-                line,
-                end_line,
-                total_asserts: facts.total_asserts,
-                strong_asserts: facts.strong_asserts,
-                tautologies: facts.tautologies,
-                fatal_asserts: facts.fatal_asserts,
-                helper_checks: 0,
-                equality_exits: 0,
-            },
+            TestHelperFacts::from_scan(key, line, end_line, &facts),
             calls,
         );
     }
@@ -1186,8 +1113,16 @@ impl<'a> PythonExtractor<'a> {
         }
     }
 
+    /// The text of `node` outside its string literals and comments: a mark is looked for
+    /// in what the code spells, so a fixture name, a parameter value or a reason that
+    /// contains `skip` is not one.
+    fn code_text(&self, node: Node) -> String {
+        super::text_without(node, self.src, PYTHON_NOT_CODE)
+    }
+
     fn is_skip_decorator(&self, dec: Node) -> bool {
-        let text = self.text(dec).trim();
+        let text = self.code_text(dec);
+        let text = text.trim();
         text.contains("pytest.mark.skip")
             || text.contains("pytest.mark.xfail")
             || text.contains("unittest.skip")
@@ -1241,7 +1176,7 @@ impl<'a> PythonExtractor<'a> {
                     .find(|c| c.kind() != "assert" && c.kind() != "," && c.kind() != "comment");
 
                 if let Some(cond) = condition {
-                    if self.is_tautological(cond) {
+                    if self.is_tautological(cond, test) {
                         test.tautologies += 1;
                     }
                     if self.is_strong_assertion(cond) {
@@ -1297,7 +1232,7 @@ impl<'a> PythonExtractor<'a> {
                         if self.is_strong_unittest_assert(func_name) {
                             test.strong_asserts += 1;
                         }
-                        if self.is_tautological_call(node, func_name) {
+                        if self.is_tautological_call(node, func_name, test) {
                             test.tautologies += 1;
                         }
                     } else if func_name == "pytest.skip"
@@ -1390,10 +1325,16 @@ impl<'a> PythonExtractor<'a> {
         )
     }
 
-    fn is_tautological(&self, cond: Node) -> bool {
+    fn is_tautological(&self, cond: Node, test: &mut TestFn) -> bool {
         let text = self.text(cond).trim();
         if text == "True" || text == "1" || text == "\"\"" || text == "''" {
             return true;
+        }
+        // `assert x == x` / `assert x is x`: the whole condition is one comparison.
+        if let Some((left, right)) = super::self_comparison::equality_sides(cond, self.src) {
+            if super::self_comparison::note(&mut test.equality_operands, left, right, self.src) {
+                return true;
+            }
         }
         if cond.kind() == "comparison_operator" {
             let mut cursor = cond.walk();
@@ -1410,7 +1351,7 @@ impl<'a> PythonExtractor<'a> {
         false
     }
 
-    fn is_tautological_call(&self, call: Node, func_name: &str) -> bool {
+    fn is_tautological_call(&self, call: Node, func_name: &str, test: &mut TestFn) -> bool {
         if let Some(args) = call.child_by_field_name("arguments") {
             let mut cursor = args.walk();
             let arg_nodes: Vec<_> = args
@@ -1430,23 +1371,36 @@ impl<'a> PythonExtractor<'a> {
             }
             if (func_name == "self.assertEqual" || func_name == "self.assertIs")
                 && arg_nodes.len() >= 2
+                && super::self_comparison::note(
+                    &mut test.equality_operands,
+                    arg_nodes[0],
+                    arg_nodes[1],
+                    self.src,
+                )
             {
-                let a = self.text(arg_nodes[0]).trim();
-                let b = self.text(arg_nodes[1]).trim();
-                if a == b && !a.is_empty() {
-                    return true;
-                }
+                return true;
             }
         }
         false
     }
 }
 
-fn is_python_env_check(text: &str) -> bool {
-    text.contains("os.environ")
-        || text.contains("os.getenv")
-        || text.contains("environ.get")
-        || super::is_ci_condition(text)
+const PYTHON_CODE: super::NotCode = super::NotCode {
+    strings: &["string"],
+    comments: &["comment"],
+    interpolations: &["interpolation"],
+};
+
+/// Whether `node` is a candidate for a condition on the environment: its code, outside
+/// string literals and comments, spells an environment read or names a CI variable. A CI
+/// variable named in a string (`os.Getenv("CI")`, `lookup("CI")`) is read by
+/// `ci_condition::site`, from the tree.
+fn is_python_env_check(node: Node, src: &[u8]) -> bool {
+    let code = super::code_text(node, src, &PYTHON_CODE);
+    code.contains("os.environ")
+        || code.contains("os.getenv")
+        || code.contains("environ.get")
+        || super::is_ci_condition(&code)
 }
 
 fn python_block_returns_early(consequence: Node) -> bool {
@@ -1609,6 +1563,20 @@ fn python_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
         .unwrap_or("");
     functions::is_test_file(path, Some(is_python_test_path)) || name.starts_with("test_")
 }
+
+/// What the steps every pack shares read of this pack (`PackSpec::shared_facts`).
+const PYTHON_PACK: super::PackSpec = super::PackSpec {
+    functions: &PYTHON_FUNCTIONS,
+    own_test_path: Some(is_python_test_path),
+    handlers: &PYTHON_HANDLERS,
+    constants: Some(&PYTHON_CONSTANTS),
+    retries: Some(&PYTHON_RETRIES),
+    receiver_calls: &PYTHON_RECEIVER_CALLS,
+    helper_loops: &super::helper_loops::PYTHON,
+    calls: &PYTHON_MOCKS,
+    vocabs: super::calls::SLEEPS_AND_TRIVIAL_ASSERTS,
+    judged: None,
+};
 
 pub const PYTHON_FUNCTIONS: FunctionSpec = FunctionSpec {
     function_kinds: &["function_definition"],

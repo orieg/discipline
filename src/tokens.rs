@@ -338,6 +338,13 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
         subject_doc: "Function name, or the file path",
     },
     DirectiveSpec {
+        canonical: "allow-harness-tampering",
+        deprecated: None,
+        gate: "harness-tampering",
+        subject_kind: DirectiveSubjectKind::FilePath,
+        subject_doc: "File path (every finding in the file), or `path:line` of the finding (that finding only)",
+    },
+    DirectiveSpec {
         canonical: "allow-swallow",
         deprecated: None,
         gate: "error-swallowing",
@@ -530,9 +537,9 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
     },
 ];
 
-/// The 45 named directives recognized by discipline (35 canonical + 10 deprecated aliases).
+/// The 46 named directives recognized by discipline (36 canonical + 10 deprecated aliases).
 pub const KNOWN_DIRECTIVES: &[&str] = &[
-    // 35 Canonical
+    // 36 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-case-drop",
@@ -568,6 +575,7 @@ pub const KNOWN_DIRECTIVES: &[&str] = &[
     "allow-miri",
     "allow-sanitizers",
     "allow-vacuous-test",
+    "allow-harness-tampering",
     // 10 Deprecated aliases
     "deletes",
     "allow-floor-drop",
@@ -618,6 +626,7 @@ pub const ALLOW_STUB: &[&str] = &[
     "discipline:allow(stub-bodies)",
     "allow(stub-bodies)",
 ];
+pub const ALLOW_HARNESS_TAMPERING: &[&str] = &["allow-harness-tampering"];
 pub const ALLOW_SWALLOW: &[&str] = &[
     "allow-swallow",
     "discipline:allow(error-swallowing)",
@@ -793,6 +802,7 @@ pub fn names_for_directive(name: &str) -> &'static [&'static str] {
         "allow-sandbox-widening" => ALLOW_SANDBOX_WIDENING,
         "allow-stub" => ALLOW_STUB,
         "allow-swallow" => ALLOW_SWALLOW,
+        "allow-harness-tampering" => ALLOW_HARNESS_TAMPERING,
         "allow-agent-instructions" => ALLOW_SMUGGLING,
         "allow-commit-provenance" => ALLOW_COMMIT_PROVENANCE,
         "allow-citation-metadata" => ALLOW_CITATION_METADATA,
@@ -832,7 +842,7 @@ pub fn spec_for_directive(name: &str) -> Option<&'static DirectiveSpec> {
 }
 
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
-    // 35 Canonical
+    // 36 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-case-drop",
@@ -868,6 +878,7 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow-miri",
     "allow-sanitizers",
     "allow-vacuous-test",
+    "allow-harness-tampering",
     // 10 Deprecated aliases
     "deletes",
     "allow-floor-drop",
@@ -1219,9 +1230,35 @@ pub fn extract_directives_with_merged(
     merged: &[MergedBody],
     config: &crate::config::DisciplineConfig,
 ) -> (Vec<ParsedDirective>, Vec<String>) {
+    let read = read_directives(pr_body, commits, merged, config);
+    (read.active, read.notes)
+}
+
+/// What [`read_directives`] made of a run's directive sources.
+#[derive(Debug, Clone, Default)]
+pub struct DirectivesRead {
+    /// The directives the gates may apply.
+    pub active: Vec<ParsedDirective>,
+    /// One note per directive, or per source, that was not read.
+    pub notes: Vec<String>,
+    /// Where each hidden directive that was not read is written, one entry per
+    /// directive, in the order they were met. Only the source: the name is in the note,
+    /// and the reason is nowhere.
+    pub refused_hidden: Vec<OverrideSource>,
+}
+
+/// [`extract_directives_with_merged`], with the source of each hidden directive it
+/// refused.
+pub fn read_directives(
+    pr_body: Option<&str>,
+    commits: &[(String, String)],
+    merged: &[MergedBody],
+    config: &crate::config::DisciplineConfig,
+) -> DirectivesRead {
     let policy = &config.directives;
     let mut active = Vec::new();
     let mut notes = Vec::new();
+    let mut refused_hidden = Vec::new();
 
     let pr_body_allowed = policy.sources.iter().any(|s| s == "pr-body");
     let commits_allowed = policy.sources.iter().any(|s| s == "commits");
@@ -1244,6 +1281,7 @@ pub fn extract_directives_with_merged(
         if pr_body_allowed {
             for d in parsed {
                 if d.hidden && !is_hidden_allowed(&d) {
+                    refused_hidden.push(d.source.clone());
                     notes.push(format!(
                         "hidden directive `{}` in PR body ignored (directives.allow_hidden is false)",
                         d.directive
@@ -1262,6 +1300,7 @@ pub fn extract_directives_with_merged(
         if commits_allowed {
             for d in parsed {
                 if d.hidden && !is_hidden_allowed(&d) {
+                    refused_hidden.push(d.source.clone());
                     notes.push(format!(
                         "hidden directive `{}` in commit {oid} ignored (directives.allow_hidden is false)",
                         d.directive
@@ -1305,6 +1344,7 @@ pub fn extract_directives_with_merged(
         let mut n = 0;
         for d in parsed {
             if d.hidden && !is_hidden_allowed(&d) {
+                refused_hidden.push(d.source.clone());
                 notes.push(format!(
                     "hidden directive `{}` in merged pull request #{} ignored (directives.allow_hidden is false)",
                     d.directive, m.number
@@ -1320,7 +1360,11 @@ pub fn extract_directives_with_merged(
         ));
     }
 
-    (active, notes)
+    DirectivesRead {
+        active,
+        notes,
+        refused_hidden,
+    }
 }
 
 /// Markers written as a YAML comment in a workflow file rather than in a pull request

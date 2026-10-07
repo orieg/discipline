@@ -727,6 +727,58 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "report: in Markdown a quoted issue number, commit id or mail address is a code span, a documentation link stays one",
+        || {
+            use crate::report::text::{markdown, terminal_line};
+            let text = "fixes #12 and GH-3 at deadbeef1 by a@b.co";
+            Ok(markdown(text) == "fixes `#12` and `GH-3` at `deadbeef1` by `a@b.co`"
+                && terminal_line(text) == text
+                && markdown("# 1, 10! and abcdef") == "# 1, 10! and abcdef"
+                && markdown("see https://orieg.github.io/discipline/gates/#pii")
+                    == "see https://orieg.github.io/discipline/gates/#pii")
+        },
+    ),
+    (
+        "commit-provenance: a pull request number is read only where a subject ends with it",
+        || {
+            use crate::guards::commit_provenance::trailing_pull_number;
+            Ok(trailing_pull_number("fix: a (#12)") == Some(12)
+                && trailing_pull_number("fix: a (#12) and (#34) ") == Some(34)
+                && trailing_pull_number("fix (#12) typo").is_none()
+                && trailing_pull_number("fix (#0)").is_none()
+                && trailing_pull_number("fix (#7a)").is_none()
+                && crate::replay::pr_from_subject("fix (#12) typo").is_none())
+        },
+    ),
+    (
+        "integrity: `base_report` added beside an existing `test_report` is a change of evidence, beside `head_report` alone it is not",
+        || {
+            let cfg = |keys: &str| {
+                DisciplineConfig::from_toml_str(&format!(
+                    "[meta]\nversion = 1\nname = \"t\"\n[gates.test-floor]\n{keys}"
+                ))
+            };
+            let report = "test_report = \"r.xml\"\n";
+            let base_report = "base_report = \"b.xml\"\n";
+            let head_report = "head_report = \"h.xml\"\n";
+            let beside_test_report = diff_configs(
+                &cfg(report)?,
+                &cfg(&format!("{report}{base_report}"))?,
+            )?;
+            let beside_head_report = diff_configs(
+                &cfg(head_report)?,
+                &cfg(&format!("{head_report}{base_report}"))?,
+            )?;
+            let with_first_report =
+                diff_configs(&cfg("")?, &cfg(&format!("{report}{base_report}"))?)?;
+            Ok(beside_test_report.len() == 1
+                && beside_test_report[0].key() == "base_report"
+                && beside_head_report.is_empty()
+                && with_first_report.len() == 1
+                && with_first_report[0].key() == "test_report")
+        },
+    ),
+    (
         "integrity: a lowered floor or raised cap is a weakening, the reverse is not",
         || {
             let mut base = DisciplineConfig::default_for_repo("t");
@@ -1144,6 +1196,114 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "harness-tampering: a TestMain that drops m.Run()'s result before os.Exit is read, os.Exit(m.Run()) is not",
+        || {
+            use crate::ast::harness::{go_test_file, Form};
+            let main = |body: &str| -> anyhow::Result<Vec<Form>> {
+                let src = format!("package p\n\nfunc TestMain(m *testing.M) {{\n{body}}}\n");
+                let file = go_test_file(&src).map_err(|e| anyhow::anyhow!(e))?;
+                Ok(file.scan.sites.iter().map(|s| s.form).collect())
+            };
+            Ok(main("\tm.Run()\n\tos.Exit(0)\n")? == vec![Form::GoResultDiscarded]
+                && main("\tos.Exit(0)\n")? == vec![Form::GoRunNeverCalled]
+                && main("\tos.Exit(m.Run())\n")?.is_empty()
+                && main("\tcode := m.Run()\n\tteardown()\n\tos.Exit(code)\n")?.is_empty()
+                && main("\tm.Run()\n")?.is_empty())
+        },
+    ),
+    (
+        "harness-tampering: a pytest hook that assigns an outcome or empties items is read, one that reads or sorts is not",
+        || {
+            use crate::ast::harness::{python, Form, PythonChecks};
+            let hooks = PythonChecks { hooks: true, ..PythonChecks::default() };
+            let forms = |src: &str| -> anyhow::Result<Vec<Form>> {
+                let scan = python(src, hooks).map_err(|e| anyhow::anyhow!(e))?;
+                Ok(scan.sites.iter().map(|s| s.form).collect())
+            };
+            Ok(forms("def pytest_runtest_logreport(report):\n    report.outcome = \"passed\"\n")?
+                == vec![Form::PytestOutcomeAssigned]
+                && forms("def pytest_runtest_logreport(report):\n    seen.append(report.outcome)\n")?.is_empty()
+                && forms("def pytest_collection_modifyitems(config, items):\n    items[:] = []\n")?
+                    == vec![Form::PytestItemsRemoved]
+                && forms("def pytest_collection_modifyitems(config, items):\n    items.sort(key=str)\n")?.is_empty()
+                && forms("def pytest_collection_modifyitems(config, items):\n    items[:] = [i for i in items if i.get_closest_marker(\"fast\")]\n")?.is_empty())
+        },
+    ),
+    (
+        "harness-tampering: a unittest result method assigned or overridden by an empty body is read, an override that calls super is not",
+        || {
+            use crate::ast::harness::{python, Form, PythonChecks};
+            let unittest = PythonChecks { unittest: true, ..PythonChecks::default() };
+            let forms = |src: &str| -> anyhow::Result<Vec<Form>> {
+                let scan = python(src, unittest).map_err(|e| anyhow::anyhow!(e))?;
+                Ok(scan.sites.iter().map(|s| s.form).collect())
+            };
+            Ok(forms("unittest.TestResult.addFailure = quiet\n")? == vec![Form::UnittestMethodAssigned]
+                && forms("class Q(unittest.TestResult):\n    def addError(self, test, err):\n        pass\n")?
+                    == vec![Form::UnittestMethodNeutralised]
+                && forms("class Q(unittest.TestResult):\n    def addError(self, test, err):\n        super().addError(test, err)\n")?.is_empty()
+                && forms("ok = result.wasSuccessful()\n")?.is_empty())
+        },
+    ),
+    (
+        "harness-tampering: an exit with status zero and no condition is read in each language, a non-zero or conditional one is not",
+        || {
+            use crate::ast::harness::{js_exit_zero, python, rust_exit_zero, PythonChecks};
+            let exit = PythonChecks { exit: true, ..PythonChecks::default() };
+            let py = |src: &str| python(src, exit).map(|s| s.sites.len());
+            let js = |src: &str| js_exit_zero("setup.js", src).map(|s| s.sites.len());
+            let rs = |src: &str| rust_exit_zero(src).map(|s| s.sites.len());
+            let read = [
+                py("import os\nos._exit(0)\n"),
+                py("import sys\nsys.exit(0)\n"),
+                js("module.exports = async () => {\n  process.exit(0);\n};\n"),
+                rs("fn main() {\n    std::process::exit(0);\n}\n"),
+            ];
+            let not_read = [
+                py("import sys\nsys.exit(1)\n"),
+                py("import sys\nif done:\n    sys.exit(0)\n"),
+                js("process.exit(1);\n"),
+                js("if (done) {\n  process.exit(0);\n}\n"),
+                js("process.on('SIGINT', () => process.exit(0));\n"),
+                rs("fn main() {\n    std::process::exit(1);\n}\n"),
+                rs("fn main() {\n    if done() {\n        std::process::exit(0);\n    }\n}\n"),
+            ];
+            Ok(read.iter().all(|r| r == &Ok(1)) && not_read.iter().all(|r| r == &Ok(0)))
+        },
+    ),
+    (
+        "harness-tampering: a harness file is known by its name or a configuration, and only added forms are new",
+        || {
+            use crate::ast::harness::{Form, Site};
+            use crate::ast::runner_collection::ConfiguredHarness;
+            use crate::guards::harness_tampering::{new_sites, roles};
+            let registry = crate::ast::default_registry();
+            let files = [
+                ("web/jest.config.json", "{\"globalTeardown\": \"./test/teardown.js\"}"),
+                ("web/test/teardown.js", ""),
+                ("web/test/other.js", ""),
+            ];
+            let tracked: Vec<String> = files.iter().map(|(path, _)| path.to_string()).collect();
+            let configured = ConfiguredHarness::from_tree(
+                |path| files.iter().find(|(p, _)| *p == path).map(|(_, src)| src.to_string()),
+                &tracked,
+            );
+            let is_harness = |path: &str| roles(path, &configured, &registry, &[]).any();
+            let site = |subject: &str| Site {
+                form: Form::ExitZero,
+                line: 1,
+                subject: subject.to_string(),
+                what: String::new(),
+            };
+            Ok(is_harness("pkg/conftest.py")
+                && is_harness("web/test/teardown.js")
+                && !is_harness("web/test/other.js")
+                && !is_harness("src/harness_setup.py")
+                && new_sites(&[site("teardown")], vec![site("teardown")]).is_empty()
+                && new_sites(&[site("teardown")], vec![site("teardown"), site("setup")]).len() == 1)
+        },
+    ),
+    (
         "mocks: an interaction check counts as a mock assertion, an equality check does not",
         || {
             let v = AssertVocabulary::default();
@@ -1467,6 +1627,25 @@ const CASES: &[Case] = &[
                 && (c == ["discarded-result", "discarded-value"] || c == ["skipped"]))
         },
     ),
+    (
+        "error-swallowing: Go `_ = f()` is a discarded result for a known-fallible callee, nothing for another",
+        || {
+            let reg = crate::ast::default_registry();
+            let v = AssertVocabulary::default();
+            let Some(pack) = reg.find_pack("pkg/a.go") else {
+                return Ok(true);
+            };
+            let kinds = |body: &str| -> Result<Vec<&'static str>> {
+                let src = format!("package a\nfunc F() {{\n{body}}}\n");
+                Ok(pack.extract("pkg/a.go", &src, &v)?.swallowed.iter().map(|s| s.kind).collect())
+            };
+            Ok(kinds("\t_ = os.Remove(p)\n\t_ = f.Close()\n")?
+                == ["discarded-result", "discarded-result"]
+                && kinds("\t_ = strings.ToUpper(p)\n\t_ = []byte(p)\n\t_ = v.(string)\n")?
+                    .is_empty()
+                && kinds("\t_, _ = f.Write(nil)\n")? == ["discarded-result"])
+        },
+    ),
     #[cfg(feature = "lang-objc")]
     (
         "objc: XCTest methods, a vacuous one, a skip, an error:nil and a stub",
@@ -1588,7 +1767,7 @@ const CASES: &[Case] = &[
                 return Ok(true);
             };
             let twin = pack.extract("src/m.rs", "(>\u{e9}t(0(.t();}", &AssertVocabulary::default())?;
-            Ok(cut == "could not parse `src/m.rs`: the parser did not finish within its budget of 316 steps for 15 bytes"
+            Ok(cut == "could not parse `src/m.rs`: the parser did not finish within its budget of 259 steps for 15 bytes"
                 && twin.has_parse_errors)
         },
     ),
@@ -1644,6 +1823,42 @@ const CASES: &[Case] = &[
                         indentation prefixes, past what the Python grammar's scanner can store, \
                         so it would overflow its serialization buffer"
                 && at_limit.is_ok())
+        },
+    ),
+    #[cfg(feature = "lang-rust")]
+    (
+        "ast: a source nested past the tree depth limit is refused by name; one at the limit is parsed",
+        || {
+            let reg = crate::ast::default_registry();
+            let v = AssertVocabulary::default();
+            let Some(pack) = reg.find_pack("tests/deep.rs") else {
+                return Ok(true);
+            };
+            // Five levels of the tree (the file, the test, its body, the `let`, the
+            // literal) and one for each pair of parentheses.
+            let file = |pairs: usize| {
+                format!(
+                    "#[test]\nfn t() {{\n    let a = {}1{};\n    assert_eq!(a, 1);\n}}\n",
+                    "(".repeat(pairs),
+                    ")".repeat(pairs)
+                )
+            };
+            let limit = crate::ast::source_text::TREE_DEPTH_LIMIT;
+            // On the deep stack, as the binary reads every file: a tree at the limit is
+            // past what a default stack lets a walker descend. One level past the limit
+            // is far inside the deep stack, so a build that lost the bound fails this
+            // case and does not end the run.
+            let (over, at_limit) = crate::deep_stack::on_deep_stack(|| {
+                (
+                    pack.extract("tests/deep.rs", &file(limit - 4), &v),
+                    pack.extract("tests/deep.rs", &file(limit - 5), &v),
+                )
+            })?;
+            Ok(over.is_err()
+                && over.unwrap_err().to_string()
+                    == "could not parse `tests/deep.rs`: the source nests 4097 levels deep, \
+                        past the 4096 this tool reads"
+                && at_limit.is_ok_and(|facts| facts.tests.len() == 1 && !facts.has_parse_errors))
         },
     ),
     #[cfg(feature = "lang-swift")]
@@ -2875,6 +3090,106 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "vacuous-tests: an equality assertion on the same tokens twice in a new test is a warning at its line; a clone, a repeated call, a macro body and a reflexivity check beside a real comparison are not",
+        || {
+            use crate::guards::agent_diff::{evaluate_vacuous_tests, Located};
+            let settings = crate::config::AssertionGate::default();
+            let verdict = |path: &str, src: &str| -> Result<Vec<(String, usize, bool)>> {
+                let facts = extract(path, src)?;
+                let added: Vec<Located> = facts
+                    .tests
+                    .iter()
+                    .map(|test| Located { path, file_survives: true, test })
+                    .collect();
+                Ok(evaluate_vacuous_tests(&added, &settings, &[])?
+                    .violations
+                    .iter()
+                    .map(|v| {
+                        (
+                            v.title.clone(),
+                            v.line.unwrap_or(0),
+                            v.severity == crate::config::Severity::Warning
+                                && v.message.contains("Exact form only")
+                                && v.message.contains("no alias or value-flow analysis"),
+                        )
+                    })
+                    .collect())
+            };
+            let title = crate::findings::SELF_COMPARISON_ASSERTION_ADDED.title.to_string();
+            let rust = verdict(
+                "tests/t.rs",
+                "#[test]\nfn t() {\n    assert_eq!(f(), 1);\n    assert_eq!(y, (y));\n}\n",
+            )?;
+            let python = verdict("tests/test_t.py", "def test_t():\n    assert f() == 1\n    assert y == y\n")?;
+            let js = verdict(
+                "t.test.js",
+                "test('t', () => {\n  expect(f()).toBe(1);\n  expect(y).toBe(y);\n});\n",
+            )?;
+            let mut silent = true;
+            for body in [
+                "assert_eq!(y.clone(), y);",
+                "assert_eq!(it.next(), it.next());",
+                "macro_rules! same { ($a:expr) => { assert_eq!($a, $a); }; }",
+                "assert_eq!(y, z); assert_eq!(y, y);",
+                "assert_ne!(y, y);",
+            ] {
+                let src = format!("#[test]\nfn t() {{\n    assert_eq!(f(), 1);\n    {body}\n}}\n");
+                silent &= verdict("tests/t.rs", &src)?.is_empty();
+            }
+            // Alone, it is the vacuous test and one finding.
+            let alone = verdict("tests/t.rs", "#[test]\nfn t() {\n    assert_eq!(y, y);\n}\n")?;
+            Ok(rust == [(title.clone(), 4, true)]
+                && python == [(title.clone(), 3, true)]
+                && js == [(title, 3, true)]
+                && silent
+                && alone.len() == 1
+                && alone[0].0 == crate::findings::VACUOUS_TEST_ADDED.title)
+        },
+    ),
+    (
+        "assertion-reduction: a self-comparison a change introduces in an existing test is a warning at its line; one the base side held, and a near-miss, are not",
+        || {
+            use crate::guards::agent_diff::{evaluate_assertion_reduction, TestPair};
+            let settings = crate::config::AssertionGate::default();
+            let verdict = |base: &str, head: &str| -> Result<Vec<(String, usize, bool)>> {
+                let file = |body: &str| format!("#[test]\nfn t() {{\n{body}}}\n");
+                let (b, h) = (extract("tests/t.rs", &file(base))?, extract("tests/t.rs", &file(head))?);
+                let pair = [TestPair { path: "tests/t.rs", base: &b.tests[0], head: &h.tests[0], forced: false }];
+                Ok(evaluate_assertion_reduction(&pair, &[], &[], &settings, &[], false)?
+                    .violations
+                    .iter()
+                    .map(|v| {
+                        (
+                            v.title.clone(),
+                            v.line.unwrap_or(0),
+                            v.severity == crate::config::Severity::Warning,
+                        )
+                    })
+                    .collect())
+            };
+            let title = crate::findings::SELF_COMPARISON_ASSERTION_INTRODUCED.title.to_string();
+            const REAL: &str = "    assert_eq!(f(), 1);\n";
+            let added = verdict(REAL, &format!("{REAL}    assert_eq!(y, y);\n"))?;
+            let held = verdict(
+                &format!("{REAL}    assert_eq!(y, y);\n"),
+                &format!("{REAL}    assert_eq!(g(), 2);\n    assert_eq!(y, y);\n"),
+            )?;
+            let near = verdict(REAL, &format!("{REAL}    assert_eq!(y.clone(), y);\n"))?;
+            // Replaced: the count drops, and the one finding is the reduction.
+            let replaced = verdict(
+                &format!("{REAL}    assert_eq!(g(), 2);\n"),
+                &format!("{REAL}    assert_eq!(y, y);\n"),
+            )?;
+            Ok(added == [(title.clone(), 4, true)]
+                && held.is_empty()
+                && near.is_empty()
+                && !replaced.iter().any(|r| r.0 == title)
+                && replaced
+                    .iter()
+                    .any(|r| r.0 == crate::findings::ASSERTIONS_REDUCED.title && !r.2))
+        },
+    ),
+    (
         "merged-pr-body: a 422 for an unknown commit means not on the forge, a 403 stays a failure",
         || {
             use crate::forge::{commit_origin, CannedApi, CommitOrigin, Forge, ForgeKind};
@@ -2979,6 +3294,65 @@ const CASES: &[Case] = &[
                     && origin(serde_json::json!({})).is_err()
                     && origin(serde_json::json!({"sha": "ffff"})).is_err();
             }
+            Ok(ok)
+        },
+    ),
+    (
+        "policy refusals: SARIF, JUnit and GitLab carry one entry per refusal at the format's level, with the rule id and none of the sentence",
+        || {
+            use crate::guards::CheckSummary;
+            use crate::refusals::{PolicyFailure, RefusalKind, REFUSALS};
+            use crate::report::{gitlab, junit, sarif};
+            let quoted = "reviewer-login-of-the-sentence";
+            let mut summary = CheckSummary {
+                schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+                could_not_check: None,
+                base: "main".into(),
+                errors: 0,
+                warnings: 0,
+                notes: 0,
+                overrides: 0,
+                baselined: 0,
+                outcomes: vec![],
+                planned_gates: vec![],
+                policy_failures: Vec::new(),
+                refused_hidden_directives: Vec::new(),
+                deprecations: Vec::new(),
+                directive_notes: Vec::new(),
+                unused_directives: Vec::new(),
+            };
+            // No refusal: no rule, no suite, no entry.
+            let quiet = sarif::format_sarif(&summary)["runs"][0]["results"] == serde_json::json!([])
+                && !junit::format_junit(&summary, false).contains("<testsuite ")
+                && gitlab::generate_gitlab_issues(&summary).is_empty();
+            summary.policy_failures = vec![
+                PolicyFailure::new(RefusalKind::MaxOverrides, quoted),
+                PolicyFailure::new(RefusalKind::MaxInlineOverrides, quoted),
+                PolicyFailure::new(RefusalKind::ApprovalRequired, quoted),
+            ];
+            summary.refused_hidden_directives = vec![
+                crate::tokens::OverrideSource::PrBody,
+                crate::tokens::OverrideSource::PrBody,
+            ];
+            let doc = sarif::format_sarif(&summary);
+            let results = doc["runs"][0]["results"].as_array().cloned().unwrap_or_default();
+            let issues = gitlab::generate_gitlab_issues(&summary);
+            let xml = junit::format_junit(&summary, false);
+            let mut ok = quiet && results.len() == 5 && issues.len() == 5;
+            for info in REFUSALS {
+                let id = info.rule_id();
+                let n = if info.blocks { 1 } else { 2 };
+                let (level, severity) = if info.blocks { ("error", "major") } else { ("note", "info") };
+                ok &= results.iter().filter(|r| r["ruleId"] == id.as_str() && r["level"] == level).count() == n
+                    && issues.iter().filter(|i| i.check_name == id && i.severity == severity).count() == n
+                    && xml.matches(&format!("<testcase name=\"{} [", info.code)).count() == n;
+            }
+            let prints: std::collections::HashSet<&str> = issues.iter().map(|i| i.fingerprint.as_str()).collect();
+            ok &= prints.len() == 5
+                && xml.contains("<testsuite name=\"policy\" tests=\"5\" failures=\"3\"")
+                && xml == junit::format_junit(&summary, true)
+                && [doc.to_string(), xml, gitlab::format_gitlab(&summary)].iter().all(|t| !t.contains(quoted))
+                && serde_json::to_value(&summary)?["policy_failures"] == serde_json::json!([quoted, quoted, quoted]);
             Ok(ok)
         },
     ),
@@ -4995,6 +5369,7 @@ command = "cargo test"
                 outcomes: vec![o],
                 planned_gates: vec![],
                 policy_failures: Vec::new(),
+                refused_hidden_directives: Vec::new(),
                 deprecations: Vec::new(),
                 directive_notes: Vec::new(),
                 unused_directives: Vec::new(),
@@ -5294,6 +5669,62 @@ command = "cargo test"
                 && run_if == Some(Severity::Error)
                 && outside_ci == Some(Severity::Note)
                 && cfg_outside_ci == Some(Severity::Note))
+        },
+    ),
+    (
+        "ignored-tests: a skip marker is an argument or name of the tree, not text inside a string",
+        || {
+            let ignored = |path: &str, src: &str| -> Result<bool> {
+                let facts = extract(path, src)?;
+                let test = facts
+                    .tests
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("no test in {path}"))?;
+                Ok(test.ignored)
+            };
+            let cs = |attribute: &str| {
+                format!("using Xunit;\npublic class T {{\n    [{attribute}]\n    public void A() {{\n        Assert.Equal(3, F());\n    }}\n}}\n")
+            };
+            let rb = |head: &str| {
+                format!("RSpec.describe Cart do\n  {head} do\n    expect(total).to eq(3)\n  end\nend\n")
+            };
+            let py = |decorator: &str| {
+                format!("import pytest\n\n\n{decorator}\ndef test_a(name=\"a\"):\n    assert f(name) == 3\n")
+            };
+            Ok(!ignored("ATests.cs", &cs("Fact(DisplayName = \"Skip logic\")"))?
+                && ignored("ATests.cs", &cs("Fact(DisplayName = \"A\", Skip = \"later\")"))?
+                && !ignored("a_spec.rb", &rb("it \"honours the skip: option\""))?
+                && ignored("a_spec.rb", &rb("it \"sums\", skip: \"later\""))?
+                && !ignored(
+                    "test_a.py",
+                    &py("@pytest.mark.parametrize(\"name\", [\"skipIf\"])"),
+                )?
+                && ignored("test_a.py", &py("@pytest.mark.skip(reason=\"later\")"))?)
+        },
+    ),
+    (
+        "ignored-tests: an early return is a candidate by its code, not by a string or a comment that names CI",
+        || {
+            let conditional = |path: &str, src: &str| -> Result<bool> {
+                let facts = extract(path, src)?;
+                let test = facts
+                    .tests
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("no test in {path}"))?;
+                Ok(test.conditional_ignore.is_some())
+            };
+            let py = |condition: &str| {
+                format!("import os\n\n\ndef test_a():\n    if {condition}:\n        return\n    assert f() == 3\n")
+            };
+            let go = |condition: &str| {
+                format!("package p\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestA(t *testing.T) {{\n\tif {condition} {{\n\t\treturn\n\t}}\n\tif F() != 3 {{\n\t\tt.Fatal(os.Args)\n\t}}\n}}\n")
+            };
+            Ok(!conditional("test_a.py", &py("mode() == \"runs on CI too\""))?
+                && !conditional("test_a.py", &py("\"os.environ\" in source()"))?
+                && conditional("test_a.py", &py("os.environ.get(\"CI\")"))?
+                && conditional("test_a.py", &py("lookup(\"CI\")"))?
+                && !conditional("p_test.go", &go("mode() == \"runs on CI too\""))?
+                && conditional("p_test.go", &go("os.Getenv(\"CI\") != \"\""))?)
         },
     ),
     (
@@ -6349,6 +6780,295 @@ test tests::c: test
                 && !is_runner_collected("node_modules/p/a.test.js", &jest);
 
             Ok(work_ok && macro_ok && node_ok && modules_ok)
+        },
+    ),
+    (
+        "test-floor: Jest and Vitest with no configuration, patterns that match nothing, and configurations Jest refuses",
+        || {
+            use crate::ast::runner_collection::{
+                check_runner_collected, RunnerCollectionRules, RunnerCollectionStatus,
+            };
+            use crate::ast::AssertVocabulary;
+
+            let tree = |files: &[(&str, &str)]| {
+                let tracked: Vec<String> = files.iter().map(|(name, _)| name.to_string()).collect();
+                AssertVocabulary {
+                    runner_rules: RunnerCollectionRules::from_tree(
+                        |p| {
+                            files
+                                .iter()
+                                .find(|(name, _)| *name == p)
+                                .map(|(_, content)| content.to_string())
+                        },
+                        &tracked,
+                    ),
+                    ..Default::default()
+                }
+            };
+            let unknown = |path: &str, vocab: &AssertVocabulary, part: &str| {
+                matches!(
+                    check_runner_collected(path, vocab),
+                    RunnerCollectionStatus::Unknown(reason) if reason.contains(part)
+                )
+            };
+            let collected = |path: &str, vocab: &AssertVocabulary| {
+                check_runner_collected(path, vocab) == RunnerCollectionStatus::Collected
+            };
+            let left_out = |path: &str, vocab: &AssertVocabulary| {
+                check_runner_collected(path, vocab) == RunnerCollectionStatus::NotCollected
+            };
+
+            // A runner that is a dependency and has no configuration runs with its
+            // defaults; with both, the files are not known to be either's.
+            let jest = tree(&[("package.json", r#"{"devDependencies": {"jest": "^29.7.0"}}"#)]);
+            let vitest = tree(&[
+                ("package.json", r#"{"devDependencies": {"vitest": "^4.1.0"}}"#),
+                ("vite.config.ts", "export default { plugins: [] };\n"),
+            ]);
+            let vite_only = tree(&[
+                ("package.json", r#"{"devDependencies": {"vite": "^5.0.0"}}"#),
+                ("vite.config.ts", "export default { plugins: [] };\n"),
+            ]);
+            let both = tree(&[(
+                "package.json",
+                r#"{"devDependencies": {"jest": "^29.7.0", "vitest": "^4.1.0"}}"#,
+            )]);
+            let defaults_ok = collected("__tests__/a.js", &jest)
+                && left_out("src/plain.js", &jest)
+                && collected("src/a.test.ts", &vitest)
+                && left_out("__tests__/a.ts", &vitest)
+                && unknown("src/plain.ts", &vite_only, "no runner config found")
+                && unknown("src/a.test.ts", &both, "no runner config found");
+
+            // A `testMatch` pattern that starts with a literal matches no absolute path.
+            let literal = tree(&[(
+                "package.json",
+                r#"{"jest": {"testMatch": ["src/**/*.js", "**/b.spec.js"]}}"#,
+            )]);
+            let wildcard = tree(&[("package.json", r#"{"jest": {"testMatch": ["*/**/a.test.js"]}}"#)]);
+            let pattern_ok = left_out("src/a.test.js", &literal)
+                && collected("b.spec.js", &literal)
+                && unknown("src/a.test.js", &wildcard, "neither `<rootDir>`");
+
+            // Jest refuses to run: nothing is evaluated.
+            let match_and_regex = tree(&[(
+                "package.json",
+                r#"{"jest": {"testMatch": ["**/a.test.js"], "testRegex": "spec"}}"#,
+            )]);
+            let empty_regex = tree(&[(
+                "package.json",
+                r#"{"jest": {"testMatch": ["**/a.test.js"], "testRegex": ""}}"#,
+            )]);
+            let two = tree(&[
+                ("package.json", r#"{"jest": {}}"#),
+                ("jest.config.json", "{}"),
+            ]);
+            let conflict_ok = unknown("plain.js", &match_and_regex, "`testMatch` and `testRegex`")
+                && collected("a.test.js", &empty_regex)
+                && left_out("b.spec.js", &empty_regex)
+                && unknown("a.test.js", &two, "more than one jest configuration");
+
+            // Vitest's default `exclude` before Vitest 4 held configuration-file names.
+            let vitest_at = |range: &str| {
+                let package = format!(r#"{{"devDependencies": {{"vitest": "{range}"}}}}"#);
+                tree(&[("package.json", &package), ("vitest.config.ts", "export default { test: {} };\n")])
+            };
+            let names_ok = left_out("vite.config.test.ts", &vitest_at("^1.6.0"))
+                && left_out("sub/jest.config.spec.ts", &vitest_at("^3.1.0"))
+                && collected("vite.config.test.ts", &vitest_at("^4.1.0"))
+                && collected("playwright.config.test.ts", &vitest_at("^3.1.0"))
+                && unknown("vite.config.test.ts", &vitest_at("^2.1.0"), "vitest 2 was not compared")
+                && unknown("vite.config.test.ts", &vitest_at("*"), "depends on its version");
+
+            Ok(defaults_ok && pattern_ok && conflict_ok && names_ok)
+        },
+    ),
+    (
+        "test-floor: Deno.test registrations, Deno's default names and a negated exclude entry",
+        || {
+            use crate::ast::runner_collection::{
+                check_runner_collected, RunnerCollectionRules, RunnerCollectionStatus,
+            };
+            use crate::ast::AssertVocabulary;
+
+            let tree = |files: &[(&str, &str)]| {
+                let tracked: Vec<String> = files.iter().map(|(name, _)| name.to_string()).collect();
+                AssertVocabulary {
+                    runner_rules: RunnerCollectionRules::from_tree(
+                        |p| {
+                            files
+                                .iter()
+                                .find(|(name, _)| *name == p)
+                                .map(|(_, content)| content.to_string())
+                        },
+                        &tracked,
+                    ),
+                    ..Default::default()
+                }
+            };
+            let unknown = |path: &str, vocab: &AssertVocabulary, part: &str| {
+                matches!(
+                    check_runner_collected(path, vocab),
+                    RunnerCollectionStatus::Unknown(reason) if reason.contains(part)
+                )
+            };
+            let collected = |path: &str, vocab: &AssertVocabulary| {
+                check_runner_collected(path, vocab) == RunnerCollectionStatus::Collected
+            };
+            let left_out = |path: &str, vocab: &AssertVocabulary| {
+                check_runner_collected(path, vocab) == RunnerCollectionStatus::NotCollected
+            };
+
+            let plain = tree(&[("deno.json", "{}")]);
+            let names_ok = ["a_test.ts", "b.test.tsx", "test.js", "__tests__/any.ts", "sub/_test.mjs"]
+                .iter()
+                .all(|path| collected(path, &plain))
+                && ["plain.ts", "a.spec.ts", "tests/plain.ts", "a_test.d.ts", "node_modules/p/a_test.ts"]
+                    .iter()
+                    .all(|path| left_out(path, &plain));
+
+            let negated = tree(&[("deno.json", r#"{"test": {"exclude": ["old", "!old/keep"]}}"#)]);
+            let refused = tree(&[("deno.json", r#"{"test": {"exclude": ["!old/keep", "old"]}}"#)]);
+            let glob = tree(&[("deno.json", r#"{"test": {"exclude": ["old/**", "!old/keep/**"]}}"#)]);
+            let included = tree(&[("deno.json", r#"{"test": {"include": ["checks", "one/plain.ts"]}}"#)]);
+            let lists_ok = left_out("old/a_test.ts", &negated)
+                && collected("old/keep/b_test.ts", &negated)
+                && left_out("old/keep/plain.ts", &negated)
+                && unknown("old/a_test.ts", &refused, "refuses to run")
+                && unknown("old/keep/b_test.ts", &glob, "is a glob")
+                && collected("checks/a_test.ts", &included)
+                && left_out("checks/plain.ts", &included)
+                && collected("one/plain.ts", &included)
+                && left_out("a_test.ts", &included);
+
+            // The pack reads the registrations, with the module's bare assertions.
+            let source = "import { assertEquals } from 'jsr:@std/assert';\n\
+                Deno.test('a', async (t) => {\n  await t.step('s', () => { assertEquals(f(), 1); });\n});\n\
+                Deno.test.ignore('b', () => {});\n\
+                Deno.test({ name: 'c', fn() { assertEquals(g(), 2); } });\n";
+            let facts = crate::ast::default_registry()
+                .find_pack("mod_test.ts")
+                .ok_or_else(|| anyhow::anyhow!("no pack for a TypeScript file"))?
+                .extract("mod_test.ts", source, &AssertVocabulary::default())?;
+            let read: Vec<(&str, bool, usize)> = facts
+                .tests
+                .iter()
+                .map(|t| (t.name.as_str(), t.ignored, t.strong_asserts))
+                .collect();
+            let pack_ok = read
+                == [
+                    ("a", false, 1),
+                    ("a > s", false, 1),
+                    ("b", true, 0),
+                    ("c", false, 1),
+                ];
+
+            Ok(names_ok && lists_ok && pack_ok)
+        },
+    ),
+    (
+        "test-floor: a Cargo target its manifest switches off, an unreached source file, nested node --test scripts and go.work strings",
+        || {
+            use crate::ast::runner_collection::{
+                check_runner_collected, moved_out_by, RunnerCollectionRules, RunnerCollectionStatus,
+            };
+            use crate::ast::AssertVocabulary;
+
+            let tree = |files: &[(&str, &str)]| {
+                let tracked: Vec<String> = files.iter().map(|(name, _)| name.to_string()).collect();
+                AssertVocabulary {
+                    runner_rules: RunnerCollectionRules::from_tree(
+                        |p| {
+                            files
+                                .iter()
+                                .find(|(name, _)| *name == p)
+                                .map(|(_, content)| content.to_string())
+                        },
+                        &tracked,
+                    ),
+                    ..Default::default()
+                }
+            };
+            let moved = |base: &[(&str, &str)], head: &[(&str, &str)], path: &str| {
+                moved_out_by(path, &tree(base), &tree(head))
+                    .into_iter()
+                    .map(|m| (m.file, m.key))
+                    .collect::<Vec<_>>()
+            };
+            let rule = |file: &str, key: &'static str| vec![(file.to_string(), key)];
+
+            let package = "[package]\nname = \"p\"\nversion = \"0.1.0\"\n";
+            let crate_with = |manifest: &'static str, lib: &'static str| {
+                vec![
+                    ("Cargo.toml", manifest),
+                    ("src/lib.rs", lib),
+                    ("src/inner.rs", "#[test]\nfn t() {}\n"),
+                    ("tests/it.rs", "mod common;\n#[test]\nfn t() {}\n"),
+                    ("tests/common/mod.rs", "#[test]\nfn t() {}\n"),
+                ]
+            };
+            let base = crate_with(package, "mod inner;\n");
+            let target_off = "[package]\nname = \"p\"\nversion = \"0.1.0\"\n\n[[test]]\nname = \"it\"\ntest = false\n";
+            let no_autotests = "[package]\nname = \"p\"\nversion = \"0.1.0\"\nautotests = false\n";
+            let lib_off = "[package]\nname = \"p\"\nversion = \"0.1.0\"\n\n[lib]\ntest = false\n";
+            let cargo_ok = moved(&base, &crate_with(target_off, "mod inner;\n"), "tests/it.rs")
+                == rule("Cargo.toml", "test-target-off")
+                && moved(&base, &crate_with(target_off, "mod inner;\n"), "tests/common/mod.rs")
+                    == rule("Cargo.toml", "test-target-off")
+                && moved(&base, &crate_with(no_autotests, "mod inner;\n"), "tests/it.rs")
+                    == rule("Cargo.toml", "autotests-off")
+                && moved(&base, &crate_with(lib_off, "mod inner;\n"), "src/inner.rs")
+                    == rule("Cargo.toml", "lib-test-off")
+                && moved(&base, &crate_with(package, ""), "src/inner.rs")
+                    == rule("src/lib.rs", "mod-removed")
+                // The key on both sides is not the change's own rule.
+                && moved(
+                    &crate_with(target_off, "mod inner;\n"),
+                    &crate_with(target_off, "mod inner;\n"),
+                    "tests/it.rs",
+                )
+                .is_empty()
+                // A file the target still runs was not moved.
+                && moved(&base, &crate_with(target_off, "mod inner;\n"), "src/inner.rs").is_empty();
+
+            // A file under `src/` no root reaches is left out with a note.
+            let unreached = tree(&crate_with(package, "declare_modules!(inner);\n"));
+            let unreached_ok = matches!(
+                check_runner_collected("src/inner.rs", &unreached),
+                RunnerCollectionStatus::NoRunner(reason) if reason.contains("no crate root reaches")
+            ) && check_runner_collected("src/inner.rs", &tree(&base))
+                == RunnerCollectionStatus::Collected;
+
+            // A script of a nested manifest runs `node --test` for the files below it.
+            let node = "import test from 'node:test';\ntest('a', () => {});\n";
+            let nested = tree(&[
+                ("package.json", r#"{"name": "root"}"#),
+                ("packages/api/package.json", r#"{"scripts": {"test": "node --test"}}"#),
+                ("packages/api/a.test.js", node),
+                ("packages/web/package.json", r#"{"scripts": {"test": "node x.js"}}"#),
+                ("packages/web/b.test.js", node),
+            ]);
+            let node_ok = check_runner_collected("packages/api/a.test.js", &nested)
+                == RunnerCollectionStatus::Collected
+                && matches!(
+                    check_runner_collected("packages/web/b.test.js", &nested),
+                    RunnerCollectionStatus::NoRunner(_)
+                );
+
+            // `go.work`: a quoted path is a Go string, and an unknown directive makes the
+            // file one the go tool refuses.
+            let go_mod = "module example.test/m\n\ngo 1.21\n";
+            let work = |content: &'static str| {
+                tree(&[("go.work", content), ("app/go.mod", go_mod), ("app/a_test.go", "package a\n")])
+            };
+            let work_ok = check_runner_collected("app/a_test.go", &work("go 1.21\nuse \"./\\x61pp\"\n"))
+                == RunnerCollectionStatus::Collected
+                && matches!(
+                    check_runner_collected("app/a_test.go", &work("go 1.21\nuse ./app\nbogus x\n")),
+                    RunnerCollectionStatus::Unknown(reason) if reason.contains("cannot be read")
+                );
+
+            Ok(cargo_ok && unreached_ok && node_ok && work_ok)
         },
     ),
     (

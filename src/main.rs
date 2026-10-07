@@ -14,22 +14,72 @@ use std::process::ExitCode;
 /// Rust ignores SIGPIPE, so a closed reader (`discipline gates | head -1`) turns every
 /// later `println!` into a panic. Restore the default so the process ends the way other
 /// Unix tools do: killed by the signal, which a pipeline still sees as a non-zero status.
+///
+/// The work runs on a second thread, and a signal raised by a write may be handed to
+/// any thread that does not block it. Handed to this one while it waits for the worker,
+/// it would be acted on only after the worker's write had returned an error and its
+/// `println!` had panicked. So this thread blocks the signal, and the worker, which
+/// inherits that, unblocks it ([`take_sigpipe`]): the worker is then the only thread the
+/// signal can be delivered to, and it ends the process inside the write.
 #[cfg(unix)]
 fn restore_sigpipe() {
-    // SAFETY: called first in `main`, before any thread is spawned; `signal` with
-    // `SIG_DFL` only resets the disposition of SIGPIPE and touches no Rust-managed memory.
+    // SAFETY: called first in `main`, before any thread is spawned. `signal` with
+    // `SIG_DFL` only resets the disposition of SIGPIPE. `sigemptyset` and `sigaddset`
+    // initialise the zeroed set they are given, and `pthread_sigmask` reads that set
+    // and changes this thread's mask only; none touches Rust-managed memory.
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, libc::SIGPIPE);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+    }
+}
+
+/// Let the calling thread receive SIGPIPE: the worker's first step (`restore_sigpipe`).
+#[cfg(unix)]
+fn take_sigpipe() {
+    // SAFETY: `sigemptyset` and `sigaddset` initialise the zeroed set they are given,
+    // and `pthread_sigmask` reads that set and changes the calling thread's mask only;
+    // none touches Rust-managed memory.
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, libc::SIGPIPE);
+        libc::pthread_sigmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut());
     }
 }
 
 #[cfg(not(unix))]
 fn restore_sigpipe() {}
 
+#[cfg(not(unix))]
+fn take_sigpipe() {}
+
 /// 0 = pass, 1 = violations, 2 = the check itself could not run. Keeping the
 /// last two apart lets CI tell "the change is bad" from "the gate is broken".
+///
+/// The work is done on a thread with a deep stack (`discipline::deep_stack`): a syntax
+/// tree may nest further than the main thread's stack lets a walker descend.
 fn main() -> ExitCode {
     restore_sigpipe();
+    match discipline::deep_stack::on_deep_stack(|| {
+        take_sigpipe();
+        run()
+    }) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!(
+                "{}: could not start the thread the work runs on, with a stack of {} MiB: {e}",
+                style::red("discipline: error"),
+                discipline::deep_stack::WORK_STACK_BYTES / (1024 * 1024)
+            );
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn run() -> ExitCode {
     let cli = match Cli::try_parse() {
         Ok(c) => c,
         Err(e) => {
@@ -503,6 +553,7 @@ fn emit_fatal_reports(args: &CheckArgs, is_gitlab: bool, base: &str, err: &anyho
             .collect(),
         outcomes,
         policy_failures: Vec::new(),
+        refused_hidden_directives: Vec::new(),
         deprecations: Vec::new(),
         directive_notes: Vec::new(),
         unused_directives: Vec::new(),
@@ -727,12 +778,14 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
     // pull request each pushed commit arrived through is the review record that approved
     // its directives. A squash or rebase merge drops it from the commit message.
     let merged = merged_pull_bodies(args, &config, &git, &commits, raw_pr_body.is_some())?;
-    let (directives, mut directive_notes) = discipline::tokens::extract_directives_with_merged(
+    let read = discipline::tokens::read_directives(
         raw_pr_body.as_deref(),
         &commits,
         &merged.bodies,
         &config,
     );
+    let (directives, mut directive_notes, refused_hidden_directives) =
+        (read.active, read.notes, read.refused_hidden);
     directive_notes.extend(merged.notes.iter().cloned());
 
     let had_pr_body = raw_pr_body.is_some();
@@ -868,6 +921,7 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
         }),
         _ => None,
     });
+    summary.refused_hidden_directives = refused_hidden_directives;
     summary.policy_failures = discipline::override_policy::judge(
         &config.directives,
         summary.directive_overrides(),
@@ -1066,22 +1120,25 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
         GitCtx::open(&base_ref, false)?
     };
     let (config, config_path) = load_config(&args.config, Some(git.root()), None, None)?;
-    let existing_baseline = {
-        let p = git.root().join(&args.baseline_file);
-        if p.exists() {
-            // An unreadable baseline is not an empty one: rewriting it would drop entries.
-            Some({
-                let shown = discipline::baseline::path_for_message(git.root(), &p);
-                discipline::baseline::DisciplineBaseline::load_from_file_named(&p, &shown)
-                    .with_context(|| {
-                        format!(
-                            "existing baseline `{shown}` could not be read; fix or remove it first"
-                        )
-                    })?
-            })
-        } else {
-            None
-        }
+    // How every message of this command names the file: its path in the repository, or
+    // its file name alone when it is outside (the directory is then the runner's).
+    let baseline_path = git.root().join(&args.baseline_file);
+    let baseline_shown = discipline::baseline::path_for_message(git.root(), &baseline_path);
+    let existing_baseline = if baseline_path.exists() {
+        // An unreadable baseline is not an empty one: rewriting it would drop entries.
+        Some(
+            discipline::baseline::DisciplineBaseline::load_from_file_named(
+                &baseline_path,
+                &baseline_shown,
+            )
+            .with_context(|| {
+                format!(
+                    "existing baseline `{baseline_shown}` could not be read; fix or remove it first"
+                )
+            })?,
+        )
+    } else {
+        None
     };
     if args.migrate {
         let Some(old) = existing_baseline.as_ref() else {
@@ -1089,15 +1146,14 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
             println!(
                 "{} no baseline at `{}`; nothing to migrate.",
                 style::yellow("note:"),
-                args.baseline_file.display()
+                baseline_shown
             );
             return Ok(true);
         };
         if old.version >= discipline::baseline::FINGERPRINT_VERSION {
             println!(
                 "`{}` already uses fingerprint version {}; nothing to migrate.",
-                args.baseline_file.display(),
-                old.version
+                baseline_shown, old.version
             );
             return Ok(true);
         }
@@ -1109,7 +1165,7 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
     {
         bail!(
             "`{}` uses fingerprint version 1; run `discipline baseline --migrate` before writing part of it with --suite",
-            args.baseline_file.display()
+            baseline_shown
         );
     }
 
@@ -1141,8 +1197,6 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
 
     let summary = run_checks(&config, args.suite, &ctx)?;
 
-    let baseline_path = git.root().join(&args.baseline_file);
-    let baseline_shown = discipline::baseline::path_for_message(git.root(), &baseline_path);
     let reads = discipline::gitctx::ReadRecorder::new();
     let read_head = reads.head(&git);
 
@@ -1160,7 +1214,7 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
         println!(
             "{} rewrote {} to fingerprint version {}: {} entr{} migrated, {} stale entr{} dropped",
             style::green("ok:"),
-            args.baseline_file.display(),
+            baseline_shown,
             migrated.version,
             report.migrated,
             if report.migrated == 1 { "y" } else { "ies" },
@@ -1244,7 +1298,7 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
             } else {
                 "s"
             },
-            args.baseline_file.display()
+            baseline_shown
         );
         println!("{breakdown}");
         if !baseline_obj.findings.is_empty() {
@@ -1266,7 +1320,7 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
         println!("{breakdown}");
         println!(
             "Run `discipline baseline --write` to record them to {}.",
-            args.baseline_file.display()
+            baseline_shown
         );
         Ok(true)
     }

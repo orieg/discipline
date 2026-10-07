@@ -7,6 +7,7 @@
 use crate::config::DirectivesConfig;
 use crate::could_not_check::{tag, Reason};
 use crate::forge::{self, Forge, ForgeApi};
+use crate::refusals::{PolicyFailure, RefusalKind};
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 
@@ -71,12 +72,13 @@ pub fn judge(
     pull: Option<&PullContext>,
     forge: &dyn Fn() -> Result<Forge, String>,
     api: &dyn ForgeApi,
-) -> Result<Vec<String>> {
+) -> Result<Vec<PolicyFailure>> {
     let mut failures = Vec::new();
     if let Some(max) = cfg.max_inline_overrides {
         if inline_overrides > max {
-            failures.push(format!(
-                "{inline_overrides} inline override(s) applied; `directives.max_inline_overrides` allows {max}"
+            failures.push(PolicyFailure::new(
+                RefusalKind::MaxInlineOverrides,
+                format!("{inline_overrides} inline override(s) applied; `directives.max_inline_overrides` allows {max}"),
             ));
         }
     }
@@ -85,8 +87,9 @@ pub fn judge(
     }
     if let Some(max) = cfg.max_overrides {
         if directive_overrides > max {
-            failures.push(format!(
-                "{directive_overrides} directive override(s) applied; `directives.max_overrides` allows {max}"
+            failures.push(PolicyFailure::new(
+                RefusalKind::MaxOverrides,
+                format!("{directive_overrides} directive override(s) applied; `directives.max_overrides` allows {max}"),
             ));
         }
     }
@@ -134,11 +137,14 @@ pub fn judge(
                     .any(|a| a.eq_ignore_ascii_case(login))
         });
         if !approved {
-            failures.push(format!(
-                "{directive_overrides} directive override(s) await an approving review of {} by one of: {} \
-                 (the author's own approval does not count)",
-                &pull.head_sha[..pull.head_sha.len().min(10)],
-                cfg.allowed_override_actors.join(", ")
+            failures.push(PolicyFailure::new(
+                RefusalKind::ApprovalRequired,
+                format!(
+                    "{directive_overrides} directive override(s) await an approving review of {} by one of: {} \
+                     (the author's own approval does not count)",
+                    &pull.head_sha[..pull.head_sha.len().min(10)],
+                    cfg.allowed_override_actors.join(", ")
+                ),
             ));
         }
     }
@@ -190,7 +196,7 @@ mod tests {
         assert!(judge(&cfg, 1, 0, None, &forge, &none).unwrap().is_empty());
         let over = judge(&cfg, 2, 0, None, &forge, &none).unwrap();
         assert_eq!(over.len(), 1);
-        assert!(over[0].contains("allows 1"), "{over:?}");
+        assert!(over[0].text.contains("allows 1"), "{over:?}");
     }
 
     #[test]
@@ -205,7 +211,7 @@ mod tests {
         let over = judge(&cfg, 0, 2, None, &forge, &none).unwrap();
         assert_eq!(over.len(), 1);
         assert!(
-            over[0].contains(
+            over[0].text.contains(
                 "2 inline override(s) applied; `directives.max_inline_overrides` allows 1"
             ),
             "{over:?}"
@@ -274,7 +280,8 @@ mod tests {
         .unwrap();
         assert!(stands.is_empty(), "{stands:?}");
 
-        let reason = |r: Result<Vec<String>>| crate::could_not_check::classify(&r.unwrap_err()).0;
+        let reason =
+            |r: Result<Vec<PolicyFailure>>| crate::could_not_check::classify(&r.unwrap_err()).0;
         // The forge does not answer for the pull request, or names no author.
         assert_eq!(
             reason(judge(
@@ -324,7 +331,8 @@ mod tests {
             ..Default::default()
         };
         let p = pull();
-        let reason = |r: Result<Vec<String>>| crate::could_not_check::classify(&r.unwrap_err()).0;
+        let reason =
+            |r: Result<Vec<PolicyFailure>>| crate::could_not_check::classify(&r.unwrap_err()).0;
         use crate::could_not_check::Reason;
         // No pull-request payload.
         assert_eq!(

@@ -1,11 +1,11 @@
 //! PHP language pack: tree-sitter AST extraction of tests, assertions, and escape hatches.
 
-use anyhow::{anyhow, Result};
-use tree_sitter::{Node, Parser};
+use anyhow::Result;
+use tree_sitter::Node;
 
 use super::ci_condition::{read_skip, CiVerdict, Grammar};
 use super::functions::{self, FunctionSpec};
-use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
+use super::{AssertVocabulary, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
 /// PHP language pack implementing [`LanguagePack`].
 pub struct PhpPack;
@@ -35,11 +35,12 @@ impl LanguagePack for PhpPack {
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_php::LANGUAGE_PHP.into())
-            .map_err(|e| anyhow!("failed to load the PHP grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
+        let tree = crate::ast::source_text::parse_file_as(
+            &tree_sitter_php::LANGUAGE_PHP.into(),
+            "the PHP",
+            path,
+            src,
+        )?;
         let root = tree.root_node();
 
         let mut extractor = PhpExtractor {
@@ -58,61 +59,9 @@ impl LanguagePack for PhpPack {
 
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
-        extractor.facts.functions = functions::extract(root, src, path, &PHP_FUNCTIONS);
-        super::mocks::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &PHP_MOCKS,
-            &vocab.mock_setup_fns,
-            &vocab.mock_assert_fns,
-        );
-        {
-            let tests = &extractor.facts.tests;
-            let spans: Vec<(usize, usize)> = tests
-                .iter()
-                .map(|t| (t.line, t.end_line.max(t.line)))
-                .collect();
-            let whole_file = functions::is_test_file(path, Some(is_php_test_path))
-                || functions::declared_test_path(path, &vocab.test_paths);
-            let is_test_line =
-                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            (
-                extractor.facts.swallowed,
-                extractor.facts.constant_fallbacks,
-            ) = super::handlers::extract_with_constants(
-                root,
-                src,
-                &PHP_HANDLERS,
-                Some(&PHP_CONSTANTS),
-                &is_test_line,
-            );
-        }
-        super::retries::mark(root, src, &mut extractor.facts.tests, &PHP_RETRIES);
-        if functions::declared_test_path(path, &vocab.test_paths) {
-            for f in &mut extractor.facts.functions {
-                f.is_test = true;
-            }
-        }
-        super::method_checks::count(root, src, &mut extractor.facts, &PHP_RECEIVER_CALLS);
+        PHP_PACK.facts_to_method_checks(root, src, path, vocab, &mut extractor.facts);
         super::expected_exceptions::php_declared(root, src, &mut extractor.facts.tests);
-        super::helper_loops::count(root, src, &mut extractor.facts, &super::helper_loops::PHP);
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &PHP_MOCKS,
-            super::calls::SLEEP_VOCAB,
-            super::calls::sleeps,
-        );
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &PHP_MOCKS,
-            super::calls::TRIVIAL_ASSERT_VOCAB,
-            super::calls::trivial_asserts,
-        );
+        PHP_PACK.facts_from_helper_loops(root, src, vocab, &mut extractor.facts);
         extractor.facts.prose = super::prose::extract(
             root,
             src,
@@ -133,6 +82,20 @@ fn php_fn_is_test(node: Node, src: &str, path: &str) -> bool {
     });
     name.starts_with("test") || attributed || functions::is_test_file(path, Some(is_php_test_path))
 }
+
+/// What the steps every pack shares read of this pack (`PackSpec::shared_facts`).
+const PHP_PACK: super::PackSpec = super::PackSpec {
+    functions: &PHP_FUNCTIONS,
+    own_test_path: Some(is_php_test_path),
+    handlers: &PHP_HANDLERS,
+    constants: Some(&PHP_CONSTANTS),
+    retries: Some(&PHP_RETRIES),
+    receiver_calls: &PHP_RECEIVER_CALLS,
+    helper_loops: &super::helper_loops::PHP,
+    calls: &PHP_MOCKS,
+    vocabs: super::calls::SLEEPS_AND_TRIVIAL_ASSERTS,
+    judged: None,
+};
 
 pub const PHP_FUNCTIONS: FunctionSpec = FunctionSpec {
     // An abstract or interface method has no `body` and is never described.
@@ -265,44 +228,31 @@ const PHP_CLOSURE_KINDS: &[&str] = &[
     "class_declaration",
 ];
 
+/// The comments that suppress a PHP analyser; a comment may open with `#`.
+const PHP_SUPPRESSIONS: super::CommentSuppressions = super::CommentSuppressions {
+    hash_comments: true,
+    markers: &[
+        "@psalm-suppress",
+        "@phpstan-ignore",
+        "phpstan-ignore",
+        "phpcs:ignore",
+        "psalm-suppress",
+    ],
+};
+
 impl<'a> PhpExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
         node.utf8_text(self.src).unwrap_or("")
     }
 
     fn collect_comments_and_escape_hatches(&mut self, node: Node) {
-        let kind = node.kind();
-        if kind == "comment" {
-            let text = self.text(node);
-            let line = node.start_position().row + 1;
-            let trimmed = text
-                .trim_start_matches("//")
-                .trim_start_matches('#')
-                .trim_start_matches("/*")
-                .trim_end_matches("*/")
-                .trim();
-
-            if trimmed.starts_with("@psalm-suppress")
-                || trimmed.starts_with("@phpstan-ignore")
-                || trimmed.starts_with("phpstan-ignore")
-                || trimmed.starts_with("phpcs:ignore")
-                || trimmed.starts_with("psalm-suppress")
-            {
-                self.facts
-                    .escape_hatches
-                    .push(EscapeHatchSite::LinterDisable {
-                        line,
-                        rule: trimmed.to_string(),
-                        snippet: text.to_string(),
-                    });
-            }
-            return;
-        }
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.collect_comments_and_escape_hatches(child);
-        }
+        super::collect_comment_suppressions(
+            node,
+            self.src,
+            &PHP_SUPPRESSIONS,
+            &mut |_, _| true,
+            &mut self.facts.escape_hatches,
+        );
     }
 
     fn visit_root(&mut self, root: Node) {
@@ -333,30 +283,12 @@ impl<'a> PhpExtractor<'a> {
                 PHP_CLOSURE_KINDS,
             );
         }
-        self.helpers.insert(
-            key.clone(),
-            super::HelperFacts {
-                total_asserts: h.total_asserts,
-                strong_asserts: h.strong_asserts,
-                tautologies: h.tautologies,
-                fatal_asserts: h.fatal_asserts,
-                wraps,
-            },
-        );
+        self.helpers
+            .insert(key.clone(), super::HelperFacts::from_scan(&h, wraps));
         let line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
         self.facts.push_helper(
-            super::TestHelperFacts {
-                name: key,
-                line,
-                end_line,
-                total_asserts: h.total_asserts,
-                strong_asserts: h.strong_asserts,
-                tautologies: h.tautologies,
-                fatal_asserts: h.fatal_asserts,
-                helper_checks: 0,
-                equality_exits: 0,
-            },
+            super::TestHelperFacts::from_scan(key, line, end_line, &h),
             calls,
         );
     }
@@ -769,6 +701,30 @@ impl<'a> PhpExtractor<'a> {
                 "toBe" | "toEqual" | "toMatch" | "toContain" | "toHaveCount" => {
                     test_fn.total_asserts += 1;
                     test_fn.strong_asserts += 1;
+                    // `expect($x)->toBe($x)`: the receiver is the `expect` call itself.
+                    // Recorded, and still counted as an assertion: this pack has never
+                    // taken a Pest matcher out of the count for its operands.
+                    if matches!(call_name, "toBe" | "toEqual") && args.len() == 1 {
+                        let subject = node
+                            .child_by_field_name("object")
+                            .filter(|o| {
+                                o.kind() == "function_call_expression"
+                                    && o.child_by_field_name("function")
+                                        .is_some_and(|f| self.text(f) == "expect")
+                            })
+                            .and_then(|o| o.child_by_field_name("arguments"))
+                            .map(|a| self.collect_arguments(a))
+                            .filter(|a| a.len() == 1)
+                            .map(|a| a[0]);
+                        if let Some(subject) = subject {
+                            super::self_comparison::note(
+                                &mut test_fn.equality_operands,
+                                subject,
+                                args[0],
+                                self.src,
+                            );
+                        }
+                    }
                     return;
                 }
                 "toBeTrue" => {
@@ -822,9 +778,26 @@ impl<'a> PhpExtractor<'a> {
                 test_fn.strong_asserts += 1;
                 // Check tautologies: assertEquals($x, $x), assertSame(1, 1)
                 if args.len() >= 2 {
-                    let a0 = self.text(args[0]).trim();
-                    let a1 = self.text(args[1]).trim();
-                    if a0 == a1 {
+                    // The equality assertions are recorded; the same operands under
+                    // another assertion of this list are counted as before.
+                    let same = if matches!(
+                        name,
+                        "assertEquals"
+                            | "assertSame"
+                            | "assertEqualsCanonicalizing"
+                            | "assertEqualsIgnoringCase"
+                            | "assertEqualsWithDelta"
+                    ) {
+                        super::self_comparison::note(
+                            &mut test_fn.equality_operands,
+                            args[0],
+                            args[1],
+                            self.src,
+                        )
+                    } else {
+                        super::self_comparison::same(args[0], args[1], self.src)
+                    };
+                    if same {
                         test_fn.tautologies += 1;
                     }
                 }

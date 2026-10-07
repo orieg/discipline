@@ -17,6 +17,7 @@ pub mod confusables;
 mod confusables_tests;
 pub mod dependency;
 pub mod error_swallowing;
+pub mod harness_tampering;
 pub mod hygiene;
 pub mod instruction_smuggling;
 pub mod integrity;
@@ -656,8 +657,14 @@ pub struct CheckSummary {
     pub planned_gates: Vec<&'static str>,
     /// Run-level refusals that no single gate owns (an exhausted override budget,
     /// overrides awaiting approval). Any entry fails the run.
+    /// Each is written as its sentence ([`crate::refusals::PolicyFailure`]).
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub policy_failures: Vec<String>,
+    pub policy_failures: Vec<crate::refusals::PolicyFailure>,
+    /// Where each hidden directive that was not read is written. Not in the JSON report,
+    /// which carries the gate note naming the directive: this is what the SARIF, JUnit
+    /// and GitLab reports build their entry from ([`crate::refusals::project`]).
+    #[serde(skip)]
+    pub refused_hidden_directives: Vec<crate::tokens::OverrideSource>,
     /// Deprecated configuration keys this run read, one note each. They never fail the run.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub deprecations: Vec<String>,
@@ -1010,6 +1017,7 @@ pub fn run_checks(
             "toolchain-config" => toolchain_config::toolchain_config(ctx),
             "sandbox-config" => sandbox_config::sandbox_config(ctx),
             "stub-bodies" => stub_bodies::stub_bodies(ctx),
+            "harness-tampering" => harness_tampering::harness_tampering(ctx),
             "error-swallowing" => error_swallowing::error_swallowing(ctx),
             "instruction-smuggling" => instruction_smuggling::instruction_smuggling(ctx),
             "build-hooks" => build_hooks::build_hooks(ctx),
@@ -1140,6 +1148,8 @@ pub fn run_checks(
             "error-swallowing"
         } else if note.contains("allow-stub") {
             "stub-bodies"
+        } else if note.contains("allow-harness-tampering") {
+            "harness-tampering"
         } else if note.contains("allow-toolchain-weakening") {
             "toolchain-config"
         } else if note.contains("allow-sandbox-widening") {
@@ -1174,6 +1184,7 @@ pub fn run_checks(
                         | "toolchain-config"
                         | "sandbox-config"
                         | "stub-bodies"
+                        | "harness-tampering"
                         | "error-swallowing"
                         | "instruction-smuggling"
                         | "commit-provenance"
@@ -1314,6 +1325,7 @@ pub fn run_checks(
         },
         outcomes,
         policy_failures: Vec::new(),
+        refused_hidden_directives: Vec::new(),
         deprecations,
         directive_notes: run_directive_notes,
     })
@@ -2058,6 +2070,7 @@ mod tests {
             "suppression-delta",
             "error-swallowing",
             "stub-bodies",
+            "harness-tampering",
             "scope-confinement",
             "ratified-paths",
             "review-threads",
