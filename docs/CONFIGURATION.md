@@ -197,6 +197,9 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.golden-output.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.golden-output.paths` | list | *(8 entries)* | Committed golden/snapshot globs whose edits require a directive |
 | `gates.golden-output.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.harness-tampering.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.harness-tampering.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.harness-tampering.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.ignored-tests.approved_predicates` | list | `[]` | Conditional ignore predicates (e.g. miri) approved by policy |
 | `gates.ignored-tests.ci_skip_severity` | string | *(the gate's `severity`)* | Severity for skips conditioned on CI environment variables (defaults to gate severity) |
 | `gates.ignored-tests.enabled` | boolean | `true` | Whether this gate is active |
@@ -763,6 +766,7 @@ Where a gate's subject is a keyword (`allow-unsafe`, `allow-msrv`, `allow-miri`,
 | `allow-sandbox-widening:` / `discipline:allow(sandbox-config)` / `allow(sandbox-config)` | `sandbox-config` | Setting key path (`permissions.defaultMode`), its last segment, or the file path |
 | `allow-stub:` / `discipline:allow(stub-bodies)` / `allow(stub-bodies)` | `stub-bodies` | Function name, or the file path |
 | `allow-swallow:` / `discipline:allow(error-swallowing)` / `allow(error-swallowing)` | `error-swallowing` | File path, or `path:line` of the handler |
+| `allow-harness-tampering:` | `harness-tampering` | File path, or `path:line` of the finding |
 | `allow-agent-instructions:` / `discipline:allow(instruction-smuggling)` / `allow(instruction-smuggling)` | `instruction-smuggling` | File path (every finding in the file), or `path:line` (the finding on that line only) |
 | `allow-commit-provenance:` / `discipline:allow(commit-provenance)` / `allow(commit-provenance)` | `commit-provenance` | Commit SHA (7 or 40 characters) |
 | `allow-citation-metadata:` / `discipline:allow(citation-metadata)` / `allow(citation-metadata)` | `citation-metadata` | `CITATION.cff` or `.zenodo.json` |
