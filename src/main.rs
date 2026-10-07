@@ -1066,22 +1066,25 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
         GitCtx::open(&base_ref, false)?
     };
     let (config, config_path) = load_config(&args.config, Some(git.root()), None, None)?;
-    let existing_baseline = {
-        let p = git.root().join(&args.baseline_file);
-        if p.exists() {
-            // An unreadable baseline is not an empty one: rewriting it would drop entries.
-            Some({
-                let shown = discipline::baseline::path_for_message(git.root(), &p);
-                discipline::baseline::DisciplineBaseline::load_from_file_named(&p, &shown)
-                    .with_context(|| {
-                        format!(
-                            "existing baseline `{shown}` could not be read; fix or remove it first"
-                        )
-                    })?
-            })
-        } else {
-            None
-        }
+    // How every message of this command names the file: its path in the repository, or
+    // its file name alone when it is outside (the directory is then the runner's).
+    let baseline_path = git.root().join(&args.baseline_file);
+    let baseline_shown = discipline::baseline::path_for_message(git.root(), &baseline_path);
+    let existing_baseline = if baseline_path.exists() {
+        // An unreadable baseline is not an empty one: rewriting it would drop entries.
+        Some(
+            discipline::baseline::DisciplineBaseline::load_from_file_named(
+                &baseline_path,
+                &baseline_shown,
+            )
+            .with_context(|| {
+                format!(
+                    "existing baseline `{baseline_shown}` could not be read; fix or remove it first"
+                )
+            })?,
+        )
+    } else {
+        None
     };
     if args.migrate {
         let Some(old) = existing_baseline.as_ref() else {
@@ -1089,15 +1092,14 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
             println!(
                 "{} no baseline at `{}`; nothing to migrate.",
                 style::yellow("note:"),
-                args.baseline_file.display()
+                baseline_shown
             );
             return Ok(true);
         };
         if old.version >= discipline::baseline::FINGERPRINT_VERSION {
             println!(
                 "`{}` already uses fingerprint version {}; nothing to migrate.",
-                args.baseline_file.display(),
-                old.version
+                baseline_shown, old.version
             );
             return Ok(true);
         }
@@ -1109,7 +1111,7 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
     {
         bail!(
             "`{}` uses fingerprint version 1; run `discipline baseline --migrate` before writing part of it with --suite",
-            args.baseline_file.display()
+            baseline_shown
         );
     }
 
@@ -1141,8 +1143,6 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
 
     let summary = run_checks(&config, args.suite, &ctx)?;
 
-    let baseline_path = git.root().join(&args.baseline_file);
-    let baseline_shown = discipline::baseline::path_for_message(git.root(), &baseline_path);
     let reads = discipline::gitctx::ReadRecorder::new();
     let read_head = reads.head(&git);
 
@@ -1160,7 +1160,7 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
         println!(
             "{} rewrote {} to fingerprint version {}: {} entr{} migrated, {} stale entr{} dropped",
             style::green("ok:"),
-            args.baseline_file.display(),
+            baseline_shown,
             migrated.version,
             report.migrated,
             if report.migrated == 1 { "y" } else { "ies" },
@@ -1244,7 +1244,7 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
             } else {
                 "s"
             },
-            args.baseline_file.display()
+            baseline_shown
         );
         println!("{breakdown}");
         if !baseline_obj.findings.is_empty() {
@@ -1266,7 +1266,7 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
         println!("{breakdown}");
         println!(
             "Run `discipline baseline --write` to record them to {}.",
-            args.baseline_file.display()
+            baseline_shown
         );
         Ok(true)
     }

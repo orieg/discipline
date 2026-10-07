@@ -229,7 +229,7 @@ pub fn replay_schema() -> Value {
                 "required": ["sha", "pr", "subject", "verdict", "blocking_gates", "refused_overrides", "overrides", "actor", "warning_gates", "findings", "directives_from", "skipped_checks"],
                 "properties": {
                     "sha": { "type": "string", "description": "Full commit id of the replayed change" },
-                    "pr": { "type": ["integer", "null"], "minimum": 1, "description": "Pull request number, from the forge or the subject's `(#N)`" },
+                    "pr": { "type": ["integer", "null"], "minimum": 1, "description": "Pull request number, from the forge or from a `(#N)` the subject ends with" },
                     "subject": { "type": "string" },
                     "verdict": { "enum": ["passed", "blocked", "could_not_check"] },
                     "blocking_gates": { "type": "array", "items": { "type": "string" }, "description": "Gates with an `error` finding" },
@@ -253,7 +253,7 @@ pub fn replay_schema() -> Value {
                     "code": { "type": "string", "pattern": "^[a-z0-9-]+/[a-z0-9-]+$", "description": "The finding the override lifted (`gate/code`); absent when the child report did not record it" },
                     "directive": { "type": "string", "description": "The directive's name, as written" },
                     "subject": { "type": "string", "description": "What the override covers: the path, test or dependency the finding named" },
-                    "source": { "type": "string", "description": "Where the directive was read: `PR body` (under replay, the merged pull request's body), `commit <sha>`, `merged pull request #N body` or `inline <file>:<line>`" },
+                    "source": { "type": "string", "description": "Where the directive was read: `PR body` (under replay, the merged pull request's body), `commit <sha>` (the replayed commit, never the scratch commit replay builds), `merged pull request #N body` or `inline <file>:<line>`" },
                     "hidden": { "type": "boolean", "description": "The directive was inside an HTML comment" }
                 }
             },
@@ -429,7 +429,7 @@ pub fn audit_schema() -> Value {
                 "required": ["sha", "pr", "time", "change_index", "subject", "kind", "class", "evidence", "tier", "gate"],
                 "properties": {
                     "sha": text("Full commit id of the change"),
-                    "pr": { "type": ["integer", "null"], "minimum": 1, "description": "Pull request number, from the subject's `(#N)`" },
+                    "pr": { "type": ["integer", "null"], "minimum": 1, "description": "Pull request number, from a `(#N)` the subject ends with" },
                     "time": { "type": "integer", "description": "Commit time, seconds since the Unix epoch" },
                     "change_index": { "type": "integer", "minimum": 0, "description": "The change's position, 0 for the newest audited change" },
                     "subject": text("The change's subject line, as its author wrote it"),
