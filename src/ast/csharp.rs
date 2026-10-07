@@ -224,6 +224,40 @@ impl<'a> CSharpExtractor<'a> {
                             self.extract_assertions_in_body(c, &mut helper_fn, &mut dummy_calls);
                         }
                     }
+<<<<<<< HEAD
+=======
+                    helper_fn.total_asserts += super::count_failure_exits(
+                        child,
+                        self.src,
+                        &["throw_statement", "throw_expression"],
+                        &[],
+                        &["lambda_expression", "local_function_statement"],
+                    );
+                    let facts = super::HelperFacts::from_scan(
+                        &helper_fn,
+                        wrap_body.and_then(|b| {
+                            super::forwarding_wrapper_callee(
+                                b,
+                                &CS_WRAPPER,
+                                &CS_LOCALS,
+                                &dummy_calls,
+                                self.src,
+                            )
+                        }),
+                    );
+                    self.helpers.insert(method_name.to_string(), facts);
+                    let line = child.start_position().row + 1;
+                    let end_line = child.end_position().row + 1;
+                    self.facts.push_helper(
+                        super::TestHelperFacts::from_scan(
+                            method_name.to_string(),
+                            line,
+                            end_line,
+                            &helper_fn,
+                        ),
+                        dummy_calls,
+                    );
+>>>>>>> origin/main
                 }
                 helper_fn.total_asserts += super::count_failure_exits(
                     child,

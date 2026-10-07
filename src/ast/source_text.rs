@@ -188,9 +188,14 @@ pub(crate) fn parse_file_as(
     parse_file(&mut parser, path, src)
 }
 
+<<<<<<< HEAD
 /// The syntax tree of `text` as it stands, within [`step_budget`] and no deeper than
 /// [`TREE_DEPTH_LIMIT`]. The caller has taken out what its grammar must not be given
 /// ([`parse`] does for source text).
+=======
+/// The syntax tree of `text` as it stands, within [`step_budget`]. The caller has taken
+/// out what its grammar must not be given ([`parse`] does for source text).
+>>>>>>> origin/main
 pub(crate) fn parse_within_budget(parser: &mut Parser, text: &[u8]) -> Result<Tree, NoTree> {
     #[cfg(test)]
     let budget = BUDGET_OF_THIS_TEST.with(|b| b.get().unwrap_or(step_budget(text.len())));
