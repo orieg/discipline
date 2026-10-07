@@ -14,8 +14,12 @@ pub fn format_junit(summary: &CheckSummary, fail_on_warnings: bool) -> String {
     let mut out = String::new();
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
 
-    let total_tests = summary.outcomes.len();
-    let mut total_failures = 0;
+    // Policy refusals (`crate::refusals`) are test cases of their own suite, written
+    // only when the run has one.
+    let refusals = crate::refusals::project(summary);
+    let refusal_failures = refusals.iter().filter(|r| r.info.blocks).count();
+    let total_tests = summary.outcomes.len() + refusals.len();
+    let mut total_failures = refusal_failures;
 
     for o in &summary.outcomes {
         // Skipped counts belong to individual testsuite elements
@@ -147,7 +151,44 @@ pub fn format_junit(summary: &CheckSummary, fail_on_warnings: bool) -> String {
         out.push_str("  </testsuite>\n");
     }
 
+    if !refusals.is_empty() {
+        out.push_str(&refusal_suite(&refusals, refusal_failures));
+    }
+
     out.push_str("</testsuites>\n");
+    out
+}
+
+/// The `policy` test suite: one test case per refusal, named by its code and its place.
+/// A refusal that fails the run is a failed case whatever `--fail-on-warnings` says; one
+/// that does not is a passing case with the refusal on `system-err`. Each carries the
+/// registry's fixed wording and where the refusal is, nothing else.
+fn refusal_suite(refusals: &[crate::refusals::Projection], failures: usize) -> String {
+    let suite = crate::refusals::NAMESPACE;
+    let mut out = format!(
+        "  <testsuite name=\"{suite}\" tests=\"{}\" failures=\"{failures}\" errors=\"0\" skipped=\"0\" time=\"0.0\">\n",
+        refusals.len()
+    );
+    for r in refusals {
+        let place = escape_xml(&r.place());
+        let title = escape_xml(r.info.title);
+        let message = escape_xml(r.info.message);
+        out.push_str(&format!(
+            "    <testcase name=\"{} [{place}]\" classname=\"discipline.{suite}\" time=\"0.0\">\n",
+            r.info.code
+        ));
+        if r.info.blocks {
+            out.push_str(&format!(
+                "      <failure message=\"{title}\" type=\"error\">[{place}] {message}</failure>\n"
+            ));
+        } else {
+            out.push_str(&format!(
+                "      <system-err>[note] {title}: [{place}] {message}</system-err>\n"
+            ));
+        }
+        out.push_str("    </testcase>\n");
+    }
+    out.push_str("  </testsuite>\n");
     out
 }
 
@@ -214,6 +255,7 @@ mod tests {
             ],
             planned_gates: Vec::new(),
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
@@ -265,6 +307,7 @@ mod tests {
             }],
             planned_gates: Vec::new(),
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
@@ -340,6 +383,7 @@ mod tests {
             }],
             planned_gates: Vec::new(),
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),

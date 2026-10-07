@@ -158,6 +158,7 @@ fn test_cross_format_redaction_pins_sentinel_exclusion() {
         outcomes: vec![shell_outcome, pii_outcome],
         planned_gates: Vec::new(),
         policy_failures: Vec::new(),
+        refused_hidden_directives: Vec::new(),
         deprecations: Vec::new(),
         directive_notes: Vec::new(),
         unused_directives: Vec::new(),
@@ -314,6 +315,71 @@ fn test_live_repository_cross_format_redaction_pins_sentinel_exclusion() {
                 "SECURITY VIOLATION: sentinel `{sentinel}` was leaked in stderr for format `{fmt_str}`!\nStderr:\n{}",
                 run.stderr
             );
+        }
+    }
+}
+
+/// A policy refusal's entry in the SARIF, JUnit and GitLab reports is a rule id, a place
+/// and fixed wording (`src/refusals.rs`). The sentence the terminal and the JSON report
+/// print can quote a reviewer's login and a commit; a hidden directive that was not read
+/// has a name, a subject and a reason. None of it reaches those three reports, and the
+/// terminal and JSON reports say what they said before.
+#[test]
+fn a_policy_refusal_reaches_sarif_junit_and_gitlab_without_the_text_it_quotes() {
+    use discipline::refusals::{PolicyFailure, RefusalKind};
+    use discipline::tokens::OverrideSource;
+    const QUOTED: &str = "REFUSAL_SENTENCE_SENTINEL";
+    let summary = CheckSummary {
+        schema_version: discipline::output_schema::REPORT_SCHEMA_VERSION,
+        could_not_check: None,
+        base: "origin/main".to_string(),
+        errors: 0,
+        warnings: 0,
+        notes: 0,
+        overrides: 0,
+        baselined: 0,
+        outcomes: vec![GateOutcome::new("agents-md")],
+        planned_gates: Vec::new(),
+        policy_failures: vec![
+            PolicyFailure::new(RefusalKind::MaxOverrides, QUOTED),
+            PolicyFailure::new(RefusalKind::MaxInlineOverrides, QUOTED),
+            PolicyFailure::new(RefusalKind::ApprovalRequired, QUOTED),
+        ],
+        refused_hidden_directives: vec![OverrideSource::PrBody],
+        deprecations: Vec::new(),
+        directive_notes: Vec::new(),
+        unused_directives: Vec::new(),
+    };
+    for format in OutputFormat::value_variants() {
+        assert_format_exhaustiveness(*format);
+        let rendered = format_report_content(&summary, *format, false, false).unwrap();
+        let quotes = rendered.contains(QUOTED);
+        match format {
+            OutputFormat::Junit | OutputFormat::Sarif | OutputFormat::Gitlab => {
+                assert!(
+                    !quotes,
+                    "{format:?} quotes a refusal's sentence:\n{rendered}"
+                );
+                for code in [
+                    "max-overrides-exceeded",
+                    "max-inline-overrides-exceeded",
+                    "approval-required",
+                    "hidden-directive-refused",
+                ] {
+                    assert!(
+                        rendered.contains(code),
+                        "{format:?} lacks {code}:\n{rendered}"
+                    );
+                }
+            }
+            OutputFormat::Terminal | OutputFormat::GithubSummary | OutputFormat::Json => {
+                assert!(
+                    quotes,
+                    "{format:?} no longer prints the refusal:\n{rendered}"
+                );
+            }
+            // The agent prompt lists findings to repair; it never carried a refusal.
+            OutputFormat::AgentPrompt => assert!(!quotes, "{rendered}"),
         }
     }
 }

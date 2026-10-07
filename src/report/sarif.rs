@@ -83,7 +83,18 @@ pub fn format_sarif(summary: &CheckSummary) -> Value {
         results.push(result);
     }
 
-    // 3. Build invocations and overrides data
+    // 3. One result per policy refusal (`crate::refusals`), and one rule per kind of
+    //    refusal the run has. The result carries the rule id, where the refusal is and
+    //    the registry's fixed wording: nothing the run quotes, nothing of a directive.
+    let refusals = crate::refusals::project(summary);
+    for info in crate::refusals::REFUSALS {
+        if refusals.iter().any(|r| r.info.kind == info.kind) {
+            rules.push(refusal_rule(info));
+        }
+    }
+    results.extend(refusals.iter().map(refusal_result));
+
+    // 4. Build invocations and overrides data
     let mut overrides = Vec::new();
     let mut total_examined = 0;
     let mut total_overrides = 0;
@@ -134,6 +145,56 @@ pub fn format_sarif(summary: &CheckSummary) -> Value {
                 "results": results
             }
         ]
+    })
+}
+
+/// The rule of one kind of refusal, with the fields a gate's rule has.
+fn refusal_rule(info: &crate::refusals::RefusalInfo) -> Value {
+    let id = info.rule_id();
+    json!({
+        "id": id,
+        "name": to_pascal_case(&id),
+        "shortDescription": {
+            "text": info.title
+        },
+        "fullDescription": {
+            "text": info.message
+        },
+        "helpUri": "https://orieg.github.io/discipline/configuration/#policy-refusals",
+        "properties": {
+            "tags": [crate::refusals::NAMESPACE],
+            "configurationKey": info.key,
+            "failsRun": info.blocks
+        }
+    })
+}
+
+/// A refusal's SARIF level: `error` for one that fails the run, `note` for one that
+/// does not. `--fail-on-warnings` changes neither.
+pub fn refusal_level(info: &crate::refusals::RefusalInfo) -> &'static str {
+    if info.blocks {
+        "error"
+    } else {
+        "note"
+    }
+}
+
+fn refusal_result(r: &crate::refusals::Projection) -> Value {
+    let mut location = json!({
+        "logicalLocations": [{ "fullyQualifiedName": r.place() }]
+    });
+    if let Some(file) = r.file() {
+        location["physicalLocation"] = json!({
+            "artifactLocation": { "uri": sanitize_sarif_uri(file) },
+            "region": { "startLine": 1 }
+        });
+    }
+    json!({
+        "ruleId": r.info.rule_id(),
+        "level": refusal_level(r.info),
+        "message": { "text": r.info.message },
+        "partialFingerprints": { "disciplineFingerprint/v2": r.fingerprint() },
+        "locations": [location]
     })
 }
 
@@ -203,6 +264,7 @@ mod tests {
             }],
             planned_gates: Vec::new(),
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
@@ -261,6 +323,7 @@ mod tests {
             }],
             planned_gates: Vec::new(),
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),

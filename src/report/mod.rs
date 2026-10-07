@@ -219,7 +219,7 @@ fn render_terminal_to_writer<W: Write>(
         writeln!(
             w,
             "{}",
-            style::red(&format!("failure: {}", text::terminal_line(failure)))
+            style::red(&format!("failure: {}", text::terminal_line(&failure.text)))
         )?;
     }
     for note in &summary.directive_notes {
@@ -314,7 +314,7 @@ pub fn render_step_summary_to_writer(
         text::code_span(&summary.base)
     )?;
     for failure in &summary.policy_failures {
-        writeln!(file, "**Refused:** {}\n", text::markdown(failure))?;
+        writeln!(file, "**Refused:** {}\n", text::markdown(&failure.text))?;
     }
     for note in &summary.directive_notes {
         writeln!(file, "**Directives:** {}\n", text::markdown(note))?;
@@ -740,6 +740,7 @@ mod tests {
             outcomes: vec![o],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
@@ -770,7 +771,12 @@ mod tests {
             },
             hidden: false,
         });
-        summary.policy_failures.push(text.into());
+        summary
+            .policy_failures
+            .push(crate::refusals::PolicyFailure::new(
+                crate::refusals::RefusalKind::MaxOverrides,
+                text,
+            ));
         summary.directive_notes.push(text.into());
         summary.deprecations.push(text.into());
         summary.unused_directives.push(UnusedDirective {
@@ -916,6 +922,7 @@ mod tests {
             outcomes: vec![o],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
@@ -1060,6 +1067,7 @@ mod tests {
             outcomes: vec![o1, o2, o3, o4, o5],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
@@ -1126,6 +1134,7 @@ mod tests {
             outcomes: vec![o1, o2, o3],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
@@ -1227,6 +1236,7 @@ mod tests {
             outcomes: vec![],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: vec!["`gates.x.old` is deprecated".into()],
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
@@ -1284,6 +1294,7 @@ mod tests {
             outcomes: vec![o1],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
@@ -1320,6 +1331,7 @@ mod tests {
             outcomes: vec![o1, o2],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),
@@ -1362,6 +1374,7 @@ mod tests {
             outcomes: vec![o1],
             planned_gates: vec![],
             policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),

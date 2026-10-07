@@ -503,6 +503,7 @@ fn emit_fatal_reports(args: &CheckArgs, is_gitlab: bool, base: &str, err: &anyho
             .collect(),
         outcomes,
         policy_failures: Vec::new(),
+        refused_hidden_directives: Vec::new(),
         deprecations: Vec::new(),
         directive_notes: Vec::new(),
         unused_directives: Vec::new(),
@@ -727,12 +728,14 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
     // pull request each pushed commit arrived through is the review record that approved
     // its directives. A squash or rebase merge drops it from the commit message.
     let merged = merged_pull_bodies(args, &config, &git, &commits, raw_pr_body.is_some())?;
-    let (directives, mut directive_notes) = discipline::tokens::extract_directives_with_merged(
+    let read = discipline::tokens::read_directives(
         raw_pr_body.as_deref(),
         &commits,
         &merged.bodies,
         &config,
     );
+    let (directives, mut directive_notes, refused_hidden_directives) =
+        (read.active, read.notes, read.refused_hidden);
     directive_notes.extend(merged.notes.iter().cloned());
 
     let had_pr_body = raw_pr_body.is_some();
@@ -868,6 +871,7 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
         }),
         _ => None,
     });
+    summary.refused_hidden_directives = refused_hidden_directives;
     summary.policy_failures = discipline::override_policy::judge(
         &config.directives,
         summary.directive_overrides(),
