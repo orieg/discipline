@@ -724,7 +724,7 @@ impl<'a> KotlinExtractor<'a> {
                 if parts.len() == 3 && parts[1].kind() == "identifier" {
                     let op = self.text(parts[1]);
                     if op.starts_with("should") {
-                        self.count_matcher(op, self.text(parts[0]), self.text(parts[2]), test_fn);
+                        self.count_matcher(op, Some(parts[0]), Some(parts[2]), test_fn);
                     }
                 }
             }
@@ -744,14 +744,20 @@ impl<'a> KotlinExtractor<'a> {
         }
     }
 
-    fn count_matcher(&self, op: &str, lhs: &str, rhs: &str, test_fn: &mut TestFn) {
+    fn count_matcher(&self, op: &str, lhs: Option<Node>, rhs: Option<Node>, test_fn: &mut TestFn) {
         test_fn.total_asserts += 1;
         if WEAK_MATCHERS.contains(&op) {
             return;
         }
-        if matches!(op, "shouldBe" | "shouldBeEqual" | "shouldBeSameInstanceAs")
-            && lhs.trim() == rhs.trim()
-        {
+        let same = match (lhs, rhs) {
+            (Some(l), Some(r))
+                if matches!(op, "shouldBe" | "shouldBeEqual" | "shouldBeSameInstanceAs") =>
+            {
+                super::self_comparison::note(&mut test_fn.equality_operands, l, r, self.src)
+            }
+            _ => false,
+        };
+        if same {
             test_fn.tautologies += 1;
         } else {
             test_fn.strong_asserts += 1;
@@ -795,7 +801,14 @@ impl<'a> KotlinExtractor<'a> {
             }
             "assertEquals" | "assertSame" | "assertContentEquals" => {
                 test_fn.total_asserts += 1;
-                if args.len() >= 2 && arg(0) == arg(1) {
+                if args.len() >= 2
+                    && super::self_comparison::note(
+                        &mut test_fn.equality_operands,
+                        args[0],
+                        args[1],
+                        self.src,
+                    )
+                {
                     test_fn.tautologies += 1;
                 } else {
                     test_fn.strong_asserts += 1;
@@ -833,12 +846,8 @@ impl<'a> KotlinExtractor<'a> {
             }
             other if other.starts_with("should") => {
                 // `x.shouldBe(y)`: the receiver is the navigation's first part.
-                let receiver = node
-                    .named_child(0)
-                    .and_then(|c| c.named_child(0))
-                    .map(|r| self.text(r))
-                    .unwrap_or("");
-                self.count_matcher(other, receiver, arg(0), test_fn);
+                let receiver = node.named_child(0).and_then(|c| c.named_child(0));
+                self.count_matcher(other, receiver, args.first().copied(), test_fn);
             }
             other => {
                 let custom = other.starts_with("assert")

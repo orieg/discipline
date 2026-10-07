@@ -1134,9 +1134,22 @@ impl<'a> CCppExtractor<'a> {
             test_fn.strong_asserts += 1;
             // Check equality tautology if 2 args
             if (fn_name.contains("_EQ") || fn_name.contains("_NE")) && args.len() >= 2 {
-                let left = self.text(args[0]).trim();
-                let right = self.text(args[1]).trim();
-                if !left.is_empty() && left == right {
+                // `EXPECT_EQ(a, a)` is recorded; `_NE` and the floating-point forms
+                // (`_DOUBLE_EQ`, `_FLOAT_EQ`) are counted as before.
+                let equality = fn_name.ends_with("_EQ")
+                    && !fn_name.contains("_DOUBLE_")
+                    && !fn_name.contains("_FLOAT_");
+                let same = if equality {
+                    super::self_comparison::note(
+                        &mut test_fn.equality_operands,
+                        args[0],
+                        args[1],
+                        self.src,
+                    )
+                } else {
+                    super::self_comparison::same(args[0], args[1], self.src)
+                };
+                if same {
                     test_fn.tautologies += 1;
                 }
             }
@@ -1171,7 +1184,9 @@ impl<'a> CCppExtractor<'a> {
             if let Some(arg) = args.first() {
                 if self.contains_comparison(*arg) {
                     test_fn.strong_asserts += 1;
-                    if self.is_tautology_comparison(*arg) {
+                    if self.note_equality_condition(*arg, test_fn)
+                        || self.is_tautology_comparison(*arg)
+                    {
                         test_fn.tautologies += 1;
                     }
                 } else if self.is_literal_true(*arg) {
@@ -1193,7 +1208,8 @@ impl<'a> CCppExtractor<'a> {
         if let Some(arg) = args.first() {
             if self.contains_comparison(*arg) {
                 test_fn.strong_asserts += 1;
-                if self.is_tautology_comparison(*arg) {
+                if self.note_equality_condition(*arg, test_fn) || self.is_tautology_comparison(*arg)
+                {
                     test_fn.tautologies += 1;
                 }
             } else if self.is_literal_true(*arg) {
@@ -1216,22 +1232,44 @@ impl<'a> CCppExtractor<'a> {
         if is_strong {
             test_fn.strong_asserts += 1;
             if args.len() >= 2 {
-                let left = self.text(args[0]).trim();
-                let right = self.text(args[1]).trim();
-                if !left.is_empty() && left == right {
+                // `TEST_ASSERT_EQUAL(a, a)` is recorded; a not-equal or match form with
+                // the same operands is counted as before.
+                let equality = (fn_name.contains("EQUAL") || fn_name.contains("_EQ"))
+                    && !fn_name.contains("NOT")
+                    && !fn_name.contains("_NE");
+                let same = if equality {
+                    super::self_comparison::note(
+                        &mut test_fn.equality_operands,
+                        args[0],
+                        args[1],
+                        self.src,
+                    )
+                } else {
+                    super::self_comparison::same(args[0], args[1], self.src)
+                };
+                if same {
                     test_fn.tautologies += 1;
                 }
             }
         } else if let Some(arg) = args.first() {
             if self.contains_comparison(*arg) {
                 test_fn.strong_asserts += 1;
-                if self.is_tautology_comparison(*arg) {
+                if self.note_equality_condition(*arg, test_fn) || self.is_tautology_comparison(*arg)
+                {
                     test_fn.tautologies += 1;
                 }
             } else if self.is_literal_true(*arg) {
                 test_fn.tautologies += 1;
             }
         }
+    }
+
+    /// `REQUIRE(a == a)`, `assert(a == a)`: a condition that is one `==` comparison is
+    /// recorded when its sides are the same tokens (`self_comparison`).
+    fn note_equality_condition(&self, cond: Node, test_fn: &mut TestFn) -> bool {
+        super::self_comparison::equality_sides(cond, self.src).is_some_and(|(left, right)| {
+            super::self_comparison::note(&mut test_fn.equality_operands, left, right, self.src)
+        })
     }
 
     fn contains_comparison(&self, node: Node) -> bool {

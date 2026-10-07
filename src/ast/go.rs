@@ -842,7 +842,19 @@ impl<'a> GoExtractor<'a> {
         if fatal {
             test_fn.fatal_asserts += 1;
         }
-        let same = args.len() == 3 && self.text(args[0]).trim() == self.text(args[2]).trim();
+        // `Equals` and `DeepEquals` are the equality checkers whose identical operands
+        // are recorded; the same operands under another checker are counted only.
+        let same = args.len() == 3
+            && if matches!(checker, "Equals" | "DeepEquals") {
+                super::self_comparison::note(
+                    &mut test_fn.equality_operands,
+                    args[0],
+                    args[2],
+                    self.src,
+                )
+            } else {
+                super::self_comparison::same(args[0], args[2], self.src)
+            };
         if same {
             test_fn.tautologies += 1;
         } else if !GOCHECK_WEAK_CHECKERS.contains(&checker) {
@@ -1297,8 +1309,17 @@ impl<'a> GoExtractor<'a> {
             }
             "Equal" | "Same" => {
                 test_fn.total_asserts += 1;
-                match (value(0), value(1)) {
-                    (Some(a), Some(b)) if a == b => test_fn.tautologies += 1,
+                match (args.get(first), args.get(first + 1)) {
+                    (Some(a), Some(b))
+                        if super::self_comparison::note(
+                            &mut test_fn.equality_operands,
+                            *a,
+                            *b,
+                            self.src,
+                        ) =>
+                    {
+                        test_fn.tautologies += 1
+                    }
                     _ => test_fn.strong_asserts += 1,
                 }
             }

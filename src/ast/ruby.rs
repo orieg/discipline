@@ -655,7 +655,12 @@ impl<'a> RubyExtractor<'a> {
                     let matcher_args = self.get_call_arguments(*matcher_node);
                     let expect_args = self.get_call_arguments(expect_call);
                     if let (Some(a), Some(b)) = (expect_args.first(), matcher_args.first()) {
-                        if self.text(*a).trim() == self.text(*b).trim() {
+                        if super::self_comparison::note(
+                            &mut test_fn.equality_operands,
+                            *a,
+                            *b,
+                            self.src,
+                        ) {
                             test_fn.tautologies += 1;
                         }
                     }
@@ -712,7 +717,18 @@ impl<'a> RubyExtractor<'a> {
             ) {
                 let args = self.get_call_arguments(call_node);
                 if let (Some(a), Some(b)) = (args.first(), args.get(1)) {
-                    if self.text(*a).trim() == self.text(*b).trim() {
+                    // `refute_equal x, x` is counted as before and is not an equality.
+                    let same = if method_name.starts_with("assert") {
+                        super::self_comparison::note(
+                            &mut test_fn.equality_operands,
+                            *a,
+                            *b,
+                            self.src,
+                        )
+                    } else {
+                        super::self_comparison::same(*a, *b, self.src)
+                    };
+                    if same {
                         test_fn.tautologies += 1;
                     }
                 }

@@ -700,7 +700,7 @@ fn swallows() -> Vec<Swallow> {
         Swallow {
             name: "javascript",
             handler: |a| format!("  try {{\n    {a}\n  }} catch (e) {{}}\n"),
-            tautology: "expect(1).toBe(1);",
+            tautology: "assert(true);",
             one: "expect(g()).toBe(2);",
             two_on_a_line: "expect(g()).toBe(2); expect(h()).toBe(3);",
         },

@@ -80,7 +80,7 @@ Discipline stands between a change and the branch it merges into. This section s
 4. The forge reports authors, edits and links truthfully. When it fails to (a closing reference it did not link, #350), discipline refuses rather than guesses.
 
 **Residual risks: what an attacker in this model can still do.**
-- A weakening the AST gates do not model (a rewritten test with the same assertion count, a workflow rewritten in a form `ci-integrity` does not read, what a GitLab `include:` brings in; §10).
+- A weakening the AST gates do not model (a rewritten test with the same assertion count, a workflow rewritten in a form `ci-integrity` does not read, what a GitLab `include:` brings in; §10). One rewrite with the same count is caught in its exact form: an equality assertion made to compare an expression with itself (`assert_eq!(y, y)`, `expect(x).toBe(x)`) is reported by `vacuous-tests` in a new test and by `assertion-reduction` in a changed one, as a warning ([GATES.md](GATES.md#self-comparison-assertions)). The detector compares tokens and follows no value, so it stops a careless rewrite and not an evasive one. Still not caught: two names bound to one value (`let b = a; assert_eq!(a, b)`), a copy compared with its source (`y.clone()`), the same call on both sides, an assertion a macro expands to, an assertion whose operands never reach the code under test, and a self-comparison kept beside a real comparison of the same operand. Held-out tests and review are the control for those.
 - Every waiver the policy allows, on the record. `audit` shows them; it does not undo them.
 - With the owner's credentials: ratify, approve, edit a pull-request body after the merge (reported on GitHub only), and merge.
 - Say which agent made a change. `discipline audit` reports a commit's agent marker as `claimed` and an agent login (with `--forge`) as `agent-login`, and a change with neither as `no-record`, never as a person's; a record an agent writes about itself is a claim, not a proof (Phase 15 Step 7).
@@ -396,7 +396,7 @@ From 1.0, a `stable` surface below changes incompatibly only in a new major vers
 ### Fact Representation
 
 Tree-sitter AST extraction translates each source file into one `ParsedFileFacts` of language-neutral fact structures. A pack declares which facts it fills (`LanguagePack::supplies(Fact)`); a gate that needs a fact a pack does not supply names the file instead of passing it.
-- `TestFn`: Qualified name, line span, assertion counts (total, strong, tautological, fatal, trivial), skip state (`ignored`, `conditional_ignore`), expected panic (`should_panic`), mock setups and verifications, retries, sleeps, `helper_checks` (same-file helpers that assert) and numeric `bounds` inside assertions.
+- `TestFn`: Qualified name, line span, assertion counts (total, strong, tautological, fatal, trivial), skip state (`ignored`, `conditional_ignore`), expected panic (`should_panic`), mock setups and verifications, retries, sleeps, `helper_checks` (same-file helpers that assert), numeric `bounds` inside assertions, and `equality_operands` (which equality assertions compare an operand with itself, by line, and which operands are compared with another).
 - `UnsafeSite`: Line number, block kind, documentation status (`documented`).
 - `escape_hatches`, `functions` (bodies, for stubs), `swallowed` (error handlers and discarded results outside tests), `prose` (comments, docstrings, string literals) and `budgets` (testing-effort settings).
 - `has_parse_errors`: Tracks whether unparseable syntax was encountered.
@@ -418,7 +418,7 @@ Assertions are classified into two levels:
 - **Weak:** General truthiness (`assert!`, `toBeTruthy`, `.unwrap()`, `.expect()`, `?` in fallible tests).
 
 **Tautology Filtering:** Tautological assertions are deducted from effective assertion counts:
-- Verbatim equality: `assert_eq!(x, x)`.
+- Verbatim equality: `assert_eq!(x, x)`. The two operands are compared as tokens read from the syntax tree (`src/ast/self_comparison.rs`): comments, white space and parentheses around a whole operand do not make them differ. Each such assertion is recorded on its test with its line, which is what the two self-comparison findings report (GATES.md, "Self-comparison assertions").
 - Constant expression tautologies: `assert!(true)`, `assert!(1 == 1)`, `assert!(1 + 1 > 0)`, `assert_ne!(1, 2)`.
 
 ---

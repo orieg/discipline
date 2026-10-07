@@ -95,12 +95,14 @@ findings! {
     ASSERTIONS_REDUCED = ["assertion-reduction"], "assertions-reduced", "Assertion Count Decreased In Existing Test", Was("Assertion Reduction In Existing Test");
     TEST_CASES_REDUCED = ["assertion-reduction"], "test-cases-reduced", "Test Cases Reduced In Parametrized Test", Same;
     TEST_HELPER_WEAKENED = ["assertion-reduction"], "test-helper-weakened", "Test Helper Function Weakened", Same;
+    SELF_COMPARISON_ASSERTION_INTRODUCED = ["assertion-reduction"], "self-comparison-assertion-introduced", "Self-Comparison Assertion Introduced In Existing Test", Same;
 
     // vacuous-tests
     ASSERTS_ONLY_ON_MOCKS = ["vacuous-tests"], "asserts-only-on-mocks", "Test Asserts Only On Mocks", Same;
     ASSERTS_ONLY_TRIVIAL = ["vacuous-tests"], "asserts-only-trivial-properties", "Test Asserts Only Trivial Properties", Same;
     VACUOUS_TEST_ADDED = ["vacuous-tests"], "vacuous-test-added", "Vacuous Test Added", Same;
     ASSERTION_DENSITY_BELOW_FLOOR = ["vacuous-tests"], "assertion-density-below-floor", "Insufficient Assertion Density", Same;
+    SELF_COMPARISON_ASSERTION_ADDED = ["vacuous-tests"], "self-comparison-assertion-added", "Self-Comparison Assertion In New Test", Same;
 
     // ignored-tests
     SKIP_JUSTIFICATION_INSUFFICIENT = ["ignored-tests"], "skip-justification-insufficient", "Skip Justification Insufficient", Was("Unannotated Skip Justification");

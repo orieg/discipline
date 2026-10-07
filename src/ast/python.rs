@@ -1241,7 +1241,7 @@ impl<'a> PythonExtractor<'a> {
                     .find(|c| c.kind() != "assert" && c.kind() != "," && c.kind() != "comment");
 
                 if let Some(cond) = condition {
-                    if self.is_tautological(cond) {
+                    if self.is_tautological(cond, test) {
                         test.tautologies += 1;
                     }
                     if self.is_strong_assertion(cond) {
@@ -1297,7 +1297,7 @@ impl<'a> PythonExtractor<'a> {
                         if self.is_strong_unittest_assert(func_name) {
                             test.strong_asserts += 1;
                         }
-                        if self.is_tautological_call(node, func_name) {
+                        if self.is_tautological_call(node, func_name, test) {
                             test.tautologies += 1;
                         }
                     } else if func_name == "pytest.skip"
@@ -1390,10 +1390,16 @@ impl<'a> PythonExtractor<'a> {
         )
     }
 
-    fn is_tautological(&self, cond: Node) -> bool {
+    fn is_tautological(&self, cond: Node, test: &mut TestFn) -> bool {
         let text = self.text(cond).trim();
         if text == "True" || text == "1" || text == "\"\"" || text == "''" {
             return true;
+        }
+        // `assert x == x` / `assert x is x`: the whole condition is one comparison.
+        if let Some((left, right)) = super::self_comparison::equality_sides(cond, self.src) {
+            if super::self_comparison::note(&mut test.equality_operands, left, right, self.src) {
+                return true;
+            }
         }
         if cond.kind() == "comparison_operator" {
             let mut cursor = cond.walk();
@@ -1410,7 +1416,7 @@ impl<'a> PythonExtractor<'a> {
         false
     }
 
-    fn is_tautological_call(&self, call: Node, func_name: &str) -> bool {
+    fn is_tautological_call(&self, call: Node, func_name: &str, test: &mut TestFn) -> bool {
         if let Some(args) = call.child_by_field_name("arguments") {
             let mut cursor = args.walk();
             let arg_nodes: Vec<_> = args
@@ -1430,12 +1436,14 @@ impl<'a> PythonExtractor<'a> {
             }
             if (func_name == "self.assertEqual" || func_name == "self.assertIs")
                 && arg_nodes.len() >= 2
+                && super::self_comparison::note(
+                    &mut test.equality_operands,
+                    arg_nodes[0],
+                    arg_nodes[1],
+                    self.src,
+                )
             {
-                let a = self.text(arg_nodes[0]).trim();
-                let b = self.text(arg_nodes[1]).trim();
-                if a == b && !a.is_empty() {
-                    return true;
-                }
+                return true;
             }
         }
         false
