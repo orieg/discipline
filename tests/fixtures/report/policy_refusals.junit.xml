@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="discipline" tests="8" failures="3" errors="0" time="0.0">
+  <testsuite name="agent-guard" tests="1" failures="0" errors="0" skipped="0" time="0.0">
+    <properties>
+      <property name="examined" value="1"/>
+      <property name="overrides" value="0"/>
+      <property name="agents-md:examined" value="1"/>
+    </properties>
+    <testcase name="agents-md" classname="discipline.agent-guard" time="0.0">
+      <system-out>examined: 1; overrides: 0</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="policy" tests="7" failures="3" errors="0" skipped="0" time="0.0">
+    <testcase name="max-inline-overrides-exceeded [directives.max_inline_overrides]" classname="discipline.policy" time="0.0">
+      <failure message="Inline Override Budget Exceeded" type="error">[directives.max_inline_overrides] The change applies more inline overrides than `directives.max_inline_overrides` allows, so the run is refused. The counts are in the JSON report (`policy_failures`).</failure>
+    </testcase>
+    <testcase name="max-overrides-exceeded [directives.max_overrides]" classname="discipline.policy" time="0.0">
+      <failure message="Directive Override Budget Exceeded" type="error">[directives.max_overrides] The change applies more directive overrides than `directives.max_overrides` allows, so the run is refused. The counts are in the JSON report (`policy_failures`).</failure>
+    </testcase>
+    <testcase name="approval-required [directives.require_approval]" classname="discipline.policy" time="0.0">
+      <failure message="Directive Overrides Await Approval" type="error">[directives.require_approval] The change applies directive overrides under `directives.require_approval`, and its checked head has no approving review from a reviewer `directives.allowed_override_actors` lists (the author&apos;s own approval does not count), so the run is refused. The detail is in the JSON report (`policy_failures`).</failure>
+    </testcase>
+    <testcase name="hidden-directive-refused [PR body]" classname="discipline.policy" time="0.0">
+      <system-err>[note] Hidden Directive Not Read: [PR body] A directive written where the rendered text does not show it was not read (`allow_hidden` is false). It lifts no finding; a finding it was written for is reported by its gate.</system-err>
+    </testcase>
+    <testcase name="hidden-directive-refused [commit 0123456789abcdef0123456789abcdef01234567]" classname="discipline.policy" time="0.0">
+      <system-err>[note] Hidden Directive Not Read: [commit 0123456789abcdef0123456789abcdef01234567] A directive written where the rendered text does not show it was not read (`allow_hidden` is false). It lifts no finding; a finding it was written for is reported by its gate.</system-err>
+    </testcase>
+    <testcase name="hidden-directive-refused [PR body, hidden directive 2]" classname="discipline.policy" time="0.0">
+      <system-err>[note] Hidden Directive Not Read: [PR body, hidden directive 2] A directive written where the rendered text does not show it was not read (`allow_hidden` is false). It lifts no finding; a finding it was written for is reported by its gate.</system-err>
+    </testcase>
+    <testcase name="hidden-directive-refused [merged pull request #7 body]" classname="discipline.policy" time="0.0">
+      <system-err>[note] Hidden Directive Not Read: [merged pull request #7 body] A directive written where the rendered text does not show it was not read (`allow_hidden` is false). It lifts no finding; a finding it was written for is reported by its gate.</system-err>
+    </testcase>
+  </testsuite>
+</testsuites>
+
