@@ -6352,6 +6352,295 @@ test tests::c: test
         },
     ),
     (
+        "test-floor: Jest and Vitest with no configuration, patterns that match nothing, and configurations Jest refuses",
+        || {
+            use crate::ast::runner_collection::{
+                check_runner_collected, RunnerCollectionRules, RunnerCollectionStatus,
+            };
+            use crate::ast::AssertVocabulary;
+
+            let tree = |files: &[(&str, &str)]| {
+                let tracked: Vec<String> = files.iter().map(|(name, _)| name.to_string()).collect();
+                AssertVocabulary {
+                    runner_rules: RunnerCollectionRules::from_tree(
+                        |p| {
+                            files
+                                .iter()
+                                .find(|(name, _)| *name == p)
+                                .map(|(_, content)| content.to_string())
+                        },
+                        &tracked,
+                    ),
+                    ..Default::default()
+                }
+            };
+            let unknown = |path: &str, vocab: &AssertVocabulary, part: &str| {
+                matches!(
+                    check_runner_collected(path, vocab),
+                    RunnerCollectionStatus::Unknown(reason) if reason.contains(part)
+                )
+            };
+            let collected = |path: &str, vocab: &AssertVocabulary| {
+                check_runner_collected(path, vocab) == RunnerCollectionStatus::Collected
+            };
+            let left_out = |path: &str, vocab: &AssertVocabulary| {
+                check_runner_collected(path, vocab) == RunnerCollectionStatus::NotCollected
+            };
+
+            // A runner that is a dependency and has no configuration runs with its
+            // defaults; with both, the files are not known to be either's.
+            let jest = tree(&[("package.json", r#"{"devDependencies": {"jest": "^29.7.0"}}"#)]);
+            let vitest = tree(&[
+                ("package.json", r#"{"devDependencies": {"vitest": "^4.1.0"}}"#),
+                ("vite.config.ts", "export default { plugins: [] };\n"),
+            ]);
+            let vite_only = tree(&[
+                ("package.json", r#"{"devDependencies": {"vite": "^5.0.0"}}"#),
+                ("vite.config.ts", "export default { plugins: [] };\n"),
+            ]);
+            let both = tree(&[(
+                "package.json",
+                r#"{"devDependencies": {"jest": "^29.7.0", "vitest": "^4.1.0"}}"#,
+            )]);
+            let defaults_ok = collected("__tests__/a.js", &jest)
+                && left_out("src/plain.js", &jest)
+                && collected("src/a.test.ts", &vitest)
+                && left_out("__tests__/a.ts", &vitest)
+                && unknown("src/plain.ts", &vite_only, "no runner config found")
+                && unknown("src/a.test.ts", &both, "no runner config found");
+
+            // A `testMatch` pattern that starts with a literal matches no absolute path.
+            let literal = tree(&[(
+                "package.json",
+                r#"{"jest": {"testMatch": ["src/**/*.js", "**/b.spec.js"]}}"#,
+            )]);
+            let wildcard = tree(&[("package.json", r#"{"jest": {"testMatch": ["*/**/a.test.js"]}}"#)]);
+            let pattern_ok = left_out("src/a.test.js", &literal)
+                && collected("b.spec.js", &literal)
+                && unknown("src/a.test.js", &wildcard, "neither `<rootDir>`");
+
+            // Jest refuses to run: nothing is evaluated.
+            let match_and_regex = tree(&[(
+                "package.json",
+                r#"{"jest": {"testMatch": ["**/a.test.js"], "testRegex": "spec"}}"#,
+            )]);
+            let empty_regex = tree(&[(
+                "package.json",
+                r#"{"jest": {"testMatch": ["**/a.test.js"], "testRegex": ""}}"#,
+            )]);
+            let two = tree(&[
+                ("package.json", r#"{"jest": {}}"#),
+                ("jest.config.json", "{}"),
+            ]);
+            let conflict_ok = unknown("plain.js", &match_and_regex, "`testMatch` and `testRegex`")
+                && collected("a.test.js", &empty_regex)
+                && left_out("b.spec.js", &empty_regex)
+                && unknown("a.test.js", &two, "more than one jest configuration");
+
+            // Vitest's default `exclude` before Vitest 4 held configuration-file names.
+            let vitest_at = |range: &str| {
+                let package = format!(r#"{{"devDependencies": {{"vitest": "{range}"}}}}"#);
+                tree(&[("package.json", &package), ("vitest.config.ts", "export default { test: {} };\n")])
+            };
+            let names_ok = left_out("vite.config.test.ts", &vitest_at("^1.6.0"))
+                && left_out("sub/jest.config.spec.ts", &vitest_at("^3.1.0"))
+                && collected("vite.config.test.ts", &vitest_at("^4.1.0"))
+                && collected("playwright.config.test.ts", &vitest_at("^3.1.0"))
+                && unknown("vite.config.test.ts", &vitest_at("^2.1.0"), "vitest 2 was not compared")
+                && unknown("vite.config.test.ts", &vitest_at("*"), "depends on its version");
+
+            Ok(defaults_ok && pattern_ok && conflict_ok && names_ok)
+        },
+    ),
+    (
+        "test-floor: Deno.test registrations, Deno's default names and a negated exclude entry",
+        || {
+            use crate::ast::runner_collection::{
+                check_runner_collected, RunnerCollectionRules, RunnerCollectionStatus,
+            };
+            use crate::ast::AssertVocabulary;
+
+            let tree = |files: &[(&str, &str)]| {
+                let tracked: Vec<String> = files.iter().map(|(name, _)| name.to_string()).collect();
+                AssertVocabulary {
+                    runner_rules: RunnerCollectionRules::from_tree(
+                        |p| {
+                            files
+                                .iter()
+                                .find(|(name, _)| *name == p)
+                                .map(|(_, content)| content.to_string())
+                        },
+                        &tracked,
+                    ),
+                    ..Default::default()
+                }
+            };
+            let unknown = |path: &str, vocab: &AssertVocabulary, part: &str| {
+                matches!(
+                    check_runner_collected(path, vocab),
+                    RunnerCollectionStatus::Unknown(reason) if reason.contains(part)
+                )
+            };
+            let collected = |path: &str, vocab: &AssertVocabulary| {
+                check_runner_collected(path, vocab) == RunnerCollectionStatus::Collected
+            };
+            let left_out = |path: &str, vocab: &AssertVocabulary| {
+                check_runner_collected(path, vocab) == RunnerCollectionStatus::NotCollected
+            };
+
+            let plain = tree(&[("deno.json", "{}")]);
+            let names_ok = ["a_test.ts", "b.test.tsx", "test.js", "__tests__/any.ts", "sub/_test.mjs"]
+                .iter()
+                .all(|path| collected(path, &plain))
+                && ["plain.ts", "a.spec.ts", "tests/plain.ts", "a_test.d.ts", "node_modules/p/a_test.ts"]
+                    .iter()
+                    .all(|path| left_out(path, &plain));
+
+            let negated = tree(&[("deno.json", r#"{"test": {"exclude": ["old", "!old/keep"]}}"#)]);
+            let refused = tree(&[("deno.json", r#"{"test": {"exclude": ["!old/keep", "old"]}}"#)]);
+            let glob = tree(&[("deno.json", r#"{"test": {"exclude": ["old/**", "!old/keep/**"]}}"#)]);
+            let included = tree(&[("deno.json", r#"{"test": {"include": ["checks", "one/plain.ts"]}}"#)]);
+            let lists_ok = left_out("old/a_test.ts", &negated)
+                && collected("old/keep/b_test.ts", &negated)
+                && left_out("old/keep/plain.ts", &negated)
+                && unknown("old/a_test.ts", &refused, "refuses to run")
+                && unknown("old/keep/b_test.ts", &glob, "is a glob")
+                && collected("checks/a_test.ts", &included)
+                && left_out("checks/plain.ts", &included)
+                && collected("one/plain.ts", &included)
+                && left_out("a_test.ts", &included);
+
+            // The pack reads the registrations, with the module's bare assertions.
+            let source = "import { assertEquals } from 'jsr:@std/assert';\n\
+                Deno.test('a', async (t) => {\n  await t.step('s', () => { assertEquals(f(), 1); });\n});\n\
+                Deno.test.ignore('b', () => {});\n\
+                Deno.test({ name: 'c', fn() { assertEquals(g(), 2); } });\n";
+            let facts = crate::ast::default_registry()
+                .find_pack("mod_test.ts")
+                .ok_or_else(|| anyhow::anyhow!("no pack for a TypeScript file"))?
+                .extract("mod_test.ts", source, &AssertVocabulary::default())?;
+            let read: Vec<(&str, bool, usize)> = facts
+                .tests
+                .iter()
+                .map(|t| (t.name.as_str(), t.ignored, t.strong_asserts))
+                .collect();
+            let pack_ok = read
+                == [
+                    ("a", false, 1),
+                    ("a > s", false, 1),
+                    ("b", true, 0),
+                    ("c", false, 1),
+                ];
+
+            Ok(names_ok && lists_ok && pack_ok)
+        },
+    ),
+    (
+        "test-floor: a Cargo target its manifest switches off, an unreached source file, nested node --test scripts and go.work strings",
+        || {
+            use crate::ast::runner_collection::{
+                check_runner_collected, moved_out_by, RunnerCollectionRules, RunnerCollectionStatus,
+            };
+            use crate::ast::AssertVocabulary;
+
+            let tree = |files: &[(&str, &str)]| {
+                let tracked: Vec<String> = files.iter().map(|(name, _)| name.to_string()).collect();
+                AssertVocabulary {
+                    runner_rules: RunnerCollectionRules::from_tree(
+                        |p| {
+                            files
+                                .iter()
+                                .find(|(name, _)| *name == p)
+                                .map(|(_, content)| content.to_string())
+                        },
+                        &tracked,
+                    ),
+                    ..Default::default()
+                }
+            };
+            let moved = |base: &[(&str, &str)], head: &[(&str, &str)], path: &str| {
+                moved_out_by(path, &tree(base), &tree(head))
+                    .into_iter()
+                    .map(|m| (m.file, m.key))
+                    .collect::<Vec<_>>()
+            };
+            let rule = |file: &str, key: &'static str| vec![(file.to_string(), key)];
+
+            let package = "[package]\nname = \"p\"\nversion = \"0.1.0\"\n";
+            let crate_with = |manifest: &'static str, lib: &'static str| {
+                vec![
+                    ("Cargo.toml", manifest),
+                    ("src/lib.rs", lib),
+                    ("src/inner.rs", "#[test]\nfn t() {}\n"),
+                    ("tests/it.rs", "mod common;\n#[test]\nfn t() {}\n"),
+                    ("tests/common/mod.rs", "#[test]\nfn t() {}\n"),
+                ]
+            };
+            let base = crate_with(package, "mod inner;\n");
+            let target_off = "[package]\nname = \"p\"\nversion = \"0.1.0\"\n\n[[test]]\nname = \"it\"\ntest = false\n";
+            let no_autotests = "[package]\nname = \"p\"\nversion = \"0.1.0\"\nautotests = false\n";
+            let lib_off = "[package]\nname = \"p\"\nversion = \"0.1.0\"\n\n[lib]\ntest = false\n";
+            let cargo_ok = moved(&base, &crate_with(target_off, "mod inner;\n"), "tests/it.rs")
+                == rule("Cargo.toml", "test-target-off")
+                && moved(&base, &crate_with(target_off, "mod inner;\n"), "tests/common/mod.rs")
+                    == rule("Cargo.toml", "test-target-off")
+                && moved(&base, &crate_with(no_autotests, "mod inner;\n"), "tests/it.rs")
+                    == rule("Cargo.toml", "autotests-off")
+                && moved(&base, &crate_with(lib_off, "mod inner;\n"), "src/inner.rs")
+                    == rule("Cargo.toml", "lib-test-off")
+                && moved(&base, &crate_with(package, ""), "src/inner.rs")
+                    == rule("src/lib.rs", "mod-removed")
+                // The key on both sides is not the change's own rule.
+                && moved(
+                    &crate_with(target_off, "mod inner;\n"),
+                    &crate_with(target_off, "mod inner;\n"),
+                    "tests/it.rs",
+                )
+                .is_empty()
+                // A file the target still runs was not moved.
+                && moved(&base, &crate_with(target_off, "mod inner;\n"), "src/inner.rs").is_empty();
+
+            // A file under `src/` no root reaches is left out with a note.
+            let unreached = tree(&crate_with(package, "declare_modules!(inner);\n"));
+            let unreached_ok = matches!(
+                check_runner_collected("src/inner.rs", &unreached),
+                RunnerCollectionStatus::NoRunner(reason) if reason.contains("no crate root reaches")
+            ) && check_runner_collected("src/inner.rs", &tree(&base))
+                == RunnerCollectionStatus::Collected;
+
+            // A script of a nested manifest runs `node --test` for the files below it.
+            let node = "import test from 'node:test';\ntest('a', () => {});\n";
+            let nested = tree(&[
+                ("package.json", r#"{"name": "root"}"#),
+                ("packages/api/package.json", r#"{"scripts": {"test": "node --test"}}"#),
+                ("packages/api/a.test.js", node),
+                ("packages/web/package.json", r#"{"scripts": {"test": "node x.js"}}"#),
+                ("packages/web/b.test.js", node),
+            ]);
+            let node_ok = check_runner_collected("packages/api/a.test.js", &nested)
+                == RunnerCollectionStatus::Collected
+                && matches!(
+                    check_runner_collected("packages/web/b.test.js", &nested),
+                    RunnerCollectionStatus::NoRunner(_)
+                );
+
+            // `go.work`: a quoted path is a Go string, and an unknown directive makes the
+            // file one the go tool refuses.
+            let go_mod = "module example.test/m\n\ngo 1.21\n";
+            let work = |content: &'static str| {
+                tree(&[("go.work", content), ("app/go.mod", go_mod), ("app/a_test.go", "package a\n")])
+            };
+            let work_ok = check_runner_collected("app/a_test.go", &work("go 1.21\nuse \"./\\x61pp\"\n"))
+                == RunnerCollectionStatus::Collected
+                && matches!(
+                    check_runner_collected("app/a_test.go", &work("go 1.21\nuse ./app\nbogus x\n")),
+                    RunnerCollectionStatus::Unknown(reason) if reason.contains("cannot be read")
+                );
+
+            Ok(cargo_ok && unreached_ok && node_ok && work_ok)
+        },
+    ),
+    (
         "ci-integrity: rollup needs detection, pinning, and error masks",
         || {
             use crate::guards::ci_integrity::parse_workflow_jobs;
