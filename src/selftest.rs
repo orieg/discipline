@@ -1825,6 +1825,42 @@ const CASES: &[Case] = &[
                 && at_limit.is_ok())
         },
     ),
+    #[cfg(feature = "lang-rust")]
+    (
+        "ast: a source nested past the tree depth limit is refused by name; one at the limit is parsed",
+        || {
+            let reg = crate::ast::default_registry();
+            let v = AssertVocabulary::default();
+            let Some(pack) = reg.find_pack("tests/deep.rs") else {
+                return Ok(true);
+            };
+            // Five levels of the tree (the file, the test, its body, the `let`, the
+            // literal) and one for each pair of parentheses.
+            let file = |pairs: usize| {
+                format!(
+                    "#[test]\nfn t() {{\n    let a = {}1{};\n    assert_eq!(a, 1);\n}}\n",
+                    "(".repeat(pairs),
+                    ")".repeat(pairs)
+                )
+            };
+            let limit = crate::ast::source_text::TREE_DEPTH_LIMIT;
+            // On the deep stack, as the binary reads every file: a tree at the limit is
+            // past what a default stack lets a walker descend. One level past the limit
+            // is far inside the deep stack, so a build that lost the bound fails this
+            // case and does not end the run.
+            let (over, at_limit) = crate::deep_stack::on_deep_stack(|| {
+                (
+                    pack.extract("tests/deep.rs", &file(limit - 4), &v),
+                    pack.extract("tests/deep.rs", &file(limit - 5), &v),
+                )
+            })?;
+            Ok(over.is_err()
+                && over.unwrap_err().to_string()
+                    == "could not parse `tests/deep.rs`: the source nests 4097 levels deep, \
+                        past the 4096 this tool reads"
+                && at_limit.is_ok_and(|facts| facts.tests.len() == 1 && !facts.has_parse_errors))
+        },
+    ),
     #[cfg(feature = "lang-swift")]
     (
         "swift: a file ending in a directive reads as the same file with a line break",

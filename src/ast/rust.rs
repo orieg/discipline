@@ -47,6 +47,7 @@ impl LanguagePack for RustPack {
             src,
         )?;
         let root = tree.root_node();
+        crate::ast::source_text::forget_unread_part();
 
         let (owning_features, manifest_error) =
             vocab.runner_rules.rust.find_owning_crate_features(path);
@@ -99,11 +100,22 @@ impl LanguagePack for RustPack {
             ],
         );
         cx.facts.budgets = super::budgets::extract(root, src, &RS_BUDGETS);
+        // A macro argument with no tree was not read: its assertion was counted without
+        // being judged, so the file has no facts, as when the file itself has no tree.
+        crate::ast::source_text::unread_part(path)?;
         Ok(cx.facts)
     }
 }
 
 use super::HelperFacts;
+
+/// What a node opened for the nodes under it (`Extractor::enter`, `Extractor::leave`).
+enum Scope {
+    None,
+    Module,
+    Function { is_test: bool },
+    Const,
+}
 
 struct Comment {
     start_row: usize,
@@ -185,7 +197,52 @@ impl<'a> Extractor<'a> {
         }
     }
 
-    fn visit(&mut self, node: Node, mods: &mut Vec<String>) {
+    /// Reads every node under `root` in source order. The walk keeps its own stack of
+    /// what is still to read, so its depth is the tree's and not the thread's: this
+    /// function took more of the thread's stack for each level than any other walker
+    /// (`source_text::TREE_DEPTH_LIMIT`).
+    fn visit(&mut self, root: Node, mods: &mut Vec<String>) {
+        enum Step<'t> {
+            Enter(Node<'t>),
+            Leave(Scope),
+        }
+        let mut steps = vec![Step::Enter(root)];
+        while let Some(step) = steps.pop() {
+            match step {
+                Step::Leave(scope) => self.leave(scope, mods),
+                Step::Enter(node) => {
+                    let Some(scope) = self.enter(node, mods) else {
+                        continue;
+                    };
+                    steps.push(Step::Leave(scope));
+                    let mut cursor = node.walk();
+                    let children: Vec<Node> = node.children(&mut cursor).collect();
+                    steps.extend(children.into_iter().rev().map(Step::Enter));
+                }
+            }
+        }
+    }
+
+    /// What [`Self::enter`] opened is closed once the node's children are read.
+    fn leave(&mut self, scope: Scope, mods: &mut Vec<String>) {
+        match scope {
+            Scope::None => {}
+            Scope::Module => {
+                mods.pop();
+            }
+            Scope::Function { is_test } => {
+                if is_test {
+                    self.in_test -= 1;
+                }
+                self.in_fn -= 1;
+            }
+            Scope::Const => self.in_const -= 1,
+        }
+    }
+
+    /// Reads `node` itself. `None` when its children are not read; otherwise what it
+    /// opened, which [`Self::leave`] closes after them.
+    fn enter(&mut self, node: Node, mods: &mut Vec<String>) -> Option<Scope> {
         match node.kind() {
             "attribute_item" | "inner_attribute_item" => {
                 let text = self.text(node);
@@ -204,7 +261,7 @@ impl<'a> Extractor<'a> {
                             snippet: text.trim().to_string(),
                         });
                 }
-                return;
+                return None;
             }
             "mod_item" => {
                 let name = node
@@ -212,9 +269,7 @@ impl<'a> Extractor<'a> {
                     .map(|n| self.text(n).to_string())
                     .unwrap_or_default();
                 mods.push(name);
-                self.visit_children(node, mods);
-                mods.pop();
-                return;
+                return Some(Scope::Module);
             }
             "function_item" => {
                 let mut direct_calls = Vec::new();
@@ -299,18 +354,11 @@ impl<'a> Extractor<'a> {
                 if is_test {
                     self.in_test += 1;
                 }
-                self.visit_children(node, mods);
-                if is_test {
-                    self.in_test -= 1;
-                }
-                self.in_fn -= 1;
-                return;
+                return Some(Scope::Function { is_test });
             }
             "const_item" => {
                 self.in_const += 1;
-                self.visit_children(node, mods);
-                self.in_const -= 1;
-                return;
+                return Some(Scope::Const);
             }
             "macro_invocation" => {
                 if self.in_test == 0 {
@@ -349,27 +397,16 @@ impl<'a> Extractor<'a> {
                 if node.children(&mut cursor).any(|c| c.kind() == "unsafe") {
                     self.unsafe_site(node, "unsafe impl");
                 }
-                self.visit_children(node, mods);
-                return;
             }
             "trait_item" => {
                 let mut cursor = node.walk();
                 if node.children(&mut cursor).any(|c| c.kind() == "unsafe") {
                     self.unsafe_site(node, "unsafe trait");
                 }
-                self.visit_children(node, mods);
-                return;
             }
             _ => {}
         }
-        self.visit_children(node, mods);
-    }
-
-    fn visit_children(&mut self, node: Node, mods: &mut Vec<String>) {
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.visit(child, mods);
-        }
+        Some(Scope::None)
     }
 
     fn resolve_same_file_helpers(&mut self) {
@@ -2085,14 +2122,17 @@ fn is_constant_argument(arg: &str) -> bool {
 /// Reads one macro argument as an expression. A macro's arguments are a token tree, so
 /// the argument's text is parsed again as the value of a `let`; `read` gets the value's
 /// node and the text it was parsed from. `None` when the argument is not an expression
-/// (a pattern, a format specification, tokens of the macro's own grammar).
+/// (a pattern, a format specification, tokens of the macro's own grammar), and when it
+/// has no tree, which `source_text::parse_part` then records.
 fn reparsed_expression<R>(arg: &str, read: impl FnOnce(Node, &str) -> R) -> Option<R> {
     let code = format!("fn _discipline_check() {{ let _ = ({arg}); }}");
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_rust::LANGUAGE.into())
         .ok()?;
-    let tree = crate::ast::source_text::parse(&mut parser, &code).ok()?;
+    // No tree is not "not an expression": it is an argument nobody read, which
+    // `parse_part` records and `RustPack::extract` refuses the file for.
+    let tree = crate::ast::source_text::parse_part(&mut parser, &code)?;
     let root = tree.root_node();
     if root.has_error() {
         return None;

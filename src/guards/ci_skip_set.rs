@@ -541,9 +541,44 @@ impl Expr {
 struct Parser {
     toks: Vec<Tok>,
     pos: usize,
+    /// How many `!`, parentheses and call arguments the term being read is inside.
+    nesting: usize,
+    /// The `&&` and `||` read so far.
+    operators: usize,
 }
 
+/// The deepest an `if:` may nest (`!`, parentheses, the arguments of a call). The
+/// parser calls itself once for each, and the text is a workflow's own: without a
+/// bound, ten thousand `!` or `(` ended the process with a stack overflow.
+const MAX_NESTING: usize = 64;
+
+/// The most `&&` and `||` one `if:` may hold. A chain is read in a loop, but each
+/// operator is one more level of the expression the evaluator then descends.
+const MAX_OPERATORS: usize = 256;
+
 impl Parser {
+    /// `read` one level further in: an error past [`MAX_NESTING`], which the gate
+    /// reports as it reports any `if:` it cannot read.
+    fn nested<T>(
+        &mut self,
+        read: impl FnOnce(&mut Self) -> Result<T, String>,
+    ) -> Result<T, String> {
+        if self.nesting >= MAX_NESTING {
+            return Err(format!("nested more than {MAX_NESTING} levels deep"));
+        }
+        self.nesting += 1;
+        let result = read(self);
+        self.nesting -= 1;
+        result
+    }
+    /// One more `&&` or `||`: an error past [`MAX_OPERATORS`].
+    fn operator(&mut self) -> Result<(), String> {
+        self.operators += 1;
+        if self.operators > MAX_OPERATORS {
+            return Err(format!("more than {MAX_OPERATORS} `&&` and `||`"));
+        }
+        Ok(())
+    }
     fn peek(&self) -> Option<&Tok> {
         self.toks.get(self.pos)
     }
@@ -556,6 +591,7 @@ impl Parser {
         let mut e = self.and()?;
         while self.peek() == Some(&Tok::Or) {
             self.pos += 1;
+            self.operator()?;
             e = Expr::Or(Box::new(e), Box::new(self.and()?));
         }
         Ok(e)
@@ -564,6 +600,7 @@ impl Parser {
         let mut e = self.unary()?;
         while self.peek() == Some(&Tok::And) {
             self.pos += 1;
+            self.operator()?;
             e = Expr::And(Box::new(e), Box::new(self.unary()?));
         }
         Ok(e)
@@ -571,7 +608,7 @@ impl Parser {
     fn unary(&mut self) -> Result<Expr, String> {
         if self.peek() == Some(&Tok::Not) {
             self.pos += 1;
-            return Ok(Expr::Not(Box::new(self.unary()?)));
+            return Ok(Expr::Not(Box::new(self.nested(Self::unary)?)));
         }
         let lhs = self.primary()?;
         match self.peek() {
@@ -589,13 +626,13 @@ impl Parser {
     fn primary(&mut self) -> Result<Expr, String> {
         match self.next() {
             Some(Tok::LParen) => {
-                let e = self.or()?;
+                let e = self.nested(Self::or)?;
                 if self.next() != Some(Tok::RParen) {
                     return Err("unbalanced parentheses".into());
                 }
                 Ok(e)
             }
-            Some(Tok::Not) => Ok(Expr::Not(Box::new(self.primary()?))),
+            Some(Tok::Not) => Ok(Expr::Not(Box::new(self.nested(Self::primary)?))),
             Some(Tok::Str(s)) => Ok(Expr::Lit(Val::Str(s))),
             Some(Tok::Num(n)) => Ok(Expr::Lit(Val::Num(n))),
             Some(Tok::Ident(id)) => {
@@ -612,7 +649,7 @@ impl Parser {
                         self.pos += 1;
                     } else {
                         loop {
-                            args.push(self.or()?);
+                            args.push(self.nested(Self::or)?);
                             match self.next() {
                                 Some(Tok::Comma) => continue,
                                 Some(Tok::RParen) => break,
@@ -650,6 +687,8 @@ fn parse_if(src: &str) -> Result<Expr, String> {
     let mut p = Parser {
         toks: lex(body).map_err(|e| format!("unsupported syntax in `{body}`: {e}"))?,
         pos: 0,
+        nesting: 0,
+        operators: 0,
     };
     let e = p
         .or()
@@ -1559,6 +1598,52 @@ jobs:
     }
 
     // ---- expression evaluator -------------------------------------------------
+
+    /// An `if:` is read to 64 levels of `!`, parentheses and call arguments, and to 256
+    /// `&&` and `||`; one past either is an expression the rule cannot read, reported
+    /// as any other is. The parser calls itself for each level and the evaluator for
+    /// each operator; `tests/test_ci_skip_set_bounds.rs` runs the nesting that ended
+    /// the process, through the binary.
+    #[test]
+    fn an_expression_nested_past_the_bounds_is_one_the_rule_cannot_read() {
+        let gh = github("pull_request");
+        let eval = |src: &str| -> (bool, Vec<String>) { eval_standalone(src, &gh) };
+        let unreadable = |src: &str, why: &str| {
+            let (value, unknown) = eval(src);
+            assert!(!value, "{why}");
+            assert_eq!(unknown.len(), 1, "{why}");
+            assert!(
+                unknown[0].starts_with("unsupported syntax in `") && unknown[0].ends_with(why),
+                "{why}: ...{}",
+                &unknown[0][unknown[0].len().saturating_sub(80)..]
+            );
+        };
+        let nots = |n: usize| format!("{}true", "!".repeat(n));
+        let parens = |n: usize| format!("{}true{}", "(".repeat(n), ")".repeat(n));
+        let calls = |n: usize| format!("{}true{}", "format(".repeat(n), ")".repeat(n));
+        let ors = |n: usize| format!("false{}", " || false".repeat(n));
+        let ands = |n: usize| format!("true{}", " && true".repeat(n));
+        let too_deep = "nested more than 64 levels deep";
+        let too_long = "more than 256 `&&` and `||`";
+
+        assert_eq!(eval(&nots(64)), (true, vec![]));
+        assert_eq!(eval(&nots(63)), (false, vec![]));
+        unreadable(&nots(65), too_deep);
+        assert_eq!(eval(&parens(64)), (true, vec![]));
+        unreadable(&parens(65), too_deep);
+        assert!(eval(&calls(64)).1.iter().all(|u| !u.contains("nested")));
+        unreadable(&calls(65), too_deep);
+        assert_eq!(eval(&ors(256)), (false, vec![]));
+        unreadable(&ors(257), too_long);
+        assert_eq!(eval(&ands(256)), (true, vec![]));
+        unreadable(&ands(257), too_long);
+        // Operators inside parentheses count toward the same 256.
+        assert_eq!(
+            eval(&format!("({}) && ({})", ors(127), ands(128))),
+            (false, vec![])
+        );
+        unreadable(&format!("({}) && ({})", ors(128), ands(128)), too_long);
+    }
 
     #[test]
     fn expression_semantics_match_github() {
