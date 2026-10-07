@@ -1592,6 +1592,60 @@ const CASES: &[Case] = &[
                 && twin.has_parse_errors)
         },
     ),
+    #[cfg(feature = "lang-ruby")]
+    (
+        "ast: a Ruby here-document word past the scanner's one-byte length is refused by name; one at the limit is parsed",
+        || {
+            let reg = crate::ast::default_registry();
+            let v = AssertVocabulary::default();
+            let Some(pack) = reg.find_pack("test/a_test.rb") else {
+                return Ok(true);
+            };
+            let file = |word_len: usize| format!("x = <<{w}\nbody\n{w}\n", w = "A".repeat(word_len));
+            // 256 bytes round-trips through the scanner's one-byte length as 0 and aborts
+            // the parser; 255 is the most it can hold.
+            let over = pack.extract("test/a_test.rb", &file(256), &v);
+            let at_limit = pack.extract("test/a_test.rb", &file(255), &v);
+            Ok(over.is_err()
+                && over.unwrap_err().to_string()
+                    == "could not parse `test/a_test.rb`: a here-document word of 256 bytes is \
+                        longer than the 255 the Ruby grammar's scanner can store, so it would \
+                        abort or mis-read the file"
+                && at_limit.is_ok())
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
+        "ast: a Python file past the scanner's indentation-buffer limit is refused by name; one at the limit is parsed",
+        || {
+            let reg = crate::ast::default_registry();
+            let v = AssertVocabulary::default();
+            let Some(pack) = reg.find_pack("test/a_test.py") else {
+                return Ok(true);
+            };
+            // `levels` distinct indentation prefixes: levels-1 nested blocks plus the top.
+            let file = |levels: usize| {
+                let mut s = String::new();
+                for i in 0..levels - 1 {
+                    s.push_str(&" ".repeat(i));
+                    s.push_str("if x:\n");
+                }
+                s.push_str(&" ".repeat(levels - 1));
+                s.push_str("y = 1\n");
+                s
+            };
+            // 201 distinct prefixes are refused before the scanner overflows its buffer; 200
+            // (worst serialized size 655 of 1024) is parsed.
+            let over = pack.extract("test/a_test.py", &file(201), &v);
+            let at_limit = pack.extract("test/a_test.py", &file(200), &v);
+            Ok(over.is_err()
+                && over.unwrap_err().to_string()
+                    == "could not parse `test/a_test.py`: the file has more than 200 distinct \
+                        indentation prefixes, past what the Python grammar's scanner can store, \
+                        so it would overflow its serialization buffer"
+                && at_limit.is_ok())
+        },
+    ),
     #[cfg(feature = "lang-swift")]
     (
         "swift: a file ending in a directive reads as the same file with a line break",
