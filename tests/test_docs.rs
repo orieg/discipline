@@ -162,7 +162,7 @@ fn test_mutant_check_always_pass_killed() {
 
 #[test]
 fn test_check_links_script_succeeds_on_repo() {
-    let output = std::process::Command::new("python3")
+    let output = common::script_command("python3")
         .arg("tests/action/check-links.py")
         .output()
         .expect("run check-links.py");
@@ -190,7 +190,7 @@ fn test_check_links_script_fails_on_broken_anchor() {
     )
     .unwrap();
 
-    let output = std::process::Command::new("python3")
+    let output = common::script_command("python3")
         .arg(&script_path)
         .current_dir(temp_dir.path())
         .output()
@@ -210,7 +210,7 @@ fn check_links_on(readme: &str) -> std::process::Output {
     std::fs::write(&script_path, script_src).unwrap();
     std::fs::write(temp_dir.path().join("Cargo.toml"), "version = \"0.0.0\"\n").unwrap();
     std::fs::write(temp_dir.path().join("README.md"), readme).unwrap();
-    std::process::Command::new("python3")
+    common::script_command("python3")
         .arg(&script_path)
         .current_dir(temp_dir.path())
         .output()
@@ -461,10 +461,11 @@ fn served_installer_is_a_byte_copy_of_the_tested_installer() {
 }
 
 /// `discipline docs --check` over the working tree itself, through the isolated
-/// helper: the single drift check covering every schema, man page and
-/// completion together (man pages have no per-file test under `cargo test`).
-/// The per-file tests above stay; their fix hints agree on `discipline docs
-/// --write`.
+/// helper: the one drift check of every generated region, schema, man page and
+/// completion script, byte for byte. `committed_completion_scripts_match_the_binary` stays
+/// for what this does not say, that `discipline completions <shell>` prints the
+/// committed script; `schema_does_not_drift` in `tests/test_config.rs` stays for the
+/// gate properties it also checks.
 /// Killed mutant: any generated file perturbed.
 #[test]
 fn docs_check_passes_over_the_working_tree() {

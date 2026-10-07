@@ -5,7 +5,7 @@
 mod common;
 use common::{Repo, Run};
 
-const HEAD: &str = "[meta]\nversion = 1\nname = \"t\"\n";
+const HEAD: &str = common::CONFIG_HEAD;
 
 fn detail(run: &Run) -> String {
     run.json()["could_not_check"]["detail"]

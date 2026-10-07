@@ -5,7 +5,7 @@ use common::{Repo, GOOD_LIB, GOOD_TEST};
 /// or `sarif`) against the vendored `schema_rel`; the caller asserts on the output.
 fn validate_out(kind: &str, out_file: &std::path::Path, schema_rel: &str) -> std::process::Output {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    std::process::Command::new("python3")
+    common::script_command("python3")
         .args([
             root.join("tests/schemas/validate.py").to_str().unwrap(),
             kind,
