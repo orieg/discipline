@@ -3154,6 +3154,65 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "policy refusals: SARIF, JUnit and GitLab carry one entry per refusal at the format's level, with the rule id and none of the sentence",
+        || {
+            use crate::guards::CheckSummary;
+            use crate::refusals::{PolicyFailure, RefusalKind, REFUSALS};
+            use crate::report::{gitlab, junit, sarif};
+            let quoted = "reviewer-login-of-the-sentence";
+            let mut summary = CheckSummary {
+                schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+                could_not_check: None,
+                base: "main".into(),
+                errors: 0,
+                warnings: 0,
+                notes: 0,
+                overrides: 0,
+                baselined: 0,
+                outcomes: vec![],
+                planned_gates: vec![],
+                policy_failures: Vec::new(),
+                refused_hidden_directives: Vec::new(),
+                deprecations: Vec::new(),
+                directive_notes: Vec::new(),
+                unused_directives: Vec::new(),
+            };
+            // No refusal: no rule, no suite, no entry.
+            let quiet = sarif::format_sarif(&summary)["runs"][0]["results"] == serde_json::json!([])
+                && !junit::format_junit(&summary, false).contains("<testsuite ")
+                && gitlab::generate_gitlab_issues(&summary).is_empty();
+            summary.policy_failures = vec![
+                PolicyFailure::new(RefusalKind::MaxOverrides, quoted),
+                PolicyFailure::new(RefusalKind::MaxInlineOverrides, quoted),
+                PolicyFailure::new(RefusalKind::ApprovalRequired, quoted),
+            ];
+            summary.refused_hidden_directives = vec![
+                crate::tokens::OverrideSource::PrBody,
+                crate::tokens::OverrideSource::PrBody,
+            ];
+            let doc = sarif::format_sarif(&summary);
+            let results = doc["runs"][0]["results"].as_array().cloned().unwrap_or_default();
+            let issues = gitlab::generate_gitlab_issues(&summary);
+            let xml = junit::format_junit(&summary, false);
+            let mut ok = quiet && results.len() == 5 && issues.len() == 5;
+            for info in REFUSALS {
+                let id = info.rule_id();
+                let n = if info.blocks { 1 } else { 2 };
+                let (level, severity) = if info.blocks { ("error", "major") } else { ("note", "info") };
+                ok &= results.iter().filter(|r| r["ruleId"] == id.as_str() && r["level"] == level).count() == n
+                    && issues.iter().filter(|i| i.check_name == id && i.severity == severity).count() == n
+                    && xml.matches(&format!("<testcase name=\"{} [", info.code)).count() == n;
+            }
+            let prints: std::collections::HashSet<&str> = issues.iter().map(|i| i.fingerprint.as_str()).collect();
+            ok &= prints.len() == 5
+                && xml.contains("<testsuite name=\"policy\" tests=\"5\" failures=\"3\"")
+                && xml == junit::format_junit(&summary, true)
+                && [doc.to_string(), xml, gitlab::format_gitlab(&summary)].iter().all(|t| !t.contains(quoted))
+                && serde_json::to_value(&summary)?["policy_failures"] == serde_json::json!([quoted, quoted, quoted]);
+            Ok(ok)
+        },
+    ),
+    (
         "report text: Markdown writes emphasis and a self-linking word as text, the terminal text is as it was",
         || {
             use crate::report::text::{markdown, markdown_cell, terminal_line};
@@ -5166,6 +5225,7 @@ command = "cargo test"
                 outcomes: vec![o],
                 planned_gates: vec![],
                 policy_failures: Vec::new(),
+                refused_hidden_directives: Vec::new(),
                 deprecations: Vec::new(),
                 directive_notes: Vec::new(),
                 unused_directives: Vec::new(),

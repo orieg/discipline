@@ -141,6 +141,11 @@ fn registries(out: &mut BTreeMap<&'static str, BTreeSet<String>>) {
             .or_default()
             .insert(discipline::findings::full_code(k.gates[0], k));
     }
+    for r in discipline::refusals::REFUSALS {
+        out.entry("policy_refusals")
+            .or_default()
+            .insert(r.rule_id());
+    }
     for r in discipline::could_not_check::Reason::ALL {
         out.entry("could_not_check_reasons")
             .or_default()
