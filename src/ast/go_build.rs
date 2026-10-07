@@ -99,6 +99,17 @@ fn is_platform_tag(tag: &str) -> bool {
         .is_some_and(|(arch, feature)| KNOWN_ARCH.contains(&arch) && !feature.is_empty())
 }
 
+/// The 1-based line of the constraint [`go_build_constraint`] reads: the `//go:build`
+/// line, or with none the first legacy `// +build` line that counts. `None` when the
+/// file has no constraint, or its header cannot be read.
+pub fn go_build_constraint_line(source: &str) -> Option<usize> {
+    let header = read_header(source).ok()?;
+    header
+        .go_build
+        .map(|(index, _)| index + 1)
+        .or_else(|| header.plus_build.first().map(|(index, _)| index + 1))
+}
+
 /// Reads the build constraint of a Go source file.
 pub fn go_build_constraint(source: &str) -> GoBuild {
     let header = match read_header(source) {
@@ -106,13 +117,13 @@ pub fn go_build_constraint(source: &str) -> GoBuild {
         Err(()) => return GoBuild::Unreadable,
     };
     let expr = match header.go_build {
-        Some(line) => match parse_go_build(line) {
+        Some((_, line)) => match parse_go_build(line) {
             Some(expr) => Some(expr),
             None => return GoBuild::Unreadable,
         },
         None => {
             let mut combined: Option<Expr> = None;
-            for line in header.plus_build {
+            for (_, line) in header.plus_build {
                 let Some(expr) = parse_plus_build(line) else {
                     return GoBuild::Unreadable;
                 };
@@ -131,10 +142,10 @@ pub fn go_build_constraint(source: &str) -> GoBuild {
 }
 
 struct Header<'a> {
-    /// What follows `//go:build` on the one such line.
-    go_build: Option<&'a str>,
-    /// What follows `+build` on each legacy line that counts.
-    plus_build: Vec<&'a str>,
+    /// What follows `//go:build` on the one such line, with the line's index.
+    go_build: Option<(usize, &'a str)>,
+    /// What follows `+build` on each legacy line that counts, with the line's index.
+    plus_build: Vec<(usize, &'a str)>,
 }
 
 /// What follows `//go:build` when `line` is such a comment.
@@ -176,7 +187,7 @@ fn read_header(source: &str) -> Result<Header<'_>, ()> {
                 if go_build.is_some() {
                     return Err(());
                 }
-                go_build = Some(text);
+                go_build = Some((index, text));
             }
             if !ended {
                 if let Some(text) = plus_build_text(line) {
@@ -215,7 +226,6 @@ fn read_header(source: &str) -> Result<Header<'_>, ()> {
         plus_build: candidates
             .into_iter()
             .filter(|(index, _)| *index < end)
-            .map(|(_, text)| text)
             .collect(),
     })
 }

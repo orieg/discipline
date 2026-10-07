@@ -13,6 +13,7 @@ mod common;
 use common::Repo;
 
 const BELOW_FLOOR: &str = "Test Count Below Floor";
+const MOVED_OUT: &str = "Tests Moved Out Of Default Run";
 
 const JS_3: &str = "\
 it('renders', () => { expect(render()).toBe(1); });
@@ -261,6 +262,18 @@ fn examined(run: &common::Run) -> u64 {
     run.outcome("test-floor")["examined"].as_u64().unwrap()
 }
 
+/// The one `Tests Moved Out Of Default Run` finding of a run, which must be its only
+/// `test-floor` finding and be reported on `file`.
+fn assert_moved_out_on(run: &common::Run, file: &str) {
+    assert_eq!(run.titles("test-floor"), vec![MOVED_OUT], "{}", run.stdout);
+    let finding = &run.violations("test-floor")[0];
+    assert_eq!(
+        finding["code"], "test-floor/tests-moved-out-of-default-run",
+        "{finding}"
+    );
+    assert_eq!(finding["file"], file, "{finding}");
+}
+
 // ------------------------------------------------- 1. Cargo workspace `exclude`
 
 #[test]
@@ -295,7 +308,7 @@ fn a_package_the_workspace_excludes_counts_with_a_note_naming_it() {
 }
 
 #[test]
-fn adding_a_package_to_the_workspace_exclude_is_noted_on_the_head_side_only() {
+fn adding_a_package_to_the_workspace_exclude_is_reported_and_noted_on_the_head_side() {
     let run = changed(
         &[
             ("Cargo.toml", WORKSPACE_MEMBERS),
@@ -306,8 +319,9 @@ fn adding_a_package_to_the_workspace_exclude_is_noted_on_the_head_side_only() {
         ],
         |repo| repo.write("Cargo.toml", WORKSPACE_EXCLUDE),
     );
-    // The count does not move: the excluded package is still counted.
-    assert!(run.titles("test-floor").is_empty(), "{}", run.stdout);
+    // The count does not move: the excluded package is still counted. The finding on
+    // the workspace manifest is what reports the change.
+    assert_moved_out_on(&run, "Cargo.toml");
     assert_eq!(examined(&run), 6, "{}", run.stdout);
     assert!(
         has_note(&run, "head: ", &["`out`", "`exclude`"]),
@@ -391,11 +405,11 @@ fn a_go_test_file_behind_a_custom_tag_counts_with_a_note_naming_the_tag() {
 }
 
 #[test]
-fn adding_a_custom_build_tag_to_a_go_test_file_names_the_file_and_the_tag() {
+fn adding_a_custom_build_tag_to_a_go_test_file_is_reported_and_names_the_file_and_the_tag() {
     let run = changed(&[("go.mod", GO_MOD), ("pkg/a_test.go", GO_3)], |repo| {
         repo.write("pkg/a_test.go", &go_with("//go:build integration\n\n"))
     });
-    assert!(run.titles("test-floor").is_empty(), "{}", run.stdout);
+    assert_moved_out_on(&run, "pkg/a_test.go");
     assert_eq!(examined(&run), 5, "{}", run.stdout);
     assert!(
         has_note(
@@ -464,11 +478,11 @@ fn a_nested_go_module_counts_with_a_note_naming_it() {
 }
 
 #[test]
-fn turning_a_go_directory_into_a_nested_module_is_noted_on_the_head_side() {
+fn turning_a_go_directory_into_a_nested_module_is_reported_and_noted_on_the_head_side() {
     let run = changed(&[("go.mod", GO_MOD), ("sub/pkg/b_test.go", GO_3)], |repo| {
         repo.write("sub/go.mod", GO_MOD_NESTED)
     });
-    assert!(run.titles("test-floor").is_empty(), "{}", run.stdout);
+    assert_moved_out_on(&run, "sub/go.mod");
     assert_eq!(examined(&run), 5, "{}", run.stdout);
     assert!(
         has_note(&run, "head: ", &["`sub/pkg/b_test.go`", "base side"]),

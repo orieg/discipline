@@ -8,19 +8,32 @@
 //! matches no file; `vendor/**` does); within one file the later line wins, and a file
 //! nearer the path wins over one above it. Only tracked `.gitattributes` files are read:
 //! `$GIT_DIR/info/attributes`, the user's and the system's files are not part of the
-//! change. A `[attr]` macro line is not expanded: an attribute set only through a macro
-//! reads as not set, and the file counts.
+//! change.
+//!
+//! A `[attr]name ...` line of the top-level `.gitattributes` defines a macro (git
+//! refuses one in a file below the top level, and so does this reader). A line that
+//! sets the macro (`name`, not `-name`, `!name` or `name=value`) also gives each
+//! attribute of the definition its state there, unless a line that wins over it has
+//! already decided that attribute; a macro may name another macro. A definition may
+//! come after the lines that use it, and the last definition of a name is the one in
+//! force. Each case was compared with `git check-attr` (git 2.49).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// The attributes that take a file out of the count, in the order they are reported.
 pub const ATTRIBUTES: &[&str] = &["linguist-vendored", "linguist-generated"];
 
+/// The prefix of a macro definition line.
+const MACRO_PREFIX: &str = "[attr]";
+
 /// What one line says about one attribute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
-    /// `attr`, or `attr=true`.
+    /// `attr`: set, and when `attr` is a macro its definition applies.
     Set,
+    /// `attr=true`: read as set for the attributes reported here. A macro given a value
+    /// is not expanded.
+    True,
     /// `-attr`, `!attr`, or `attr=<anything else>`: the line decides, and the attribute
     /// is not set.
     NotSet,
@@ -34,8 +47,8 @@ struct Rule {
     basename: bool,
     /// A trailing `/`: the pattern names directories only, so it matches no file.
     directory_only: bool,
-    /// The state the line gives each of [`ATTRIBUTES`], when it names it.
-    states: [Option<State>; 2],
+    /// Each attribute the line names with its state, in the order written.
+    states: Vec<(String, State)>,
 }
 
 /// Every tracked `.gitattributes` of one side, by the directory that holds it (empty
@@ -43,12 +56,23 @@ struct Rule {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GitAttributes {
     files: HashMap<String, Vec<Rule>>,
+    /// The macros the top-level file defines, by name.
+    macros: HashMap<String, Vec<(String, State)>>,
+    /// [`ATTRIBUTES`] and every macro whose definition reaches one of them: a line
+    /// that names none of these says nothing read here.
+    relevant: HashSet<String>,
 }
 
 /// A step budget for one match: a pattern is written by the change under review, and
 /// a run of `*` must not be able to stall the check. Running out reads as no match,
 /// which leaves the attribute unset and the file counted.
 const MATCH_BUDGET: u32 = 200_000;
+
+/// One line of a `.gitattributes` file.
+enum Line {
+    Rule(Rule),
+    Macro(String, Vec<(String, State)>),
+}
 
 impl GitAttributes {
     /// Reads the `.gitattributes` at `path` (`.gitattributes`, `vendor/.gitattributes`).
@@ -57,10 +81,47 @@ impl GitAttributes {
             Some(i) => &path[..i],
             None => "",
         };
-        let rules: Vec<Rule> = content.lines().filter_map(parse_line).collect();
+        let mut rules = Vec::new();
+        for line in content.lines().filter_map(parse_line) {
+            match line {
+                Line::Rule(rule) => rules.push(rule),
+                // A macro is defined only by the top-level file.
+                Line::Macro(name, states) if dir.is_empty() => {
+                    self.macros.insert(name, states);
+                }
+                Line::Macro(..) => {}
+            }
+        }
         if !rules.is_empty() {
             self.files.insert(dir.to_string(), rules);
         }
+        if dir.is_empty() {
+            self.relevant = self.relevant_names();
+        }
+    }
+
+    /// The macros whose definition names one of [`ATTRIBUTES`], directly or through
+    /// another macro.
+    fn relevant_names(&self) -> HashSet<String> {
+        let mut relevant: HashSet<String> = HashSet::new();
+        loop {
+            let before = relevant.len();
+            for (name, states) in &self.macros {
+                if states
+                    .iter()
+                    .any(|(n, _)| ATTRIBUTES.contains(&n.as_str()) || relevant.contains(n))
+                {
+                    relevant.insert(name.clone());
+                }
+            }
+            if relevant.len() == before {
+                return relevant;
+            }
+        }
+    }
+
+    fn is_relevant(&self, name: &str) -> bool {
+        ATTRIBUTES.contains(&name) || self.relevant.contains(name)
     }
 
     /// The first of [`ATTRIBUTES`] that is set on `path`, with the `.gitattributes`
@@ -70,16 +131,21 @@ impl GitAttributes {
             return None;
         }
         let path = path.strip_prefix("./").unwrap_or(path);
-        ATTRIBUTES
-            .iter()
-            .enumerate()
-            .find_map(|(index, name)| self.deciding_file(path, index).map(|file| (*name, file)))
+        let decided = self.decided(path);
+        ATTRIBUTES.iter().find_map(|name| {
+            decided
+                .get(*name)
+                .filter(|(state, _)| *state != State::NotSet)
+                .map(|(_, file)| (*name, file.clone()))
+        })
     }
 
-    /// The attributes file whose line sets attribute `index` on `path`: the nearest
-    /// directory's file is read first, each file from its last line to its first, and
-    /// the first line that matches and names the attribute decides.
-    fn deciding_file(&self, path: &str, index: usize) -> Option<String> {
+    /// The state of each attribute read here on `path`, with the attributes file whose
+    /// line decides it. The order is git's: the nearest directory's file first, each
+    /// file from its last line to its first, each line from its last attribute to its
+    /// first, and the first mention of an attribute decides it.
+    fn decided(&self, path: &str) -> HashMap<String, (State, String)> {
+        let mut decided: HashMap<String, (State, String)> = HashMap::new();
         let mut dir = match path.rfind('/') {
             Some(i) => &path[..i],
             None => "",
@@ -91,28 +157,51 @@ impl GitAttributes {
                 } else {
                     &path[dir.len() + 1..]
                 };
+                let file = if dir.is_empty() {
+                    ".gitattributes".to_string()
+                } else {
+                    format!("{dir}/.gitattributes")
+                };
                 for rule in rules.iter().rev() {
-                    let Some(state) = rule.states[index] else {
+                    let says = rule.states.iter().any(|(name, _)| self.is_relevant(name));
+                    if !says || !rule.matches(relative) {
                         continue;
-                    };
-                    if rule.matches(relative) {
-                        return (state == State::Set).then(|| {
-                            if dir.is_empty() {
-                                ".gitattributes".to_string()
-                            } else {
-                                format!("{dir}/.gitattributes")
-                            }
-                        });
+                    }
+                    for (name, state) in rule.states.iter().rev() {
+                        self.decide(name, *state, &file, &mut decided);
                     }
                 }
             }
-            if dir.is_empty() {
-                return None;
+            if dir.is_empty() || ATTRIBUTES.iter().all(|a| decided.contains_key(*a)) {
+                return decided;
             }
             dir = match dir.rfind('/') {
                 Some(i) => &dir[..i],
                 None => "",
             };
+        }
+    }
+
+    /// Gives `name` the state a line of `file` gives it, unless a line that wins has
+    /// already decided it, and expands it when it is a macro that the line sets.
+    fn decide(
+        &self,
+        name: &str,
+        state: State,
+        file: &str,
+        decided: &mut HashMap<String, (State, String)>,
+    ) {
+        if !self.is_relevant(name) || decided.contains_key(name) {
+            return;
+        }
+        decided.insert(name.to_string(), (state, file.to_string()));
+        if state != State::Set {
+            return;
+        }
+        if let Some(definition) = self.macros.get(name) {
+            for (inner, inner_state) in definition.iter().rev() {
+                self.decide(inner, *inner_state, file, decided);
+            }
         }
     }
 }
@@ -139,9 +228,9 @@ impl Rule {
     }
 }
 
-/// One line of a `.gitattributes` file, when it names one of [`ATTRIBUTES`] for a
-/// pattern git reads.
-fn parse_line(line: &str) -> Option<Rule> {
+/// One line of a `.gitattributes` file, when it gives a pattern git reads at least one
+/// attribute, or defines a macro.
+fn parse_line(line: &str) -> Option<Line> {
     let line = line.trim_start_matches([' ', '\t']);
     if line.is_empty() || line.starts_with('#') {
         return None;
@@ -152,17 +241,17 @@ fn parse_line(line: &str) -> Option<Rule> {
         let end = line.find([' ', '\t', '\r']).unwrap_or(line.len());
         (line[..end].to_string(), &line[end..])
     };
-    // A macro definition, and a negative pattern (which git ignores with a warning).
-    if pattern.starts_with("[attr]") || pattern.starts_with('!') {
+    // A negative pattern, which git ignores with a warning.
+    if pattern.starts_with('!') {
         return None;
     }
-    let mut states = [None; 2];
+    let mut states: Vec<(String, State)> = Vec::new();
     for token in rest.split([' ', '\t', '\r']).filter(|t| !t.is_empty()) {
         let (name, state) = if let Some(name) = token.strip_prefix(['-', '!']) {
             (name, State::NotSet)
         } else if let Some((name, value)) = token.split_once('=') {
             let state = if value == "true" {
-                State::Set
+                State::True
             } else {
                 State::NotSet
             };
@@ -170,12 +259,18 @@ fn parse_line(line: &str) -> Option<Rule> {
         } else {
             (token, State::Set)
         };
-        if let Some(index) = ATTRIBUTES.iter().position(|a| *a == name) {
-            // Within one line the later mention wins, as between lines.
-            states[index] = Some(state);
+        if !name.is_empty() {
+            states.push((name.to_string(), state));
         }
     }
-    if states.iter().all(Option::is_none) {
+    // `[attr]name`, with the name right after the prefix: `[attr] name` is a pattern.
+    if let Some(name) = pattern
+        .strip_prefix(MACRO_PREFIX)
+        .filter(|name| !name.is_empty())
+    {
+        return Some(Line::Macro(name.to_string(), states));
+    }
+    if states.is_empty() {
         return None;
     }
     let (pattern, directory_only) = match pattern.strip_suffix('/') {
@@ -187,12 +282,12 @@ fn parse_line(line: &str) -> Option<Rule> {
     if pattern.is_empty() {
         return None;
     }
-    Some(Rule {
+    Some(Line::Rule(Rule {
         pattern,
         basename,
         directory_only,
         states,
-    })
+    }))
 }
 
 /// A pattern written in double quotes, C style, with what follows the closing quote.
@@ -444,13 +539,146 @@ macro/** vend
             // Both set: the first of `ATTRIBUTES` is the one reported.
             ("both/a.js", Some("linguist-vendored")),
             ("quoted dir/a.js", Some("linguist-vendored")),
-            // A negative pattern and a macro are not read.
+            // A negative pattern is not read. A macro the line sets is expanded.
             ("negative/a.js", None),
-            ("macro/a.js", None),
+            ("macro/a.js", Some("linguist-vendored")),
             ("comment", None),
         ] {
             assert_eq!(set(&attrs, path), expected, "{path}");
         }
+    }
+
+    /// Each row is `git check-attr linguist-vendored linguist-generated` (git 2.49) on
+    /// `a.txt` and on `sub/b.txt` with this top-level `.gitattributes`.
+    #[test]
+    fn macros_expand_as_git_expands_them() {
+        const V: Option<&str> = Some("linguist-vendored");
+        const G: Option<&str> = Some("linguist-generated");
+        for (root, a, b) in [
+            ("[attr]vend linguist-vendored\n*.txt vend\n", V, V),
+            // Defined after its use.
+            ("*.txt vend\n[attr]vend linguist-vendored\n", V, V),
+            // Through another macro, in either order of definition.
+            (
+                "[attr]vend linguist-vendored\n[attr]outer vend\n*.txt outer\n",
+                V,
+                V,
+            ),
+            (
+                "[attr]outer vend\n[attr]vend linguist-vendored\n*.txt outer\n",
+                V,
+                V,
+            ),
+            // Unset, unspecified, or given a value: not expanded.
+            ("[attr]vend linguist-vendored\n*.txt -vend\n", None, None),
+            (
+                "[attr]vend linguist-vendored\n*.txt vend\na.txt !vend\n",
+                None,
+                V,
+            ),
+            ("[attr]vend linguist-vendored\n*.txt vend=x\n", None, None),
+            ("[attr]vend linguist-vendored\n*.txt vend=true\n", None, None),
+            // The macro unsets one attribute and sets the other; on one line the
+            // later mention is read first.
+            (
+                "[attr]vend -linguist-vendored linguist-generated\n*.txt linguist-vendored vend\n",
+                G,
+                G,
+            ),
+            (
+                "[attr]vend linguist-vendored\n*.txt vend -linguist-vendored\n",
+                None,
+                None,
+            ),
+            (
+                "[attr]vend linguist-vendored\n*.txt -linguist-vendored vend\n",
+                V,
+                V,
+            ),
+            // A later line wins over the macro, and an earlier one does not.
+            (
+                "[attr]vend linguist-vendored\n*.txt vend\na.txt -linguist-vendored\n",
+                None,
+                V,
+            ),
+            (
+                "[attr]vend linguist-vendored\n* -linguist-vendored\na.txt vend\n",
+                V,
+                None,
+            ),
+            // The last definition of a name is the one in force.
+            (
+                "[attr]vend linguist-vendored\n[attr]vend linguist-generated\n*.txt vend\n",
+                G,
+                G,
+            ),
+            // Recursion ends: each attribute is decided once.
+            ("[attr]vend vend linguist-vendored\n*.txt vend\n", V, V),
+            (
+                "[attr]vend outer linguist-vendored\n[attr]outer vend linguist-generated\n*.txt vend\n",
+                V,
+                V,
+            ),
+            // A macro named like the attribute sets the attribute and expands.
+            (
+                "[attr]linguist-vendored linguist-generated\n*.txt linguist-vendored\n",
+                V,
+                V,
+            ),
+            // `[attr] vend` is a pattern (a class of one letter), not a definition.
+            ("[attr] vend linguist-vendored\n*.txt vend\n", None, None),
+            ("  [attr]vend linguist-vendored\n*.txt vend\n", V, V),
+        ] {
+            let attrs = attributes(&[(".gitattributes", root)]);
+            assert_eq!(set(&attrs, "a.txt"), a, "{root:?} on a.txt");
+            assert_eq!(set(&attrs, "sub/b.txt"), b, "{root:?} on sub/b.txt");
+        }
+    }
+
+    /// As above, with a second file in `sub/`.
+    #[test]
+    fn macros_belong_to_the_top_level_file() {
+        const V: Option<&str> = Some("linguist-vendored");
+        for (root, nested, expected) in [
+            // git refuses a definition below the top level.
+            ("", "[attr]vend linguist-vendored\n*.txt vend\n", None),
+            // Defined at the top, used below, and named as the file that sets it.
+            ("[attr]vend linguist-vendored\n", "*.txt vend\n", V),
+            // The nearer file decides the macro, or the attribute, first.
+            (
+                "[attr]vend linguist-vendored\n*.txt vend\n",
+                "*.txt -vend\n",
+                None,
+            ),
+            (
+                "[attr]vend linguist-vendored\n*.txt vend\n",
+                "*.txt -linguist-vendored\n",
+                None,
+            ),
+            (
+                "[attr]vend -linguist-vendored\n*.txt vend\n",
+                "*.txt linguist-vendored\n",
+                V,
+            ),
+        ] {
+            let attrs = attributes(&[(".gitattributes", root), ("sub/.gitattributes", nested)]);
+            assert_eq!(set(&attrs, "sub/b.txt"), expected, "{root:?} / {nested:?}");
+            // The order the files are read in does not matter.
+            let reversed = attributes(&[("sub/.gitattributes", nested), (".gitattributes", root)]);
+            assert_eq!(
+                set(&reversed, "sub/b.txt"),
+                expected,
+                "{root:?} / {nested:?}"
+            );
+        }
+        let attrs = attributes(&[
+            (".gitattributes", "[attr]vend linguist-vendored\n"),
+            ("sub/.gitattributes", "*.txt vend\n"),
+        ]);
+        assert_eq!(
+            attrs.set_on("sub/b.txt"),
+            Some(("linguist-vendored", "sub/.gitattributes".to_string()))
+        );
     }
 
     #[test]
