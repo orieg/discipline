@@ -798,11 +798,9 @@ fn test_harness_isolates_names_read_without_a_family_prefix() {
 /// two checks above cannot see through these, so a new one fails here until it is read
 /// and recorded.
 const REVIEWED_DYNAMIC_READS: &[(&str, &str, &str)] = &[
-    ("src/audit.rs", "k", ENV_CLOSURE),
     ("src/forge.rs", "k", ENV_CLOSURE),
     ("src/gitctx.rs", "k", ENV_CLOSURE),
     ("src/main.rs", "k", ENV_CLOSURE),
-    ("src/replay.rs", "k", ENV_CLOSURE),
     (
         "src/guards/mod.rs",
         "k",

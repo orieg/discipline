@@ -501,11 +501,6 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.provenance_tags;
     let mut out = GateOutcome::new(GATE);
 
-    if !settings.enabled() {
-        out.enabled = false;
-        return Ok(out);
-    }
-
     let exempt = exempt_filter(settings)?;
     let patterns = vec!["**/*.md".to_string(), "**/*.markdown".to_string()];
     let doc_filter = PathFilter::new(&patterns)?;

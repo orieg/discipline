@@ -425,6 +425,71 @@ pub fn test_scope_by_name_only(
     })
 }
 
+/// [`test_scope_by_name_only`] for a file whose parsed facts hold no test that checks.
+pub(crate) fn name_only_scope(
+    file: &crate::gitctx::ChangedFile,
+    changed: &[crate::gitctx::ChangedFile],
+    pack: &dyn crate::ast::LanguagePack,
+    registry: &crate::ast::LanguageRegistry,
+    declared_test_paths: &[String],
+    facts: &crate::ast::ParsedFileFacts,
+) -> Option<TestScopeByNameOnly> {
+    (!holds_a_checking_test(facts))
+        .then(|| {
+            test_scope_by_name_only(
+                file,
+                changed,
+                pack,
+                registry,
+                declared_test_paths,
+                facts.tests.len(),
+            )
+        })
+        .flatten()
+}
+
+/// The changed files a gate that reads `fact` analyses, each with its language pack
+/// (`stub-bodies`, `error-swallowing`): not deleted, not exempt, and in a language that
+/// has a pack. A file whose pack does not supply `fact` is listed in `unsupported`
+/// instead, for [`unsupported_fact_note`].
+pub(crate) fn ast_changes<'r>(
+    changed: &[crate::gitctx::ChangedFile],
+    exempt: &PathFilter,
+    registry: &'r crate::ast::LanguageRegistry,
+    fact: crate::ast::Fact,
+    unsupported: &mut Vec<String>,
+) -> Vec<(crate::gitctx::ChangedFile, &'r dyn crate::ast::LanguagePack)> {
+    let mut analysed = Vec::new();
+    for file in changed {
+        if file.kind == crate::gitctx::ChangeKind::Deleted || exempt.matches(&file.path) {
+            continue;
+        }
+        let Some(pack) = registry.find_pack(&file.path) else {
+            continue;
+        };
+        if !pack.supplies(fact) {
+            unsupported.push(file.path.clone());
+            continue;
+        }
+        analysed.push((file.clone(), pack));
+    }
+    analysed
+}
+
+/// The note that names the files [`ast_changes`] left out because their pack supplies
+/// no `what` facts (`function`, `handler`); `None` when it left none out.
+pub(crate) fn unsupported_fact_note(unsupported: &[String], what: &str) -> Option<String> {
+    if unsupported.is_empty() {
+        return None;
+    }
+    let sample: Vec<&str> = unsupported.iter().take(3).map(String::as_str).collect();
+    Some(format!(
+        "{} changed file(s) are in a language whose pack supplies no {what} facts and were NOT analysed (e.g. {})",
+        unsupported.len(),
+        sample.join(", ")
+    ))
+}
+
 /// Whether a file holds a test that checks something: at least one test the pack found
 /// that `vacuous-tests` would not report ([`crate::ast::TestFacts::is_vacuous`]). One
 /// empty test is not enough to keep a whole file test code.
@@ -477,6 +542,24 @@ impl GateOutcome {
             kind.code
         );
         self.record(severity, kind, None, (file, line), message, remediation);
+    }
+
+    /// Record the override that lifted a finding, or report the finding ([`Self::push`])
+    /// when no directive lifted it. `lifted` is the gate's own lookup for this finding
+    /// ([`Context::find_override`]), made with the same `kind`.
+    pub fn lift_or_push(
+        &mut self,
+        lifted: Option<crate::tokens::OverrideRecord>,
+        severity: Severity,
+        kind: &crate::findings::FindingKind,
+        at: (Option<&str>, Option<usize>),
+        message: String,
+        remediation: &str,
+    ) {
+        match lifted {
+            Some(record) => self.overrides.push(record),
+            None => self.push(severity, kind, at.0, at.1, message, remediation),
+        }
     }
 
     /// Anchor the finding just reported ([`Violation::anchor`]): what tells it apart from
@@ -882,31 +965,6 @@ pub fn run_checks(
         check_configured_pairs(checked, &selected_ids)?;
     }
 
-    // Gates whose rule describes a change (base against head). A whole-tree run has no
-    // change: every file is "added", so these would record every dependency, every
-    // ignored test and every instruction file as debt.
-    const DELTA_ONLY_GATES: &[&str] = &[
-        "assertion-reduction",
-        "ignored-tests",
-        "deletion-rationale",
-        "config-integrity",
-        "toolchain-config",
-        "build-hooks",
-        "ci-integrity",
-        "ci-skip-set",
-        "golden-output",
-        "dependency-delta",
-        "test-budget",
-        "test-floor",
-        "suppression-delta",
-        "error-swallowing",
-        "stub-bodies",
-        "scope-confinement",
-        "ratified-paths",
-        "review-threads",
-        "commit-provenance",
-        "bench-regression",
-    ];
     let whole_tree = ctx.git.is_whole_tree();
 
     // Misses recorded by an earlier run on this thread are not this run's.
@@ -928,7 +986,7 @@ pub fn run_checks(
             outcomes.push(o);
             continue;
         }
-        if whole_tree && DELTA_ONLY_GATES.contains(&gate.id) {
+        if whole_tree && gate.delta_only {
             let mut o = GateOutcome::new(gate.id);
             o.notes.push(
                 "not evaluated: this rule describes a change, and a whole-tree baseline has no change to describe"
@@ -1974,6 +2032,47 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The gates a whole-tree run does not evaluate, by `GateInfo::delta_only`: the set is
+    /// written out here so that a flag flipped in `config::GATES` fails this test.
+    #[test]
+    fn the_delta_only_gates_are_the_ones_whose_rule_describes_a_change() {
+        let delta_only: Vec<&str> = GATES
+            .iter()
+            .filter(|g| g.delta_only)
+            .map(|g| g.id)
+            .collect();
+        let mut expected = vec![
+            "assertion-reduction",
+            "ignored-tests",
+            "deletion-rationale",
+            "config-integrity",
+            "toolchain-config",
+            "build-hooks",
+            "ci-integrity",
+            "ci-skip-set",
+            "golden-output",
+            "dependency-delta",
+            "test-budget",
+            "test-floor",
+            "suppression-delta",
+            "error-swallowing",
+            "stub-bodies",
+            "scope-confinement",
+            "ratified-paths",
+            "review-threads",
+            "commit-provenance",
+            "bench-regression",
+        ];
+        let mut found = delta_only.clone();
+        expected.sort_unstable();
+        found.sort_unstable();
+        assert_eq!(found, expected);
+        assert!(
+            GATES.iter().all(|g| g.available || !g.delta_only),
+            "a planned gate never runs, so it carries no whole-tree rule"
+        );
+    }
 
     /// Every string-list property of the configuration schema, by name, with whether
     /// its description calls it a glob.

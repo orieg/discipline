@@ -2701,21 +2701,17 @@ pub fn evaluate_ignored_tests(
         if exempt.matches(path) {
             continue;
         }
-        if let Some(record) = tokens::find_override(
-            directives,
-            GATE,
-            &crate::findings::TEST_SLEEP_ADDED,
-            tokens::ALLOW_IGNORE,
-            leaf_name(test),
-        ) {
-            out.overrides.push(record);
-            continue;
-        }
-        out.push(
+        out.lift_or_push(
+            tokens::find_override(
+                directives,
+                GATE,
+                &crate::findings::TEST_SLEEP_ADDED,
+                tokens::ALLOW_IGNORE,
+                leaf_name(test),
+            ),
             crate::config::Severity::Warning,
             &crate::findings::TEST_SLEEP_ADDED,
-            Some(path),
-            Some(test.line),
+            (Some(path), Some(test.line)),
             format!(
                 "Test `{}` carries {} hard-coded delay(s) (was {before}); a timing-dependent pass slows the suite and hides the race.",
                 test.name, test.sleeps

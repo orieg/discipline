@@ -1904,20 +1904,14 @@ pub fn toolchain_config(ctx: &Context) -> Result<GateOutcome> {
                     // A file that appears has no bar to lower; one that disappears is
                     // reported: its settings no longer apply.
                     if file.kind == ChangeKind::Deleted {
-                        if let Some(ov) =
-                            lift(&crate::findings::TOOLCHAIN_CONFIG_DELETED, &file.path)
-                        {
-                            out.overrides.push(ov);
-                        } else {
-                            out.push(
-                                ctx.overridable(settings.severity()),
-                                &crate::findings::TOOLCHAIN_CONFIG_DELETED,
-                                Some(&file.path),
-                                None,
-                                format!("`{}` was deleted; the settings it carried no longer apply.", file.path),
-                                "Restore it, or record the deletion with `allow-toolchain-weakening: <path> <reason>`.",
-                            );
-                        }
+                        out.lift_or_push(
+                            lift(&crate::findings::TOOLCHAIN_CONFIG_DELETED, &file.path),
+                            ctx.overridable(settings.severity()),
+                            &crate::findings::TOOLCHAIN_CONFIG_DELETED,
+                            (Some(&file.path), None),
+                            format!("`{}` was deleted; the settings it carried no longer apply.", file.path),
+                            "Restore it, or record the deletion with `allow-toolchain-weakening: <path> <reason>`.",
+                        );
                     }
                     continue;
                 };

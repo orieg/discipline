@@ -525,12 +525,6 @@ pub fn render_cli_markdown() -> String {
 /// Render the options of every visible subcommand (and nested subcommand) from clap:
 /// one table per command with the flag, its environment variable, default and help.
 pub fn render_cli_options_markdown() -> String {
-    fn cell(s: &str) -> String {
-        s.replace('|', "\\|")
-            .replace('\n', " ")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-    }
     fn walk(cmd: &clap::Command, path: &str, out: &mut String) {
         for sub in cmd.get_subcommands() {
             if sub.is_hide_set() || sub.get_name() == "help" {
@@ -570,7 +564,7 @@ pub fn render_cli_options_markdown() -> String {
                     let help = a.get_help().map(|h| h.to_string()).unwrap_or_default();
                     out.push_str(&format!(
                         "| {name} | {env} | {default} | {} |\n",
-                        cell(&help)
+                        table_cell(&help)
                     ));
                 }
             }

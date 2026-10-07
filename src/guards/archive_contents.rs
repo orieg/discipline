@@ -21,11 +21,6 @@ pub fn evaluate_archive_contents(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.archive_contents;
     let mut out = GateOutcome::new(GATE);
 
-    if !settings.enabled {
-        out.enabled = false;
-        return Ok(out);
-    }
-
     let Some(archive_glob) = &settings.archive_path else {
         bail!("archive-contents gate is enabled but `archive_path` is not configured");
     };

@@ -98,8 +98,6 @@ pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
         return Ok(out);
     }
 
-    let allow_cross = ctx.allow_cross_host_bench || settings.allow_cross_host;
-
     for file in matching_files {
         // G1(c): Deleted benchmark artifact without a scoped directive -> FAIL (exit 1).
         // A generic `removes:` on the file does NOT silently lift benchmark deletions;
@@ -224,41 +222,14 @@ pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
             );
         }
 
-        // G1(d): Provenance tracking
-        let base_prov = extract_provenance(&base_text);
-        let head_prov = extract_provenance(&head_text);
-
-        if let Some(req) = &ctx.bench_provenance {
-            if head_prov.as_deref() != Some(req.as_str()) {
-                out.push(
-                    ctx.overridable(settings.severity),
-                    &crate::findings::BENCHMARK_PROVENANCE_MISMATCH,
-                    Some(&file.path),
-                    None,
-                    format!(
-                        "benchmark artifact `{}` has provenance `{:?}`, which does not match required `--bench-provenance` tag `{}`",
-                        file.path, head_prov, req
-                    ),
-                    "ensure benchmark was run on the required runner or update --bench-provenance",
-                );
-            }
-        }
-
-        if let (Some(b_p), Some(h_p)) = (&base_prov, &head_prov) {
-            if b_p != h_p && !allow_cross {
-                out.push(
-                    ctx.overridable(settings.severity),
-                    &crate::findings::CROSS_HOST_COMPARISON,
-                    Some(&file.path),
-                    None,
-                    format!(
-                        "benchmark artifact `{}` has provenance `{}` while baseline has `{}`; cross-host comparison is statistically invalid measurement noise",
-                        file.path, h_p, b_p
-                    ),
-                    "pass `--allow-cross-host-bench` or set `allow_cross_host = true` to allow cross-host comparison",
-                );
-            }
-        }
+        check_provenance(
+            ctx,
+            settings,
+            &file.path,
+            &extract_provenance(&base_text),
+            &extract_provenance(&head_text),
+            &mut out,
+        );
 
         evaluate_metrics_regression(
             ctx,
@@ -413,39 +384,7 @@ fn run_dual_file_bench_regression(
         }
     };
 
-    // G1(d): Provenance tracking
-    let allow_cross = ctx.allow_cross_host_bench || settings.allow_cross_host;
-    if let Some(req) = &ctx.bench_provenance {
-        if head_prov.as_deref() != Some(req.as_str()) {
-            out.push(
-                ctx.overridable(settings.severity),
-                &crate::findings::BENCHMARK_PROVENANCE_MISMATCH,
-                Some(h_path),
-                None,
-                format!(
-                    "benchmark artifact `{}` has provenance `{:?}`, which does not match required `--bench-provenance` tag `{}`",
-                    h_path, head_prov, req
-                ),
-                "ensure benchmark was run on the required runner or update --bench-provenance",
-            );
-        }
-    }
-
-    if let (Some(b_p), Some(h_p)) = (&base_prov, &head_prov) {
-        if b_p != h_p && !allow_cross {
-            out.push(
-                ctx.overridable(settings.severity),
-                &crate::findings::CROSS_HOST_COMPARISON,
-                Some(h_path),
-                None,
-                format!(
-                    "benchmark artifact `{}` has provenance `{}` while baseline has `{}`; cross-host comparison is statistically invalid measurement noise",
-                    h_path, h_p, b_p
-                ),
-                "pass `--allow-cross-host-bench` or set `allow_cross_host = true` to allow cross-host comparison",
-            );
-        }
-    }
+    check_provenance(ctx, settings, h_path, &base_prov, &head_prov, &mut out);
 
     evaluate_metrics_regression(
         ctx,
@@ -463,6 +402,50 @@ fn run_dual_file_bench_regression(
     }
 
     Ok(out)
+}
+
+/// G1(d), provenance tracking for one head artifact against its baseline: a tag other
+/// than the one `--bench-provenance` requires, and a baseline measured on another host.
+fn check_provenance(
+    ctx: &Context,
+    settings: &crate::config::BenchRegressionGate,
+    head_path: &str,
+    base_prov: &Option<String>,
+    head_prov: &Option<String>,
+    out: &mut GateOutcome,
+) {
+    let allow_cross = ctx.allow_cross_host_bench || settings.allow_cross_host;
+    if let Some(req) = &ctx.bench_provenance {
+        if head_prov.as_deref() != Some(req.as_str()) {
+            out.push(
+                ctx.overridable(settings.severity),
+                &crate::findings::BENCHMARK_PROVENANCE_MISMATCH,
+                Some(head_path),
+                None,
+                format!(
+                    "benchmark artifact `{}` has provenance `{:?}`, which does not match required `--bench-provenance` tag `{}`",
+                    head_path, head_prov, req
+                ),
+                "ensure benchmark was run on the required runner or update --bench-provenance",
+            );
+        }
+    }
+
+    if let (Some(b_p), Some(h_p)) = (base_prov, head_prov) {
+        if b_p != h_p && !allow_cross {
+            out.push(
+                ctx.overridable(settings.severity),
+                &crate::findings::CROSS_HOST_COMPARISON,
+                Some(head_path),
+                None,
+                format!(
+                    "benchmark artifact `{}` has provenance `{}` while baseline has `{}`; cross-host comparison is statistically invalid measurement noise",
+                    head_path, h_p, b_p
+                ),
+                "pass `--allow-cross-host-bench` or set `allow_cross_host = true` to allow cross-host comparison",
+            );
+        }
+    }
 }
 
 pub fn evaluate_metrics_regression(
