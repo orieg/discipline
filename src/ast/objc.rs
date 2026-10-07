@@ -139,6 +139,7 @@ impl LanguagePack for ObjcPack {
             super::calls::SLEEP_VOCAB,
             super::calls::sleeps,
         );
+        super::expected_exceptions::objc(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(root, src, &["comment", "string_literal"]);
         Ok(extractor.facts)
     }
@@ -458,6 +459,8 @@ impl<'a> ObjcExtractor<'a> {
             | "XCTAssertThrowsSpecific"
             | "XCTAssertThrowsSpecificNamed"
             | "XCTAssertNoThrow"
+            | "XCTAssertNoThrowSpecific"
+            | "XCTAssertNoThrowSpecificNamed"
             | "XCTFail" => {
                 test_fn.total_asserts += 1;
                 test_fn.strong_asserts += 1;
