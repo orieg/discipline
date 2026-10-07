@@ -28,8 +28,25 @@ fn restore_sigpipe() {}
 
 /// 0 = pass, 1 = violations, 2 = the check itself could not run. Keeping the
 /// last two apart lets CI tell "the change is bad" from "the gate is broken".
+///
+/// The work is done on a thread with a deep stack (`discipline::deep_stack`): a syntax
+/// tree may nest further than the main thread's stack lets a walker descend.
 fn main() -> ExitCode {
     restore_sigpipe();
+    match discipline::deep_stack::on_deep_stack(run) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!(
+                "{}: could not start the thread the work runs on, with a stack of {} MiB: {e}",
+                style::red("discipline: error"),
+                discipline::deep_stack::WORK_STACK_BYTES / (1024 * 1024)
+            );
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn run() -> ExitCode {
     let cli = match Cli::try_parse() {
         Ok(c) => c,
         Err(e) => {

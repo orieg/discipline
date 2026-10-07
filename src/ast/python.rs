@@ -57,6 +57,7 @@ impl LanguagePack for PythonPack {
             src,
         )?;
         let root = tree.root_node();
+        crate::ast::source_text::forget_unread_part();
 
         let mut extractor = PythonExtractor {
             dead: super::reach::dead_ranges(root, src, &PY_REACH),
@@ -92,6 +93,9 @@ impl LanguagePack for PythonPack {
         super::calls::count_python_assert_statements(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(root, src, &["comment", "string"]);
         extractor.facts.budgets = super::budgets::extract(root, src, &PY_BUDGETS);
+        // A skip condition written as a string that had no tree was not read: the skip
+        // it guards was counted as conditional without being judged.
+        crate::ast::source_text::unread_part(path)?;
         Ok(extractor.facts)
     }
 }
@@ -208,7 +212,9 @@ fn python_string_condition(code: &str) -> SkipCondition {
     {
         return undecided;
     }
-    let Ok(tree) = crate::ast::source_text::parse(&mut parser, code) else {
+    // No tree is not "undecided": it is a condition nobody read, which `parse_part`
+    // records and `PythonPack::extract` refuses the file for.
+    let Some(tree) = crate::ast::source_text::parse_part(&mut parser, code) else {
         return undecided;
     };
     let root = tree.root_node();
