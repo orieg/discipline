@@ -231,9 +231,21 @@ pub fn detect(env: &dyn Fn(&str) -> Option<String>, origin: Option<&str>) -> Res
 
 /// [`detect`] against the process environment and a repository's `origin`.
 pub fn detect_for(git: &crate::gitctx::GitCtx) -> Result<Forge, String> {
-    let origin = git
-        .remote_url("origin")
-        .map(|o| resolve_ssh_alias(&o, &|alias| ssh_hostname_from_home(alias)));
+    detect_from_origin(git.remote_url("origin"))
+}
+
+/// [`detect_for`] for a repository opened without a [`crate::gitctx::GitCtx`].
+pub(crate) fn detect_for_repo(repo: &git2::Repository) -> Result<Forge, String> {
+    detect_from_origin(
+        repo.find_remote("origin")
+            .ok()
+            .and_then(|r| r.url().ok().map(str::to_string)),
+    )
+}
+
+/// An SSH remote may name a `~/.ssh/config` alias; the forge is at its HostName.
+fn detect_from_origin(origin: Option<String>) -> Result<Forge, String> {
+    let origin = origin.map(|o| resolve_ssh_alias(&o, &|alias| ssh_hostname_from_home(alias)));
     detect(&|k| std::env::var(k).ok(), origin.as_deref())
 }
 

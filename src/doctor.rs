@@ -552,13 +552,9 @@ fn push_branches(
 /// Whether a push-trigger branch list (globs as written) covers `branch`.
 pub fn push_covers(branches: &[String], branch: &str) -> bool {
     branches.is_empty()
-        || branches.iter().any(|g| {
-            g == branch
-                || globset::Glob::new(g)
-                    .ok()
-                    .map(|g| g.compile_matcher().is_match(branch))
-                    .unwrap_or(false)
-        })
+        || branches
+            .iter()
+            .any(|g| g == branch || crate::doctor_settings::glob_matches(g, branch, false))
 }
 
 fn triggers(wf: &serde_yaml::Value) -> BTreeMap<String, serde_yaml::Value> {
@@ -1591,12 +1587,7 @@ pub fn gitea_protection(
                     .unwrap_or_default();
                 // Gitea and Forgejo match rule names with `/` as a separator: `*` does
                 // not cover `release/1.0`.
-                name == branch
-                    || globset::GlobBuilder::new(name)
-                        .literal_separator(true)
-                        .build()
-                        .map(|g| g.compile_matcher().is_match(branch))
-                        .unwrap_or(false)
+                name == branch || crate::doctor_settings::glob_matches(name, branch, true)
             };
             let exact = list.iter().find(|r| {
                 r.get("rule_name")
@@ -1805,10 +1796,7 @@ fn context_matches(required: &str, candidate: &str, patterns: bool) -> bool {
     if !patterns {
         return required == candidate;
     }
-    required == candidate
-        || globset::Glob::new(required)
-            .map(|g| g.compile_matcher().is_match(candidate))
-            .unwrap_or(false)
+    required == candidate || crate::doctor_settings::glob_matches(required, candidate, false)
 }
 
 /// A Gitea / Forgejo protected file pattern as the forge applies it (#428): lowercased and

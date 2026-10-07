@@ -749,62 +749,37 @@ pub fn config_for_opts(
     match agent {
         Agent::ClaudeCode => (
             ".claude/settings.json",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "hooks": {
-                    // A cloud session starts on a fresh VM without discipline: this
-                    // installs it there before the first edit ([`CLAUDE_BOOTSTRAP`]).
-                    "SessionStart": [{
-                        "matcher": "startup|resume",
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": format!("bash \"$CLAUDE_PROJECT_DIR\"/{CLAUDE_BOOTSTRAP}")
-                            },
-                            { "type": "command", "command": start }
-                        ]
-                    }],
-                    "PreToolUse": [{
-                        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
-                        "hooks": [{ "type": "command", "command": pre }]
-                    }],
-                    "PostToolUse": [{
-                        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
-                        "hooks": [{ "type": "command", "command": cmd }]
-                    }],
-                    "Stop": [{
-                        "hooks": [{ "type": "command", "command": cmd }]
-                    }]
-                }
-            }))
-            .unwrap_or_default()
-                + "\n",
+            claude_shaped(
+                // A cloud session starts on a fresh VM without discipline: this
+                // installs it there before the first edit ([`CLAUDE_BOOTSTRAP`]).
+                serde_json::json!({
+                    "matcher": "startup|resume",
+                    "hooks": [
+                        hook_entry(
+                            &format!("bash \"$CLAUDE_PROJECT_DIR\"/{CLAUDE_BOOTSTRAP}"),
+                            None
+                        ),
+                        hook_entry(&start, None)
+                    ]
+                }),
+                (
+                    "Edit|Write|MultiEdit|NotebookEdit|Bash",
+                    hook_entry(&pre, None),
+                ),
+                ("Edit|Write|MultiEdit|NotebookEdit", hook_entry(&cmd, None)),
+            ),
         ),
+        // Codex's contract is Claude Code's (recorded live:
+        // tests/fixtures/pretool/codex/): edits arrive as `apply_patch`, shell
+        // commands (reads included) as `Bash`. Codex runs a project's hooks
+        // only once they are approved in an interactive session.
         Agent::Codex => (
             ".codex/hooks.json",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "hooks": {
-                    // Codex's contract is Claude Code's (recorded live:
-                    // tests/fixtures/pretool/codex/): edits arrive as `apply_patch`, shell
-                    // commands (reads included) as `Bash`. Codex runs a project's hooks
-                    // only once they are approved in an interactive session.
-                    "SessionStart": [{
-                        "hooks": [{ "type": "command", "command": start }]
-                    }],
-                    "PreToolUse": [{
-                        "matcher": "apply_patch|Edit|Write|Bash",
-                        "hooks": [{ "type": "command", "command": pre }]
-                    }],
-                    "PostToolUse": [{
-                        "matcher": "apply_patch|Edit|Write",
-                        "hooks": [{ "type": "command", "command": cmd }]
-                    }],
-                    "Stop": [{
-                        "hooks": [{ "type": "command", "command": cmd }]
-                    }]
-                }
-            }))
-            .unwrap_or_default()
-                + "\n",
+            claude_shaped(
+                serde_json::json!({ "hooks": [hook_entry(&start, None)] }),
+                ("apply_patch|Edit|Write|Bash", hook_entry(&pre, None)),
+                ("apply_patch|Edit|Write", hook_entry(&cmd, None)),
+            ),
         ),
         Agent::Cursor => (
             ".cursor/hooks.json",
@@ -850,37 +825,55 @@ pub fn config_for_opts(
             .unwrap_or_default()
                 + "\n",
         ),
+        // Qwen Code's contract is Claude Code's (recorded live:
+        // tests/fixtures/pretool/qwen/); its tools are `write_file`, `edit`
+        // and `run_shell_command`.
         Agent::Qwen => (
             ".qwen/settings.json",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "hooks": {
-                    // Qwen Code's contract is Claude Code's (recorded live:
-                    // tests/fixtures/pretool/qwen/); its tools are `write_file`, `edit`
-                    // and `run_shell_command`.
-                    "SessionStart": [{
-                        "hooks": [{ "type": "command", "command": start, "timeout": 30 }]
-                    }],
-                    "PreToolUse": [{
-                        "matcher": "^(write_file|edit|replace|run_shell_command)$",
-                        "hooks": [{ "type": "command", "command": pre, "timeout": 30 }]
-                    }],
-                    "PostToolUse": [{
-                        "matcher": "^(write_file|edit)$",
-                        "hooks": [{ "type": "command", "command": cmd, "timeout": secs }]
-                    }],
-                    "Stop": [{
-                        "hooks": [{ "type": "command", "command": cmd, "timeout": secs }]
-                    }]
-                }
-            }))
-            .unwrap_or_default()
-                + "\n",
+            claude_shaped(
+                serde_json::json!({ "hooks": [hook_entry(&start, Some(30))] }),
+                (
+                    "^(write_file|edit|replace|run_shell_command)$",
+                    hook_entry(&pre, Some(30)),
+                ),
+                ("^(write_file|edit)$", hook_entry(&cmd, Some(secs))),
+            ),
         ),
         Agent::Opencode => (
             ".opencode/plugins/discipline.js",
             opencode_plugin(&cmd, &pre, &start, observe),
         ),
     }
+}
+
+/// One command handler of a Claude-shaped hook file, with its timeout in seconds when the
+/// agent's file carries one.
+fn hook_entry(command: &str, timeout: Option<u32>) -> serde_json::Value {
+    let mut entry = serde_json::json!({ "type": "command", "command": command });
+    if let Some(secs) = timeout {
+        entry["timeout"] = serde_json::json!(secs);
+    }
+    entry
+}
+
+/// The hook file of an agent whose contract is Claude Code's: one `SessionStart` group,
+/// the pre-tool handler and the check after an edit under their tool matchers, and the
+/// same check on `Stop`.
+fn claude_shaped(
+    session_start: serde_json::Value,
+    (pre_matcher, pre): (&str, serde_json::Value),
+    (post_matcher, check): (&str, serde_json::Value),
+) -> String {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "hooks": {
+            "SessionStart": [session_start],
+            "PreToolUse": [{ "matcher": pre_matcher, "hooks": [pre] }],
+            "PostToolUse": [{ "matcher": post_matcher, "hooks": [check.clone()] }],
+            "Stop": [{ "hooks": [check] }]
+        }
+    }))
+    .unwrap_or_default()
+        + "\n"
 }
 
 /// `run` behind a check that `discipline` is on `PATH`: without it the command says so on

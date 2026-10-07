@@ -1721,14 +1721,16 @@ const CASES: &[Case] = &[
     (
         "replay: a blocked run names its error gates, a run that could not check names none",
         || {
-            use crate::replay::{pr_from_subject, read_verdict};
-            let json = r#"{"outcomes":[{"gate":"pii","violations":[{"severity":"error"}]},{"gate":"x","violations":[{"severity":"warning"}]}]}"#;
-            let (v, e, w) = read_verdict(1, json);
+            use crate::replay::{parse_report, pr_from_subject, read_verdict};
+            let json = parse_report(
+                r#"{"outcomes":[{"gate":"pii","violations":[{"severity":"error"}]},{"gate":"x","violations":[{"severity":"warning"}]}]}"#,
+            );
+            let (v, e, w) = read_verdict(1, &json);
             Ok(v == "blocked"
                 && e == ["pii"]
                 && w == ["x"]
-                && read_verdict(0, "{}").0 == "passed"
-                && read_verdict(2, json) == ("could_not_check", vec![], vec![])
+                && read_verdict(0, &parse_report("{}")).0 == "passed"
+                && read_verdict(2, &json) == ("could_not_check", vec![], vec![])
                 && pr_from_subject("fix: y (#1028)") == Some(1028))
         },
     ),
