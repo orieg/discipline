@@ -775,20 +775,16 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                 return Ok(out);
             }
             if !others.is_empty() {
-                if let Some(record) = ctx.find_override(
-                    GATE,
-                    &crate::findings::BASELINE_MIGRATION_NOT_ALONE,
-                    tokens::ALLOW_GATE_WEAKENING,
-                    "baseline",
-                ) {
-                    out.overrides.push(record);
-                    return Ok(out);
-                }
-                out.push(
+                out.lift_or_push(
+                    ctx.find_override(
+                        GATE,
+                        &crate::findings::BASELINE_MIGRATION_NOT_ALONE,
+                        tokens::ALLOW_GATE_WEAKENING,
+                        "baseline",
+                    ),
                     ctx.overridable(severity),
                     &crate::findings::BASELINE_MIGRATION_NOT_ALONE,
-                    Some(baseline_shown),
-                    None,
+                    (Some(baseline_shown), None),
                     format!(
                         "[baseline] `{baseline_shown}` is rewritten from fingerprint version {} to {} in a change that also touches {} other file(s) (e.g. `{}`); a migration is only verifiable on its own.",
                         b.version,
@@ -1018,20 +1014,16 @@ pub fn golden_output(ctx: &Context) -> Result<GateOutcome> {
             if unmatched.is_empty() {
                 continue;
             }
-            if let Some(ov) = ctx.find_override(
-                GATE,
-                &crate::findings::SNAPSHOT_ADDED_FOR_EXISTING_TEST,
-                tokens::ALLOW_GOLDEN_UPDATE,
-                &file.path,
-            ) {
-                out.overrides.push(ov);
-                continue;
-            }
-            out.push(
+            out.lift_or_push(
+                ctx.find_override(
+                    GATE,
+                    &crate::findings::SNAPSHOT_ADDED_FOR_EXISTING_TEST,
+                    tokens::ALLOW_GOLDEN_UPDATE,
+                    &file.path,
+                ),
                 ctx.overridable(settings.severity()),
                 &crate::findings::SNAPSHOT_ADDED_FOR_EXISTING_TEST,
-                Some(&file.path),
-                None,
+                (Some(&file.path), None),
                 format!(
                     "Snapshot `{}` is new, but the test(s) it records ({}) already existed in `{}` and this change does not add them: the expectation was written after the behaviour.",
                     file.path,

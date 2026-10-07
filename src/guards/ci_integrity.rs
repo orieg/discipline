@@ -105,10 +105,6 @@ fn documented_job_count(
 pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
     let mut out = GateOutcome::new(GATE);
     let settings = &ctx.config.gates.ci_integrity;
-    if !settings.enabled {
-        out.enabled = false;
-        return Ok(out);
-    }
 
     let filter = exempt_filter(settings)?;
 

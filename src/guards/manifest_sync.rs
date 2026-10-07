@@ -17,11 +17,6 @@ pub fn evaluate_manifest_sync(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.manifest_sync;
     let mut out = GateOutcome::new(GATE);
 
-    if !settings.enabled {
-        out.enabled = false;
-        return Ok(out);
-    }
-
     if settings.rules.is_empty() {
         bail!("manifest-sync gate is enabled but no rules are configured");
     }

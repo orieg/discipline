@@ -130,11 +130,6 @@ pub fn evaluate_suppression_delta(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.suppression_delta;
     let mut out = GateOutcome::new(GATE);
 
-    if !settings.enabled {
-        out.enabled = false;
-        return Ok(out);
-    }
-
     let changed = ctx.git.changed_files()?;
     if changed.is_empty() {
         return Ok(out);

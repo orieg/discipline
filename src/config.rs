@@ -50,6 +50,10 @@ pub struct GateInfo {
     /// gate cannot be enabled or configured: asking for it is an error, never
     /// a silent pass.
     pub available: bool,
+    /// The gate's rule describes a change (base against head). A whole-tree run has no
+    /// change: every file is "added", so such a gate would record every dependency, every
+    /// ignored test and every instruction file as debt, and is not evaluated there.
+    pub delta_only: bool,
 }
 
 /// Single source of truth for gate identifiers.
@@ -60,6 +64,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it",
         languages: "any",
         available: true,
+        delta_only: false,
     },
     GateInfo {
         id: "assertion-reduction",
@@ -67,6 +72,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "assertion count / strength must not drop in an existing test",
         languages: "Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala, Objective-C",
         available: true,
+        delta_only: true,
     },
     GateInfo {
         id: "vacuous-tests",
@@ -74,6 +80,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "new tests must carry a non-tautological assertion",
         languages: "Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala, Objective-C",
         available: true,
+        delta_only: false,
     },
     GateInfo {
         id: "ignored-tests",
@@ -81,6 +88,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "tests must not be newly #[ignore]d or skipped without directive",
         languages: "Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala, Objective-C",
         available: true,
+        delta_only: true,
     },
     GateInfo {
         id: "unsafe-safety-comment",
@@ -88,6 +96,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "unsafe blocks / impls carry a // SAFETY: comment",
         languages: "Rust",
         available: true,
+        delta_only: false,
     },
     GateInfo {
         id: "deletion-rationale",
@@ -95,6 +104,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "deleted files and removed tests need a scoped removes: rationale",
         languages: "any",
         available: true,
+        delta_only: true,
     },
     GateInfo {
         id: "time-estimates",
@@ -102,6 +112,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "no calendar / duration estimates in markdown or the PR body",
         languages: "any",
         available: true,
+        delta_only: false,
     },
     GateInfo {
         id: "pii",
@@ -109,6 +120,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "no home paths, LAN IPs, denylisted hostnames, or fixed-format credentials (private keys, AWS, GitHub, Slack, OpenAI and Anthropic tokens, literal bearer headers) in tracked text",
         languages: "any",
         available: true,
+        delta_only: false,
     },
     GateInfo {
         id: "agent-scratch",
@@ -116,6 +128,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "agent scratch state is never tracked",
         languages: "any",
         available: true,
+        delta_only: false,
     },
     GateInfo {
         id: "shell-secrets",
@@ -123,6 +136,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "no command-line secrets or unverified piped scripts in shell, docker, or CI",
         languages: "shell, docker, workflows",
         available: true,
+        delta_only: false,
     },
     GateInfo {
         id: "issue-link",
@@ -130,6 +144,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "PR title or description links a tracking issue (#123, Fixes #123)",
         languages: "any",
         available: true,
+        delta_only: false,
     },
     GateInfo {
         id: "review-threads",
@@ -137,6 +152,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "the pull request has no unresolved review thread",
         languages: "any",
         available: true,
+        delta_only: true,
     },
     GateInfo {
         id: "ratified-paths",
@@ -144,6 +160,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "edits to protected paths carry an owner's ratification on an issue the pull request closes",
         languages: "any",
         available: true,
+        delta_only: true,
     },
     GateInfo {
         id: "citation-metadata",
@@ -151,6 +168,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "CITATION.cff and .zenodo.json are valid, agree with each other, and cite the concept DOI",
         languages: "any",
         available: true,
+        delta_only: false,
     },
     GateInfo {
         id: "commit-provenance",
@@ -158,6 +176,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "commits carry the required trailers; an agent-produced commit carries a review by someone else",
         languages: "any",
         available: true,
+        delta_only: true,
     },
     GateInfo {
         id: "config-integrity",
@@ -165,6 +184,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "a change cannot weaken its own discipline.toml without a token",
         languages: "any",
         available: true,
+        delta_only: true,
     },
     GateInfo {
         id: "stub-bodies",
@@ -172,6 +192,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null",
         languages: "Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala, Objective-C",
         available: true,
+        delta_only: true,
     },
     GateInfo {
         id: "error-swallowing",
@@ -179,6 +200,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "no new empty error handler or discarded Result outside tests",
         languages: "Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala, Objective-C",
         available: true,
+        delta_only: true,
     },
     GateInfo {
         id: "instruction-smuggling",
@@ -186,6 +208,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "no invisible Unicode, unreviewed agent-instruction edits, or instruction-like text in comments and prose",
         languages: "any (invisible characters, instruction files); Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala, Objective-C and prose files (phrases)",
         available: true,
+        delta_only: false,
     },
     GateInfo {
         id: "build-hooks",
@@ -193,6 +216,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "install and build hooks that gain network or shell access, and package-manager configuration edits, need a token",
         languages: "package.json, build.rs, setup.py, .npmrc, .pypirc, pip.conf, .cargo/config.toml, .env*",
         available: true,
+        delta_only: true,
     },
     GateInfo {
         id: "toolchain-config",
@@ -200,6 +224,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "compiler, linter, type-checker, test-runner and coverage configuration cannot be loosened without a token",
         languages: "tsconfig, ruff, mypy, pytest, coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest, codecov, phpstan, phpunit, and compiler warning flags in Makefile, CMake, setup.py and build.rs",
         available: true,
+        delta_only: true,
     },
     GateInfo {
         id: "sandbox-config",
@@ -207,6 +232,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "a change cannot widen an agent's permissions or sandbox, or a container's isolation, without a token",
         languages: "Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor and Copilot CLI settings, MCP server lists, devcontainer.json, Docker Compose, CI job and service containers",
         available: true,
+        delta_only: false,
     },
     GateInfo {
         id: "scope-confinement",
@@ -214,6 +240,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "changes stay inside authorized paths",
         languages: "any",
         available: true,
+        delta_only: true,
     },
     GateInfo {
         id: "suppression-delta",
@@ -221,6 +248,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "newly added linter / compiler suppression annotations",
         languages: "per pack",
         available: true,
+        delta_only: true,
     },
     GateInfo {
         id: "provenance-tags",
@@ -228,6 +256,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "published numerics carry (measured|target|projected)",
         languages: "any",
         available: true,
+        delta_only: false,
     },
     GateInfo {
         id: "ci-integrity",
@@ -235,6 +264,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "workflow weakening: continue-on-error, || true, unpinned actions",
         languages: "any",
         available: true,
+        delta_only: true,
     },
     GateInfo {
         id: "ci-skip-set",
@@ -242,6 +272,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "rollup skip set matches each job's `if:` under the observed filter outputs",
         languages: "any",
         available: true,
+        delta_only: true,
     },
     GateInfo {
         id: "test-floor",
@@ -249,6 +280,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "test-count ratchet read from the base ref",
         languages: "any",
         available: true,
+        delta_only: true,
     },
     GateInfo {
         id: "golden-output",
@@ -257,6 +289,7 @@ pub const GATES: &[GateInfo] = &[
             "prevents stealth edits to committed golden/test output files without explicit override",
         languages: "any",
         available: true,
+        delta_only: true,
     },
     GateInfo {
         id: "dependency-delta",
@@ -264,6 +297,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification",
         languages: "any",
         available: true,
+        delta_only: true,
     },
     GateInfo {
         id: "test-budget",
@@ -271,6 +305,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus)",
         languages: "Rust, Python, JS/TS, Go, any",
         available: true,
+        delta_only: true,
     },
     GateInfo {
         id: "pr-checklist",
@@ -278,6 +313,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "ticked PR checkboxes are reconciled against the diff",
         languages: "any",
         available: true,
+        delta_only: false,
     },
     GateInfo {
         id: "command",
@@ -285,6 +321,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet",
         languages: "any",
         available: true,
+        delta_only: false,
     },
     GateInfo {
         id: "sanitizers",
@@ -292,6 +329,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "ASan / TSan preset with audited suppressions and a race canary",
         languages: "Rust, C/C++",
         available: true,
+        delta_only: false,
     },
     GateInfo {
         id: "msrv",
@@ -299,6 +337,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "cargo check under the pinned MSRV",
         languages: "Rust",
         available: true,
+        delta_only: false,
     },
     GateInfo {
         id: "miri",
@@ -306,6 +345,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "Miri tiers with zero-tests guard",
         languages: "Rust",
         available: true,
+        delta_only: false,
     },
     GateInfo {
         id: "unsafe-budget",
@@ -313,6 +353,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "unsafe count ratchet",
         languages: "Rust",
         available: true,
+        delta_only: false,
     },
     GateInfo {
         id: "bench-regression",
@@ -320,6 +361,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "benchmark drift via harness adapters (deterministic counts or BCa intervals)",
         languages: "Rust, Go, Python, C/C++",
         available: true,
+        delta_only: true,
     },
     GateInfo {
         id: "archive-contents",
@@ -327,6 +369,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "distribution archive must contain required paths and zero forbidden developer artifacts",
         languages: "any",
         available: true,
+        delta_only: false,
     },
     GateInfo {
         id: "manifest-sync",
@@ -334,6 +377,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "reconcile git-tracked files against packaging manifest declarations",
         languages: "any",
         available: true,
+        delta_only: false,
     },
     GateInfo {
         id: "version-lockstep",
@@ -341,6 +385,7 @@ pub const GATES: &[GateInfo] = &[
         summary: "version declarations across headers, manifests, and files must remain in lockstep",
         languages: "any",
         available: true,
+        delta_only: false,
     },
 ];
 
