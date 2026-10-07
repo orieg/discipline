@@ -497,7 +497,13 @@ impl<'a> RubyExtractor<'a> {
     fn has_skip_metadata(&self, call_node: Node) -> bool {
         // Look for arguments: :skip, skip: true, skip: "reason"
         if let Some(args) = call_node.child_by_field_name("arguments") {
-            let text = self.text(args);
+            // Outside string literals and comments: a description that contains `skip:`
+            // is not metadata.
+            let text = super::text_without(
+                args,
+                self.src,
+                &["string", "heredoc_body", "comment", "block", "do_block"],
+            );
             if text.contains(":skip") || text.contains("skip:") {
                 return true;
             }

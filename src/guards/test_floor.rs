@@ -578,7 +578,15 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
             }
         }
         if let Some(head) = &head_static {
-            out.notes.extend(head.transition_notes(&base));
+            // A renamed file is the base side's file under its old path.
+            let renamed: std::collections::BTreeMap<String, String> = ctx
+                .git
+                .changed_files()?
+                .into_iter()
+                .filter(|cf| cf.old_path != cf.path && !cf.is_deleted())
+                .map(|cf| (cf.path, cf.old_path))
+                .collect();
+            out.notes.extend(head.transition_notes(&base, &renamed));
         }
         let base_count = base.running;
         if base_count > 0 && measured_count + settings.tolerance < base_count {
@@ -954,20 +962,38 @@ impl AstTestCount {
     /// Notes for the files the change takes out of determined collection while they
     /// keep counting: collected on the base side, and on the head side counted with
     /// collection not determined. The count cannot show it, so each file is named (the
-    /// first few), with the reason.
-    fn transition_notes(&self, base: &AstTestCount) -> Vec<String> {
+    /// first few), with the reason. `renamed` gives the base-side path of each file the
+    /// change renamed, by its head-side path: a file moved into a place where its
+    /// collection is not determined is the base side's file under its old path.
+    fn transition_notes(
+        &self,
+        base: &AstTestCount,
+        renamed: &std::collections::BTreeMap<String, String>,
+    ) -> Vec<String> {
         const NAMED: usize = 5;
-        let moved: Vec<(&String, &String)> = self
+        let moved: Vec<(&String, &String, Option<&String>)> = self
             .unknown_files
             .iter()
-            .filter(|(path, _)| base.collected_files.contains(*path))
+            .filter_map(|(path, reason)| {
+                if base.collected_files.contains(path) {
+                    return Some((path, reason, None));
+                }
+                let old = renamed.get(path)?;
+                base.collected_files
+                    .contains(old)
+                    .then_some((path, reason, Some(old)))
+            })
             .collect();
         let mut notes: Vec<String> = moved
             .iter()
             .take(NAMED)
-            .map(|(path, reason)| {
+            .map(|(path, reason, old)| {
+                let named = match old {
+                    Some(old) => format!("`{path}` (renamed from `{old}`)"),
+                    None => format!("`{path}`"),
+                };
                 format!(
-                    "head: `{path}` was collected on the base side, and the change leaves whether its tests run not determined ({reason}); they are still counted, so the count does not show the change"
+                    "head: {named} was collected on the base side, and the change leaves whether its tests run not determined ({reason}); they are still counted, so the count does not show the change"
                 )
             })
             .collect();

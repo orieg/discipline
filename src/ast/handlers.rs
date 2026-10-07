@@ -1219,7 +1219,8 @@ fn sort_by_callee(name: &str, fallible: &[&str], value_only: &[&str]) -> Option<
 }
 
 /// Go: sorts a discard by what it drops. `_ = err` drops an error. `x, _ := f()` drops
-/// `f`'s last value, sorted by `f`'s name. A type assertion, map index or channel
+/// `f`'s last value, sorted by `f`'s name. `_ = f()` drops `f`'s only value: a discarded
+/// result when `f` is a known-fallible name, nothing otherwise. A type assertion, map index or channel
 /// receive (`v, _ := x.(T)`, `m[k]`, `<-ch`) drops an ok flag and is not reported.
 pub fn go_discard_class(node: Node, src: &str) -> Option<&'static str> {
     let right = node.child_by_field_name("right")?;
@@ -1235,7 +1236,16 @@ pub fn go_discard_class(node: Node, src: &str) -> Option<&'static str> {
                 "selector_expression" => text(f.child_by_field_name("field")?, src),
                 _ => text(f, src),
             };
-            sort_by_callee(name, GO_FALLIBLE_CALLEES, GO_OK_CALLEES)
+            let class = sort_by_callee(name, GO_FALLIBLE_CALLEES, GO_OK_CALLEES);
+            // `_ = f()` drops the one value `f` returns. Only a known-fallible name says
+            // that value is an error; for any other callee nothing does.
+            let single_blank = node
+                .child_by_field_name("left")
+                .is_some_and(|left| text(left, src).trim() == "_");
+            if single_blank && class != Some("discarded-result") {
+                return None;
+            }
+            class
         }
         "identifier" => Some("discarded-result"),
         _ => None,
@@ -1318,7 +1328,8 @@ pub fn swift_discard_class(node: Node, src: &str) -> Option<&'static str> {
     }
 }
 
-/// Go: `_ = err`, `_, _ = f()`, `x, _ := f()` where the dropped value is the error.
+/// Go: `_ = err`, `_, _ = f()`, `x, _ := f()` where the dropped value is the error, and
+/// `_ = f()`, which `go_discard_class` keeps only for a known-fallible callee.
 pub fn go_discards(t: &str) -> bool {
     let t = t.trim();
     if t == "_ = err" || t.starts_with("_ = err") {
@@ -1328,7 +1339,8 @@ pub fn go_discards(t: &str) -> bool {
     if let Some((lhs, rhs)) = t.split_once([':', '=']) {
         let lhs = lhs.trim().trim_end_matches(':').trim();
         let rhs = rhs.trim_start_matches('=').trim();
-        return lhs.contains(',') && lhs.ends_with('_') && rhs.contains('(');
+        // A single `_` on the left of a call drops its one value.
+        return (lhs.contains(',') || lhs == "_") && lhs.ends_with('_') && rhs.contains('(');
     }
     false
 }
