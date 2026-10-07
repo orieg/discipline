@@ -23,6 +23,7 @@ pub mod integrity;
 pub mod issue_link;
 pub mod lockfile;
 pub mod manifest_sync;
+pub mod measured_citations;
 pub mod miri;
 pub mod msrv;
 pub mod perf;
@@ -1295,6 +1296,7 @@ const GLOB_LIST_KEYS: &[&str] = &[
     "fuzz_targets",
     "instruction_files",
     "superseded_json_paths",
+    "record_paths",
     "required_paths",
     "constant_fallback_paths",
 ];
@@ -2177,13 +2179,14 @@ mod tests {
         "canary_command",
         "command",
         "test_command",
-        // Names: jobs, steps, constants, presets, sanitizers, groups, actions.
+        // Names: jobs, steps, constants, presets, sanitizers, groups, actions, record keys.
         "change_job",
         "constant_name",
         "guard",
         "job",
         "name",
         "preset",
+        "record_commit_key",
         "rollup_job",
         "sanitizer",
         "uses",

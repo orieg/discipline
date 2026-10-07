@@ -6480,6 +6480,98 @@ smoke_cost::set_contains
         },
     ),
     (
+        "provenance-tags: a measured tag names a host and a commit that resolves (verify_measured_commit)",
+        || {
+            use crate::guards::measured_citations::{scan_document, Artifacts, DocPolicy};
+            const COMMIT: &str = "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            let commit = COMMIT;
+            let full = CitedRepository { commits: &[COMMIT, "1111111bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], shallow: false, files: &[] };
+            let shallow = CitedRepository { shallow: true, ..full };
+            let policy = DocPolicy { verify_measured_commit: true, ..DocPolicy::default() };
+            let scan = |text: &str, repo: &CitedRepository| {
+                scan_document(text, "docs/perf.md", None, &policy, repo, &mut Artifacts::default())
+            };
+            let codes = |text: &str| -> anyhow::Result<Vec<&'static str>> {
+                Ok(scan(text, &full)?.findings.iter().map(|f| f.kind.code).collect())
+            };
+            let named = scan(&format!("12.4 ns (measured: bench-box, {commit})"), &full)?;
+            let placeholder = codes("12.4 ns (measured: host, commit)")?;
+            let formless = codes("12.4 ns (measured on the reference host)")?;
+            let absent = codes("12.4 ns (measured: bench-box, 9999999)")?;
+            let branch = codes("12.4 ns (measured: bench-box, main)")?;
+            // Two commits start with these seven digits; a shallow clone cannot say an id is absent.
+            let ambiguous = scan("12.4 ns (measured: bench-box, 1111111)", &full)?;
+            let truncated = scan("12.4 ns (measured: bench-box, 9999999)", &shallow)?;
+            Ok(named.findings.is_empty()
+                && named.tags_judged == 1
+                && placeholder == ["placeholder-provenance-tag", "placeholder-provenance-tag"]
+                && formless == ["placeholder-provenance-tag"]
+                && absent == ["unresolvable-measured-commit"]
+                && branch == ["unresolvable-measured-commit"]
+                && ambiguous.findings.is_empty()
+                && ambiguous.cannot_check.len() == 1
+                && truncated.findings.is_empty()
+                && truncated.cannot_check.len() == 1)
+        },
+    ),
+    (
+        "provenance-tags: an added result record carries a full commit id that resolves (record_paths)",
+        || {
+            use crate::guards::measured_citations::scan_records;
+            const COMMIT: &str = "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            let commit = COMMIT;
+            let repo = CitedRepository { commits: &[COMMIT], shallow: false, files: &[] };
+            let added: std::collections::BTreeSet<usize> = [2, 3].into_iter().collect();
+            let jsonl = format!("{{\"commit\": \"unknown\"}}\n{{\"commit\": \"{commit}\"}}\n{{\"commit\": \"unknown\"}}\n");
+            // Line 1 is not added and is not judged; line 3 is.
+            let lines = scan_records("results/run.jsonl", &jsonl, None, &added, "commit", &repo)?;
+            let abbreviated = scan_records("results/r.json", "{\"commit\": \"1111111a\"}", None, &added, "commit", &repo)?;
+            let run_file = "{\"schema\": \"discipline-bench-ratio/v1\", \"provenance\": {\"commit\": \"abc123\"}}";
+            let ratio = scan_records("results/ratio.json", run_file, None, &added, "commit", &repo)?;
+            let unparsed = scan_records("results/r.json", "{", None, &added, "commit", &repo).is_err();
+            Ok(lines.judged == 2
+                && lines.findings.len() == 1
+                && lines.findings[0].line == Some(3)
+                && !lines.findings[0].message.contains("unknown")
+                && abbreviated.findings.len() == 1
+                && ratio.findings.len() == 1
+                && ratio.findings[0].message.contains("provenance.commit")
+                && unparsed)
+        },
+    ),
+    (
+        "provenance-tags: a tagged figure is a value of the artifact its paragraph cites (verify_cited_figures)",
+        || {
+            use crate::guards::measured_citations::{scan_document, Artifacts, DocPolicy};
+            let repo = CitedRepository {
+                commits: &[],
+                shallow: false,
+                files: &[("results/get.json", "{\"median_ns\": 12.3849}"), ("results/bad.json", "{")],
+            };
+            let scan = |text: &str, tolerance: f64| {
+                let policy = DocPolicy { verify_cited_figures: true, figure_tolerance_pct: tolerance, ..DocPolicy::default() };
+                scan_document(text, "docs/perf.md", None, &policy, &repo, &mut Artifacts::default())
+            };
+            let rounded = scan("Lookup takes 12.38 ns (measured: bench-box, abc1234; results/get.json).", 0.0)?;
+            let stale = scan("Lookup takes 11.9 ns (measured: bench-box, abc1234; results/get.json).", 0.0)?;
+            let tolerated = scan("Lookup takes 11.9 ns (measured: bench-box, abc1234; results/get.json).", 5.0)?;
+            let untracked = scan("Lookup takes 12.38 ns (measured: bench-box, abc1234; results/gone.json).", 0.0)?;
+            let uncited = scan("Lookup takes 11.9 ns (measured: bench-box, abc1234).", 0.0)?;
+            let unparsed = scan("Lookup takes 12.38 ns (measured: bench-box, abc1234; results/bad.json).", 0.0).is_err();
+            let code = |s: &crate::guards::measured_citations::DocScan| -> Vec<&'static str> {
+                s.findings.iter().map(|f| f.kind.code).collect()
+            };
+            Ok(rounded.findings.is_empty()
+                && rounded.paragraphs_compared == 1
+                && code(&stale) == ["figure-disagrees-with-artifact"]
+                && tolerated.findings.is_empty()
+                && code(&untracked) == ["figure-disagrees-with-artifact"]
+                && uncited.findings.is_empty()
+                && uncited.uncited == 1
+                && unparsed)
+        },
+    ),
+    (
         "doctor: a required check must run discipline; could-not-check is never healthy",
         || {
             use crate::doctor::{analyse_workflows, protection_findings, Protection, Status};
@@ -7762,4 +7854,42 @@ fn first_test_cases(path: &str, src: &str) -> Result<(Option<usize>, bool)> {
         .first()
         .ok_or_else(|| anyhow::anyhow!("no test read in {path}"))?;
     Ok((test.cases, test.non_literal_cases))
+}
+
+/// A repository told as a table, for the `provenance-tags` citation cases: the commits it
+/// holds, whether its history is truncated, and its tracked files.
+#[derive(Clone, Copy)]
+struct CitedRepository {
+    commits: &'static [&'static str],
+    shallow: bool,
+    files: &'static [(&'static str, &'static str)],
+}
+
+impl crate::guards::measured_citations::Evidence for CitedRepository {
+    fn lookup_commit(&self, hex: &str) -> Result<crate::gitctx::CommitLookup> {
+        use crate::gitctx::CommitLookup;
+        let held: Vec<&str> = self
+            .commits
+            .iter()
+            .copied()
+            .filter(|c| c.starts_with(hex))
+            .collect();
+        Ok(match held.as_slice() {
+            [] => CommitLookup::Missing,
+            [one] => CommitLookup::Commit(one.to_string()),
+            _ => CommitLookup::Ambiguous,
+        })
+    }
+
+    fn is_shallow(&self) -> bool {
+        self.shallow
+    }
+
+    fn artifact(&self, path: &str) -> Result<Option<Vec<u8>>> {
+        Ok(self
+            .files
+            .iter()
+            .find(|(p, _)| *p == path)
+            .map(|(_, c)| c.as_bytes().to_vec()))
+    }
 }

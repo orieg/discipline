@@ -262,12 +262,17 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.provenance-tags.diff_only` | boolean | `false` | Judge only paragraphs that contain an added line (default: false, the whole changed file) |
 | `gates.provenance-tags.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.provenance-tags.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.provenance-tags.figure_tolerance_pct` | number | `0.0` | Relative tolerance in percent added to rounding when a tagged figure is compared with the cited artifact's values (default: 0) |
 | `gates.provenance-tags.pending_issue_repos` | list | `[]` | Other repositories (owner/name) whose issues a pending statement may cite; by default only this repository's issues count |
 | `gates.provenance-tags.ratio_satisfied_by` | list | `[]` | What satisfies a published wall-clock ratio, replacing the built-in list when set: interval, marker:&lt;word&gt;, artifact:&lt;glob&gt;, regex:&lt;pattern&gt; (paragraph-scoped) |
+| `gates.provenance-tags.record_commit_key` | string | `"commit"` | Key of a result record that holds the commit it was measured at (default: commit) |
+| `gates.provenance-tags.record_paths` | list | `[]` | Globs of JSON / JSONL result records; the commit key of every added or changed record must be a full object id that resolves to a commit |
 | `gates.provenance-tags.require_open_pending_issues` | boolean | `false` | A pending-measurement statement must cite at least one open issue, read from the forge (gh on GitHub, curl on GitLab, Gitea and Forgejo); implies check_pending_citations |
 | `gates.provenance-tags.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.provenance-tags.superseded_json_paths` | list | `[]` | Globs of tracked JSON datasets swept for registered figures |
 | `gates.provenance-tags.superseded_registry` | string | *(unset)* | Path (read at HEAD) of a JSON registry of withdrawn figures; a registered figure may be republished only next to a retraction marker |
+| `gates.provenance-tags.verify_cited_figures` | boolean | `false` | Each figure of a paragraph or table carrying a measured tag must equal a numeric value of the tracked data artifact (.json, .jsonl, .csv) the paragraph cites |
+| `gates.provenance-tags.verify_measured_commit` | boolean | `false` | A (measured: &lt;host&gt;, &lt;commit&gt;) tag on an added line must name a host and a commit (7 to 40 hexadecimal digits) that resolves to a commit in the local object database |
 | `gates.ratified-paths.accept_edited` | string | `"never"` | Whether an edited comment ratifies: never (default), or when the forge names the author as editor (GitHub only) |
 | `gates.ratified-paths.accept_email_replies` | boolean | `false` | Whether a GitHub comment created by an email reply ratifies (default: false) |
 | `gates.ratified-paths.agent_logins` | list | `[]` | Logins that never ratify, even when also listed in ratifiers |

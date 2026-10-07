@@ -244,6 +244,10 @@ findings! {
     CROSS_METRIC_FIGURES_WITHOUT_WORKLOAD_TAG = ["provenance-tags"], "cross-metric-figures-without-workload-tag", "Cross-Metric Figures Without Workload Tag", Same;
     PENDING_MEASUREMENT_WITHOUT_OPEN_ISSUE = ["provenance-tags"], "pending-measurement-without-open-issue", "Pending Measurement Without Open Issue", Same;
     SUPERSEDED_FIGURE_REPUBLISHED = ["provenance-tags"], "superseded-figure-republished", "Superseded Figure Republished", Same;
+    PLACEHOLDER_PROVENANCE_TAG = ["provenance-tags"], "placeholder-provenance-tag", "Measured Tag Names No Host Or Commit", Same;
+    UNRESOLVABLE_MEASURED_COMMIT = ["provenance-tags"], "unresolvable-measured-commit", "Measured Tag Commit Does Not Resolve", Same;
+    UNRESOLVABLE_RECORD_COMMIT = ["provenance-tags"], "unresolvable-record-commit", "Result Record Commit Does Not Resolve", Same;
+    FIGURE_DISAGREES_WITH_ARTIFACT = ["provenance-tags"], "figure-disagrees-with-artifact", "Tagged Figure Not In Cited Artifact", Same;
 
     // ci-integrity
     VERIFICATION_WORKFLOW_DELETED = ["ci-integrity"], "verification-workflow-deleted", "Verification Workflow Deleted", Was("Deletion of Verification Workflow");
