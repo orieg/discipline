@@ -355,6 +355,7 @@ impl<'a> PhpExtractor<'a> {
                 tautologies: h.tautologies,
                 fatal_asserts: h.fatal_asserts,
                 helper_checks: 0,
+                equality_exits: 0,
             },
             calls,
         );

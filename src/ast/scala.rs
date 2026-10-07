@@ -465,6 +465,7 @@ impl<'a> ScalaExtractor<'a> {
                 tautologies: helper.tautologies,
                 fatal_asserts: helper.fatal_asserts,
                 helper_checks: 0,
+                equality_exits: 0,
             },
             dummy,
         );

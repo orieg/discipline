@@ -64,6 +64,7 @@ impl LanguagePack for JavaScriptPack {
             test_calls: Vec::new(),
             suite_cases: Vec::new(),
             suite_skips: Vec::new(),
+            runner_names: runner_names(root, src),
         };
 
         extractor.collect_comments_and_escape_hatches(root);
@@ -252,6 +253,81 @@ struct JsExtractor<'a> {
     /// Conditional skips of the enclosing suites (`describe.skipIf(..)`), outermost first:
     /// the condition as reported and what a CI variable decides about it.
     suite_skips: Vec<Vec<(String, super::ci_condition::CiVerdict)>>,
+    /// The runner function names this file binds to something else
+    /// ([`runner_names`]): `.each` on one is not a case source.
+    runner_names: super::test_cases::RunnerNames,
+}
+
+/// Reads which of the runner's function names (`it`, `test`, `describe`, ..) the file
+/// declares as something that is not a runner's: a function, class or parameter of that
+/// name, and a variable of that name whose value is not derived from a runner's
+/// (`const test = base.extend({..})`, where `base` is a runner's name, stays the
+/// runner's); and which it imports or requires from a module that is not a runner.
+fn runner_names(root: Node, src: &str) -> super::test_cases::RunnerNames {
+    use super::test_cases::{RUNNER_FUNCTIONS, RUNNER_MODULES};
+    let text = |n: Node| n.utf8_text(src.as_bytes()).unwrap_or("");
+    let bindings = super::expected_exceptions::js_bindings(root, src);
+    let from_runner = |name: &str| {
+        bindings
+            .iter()
+            .any(|(bound, module)| bound == name && RUNNER_MODULES.contains(&module.as_str()))
+    };
+    let mut not_runner: Vec<String> = Vec::new();
+    let from_elsewhere: Vec<String> = bindings
+        .iter()
+        .filter(|(bound, module)| {
+            RUNNER_FUNCTIONS.contains(&bound.as_str()) && !RUNNER_MODULES.contains(&module.as_str())
+        })
+        .map(|(bound, _)| bound.clone())
+        .collect();
+    let imported = |name: &str| bindings.iter().any(|(bound, _)| bound == name);
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        let declared: Option<Node> = match node.kind() {
+            "function_declaration" | "generator_function_declaration" | "class_declaration" => {
+                node.child_by_field_name("name")
+            }
+            "required_parameter" | "optional_parameter" => node.child_by_field_name("pattern"),
+            "identifier"
+                if node
+                    .parent()
+                    .is_some_and(|p| p.kind() == "formal_parameters") =>
+            {
+                Some(node)
+            }
+            "variable_declarator" => {
+                let name = node.child_by_field_name("name");
+                // `const test = base.extend({..})`: derived from a runner's function.
+                let mut on = node.child_by_field_name("value");
+                while let Some(value) = on {
+                    on = match value.kind() {
+                        "call_expression" => value.child_by_field_name("function"),
+                        "member_expression" => value.child_by_field_name("object"),
+                        _ => break,
+                    };
+                }
+                let derived = on.is_some_and(|base| {
+                    base.kind() == "identifier"
+                        && (from_runner(text(base))
+                            || (RUNNER_FUNCTIONS.contains(&text(base)) && !imported(text(base))))
+                });
+                name.filter(|_| !derived)
+            }
+            _ => None,
+        };
+        if let Some(name) = declared.filter(|n| n.kind() == "identifier") {
+            let name = text(name);
+            if RUNNER_FUNCTIONS.contains(&name) && !imported(name) {
+                not_runner.push(name.to_string());
+            }
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.children(&mut cursor));
+    }
+    super::test_cases::RunnerNames {
+        not_runner,
+        imported: from_elsewhere,
+    }
 }
 
 /// Function nodes whose body runs only when called.
@@ -360,7 +436,9 @@ impl<'a> JsExtractor<'a> {
                     scope.push(title);
                     self.suite_cases
                         .push(super::test_cases::extract_javascript_cases(
-                            func_node, self.src,
+                            func_node,
+                            self.src,
+                            &self.runner_names,
                         ));
                     self.suite_skips.push(conditional);
                     if let Some(args) = node.child_by_field_name("arguments") {
@@ -386,7 +464,11 @@ impl<'a> JsExtractor<'a> {
                         .suite_cases
                         .iter()
                         .fold(
-                            super::test_cases::extract_javascript_cases(func_node, self.src),
+                            super::test_cases::extract_javascript_cases(
+                                func_node,
+                                self.src,
+                                &self.runner_names,
+                            ),
                             |own, suite| super::test_cases::multiply_cases(suite.clone(), own),
                         )
                         .into_parts();
@@ -538,6 +620,7 @@ impl<'a> JsExtractor<'a> {
                     tautologies: h.tautologies,
                     fatal_asserts: h.fatal_asserts,
                     helper_checks: 0,
+                    equality_exits: 0,
                 },
                 calls,
             );
@@ -579,6 +662,7 @@ impl<'a> JsExtractor<'a> {
                     tautologies: h.tautologies,
                     fatal_asserts: h.fatal_asserts,
                     helper_checks: 0,
+                    equality_exits: 0,
                 },
                 calls,
             );

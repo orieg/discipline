@@ -1317,15 +1317,25 @@ var addRows = []struct{ a, b int }{
 }
 ";
 
-/// A table moved to another file of the package is not resolved: the test reads as one
-/// that lost its case list.
+/// A table moved to another file of the package is resolved there (#626): the test keeps
+/// its rows. Moved with a row lost on the way, or to a file of another package, the test
+/// is reported.
 #[test]
-fn go_table_moved_to_another_file_is_not_resolved() {
-    let repo = Repo::new();
-    repo.commit_base("calc_test.go", GO_TABLE_ELSEWHERE, "test: base");
-    repo.write("calc_test.go", GO_TABLE_ELSEWHERE_HEAD);
-    repo.write("rows_test.go", GO_TABLE_FILE);
-    repo.commit("test: move the table");
-    let run = repo.check(&[]);
-    assert_reduced(&run, "no longer read as parametrized");
+fn go_table_moved_to_another_file_of_the_package_keeps_its_rows() {
+    let moved = |table: &str| {
+        let repo = Repo::new();
+        repo.commit_base("calc_test.go", GO_TABLE_ELSEWHERE, "test: base");
+        repo.write("calc_test.go", GO_TABLE_ELSEWHERE_HEAD);
+        repo.write("rows_test.go", table);
+        repo.commit("test: move the table");
+        repo.check(&[])
+    };
+    assert_clean(&moved(GO_TABLE_FILE));
+    // Control: one row lost on the way.
+    assert_reduced(&moved(&GO_TABLE_FILE.replace("\t{3, 4},\n", "")), "3 to 2");
+    // Control: a file of the directory's other package holds no table of this one.
+    assert_reduced(
+        &moved(&GO_TABLE_FILE.replace("package calc\n", "package calc_test\n")),
+        "no longer read as parametrized",
+    );
 }

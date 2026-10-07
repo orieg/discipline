@@ -552,6 +552,9 @@ pub struct TestHelperFacts {
     pub tautologies: usize,
     pub fatal_asserts: usize,
     pub helper_checks: usize,
+    /// Failure exits of its body that an equality comparison guards
+    /// (`if a != b { panic!() }`, `helper_loops`): equality checks written by hand.
+    pub equality_exits: usize,
 }
 
 impl TestHelperFacts {
@@ -599,6 +602,7 @@ impl ParsedFileFacts {
             out.strong_asserts += callee.strong_asserts;
             out.tautologies += callee.tautologies;
             out.fatal_asserts += callee.fatal_asserts;
+            out.equality_exits += callee.equality_exits;
         }
         path.pop();
         out
@@ -619,6 +623,7 @@ impl ParsedFileFacts {
                         s.strong_asserts = s.strong_asserts.min(f.strong_asserts);
                         s.tautologies = s.tautologies.min(f.tautologies);
                         s.fatal_asserts = s.fatal_asserts.min(f.fatal_asserts);
+                        s.equality_exits = s.equality_exits.min(f.equality_exits);
                         s
                     }
                 });

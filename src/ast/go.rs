@@ -55,6 +55,8 @@ impl LanguagePack for GoPack {
             suites: suite_types(root, src),
             suite_receiver: None,
             suite_package: suite_package(root, src),
+            assertion_locals: Vec::new(),
+            gocheck: Vec::new(),
         };
 
         extractor.collect_comments_and_escape_hatches(root);
@@ -125,6 +127,77 @@ impl LanguagePack for GoPack {
     }
 }
 
+/// Reads the case tables of the tests of `facts`, the facts of the Go file `src`, again
+/// with the other files of its package in hand (`siblings`, as `(path, source)`): a
+/// table or row type declared in another file of the package directory counts as one
+/// declared in the test's own file does
+/// ([`super::test_cases::extract_go_cases_in_package`]). A sibling that declares another
+/// package (`calc_test` beside `calc`) or that the grammar cannot read is left out.
+pub fn resolve_package_cases(
+    facts: &mut ParsedFileFacts,
+    path: &str,
+    src: &str,
+    siblings: &[(String, String)],
+) -> Result<()> {
+    use super::test_cases::{extract_go_cases_in_package, go_package_name, GoSibling};
+    if facts.tests.is_empty() || siblings.is_empty() {
+        return Ok(());
+    }
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_go::LANGUAGE.into())
+        .map_err(|e| anyhow!("failed to load the Go grammar: {e}"))?;
+    let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
+    let root = tree.root_node();
+    let Some(package) = go_package_name(root, src.as_bytes()) else {
+        return Ok(());
+    };
+    let mut trees = Vec::new();
+    for (sibling_path, sibling_src) in siblings {
+        let Ok(tree) = crate::ast::source_text::parse_file(&mut parser, sibling_path, sibling_src)
+        else {
+            continue;
+        };
+        if go_package_name(tree.root_node(), sibling_src.as_bytes()) == Some(package) {
+            trees.push((tree, sibling_src.as_bytes()));
+        }
+    }
+    if trees.is_empty() {
+        return Ok(());
+    }
+    let siblings: Vec<GoSibling> = trees
+        .iter()
+        .map(|(tree, src)| GoSibling {
+            src,
+            root: tree.root_node(),
+        })
+        .collect();
+    let mut cursor = root.walk();
+    for decl in root.children(&mut cursor) {
+        if !matches!(decl.kind(), "function_declaration" | "method_declaration") {
+            continue;
+        }
+        let Some(body) = decl.child_by_field_name("body") else {
+            continue;
+        };
+        let line = decl.start_position().row + 1;
+        let end_line = decl.end_position().row + 1;
+        // The test recorded for this declaration; a subtest shares neither line.
+        let test = facts
+            .tests
+            .iter_mut()
+            .find(|t| t.line == line && t.end_line == end_line && !t.name.contains('/'));
+        if let Some(test) = test {
+            let (cases, non_literal_cases, case_rows) =
+                extract_go_cases_in_package(body, src.as_bytes(), &siblings).into_parts();
+            test.cases = cases;
+            test.non_literal_cases = non_literal_cases;
+            test.case_rows = case_rows;
+        }
+    }
+    Ok(())
+}
+
 /// Determines whether a function name matches the Go test runner's convention (TestXxx or FuzzXxx).
 pub fn is_go_test_function_name(name: &str) -> bool {
     for prefix in &["Test", "Fuzz"] {
@@ -175,7 +248,69 @@ struct GoExtractor<'a> {
     suite_receiver: Option<String>,
     /// The name the file calls testify's `suite` package by ([`suite_package`]).
     suite_package: String,
+    /// Locals of the function being read that hold a testify assertion object, and
+    /// whether its assertions stop the test (`read_assertion_locals`).
+    assertion_locals: Vec<(String, bool)>,
+    /// The gocheck `*C` parameters of the function being read ([`gocheck_parameters`]).
+    gocheck: Vec<String>,
 }
+
+/// The parameters of a function or method declared as gocheck's `*C` (`c *C`,
+/// `c *check.C`, `c *gc.C`): assertions are made on them (`c.Assert(a, Equals, b)`).
+fn gocheck_parameters(node: Node, src: &str) -> Vec<String> {
+    let text = |n: Node| n.utf8_text(src.as_bytes()).unwrap_or("").to_string();
+    let Some(params) = node.child_by_field_name("parameters") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut cursor = params.walk();
+    for param in params
+        .named_children(&mut cursor)
+        .filter(|c| c.kind() == "parameter_declaration")
+    {
+        let Some(ty) = param.child_by_field_name("type") else {
+            continue;
+        };
+        if ty.kind() != "pointer_type" {
+            continue;
+        }
+        let named = ty.named_child(0).is_some_and(|inner| match inner.kind() {
+            "type_identifier" => text(inner) == "C",
+            "qualified_type" => inner
+                .child_by_field_name("name")
+                .is_some_and(|n| text(n) == "C"),
+            _ => false,
+        });
+        if named {
+            let mut names = param.walk();
+            out.extend(
+                param
+                    .children_by_field_name("name", &mut names)
+                    .map(text)
+                    .filter(|n| n != "_"),
+            );
+        }
+    }
+    out
+}
+
+/// Whether a method has the shape gocheck runs as a test: named as a Go test, with one
+/// parameter, a gocheck `*C`, and no result (`func (s *S) TestX(c *C)`).
+fn is_gocheck_test(node: Node, src: &str) -> bool {
+    let name = node
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(src.as_bytes()).ok())
+        .unwrap_or("");
+    is_go_test_function_name(name)
+        && node.child_by_field_name("result").is_none()
+        && node
+            .child_by_field_name("parameters")
+            .is_some_and(|p| p.named_child_count() == 1)
+        && gocheck_parameters(node, src).len() == 1
+}
+
+/// gocheck checkers that compare the value with an expected one.
+const GOCHECK_WEAK_CHECKERS: &[&str] = &["IsNil", "NotNil"];
 
 /// The assertion methods of testify's `assert` and `require` packages, which a suite
 /// carries as methods of its own (`s.Equal(..)`). Each also exists with a trailing `f`
@@ -513,6 +648,12 @@ impl<'a> GoExtractor<'a> {
         }
         let name = format!("{receiver}.{method}");
         let src = std::str::from_utf8(self.src).unwrap_or("");
+        // A gocheck suite method: `func (s *S) TestX(c *C)`. The type need not be a
+        // testify suite, and gocheck runs every method of that shape.
+        if is_gocheck_test(node, src) {
+            self.record_test(node, &name);
+            return;
+        }
         let suite = method_head(node, src).filter(|(ty, _, _)| self.suites.contains(*ty));
         let Some((_, on, shaped)) = suite else {
             self.record_helper(node, name, false);
@@ -536,6 +677,7 @@ impl<'a> GoExtractor<'a> {
             ..Default::default()
         };
         let mut direct_calls = Vec::new();
+        self.enter_function(node);
         if let Some(body) = node.child_by_field_name("body") {
             let (cases, non_literal_cases, case_rows) =
                 super::test_cases::extract_go_cases(body, self.src).into_parts();
@@ -550,6 +692,148 @@ impl<'a> GoExtractor<'a> {
         }
         self.facts.tests.push(test_fn);
         self.test_calls.push(direct_calls);
+    }
+
+    /// Reads what the function or method `node` makes assertions on beside `t` and the
+    /// suite: its gocheck `*C` parameters, and its locals bound to a testify assertion
+    /// object.
+    fn enter_function(&mut self, node: Node) {
+        let src = std::str::from_utf8(self.src).unwrap_or("");
+        self.gocheck = if self.is_test_path {
+            gocheck_parameters(node, src)
+        } else {
+            Vec::new()
+        };
+        self.assertion_locals.clear();
+        if let Some(body) = node.child_by_field_name("body") {
+            self.read_assertion_locals(body);
+        }
+    }
+
+    /// Records the locals under `node` bound to a testify assertion object:
+    /// `r := s.Require()` and `a := s.Assert()` on the suite being read,
+    /// `r := require.New(t)` and `a := assert.New(t)`. `r.NoError(err)` then counts as
+    /// `require.NoError(t, err)` does. A name bound to anything else, or assigned twice
+    /// to objects that differ, is not recorded.
+    fn read_assertion_locals<'t>(&mut self, node: Node<'t>) {
+        if matches!(node.kind(), "short_var_declaration" | "var_spec") {
+            let left = node
+                .child_by_field_name("left")
+                .or_else(|| node.child_by_field_name("name"));
+            let right = node
+                .child_by_field_name("right")
+                .or_else(|| node.child_by_field_name("value"));
+            let single = |n: Node<'t>| -> Option<Node<'t>> {
+                match n.kind() {
+                    "expression_list" => (n.named_child_count() == 1)
+                        .then(|| n.named_child(0))
+                        .flatten(),
+                    _ => Some(n),
+                }
+            };
+            let bound = left.and_then(single).zip(right.and_then(single));
+            if let Some((name, value)) = bound {
+                if name.kind() == "identifier" {
+                    if let Some(fatal) = self.assertion_object(value) {
+                        let name = self.text(name).to_string();
+                        match self.assertion_locals.iter().position(|(n, _)| *n == name) {
+                            Some(at) if self.assertion_locals[at].1 != fatal => {
+                                self.assertion_locals.remove(at);
+                            }
+                            Some(_) => {}
+                            None => self.assertion_locals.push((name, fatal)),
+                        }
+                    }
+                }
+            }
+        }
+        let mut cursor = node.walk();
+        let children: Vec<Node<'t>> = node.children(&mut cursor).collect();
+        for child in children {
+            self.read_assertion_locals(child);
+        }
+    }
+
+    /// Whether `value` builds a testify assertion object, and whether its assertions
+    /// stop the test: `s.Require()` / `require.New(t)` do, `s.Assert()` / `assert.New(t)`
+    /// do not.
+    fn assertion_object(&self, value: Node) -> Option<bool> {
+        if value.kind() != "call_expression" {
+            return None;
+        }
+        let callee = value.child_by_field_name("function")?;
+        if callee.kind() != "selector_expression" {
+            return None;
+        }
+        let on = self.text(callee.child_by_field_name("operand")?);
+        let method = self.text(callee.child_by_field_name("field")?);
+        let args = Self::collect_arguments(value.child_by_field_name("arguments"));
+        match (on, method, args.len()) {
+            ("require", "New", 1) => Some(true),
+            ("assert", "New", 1) => Some(false),
+            (_, "Require", 0) if self.suite_receiver.as_deref() == Some(on) => Some(true),
+            (_, "Assert", 0) if self.suite_receiver.as_deref() == Some(on) => Some(false),
+            _ => None,
+        }
+    }
+
+    /// The assertion a call makes on a local bound to a testify assertion object
+    /// ([`Self::read_assertion_locals`]), and whether it stops the test.
+    fn local_assertion(&self, callee: Node) -> Option<(&'a str, bool)> {
+        if callee.kind() != "selector_expression" {
+            return None;
+        }
+        let on = callee.child_by_field_name("operand")?;
+        let method = self.text(callee.child_by_field_name("field")?);
+        if on.kind() != "identifier" || !is_testify_assertion(method) {
+            return None;
+        }
+        let on = self.text(on);
+        self.assertion_locals
+            .iter()
+            .find(|(name, _)| name == on)
+            .map(|(_, fatal)| (method, *fatal))
+    }
+
+    /// Counts a gocheck assertion, `c.Assert(obtained, Checker, expected..)` (stops the
+    /// test) or `c.Check(..)` (does not), made on a `*C` parameter of the function being
+    /// read. A checker that takes an expected value (`Equals`, `DeepEquals`, `Matches`,
+    /// `HasLen`, ..) is an equality check; `IsNil` / `NotNil` are not; the same text on
+    /// both sides of one is a tautology.
+    fn count_gocheck(&self, callee: Node, args: &[Node], test_fn: &mut TestFn) -> bool {
+        if callee.kind() != "selector_expression" {
+            return false;
+        }
+        let (Some(on), Some(method)) = (
+            callee.child_by_field_name("operand"),
+            callee.child_by_field_name("field"),
+        ) else {
+            return false;
+        };
+        let fatal = match self.text(method) {
+            "Assert" => true,
+            "Check" => false,
+            _ => return false,
+        };
+        if on.kind() != "identifier"
+            || !self.gocheck.iter().any(|c| c == self.text(on))
+            || args.len() < 2
+        {
+            return false;
+        }
+        let checker = self.text(args[1]);
+        let checker = checker.rsplit('.').next().unwrap_or(checker);
+        test_fn.total_asserts += 1;
+        if fatal {
+            test_fn.fatal_asserts += 1;
+        }
+        let same = args.len() == 3 && self.text(args[0]).trim() == self.text(args[2]).trim();
+        if same {
+            test_fn.tautologies += 1;
+        } else if !GOCHECK_WEAK_CHECKERS.contains(&checker) {
+            test_fn.strong_asserts += 1;
+        }
+        true
     }
 
     /// Whether a call is `suite.Run(t, <suite value>)`: `Run` of testify's `suite`
@@ -617,6 +901,7 @@ impl<'a> GoExtractor<'a> {
         };
         let mut helper_fn = TestFn::default();
         let mut dummy_calls = Vec::new();
+        self.enter_function(node);
         self.scan_block(body, &mut helper_fn, &name, &mut dummy_calls);
         helper_fn.total_asserts += super::count_failure_exits(
             body,
@@ -653,6 +938,7 @@ impl<'a> GoExtractor<'a> {
                 tautologies: helper_fn.tautologies,
                 fatal_asserts: helper_fn.fatal_asserts,
                 helper_checks: 0,
+                equality_exits: 0,
             },
             dummy_calls,
         );
@@ -857,6 +1143,17 @@ impl<'a> GoExtractor<'a> {
             return;
         }
 
+        // An assertion made on a local bound to one: `r := s.Require(); r.NoError(err)`.
+        if let Some((method, fatal)) = self.local_assertion(func_node) {
+            self.count_testify(test_fn, method, &args, 0, fatal);
+            return;
+        }
+
+        // A gocheck assertion: `c.Assert(got, Equals, want)`, `c.Check(err, IsNil)`.
+        if self.count_gocheck(func_node, &args, test_fn) {
+            return;
+        }
+
         // Standard testing methods: t.Fatalf, t.Fatal, t.Errorf, t.Error, t.FailNow
         if call_text.ends_with(".Fatalf")
             || call_text.ends_with(".Fatal")
@@ -881,6 +1178,10 @@ impl<'a> GoExtractor<'a> {
 
         // Testify assert / require
         let method_name = call_text.rsplit('.').next().unwrap_or(call_text);
+        if matches!(call_text, "assert.New" | "require.New") {
+            // Builds an assertion object (`read_assertion_locals`); it checks nothing.
+            return;
+        }
         if call_text.starts_with("assert.") || call_text.starts_with("require.") {
             // The first argument is `t`.
             let fatal = call_text.starts_with("require.");

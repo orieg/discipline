@@ -4142,7 +4142,7 @@ command = "cargo test"
         },
     ),
     (
-        "assertion-reduction: JUnit case sources add up; a text block counts its rows only; null sources and enum names count; a named constant is not a literal list",
+        "assertion-reduction: JUnit case sources add up; a text block counts its rows only; null sources and enum names count; a named constant is one value in @ValueSource and not a literal list elsewhere",
         || {
             let java = |annotations: &str| {
                 first_test_cases(
@@ -4162,7 +4162,8 @@ command = "cargo test"
                 && java("    @NullAndEmptySource\n    @EmptySource\n    @EnumSource(value = M.class, names = {\"A\", \"B\"})")? == (Some(5), false)
                 && java("    @EnumSource(value = M.class, names = {\"A\"}, mode = EnumSource.Mode.EXCLUDE)")? == (None, true)
                 && java("    @ValueSource(strings = \"a\")")? == (Some(1), false)
-                && java("    @ValueSource(strings = ROWS)")? == (None, true)
+                && java("    @ValueSource(strings = ROWS)")? == (Some(1), false)
+                && java("    @CsvSource(ROWS)")? == (None, true)
                 && kotlin("    @NullAndEmptySource\n    @ValueSource(strings = [\"a\", \"b\"])")? == (Some(4), false)
                 && kotlin("    @CsvSource(textBlock = \"\"\"\n        a\n        # b\n        c\n    \"\"\")")? == (Some(2), false))
         },
@@ -4228,6 +4229,187 @@ command = "cargo test"
                 && change(&file("1", "MORE"))? == reduced
                 // Control: the three cases, as written, in the other test.
                 && change(&file("1", "4,3 , 2"))?.is_empty())
+        },
+    ),
+    (
+        "assertion-reduction: a function of a file that holds no test is an assertion helper only when a test names it",
+        || {
+            let support = |call: &str| {
+                format!("pub fn sample() -> u32 {{\n    let v = load().{call}();\n    v\n}}\n\npub fn doubled() -> u32 {{\n    sample() * 2\n}}\n")
+            };
+            let file = "tests/support/gen.rs";
+            let edit = (file, &support("unwrap")[..], &support("unwrap_or_default")[..]);
+            let weakened = vec!["assertion-reduction/test-helper-weakened".to_string()];
+            let direct = "#[test]\nfn uses() {\n    assert_eq!(support::gen::sample(), 3);\n}\n";
+            let through = "#[test]\nfn uses() {\n    assert_eq!(support::gen::doubled(), 6);\n}\n";
+            let other = "#[test]\nfn uses() {\n    assert_eq!(build(), 6);\n}\n";
+            let fixture = |n: usize| {
+                format!("import pytest\n\n\n@pytest.fixture\ndef client():\n    r = connect()\n{}    return r\n", "    assert r.ok\n".repeat(n))
+            };
+            Ok(helper_change(&[edit], "")?.is_empty()
+                && helper_change_beside(&[edit], &[("tests/uses.rs", other)], "")?.is_empty()
+                // Named by a test of an unchanged file, of a changed one, and through
+                // another function of the support file.
+                && helper_change_beside(&[edit], &[("tests/uses.rs", direct)], "")? == weakened
+                && helper_change(&[edit, ("tests/uses.rs", direct, direct)], "")? == weakened
+                && helper_change_beside(&[edit], &[("tests/uses.rs", through)], "")? == weakened
+                // A pytest fixture is received as a parameter: judged whatever names it.
+                && helper_change(&[("tests/conftest.py", &fixture(2), &fixture(1))], "")?
+                    == weakened)
+        },
+    ),
+    (
+        "assertion-reduction: a helper in an unchanged test-support file stands for the checks it holds, and its equality-guarded exit for an equality assertion",
+        || {
+            let helper = |n: usize| {
+                format!("def check(r):\n{}", (0..n).map(|i| format!("    assert r.f{i} == {i}\n")).collect::<String>())
+            };
+            let test = |body: &str| {
+                format!("from helpers import check\n\n\ndef test_create():\n    r = create()\n{body}")
+            };
+            let inline = test("    assert r.f0 == 0\n    assert r.f1 == 1\n    assert r.f2 == 2\n");
+            let calling = test("    check(r)\n");
+            let moved = ("tests/test_api.py", &inline[..], &calling[..]);
+            let reduced = vec!["assertion-reduction/assertions-reduced".to_string()];
+            let exit = |condition: &str| {
+                format!("pub fn check(r: &R) {{\n    if {condition} {{\n        panic!(\"f1\");\n    }}\n}}\n")
+            };
+            let rust = |body: &str| format!("#[test]\nfn create() {{\n    let r = &make();\n{body}}}\n");
+            let (eq, call) = (rust("    assert_eq!(r.f1, 1);\n"), rust("    common::check(r);\n"));
+            let by_hand = ("tests/api.rs", &eq[..], &call[..]);
+            let common = "tests/common/mod.rs";
+            Ok(helper_change_beside(&[moved], &[("tests/helpers.py", &helper(3))], "")?.is_empty()
+                && helper_change_beside(&[moved], &[("tests/helpers.py", &helper(1))], "")? == reduced
+                // Outside a test-support path, and with no such file, the call stands for nothing.
+                && helper_change_beside(&[moved], &[("app/helpers.py", &helper(3))], "")? == reduced
+                && helper_change(&[moved], "")? == reduced
+                && helper_change_beside(&[by_hand], &[(common, &exit("r.f1 != 1"))], "")?.is_empty()
+                && helper_change(&[by_hand, (common, "", &exit("r.f1 != 1"))], "")?.is_empty()
+                && helper_change_beside(&[by_hand], &[(common, &exit("r.f1 < 1"))], "")? == reduced)
+        },
+    ),
+    #[cfg(feature = "lang-go")]
+    (
+        "assertion-reduction: gocheck suite methods are tests, and a local bound to a testify assertion object carries assertions",
+        || {
+            let facts = |src: &str| extract("calc_test.go", src);
+            let gocheck = facts("package x\n\ntype S struct{}\n\nfunc (s *S) TestAdd(c *C) {\n\tc.Assert(Add(1, 1), Equals, 2)\n\tc.Check(Add(2, 2), gc.DeepEquals, 4)\n\tc.Assert(Open(), IsNil)\n\tc.Check(x, Equals, x)\n}\n\nfunc (s *S) SetUpTest(c *C) {\n\tc.Assert(Open(), IsNil)\n}\n\nfunc (s *S) TestShape(c *C, n int) {\n\tc.Assert(n, Equals, 1)\n}\n")?;
+            let locals = facts("package x\n\ntype Suite struct {\n\tsuite.Suite\n}\n\nfunc (s *Suite) TestAdd() {\n\tr := s.Require()\n\tr.NoError(open())\n\ta := assert.New(s.T())\n\ta.Equal(4, Add(2, 2))\n\tother := build()\n\tother.Equal(1, 2)\n}\n")?;
+            let (Some(t), Some(l)) = (gocheck.tests.first(), locals.tests.first()) else {
+                return Ok(false);
+            };
+            Ok(gocheck.tests.len() == 1
+                && t.name == "S.TestAdd"
+                && (t.total_asserts, t.strong_asserts, t.fatal_asserts, t.tautologies) == (4, 2, 2, 1)
+                && (l.total_asserts, l.strong_asserts, l.fatal_asserts) == (2, 2, 1))
+        },
+    ),
+    #[cfg(feature = "lang-go")]
+    (
+        "assertion-reduction: a Go table or row type in another file of the package is resolved; a Java @ValueSource naming a constant is one case; each and parametrize are read by what they are bound to; a property closure in a helper counts",
+        || {
+            let test = "package calc\n\nfunc TestAdd(t *testing.T) {\n\tfor _, c := range addCases {\n\t\tt.Log(c)\n\t}\n\tfor _, r := range []row{{1}, {2}} {\n\t\tt.Log(r)\n\t}\n}\n";
+            let table = |package: &str| {
+                format!("package {package}\n\ntype row struct {{\n\tn int\n}}\n\nvar addCases = []struct {{\n\ta, b int\n}}{{\n\t{{1, 2}},\n\t{{3, 4}},\n\t{{5, 6}},\n}}\n")
+            };
+            let in_package = |sibling: &str| -> Result<Option<usize>> {
+                let mut facts = extract("calc/calc_test.go", test)?;
+                crate::ast::go::resolve_package_cases(
+                    &mut facts,
+                    "calc/calc_test.go",
+                    test,
+                    &[("calc/cases_test.go".to_string(), sibling.to_string())],
+                )?;
+                Ok(facts.tests.first().and_then(|t| t.cases))
+            };
+            let java = |source: &str| {
+                format!("class T {{\n    @ParameterizedTest\n    @NullSource\n    {source}\n    void accepts(String name) {{\n        assertTrue(valid(name));\n    }}\n}}\n")
+            };
+            let js = |import: &str| {
+                format!("{import}\nit.each([[1], [2], [3]])('n %i', (n) => {{\n  expect(n).toBe(n);\n}});\n")
+            };
+            let py = |import: &str, decorator: &str| {
+                format!("{import}\n\n@{decorator}(\"n\", [1, 2, 3])\ndef test_n(n):\n    assert n\n")
+            };
+            let cases = |path: &str, src: &str| Ok::<_, anyhow::Error>(first_test_cases(path, src)?.0);
+            let prop = extract("tests/p.rs", "fn holds() {\n    proptest!(|(x in 0..10i32)| {\n        prop_assert!(x >= 0);\n        prop_assert_eq!(x + 0, x);\n    });\n}\n\n#[test]\nfn runs() {\n    holds();\n}\n")?;
+            Ok(first_test_cases("calc/calc_test.go", test)?.0.is_none()
+                && in_package(&table("calc"))? == Some(5)
+                && in_package(&table("calc_test"))?.is_none()
+                && cases("src/test/java/T.java", &java("@ValueSource(strings = FIRST)"))? == Some(2)
+                && cases("src/test/java/T.java", &java("@ValueSource(strings = {FIRST, Names.SECOND})"))? == Some(3)
+                && cases("tests/a.test.js", &js(""))? == Some(3)
+                && cases("tests/a.test.js", &js("import { it } from 'vitest';"))? == Some(3)
+                // Imported from a project module: a case source that is not counted.
+                && first_test_cases("tests/a.test.js", &js("import { it } from './harness';"))?
+                    == (None, true)
+                && first_test_cases("tests/a.test.js", &js("function it() {}"))? == (None, false)
+                && cases("tests/test_a.py", &py("import pytest as pt", "pt.mark.parametrize"))? == Some(3)
+                && cases("tests/test_a.py", &py("from pytest import mark", "mark.parametrize"))? == Some(3)
+                && cases("tests/test_a.py", &py("from harness import mark", "mark.parametrize"))?.is_none()
+                && cases("tests/test_a.py", &py("import harness", "harness.parametrize"))?.is_none()
+                && prop.tests.first().map(|t| t.total_asserts) == Some(2))
+        },
+    ),
+    (
+        "assertion-reduction: MSTest Assert.Throws accepts subclasses beside Assert.ThrowsExactly, and ThrowsExactly replaced by it loses exactness",
+        || {
+            let file = |bodies: &[&str]| {
+                let methods: String = bodies
+                    .iter()
+                    .enumerate()
+                    .map(|(i, body)| format!("    [TestMethod]\n    public void Rejects{i}() {{\n        {body}\n    }}\n"))
+                    .collect();
+                format!("[TestClass]\npublic class SutTests {{\n{methods}}}\n")
+            };
+            let change = |base: &[&str], head: &[&str]| {
+                helper_change(&[("tests/SutTests.cs", &file(base), &file(head))], "")
+            };
+            let widened = vec!["assertion-reduction/expected-exception-widened".to_string()];
+            let exactly = "Assert.ThrowsExactly<ArgumentException>(() => sut.Run());";
+            let throws = "Assert.Throws<ArgumentException>(() => sut.Run());";
+            let throws_null = "Assert.Throws<ArgumentNullException>(() => sut.Run());";
+            let legacy = "Assert.ThrowsException<ArgumentException>(() => sut.Run());";
+            let other = "Assert.ThrowsExactly<FormatException>(() => sut.Parse());";
+            Ok(change(&[exactly], &[throws])? == widened
+                && change(&[throws_null, other], &[throws, other])? == widened
+                // Controls: the reverse; no sign of the version; the name on one side
+                // only beside an untouched site; the form that is exact in every version.
+                && change(&[throws], &[exactly])?.is_empty()
+                && change(&[throws_null], &[throws])?.is_empty()
+                && change(&[throws], &[throws, other])?.is_empty()
+                && change(&[legacy], &[throws])?.is_empty()
+                && change(&[exactly], &[legacy])?.is_empty())
+        },
+    ),
+    (
+        "assertion-reduction: pytest.warns is an expected warning whose class and match pattern are compared",
+        || {
+            let file = |import: &str, body: &str| {
+                format!("{import}\n\n\ndef test_warns():\n{body}    assert ready()\n")
+            };
+            let change = |import: &str, base: &str, head: &str| {
+                helper_change(&[("tests/test_sut.py", &file(import, base), &file(import, head))], "")
+            };
+            let widened = vec!["assertion-reduction/expected-exception-widened".to_string()];
+            let with = |call: &str| format!("    with {call}:\n        sut.run()\n");
+            let matched = with("pytest.warns(DeprecationWarning, match=\"old api\")");
+            let class = with("pytest.warns(DeprecationWarning)");
+            Ok(change("import pytest", &matched, &class)? == widened
+                && change("import pytest", &class, &with("pytest.warns(Warning)"))? == widened
+                && change(
+                    "from pytest import warns",
+                    &with("warns(UserWarning, match=\"slow\")"),
+                    &with("warns(UserWarning)"),
+                )? == widened
+                // Controls: narrowed, and a `warns` that is not pytest's.
+                && change("import pytest", &class, &matched)?.is_empty()
+                && change(
+                    "import harness",
+                    &with("harness.warns(DeprecationWarning, match=\"old api\")"),
+                    &with("harness.warns(DeprecationWarning)"),
+                )?
+                .is_empty())
         },
     ),
     (
@@ -4367,6 +4549,7 @@ command = "cargo test"
                 tautologies: 0,
                 fatal_asserts: 0,
                 helper_checks: 0,
+                equality_exits: 0,
             };
             let h = TestHelperFacts {
                 name: "check_user".to_string(),
@@ -4377,6 +4560,7 @@ command = "cargo test"
                 tautologies: 0,
                 fatal_asserts: 0,
                 helper_checks: 0,
+                equality_exits: 0,
             };
             let helpers = [HelperPair {
                 path: "tests/helpers.py",
@@ -4412,18 +4596,26 @@ command = "cargo test"
             let method = |held: &str| {
                 format!("package x\n\ntype Suite struct{{}}\n\nfunc (s *Suite) check(t *testing.T, r R) {{\n{held}}}\n")
             };
-            let on_a_receiver =
-                helper_change(&[("helpers_test.go", &method(fatal), &method(""))], "")?;
+            // A function of a file that holds no test is judged when a test names it: each
+            // helper file below stands beside an unchanged test file that calls `check`.
+            let go_caller = "package x\n\nfunc TestApi(t *testing.T) {\n\tSuite{}.check(t, load())\n}\n";
+            let py_caller = [("tests/test_api.py", "def test_api():\n    check(load())\n")];
+            let on_a_receiver = helper_change_beside(
+                &[("helpers_test.go", &method(fatal), &method(""))],
+                &[("api_test.go", go_caller)],
+                "",
+            )?;
             let whole = "def check(r):\n    assert r.a == 1\n    assert r.b == 2\n    assert r.c == 3\n";
             let split = "def check(r):\n    assert r.a == 1\n    check_body(r)\n\ndef check_body(r):\n    assert r.b == 2\n    assert r.c == 3\n";
             let uncalled = split.replace("    check_body(r)\n", "");
             let renamed = whole.replace("def check(", "def check_response(");
             let renamed_weaker = renamed.replace("    assert r.c == 3\n", "");
             let py = "tests/helpers.py";
-            let call_dropped = helper_change(&[(py, split, &uncalled)], "")?;
-            let extracted = helper_change(&[(py, whole, split)], "")?;
-            let rename = helper_change(&[(py, whole, &renamed)], "")?;
-            let rename_lost = helper_change(&[(py, whole, &renamed_weaker)], "")?;
+            let call_dropped = helper_change_beside(&[(py, split, &uncalled)], &py_caller, "")?;
+            let extracted = helper_change_beside(&[(py, whole, split)], &py_caller, "")?;
+            let rename = helper_change_beside(&[(py, whole, &renamed)], &py_caller, "")?;
+            let rename_lost =
+                helper_change_beside(&[(py, whole, &renamed_weaker)], &py_caller, "")?;
             let example = helper_change(&[("examples/helpers.py", whole, &uncalled)], "")?;
             Ok(beside_a_test == weakened
                 && on_a_receiver == weakened
@@ -7861,9 +8053,20 @@ pub fn run() -> Result<bool> {
 /// `(path, base source, head source)` with `body` as the PR body; an empty source is a
 /// side on which the file does not exist.
 fn helper_change(files: &[(&str, &str, &str)], body: &str) -> Result<Vec<String>> {
+    helper_change_beside(files, &[], body)
+}
+
+/// [`helper_change`] in a tree that also holds `unchanged`, files the change does not
+/// touch, as `(path, source)`.
+fn helper_change_beside(
+    files: &[(&str, &str, &str)],
+    unchanged: &[(&str, &str)],
+    body: &str,
+) -> Result<Vec<String>> {
     use crate::gitctx::{ChangeKind, ChangedFile};
     use crate::guards::agent_diff::{
-        evaluate_assertion_reduction, extract_facts, match_tests, pair_helpers, FileFacts,
+        evaluate_assertion_reduction, extract_facts, match_tests, pair_helpers_in_tree, FileFacts,
+        OutsideFile,
     };
     let registry = crate::ast::default_registry();
     let vocab = AssertVocabulary::default();
@@ -7890,8 +8093,19 @@ fn helper_change(files: &[(&str, &str, &str)], body: &str) -> Result<Vec<String>
             newly_added_nul: false,
         });
     }
+    let mut outside = Vec::new();
+    for (path, src) in unchanged {
+        let pack = registry
+            .find_pack(path)
+            .ok_or_else(|| anyhow::anyhow!("no language pack for {path}"))?;
+        outside.push(OutsideFile {
+            path: path.to_string(),
+            facts: Some(extract_facts(pack, path, src, &vocab)?),
+            text: String::new(),
+        });
+    }
     let (pairs, _, added) = match_tests(&facts);
-    let helpers = pair_helpers(&facts, &pairs);
+    let helpers = pair_helpers_in_tree(&facts, &pairs, &outside);
     let directives = crate::tokens::parse_directives(body, crate::tokens::OverrideSource::PrBody);
     let out = evaluate_assertion_reduction(
         &pairs,
@@ -7902,6 +8116,15 @@ fn helper_change(files: &[(&str, &str, &str)], body: &str) -> Result<Vec<String>
         false,
     )?;
     Ok(out.violations.iter().map(|v| v.code.to_string()).collect())
+}
+
+/// The facts the language pack for `path` reads in `src`, helpers resolved.
+fn extract(path: &str, src: &str) -> Result<crate::ast::ParsedFileFacts> {
+    let registry = crate::ast::default_registry();
+    let pack = registry
+        .find_pack(path)
+        .ok_or_else(|| anyhow::anyhow!("no language pack for {path}"))?;
+    crate::guards::agent_diff::extract_facts(pack, path, src, &AssertVocabulary::default())
 }
 
 /// The case count and non-literal flag the language pack for `path` reads on the first

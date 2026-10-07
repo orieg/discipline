@@ -1181,18 +1181,28 @@ fn a_test_method_of_a_class_that_loses_assertions_is_reported() {
     v.done();
 }
 
-/// Pin of a limit: a gocheck suite method (`func (s *S) TestX(c *C)`, run by
-/// `check.Suite`) is not read as a test, and `c.Assert` is not counted, so a method that
-/// loses its checks is not reported.
+/// A gocheck suite method (`func (s *S) TestX(c *C)`, run by `check.Suite`) is read as a
+/// test and `c.Assert` is counted (#626), so a method that loses its checks is reported;
+/// one that keeps them is not.
 #[test]
-fn a_gocheck_suite_method_is_not_read_as_a_test() {
+fn a_gocheck_suite_method_that_loses_its_checks_is_reported() {
     let file = |n: usize| {
         let body: String = (1..=n)
             .map(|i| format!("\tc.Assert(Add({i}, 0), Equals, {i})\n"))
             .collect();
         format!("package calc\n\nimport (\n\t\"testing\"\n\n\t. \"gopkg.in/check.v1\"\n)\n\nfunc Test(t *testing.T) {{ TestingT(t) }}\n\ntype S struct{{}}\n\nvar _ = Suite(&S{{}})\n\nfunc (s *S) TestAdd(c *C) {{\n{body}}}\n")
     };
-    let run = edit(SUITE_PATH, &file(3), &file(1));
+    let mut v = Verdicts::default();
+    v.drops(
+        "gocheck",
+        &edit(SUITE_PATH, &file(3), &file(1)),
+        SUITE_PATH,
+        3,
+        1,
+    );
+    v.done();
+    // Control: the three checks kept, a comment added.
+    let run = edit(SUITE_PATH, &file(3), &format!("{}// Adds.\n", file(3)));
     assert_eq!(reported(&run), Vec::new(), "{}", run.stdout);
     assert_eq!(run.code, 0, "{}", run.stdout);
 }

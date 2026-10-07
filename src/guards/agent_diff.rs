@@ -156,6 +156,7 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
     let registry = default_registry();
     let changed = ctx.git.changed_files()?;
     let mut analyzed_files = Vec::new();
+    let mut packages = GoPackages::default();
     for file in changed
         .iter()
         .filter(|f| registry.is_supported(&f.path) || registry.is_supported(&f.old_path))
@@ -166,7 +167,9 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
             Some(bytes) => {
                 if let Some(pack) = registry.find_pack(&file.old_path) {
                     let src = String::from_utf8_lossy(&bytes);
-                    Some(extract_facts(pack, &file.old_path, &src, &base_vocab)?)
+                    let mut facts = extract_facts(pack, &file.old_path, &src, &base_vocab)?;
+                    packages.resolve(ctx, pack, false, &file.old_path, &src, &mut facts)?;
+                    Some(facts)
                 } else {
                     None
                 }
@@ -181,10 +184,9 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
                     let newly_added = has_nul && !base_had_nul;
                     if let Some(pack) = registry.find_pack(&file.path) {
                         let src = String::from_utf8_lossy(&bytes);
-                        (
-                            Some(extract_facts(pack, &file.path, &src, &head_vocab)?),
-                            newly_added,
-                        )
+                        let mut facts = extract_facts(pack, &file.path, &src, &head_vocab)?;
+                        packages.resolve(ctx, pack, true, &file.path, &src, &mut facts)?;
+                        (Some(facts), newly_added)
                     } else {
                         (None, newly_added)
                     }
@@ -201,7 +203,8 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
     }
 
     let (pairs, removed, added) = match_tests(&analyzed_files);
-    let helpers = pair_helpers(&analyzed_files, &pairs);
+    let outside = read_outside_files(ctx, &registry, &analyzed_files, &pairs, &head_vocab)?;
+    let helpers = pair_helpers_in_tree(&analyzed_files, &pairs, &outside);
 
     let is_staged = ctx.staged && ctx.pr_body.is_none();
     let mut ast_gates = vec![
@@ -320,6 +323,93 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
         is_staged,
     )?);
     Ok(ast_gates)
+}
+
+/// The other Go files of each package directory a changed test file stands in, per side
+/// of the change, read once: a case table or row type declared in another file of the
+/// package is resolved there (`crate::ast::go::resolve_package_cases`).
+#[derive(Default)]
+struct GoPackages {
+    read: Vec<GoDirectory>,
+    tracked: [Option<Vec<String>>; 2],
+}
+
+/// The Go files of one directory on one side of the change.
+struct GoDirectory {
+    head: bool,
+    dir: String,
+    /// `(path, source)` of each.
+    files: Vec<(String, String)>,
+}
+
+impl GoPackages {
+    #[cfg(feature = "lang-go")]
+    fn resolve(
+        &mut self,
+        ctx: &Context,
+        pack: &dyn crate::ast::LanguagePack,
+        head: bool,
+        path: &str,
+        src: &str,
+        facts: &mut ParsedFileFacts,
+    ) -> Result<()> {
+        if pack.id() != "go" || facts.tests.is_empty() {
+            return Ok(());
+        }
+        let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir).to_string();
+        if !self.read.iter().any(|d| d.head == head && d.dir == dir) {
+            let tracked = &mut self.tracked[usize::from(head)];
+            if tracked.is_none() {
+                *tracked = Some(if head {
+                    ctx.git.tracked_files()?
+                } else {
+                    ctx.git.base_tracked_files()?
+                });
+            }
+            let mut files = Vec::new();
+            for other in tracked.iter().flatten() {
+                let in_dir = other.rsplit_once('/').map_or("", |(dir, _)| dir) == dir;
+                if !in_dir || !other.ends_with(".go") {
+                    continue;
+                }
+                let bytes = if head {
+                    ctx.git.head_bytes(other)?
+                } else {
+                    ctx.git.base_bytes(other)?
+                };
+                if let Some(bytes) = bytes {
+                    files.push((other.clone(), String::from_utf8_lossy(&bytes).into_owned()));
+                }
+            }
+            self.read.push(GoDirectory {
+                head,
+                dir: dir.clone(),
+                files,
+            });
+        }
+        let siblings: Vec<(String, String)> = self
+            .read
+            .iter()
+            .filter(|d| d.head == head && d.dir == dir)
+            .flat_map(|d| d.files.iter())
+            .filter(|(p, _)| p != path)
+            .cloned()
+            .collect();
+        crate::ast::go::resolve_package_cases(facts, path, src, &siblings)
+    }
+
+    #[cfg(not(feature = "lang-go"))]
+    fn resolve(
+        &mut self,
+        _ctx: &Context,
+        _pack: &dyn crate::ast::LanguagePack,
+        _head: bool,
+        _path: &str,
+        _src: &str,
+        _facts: &mut ParsedFileFacts,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 pub const RENAME_NAME_SIMILARITY_THRESHOLD: f64 = 0.5;
@@ -601,12 +691,349 @@ pub fn extract_facts(
     Ok(facts)
 }
 
-/// The helper pairs `assertion-reduction` judges: [`match_helpers`], less the helpers a
-/// dropping test of their own file already shows.
+/// The helper pairs `assertion-reduction` judges for a change read without the rest of
+/// the tree: [`pair_helpers_in_tree`] with no file outside the change.
+#[cfg(test)]
 pub fn pair_helpers<'a>(files: &'a [FileFacts], pairs: &[TestPair<'a>]) -> Vec<HelperPair<'a>> {
+    pair_helpers_in_tree(files, pairs, &[])
+}
+
+/// The helper pairs `assertion-reduction` judges: [`match_helpers`], less the functions
+/// of a file that holds no test which no test names ([`leave_unreferenced_functions`]),
+/// with the helpers of unchanged test-support files the changed tests call
+/// ([`outside_helpers`]), and less the helpers a dropping test of their own file already
+/// shows.
+pub fn pair_helpers_in_tree<'a>(
+    files: &'a [FileFacts],
+    pairs: &[TestPair<'a>],
+    outside: &'a [OutsideFile],
+) -> Vec<HelperPair<'a>> {
     let mut helpers = match_helpers(files);
+    leave_unreferenced_functions(&mut helpers, files, outside);
+    helpers.extend(outside_helpers(pairs, outside));
     leave_helpers_shown_by_tests(&mut helpers, pairs, files);
     helpers
+}
+
+/// A file the change does not touch, as the head tree has it.
+pub struct OutsideFile {
+    pub path: String,
+    /// `None` when the file could not be parsed: it then stands for no helper, and
+    /// counts as naming every function its text holds (`text`).
+    pub facts: Option<ParsedFileFacts>,
+    /// The file's text, kept only when `facts` is `None`.
+    pub text: String,
+}
+
+fn helper_lost(hp: &HelperPair) -> bool {
+    match hp.head {
+        None => true,
+        Some(h) => {
+            h.effective_asserts() < hp.base.effective_asserts()
+                || h.strong_asserts < hp.base.strong_asserts
+                || h.fatal_asserts < hp.base.fatal_asserts
+        }
+    }
+}
+
+fn holds_no_test(ff: &FileFacts) -> bool {
+    [ff.base.as_ref(), ff.head.as_ref()]
+        .into_iter()
+        .flatten()
+        .all(|facts| facts.tests.is_empty())
+}
+
+/// The last `::` / `.` segment of each callee a call names (`a|b` names two).
+fn call_leaves(call: &str) -> impl Iterator<Item = &str> {
+    call.split('|').map(crate::ast::helper_leaf)
+}
+
+/// Functions a runner calls without a test naming them: a change to one is judged as
+/// before, whatever names it.
+const RUN_UNNAMED: &[&str] = &[
+    "setUp",
+    "tearDown",
+    "setUpClass",
+    "tearDownClass",
+    "setup_method",
+    "teardown_method",
+    "setup_class",
+    "teardown_class",
+    "setup_module",
+    "teardown_module",
+    "setup",
+    "teardown",
+    "SetUp",
+    "TearDown",
+    "SetUpTest",
+    "TearDownTest",
+    "SetupTest",
+    "TearDownSuite",
+    "SetupSuite",
+    "SetUpSuite",
+    "TestMain",
+    "beforeEach",
+    "afterEach",
+    "beforeAll",
+    "afterAll",
+    "before",
+    "after",
+];
+
+/// Whether a function of a file that holds no test is judged whatever names it: one a
+/// runner calls by its name alone, and every function of a pytest `conftest.py`, whose
+/// fixtures a test receives as parameters.
+fn run_unnamed(path: &str, helper: &str) -> bool {
+    let file = path.rsplit('/').next().unwrap_or(path);
+    file == "conftest.py" || RUN_UNNAMED.contains(&crate::ast::helper_leaf(helper))
+}
+
+/// The unchanged files `assertion-reduction` reads beside the change, from the head
+/// tree, and only when the change calls for it:
+///
+/// - a test-support file ([`test_support_path`]) holding a helper that a test whose
+///   assertions dropped calls and its own file does not define, so the helper stands
+///   for the checks it holds ([`outside_helpers`]);
+/// - a test file or test-support file naming a function that lost checks in a changed
+///   file holding no test, so that function is known to be called by a test
+///   ([`leave_unreferenced_functions`]).
+///
+/// A file is parsed only when its text holds one of the names looked for, and is of the
+/// language of the file the name came from.
+///
+/// [`test_support_path`]: crate::ast::functions::test_support_path
+fn read_outside_files(
+    ctx: &Context,
+    registry: &crate::ast::LanguageRegistry,
+    files: &[FileFacts],
+    pairs: &[TestPair],
+    vocab: &AssertVocabulary,
+) -> Result<Vec<OutsideFile>> {
+    let pack_id = |path: &str| registry.find_pack(path).map(|p| p.id());
+    // (pack, name) of the helpers looked for, and of the functions whose callers are.
+    let mut helpers_wanted: Vec<(&str, &str)> = Vec::new();
+    for p in pairs {
+        let (b, h) = (p.base, p.head);
+        if h.effective_asserts() >= b.effective_asserts() && h.strong_asserts >= b.strong_asserts {
+            continue;
+        }
+        let Some(id) = pack_id(p.path) else { continue };
+        let reach = &h.helper_reach;
+        for call in h.direct_calls.iter().chain(&reach.receiver_calls) {
+            if !reach.own_file_calls.contains(call) {
+                helpers_wanted.extend(call_leaves(call).map(|leaf| (id, leaf)));
+            }
+        }
+    }
+    let mut callers_wanted: Vec<(&str, &str)> = Vec::new();
+    for hp in match_helpers(files) {
+        let no_test = files
+            .iter()
+            .any(|ff| ff.file.path == hp.path && holds_no_test(ff));
+        if helper_lost(&hp) && no_test && !run_unnamed(hp.path, &hp.base.name) {
+            if let Some(id) = pack_id(hp.path) {
+                callers_wanted.push((id, crate::ast::helper_leaf(&hp.base.name)));
+            }
+        }
+    }
+    // A test may name such a function through another function of its file.
+    for ff in files.iter().filter(|ff| holds_no_test(ff)) {
+        let Some(id) = pack_id(&ff.file.path) else {
+            continue;
+        };
+        loop {
+            let mut grew = false;
+            for facts in [ff.base.as_ref(), ff.head.as_ref()].into_iter().flatten() {
+                for (at, helper) in facts.test_helpers.iter().enumerate() {
+                    let leaf = crate::ast::helper_leaf(&helper.name);
+                    let calls = facts.helper_calls.get(at).into_iter().flatten();
+                    let reaches = calls
+                        .flat_map(|c| call_leaves(c))
+                        .any(|c| callers_wanted.contains(&(id, c)));
+                    if reaches && !callers_wanted.contains(&(id, leaf)) {
+                        callers_wanted.push((id, leaf));
+                        grew = true;
+                    }
+                }
+            }
+            if !grew {
+                break;
+            }
+        }
+    }
+    if helpers_wanted.is_empty() && callers_wanted.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for path in ctx.git.tracked_files()? {
+        if files
+            .iter()
+            .any(|ff| ff.file.path == path || ff.file.old_path == path)
+        {
+            continue;
+        }
+        let Some(pack) = registry.find_pack(&path) else {
+            continue;
+        };
+        let support = crate::ast::functions::test_support_path(&path);
+        let holds = |wanted: &[(&str, &str)], text: &str| {
+            wanted
+                .iter()
+                .any(|(id, name)| *id == pack.id() && !name.is_empty() && text.contains(name))
+        };
+        let for_helpers = support && helpers_wanted.iter().any(|(id, _)| *id == pack.id());
+        let for_callers = (support || pack.is_test_path(&path))
+            && callers_wanted.iter().any(|(id, _)| *id == pack.id());
+        if !for_helpers && !for_callers {
+            continue;
+        }
+        let Some(bytes) = ctx.git.head_bytes(&path)? else {
+            continue;
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        if !(for_helpers && holds(&helpers_wanted, &text)
+            || for_callers && holds(&callers_wanted, &text))
+        {
+            continue;
+        }
+        match extract_facts(pack, &path, &text, vocab) {
+            Ok(facts) => out.push(OutsideFile {
+                path,
+                facts: Some(facts),
+                text: String::new(),
+            }),
+            Err(_) => out.push(OutsideFile {
+                path,
+                facts: None,
+                text: text.into_owned(),
+            }),
+        }
+    }
+    Ok(out)
+}
+
+/// Whether `text`, a file that could not be parsed, holds `name` as a whole word.
+fn text_names(text: &str, name: &str) -> bool {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    text.match_indices(name).any(|(at, _)| {
+        !text[..at].chars().next_back().is_some_and(word)
+            && !text[at + name.len()..].chars().next().is_some_and(word)
+    })
+}
+
+/// A function of a file under a test directory that holds no test is an assertion helper
+/// only when a test names it: `tests/support/gen.rs` going from `.unwrap()` to
+/// `.unwrap_or_default()` weakens no test unless a test checks through `gen`. The pair of
+/// a function that lost checks and that nothing names is left out.
+///
+/// What names a function: a call, direct or on a receiver, in a test of a changed file
+/// (either side) or of an unchanged test file (`outside`); a call in a helper of a file
+/// that holds tests; and a call in a function of a file without tests that is itself
+/// named. A call names the function whose name, or last `::` / `.` segment, it ends in,
+/// whichever file defines it: imports are not resolved, so a same-named function
+/// elsewhere keeps the pair. A function a runner calls unnamed ([`run_unnamed`]) and an
+/// unchanged file that names it and cannot be parsed keep the pair too.
+fn leave_unreferenced_functions<'a>(
+    helpers: &mut Vec<HelperPair<'a>>,
+    files: &'a [FileFacts],
+    outside: &'a [OutsideFile],
+) {
+    let in_no_test_file = |hp: &HelperPair| {
+        files
+            .iter()
+            .any(|ff| ff.file.path == hp.path && holds_no_test(ff))
+    };
+    if !helpers
+        .iter()
+        .any(|hp| helper_lost(hp) && in_no_test_file(hp))
+    {
+        return;
+    }
+    let changed = files
+        .iter()
+        .flat_map(|ff| [ff.base.as_ref(), ff.head.as_ref()])
+        .flatten();
+    let all: Vec<&ParsedFileFacts> = changed
+        .chain(outside.iter().filter_map(|o| o.facts.as_ref()))
+        .collect();
+    // The calls of every test, and of every helper of a file that holds tests.
+    let mut calls: Vec<&str> = Vec::new();
+    for facts in &all {
+        for test in &facts.tests {
+            let reach = &test.helper_reach;
+            let own = test.direct_calls.iter().chain(&reach.receiver_calls);
+            calls.extend(own.flat_map(|c| call_leaves(c)));
+        }
+        if !facts.tests.is_empty() {
+            let own = facts.helper_calls.iter().flatten();
+            calls.extend(own.flat_map(|c| call_leaves(c)));
+        }
+    }
+    // Then the calls of each function of a file without tests that is named so far.
+    let mut named: Vec<&str> = Vec::new();
+    while let Some(call) = calls.pop() {
+        if named.contains(&call) {
+            continue;
+        }
+        named.push(call);
+        for facts in all.iter().filter(|facts| facts.tests.is_empty()) {
+            for (at, helper) in facts.test_helpers.iter().enumerate() {
+                if crate::ast::helper_leaf(&helper.name) == call {
+                    let own = facts.helper_calls.get(at).into_iter().flatten();
+                    calls.extend(own.flat_map(|c| call_leaves(c)));
+                }
+            }
+        }
+    }
+    helpers.retain(|hp| {
+        if !helper_lost(hp) || !in_no_test_file(hp) || run_unnamed(hp.path, &hp.base.name) {
+            return true;
+        }
+        let leaf = crate::ast::helper_leaf(&hp.base.name);
+        let head_leaf = hp.head.map(|h| crate::ast::helper_leaf(&h.name));
+        named.contains(&leaf)
+            || head_leaf.is_some_and(|l| named.contains(&l))
+            || outside
+                .iter()
+                .any(|o| o.facts.is_none() && text_names(&o.text, leaf))
+    });
+}
+
+/// The helpers of unchanged test-support files that the changed tests call: each is
+/// paired with itself, as a helper new on the head side is, so a test that starts
+/// calling it gets its checks ([`helper_call_gain`]) and one that already called it gets
+/// nothing more. A file the head tree does not hold, or that cannot be parsed, gives no
+/// pair: a call into it stands for nothing.
+fn outside_helpers<'a>(pairs: &[TestPair<'a>], outside: &'a [OutsideFile]) -> Vec<HelperPair<'a>> {
+    let mut out = Vec::new();
+    for o in outside {
+        let Some(facts) = o.facts.as_ref() else {
+            continue;
+        };
+        if !crate::ast::functions::test_support_path(&o.path) {
+            continue;
+        }
+        for helper in HelperSide::of(Some(facts)).tracked {
+            let called = pairs.iter().any(|p| {
+                [p.base, p.head].into_iter().any(|test| {
+                    let reach = &test.helper_reach;
+                    let mut calls = test.direct_calls.iter().chain(&reach.receiver_calls);
+                    calls.any(|call| {
+                        !reach.own_file_calls.contains(call)
+                            && call_names_helper(call, &helper.name)
+                    })
+                })
+            });
+            if called {
+                out.push(HelperPair {
+                    path: &o.path,
+                    base: helper,
+                    head: Some(helper),
+                });
+            }
+        }
+    }
+    out
 }
 
 /// One side of a file's helpers: each helper with its callees' checks counted in
@@ -835,14 +1262,7 @@ fn leave_helpers_shown_by_tests<'a>(
     pairs: &[TestPair<'a>],
     files: &'a [FileFacts],
 ) {
-    let lost = |hp: &HelperPair| match hp.head {
-        None => true,
-        Some(h) => {
-            h.effective_asserts() < hp.base.effective_asserts()
-                || h.strong_asserts < hp.base.strong_asserts
-                || h.fatal_asserts < hp.base.fatal_asserts
-        }
-    };
+    let lost = helper_lost;
     for ff in files {
         let path = ff.file.path.as_str();
         if !helpers.iter().any(|hp| hp.path == path && lost(hp)) {
@@ -906,6 +1326,9 @@ struct HelperCallGain {
     total: usize,
     strong: usize,
     fatal: usize,
+    /// Equality checks written by hand in helpers of other files
+    /// (`TestHelperFacts::equality_exits`), per call as the counts above.
+    equality: usize,
     names: Vec<String>,
 }
 
@@ -1012,6 +1435,7 @@ fn helper_call_gain<'a>(
         total: own_head.total.saturating_sub(own_base.total),
         strong: own_head.strong.saturating_sub(own_base.strong),
         fatal: own_head.fatal.saturating_sub(own_base.fatal),
+        equality: 0,
         names: Vec::new(),
     };
     if gain.total > 0 || gain.strong > 0 {
@@ -1029,6 +1453,8 @@ fn helper_call_gain<'a>(
             .saturating_sub(base_calls * base_helper.strong_asserts);
         let fatal = (head_calls * head_helper.fatal_asserts)
             .saturating_sub(base_calls * base_helper.fatal_asserts);
+        gain.equality += (head_calls * head_helper.equality_exits)
+            .saturating_sub(base_calls * base_helper.equality_exits);
         if total > 0 || strong > 0 {
             gain.total += total;
             gain.strong += strong;
@@ -1532,12 +1958,17 @@ pub fn evaluate_assertion_reduction(
             // rewritten in a same-file helper as a failure exit under an equality
             // comparison (`if a != b { panic!() }`) is still an equality check.
             if strong_drop && !total_drop {
-                let by_hand = equality_exits_gained(b, h);
+                let by_hand = equality_exits_gained(b, h) + moved.equality;
                 if by_hand > 0 && h.strong_asserts + moved.strong + by_hand >= b.strong_asserts {
                     strong_drop = false;
                     note_the_move = false;
+                    let whose = if moved.equality == 0 {
+                        "same-file "
+                    } else {
+                        ""
+                    };
                     out.notes.push(format!(
-                        "`{}` in `{}`: equality assertions {} -> {} read as moved into same-file helpers that fail on an equality comparison ({} exit(s))",
+                        "`{}` in `{}`: equality assertions {} -> {} read as moved into {whose}helpers that fail on an equality comparison ({} exit(s))",
                         h.name, p.path, b.strong_asserts, h.strong_asserts, by_hand
                     ));
                 }
@@ -4234,6 +4665,7 @@ mod tests {
             tautologies: 0,
             fatal_asserts: 0,
             helper_checks: 0,
+            equality_exits: 0,
         };
         let h_helper = crate::ast::TestHelperFacts {
             name: "check_user".to_string(),
@@ -4244,6 +4676,7 @@ mod tests {
             tautologies: 0,
             fatal_asserts: 0,
             helper_checks: 0,
+            equality_exits: 0,
         };
         let helpers = [HelperPair {
             path: "tests/helpers.py",
@@ -4311,6 +4744,7 @@ mod tests {
             tautologies: 0,
             fatal_asserts: 0,
             helper_checks: 0,
+            equality_exits: 0,
         };
         let h_helper = crate::ast::TestHelperFacts {
             name: "check_user".to_string(),
@@ -4321,6 +4755,7 @@ mod tests {
             tautologies: 0,
             fatal_asserts: 0,
             helper_checks: 0,
+            equality_exits: 0,
         };
         let helpers = [HelperPair {
             path: "tests/helpers.py",
@@ -4385,6 +4820,7 @@ mod tests {
             tautologies: 0,
             fatal_asserts: 0,
             helper_checks: 0,
+            equality_exits: 0,
         };
         let helpers = [HelperPair {
             path: "tests/common.rs",
@@ -4418,6 +4854,7 @@ mod tests {
             tautologies: 0,
             fatal_asserts: 0,
             helper_checks: 0,
+            equality_exits: 0,
         }
     }
 
@@ -4631,6 +5068,7 @@ mod tests {
             tautologies: 0,
             fatal_asserts: 0,
             helper_checks: 0,
+            equality_exits: 0,
         };
         let h_helper = crate::ast::TestHelperFacts {
             name: "helper".to_string(),
@@ -4641,6 +5079,7 @@ mod tests {
             tautologies: 0,
             fatal_asserts: 0,
             helper_checks: 0,
+            equality_exits: 0,
         };
         let helpers = [HelperPair {
             path: "tests/test_foo.rs",
@@ -4748,6 +5187,10 @@ mod tests {
     const TEST_REDUCED: &str = "assertion-reduction/assertions-reduced";
     const PY_CHECK_2: &str = "def check(r):\n    assert r.a == 1\n    assert r.b == 2\n";
     const PY_CHECK_1: &str = "def check(r):\n    assert r.a == 1\n";
+    /// A test file the change leaves as it is, whose test calls `check`: a function of a
+    /// file that holds no test is judged only when a test names it.
+    const PY_CALLER: &str = "def test_api():\n    check(load())\n";
+    const PY_CALLER_FILE: (&str, &str, &str) = ("tests/test_api.py", PY_CALLER, PY_CALLER);
 
     /// #562: two methods named `check` in one file pair each with itself, so a comment
     /// added to the file loses nothing; one of them losing a check is one drop.
@@ -4895,7 +5338,10 @@ mod tests {
             assert_eq!(reduction(&[(path, PY_CHECK_2, PY_CHECK_1)], ""), Vec::new());
         }
         assert_eq!(
-            reduction(&[("tests/helpers.py", PY_CHECK_2, PY_CHECK_1)], ""),
+            reduction(
+                &[("tests/helpers.py", PY_CHECK_2, PY_CHECK_1), PY_CALLER_FILE],
+                ""
+            ),
             vec![(HELPER_WEAKENED.to_string(), "tests/helpers.py".to_string())]
         );
     }
@@ -4913,7 +5359,7 @@ mod tests {
         let path = "tests/helpers.py";
         assert_eq!(reduction(&[(path, whole, split)], ""), Vec::new());
         assert_eq!(
-            reduction(&[(path, split, &uncalled)], ""),
+            reduction(&[(path, split, &uncalled), PY_CALLER_FILE], ""),
             vec![(HELPER_WEAKENED.to_string(), path.to_string())]
         );
         let facts = change_facts(&[(path, split, &weaker_body)]);
@@ -5181,6 +5627,7 @@ mod tests {
             tautologies: 0,
             fatal_asserts: 0,
             helper_checks: 0,
+            equality_exits: 0,
         };
         let h2_base = crate::ast::TestHelperFacts {
             name: "check_cross".to_string(),
@@ -5191,6 +5638,7 @@ mod tests {
             tautologies: 0,
             fatal_asserts: 0,
             helper_checks: 0,
+            equality_exits: 0,
         };
         let h2_head = crate::ast::TestHelperFacts {
             name: "check_cross".to_string(),
@@ -5201,6 +5649,7 @@ mod tests {
             tautologies: 0,
             fatal_asserts: 0,
             helper_checks: 0,
+            equality_exits: 0,
         };
 
         let file1 = FileFacts {

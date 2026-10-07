@@ -41,7 +41,19 @@ pub struct ExpectedException {
     /// The one call the site guards (`f(-1)` of `with pytest.raises(E): f(-1)`), as
     /// [`call_text`] writes it; `None` when the guarded code is anything else.
     pub guarded_call: Option<String>,
+    /// How a C# `Assert.Throws` kind was spelled, where the spelling decides whether the
+    /// class is exact ([`is_exact_beside`]): [`THROWS_EXACTLY`], [`THROWS`],
+    /// [`THROWS_BESIDE_EXACTLY`]. Empty for every other expectation.
+    pub form: &'static str,
 }
+
+/// `Assert.ThrowsExactly<T>`: exact, and a name MSTest has from 3.8 only.
+const THROWS_EXACTLY: &str = "ThrowsExactly";
+/// `Assert.Throws<T>` in a file that does not use `Assert.ThrowsExactly`.
+const THROWS: &str = "Throws";
+/// `Assert.Throws<T>` in a file that uses `Assert.ThrowsExactly`: MSTest 3.8 or later,
+/// where it accepts subclasses.
+const THROWS_BESIDE_EXACTLY: &str = "Throws beside ThrowsExactly";
 
 /// An expected exception or panic that was widened between base and head.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -366,6 +378,20 @@ fn is_exact(kind: &str) -> bool {
     matches!(kind, "Assert.Throws" | "assertThrowsExactly")
 }
 
+/// Whether `e` accepts the named class only, read beside `other`, the expectation it
+/// is compared with across the change.
+///
+/// `Assert.Throws<T>` is exact in xUnit and NUnit. In MSTest it exists from 3.8 only, and
+/// accepts subclasses; the version is not written in a test file, but
+/// `Assert.ThrowsExactly` is a name of 3.8 and later. So `Assert.Throws<T>` accepts
+/// subclasses in a file that uses `Assert.ThrowsExactly`, and also when the expectation
+/// on the other side of the change is an `Assert.ThrowsExactly` or an `Assert.Throws`
+/// of such a file: the same call means the same on both sides. Otherwise it is exact.
+fn is_exact_beside(e: &ExpectedException, other: &ExpectedException) -> bool {
+    let later = |x: &ExpectedException| matches!(x.form, THROWS_EXACTLY | THROWS_BESIDE_EXACTLY);
+    is_exact(&e.kind) && e.form != THROWS_BESIDE_EXACTLY && !(e.form == THROWS && later(other))
+}
+
 /// Kinds that state the test passes when nothing (or nothing of the type) is thrown.
 fn is_negated(kind: &str) -> bool {
     matches!(
@@ -601,7 +627,7 @@ fn type_change(b: &ExpectedException, h: &ExpectedException) -> TypeChange {
         fam,
         declared: [b.declared.as_slice(), h.declared.as_slice()],
     };
-    let exact = is_exact(&h.kind);
+    let exact = is_exact_beside(h, b);
     let (bt, ht) = (type_names(b), type_names(h));
     match (bt.first(), ht.is_empty()) {
         (None, true) => return TypeChange::Same,
@@ -751,7 +777,7 @@ fn accepts_more(b: &ExpectedException, h: &ExpectedException) -> Option<String> 
     let matcher = matcher_change(b, h);
     // An exact-type assertion replaced by one that accepts subclasses too.
     let exactness_lost =
-        family(&b.kind) == family(&h.kind) && is_exact(&b.kind) && !is_exact(&h.kind);
+        family(&b.kind) == family(&h.kind) && is_exact_beside(b, h) && !is_exact_beside(h, b);
     let matcher_weaker = matches!(matcher, MatcherChange::Dropped | MatcherChange::Loosened);
     // A matcher where base had none. It rejects some failures base accepted, and takes
     // nothing back from a type that now accepts failures base rejected.
@@ -856,6 +882,7 @@ pub fn widened(base: &[ExpectedException], head: &[ExpectedException]) -> Vec<Wi
             && b.exception_type == h.exception_type
             && b.matcher == h.matcher
             && b.whole_message == h.whole_message
+            && b.form == h.form
     };
     let mut out = Vec::new();
     let mut head_left: Vec<&ExpectedException> = head.iter().collect();
@@ -1099,7 +1126,11 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
     }
-    let bare = python_bare_raises(root, src);
+    let bare = PytestBare {
+        raises: python_bare(root, src, "raises"),
+        warns: python_bare(root, src, "warns"),
+    };
+    let bare = &bare;
     walk(root, &mut |node| {
         match node.kind() {
             "with_statement" => {
@@ -1109,11 +1140,11 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
                         let mut c2 = child.walk();
                         for item in child.children(&mut c2) {
                             if item.kind() == "with_item" {
-                                inspect_python_with_item(node, item, src, &bare, tests);
+                                inspect_python_with_item(node, item, src, bare, tests);
                             }
                         }
                     } else if child.kind() == "with_item" {
-                        inspect_python_with_item(node, child, src, &bare, tests);
+                        inspect_python_with_item(node, child, src, bare, tests);
                     }
                 }
                 true
@@ -1122,7 +1153,7 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
                 // Standalone calls like self.assertRaises(ValueError, f, -1). The context
                 // manager of a `with` item, bound with `as` or not, is read above.
                 if !is_python_with_item_value(node) {
-                    inspect_python_standalone_call(node, src, &bare, tests);
+                    inspect_python_standalone_call(node, src, bare, tests);
                 }
                 true
             }
@@ -1132,10 +1163,16 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
     attach_declared(root, src, tests, &PYTHON_CLASSES);
 }
 
-/// The names under which the file imports pytest's `raises`: `from pytest import raises`
-/// binds `raises`, `from pytest import raises as throws` binds `throws`. A `raises` that
-/// comes from anywhere else is not read.
-fn python_bare_raises(root: Node, src: &str) -> Vec<String> {
+/// The bare names the file imports pytest's `raises` and `warns` under.
+struct PytestBare {
+    raises: Vec<String>,
+    warns: Vec<String>,
+}
+
+/// The names under which the file imports pytest's `wanted` (`raises`, `warns`):
+/// `from pytest import raises` binds `raises`, `from pytest import raises as throws`
+/// binds `throws`. A `raises` that comes from anywhere else is not read.
+fn python_bare(root: Node, src: &str, wanted: &str) -> Vec<String> {
     let mut names = Vec::new();
     walk(root, &mut |node| {
         if node.kind() != "import_from_statement" {
@@ -1157,7 +1194,7 @@ fn python_bare_raises(root: Node, src: &str) -> Vec<String> {
                 _ => (Some(name), Some(name)),
             };
             if let (Some(imported), Some(bound)) = (imported, bound) {
-                if text(imported, src) == "raises" {
+                if text(imported, src) == wanted {
                     names.push(text(bound, src).to_string());
                 }
             }
@@ -1230,7 +1267,9 @@ fn pytest_raises_arguments<'t>(args: Node<'t>, src: &str) -> PytestRaises<'t> {
             };
             match text(name, src) {
                 "match" => out.matcher = Some(matcher_value(val, src)),
-                "expected_exception" => out.exception_type = Some(python_exception_type(val, src)),
+                "expected_exception" | "expected_warning" => {
+                    out.exception_type = Some(python_exception_type(val, src))
+                }
                 _ => {}
             }
         } else if arg.kind() != "comment" {
@@ -1250,6 +1289,9 @@ fn pytest_raises_arguments<'t>(args: Node<'t>, src: &str) -> PytestRaises<'t> {
 enum PythonForm {
     /// `pytest.raises(..)`, or `raises(..)` imported from pytest.
     Raises,
+    /// `pytest.warns(..)`, or `warns(..)` imported from pytest: an expected warning, of
+    /// the kind `assertWarns` is, with the arguments of `pytest.raises`.
+    Warns,
     /// `assertRaises`, `assertRaisesRegex`, `assertWarns`, `assertWarnsRegex`: the kind,
     /// the name as written, and whether the second argument is a pattern.
     Unittest(&'static str, &'static str, bool),
@@ -1267,26 +1309,33 @@ fn python_unittest_form(name: &str) -> Option<PythonForm> {
 
 /// Reads the callee of a call: `pytest.raises` on the module (`pytest`, `x.pytest`), a
 /// bare name the file imports from pytest (`bare`), or a unittest method on any receiver.
-fn python_form(func: Node, src: &str, bare: &[String]) -> Option<PythonForm> {
+fn python_form(func: Node, src: &str, bare: &PytestBare) -> Option<PythonForm> {
     match func.kind() {
         "identifier" => {
             let name = text(func, src);
-            if bare.iter().any(|b| b == name) {
+            if bare.raises.iter().any(|b| b == name) {
                 Some(PythonForm::Raises)
+            } else if bare.warns.iter().any(|b| b == name) {
+                Some(PythonForm::Warns)
             } else {
                 python_unittest_form(name)
             }
         }
         "attribute" => {
             let name = text(func.child_by_field_name("attribute")?, src);
-            if name == "raises" {
+            if matches!(name, "raises" | "warns") {
                 let object = func.child_by_field_name("object")?;
                 let module = match object.kind() {
                     "identifier" => object,
                     "attribute" => object.child_by_field_name("attribute")?,
                     _ => return None,
                 };
-                (text(module, src) == "pytest").then_some(PythonForm::Raises)
+                let form = if name == "raises" {
+                    PythonForm::Raises
+                } else {
+                    PythonForm::Warns
+                };
+                (text(module, src) == "pytest").then_some(form)
             } else {
                 python_unittest_form(name)
             }
@@ -1299,7 +1348,7 @@ fn inspect_python_with_item(
     with_stmt: Node,
     item: Node,
     src: &str,
-    bare: &[String],
+    bare: &PytestBare,
     tests: &mut [TestFn],
 ) {
     let call = if let Some(val) = item.child_by_field_name("value") {
@@ -1344,16 +1393,21 @@ fn inspect_python_with_item(
     let guarded = guarded_call(with_stmt.child_by_field_name("body"), src);
 
     match form {
-        PythonForm::Raises => {
+        PythonForm::Raises | PythonForm::Warns => {
+            let (kind, name) = if form == PythonForm::Raises {
+                ("pytest.raises", "raises")
+            } else {
+                ("assertWarns", "warns")
+            };
             let parsed = pytest_raises_arguments(args, src);
             let skeleton_raw = masked
-                .unwrap_or_else(|| format!("with pytest.raises(#): {}", text(with_stmt, src)));
+                .unwrap_or_else(|| format!("with pytest.{name}(#): {}", text(with_stmt, src)));
             attribute(
                 tests,
                 ExpectedException {
                     line: call.start_position().row + 1,
                     skeleton: collapse_ws(&skeleton_raw),
-                    kind: "pytest.raises".to_string(),
+                    kind: kind.to_string(),
                     exception_type: parsed.exception_type,
                     matcher: parsed.matcher,
                     guarded_call: guarded,
@@ -1394,7 +1448,7 @@ fn inspect_python_with_item(
     }
 }
 
-fn inspect_python_standalone_call(call: Node, src: &str, bare: &[String], tests: &mut [TestFn]) {
+fn inspect_python_standalone_call(call: Node, src: &str, bare: &PytestBare, tests: &mut [TestFn]) {
     let Some(func) = call.child_by_field_name("function") else {
         return;
     };
@@ -1405,8 +1459,13 @@ fn inspect_python_standalone_call(call: Node, src: &str, bare: &[String], tests:
         return;
     };
     let (kind, written, is_regex) = match form {
-        PythonForm::Raises => {
+        PythonForm::Raises | PythonForm::Warns => {
             // The call form: `pytest.raises(ValueError, f, -1)`.
+            let (kind, name) = if form == PythonForm::Raises {
+                ("pytest.raises", "raises")
+            } else {
+                ("assertWarns", "warns")
+            };
             let parsed = pytest_raises_arguments(args, src);
             if parsed.exception_type.is_none() {
                 return;
@@ -1416,8 +1475,8 @@ fn inspect_python_standalone_call(call: Node, src: &str, bare: &[String], tests:
                 tests,
                 ExpectedException {
                     line: call.start_position().row + 1,
-                    skeleton: collapse_ws(&format!("pytest.raises(#, {})", rest.join(", "))),
-                    kind: "pytest.raises".to_string(),
+                    skeleton: collapse_ws(&format!("pytest.{name}(#, {})", rest.join(", "))),
+                    kind: kind.to_string(),
                     exception_type: parsed.exception_type,
                     matcher: parsed.matcher,
                     ..Default::default()
@@ -1514,7 +1573,7 @@ pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
 
 /// The module each name of the file is bound to by an `import` or a `require`:
 /// `(local name, module)`.
-fn js_bindings(root: Node, src: &str) -> Vec<(String, String)> {
+pub(super) fn js_bindings(root: Node, src: &str) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     walk(root, &mut |node| match node.kind() {
         "import_statement" => {
@@ -2121,6 +2180,29 @@ pub fn csharp(root: Node, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
     }
+    // Whether the file calls `Assert.ThrowsExactly`, a name of MSTest 3.8 and later.
+    let mut uses_throws_exactly = false;
+    walk(root, &mut |node| {
+        if node.kind() == "invocation_expression" {
+            let access = node
+                .child_by_field_name("function")
+                .filter(|f| f.kind() == "member_access_expression");
+            let named = access.and_then(|a| {
+                Some((
+                    a.child_by_field_name("expression")?,
+                    a.child_by_field_name("name")?,
+                ))
+            });
+            if let Some((receiver, name)) = named {
+                uses_throws_exactly |= is_csharp_assert_class(receiver, src)
+                    && matches!(
+                        text(csharp_member(name).0, src),
+                        "ThrowsExactly" | "ThrowsExactlyAsync"
+                    );
+            }
+        }
+        !uses_throws_exactly
+    });
     walk(root, &mut |node| {
         if node.kind() != "invocation_expression" {
             return true;
@@ -2160,6 +2242,12 @@ pub fn csharp(root: Node, src: &str, tests: &mut [TestFn]) {
             | "ThrowsExceptionAsync" => "Assert.Throws",
             _ => return true,
         };
+        let form = match text(method, src) {
+            "ThrowsExactly" | "ThrowsExactlyAsync" => THROWS_EXACTLY,
+            "Throws" | "ThrowsAsync" if uses_throws_exactly => THROWS_BESIDE_EXACTLY,
+            "Throws" | "ThrowsAsync" => THROWS,
+            _ => "",
+        };
         let Some(args) = node.child_by_field_name("arguments") else {
             return true;
         };
@@ -2194,6 +2282,7 @@ pub fn csharp(root: Node, src: &str, tests: &mut [TestFn]) {
                 kind: kind.to_string(),
                 exception_type,
                 matcher: None,
+                form,
                 ..Default::default()
             },
         );

@@ -411,14 +411,15 @@ impl Verdicts {
 
 // ---- pins: what already held -------------------------------------------------------------
 
-/// Pin: a helper in a file that holds no test loses its checks. PHP's shared helpers are
-/// the methods of a trait, which the pack did not read before this change.
+/// Pin: a helper in a file that holds no test loses its checks, and a test of an
+/// unchanged file calls it. PHP's shared helpers are the methods of a trait, which the
+/// pack did not read before this change.
 #[test]
 fn a_helper_that_loses_its_checks_in_a_helper_file_is_reported() {
     let mut v = Verdicts::default();
     for l in langs() {
         let run = change(
-            &[(l.helpers, &l.helper_file(3))],
+            &[(l.helpers, &l.helper_file(3)), (l.tests, &l.calling_test())],
             &[(l.helpers, &l.helper_file(0))],
             "",
         );
@@ -427,11 +428,12 @@ fn a_helper_that_loses_its_checks_in_a_helper_file_is_reported() {
     assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
-/// Pin of the rule for a call whose helper was not read: three inline assertions are
-/// replaced by a call to a helper in a file the change does not touch. Its body is not
-/// read, so it stands for nothing and the drop is reported.
+/// Three inline assertions are replaced by a call to a helper in a test-support file the
+/// change does not touch: the file is read from the head tree, and the helper stands for
+/// the checks it holds (#626). Holding three, the move is lossless; holding one, or
+/// standing in a file that is not a test-support path, the drop is reported.
 #[test]
-fn a_call_to_a_helper_outside_the_change_stands_for_no_dropped_assertion() {
+fn a_call_to_a_helper_in_an_unchanged_file_stands_for_the_checks_it_holds() {
     let mut v = Verdicts::default();
     for l in langs() {
         let run = change(
@@ -439,8 +441,30 @@ fn a_call_to_a_helper_outside_the_change_stands_for_no_dropped_assertion() {
             &[(l.tests, &l.calling_test())],
             "",
         );
-        v.reports(l.name, &run, DECREASED, l.tests);
+        v.clean(l.name, &run);
+        // Control: the unchanged helper holds fewer checks than the test dropped.
+        let run = change(
+            &[(l.helpers, &l.helper_file(1)), (l.tests, &l.inline_test(3))],
+            &[(l.tests, &l.calling_test())],
+            "",
+        );
+        v.reports(&format!("{} (1 held)", l.name), &run, DECREASED, l.tests);
     }
+    // Control: a helper file outside every test-support path is not read.
+    let run = change(
+        &[
+            ("app/helpers.py", "def check(r):\n    assert r.f0 == 0\n    assert r.f1 == 1\n    assert r.f2 == 2\n"),
+            ("tests/test_api.py", "from app.helpers import check\n\n\ndef test_create():\n    r = create()\n    assert r.f0 == 0\n    assert r.f1 == 1\n    assert r.f2 == 2\n"),
+        ],
+        &[("tests/test_api.py", "from app.helpers import check\n\n\ndef test_create():\n    r = create()\n    check(r)\n")],
+        "",
+    );
+    v.reports(
+        "python (app/helpers.py)",
+        &run,
+        DECREASED,
+        "tests/test_api.py",
+    );
     assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
@@ -536,7 +560,10 @@ fn a_method_helper_that_loses_its_checks_is_reported() {
     for l in langs() {
         let Some(method) = l.method else { continue };
         let run = change(
-            &[(l.helpers, &(l.file)(&method("check", &l.checks(3))))],
+            &[
+                (l.helpers, &(l.file)(&method("check", &l.checks(3)))),
+                (l.tests, &l.calling_test()),
+            ],
             &[(l.helpers, &(l.file)(&method("check", "")))],
             "",
         );
@@ -583,7 +610,10 @@ fn a_helper_that_stops_calling_a_checking_helper_is_reported() {
     let mut v = Verdicts::default();
     for l in langs() {
         let run = change(
-            &[(l.helpers, &with_sub_helper(&l, true, 2))],
+            &[
+                (l.helpers, &with_sub_helper(&l, true, 2)),
+                (l.tests, &l.calling_test()),
+            ],
             &[(l.helpers, &with_sub_helper(&l, false, 2))],
             "",
         );
@@ -614,7 +644,7 @@ fn an_extraction_that_loses_a_check_is_reported() {
     let mut v = Verdicts::default();
     for l in langs() {
         let run = change(
-            &[(l.helpers, &l.helper_file(3))],
+            &[(l.helpers, &l.helper_file(3)), (l.tests, &l.calling_test())],
             &[(l.helpers, &with_sub_helper(&l, true, 1))],
             "",
         );
@@ -744,7 +774,7 @@ fn a_renamed_helper_that_loses_checks_is_reported() {
     let mut v = Verdicts::default();
     for l in langs() {
         let run = change(
-            &[(l.helpers, &l.helper_file(3))],
+            &[(l.helpers, &l.helper_file(3)), (l.tests, &l.calling_test())],
             &[(
                 l.helpers,
                 &(l.file)(&(l.helper)("check_response", &l.checks(1))),
@@ -766,6 +796,7 @@ fn a_deleted_helper_is_reported_in_its_own_file() {
             &[
                 (l.helpers, &l.helper_file(2)),
                 (l.helpers2, &l.helper_file(3)),
+                (l.tests, &l.calling_test()),
             ],
             &[
                 (l.helpers, &(l.file)(&(l.helper)("unrelated", ""))),
@@ -876,13 +907,35 @@ fn a_comment_beside_two_helpers_of_one_name_reports_nothing() {
     assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
+/// A test file, in the language of the helper file `path`, whose one test calls the
+/// helper `check` (`Check` in C# and C++): a helper of a file that holds no test is judged
+/// only when a test names it (#626).
+fn caller_of(path: &str) -> (&'static str, String) {
+    let extension = path.rsplit('.').next().unwrap_or("");
+    let (name, helper) = match extension {
+        "rs" => ("rust", "check"),
+        "java" => ("java", "check"),
+        "cs" => ("csharp", "Check"),
+        "kt" => ("kotlin", "check"),
+        "swift" => ("swift", "check"),
+        "scala" => ("scala", "check"),
+        "cc" => ("cpp", "Check"),
+        "rb" => ("ruby", "check"),
+        "m" => ("objc", "check"),
+        other => panic!("no calling test for .{other}"),
+    };
+    let l = langs().into_iter().find(|l| l.name == name).unwrap();
+    (l.tests, (l.test)(&(l.call)(helper)))
+}
+
 /// Control: one of the two losing an assertion is reported.
 #[test]
 fn one_of_two_helpers_of_one_name_losing_a_check_is_reported() {
     let mut v = Verdicts::default();
     for (path, file, last_check, _) in SAME_NAMED {
+        let (tests, caller) = caller_of(path);
         let run = change(
-            &[(path, file)],
+            &[(path, file), (tests, &caller)],
             &[(path, &file.replace(last_check, ""))],
             "",
         );
@@ -924,15 +977,30 @@ fn a_function_under_examples_or_benches_is_not_an_assertion_helper() {
     assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
-/// Control, and the part of that item left as it was: a function of a file under `tests/`
-/// that holds no test is still read as a helper, so the same edit there is reported.
+/// A function of a file under `tests/` that holds no test is an assertion helper only
+/// when a test names it (#626): the same edit there reports nothing while no test calls
+/// the function, and is reported once a test of an unchanged file does.
 #[test]
-fn a_function_in_a_test_support_file_that_drops_an_unwrap_is_reported() {
-    let gen =
-        |call: &str| format!("pub fn gen() -> u32 {{\n    let v = load().{call}();\n    v\n}}\n");
+fn a_function_in_a_test_support_file_is_a_helper_only_when_a_test_names_it() {
+    let sample = |call: &str| {
+        format!("pub fn sample() -> u32 {{\n    let v = load().{call}();\n    v\n}}\n")
+    };
     let run = change(
-        &[("tests/support/gen.rs", &gen("unwrap"))],
-        &[("tests/support/gen.rs", &gen("unwrap_or_default"))],
+        &[("tests/support/gen.rs", &sample("unwrap"))],
+        &[("tests/support/gen.rs", &sample("unwrap_or_default"))],
+        "",
+    );
+    assert_eq!(reported(&run), vec![], "{}", run.stdout);
+
+    // Control: the same function, named by a test.
+    let uses =
+        "mod support;\n\n#[test]\nfn uses() {\n    assert_eq!(support::gen::sample(), 3);\n}\n";
+    let run = change(
+        &[
+            ("tests/support/gen.rs", &sample("unwrap")),
+            ("tests/uses.rs", uses),
+        ],
+        &[("tests/support/gen.rs", &sample("unwrap_or_default"))],
         "",
     );
     assert_eq!(
@@ -1209,10 +1277,11 @@ fn a_move_behind_a_qualified_call_into_a_changed_helper_file_reports_nothing() {
     assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }
 
-/// The rows of that pin that still hold: the method is defined in a file the change does
-/// not touch, so no method of that name was read and the call stands for nothing.
+/// The same move into a method of a test-support file the change does not touch: the
+/// file is read from the head tree and the method stands for its checks (#626). A test
+/// that drops more than the method holds is still reported.
 #[test]
-fn a_move_behind_a_qualified_call_into_a_file_outside_the_change_is_reported() {
+fn a_move_behind_a_qualified_call_into_an_unchanged_file_reports_nothing() {
     let mut v = Verdicts::default();
     for l in langs() {
         let Some((qualified, helper)) = qualified_move(&l) else {
@@ -1223,7 +1292,14 @@ fn a_move_behind_a_qualified_call_into_a_file_outside_the_change_is_reported() {
             &[(l.tests, &(l.test)(&qualified))],
             "",
         );
-        v.reports(l.name, &run, DECREASED, l.tests);
+        v.clean(l.name, &run);
+        // Control: five inline assertions, and a method that holds three.
+        let run = change(
+            &[(l.helpers, &helper), (l.tests, &l.inline_test(5))],
+            &[(l.tests, &(l.test)(&qualified))],
+            "",
+        );
+        v.reports(&format!("{} (5 dropped)", l.name), &run, DECREASED, l.tests);
     }
     assert!(v.0.is_empty(), "\n{}\n", v.0.join("\n"));
 }

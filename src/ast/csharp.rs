@@ -313,6 +313,7 @@ impl<'a> CSharpExtractor<'a> {
                             tautologies: helper_fn.tautologies,
                             fatal_asserts: helper_fn.fatal_asserts,
                             helper_checks: 0,
+                            equality_exits: 0,
                         },
                         dummy_calls,
                     );
@@ -681,6 +682,11 @@ impl<'a> CSharpExtractor<'a> {
                 | "ThrowsAsync"
                 | "ThrowsAny"
                 | "ThrowsAnyAsync"
+                // MSTest's spellings of the same assertion.
+                | "ThrowsExactly"
+                | "ThrowsExactlyAsync"
+                | "ThrowsException"
+                | "ThrowsExceptionAsync"
                 | "Single"
                 | "Empty"
                 | "NotEmpty"

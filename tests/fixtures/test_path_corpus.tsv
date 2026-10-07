@@ -2106,3 +2106,9 @@ rust	src/examples.rs	production
 rust	bench/x.rs	production
 rust	example/x.rs	production
 rust	src/mybenches/x.rs	production
+go	internal/db/dbtestutil.go	production
+go	pkg/store/dbtestutil.go	production
+go	pkg/dbtestutil/fixtures.go	production
+go	internal/servertesthelpers.go	production
+go	pkg/apitestutils/client.go	production
+go	internal/db/db_testutil.go	test
