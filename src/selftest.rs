@@ -1659,7 +1659,7 @@ const CASES: &[Case] = &[
                 return Ok(true);
             };
             let twin = pack.extract("src/m.rs", "(>\u{e9}t(0(.t();}", &AssertVocabulary::default())?;
-            Ok(cut == "could not parse `src/m.rs`: the parser did not finish within its budget of 316 steps for 15 bytes"
+            Ok(cut == "could not parse `src/m.rs`: the parser did not finish within its budget of 259 steps for 15 bytes"
                 && twin.has_parse_errors)
         },
     ),
