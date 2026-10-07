@@ -1283,7 +1283,7 @@ impl<'a> JsExtractor<'a> {
                         if class == MatcherClass::Strong {
                             test.strong_asserts += 1;
                         }
-                        if self.is_tautological_expect(call, prop_name) {
+                        if self.is_tautological_expect(call, prop_name, test) {
                             test.tautologies += 1;
                         }
                         return;
@@ -1308,7 +1308,7 @@ impl<'a> JsExtractor<'a> {
                 if self.is_strong_assert_fn(func_text) {
                     test.strong_asserts += 1;
                 }
-                if self.is_tautological_assert_call(call, func_text) {
+                if self.is_tautological_assert_call(call, func_text, test) {
                     test.tautologies += 1;
                 }
                 return;
@@ -1343,7 +1343,7 @@ impl<'a> JsExtractor<'a> {
         )
     }
 
-    fn is_tautological_expect(&self, call: Node, prop_name: &str) -> bool {
+    fn is_tautological_expect(&self, call: Node, prop_name: &str, test: &mut TestFn) -> bool {
         // Find subject in expect(subject)
         // Structure of call: expect(subject).toBe(expected)
         let call_text = self.text(call);
@@ -1364,6 +1364,18 @@ impl<'a> JsExtractor<'a> {
                     // Check if subject inside expect(...) matches expected
                     if let Some(func) = call.child_by_field_name("function") {
                         if let Some(obj) = func.child_by_field_name("object") {
+                            // `expect(subject).toBe(expected)`: the receiver is the
+                            // `expect` call itself, with one argument.
+                            if let Some(subject) = self.expect_subject(obj) {
+                                if super::self_comparison::note(
+                                    &mut test.equality_operands,
+                                    subject,
+                                    arg_nodes[0],
+                                    self.src,
+                                ) {
+                                    return true;
+                                }
+                            }
                             let obj_text = self.text(obj);
                             if let Some(inner) = obj_text.strip_prefix("expect(") {
                                 if let Some(subject) = inner.strip_suffix(')') {
@@ -1385,7 +1397,23 @@ impl<'a> JsExtractor<'a> {
         false
     }
 
-    fn is_tautological_assert_call(&self, call: Node, func_text: &str) -> bool {
+    /// The one argument of a receiver that is the call `expect(subject)`.
+    fn expect_subject<'b>(&self, receiver: Node<'b>) -> Option<Node<'b>> {
+        if receiver.kind() != "call_expression"
+            || receiver
+                .child_by_field_name("function")
+                .is_none_or(|f| self.text(f) != "expect")
+        {
+            return None;
+        }
+        let args = receiver.child_by_field_name("arguments")?;
+        if args.named_child_count() != 1 {
+            return None;
+        }
+        args.named_child(0).filter(|a| a.kind() != "comment")
+    }
+
+    fn is_tautological_assert_call(&self, call: Node, func_text: &str, test: &mut TestFn) -> bool {
         if let Some(args) = call.child_by_field_name("arguments") {
             let mut cursor = args.walk();
             let arg_nodes: Vec<_> = args
@@ -1399,14 +1427,21 @@ impl<'a> JsExtractor<'a> {
                 if text == "true" || text == "1" {
                     return true;
                 }
-            } else if (func_text == "assert.equal" || func_text == "assert.strictEqual")
-                && arg_nodes.len() >= 2
+            } else if matches!(
+                func_text,
+                "assert.equal"
+                    | "assert.strictEqual"
+                    | "assert.deepEqual"
+                    | "assert.deepStrictEqual"
+            ) && arg_nodes.len() >= 2
+                && super::self_comparison::note(
+                    &mut test.equality_operands,
+                    arg_nodes[0],
+                    arg_nodes[1],
+                    self.src,
+                )
             {
-                let a = self.text(arg_nodes[0]).trim();
-                let b = self.text(arg_nodes[1]).trim();
-                if a == b && !a.is_empty() {
-                    return true;
-                }
+                return true;
             }
         }
         false

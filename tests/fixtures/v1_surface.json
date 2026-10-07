@@ -1091,6 +1091,7 @@
       "assertion-reduction/fatal-assertions-weakened",
       "assertion-reduction/mocking-increased-without-stronger-assertions",
       "assertion-reduction/nul-byte-added",
+      "assertion-reduction/self-comparison-assertion-introduced",
       "assertion-reduction/source-parsed-with-errors",
       "assertion-reduction/source-parsed-with-errors-preprocessor",
       "assertion-reduction/test-cases-reduced",
@@ -1326,6 +1327,7 @@
       "vacuous-tests/assertion-density-below-floor",
       "vacuous-tests/asserts-only-on-mocks",
       "vacuous-tests/asserts-only-trivial-properties",
+      "vacuous-tests/self-comparison-assertion-added",
       "vacuous-tests/vacuous-test-added",
       "version-lockstep/version-mismatch"
     ],

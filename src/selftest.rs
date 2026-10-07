@@ -3083,6 +3083,106 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "vacuous-tests: an equality assertion on the same tokens twice in a new test is a warning at its line; a clone, a repeated call, a macro body and a reflexivity check beside a real comparison are not",
+        || {
+            use crate::guards::agent_diff::{evaluate_vacuous_tests, Located};
+            let settings = crate::config::AssertionGate::default();
+            let verdict = |path: &str, src: &str| -> Result<Vec<(String, usize, bool)>> {
+                let facts = extract(path, src)?;
+                let added: Vec<Located> = facts
+                    .tests
+                    .iter()
+                    .map(|test| Located { path, file_survives: true, test })
+                    .collect();
+                Ok(evaluate_vacuous_tests(&added, &settings, &[])?
+                    .violations
+                    .iter()
+                    .map(|v| {
+                        (
+                            v.title.clone(),
+                            v.line.unwrap_or(0),
+                            v.severity == crate::config::Severity::Warning
+                                && v.message.contains("Exact form only")
+                                && v.message.contains("no alias or value-flow analysis"),
+                        )
+                    })
+                    .collect())
+            };
+            let title = crate::findings::SELF_COMPARISON_ASSERTION_ADDED.title.to_string();
+            let rust = verdict(
+                "tests/t.rs",
+                "#[test]\nfn t() {\n    assert_eq!(f(), 1);\n    assert_eq!(y, (y));\n}\n",
+            )?;
+            let python = verdict("tests/test_t.py", "def test_t():\n    assert f() == 1\n    assert y == y\n")?;
+            let js = verdict(
+                "t.test.js",
+                "test('t', () => {\n  expect(f()).toBe(1);\n  expect(y).toBe(y);\n});\n",
+            )?;
+            let mut silent = true;
+            for body in [
+                "assert_eq!(y.clone(), y);",
+                "assert_eq!(it.next(), it.next());",
+                "macro_rules! same { ($a:expr) => { assert_eq!($a, $a); }; }",
+                "assert_eq!(y, z); assert_eq!(y, y);",
+                "assert_ne!(y, y);",
+            ] {
+                let src = format!("#[test]\nfn t() {{\n    assert_eq!(f(), 1);\n    {body}\n}}\n");
+                silent &= verdict("tests/t.rs", &src)?.is_empty();
+            }
+            // Alone, it is the vacuous test and one finding.
+            let alone = verdict("tests/t.rs", "#[test]\nfn t() {\n    assert_eq!(y, y);\n}\n")?;
+            Ok(rust == [(title.clone(), 4, true)]
+                && python == [(title.clone(), 3, true)]
+                && js == [(title, 3, true)]
+                && silent
+                && alone.len() == 1
+                && alone[0].0 == crate::findings::VACUOUS_TEST_ADDED.title)
+        },
+    ),
+    (
+        "assertion-reduction: a self-comparison a change introduces in an existing test is a warning at its line; one the base side held, and a near-miss, are not",
+        || {
+            use crate::guards::agent_diff::{evaluate_assertion_reduction, TestPair};
+            let settings = crate::config::AssertionGate::default();
+            let verdict = |base: &str, head: &str| -> Result<Vec<(String, usize, bool)>> {
+                let file = |body: &str| format!("#[test]\nfn t() {{\n{body}}}\n");
+                let (b, h) = (extract("tests/t.rs", &file(base))?, extract("tests/t.rs", &file(head))?);
+                let pair = [TestPair { path: "tests/t.rs", base: &b.tests[0], head: &h.tests[0], forced: false }];
+                Ok(evaluate_assertion_reduction(&pair, &[], &[], &settings, &[], false)?
+                    .violations
+                    .iter()
+                    .map(|v| {
+                        (
+                            v.title.clone(),
+                            v.line.unwrap_or(0),
+                            v.severity == crate::config::Severity::Warning,
+                        )
+                    })
+                    .collect())
+            };
+            let title = crate::findings::SELF_COMPARISON_ASSERTION_INTRODUCED.title.to_string();
+            const REAL: &str = "    assert_eq!(f(), 1);\n";
+            let added = verdict(REAL, &format!("{REAL}    assert_eq!(y, y);\n"))?;
+            let held = verdict(
+                &format!("{REAL}    assert_eq!(y, y);\n"),
+                &format!("{REAL}    assert_eq!(g(), 2);\n    assert_eq!(y, y);\n"),
+            )?;
+            let near = verdict(REAL, &format!("{REAL}    assert_eq!(y.clone(), y);\n"))?;
+            // Replaced: the count drops, and the one finding is the reduction.
+            let replaced = verdict(
+                &format!("{REAL}    assert_eq!(g(), 2);\n"),
+                &format!("{REAL}    assert_eq!(y, y);\n"),
+            )?;
+            Ok(added == [(title.clone(), 4, true)]
+                && held.is_empty()
+                && near.is_empty()
+                && !replaced.iter().any(|r| r.0 == title)
+                && replaced
+                    .iter()
+                    .any(|r| r.0 == crate::findings::ASSERTIONS_REDUCED.title && !r.2))
+        },
+    ),
+    (
         "merged-pr-body: a 422 for an unknown commit means not on the forge, a 403 stays a failure",
         || {
             use crate::forge::{commit_origin, CannedApi, CommitOrigin, Forge, ForgeKind};

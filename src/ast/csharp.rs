@@ -671,6 +671,11 @@ impl<'a> CSharpExtractor<'a> {
                 | "NotStrictEqual"
                 | "Same"
                 | "NotSame"
+                // NUnit's classic model and MSTest: `Assert.AreEqual(expected, actual)`.
+                | "AreEqual"
+                | "AreNotEqual"
+                | "AreSame"
+                | "AreNotSame"
                 | "Contains"
                 | "DoesNotContain"
                 | "Matches"
@@ -695,19 +700,46 @@ impl<'a> CSharpExtractor<'a> {
                 | "AreEquivalent"
         );
 
+        // NUnit's constraint model: `Assert.That(actual, Is.EqualTo(expected))` and
+        // `Is.SameAs(expected)` are equality assertions; any other constraint is counted
+        // as it was.
+        if method_name == "That" {
+            if let Some(expected) = args.get(1).and_then(|c| self.nunit_equality_operand(*c)) {
+                if super::self_comparison::note(
+                    &mut test_fn.equality_operands,
+                    args[0],
+                    expected,
+                    self.src,
+                ) {
+                    test_fn.tautologies += 1;
+                } else {
+                    test_fn.strong_asserts += 1;
+                }
+            }
+            return;
+        }
+
         if is_strong {
             test_fn.strong_asserts += 1;
-            // Equality tautology check: 2 args with identical text
+            // Equality tautology check: 2 args with the same tokens
             if matches!(
                 method_name,
-                "Equal" | "StrictEqual" | "Same" | "Equivalent" | "AreEquivalent"
+                "Equal"
+                    | "StrictEqual"
+                    | "Same"
+                    | "Equivalent"
+                    | "AreEquivalent"
+                    | "AreEqual"
+                    | "AreSame"
             ) && args.len() >= 2
+                && super::self_comparison::note(
+                    &mut test_fn.equality_operands,
+                    args[0],
+                    args[1],
+                    self.src,
+                )
             {
-                let left = self.text(args[0]).trim();
-                let right = self.text(args[1]).trim();
-                if !left.is_empty() && left == right {
-                    test_fn.tautologies += 1;
-                }
+                test_fn.tautologies += 1;
             }
         } else if method_name == "True" {
             if let Some(arg) = args.first() {
@@ -722,6 +754,20 @@ impl<'a> CSharpExtractor<'a> {
                 }
             }
         }
+    }
+
+    /// The operand of `Is.EqualTo(x)` / `Is.SameAs(x)`, written as exactly that call.
+    fn nunit_equality_operand<'b>(&self, constraint: Node<'b>) -> Option<Node<'b>> {
+        if constraint.kind() != "invocation_expression" {
+            return None;
+        }
+        let callee = constraint.child_by_field_name("function")?;
+        let callee: String = self.text(callee).split_whitespace().collect();
+        if !matches!(callee.as_str(), "Is.EqualTo" | "Is.SameAs") {
+            return None;
+        }
+        let args = self.get_invocation_arguments(constraint);
+        (args.len() == 1).then(|| args[0])
     }
 
     fn is_literal_true(&self, node: Node) -> bool {

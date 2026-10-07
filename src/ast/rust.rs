@@ -587,6 +587,7 @@ impl<'a> Extractor<'a> {
             method_checks: 0,
             counted_helper_calls: Vec::new(),
             helper_reach: super::HelperReach::default(),
+            equality_operands: Default::default(),
         };
         let is_fallible_return = node
             .child_by_field_name("return_type")
@@ -1212,7 +1213,8 @@ impl<'a> Extractor<'a> {
                             .find(|c| c.kind() == "token_tree")
                             .and_then(|t| t.utf8_text(src).ok())
                             .unwrap_or("");
-                        if is_tautology(macro_ident, args) {
+                        let same = note_macro_operands(node, macro_ident, test, src);
+                        if is_tautology(macro_ident, args) || same {
                             test.tautologies += 1;
                         }
                     }
@@ -1324,7 +1326,8 @@ impl<'a> Extractor<'a> {
                             .find(|c| c.kind() == "token_tree")
                             .map(|t| self.text(t))
                             .unwrap_or("");
-                        if is_tautology(name, args) {
+                        let same = note_macro_operands(node, name, test, self.src);
+                        if is_tautology(name, args) || same {
                             test.tautologies += 1;
                         }
                     }
@@ -2069,6 +2072,40 @@ fn property_result(expr: Node, body: Node, src: &[u8], depth: usize) -> Property
         }
         _ => Checks { strong: false },
     }
+}
+
+/// Reads the first two arguments of an equality macro (`assert_eq!`, `debug_assert_eq!`,
+/// `prop_assert_eq!`, ..) from its token tree and records them (`self_comparison`).
+/// Returns whether they are the same tokens. Arguments are the runs of tokens between
+/// the commas of the tree; a comma inside `<..>` splits a run, and such an argument is
+/// then never equal to its neighbour.
+fn note_macro_operands(invocation: Node, name: &str, test: &mut TestFn, src: &[u8]) -> bool {
+    if !name.contains("_eq") {
+        return false;
+    }
+    let mut cursor = invocation.walk();
+    let Some(tree) = invocation
+        .children(&mut cursor)
+        .find(|c| c.kind() == "token_tree")
+    else {
+        return false;
+    };
+    let mut tree_cursor = tree.walk();
+    let tokens: Vec<Node> = tree.children(&mut tree_cursor).collect();
+    if tokens.len() < 2 {
+        return false;
+    }
+    let inner = &tokens[1..tokens.len() - 1];
+    let mut runs = inner.split(|t| t.kind() == ",");
+    let (Some(a), Some(b)) = (runs.next(), runs.next()) else {
+        return false;
+    };
+    super::self_comparison::note_operands(
+        &mut test.equality_operands,
+        super::self_comparison::Operand { nodes: a },
+        super::self_comparison::Operand { nodes: b },
+        src,
+    )
 }
 
 fn is_tautology(name: &str, token_tree: &str) -> bool {

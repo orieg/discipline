@@ -481,17 +481,23 @@ impl<'a> ScalaExtractor<'a> {
     }
 
     /// Whether a condition compares a value with itself (`x == x`) or is `true`.
-    fn is_tautology(&self, cond: Node) -> bool {
+    fn is_tautology(&self, cond: Node, test_fn: &mut TestFn) -> bool {
         match cond.kind() {
             "boolean_literal" => self.text(cond) == "true",
             "infix_expression" => {
-                let l = cond.child_by_field_name("left").map(|n| self.text(n));
-                let r = cond.child_by_field_name("right").map(|n| self.text(n));
                 let op = cond
                     .child_by_field_name("operator")
                     .map(|n| self.text(n))
                     .unwrap_or("");
-                matches!(op, "==" | "===" | "eq") && l.is_some() && l == r
+                match (
+                    cond.child_by_field_name("left"),
+                    cond.child_by_field_name("right"),
+                ) {
+                    (Some(l), Some(r)) if matches!(op, "==" | "===" | "eq") => {
+                        super::self_comparison::note(&mut test_fn.equality_operands, l, r, self.src)
+                    }
+                    _ => false,
+                }
             }
             _ => false,
         }
@@ -535,13 +541,24 @@ impl<'a> ScalaExtractor<'a> {
             return;
         }
         test_fn.total_asserts += 1;
-        let l = node
-            .child_by_field_name("left")
-            .map(|n| self.text(n).trim());
         let r = node
             .child_by_field_name("right")
             .map(|n| self.text(n).trim());
-        if l.is_some() && l == r {
+        // `x shouldBe x` is recorded; the same operands under another matcher word are
+        // counted as before.
+        let same = match (
+            node.child_by_field_name("left"),
+            node.child_by_field_name("right"),
+        ) {
+            (Some(a), Some(b))
+                if matches!(op, "shouldBe" | "shouldEqual" | "mustBe" | "mustEqual") =>
+            {
+                super::self_comparison::note(&mut test_fn.equality_operands, a, b, self.src)
+            }
+            (Some(a), Some(b)) => super::self_comparison::same(a, b, self.src),
+            _ => false,
+        };
+        if same {
             test_fn.tautologies += 1;
         } else if !matches!(r, Some("true" | "false" | "be (true)" | "be (false)")) {
             test_fn.strong_asserts += 1;
@@ -569,14 +586,25 @@ impl<'a> ScalaExtractor<'a> {
             "assert" => {
                 test_fn.total_asserts += 1;
                 match args.first() {
-                    Some(c) if self.is_tautology(*c) => test_fn.tautologies += 1,
+                    Some(c) if self.is_tautology(*c, test_fn) => test_fn.tautologies += 1,
                     Some(c) if c.kind() == "infix_expression" => test_fn.strong_asserts += 1,
                     _ => {}
                 }
             }
             "assertEquals" | "assertResult" | "expectResult" | "assertNotEquals" => {
                 test_fn.total_asserts += 1;
-                if args.len() >= 2 && self.text(args[0]) == self.text(args[1]) {
+                let same = args.len() >= 2
+                    && if name == "assertNotEquals" {
+                        super::self_comparison::same(args[0], args[1], self.src)
+                    } else {
+                        super::self_comparison::note(
+                            &mut test_fn.equality_operands,
+                            args[0],
+                            args[1],
+                            self.src,
+                        )
+                    };
+                if same {
                     test_fn.tautologies += 1;
                 } else {
                     test_fn.strong_asserts += 1;
