@@ -995,8 +995,14 @@ impl<'a> JsExtractor<'a> {
 
     fn classify_call(&self, func: Node) -> (bool, bool, bool, bool) {
         // (is_test, is_suite, is_ignored, is_todo)
-        let text = self.text(func);
-        match text {
+        // The names of the chain only: `test.each([".skip"])` is `test.each`, not a skip.
+        let text = super::text_without(
+            func,
+            self.src,
+            &["arguments", "template_string", "string", "comment"],
+        );
+        let text: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        match text.as_str() {
             "it" | "test" => (true, false, false, false),
             "xit" | "xtest" => (true, false, true, false),
             "describe" | "context" => (false, true, false, false),
@@ -1216,17 +1222,16 @@ impl<'a> JsExtractor<'a> {
         let mut env_bindings = std::collections::HashSet::new();
 
         for child in body.children(&mut cursor) {
-            if child.kind() == "lexical_declaration" || child.kind() == "variable_declaration" {
-                let text = self.text(child);
-                if is_js_env_check(text) {
-                    let mut decl_cursor = child.walk();
-                    for decl in child.children(&mut decl_cursor) {
-                        if decl.kind() == "variable_declarator" {
-                            if let Some(name_node) = decl.child_by_field_name("name") {
-                                let name = self.text(name_node).trim();
-                                if !name.is_empty() {
-                                    env_bindings.insert(name.to_string());
-                                }
+            if (child.kind() == "lexical_declaration" || child.kind() == "variable_declaration")
+                && is_js_env_check(child, self.src)
+            {
+                let mut decl_cursor = child.walk();
+                for decl in child.children(&mut decl_cursor) {
+                    if decl.kind() == "variable_declarator" {
+                        if let Some(name_node) = decl.child_by_field_name("name") {
+                            let name = self.text(name_node).trim();
+                            if !name.is_empty() {
+                                env_bindings.insert(name.to_string());
                             }
                         }
                     }
@@ -1242,13 +1247,8 @@ impl<'a> JsExtractor<'a> {
                     .unwrap_or(cond_text)
                     .trim();
 
-                let is_env_check = is_js_env_check(unwrapped)
-                    || env_bindings.iter().any(|v| {
-                        unwrapped == v
-                            || unwrapped
-                                .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
-                                .any(|t| t == v)
-                    });
+                let is_env_check = is_js_env_check(cond_node, self.src)
+                    || super::code_names_one_of(cond_node, self.src, &JS_NOT_CODE, &env_bindings);
 
                 if is_env_check {
                     let consequence = child.child_by_field_name("consequence")?;
@@ -1413,8 +1413,19 @@ impl<'a> JsExtractor<'a> {
     }
 }
 
-fn is_js_env_check(text: &str) -> bool {
-    text.contains("process.env") || text.contains("process?.env") || super::is_ci_condition(text)
+const JS_NOT_CODE: super::NotCode = super::NotCode {
+    strings: &["string", "template_string", "regex"],
+    comments: &["comment"],
+    interpolations: &["template_substitution"],
+};
+
+/// Whether `node` is a candidate for a condition on the environment: its code, outside
+/// string literals and comments, spells an environment read or names a CI variable. A CI
+/// variable named in a string (`os.Getenv("CI")`, `lookup("CI")`) is read by
+/// `ci_condition::site`, from the tree.
+fn is_js_env_check(node: Node, src: &[u8]) -> bool {
+    let code = super::code_text(node, src, &JS_NOT_CODE);
+    code.contains("process.env") || code.contains("process?.env") || super::is_ci_condition(&code)
 }
 
 fn js_consequence_returns_early(consequence: Node) -> bool {

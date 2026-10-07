@@ -142,7 +142,7 @@
           "type": "integer"
         },
         "pr": {
-          "description": "Pull request number, from the subject's `(#N)`",
+          "description": "Pull request number, from a `(#N)` the subject ends with",
           "minimum": 1,
           "type": [
             "integer",

@@ -426,7 +426,8 @@ pub const ADDED_IS_ANOTHER_BASIS: &[(&str, &str)] = &[
     ("test-floor", "test_report"),
     // The head-side report is what the count is read from, as `test_report` is.
     // `base_report` is not here: it names what the head report is compared with, and
-    // the gate cannot run with it alone.
+    // the gate cannot run with it alone. Added beside a `test_report` the base already
+    // had, it is reported for what it replaces (`BASE_SIDE_MOVED`).
     ("test-floor", "head_report"),
 ];
 
@@ -437,6 +438,10 @@ const UNORDERED_VERSION: &str =
 /// What the sentence of an added [`ADDED_IS_ANOTHER_BASIS`] key says.
 const ANOTHER_BASIS: &str =
     "the tests are then counted on a basis the base ref did not use, so its floor is compared with a different count";
+
+/// What the sentence of a `base_report` added beside an existing `test_report` says.
+const BASE_SIDE_MOVED: &str =
+    "the head report was compared with `test_report` as the base ref committed it, and is now compared with a file the runner supplies";
 
 pub fn direction_of(key: &str) -> Option<Direction> {
     KEY_DIRECTIONS
@@ -1398,6 +1403,17 @@ pub fn diff_configs_under(
                         None if ADDED_IS_ANOTHER_BASIS.contains(&(gate.as_str(), key.as_str())) => {
                             let mut changed = w(key, Change::Changed).values("unset", hv);
                             changed.note = Some(ANOTHER_BASIS);
+                            note(changed);
+                        }
+                        // `base_report` beside a `test_report` the base already had: the
+                        // base side of the comparison was that file as the base ref
+                        // committed it, and is now a file the runner supplies.
+                        None if gate == "test-floor"
+                            && key == "base_report"
+                            && b.contains_key("test_report") =>
+                        {
+                            let mut changed = w(key, Change::Changed).values("unset", hv);
+                            changed.note = Some(BASE_SIDE_MOVED);
                             note(changed);
                         }
                         None => {}

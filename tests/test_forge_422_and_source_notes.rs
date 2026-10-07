@@ -585,9 +585,10 @@ fn the_job_summary_carries_the_source_notes() {
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     let written = std::fs::read_to_string(&summary).unwrap();
     for line in [
-        "**Directives:** 1 directive(s) read from merged pull request #12 (author agent)"
+        // A number or a commit id inside a message is a code span in Markdown.
+        "**Directives:** 1 directive(s) read from merged pull request `#12` (author agent)"
             .to_string(),
-        format!("**Directives:** merged-pr-body: commit {short} arrived through merged pull request #12 (author agent)"),
+        format!("**Directives:** merged-pr-body: commit `{short}` arrived through merged pull request `#12` (author agent)"),
     ] {
         assert_eq!(count_lines(&written, &line), 1, "{line}\n{written}");
     }
