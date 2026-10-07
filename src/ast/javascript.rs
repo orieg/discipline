@@ -1,7 +1,7 @@
 //! JavaScript and TypeScript language pack: tree-sitter AST extraction of tests, assertions, and escape hatches.
 
-use anyhow::{anyhow, Result};
-use tree_sitter::{Node, Parser};
+use anyhow::Result;
+use tree_sitter::Node;
 
 use super::ci_condition::SkipCondition;
 use super::functions::{self, FunctionSpec};
@@ -39,18 +39,13 @@ impl LanguagePack for JavaScriptPack {
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
-        let mut parser = Parser::new();
         let ext = super::extension(path).unwrap_or("js");
         let lang = match ext {
             "ts" | "mts" | "cts" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             "tsx" | "jsx" => tree_sitter_typescript::LANGUAGE_TSX.into(),
             _ => tree_sitter_javascript::LANGUAGE.into(),
         };
-
-        parser
-            .set_language(&lang)
-            .map_err(|e| anyhow!("failed to load JS/TS grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
+        let tree = crate::ast::source_text::parse_file_as(&lang, "JS/TS", path, src)?;
         let root = tree.root_node();
 
         let mut extractor = JsExtractor {
@@ -72,67 +67,7 @@ impl LanguagePack for JavaScriptPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers(root);
-        extractor.facts.functions = functions::extract(root, src, path, &JS_FUNCTIONS);
-        super::mocks::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &JS_MOCKS,
-            &vocab.mock_setup_fns,
-            &vocab.mock_assert_fns,
-        );
-        {
-            let tests = &extractor.facts.tests;
-            let spans: Vec<(usize, usize)> = tests
-                .iter()
-                .map(|t| (t.line, t.end_line.max(t.line)))
-                .collect();
-            // A file in a test directory, or one the repository declares as test scope, is
-            // test code line for line.
-            let whole_file = super::functions::test_path(path)
-                || super::functions::declared_test_path(path, &vocab.test_paths);
-            let is_test_line =
-                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            (
-                extractor.facts.swallowed,
-                extractor.facts.constant_fallbacks,
-            ) = super::handlers::extract_with_constants(
-                root,
-                src,
-                &JS_HANDLERS,
-                Some(&JS_CONSTANTS),
-                &is_test_line,
-            );
-        }
-        super::retries::mark(root, src, &mut extractor.facts.tests, &JS_RETRIES);
-        if super::functions::declared_test_path(path, &vocab.test_paths) {
-            for f in &mut extractor.facts.functions {
-                f.is_test = true;
-            }
-        }
-        super::method_checks::count(root, src, &mut extractor.facts, &JS_RECEIVER_CALLS);
-        super::helper_loops::count(
-            root,
-            src,
-            &mut extractor.facts,
-            &super::helper_loops::JAVASCRIPT,
-        );
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &JS_MOCKS,
-            super::calls::SLEEP_VOCAB,
-            super::calls::sleeps,
-        );
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &JS_MOCKS,
-            super::calls::TRIVIAL_ASSERT_VOCAB,
-            super::calls::trivial_asserts,
-        );
+        JS_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
         super::bounds::javascript(root, src, &mut extractor.facts.tests);
         super::expectations::javascript(root, src, &mut extractor.facts.tests);
         super::caught_assertions::javascript(root, src, &mut extractor.facts.tests, vocab);
@@ -207,7 +142,7 @@ pub fn classify_matcher(name: &str) -> MatcherClass {
         | "toHaveBeenCalled" | "toBeCalled" | "toHaveReturned" | "toReturn" => MatcherClass::Weak,
 
         _ => {
-            if name.starts_with("toBe") || name.starts_with("to") || name.starts_with("toHave") {
+            if name.starts_with("to") {
                 MatcherClass::Strong
             } else {
                 MatcherClass::Unknown
@@ -219,9 +154,6 @@ pub fn classify_matcher(name: &str) -> MatcherClass {
 /// True if `name` is a recognized or plausible expect matcher name.
 pub fn is_matcher(name: &str) -> bool {
     classify_matcher(name) != MatcherClass::Unknown
-        || name.starts_with("to")
-        || name.starts_with("toHave")
-        || name.starts_with("toBe")
 }
 
 /// Returns true if `node` is part of an `expect(...)` call or method chain.
@@ -898,29 +830,10 @@ impl<'a> JsExtractor<'a> {
             let line = func.start_position().row + 1;
             let end_line = func.end_position().row + 1;
             self.facts.push_helper(
-                super::TestHelperFacts {
-                    name: name.clone(),
-                    line,
-                    end_line,
-                    total_asserts: h.total_asserts,
-                    strong_asserts: h.strong_asserts,
-                    tautologies: h.tautologies,
-                    fatal_asserts: h.fatal_asserts,
-                    helper_checks: 0,
-                    equality_exits: 0,
-                },
+                super::TestHelperFacts::from_scan(name.clone(), line, end_line, &h),
                 calls,
             );
-            helpers.insert(
-                name,
-                super::HelperFacts {
-                    total_asserts: h.total_asserts,
-                    strong_asserts: h.strong_asserts,
-                    tautologies: h.tautologies,
-                    fatal_asserts: h.fatal_asserts,
-                    wraps,
-                },
-            );
+            helpers.insert(name, super::HelperFacts::from_scan(&h, wraps));
         }
         // A class's methods (`class Checker { check(r) { expect(..) } }`) are tracked as
         // `Class.method`. A call through an object is not resolved to one: which class the
@@ -940,17 +853,12 @@ impl<'a> JsExtractor<'a> {
                 JS_FUNCTION_KINDS,
             );
             self.facts.push_helper(
-                super::TestHelperFacts {
+                super::TestHelperFacts::from_scan(
                     name,
-                    line: body.start_position().row + 1,
-                    end_line: body.end_position().row + 1,
-                    total_asserts: h.total_asserts,
-                    strong_asserts: h.strong_asserts,
-                    tautologies: h.tautologies,
-                    fatal_asserts: h.fatal_asserts,
-                    helper_checks: 0,
-                    equality_exits: 0,
-                },
+                    body.start_position().row + 1,
+                    body.end_position().row + 1,
+                    &h,
+                ),
                 calls,
             );
         }
@@ -1521,6 +1429,20 @@ fn js_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
     }
     false
 }
+
+/// What the steps every pack shares read of this pack (`PackSpec::shared_facts`).
+const JS_PACK: super::PackSpec = super::PackSpec {
+    functions: &JS_FUNCTIONS,
+    own_test_path: None,
+    handlers: &JS_HANDLERS,
+    constants: Some(&JS_CONSTANTS),
+    retries: Some(&JS_RETRIES),
+    receiver_calls: &JS_RECEIVER_CALLS,
+    helper_loops: &super::helper_loops::JAVASCRIPT,
+    calls: &JS_MOCKS,
+    vocabs: super::calls::SLEEPS_AND_TRIVIAL_ASSERTS,
+    judged: None,
+};
 
 pub const JS_FUNCTIONS: FunctionSpec = FunctionSpec {
     function_kinds: &[

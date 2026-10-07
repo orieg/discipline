@@ -1,7 +1,7 @@
 //! Ruby language pack: tree-sitter AST extraction of tests, assertions, and escape hatches.
 
 use anyhow::{anyhow, Result};
-use tree_sitter::{Node, Parser};
+use tree_sitter::Node;
 
 use super::ci_condition::{read_skip, Grammar};
 use super::functions::{self, FunctionSpec};
@@ -42,11 +42,12 @@ impl LanguagePack for RubyPack {
         // by name, the way an over-budget parse is (`crate::ast::scanner_limits`).
         crate::ast::scanner_limits::ruby_heredoc_word(src)
             .map_err(|why| anyhow!("could not parse `{path}`: {why}"))?;
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_ruby::LANGUAGE.into())
-            .map_err(|e| anyhow!("failed to load the Ruby grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
+        let tree = crate::ast::source_text::parse_file_as(
+            &tree_sitter_ruby::LANGUAGE.into(),
+            "the Ruby",
+            path,
+            src,
+        )?;
         let root = tree.root_node();
 
         let mut extractor = RubyExtractor {
@@ -65,60 +66,7 @@ impl LanguagePack for RubyPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
-        extractor.facts.functions = functions::extract(root, src, path, &RUBY_FUNCTIONS);
-        super::mocks::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &RUBY_MOCKS,
-            &vocab.mock_setup_fns,
-            &vocab.mock_assert_fns,
-        );
-        {
-            let tests = &extractor.facts.tests;
-            let spans: Vec<(usize, usize)> = tests
-                .iter()
-                .map(|t| (t.line, t.end_line.max(t.line)))
-                .collect();
-            let whole_file = functions::is_test_file(path, Some(is_ruby_test_path))
-                || functions::declared_test_path(path, &vocab.test_paths);
-            let is_test_line =
-                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            (
-                extractor.facts.swallowed,
-                extractor.facts.constant_fallbacks,
-            ) = super::handlers::extract_with_constants(
-                root,
-                src,
-                &RUBY_HANDLERS,
-                Some(&RUBY_CONSTANTS),
-                &is_test_line,
-            );
-        }
-        super::retries::mark(root, src, &mut extractor.facts.tests, &RUBY_RETRIES);
-        if functions::declared_test_path(path, &vocab.test_paths) {
-            for f in &mut extractor.facts.functions {
-                f.is_test = true;
-            }
-        }
-        super::method_checks::count(root, src, &mut extractor.facts, &RUBY_RECEIVER_CALLS);
-        super::helper_loops::count(root, src, &mut extractor.facts, &super::helper_loops::RUBY);
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &RUBY_MOCKS,
-            super::calls::SLEEP_VOCAB,
-            super::calls::sleeps,
-        );
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &RUBY_MOCKS,
-            super::calls::TRIVIAL_ASSERT_VOCAB,
-            super::calls::trivial_asserts,
-        );
+        RUBY_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
         extractor.facts.prose =
             super::prose::extract(root, src, &["comment", "string", "heredoc_body"]);
         super::expected_exceptions::ruby(root, src, &mut extractor.facts.tests);
@@ -135,6 +83,20 @@ fn ruby_fn_is_test(node: Node, src: &str, path: &str) -> bool {
         || name == "test"
         || functions::is_test_file(path, Some(is_ruby_test_path))
 }
+
+/// What the steps every pack shares read of this pack (`PackSpec::shared_facts`).
+const RUBY_PACK: super::PackSpec = super::PackSpec {
+    functions: &RUBY_FUNCTIONS,
+    own_test_path: Some(is_ruby_test_path),
+    handlers: &RUBY_HANDLERS,
+    constants: Some(&RUBY_CONSTANTS),
+    retries: Some(&RUBY_RETRIES),
+    receiver_calls: &RUBY_RECEIVER_CALLS,
+    helper_loops: &super::helper_loops::RUBY,
+    calls: &RUBY_MOCKS,
+    vocabs: super::calls::SLEEPS_AND_TRIVIAL_ASSERTS,
+    judged: None,
+};
 
 pub const RUBY_FUNCTIONS: FunctionSpec = FunctionSpec {
     // `def x; end` has no body node and is not described.
@@ -318,34 +280,26 @@ impl<'a> RubyExtractor<'a> {
                             &["raise ", "raise(", "fail "],
                             &["block", "do_block", "lambda", "method", "singleton_method"],
                         );
-                        let facts = super::HelperFacts {
-                            total_asserts: helper_fn.total_asserts,
-                            strong_asserts: helper_fn.strong_asserts,
-                            tautologies: helper_fn.tautologies,
-                            fatal_asserts: helper_fn.fatal_asserts,
-                            wraps: super::forwarding_wrapper_callee(
+                        let facts = super::HelperFacts::from_scan(
+                            &helper_fn,
+                            super::forwarding_wrapper_callee(
                                 body,
                                 &RUBY_WRAPPER,
                                 &RUBY_LOCALS,
                                 &dummy_calls,
                                 self.src,
                             ),
-                        };
+                        );
                         self.helpers.insert(method_name.to_string(), facts);
                         let line = child.start_position().row + 1;
                         let end_line = child.end_position().row + 1;
                         self.facts.push_helper(
-                            super::TestHelperFacts {
-                                name: method_name.to_string(),
+                            super::TestHelperFacts::from_scan(
+                                method_name.to_string(),
                                 line,
                                 end_line,
-                                total_asserts: helper_fn.total_asserts,
-                                strong_asserts: helper_fn.strong_asserts,
-                                tautologies: helper_fn.tautologies,
-                                fatal_asserts: helper_fn.fatal_asserts,
-                                helper_checks: 0,
-                                equality_exits: 0,
-                            },
+                                &helper_fn,
+                            ),
                             dummy_calls,
                         );
                     }

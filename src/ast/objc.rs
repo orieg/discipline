@@ -10,8 +10,8 @@
 //! Grammar note: the grammar reads Objective-C, not Objective-C++. A `.mm` file whose
 //! C++ constructs it cannot read reports its parse errors like any other file.
 
-use anyhow::{anyhow, Result};
-use tree_sitter::{Node, Parser};
+use anyhow::Result;
+use tree_sitter::Node;
 
 use super::ci_condition::{read_skip, Grammar};
 use super::functions::{self, FunctionSpec};
@@ -61,16 +61,17 @@ impl LanguagePack for ObjcPack {
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_objc::LANGUAGE.into())
-            .map_err(|e| anyhow!("failed to load the Objective-C grammar: {e}"))?;
         // The C preprocessor habits of Objective-C, rewritten byte for byte before the parse
         // (`super::c_macros`): `typedef NS_ENUM(T, Name)`, Apple's annotation macros, the
         // repository's own `[languages.c]` macros, `extern "C"` guards.
         let masked = mask_objc_macros(src, vocab);
         let src = masked.as_deref().unwrap_or(src);
-        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
+        let tree = crate::ast::source_text::parse_file_as(
+            &tree_sitter_objc::LANGUAGE.into(),
+            "the Objective-C",
+            path,
+            src,
+        )?;
         let root = tree.root_node();
         let (has_errors, first_line, error_count) = super::collect_error_nodes_info(root);
 
@@ -94,51 +95,7 @@ impl LanguagePack for ObjcPack {
         extractor.collect_xctest_classes(root);
         extractor.visit_node(root, "");
         extractor.resolve_same_file_helpers();
-        extractor.facts.functions = functions::extract(root, src, path, &OBJC_FUNCTIONS);
-        super::mocks::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &OBJC_MOCKS,
-            &vocab.mock_setup_fns,
-            &vocab.mock_assert_fns,
-        );
-        {
-            let tests = &extractor.facts.tests;
-            let spans: Vec<(usize, usize)> = tests
-                .iter()
-                .map(|t| (t.line, t.end_line.max(t.line)))
-                .collect();
-            let whole_file = functions::is_test_file(path, Some(is_objc_test_path))
-                || functions::declared_test_path(path, &vocab.test_paths);
-            let is_test_line =
-                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            (
-                extractor.facts.swallowed,
-                extractor.facts.constant_fallbacks,
-            ) = super::handlers::extract_with_constants(
-                root,
-                src,
-                &OBJC_HANDLERS,
-                Some(&OBJC_CONSTANTS),
-                &is_test_line,
-            );
-        }
-        if functions::declared_test_path(path, &vocab.test_paths) {
-            for f in &mut extractor.facts.functions {
-                f.is_test = true;
-            }
-        }
-        super::method_checks::count(root, src, &mut extractor.facts, &OBJC_RECEIVER_CALLS);
-        super::helper_loops::count(root, src, &mut extractor.facts, &super::helper_loops::OBJC);
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &OBJC_MOCKS,
-            super::calls::SLEEP_VOCAB,
-            super::calls::sleeps,
-        );
+        OBJC_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
         super::expected_exceptions::objc(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(root, src, &["comment", "string_literal"]);
         Ok(extractor.facts)
@@ -181,6 +138,12 @@ struct ObjcExtractor<'a> {
     test_calls: Vec<Vec<String>>,
 }
 
+/// The comments that suppress an Objective-C linter; a `#pragma` is read from its own node.
+const OBJC_SUPPRESSIONS: super::CommentSuppressions = super::CommentSuppressions {
+    hash_comments: false,
+    markers: &["NOLINT"],
+};
+
 impl<'a> ObjcExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
         node.utf8_text(self.src).unwrap_or("")
@@ -198,45 +161,28 @@ impl<'a> ObjcExtractor<'a> {
 
     /// `#pragma clang diagnostic ignored "-W..."` and `// NOLINT...`.
     fn collect_escape_hatches(&mut self, node: Node) {
-        match node.kind() {
-            "preproc_call" => {
-                let text = self.text(node);
+        let src = self.src;
+        super::collect_comment_suppressions(
+            node,
+            src,
+            &OBJC_SUPPRESSIONS,
+            &mut |node, sites| {
+                if node.kind() != "preproc_call" {
+                    return true;
+                }
+                let text = node.utf8_text(src).unwrap_or("");
                 if text.contains("diagnostic ignored") {
                     let rule = text.split('"').nth(1).unwrap_or("all").to_string();
-                    self.facts
-                        .escape_hatches
-                        .push(EscapeHatchSite::LinterDisable {
-                            line: node.start_position().row + 1,
-                            rule,
-                            snippet: text.trim().to_string(),
-                        });
+                    sites.push(EscapeHatchSite::LinterDisable {
+                        line: node.start_position().row + 1,
+                        rule,
+                        snippet: text.trim().to_string(),
+                    });
                 }
-                return;
-            }
-            "comment" => {
-                let text = self.text(node);
-                let body = text
-                    .trim_start_matches("//")
-                    .trim_start_matches("/*")
-                    .trim_end_matches("*/")
-                    .trim();
-                if body.starts_with("NOLINT") {
-                    self.facts
-                        .escape_hatches
-                        .push(EscapeHatchSite::LinterDisable {
-                            line: node.start_position().row + 1,
-                            rule: body.to_string(),
-                            snippet: text.to_string(),
-                        });
-                }
-                return;
-            }
-            _ => {}
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.collect_escape_hatches(child);
-        }
+                false
+            },
+            &mut self.facts.escape_hatches,
+        );
     }
 
     fn collect_xctest_classes(&mut self, node: Node) {
@@ -342,33 +288,20 @@ impl<'a> ObjcExtractor<'a> {
         );
         self.helpers
             .entry(name.clone())
-            .or_insert(super::HelperFacts {
-                total_asserts: helper.total_asserts,
-                strong_asserts: helper.strong_asserts,
-                tautologies: helper.tautologies,
-                fatal_asserts: helper.fatal_asserts,
-                wraps: super::forwarding_wrapper_callee(
+            .or_insert(super::HelperFacts::from_scan(
+                &helper,
+                super::forwarding_wrapper_callee(
                     body,
                     &OBJC_WRAPPER,
                     &OBJC_LOCALS,
                     &dummy,
                     self.src,
                 ),
-            });
+            ));
         let line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
         self.facts.push_helper(
-            super::TestHelperFacts {
-                name,
-                line,
-                end_line,
-                total_asserts: helper.total_asserts,
-                strong_asserts: helper.strong_asserts,
-                tautologies: helper.tautologies,
-                fatal_asserts: helper.fatal_asserts,
-                helper_checks: 0,
-                equality_exits: 0,
-            },
+            super::TestHelperFacts::from_scan(name, line, end_line, &helper),
             dummy,
         );
     }
@@ -507,6 +440,20 @@ fn objc_fn_is_test(node: Node, src: &str, path: &str) -> bool {
     (node.kind() == "method_definition" && first.starts_with("test") && is_objc_test_path(path))
         || functions::is_test_file(path, Some(is_objc_test_path))
 }
+
+/// What the steps every pack shares read of this pack (`PackSpec::shared_facts`).
+const OBJC_PACK: super::PackSpec = super::PackSpec {
+    functions: &OBJC_FUNCTIONS,
+    own_test_path: Some(is_objc_test_path),
+    handlers: &OBJC_HANDLERS,
+    constants: Some(&OBJC_CONSTANTS),
+    retries: None,
+    receiver_calls: &OBJC_RECEIVER_CALLS,
+    helper_loops: &super::helper_loops::OBJC,
+    calls: &OBJC_MOCKS,
+    vocabs: &[(super::calls::SLEEP_VOCAB, super::calls::sleeps)],
+    judged: None,
+};
 
 pub const OBJC_FUNCTIONS: FunctionSpec = FunctionSpec {
     function_kinds: &["method_definition", "function_definition"],

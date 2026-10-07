@@ -1,7 +1,7 @@
 //! Java language pack: tree-sitter AST extraction of tests, assertions, and escape hatches.
 
-use anyhow::{anyhow, Result};
-use tree_sitter::{Node, Parser};
+use anyhow::Result;
+use tree_sitter::Node;
 
 use super::ci_condition::{CiVerdict, Lang, SkipCondition};
 use super::functions::{self, FunctionSpec};
@@ -35,11 +35,12 @@ impl LanguagePack for JavaPack {
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_java::LANGUAGE.into())
-            .map_err(|e| anyhow!("failed to load the Java grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
+        let tree = crate::ast::source_text::parse_file_as(
+            &tree_sitter_java::LANGUAGE.into(),
+            "the Java",
+            path,
+            src,
+        )?;
         let root = tree.root_node();
 
         let mut extractor = JavaExtractor {
@@ -59,63 +60,7 @@ impl LanguagePack for JavaPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
-        extractor.facts.functions = functions::extract(root, src, path, &JAVA_FUNCTIONS);
-        super::mocks::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &JAVA_MOCKS,
-            &vocab.mock_setup_fns,
-            &vocab.mock_assert_fns,
-        );
-        {
-            let tests = &extractor.facts.tests;
-            let spans: Vec<(usize, usize)> = tests
-                .iter()
-                .map(|t| (t.line, t.end_line.max(t.line)))
-                .collect();
-            // A file matching the shared test-path conventions, this pack's own test-file
-            // convention, or one the repository declares as test scope, is test code
-            // line for line.
-            let whole_file = super::functions::is_test_file(path, Some(is_java_test_path))
-                || super::functions::declared_test_path(path, &vocab.test_paths);
-            let is_test_line =
-                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            (
-                extractor.facts.swallowed,
-                extractor.facts.constant_fallbacks,
-            ) = super::handlers::extract_with_constants(
-                root,
-                src,
-                &JAVA_HANDLERS,
-                Some(&JAVA_CONSTANTS),
-                &is_test_line,
-            );
-        }
-        super::retries::mark(root, src, &mut extractor.facts.tests, &JAVA_RETRIES);
-        if super::functions::declared_test_path(path, &vocab.test_paths) {
-            for f in &mut extractor.facts.functions {
-                f.is_test = true;
-            }
-        }
-        super::method_checks::count(root, src, &mut extractor.facts, &JAVA_RECEIVER_CALLS);
-        super::helper_loops::count(root, src, &mut extractor.facts, &super::helper_loops::JAVA);
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &JAVA_MOCKS,
-            super::calls::SLEEP_VOCAB,
-            super::calls::sleeps,
-        );
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &JAVA_MOCKS,
-            super::calls::TRIVIAL_ASSERT_VOCAB,
-            super::calls::trivial_asserts,
-        );
+        JAVA_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
         super::caught_assertions::java(root, src, &mut extractor.facts.tests, vocab);
         super::expected_exceptions::java(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
@@ -475,34 +420,26 @@ impl<'a> JavaExtractor<'a> {
                     &[],
                     &["lambda_expression", "class_body"],
                 );
-                let facts = super::HelperFacts {
-                    total_asserts: helper_fn.total_asserts,
-                    strong_asserts: helper_fn.strong_asserts,
-                    tautologies: helper_fn.tautologies,
-                    fatal_asserts: helper_fn.fatal_asserts,
-                    wraps: super::forwarding_wrapper_callee(
+                let facts = super::HelperFacts::from_scan(
+                    &helper_fn,
+                    super::forwarding_wrapper_callee(
                         body,
                         &JAVA_WRAPPER,
                         &JAVA_LOCALS,
                         &dummy_calls,
                         self.src,
                     ),
-                };
+                );
                 self.helpers.insert(method_name.to_string(), facts);
                 let line = node.start_position().row + 1;
                 let end_line = node.end_position().row + 1;
                 self.facts.push_helper(
-                    super::TestHelperFacts {
-                        name: method_name.to_string(),
+                    super::TestHelperFacts::from_scan(
+                        method_name.to_string(),
                         line,
                         end_line,
-                        total_asserts: helper_fn.total_asserts,
-                        strong_asserts: helper_fn.strong_asserts,
-                        tautologies: helper_fn.tautologies,
-                        fatal_asserts: helper_fn.fatal_asserts,
-                        helper_checks: 0,
-                        equality_exits: 0,
-                    },
+                        &helper_fn,
+                    ),
                     dummy_calls,
                 );
             }
@@ -806,6 +743,20 @@ fn java_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
     });
     found
 }
+
+/// What the steps every pack shares read of this pack (`PackSpec::shared_facts`).
+const JAVA_PACK: super::PackSpec = super::PackSpec {
+    functions: &JAVA_FUNCTIONS,
+    own_test_path: Some(is_java_test_path),
+    handlers: &JAVA_HANDLERS,
+    constants: Some(&JAVA_CONSTANTS),
+    retries: Some(&JAVA_RETRIES),
+    receiver_calls: &JAVA_RECEIVER_CALLS,
+    helper_loops: &super::helper_loops::JAVA,
+    calls: &JAVA_MOCKS,
+    vocabs: super::calls::SLEEPS_AND_TRIVIAL_ASSERTS,
+    judged: None,
+};
 
 pub const JAVA_FUNCTIONS: FunctionSpec = FunctionSpec {
     function_kinds: &["method_declaration", "constructor_declaration"],

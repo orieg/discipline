@@ -8,8 +8,8 @@
 //! `scalafix:off` comments as escape hatches; an empty `catch` arm and `Try(...)
 //! .getOrElse(...)` / `.toOption` as swallowed errors; `???` as a stub.
 
-use anyhow::{anyhow, Result};
-use tree_sitter::{Node, Parser};
+use anyhow::Result;
+use tree_sitter::Node;
 
 use super::ci_condition::{read_skip, Grammar};
 use super::functions::{self, FunctionSpec};
@@ -43,11 +43,12 @@ impl LanguagePack for ScalaPack {
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_scala::LANGUAGE.into())
-            .map_err(|e| anyhow!("failed to load the Scala grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
+        let tree = crate::ast::source_text::parse_file_as(
+            &tree_sitter_scala::LANGUAGE.into(),
+            "the Scala",
+            path,
+            src,
+        )?;
         let root = tree.root_node();
 
         let mut extractor = ScalaExtractor {
@@ -65,60 +66,7 @@ impl LanguagePack for ScalaPack {
         extractor.collect_escape_hatches(root);
         extractor.visit_node(root, &mut Vec::new(), false);
         extractor.resolve_same_file_helpers();
-        extractor.facts.functions = functions::extract(root, src, path, &SCALA_FUNCTIONS);
-        super::mocks::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &SCALA_MOCKS,
-            &vocab.mock_setup_fns,
-            &vocab.mock_assert_fns,
-        );
-        {
-            let tests = &extractor.facts.tests;
-            let spans: Vec<(usize, usize)> = tests
-                .iter()
-                .map(|t| (t.line, t.end_line.max(t.line)))
-                .collect();
-            let whole_file = functions::is_test_file(path, Some(is_scala_test_path))
-                || functions::declared_test_path(path, &vocab.test_paths);
-            let is_test_line =
-                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            (
-                extractor.facts.swallowed,
-                extractor.facts.constant_fallbacks,
-            ) = super::handlers::extract_with_constants(
-                root,
-                src,
-                &SCALA_HANDLERS,
-                Some(&SCALA_CONSTANTS),
-                &is_test_line,
-            );
-        }
-        super::retries::mark(root, src, &mut extractor.facts.tests, &SCALA_RETRIES);
-        if functions::declared_test_path(path, &vocab.test_paths) {
-            for f in &mut extractor.facts.functions {
-                f.is_test = true;
-            }
-        }
-        super::method_checks::count(root, src, &mut extractor.facts, &SCALA_RECEIVER_CALLS);
-        super::helper_loops::count(root, src, &mut extractor.facts, &super::helper_loops::SCALA);
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &SCALA_MOCKS,
-            super::calls::SLEEP_VOCAB,
-            super::calls::sleeps,
-        );
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &SCALA_MOCKS,
-            super::calls::TRIVIAL_ASSERT_VOCAB,
-            super::calls::trivial_asserts,
-        );
+        SCALA_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
         super::expected_exceptions::scala(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
@@ -441,33 +389,20 @@ impl<'a> ScalaExtractor<'a> {
         );
         self.helpers
             .entry(name.to_string())
-            .or_insert(super::HelperFacts {
-                total_asserts: helper.total_asserts,
-                strong_asserts: helper.strong_asserts,
-                tautologies: helper.tautologies,
-                fatal_asserts: helper.fatal_asserts,
-                wraps: super::forwarding_wrapper_callee(
+            .or_insert(super::HelperFacts::from_scan(
+                &helper,
+                super::forwarding_wrapper_callee(
                     body,
                     &SCALA_WRAPPER,
                     &SCALA_LOCALS,
                     &dummy,
                     self.src,
                 ),
-            });
+            ));
         let line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
         self.facts.push_helper(
-            super::TestHelperFacts {
-                name: name.to_string(),
-                line,
-                end_line,
-                total_asserts: helper.total_asserts,
-                strong_asserts: helper.strong_asserts,
-                tautologies: helper.tautologies,
-                fatal_asserts: helper.fatal_asserts,
-                helper_checks: 0,
-                equality_exits: 0,
-            },
+            super::TestHelperFacts::from_scan(name.to_string(), line, end_line, &helper),
             dummy,
         );
     }
@@ -656,6 +591,20 @@ fn scala_fn_is_test(node: Node, src: &str, path: &str) -> bool {
     });
     annotated || functions::is_test_file(path, Some(is_scala_test_path))
 }
+
+/// What the steps every pack shares read of this pack (`PackSpec::shared_facts`).
+const SCALA_PACK: super::PackSpec = super::PackSpec {
+    functions: &SCALA_FUNCTIONS,
+    own_test_path: Some(is_scala_test_path),
+    handlers: &SCALA_HANDLERS,
+    constants: Some(&SCALA_CONSTANTS),
+    retries: Some(&SCALA_RETRIES),
+    receiver_calls: &SCALA_RECEIVER_CALLS,
+    helper_loops: &super::helper_loops::SCALA,
+    calls: &SCALA_MOCKS,
+    vocabs: super::calls::SLEEPS_AND_TRIVIAL_ASSERTS,
+    judged: None,
+};
 
 pub const SCALA_FUNCTIONS: FunctionSpec = FunctionSpec {
     function_kinds: &["function_definition"],

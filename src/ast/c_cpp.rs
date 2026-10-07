@@ -1,7 +1,7 @@
 //! C and C++ language pack: tree-sitter AST extraction of tests, assertions, and escape hatches.
 
-use anyhow::{anyhow, Result};
-use tree_sitter::{Node, Parser};
+use anyhow::Result;
+use tree_sitter::Node;
 
 use super::ci_condition::{read_skip, Grammar};
 use super::functions::{self, FunctionSpec};
@@ -78,15 +78,16 @@ impl CPack {
         src: &str,
         vocab: &AssertVocabulary,
     ) -> Result<ParsedFileFacts> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_c::LANGUAGE.into())
-            .map_err(|e| anyhow!("failed to load the C grammar: {e}"))?;
         let masked = mask_macros(src, vocab);
         let src = masked.as_deref().unwrap_or(src);
         let guarded = super::c_macros::mask_cplusplus_guards(src);
         let src = guarded.as_deref().unwrap_or(src);
-        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
+        let tree = crate::ast::source_text::parse_file_as(
+            &tree_sitter_c::LANGUAGE.into(),
+            "the C",
+            path,
+            src,
+        )?;
         let root = tree.root_node();
 
         let (has_errors, first_line, error_count) = collect_error_nodes_info(root);
@@ -145,13 +146,14 @@ impl LanguagePack for CppPack {
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_cpp::LANGUAGE.into())
-            .map_err(|e| anyhow!("failed to load the C++ grammar: {e}"))?;
         let masked = mask_macros(src, vocab);
         let src = masked.as_deref().unwrap_or(src);
-        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
+        let tree = crate::ast::source_text::parse_file_as(
+            &tree_sitter_cpp::LANGUAGE.into(),
+            "the C++",
+            path,
+            src,
+        )?;
         let root = tree.root_node();
 
         let (has_errors, first_line, error_count) = collect_error_nodes_info(root);
@@ -199,56 +201,7 @@ fn shared_facts(
     vocab: &AssertVocabulary,
     facts: &mut ParsedFileFacts,
 ) {
-    facts.functions = functions::extract(root, src, path, &C_FUNCTIONS);
-    super::mocks::count(
-        root,
-        src,
-        &mut facts.tests,
-        &C_MOCKS,
-        &vocab.mock_setup_fns,
-        &vocab.mock_assert_fns,
-    );
-    {
-        let spans: Vec<(usize, usize)> = facts
-            .tests
-            .iter()
-            .map(|t| (t.line, t.end_line.max(t.line)))
-            .collect();
-        let whole_file = functions::is_test_file(path, Some(is_c_cpp_test_path))
-            || functions::declared_test_path(path, &vocab.test_paths);
-        let is_test_line = |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-        (facts.swallowed, facts.constant_fallbacks) = super::handlers::extract_with_constants(
-            root,
-            src,
-            &C_HANDLERS,
-            Some(&C_CONSTANTS),
-            &is_test_line,
-        );
-    }
-    super::retries::mark(root, src, &mut facts.tests, &C_RETRIES);
-    if functions::declared_test_path(path, &vocab.test_paths) {
-        for f in &mut facts.functions {
-            f.is_test = true;
-        }
-    }
-    super::method_checks::count(root, src, facts, &C_RECEIVER_CALLS);
-    super::helper_loops::count(root, src, facts, &super::helper_loops::C);
-    super::calls::count(
-        root,
-        src,
-        &mut facts.tests,
-        &C_MOCKS,
-        super::calls::SLEEP_VOCAB,
-        super::calls::sleeps,
-    );
-    super::calls::count(
-        root,
-        src,
-        &mut facts.tests,
-        &C_MOCKS,
-        super::calls::TRIVIAL_ASSERT_VOCAB,
-        super::calls::trivial_asserts,
-    );
+    C_PACK.shared_facts(root, src, path, vocab, facts);
     facts.prose = super::prose::extract(
         root,
         src,
@@ -287,6 +240,20 @@ fn c_fn_is_test(node: Node, src: &str, path: &str) -> bool {
         || name.ends_with("_smoke")
         || functions::is_test_file(path, Some(is_c_cpp_test_path))
 }
+
+/// What the steps every pack shares read of this pack (`PackSpec::shared_facts`).
+const C_PACK: super::PackSpec = super::PackSpec {
+    functions: &C_FUNCTIONS,
+    own_test_path: Some(is_c_cpp_test_path),
+    handlers: &C_HANDLERS,
+    constants: Some(&C_CONSTANTS),
+    retries: Some(&C_RETRIES),
+    receiver_calls: &C_RECEIVER_CALLS,
+    helper_loops: &super::helper_loops::C,
+    calls: &C_MOCKS,
+    vocabs: super::calls::SLEEPS_AND_TRIVIAL_ASSERTS,
+    judged: None,
+};
 
 pub const C_FUNCTIONS: FunctionSpec = FunctionSpec {
     // `= default` / `= delete` and a pure-virtual declaration have no `body`.
@@ -462,52 +429,40 @@ struct CCppExtractor<'a> {
     facts: ParsedFileFacts,
 }
 
+/// The comments that suppress a C or C++ linter; a `#pragma` is read from its own node.
+const C_SUPPRESSIONS: super::CommentSuppressions = super::CommentSuppressions {
+    hash_comments: false,
+    markers: &["NOLINT"],
+};
+
 impl<'a> CCppExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
         node.utf8_text(self.src).unwrap_or("")
     }
 
     fn collect_comments_and_escape_hatches(&mut self, node: Node) {
-        let kind = node.kind();
-        if kind == "preproc_call" {
-            // A `#pragma` directive is its own node, so the same words in a comment or a
-            // string literal never reach here. The node has no children worth walking.
-            if let Some(rule) = pragma_suppression_rule(node, self.src) {
-                self.facts
-                    .escape_hatches
-                    .push(EscapeHatchSite::LinterDisable {
+        let src = self.src;
+        super::collect_comment_suppressions(
+            node,
+            src,
+            &C_SUPPRESSIONS,
+            &mut |node, sites| {
+                if node.kind() != "preproc_call" {
+                    return true;
+                }
+                // A `#pragma` directive is its own node, so the same words in a comment or a
+                // string literal never reach here. The node has no children worth walking.
+                if let Some(rule) = pragma_suppression_rule(node, src) {
+                    sites.push(EscapeHatchSite::LinterDisable {
                         line: node.start_position().row + 1,
                         rule,
-                        snippet: self.text(node).trim().to_string(),
+                        snippet: node.utf8_text(src).unwrap_or("").trim().to_string(),
                     });
-            }
-            return;
-        }
-        if kind == "comment" {
-            let text = self.text(node);
-            let line = node.start_position().row + 1;
-            let trimmed = text
-                .trim_start_matches("//")
-                .trim_start_matches("/*")
-                .trim_end_matches("*/")
-                .trim();
-
-            if trimmed.starts_with("NOLINT") {
-                self.facts
-                    .escape_hatches
-                    .push(EscapeHatchSite::LinterDisable {
-                        line,
-                        rule: trimmed.to_string(),
-                        snippet: text.to_string(),
-                    });
-            }
-            return;
-        }
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.collect_comments_and_escape_hatches(child);
-        }
+                }
+                false
+            },
+            &mut self.facts.escape_hatches,
+        );
     }
 
     fn visit_root(&mut self, root: Node) {
@@ -664,34 +619,21 @@ impl<'a> CCppExtractor<'a> {
         super::dispatch_calls(body, self.src, &C_DISPATCH, &mut dummy_calls);
         self.helpers.insert(
             name.clone(),
-            super::HelperFacts {
-                total_asserts: helper_fn.total_asserts,
-                strong_asserts: helper_fn.strong_asserts,
-                tautologies: helper_fn.tautologies,
-                fatal_asserts: helper_fn.fatal_asserts,
-                wraps: super::forwarding_wrapper_callee(
+            super::HelperFacts::from_scan(
+                &helper_fn,
+                super::forwarding_wrapper_callee(
                     body,
                     &C_WRAPPER,
                     &C_LOCALS,
                     &dummy_calls,
                     self.src,
                 ),
-            },
+            ),
         );
         let line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
         self.facts.push_helper(
-            super::TestHelperFacts {
-                name: name.clone(),
-                line,
-                end_line,
-                total_asserts: helper_fn.total_asserts,
-                strong_asserts: helper_fn.strong_asserts,
-                tautologies: helper_fn.tautologies,
-                fatal_asserts: helper_fn.fatal_asserts,
-                helper_checks: 0,
-                equality_exits: 0,
-            },
+            super::TestHelperFacts::from_scan(name.clone(), line, end_line, &helper_fn),
             dummy_calls.clone(),
         );
         self.helper_calls.insert(name, dummy_calls);

@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use tree_sitter::{Node, Parser};
 
 use super::functions::{self, FunctionSpec};
@@ -40,11 +40,12 @@ impl LanguagePack for RustPack {
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_rust::LANGUAGE.into())
-            .map_err(|e| anyhow!("failed to load the Rust grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
+        let tree = crate::ast::source_text::parse_file_as(
+            &tree_sitter_rust::LANGUAGE.into(),
+            "the Rust",
+            path,
+            src,
+        )?;
         let root = tree.root_node();
 
         let (owning_features, manifest_error) =
@@ -83,59 +84,7 @@ impl LanguagePack for RustPack {
         cx.visit(root, &mut Vec::new());
         cx.resolve_same_file_helpers();
         cx.facts.build_compile_time_test();
-        cx.facts.functions = functions::extract(root, src, path, &RUST_FUNCTIONS);
-        super::mocks::count(
-            root,
-            src,
-            &mut cx.facts.tests,
-            &RUST_MOCKS,
-            &vocab.mock_setup_fns,
-            &vocab.mock_assert_fns,
-        );
-        {
-            let tests = &cx.facts.tests;
-            let spans: Vec<(usize, usize)> = tests
-                .iter()
-                .map(|t| (t.line, t.end_line.max(t.line)))
-                .collect();
-            // A file in a test directory, or one the repository declares as test scope, is
-            // test code line for line.
-            let whole_file = super::functions::test_path(path)
-                || super::functions::declared_test_path(path, &vocab.test_paths);
-            let is_test_line =
-                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            cx.facts.swallowed = super::handlers::extract(root, src, &RUST_HANDLERS, &is_test_line);
-        }
-        super::retries::mark(root, src, &mut cx.facts.tests, &RUST_RETRIES);
-        if super::functions::declared_test_path(path, &vocab.test_paths) {
-            for f in &mut cx.facts.functions {
-                f.is_test = true;
-            }
-        }
-        super::method_checks::count(root, src, &mut cx.facts, &RUST_RECEIVER_CALLS);
-        super::helper_loops::count(root, src, &mut cx.facts, &super::helper_loops::RUST);
-        let counted: [(super::calls::Vocab, super::calls::Pick); 2] = [
-            (super::calls::SLEEP_VOCAB, super::calls::sleeps),
-            (
-                super::calls::TRIVIAL_ASSERT_VOCAB,
-                super::calls::trivial_asserts,
-            ),
-        ];
-        for (counted_vocab, pick) in counted {
-            super::calls::count_with(
-                root,
-                src,
-                &mut cx.facts.tests,
-                &RUST_MOCKS,
-                counted_vocab,
-                pick,
-                // A macro's arguments are a token tree, not call nodes.
-                &|node| {
-                    (node.kind() == "macro_invocation")
-                        .then(|| macro_code(node, src, counted_vocab, &vocab.extra_macros))
-                },
-            );
-        }
+        RUST_PACK.shared_facts(root, src, path, vocab, &mut cx.facts);
         super::bounds::rust(root, src, &mut cx.facts.tests);
         super::expectations::rust(root, src, &mut cx.facts.tests);
         super::caught_assertions::rust(root, src, &mut cx.facts.tests, vocab);
@@ -326,12 +275,9 @@ impl<'a> Extractor<'a> {
                             &["function_item", "closure_expression"],
                         );
                     }
-                    let facts = HelperFacts {
-                        total_asserts: helper_test.total_asserts,
-                        strong_asserts: helper_test.strong_asserts,
-                        tautologies: helper_test.tautologies,
-                        fatal_asserts: helper_test.fatal_asserts,
-                        wraps: node.child_by_field_name("body").and_then(|b| {
+                    let facts = HelperFacts::from_scan(
+                        &helper_test,
+                        node.child_by_field_name("body").and_then(|b| {
                             super::forwarding_wrapper_callee(
                                 b,
                                 &RS_WRAPPER,
@@ -340,22 +286,12 @@ impl<'a> Extractor<'a> {
                                 self.src,
                             )
                         }),
-                    };
+                    );
                     self.helpers.insert(fn_name.clone(), facts);
                     let line = node.start_position().row + 1;
                     let end_line = node.end_position().row + 1;
                     self.facts.push_helper(
-                        super::TestHelperFacts {
-                            name: fn_name,
-                            line,
-                            end_line,
-                            total_asserts: helper_test.total_asserts,
-                            strong_asserts: helper_test.strong_asserts,
-                            tautologies: helper_test.tautologies,
-                            fatal_asserts: helper_test.fatal_asserts,
-                            helper_checks: 0,
-                            equality_exits: 0,
-                        },
+                        super::TestHelperFacts::from_scan(fn_name, line, end_line, &helper_test),
                         dummy_calls,
                     );
                 }
@@ -2177,7 +2113,18 @@ fn is_assert_macro_name(name: &str, extra: &[String]) -> bool {
         || extra.iter().any(|m| m == name)
 }
 
-/// The code a call counter (`calls::count_with`) judges a macro invocation by.
+/// The code a macro invocation is judged by for a call vocabulary; any other node is
+/// read the ordinary way. A macro's arguments are a token tree, not call nodes.
+fn macro_judged(
+    node: Node,
+    src: &str,
+    counted: super::calls::Vocab,
+    vocab: &AssertVocabulary,
+) -> Option<String> {
+    (node.kind() == "macro_invocation").then(|| macro_code(node, src, counted, &vocab.extra_macros))
+}
+
+/// The code a call counter (`calls::count`) judges a macro invocation by.
 ///
 /// A delay is counted wherever the macro's tokens spell one, so the whole invocation is
 /// read, less its string literals and comments. A vocabulary that describes what an
@@ -2412,6 +2359,20 @@ fn rust_fn_skip(node: tree_sitter::Node, src: &str) -> bool {
     }
     false
 }
+
+/// What the steps every pack shares read of this pack (`PackSpec::shared_facts`).
+const RUST_PACK: super::PackSpec = super::PackSpec {
+    functions: &RUST_FUNCTIONS,
+    own_test_path: None,
+    handlers: &RUST_HANDLERS,
+    constants: None,
+    retries: Some(&RUST_RETRIES),
+    receiver_calls: &RUST_RECEIVER_CALLS,
+    helper_loops: &super::helper_loops::RUST,
+    calls: &RUST_MOCKS,
+    vocabs: super::calls::SLEEPS_AND_TRIVIAL_ASSERTS,
+    judged: Some(macro_judged),
+};
 
 pub const RUST_FUNCTIONS: FunctionSpec = FunctionSpec {
     function_kinds: &["function_item"],
