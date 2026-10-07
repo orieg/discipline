@@ -10,7 +10,7 @@
 //! - Paired figures (e.g. `11.9 ns vs 108.9 ns`, cross-metric statements)
 //!   require shared workload IDs (`(workload: id)`) or documented differentiation markers.
 
-use super::{claim_registry, exempt_filter, Context, GateOutcome, PathFilter};
+use super::{claim_registry, exempt_filter, measured_citations, Context, GateOutcome, PathFilter};
 use crate::config::GateSettings;
 use crate::tokens;
 use anyhow::Result;
@@ -19,7 +19,8 @@ use std::sync::LazyLock;
 
 pub const GATE: &str = "provenance-tags";
 
-static UNIT_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
+/// A figure: a number carrying a unit, or a multiplier (`2.9x`).
+pub(crate) static UNIT_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\b\d+(?:[.,]\d+)?\s*(?:ns|µs|us|ms|ops/s|Mops/s|M ops/s|M/s|B/key|B/k|bytes/key|GB|MB|KiB|MiB)\b|\d+(?:\.\d+)?\s*[×x]\b").expect("valid regex")
 });
 
@@ -131,6 +132,26 @@ pub fn strip_fences(lines: &[&str]) -> Vec<(usize, String)> {
         out.push((line_num, line.to_string()));
     }
     out
+}
+
+/// Lines grouped into paragraphs: runs of non-blank lines, each with its line number.
+pub(crate) fn paragraphs(stripped: Vec<(usize, String)>) -> Vec<Vec<(usize, String)>> {
+    let mut paras: Vec<Vec<(usize, String)>> = Vec::new();
+    let mut current_para: Vec<(usize, String)> = Vec::new();
+
+    for (num, line) in stripped {
+        if line.trim().is_empty() {
+            if !current_para.is_empty() {
+                paras.push(std::mem::take(&mut current_para));
+            }
+        } else {
+            current_para.push((num, line));
+        }
+    }
+    if !current_para.is_empty() {
+        paras.push(current_para);
+    }
+    paras
 }
 
 fn split_sentences(text: &str) -> Vec<String> {
@@ -311,22 +332,7 @@ pub fn scan_markdown_text_with_policy(
         }
     }
 
-    // Group into paragraphs
-    let mut paras: Vec<Vec<(usize, String)>> = Vec::new();
-    let mut current_para: Vec<(usize, String)> = Vec::new();
-
-    for (num, line) in stripped {
-        if line.trim().is_empty() {
-            if !current_para.is_empty() {
-                paras.push(std::mem::take(&mut current_para));
-            }
-        } else {
-            current_para.push((num, line));
-        }
-    }
-    if !current_para.is_empty() {
-        paras.push(current_para);
-    }
+    let paras = paragraphs(stripped);
 
     for (para_idx, para) in paras.iter().enumerate() {
         // `diff_only`: a paragraph the change did not touch is not judged.
@@ -541,6 +547,29 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
     });
     let mut undecidable: Vec<String> = Vec::new();
 
+    // What a `measured` tag cites (opt-in): see `measured_citations`.
+    let record_filter = PathFilter::new(&settings.record_paths)?;
+    let cites = measured_citations::DocPolicy {
+        verify_measured_commit: settings.verify_measured_commit,
+        verify_cited_figures: settings.verify_cited_figures,
+        figure_tolerance_pct: settings.figure_tolerance_pct,
+        figures_on_added_lines_only: settings.diff_only,
+    };
+    let cites_documents = cites.verify_measured_commit || cites.verify_cited_figures;
+    if cites.verify_cited_figures {
+        measured_citations::check_tolerance(cites.figure_tolerance_pct).map_err(|e| {
+            crate::could_not_check::tag(crate::could_not_check::Reason::Configuration, e)
+        })?;
+    }
+    if !settings.record_paths.is_empty() && settings.record_commit_key.trim().is_empty() {
+        return Err(crate::could_not_check::tag(
+            crate::could_not_check::Reason::Configuration,
+            anyhow::anyhow!("provenance-tags: `record_commit_key` is empty"),
+        ));
+    }
+    let mut artifacts = measured_citations::Artifacts::default();
+    let mut cited = CitationTally::default();
+
     let mut scanned_count = 0;
 
     for path in &candidate_paths {
@@ -581,6 +610,22 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
                     .into_iter()
                     .map(|u| format!("{path}:{}: {}", u.line, u.reasons.join("; "))),
             );
+        }
+        if cites_documents && !is_agent_guide(path) {
+            let none = std::collections::BTreeSet::new();
+            let added = changed_files
+                .iter()
+                .find(|f| &f.path == path)
+                .map_or(&none, |f| &f.added_lines);
+            let scan = measured_citations::scan_document(
+                &content,
+                path,
+                Some(added),
+                &cites,
+                ctx.git,
+                &mut artifacts,
+            )?;
+            findings.extend(cited.take(scan));
         }
 
         for f in findings {
@@ -628,6 +673,21 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
                     .map(|u| format!("PR body:{}: {}", u.line, u.reasons.join("; "))),
             );
         }
+        if cites_documents {
+            // A description is new text throughout: every tag and paragraph is judged.
+            let scan = measured_citations::scan_document(
+                body,
+                "PR body",
+                None,
+                &measured_citations::DocPolicy {
+                    figures_on_added_lines_only: false,
+                    ..cites
+                },
+                ctx.git,
+                &mut artifacts,
+            )?;
+            findings.extend(cited.take(scan));
+        }
 
         for f in findings {
             let severity = if f.is_warning {
@@ -655,6 +715,92 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
                  repositories; see docs/GATES.md#forge-access): {}",
                 undecidable.join(" | ")
             ),
+        ));
+    }
+
+    // Result records: the commit key of every added or changed record.
+    let mut records_judged = 0;
+    let mut record_files = 0;
+    for file in &changed_files {
+        let path = &file.path;
+        if file.is_deleted() || !record_filter.matches(path) || exempt.matches(path) {
+            continue;
+        }
+        let lower = path.to_ascii_lowercase();
+        if !lower.ends_with(".json") && !lower.ends_with(".jsonl") {
+            out.notes.push(format!(
+                "record_paths: `{path}` is neither `.json` nor `.jsonl`; its records were not read"
+            ));
+            continue;
+        }
+        let Some(bytes) = ctx.git.head_bytes(path)? else {
+            continue;
+        };
+        let head = String::from_utf8(bytes).map_err(|_| {
+            anyhow::anyhow!("provenance-tags: result record file `{path}` is not UTF-8 text")
+        })?;
+        let base = ctx.git.base_content(&file.old_path)?;
+        let scan = measured_citations::scan_records(
+            path,
+            &head,
+            base.as_deref(),
+            &file.added_lines,
+            &settings.record_commit_key,
+            ctx.git,
+        )
+        .map_err(|e| anyhow::anyhow!("provenance-tags: {e}"))?;
+        record_files += 1;
+        records_judged += scan.judged;
+        cited.cannot_check.extend(scan.cannot_check);
+        for f in scan.findings {
+            if let Some(ov) = ctx.find_override(
+                GATE,
+                &crate::findings::UNRESOLVABLE_RECORD_COMMIT,
+                tokens::ALLOW_PROVENANCE,
+                path,
+            ) {
+                out.overrides.push(ov);
+            } else {
+                out.push(
+                    settings.severity(),
+                    &crate::findings::UNRESOLVABLE_RECORD_COMMIT,
+                    Some(path),
+                    f.line,
+                    f.message,
+                    "Record the full id of the commit the result was measured at; a harness that cannot read its revision must fail, not write a stand-in.",
+                );
+                if let Some(anchor) = f.anchor {
+                    out.anchor_last(anchor);
+                }
+            }
+        }
+    }
+    scanned_count += record_files;
+
+    if !cited.cannot_check.is_empty() {
+        return Err(crate::could_not_check::tag(
+            crate::could_not_check::Reason::Repository,
+            anyhow::anyhow!(
+                "provenance-tags: could not decide whether a cited commit exists: {}",
+                cited.cannot_check.join(" | ")
+            ),
+        ));
+    }
+    if cites.verify_measured_commit {
+        out.notes.push(format!(
+            "verify_measured_commit: {} measured tag(s) on added lines judged",
+            cited.tags_judged
+        ));
+    }
+    if !settings.record_paths.is_empty() {
+        out.notes.push(format!(
+            "record_paths: {records_judged} added or changed record(s) judged in {record_files} file(s)"
+        ));
+    }
+    if cites.verify_cited_figures {
+        out.notes.push(format!(
+            "verify_cited_figures: figures compared in {} tagged paragraph(s); {} tagged paragraph(s) cite no data artifact (.json, .jsonl, .csv), so there was nothing to compare their figures with",
+            cited.paragraphs_compared, cited.uncited
         ));
     }
 
@@ -767,6 +913,26 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
 
     out.examined = scanned_count;
     Ok(out)
+}
+
+/// What the citation rules did across every document of a run.
+#[derive(Default)]
+struct CitationTally {
+    cannot_check: Vec<String>,
+    tags_judged: usize,
+    paragraphs_compared: usize,
+    uncited: usize,
+}
+
+impl CitationTally {
+    /// Adds one document's counts and hands back its findings.
+    fn take(&mut self, scan: measured_citations::DocScan) -> Vec<HygieneFinding> {
+        self.cannot_check.extend(scan.cannot_check);
+        self.tags_judged += scan.tags_judged;
+        self.paragraphs_compared += scan.paragraphs_compared;
+        self.uncited += scan.uncited;
+        scan.findings
+    }
 }
 
 fn is_agent_guide(path: &str) -> bool {
