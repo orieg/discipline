@@ -65,6 +65,8 @@ impl LanguagePack for JavaScriptPack {
             suite_cases: Vec::new(),
             suite_skips: Vec::new(),
             runner_names: runner_names(root, src),
+            deno_global: !binds_name(root, src, "Deno"),
+            std_asserts: std_assert_names(root, src),
         };
 
         extractor.collect_comments_and_escape_hatches(root);
@@ -256,6 +258,91 @@ struct JsExtractor<'a> {
     /// The runner function names this file binds to something else
     /// ([`runner_names`]): `.each` on one is not a case source.
     runner_names: super::test_cases::RunnerNames,
+    /// `Deno` is the runtime's global here: the file binds nothing else to the name.
+    deno_global: bool,
+    /// The names the file imports from Deno's standard assertion module, each with the
+    /// `node:assert` call it is counted as ([`std_assert_names`]).
+    std_asserts: Vec<(String, &'static str)>,
+}
+
+/// Whether a module specifier names Deno's standard assertion module: `jsr:@std/assert`
+/// (with or without a version or a sub-path), the same through an import map
+/// (`@std/assert`), or `https://deno.land/std@<version>/assert/...` and its older
+/// `testing/asserts.ts`.
+pub(super) fn is_std_assert_module(module: &str) -> bool {
+    let bare = module.strip_prefix("jsr:").unwrap_or(module);
+    let bare = bare.strip_prefix('/').unwrap_or(bare);
+    if let Some(rest) = bare.strip_prefix("@std/assert") {
+        return rest.is_empty() || rest.starts_with(['@', '/']);
+    }
+    module.starts_with("https://deno.land/std")
+        && (module.contains("/assert/") || module.contains("/testing/asserts"))
+}
+
+/// The names the file imports from Deno's standard assertion module, each with the
+/// `node:assert` call the pack counts it as: `assertEquals(a, b)` is counted, and read
+/// for a tautology, as `assert.equal(a, b)` is. A function of the module with no such
+/// counterpart (`assertExists`, `assertInstanceOf`) is counted as a plain `assert.*`
+/// call. Only a name that starts with `assert` is read: an import under another name
+/// (`assertEquals as eq`) and a namespace import are not.
+fn std_assert_names(root: Node, src: &str) -> Vec<(String, &'static str)> {
+    super::expected_exceptions::js_bindings(root, src)
+        .into_iter()
+        .filter(|(bound, module)| bound.starts_with("assert") && is_std_assert_module(module))
+        .map(|(bound, _)| {
+            let counted_as = match bound.as_str() {
+                "assert" => "assert",
+                "assertEquals" => "assert.equal",
+                "assertStrictEquals" => "assert.strictEqual",
+                "assertNotEquals" => "assert.notEqual",
+                "assertNotStrictEquals" => "assert.notStrictEqual",
+                "assertThrows" => "assert.throws",
+                "assertRejects" => "assert.rejects",
+                "assertMatch" => "assert.match",
+                _ => "assert.ok",
+            };
+            (bound, counted_as)
+        })
+        .collect()
+}
+
+/// Whether the file binds `name` itself: an import or a `require`, a declaration, or a
+/// parameter of that name.
+fn binds_name(root: Node, src: &str, name: &str) -> bool {
+    if !src.contains(name) {
+        return false;
+    }
+    if super::expected_exceptions::js_bindings(root, src)
+        .iter()
+        .any(|(bound, _)| bound == name)
+    {
+        return true;
+    }
+    let text = |n: Node| n.utf8_text(src.as_bytes()).unwrap_or("");
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        let declared = match node.kind() {
+            "function_declaration"
+            | "generator_function_declaration"
+            | "class_declaration"
+            | "variable_declarator" => node.child_by_field_name("name"),
+            "required_parameter" | "optional_parameter" => node.child_by_field_name("pattern"),
+            "identifier"
+                if node
+                    .parent()
+                    .is_some_and(|p| p.kind() == "formal_parameters") =>
+            {
+                Some(node)
+            }
+            _ => None,
+        };
+        if declared.is_some_and(|n| n.kind() == "identifier" && text(n) == name) {
+            return true;
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.children(&mut cursor));
+    }
+    false
 }
 
 /// Reads which of the runner's function names (`it`, `test`, `describe`, ..) the file
@@ -413,6 +500,10 @@ impl<'a> JsExtractor<'a> {
     fn visit_node(&mut self, node: Node, scope: &mut Vec<String>, parent_ignored: bool) {
         if node.kind() == "call_expression" {
             if let Some(func_node) = node.child_by_field_name("function") {
+                if let Some(modifier_skips) = self.deno_test_callee(func_node) {
+                    self.record_deno_test(node, None, scope, parent_ignored || modifier_skips);
+                    return;
+                }
                 let (is_test, is_suite, mut is_ignored, is_todo) = self.classify_call(func_node);
                 // `test.skipIf(<condition>)`, `describe.runIf(<condition>)`: a conditional
                 // skip, read by its condition. The text rule above reads `.skipIf` as
@@ -519,6 +610,202 @@ impl<'a> JsExtractor<'a> {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             self.visit_node(child, scope, parent_ignored);
+        }
+    }
+
+    /// Whether `func` is the callee of a Deno test registration, read from the tree:
+    /// `Deno.test` (`Some(false)`), or `Deno.test.only` / `Deno.test.ignore`
+    /// (`Some(true)`: a test the run leaves out or that makes the run fail, flagged as
+    /// `it.only` and `it.skip` are). `None` for anything else, and in a file that binds
+    /// `Deno` to something of its own.
+    fn deno_test_callee(&self, func: Node) -> Option<bool> {
+        if !self.deno_global || func.kind() != "member_expression" {
+            return None;
+        }
+        let object = func.child_by_field_name("object")?;
+        let property = self.text(func.child_by_field_name("property")?);
+        let is_deno_test = |node: Node| {
+            node.kind() == "member_expression"
+                && node
+                    .child_by_field_name("object")
+                    .is_some_and(|o| o.kind() == "identifier" && self.text(o) == "Deno")
+                && node
+                    .child_by_field_name("property")
+                    .is_some_and(|p| self.text(p) == "test")
+        };
+        if is_deno_test(func) {
+            return Some(false);
+        }
+        (is_deno_test(object) && matches!(property, "only" | "ignore")).then_some(true)
+    }
+
+    /// The `key: value` pairs and methods of the object literal among the arguments of
+    /// a Deno test or step registration: `(key, value or method)`.
+    fn deno_options<'t>(&self, args: Node<'t>) -> Vec<(&'a str, Node<'t>)> {
+        let mut out = Vec::new();
+        let mut cursor = args.walk();
+        for arg in args.named_children(&mut cursor) {
+            if arg.kind() != "object" {
+                continue;
+            }
+            let mut inner = arg.walk();
+            for member in arg.named_children(&mut inner) {
+                match member.kind() {
+                    "pair" => {
+                        if let (Some(key), Some(value)) = (
+                            member.child_by_field_name("key"),
+                            member.child_by_field_name("value"),
+                        ) {
+                            let key = self.text(key).trim_matches(['"', '\'']);
+                            out.push((key, value));
+                        }
+                    }
+                    "method_definition" => {
+                        if let Some(name) = member.child_by_field_name("name") {
+                            out.push((self.text(name), member));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        out
+    }
+
+    /// Records one `Deno.test(...)` registration, or one `t.step(...)` of it when
+    /// `parent` names the test around it, as a test: `("name", fn)`, `("name", {
+    /// options }, fn)`, `({ name, fn })`, `({ options }, fn)` and `(function name() {})`.
+    /// `ignore: true` and `only: true` in the options flag it as the `.ignore` and
+    /// `.only` forms do; any other `ignore` value is a conditional skip, read by its
+    /// condition. Each step of the callback's first parameter is then recorded as a
+    /// subtest named `<test> > <step>`, as a Go `t.Run` is: `deno test` reports steps
+    /// beside the tests, not among them.
+    fn record_deno_test(
+        &mut self,
+        call: Node,
+        parent: Option<&str>,
+        scope: &[String],
+        mut ignored: bool,
+    ) {
+        let Some(args) = call.child_by_field_name("arguments") else {
+            return;
+        };
+        let options = self.deno_options(args);
+        let option = |key: &str| options.iter().find(|(k, _)| *k == key).map(|(_, v)| *v);
+        let callback = Self::find_callback(args).or_else(|| {
+            option("fn").filter(|f| {
+                matches!(
+                    f.kind(),
+                    "arrow_function" | "function_expression" | "function" | "method_definition"
+                )
+            })
+        });
+        let literal = |node: Node| {
+            matches!(node.kind(), "string" | "template_string")
+                .then(|| self.text(node).trim_matches(['\'', '"', '`']).to_string())
+        };
+        let mut cursor = args.walk();
+        let first = args
+            .named_children(&mut cursor)
+            .find(|n| n.kind() != "comment");
+        let title = first
+            .and_then(literal)
+            .or_else(|| option("name").and_then(literal))
+            .or_else(|| {
+                let name = callback?.child_by_field_name("name")?;
+                // The key of a `fn() {}` method is not the name of the test.
+                (callback?.kind() != "method_definition").then(|| self.text(name).to_string())
+            })
+            .unwrap_or_else(|| "unnamed".to_string());
+        let own_name = match parent {
+            Some(parent) => format!("{parent} > {title}"),
+            None if scope.is_empty() => title,
+            None => format!("{} > {}", scope.join(" > "), title),
+        };
+        let mut conditional = None;
+        if let Some(value) = option("ignore") {
+            use super::ci_condition::{self, Lang};
+            match ci_condition::skip_condition(Lang::JavaScript, value, self.src, false) {
+                SkipCondition::Always => ignored = true,
+                SkipCondition::Never => {}
+                SkipCondition::When(verdict) => {
+                    conditional = Some((self.text(value).trim().to_string(), verdict));
+                }
+            }
+        }
+        if option("only").is_some_and(|value| self.text(value) == "true") {
+            ignored = true;
+        }
+        let mut test_fn = TestFn {
+            name: own_name.clone(),
+            line: call.start_position().row + 1,
+            end_line: call.end_position().row + 1,
+            ignored,
+            ..Default::default()
+        };
+        if !test_fn.ignored {
+            let inherited = self.suite_skips.iter().flatten().cloned();
+            for (text, verdict) in inherited.chain(conditional) {
+                test_fn.record_conditional_skip(text, verdict);
+            }
+        }
+        let mut calls = Vec::new();
+        let body = callback.and_then(|c| c.child_by_field_name("body"));
+        if let Some(callback) = callback {
+            if callback.kind() == "method_definition" {
+                if let Some(body) = body {
+                    self.scan_test_body(body, &mut test_fn);
+                }
+            } else {
+                self.scan_test_body(callback, &mut test_fn);
+            }
+        }
+        if let Some(body) = body {
+            self.collect_calls(body, &mut calls);
+            super::dispatch_calls(body, self.src, &JS_DISPATCH, &mut calls);
+            if !test_fn.ignored {
+                self.record_conditional_early_exits(body, &mut test_fn);
+            }
+        }
+        self.facts.tests.push(test_fn);
+        self.test_calls.push(calls);
+
+        // The steps the callback registers on its first parameter.
+        let context = callback
+            .and_then(|c| c.child_by_field_name("parameters"))
+            .and_then(|p| p.named_child(0))
+            .map(|first| first.child_by_field_name("pattern").unwrap_or(first))
+            .filter(|name| name.kind() == "identifier")
+            .map(|name| self.text(name));
+        if let (Some(context), Some(body)) = (context, body) {
+            let mut steps = Vec::new();
+            self.deno_steps(body, context, &mut steps);
+            for step in steps {
+                self.record_deno_test(step, Some(&own_name), scope, ignored);
+            }
+        }
+    }
+
+    /// The `<context>.step(...)` calls under `node`, outermost only: a step inside
+    /// another step's callback is that step's own.
+    fn deno_steps<'t>(&self, node: Node<'t>, context: &str, out: &mut Vec<Node<'t>>) {
+        if node.kind() == "call_expression" {
+            let is_step = node.child_by_field_name("function").is_some_and(|f| {
+                f.kind() == "member_expression"
+                    && f.child_by_field_name("object")
+                        .is_some_and(|o| o.kind() == "identifier" && self.text(o) == context)
+                    && f.child_by_field_name("property")
+                        .is_some_and(|p| self.text(p) == "step")
+            });
+            if is_step {
+                out.push(node);
+                return;
+            }
+        }
+        let mut cursor = node.walk();
+        let children: Vec<Node<'t>> = node.children(&mut cursor).collect();
+        for child in children {
+            self.deno_steps(child, context, out);
         }
     }
 
@@ -1003,6 +1290,17 @@ impl<'a> JsExtractor<'a> {
                     }
                 }
             }
+
+            // A function of Deno's standard assertion module, counted as the
+            // `node:assert` call it corresponds to.
+            let func_text = match self
+                .std_asserts
+                .iter()
+                .find(|(bound, _)| func.kind() == "identifier" && bound == func_text)
+            {
+                Some((_, counted_as)) => counted_as,
+                None => func_text,
+            };
 
             // assert / assert.* calls
             if func_text == "assert" || func_text.starts_with("assert.") {
@@ -1902,5 +2200,149 @@ it('another receiver', function () {
         assert_eq!(skip_if("true && isSlow()"), (false, true, false));
         assert_eq!(skip_if("process.env.CI"), (false, true, true));
         assert_eq!(skip_if("!process.env.CI"), (false, true, false));
+    }
+
+    const DENO_FILE: &str = r#"import { assert, assertEquals, assertExists, assertEquals as same } from "jsr:@std/assert@1";
+import { fail } from "https://deno.land/std@0.224.0/assert/mod.ts";
+
+Deno.test("named", () => { assertEquals(add(1, 2), 3); });
+Deno.test({ name: "object", fn() { assertExists(find()); } });
+Deno.test(function byName() { assert(ready()); });
+Deno.test("tautology", () => { assertEquals(x, x); });
+Deno.test("alias and fail", () => { same(1, 2); fail("no"); });
+Deno.test.ignore("parked", () => { assertEquals(1, 2); });
+Deno.test.only("alone", () => { assertEquals(1, 2); });
+Deno.test({ name: "off", ignore: true, fn: () => {} });
+Deno.test({ name: "on windows", ignore: Deno.build.os === "windows", fn: () => {} });
+Deno.test("steps", async (t) => {
+  await t.step("first", () => { assertEquals(a(), 1); });
+  await t.step("outer", async (inner) => {
+    await inner.step("deep", () => { assertEquals(b(), 2); });
+  });
+  await other.step("not a step of t", () => {});
+});
+"#;
+
+    /// `deno test` (deno 2.6) counts each `Deno.test` registration as one test, whatever
+    /// its shape, and reports steps beside them.
+    #[test]
+    fn deno_test_registrations_and_steps_are_read() {
+        let facts = JavaScriptPack
+            .extract("mod_test.ts", DENO_FILE, &AssertVocabulary::default())
+            .unwrap();
+        let names: Vec<&str> = facts.tests.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "named",
+                "object",
+                "byName",
+                "tautology",
+                "alias and fail",
+                "parked",
+                "alone",
+                "off",
+                "on windows",
+                "steps",
+                "steps > first",
+                "steps > outer",
+                "steps > outer > deep",
+            ]
+        );
+        let test = |name: &str| facts.tests.iter().find(|t| t.name == name).unwrap();
+        // The module's functions count as the `node:assert` calls they correspond to.
+        assert_eq!(
+            (test("named").total_asserts, test("named").strong_asserts),
+            (1, 1)
+        );
+        assert_eq!(
+            (test("object").total_asserts, test("object").strong_asserts),
+            (1, 0)
+        );
+        assert_eq!(test("byName").total_asserts, 1);
+        assert_eq!(test("tautology").tautologies, 1);
+        // An import under another name, and a function that is not an `assert*`.
+        assert_eq!(test("alias and fail").total_asserts, 0);
+        for ignored in ["parked", "alone", "off"] {
+            assert!(test(ignored).ignored, "{ignored}");
+        }
+        let conditional = test("on windows");
+        assert!(!conditional.ignored);
+        assert!(conditional.conditional_ignore.is_some());
+        // A step holds its own assertions; the test around it holds them all.
+        assert_eq!(test("steps > first").total_asserts, 1);
+        assert_eq!(test("steps > outer > deep").total_asserts, 1);
+        assert_eq!(test("steps").total_asserts, 2);
+    }
+
+    #[test]
+    fn deno_test_is_read_from_the_tree_and_only_for_the_runtimes_global() {
+        let count = |src: &str| {
+            JavaScriptPack
+                .extract("mod_test.ts", src, &AssertVocabulary::default())
+                .unwrap()
+                .tests
+                .len()
+        };
+        assert_eq!(count("Deno.test('a', () => {});\n"), 1);
+        // The words in a comment or a string, another object, another member.
+        assert_eq!(count("// Deno.test('a', () => {});\n"), 0);
+        assert_eq!(count("const s = \"Deno.test('a', () => {})\";\n"), 0);
+        assert_eq!(count("NotDeno.test('a', () => {});\n"), 0);
+        assert_eq!(count("Deno.tests('a', () => {});\n"), 0);
+        assert_eq!(count("Deno.test.each('a', () => {});\n"), 0);
+        assert_eq!(count("x.Deno.test('a', () => {});\n"), 0);
+        // A file that binds the name itself.
+        for bound in [
+            "import { Deno } from './shim.ts';",
+            "const Deno = require('./shim');",
+            "const Deno = { test() {} };",
+            "function Deno() {}",
+            "function run(Deno) { Deno.test('b', () => {}); }",
+        ] {
+            assert_eq!(
+                count(&format!("{bound}\nDeno.test('a', () => {{}});\n")),
+                0,
+                "{bound}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_standard_assertion_module_supplies_bare_assertions() {
+        let asserts = |import: &str| {
+            let src = format!("{import}\nDeno.test('a', () => {{ assertEquals(f(), 1); }});\n");
+            JavaScriptPack
+                .extract("mod_test.ts", &src, &AssertVocabulary::default())
+                .unwrap()
+                .tests[0]
+                .total_asserts
+        };
+        for module in [
+            "jsr:@std/assert",
+            "jsr:@std/assert@^1.0.0",
+            "jsr:@std/assert/equals",
+            "@std/assert",
+            "https://deno.land/std@0.224.0/assert/mod.ts",
+            "https://deno.land/std@0.150.0/testing/asserts.ts",
+        ] {
+            assert_eq!(
+                asserts(&format!("import {{ assertEquals }} from '{module}';")),
+                1,
+                "{module}"
+            );
+        }
+        for module in [
+            "./helpers.ts",
+            "jsr:@std/assertions",
+            "jsr:@std/testing/bdd",
+        ] {
+            assert_eq!(
+                asserts(&format!("import {{ assertEquals }} from '{module}';")),
+                0,
+                "{module}"
+            );
+        }
+        assert_eq!(asserts(""), 0);
     }
 }

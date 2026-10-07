@@ -83,6 +83,15 @@ pub struct GitCtx {
     base: Option<Oid>,
     base_label: String,
     staged: bool,
+    /// A number no other `GitCtx` of this process has ([`GitCtx::run_id`]).
+    run: u64,
+}
+
+/// The next [`GitCtx::run_id`].
+static NEXT_RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_run() -> u64 {
+    NEXT_RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Detect the target base git ref for diff inspection.
@@ -691,6 +700,7 @@ impl GitCtx {
             base: None,
             base_label: "empty tree (whole-tree baseline)".to_string(),
             staged: false,
+            run: next_run(),
         })
     }
 
@@ -805,6 +815,7 @@ impl GitCtx {
             base,
             base_label,
             staged,
+            run: next_run(),
         })
     }
 
@@ -833,6 +844,26 @@ impl GitCtx {
             Some(oid) => Ok(Some(self.repo.find_commit(oid)?.tree()?)),
             None => Ok(None),
         }
+    }
+
+    /// An opened repository over `repo`, measured against `base`, for a unit test that
+    /// needs one outside this module.
+    #[cfg(test)]
+    pub(crate) fn for_test(repo: Repository, base: Option<Oid>) -> Self {
+        Self {
+            repo,
+            base,
+            base_label: "base".to_string(),
+            staged: false,
+            run: next_run(),
+        }
+    }
+
+    /// A number that names this opened repository among all those of the process. One
+    /// run opens one, and neither side of the change moves while it runs, so what was
+    /// read from the head side for this number holds for the rest of the run.
+    pub fn run_id(&self) -> u64 {
+        self.run
     }
 
     /// The object id of the base side's tree, which names its whole content. `None`
@@ -1731,6 +1762,7 @@ pub(crate) mod test_support {
             base: Some(commit),
             base_label: "base".to_string(),
             staged: false,
+            run: super::next_run(),
         };
         (dir, git)
     }
@@ -2388,6 +2420,7 @@ mod tests {
             base: Some(commit),
             base_label: "base".to_string(),
             staged: false,
+            run: next_run(),
         };
         (dir, git, blob)
     }
@@ -2422,6 +2455,7 @@ mod tests {
             base: Some(commit),
             base_label: "base".to_string(),
             staged: false,
+            run: next_run(),
         };
         (dir, git, sub)
     }
@@ -2459,6 +2493,7 @@ mod tests {
             base: git.base,
             base_label: "base".to_string(),
             staged: false,
+            run: next_run(),
         };
         let shown = format!("{:#}", git.base_content("sub/a.txt").unwrap_err());
         assert!(shown.contains("`sub/a.txt` on the base side"), "{shown}");
@@ -2638,6 +2673,7 @@ mod tests {
                 base: Some(commit),
                 base_label: "base".to_string(),
                 staged,
+                run: next_run(),
             };
             for path in ["somedir", "vendor/sub"] {
                 assert_eq!(git.base_content(path).unwrap(), None, "{path} base");

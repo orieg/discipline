@@ -1103,9 +1103,17 @@ fn a_deno_exclude_added_over_existing_tests_is_reported() {
         repo.write("deno.json", r#"{"test": {"exclude": ["legacy/"]}}"#);
         repo.write("c_test.ts", DENO_3);
     });
-    // Collection is not determined for a Deno repository's files, so the base side did
-    // not collect the file by a rule this model reads: the count is what shows it.
-    assert!(moved(&run).is_empty(), "{}", run.stdout);
+    // Deno's default names collected the file on the base side, and the count does not
+    // fall: the rule is reported on the file that holds it.
+    assert_moved(
+        &run,
+        "deno.json",
+        &[
+            "`exclude` / `test.exclude` in `deno.json`",
+            "3 test(s) in 1 file(s)",
+            "`legacy/b_test.ts`",
+        ],
+    );
     let run = changed(&base, |repo| {
         repo.write("deno.json", r#"{"test": {"exclude": ["legacy/"]}}"#)
     });
