@@ -26,7 +26,7 @@ const CONFIG_NAME: &str = "discipline.toml";
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Case {
     pub sha: String,
-    /// The pull request number, from the forge or the subject's `(#N)`.
+    /// The pull request number, from the forge or from a `(#N)` the subject ends with.
     pub pr: Option<u64>,
     pub subject: String,
     /// `passed`, `blocked` or `could_not_check`.
@@ -505,13 +505,8 @@ pub fn refused_overrides(
     gates_with_overrides(json)
 }
 
-/// `(#123)` at the end of a squash-merge subject.
-pub fn pr_from_subject(subject: &str) -> Option<u64> {
-    let open = subject.rfind("(#")?;
-    let rest = &subject[open + 2..];
-    let close = rest.find(')')?;
-    rest[..close].parse().ok()
-}
+/// `(#123)` at the end of a squash-merge subject: the reading `commit-provenance` makes.
+pub use crate::guards::commit_provenance::trailing_pull_number as pr_from_subject;
 
 /// A temp directory removed on drop.
 pub(crate) struct TempDir(pub(crate) PathBuf);
@@ -603,7 +598,8 @@ pub fn run(opts: &Options) -> Result<Summary> {
     let tip = src
         .revparse_single(&reference)
         .with_context(|| format!("`{reference}` does not resolve"))?
-        .peel_to_commit()?
+        .peel_to_commit()
+        .map_err(|e| anyhow!("`{reference}` is not a commit: {e}"))?
         .id();
     let config_bytes: Option<Vec<u8>> = match &opts.config {
         Some(p) => Some(std::fs::read(p).with_context(|| format!("cannot read {}", p.display()))?),
@@ -663,7 +659,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
     }
     for c in commits {
         let parent = c.parent(0)?;
-        let subject = c.summary().ok().flatten().unwrap_or("").to_string();
+        let subject = crate::gitctx::commit_subject(&c);
         let sig = git2::Signature::now("discipline replay", crate::gitctx::REPLAY_BASE_EMAIL)?;
         let base_tree = scratch.find_tree(with_config(&scratch, &parent.tree()?, config_blob)?)?;
         let base = scratch.commit(
@@ -680,7 +676,9 @@ pub fn run(opts: &Options) -> Result<Summary> {
             None,
             &c.author(),
             &c.committer(),
-            c.message().unwrap_or(""),
+            // Read as `check` reads it: a byte that is not UTF-8 is U+FFFD, and the
+            // directives of the message are kept.
+            &crate::gitctx::commit_message(&c),
             &head_tree,
             &[&base_commit],
         )?;
@@ -761,7 +759,20 @@ pub fn run(opts: &Options) -> Result<Summary> {
         let (mut verdict, blocking, warning) =
             read_verdict(code, &String::from_utf8_lossy(&out.stdout));
         let findings = read_findings(code, &String::from_utf8_lossy(&out.stdout));
-        let overrides = read_overrides(code, &String::from_utf8_lossy(&out.stdout));
+        let mut overrides = read_overrides(code, &String::from_utf8_lossy(&out.stdout));
+        // The check ran on the scratch commit; the directive was read in the commit
+        // being replayed, which is the one a reader can find. The id is cut as the
+        // check cut the scratch one.
+        let (scratch_id, replayed_id) = (head.to_string(), c.id().to_string());
+        for o in &mut overrides {
+            let short = o.source.strip_prefix("commit ").map(str::len);
+            if let Some(len) = short.filter(|len| {
+                *len > 0 && o.source.strip_prefix("commit ") == scratch_id.get(..*len)
+            }) {
+                o.source = crate::tokens::OverrideSource::Commit(replayed_id[..len].to_string())
+                    .to_string();
+            }
+        }
         let skipped_checks = if matches!(code, 0 | 1) {
             read_skipped_checks(&String::from_utf8_lossy(&out.stdout))
         } else {

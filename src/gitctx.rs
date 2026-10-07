@@ -62,6 +62,21 @@ pub const REPLAY_BASE_EMAIL: &str = "replay@discipline.invalid";
 /// Message of that base commit.
 pub const REPLAY_BASE_MESSAGE: &str = "replay base";
 
+/// A commit's message as every command reads it: bytes that are not UTF-8 become U+FFFD
+/// each, so a directive in a message with one such byte is still read. A message is never
+/// read as empty because it is not UTF-8.
+pub fn commit_message(commit: &git2::Commit) -> String {
+    String::from_utf8_lossy(commit.message_bytes()).into_owned()
+}
+
+/// A commit's subject, read the same way as [`commit_message`].
+pub fn commit_subject(commit: &git2::Commit) -> String {
+    commit
+        .summary_bytes()
+        .map(|b| String::from_utf8_lossy(b).into_owned())
+        .unwrap_or_default()
+}
+
 pub struct GitCtx {
     repo: Repository,
     /// Tree the change is measured against; `None` = empty tree (first commit).
@@ -593,10 +608,54 @@ pub fn discover_repository(path: impl AsRef<std::path::Path>) -> Result<Reposito
         }
     }
 
+    let configured = user_configured_worktree();
     match Repository::discover(path.as_ref()) {
-        Ok(repo) => Ok(repo),
-        Err(err) => Err(format_discover_error(&err, path.as_ref())),
+        Ok(repo) => {
+            // The setting applies to every repository the user opens. When it names a
+            // directory this path is not in, the files read would be another tree's.
+            if let Some(worktree) = &configured {
+                let inside = match (repo.workdir(), path.as_ref().canonicalize()) {
+                    (Some(workdir), Ok(here)) => workdir
+                        .canonicalize()
+                        .is_ok_and(|workdir| here.starts_with(workdir)),
+                    _ => false,
+                };
+                if !inside {
+                    bail!(
+                        "git's user configuration sets `core.worktree` to a directory (`{}`) that is not the directory this repository is in, so its files cannot be read as the change; unset it (`git config --global --unset core.worktree`) or set it only in the repository it belongs to",
+                        last_component(worktree)
+                    );
+                }
+            }
+            Ok(repo)
+        }
+        Err(err) => match configured.filter(|worktree| !worktree.exists()) {
+            // The library's error names the whole path, which can be a home directory.
+            Some(worktree) => Err(anyhow!(
+                "git's user configuration sets `core.worktree` to a directory (`{}`) that does not exist, so no repository can be opened; unset it (`git config --global --unset core.worktree`) or set it only in the repository it belongs to",
+                last_component(&worktree)
+            )),
+            None => Err(format_discover_error(&err, path.as_ref())),
+        },
     }
+}
+
+/// `core.worktree` as the configuration outside any repository sets it (the user's, the
+/// XDG and the system files): there it applies to every repository opened. `None` when
+/// it is not set there, which is the usual case.
+fn user_configured_worktree() -> Option<std::path::PathBuf> {
+    git2::Config::open_default()
+        .ok()?
+        .get_path("core.worktree")
+        .ok()
+}
+
+/// The last component of `path`, for a message: the directories above it can be a home
+/// directory.
+fn last_component(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "(unnamed)".to_string())
 }
 
 impl GitCtx {

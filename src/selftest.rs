@@ -727,6 +727,58 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "report: in Markdown a quoted issue number, commit id or mail address is a code span, a documentation link stays one",
+        || {
+            use crate::report::text::{markdown, terminal_line};
+            let text = "fixes #12 and GH-3 at deadbeef1 by a@b.co";
+            Ok(markdown(text) == "fixes `#12` and `GH-3` at `deadbeef1` by `a@b.co`"
+                && terminal_line(text) == text
+                && markdown("# 1, 10! and abcdef") == "# 1, 10! and abcdef"
+                && markdown("see https://orieg.github.io/discipline/gates/#pii")
+                    == "see https://orieg.github.io/discipline/gates/#pii")
+        },
+    ),
+    (
+        "commit-provenance: a pull request number is read only where a subject ends with it",
+        || {
+            use crate::guards::commit_provenance::trailing_pull_number;
+            Ok(trailing_pull_number("fix: a (#12)") == Some(12)
+                && trailing_pull_number("fix: a (#12) and (#34) ") == Some(34)
+                && trailing_pull_number("fix (#12) typo").is_none()
+                && trailing_pull_number("fix (#0)").is_none()
+                && trailing_pull_number("fix (#7a)").is_none()
+                && crate::replay::pr_from_subject("fix (#12) typo").is_none())
+        },
+    ),
+    (
+        "integrity: `base_report` added beside an existing `test_report` is a change of evidence, beside `head_report` alone it is not",
+        || {
+            let cfg = |keys: &str| {
+                DisciplineConfig::from_toml_str(&format!(
+                    "[meta]\nversion = 1\nname = \"t\"\n[gates.test-floor]\n{keys}"
+                ))
+            };
+            let report = "test_report = \"r.xml\"\n";
+            let base_report = "base_report = \"b.xml\"\n";
+            let head_report = "head_report = \"h.xml\"\n";
+            let beside_test_report = diff_configs(
+                &cfg(report)?,
+                &cfg(&format!("{report}{base_report}"))?,
+            )?;
+            let beside_head_report = diff_configs(
+                &cfg(head_report)?,
+                &cfg(&format!("{head_report}{base_report}"))?,
+            )?;
+            let with_first_report =
+                diff_configs(&cfg("")?, &cfg(&format!("{report}{base_report}"))?)?;
+            Ok(beside_test_report.len() == 1
+                && beside_test_report[0].key() == "base_report"
+                && beside_head_report.is_empty()
+                && with_first_report.len() == 1
+                && with_first_report[0].key() == "test_report")
+        },
+    ),
+    (
         "integrity: a lowered floor or raised cap is a weakening, the reverse is not",
         || {
             let mut base = DisciplineConfig::default_for_repo("t");
@@ -1465,6 +1517,25 @@ const CASES: &[Case] = &[
             let c = kinds("src/a.c", "void f(void) {\n    (void)fsync(fd);\n    (void)g();\n}\n")?;
             Ok((go == ["discarded-result"] || go == ["skipped"])
                 && (c == ["discarded-result", "discarded-value"] || c == ["skipped"]))
+        },
+    ),
+    (
+        "error-swallowing: Go `_ = f()` is a discarded result for a known-fallible callee, nothing for another",
+        || {
+            let reg = crate::ast::default_registry();
+            let v = AssertVocabulary::default();
+            let Some(pack) = reg.find_pack("pkg/a.go") else {
+                return Ok(true);
+            };
+            let kinds = |body: &str| -> Result<Vec<&'static str>> {
+                let src = format!("package a\nfunc F() {{\n{body}}}\n");
+                Ok(pack.extract("pkg/a.go", &src, &v)?.swallowed.iter().map(|s| s.kind).collect())
+            };
+            Ok(kinds("\t_ = os.Remove(p)\n\t_ = f.Close()\n")?
+                == ["discarded-result", "discarded-result"]
+                && kinds("\t_ = strings.ToUpper(p)\n\t_ = []byte(p)\n\t_ = v.(string)\n")?
+                    .is_empty()
+                && kinds("\t_, _ = f.Write(nil)\n")? == ["discarded-result"])
         },
     ),
     #[cfg(feature = "lang-objc")]
@@ -5008,6 +5079,62 @@ command = "cargo test"
                 && run_if == Some(Severity::Error)
                 && outside_ci == Some(Severity::Note)
                 && cfg_outside_ci == Some(Severity::Note))
+        },
+    ),
+    (
+        "ignored-tests: a skip marker is an argument or name of the tree, not text inside a string",
+        || {
+            let ignored = |path: &str, src: &str| -> Result<bool> {
+                let facts = extract(path, src)?;
+                let test = facts
+                    .tests
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("no test in {path}"))?;
+                Ok(test.ignored)
+            };
+            let cs = |attribute: &str| {
+                format!("using Xunit;\npublic class T {{\n    [{attribute}]\n    public void A() {{\n        Assert.Equal(3, F());\n    }}\n}}\n")
+            };
+            let rb = |head: &str| {
+                format!("RSpec.describe Cart do\n  {head} do\n    expect(total).to eq(3)\n  end\nend\n")
+            };
+            let py = |decorator: &str| {
+                format!("import pytest\n\n\n{decorator}\ndef test_a(name=\"a\"):\n    assert f(name) == 3\n")
+            };
+            Ok(!ignored("ATests.cs", &cs("Fact(DisplayName = \"Skip logic\")"))?
+                && ignored("ATests.cs", &cs("Fact(DisplayName = \"A\", Skip = \"later\")"))?
+                && !ignored("a_spec.rb", &rb("it \"honours the skip: option\""))?
+                && ignored("a_spec.rb", &rb("it \"sums\", skip: \"later\""))?
+                && !ignored(
+                    "test_a.py",
+                    &py("@pytest.mark.parametrize(\"name\", [\"skipIf\"])"),
+                )?
+                && ignored("test_a.py", &py("@pytest.mark.skip(reason=\"later\")"))?)
+        },
+    ),
+    (
+        "ignored-tests: an early return is a candidate by its code, not by a string or a comment that names CI",
+        || {
+            let conditional = |path: &str, src: &str| -> Result<bool> {
+                let facts = extract(path, src)?;
+                let test = facts
+                    .tests
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("no test in {path}"))?;
+                Ok(test.conditional_ignore.is_some())
+            };
+            let py = |condition: &str| {
+                format!("import os\n\n\ndef test_a():\n    if {condition}:\n        return\n    assert f() == 3\n")
+            };
+            let go = |condition: &str| {
+                format!("package p\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestA(t *testing.T) {{\n\tif {condition} {{\n\t\treturn\n\t}}\n\tif F() != 3 {{\n\t\tt.Fatal(os.Args)\n\t}}\n}}\n")
+            };
+            Ok(!conditional("test_a.py", &py("mode() == \"runs on CI too\""))?
+                && !conditional("test_a.py", &py("\"os.environ\" in source()"))?
+                && conditional("test_a.py", &py("os.environ.get(\"CI\")"))?
+                && conditional("test_a.py", &py("lookup(\"CI\")"))?
+                && !conditional("p_test.go", &go("mode() == \"runs on CI too\""))?
+                && conditional("p_test.go", &go("os.Getenv(\"CI\") != \"\""))?)
         },
     ),
     (

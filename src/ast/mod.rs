@@ -733,6 +733,129 @@ impl ParsedFileFacts {
     }
 }
 
+/// The source text of `node` without the text of any descendant whose kind is in
+/// `left_out`, each replaced by one space. A marker searched for in the result is one
+/// the code spells, never one a string literal, a comment or an argument list contains.
+pub(crate) fn text_without(node: tree_sitter::Node, src: &[u8], left_out: &[&str]) -> String {
+    code_parts(node, src, left_out, &[])
+}
+
+/// The node kinds of one grammar that hold text which is not code.
+pub(crate) struct NotCode {
+    /// String literals of every form.
+    pub strings: &'static [&'static str],
+    /// Comments.
+    pub comments: &'static [&'static str],
+    /// The parts of a string literal that are code again (`${..}`, `{..}` of an
+    /// f-string).
+    pub interpolations: &'static [&'static str],
+}
+
+/// The text of `node` that is code: outside its comments and its string literals, with
+/// the interpolated expressions of a string kept.
+pub(crate) fn code_text(node: tree_sitter::Node, src: &[u8], grammar: &NotCode) -> String {
+    let left_out: Vec<&str> = grammar
+        .strings
+        .iter()
+        .chain(grammar.comments)
+        .copied()
+        .collect();
+    code_parts(node, src, &left_out, grammar.interpolations)
+}
+
+/// The text of `node` with each descendant of a kind in `left_out` replaced by a space,
+/// except the descendants of it whose kind is in `kept`, which are read as code again.
+fn code_parts(node: tree_sitter::Node, src: &[u8], left_out: &[&str], kept: &[&str]) -> String {
+    fn kept_inside<'t>(
+        node: tree_sitter::Node<'t>,
+        kept: &[&str],
+        out: &mut Vec<tree_sitter::Node<'t>>,
+    ) {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if kept.contains(&child.kind()) {
+                out.push(child);
+            } else {
+                kept_inside(child, kept, out);
+            }
+        }
+    }
+    fn collect(
+        node: tree_sitter::Node,
+        left_out: &[&str],
+        kept: &[&str],
+        spans: &mut Vec<(usize, usize)>,
+    ) {
+        if left_out.contains(&node.kind()) {
+            let mut inside = Vec::new();
+            kept_inside(node, kept, &mut inside);
+            let mut at = node.start_byte();
+            for part in inside {
+                spans.push((at, part.start_byte()));
+                at = part.end_byte();
+                let mut cursor = part.walk();
+                for child in part.children(&mut cursor) {
+                    collect(child, left_out, kept, spans);
+                }
+            }
+            spans.push((at, node.end_byte()));
+            return;
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            collect(child, left_out, kept, spans);
+        }
+    }
+    let mut spans = Vec::new();
+    collect(node, left_out, kept, &mut spans);
+    spans.sort_unstable();
+    let mut out = Vec::new();
+    let mut at = node.start_byte();
+    for (start, end) in spans {
+        if start < at {
+            continue;
+        }
+        out.extend_from_slice(src.get(at..start).unwrap_or_default());
+        out.push(b' ');
+        at = end;
+    }
+    out.extend_from_slice(src.get(at..node.end_byte()).unwrap_or_default());
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Whether one of `bound` (names a test binds to an environment read) is a word of the
+/// code of `node`.
+pub(crate) fn code_names_one_of(
+    node: tree_sitter::Node,
+    src: &[u8],
+    grammar: &NotCode,
+    bound: &std::collections::HashSet<String>,
+) -> bool {
+    let code = code_text(node, src, grammar);
+    code.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+        .any(|word| bound.contains(word))
+}
+
+/// Whether a TestNG `@Test(..)` annotation carries `enabled = false`, at any spacing and
+/// outside its string literals and comments: a description that contains the words is
+/// not the element.
+pub(crate) fn annotation_disables(
+    annotation: tree_sitter::Node,
+    src: &[u8],
+    not_code: &[&str],
+) -> bool {
+    let code: String = text_without(annotation, src, not_code)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    code.match_indices("enabled=false").any(|(at, found)| {
+        let before = code[..at].chars().next_back();
+        let after = code[at + found.len()..].chars().next();
+        let word = |c: char| c.is_alphanumeric() || c == '_';
+        !before.is_some_and(word) && !after.is_some_and(word)
+    })
+}
+
 /// A helper's own name without the type or module it is recorded under
 /// (`Base::check`, `Suite.check`).
 pub fn helper_leaf(name: &str) -> &str {
