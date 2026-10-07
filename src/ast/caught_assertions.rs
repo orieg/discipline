@@ -70,11 +70,7 @@ fn site(node: Node) -> Site {
 
 fn attribute(tests: &mut [TestFn], mut c: CaughtAssertion) {
     let line = c.line;
-    if let Some(t) = tests
-        .iter_mut()
-        .filter(|t| t.line <= line && line <= t.end_line.max(t.line))
-        .min_by_key(|t| t.end_line.saturating_sub(t.line))
-    {
+    if let Some(t) = super::innermost_test(tests, line) {
         if !t
             .caught_assertions
             .iter()
@@ -1646,10 +1642,7 @@ fn java_catch_body_swallows(clause: Node, src: &str, vocab: &AssertVocabulary) -
         }
         if n.kind() == "method_invocation" {
             let name = n.child_by_field_name("name").map_or("", |m| text(m, src));
-            if name.starts_with("assert")
-                || name.starts_with("assertThat")
-                || configured(name, vocab)
-            {
+            if name.starts_with("assert") || configured(name, vocab) {
                 has_assert = true;
                 return false;
             }
@@ -1734,7 +1727,6 @@ pub fn java(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabular
                 "method_invocation" => {
                     let name = n.child_by_field_name("name").map_or("", |m| text(m, src));
                     (name.starts_with("assert") && name != "assertThrows")
-                        || name.starts_with("assertThat")
                         || configured(name, vocab)
                 }
                 _ => false,

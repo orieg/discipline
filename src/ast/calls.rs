@@ -1,7 +1,7 @@
-//! Calls inside test bodies that a test gate wants counted: sleeps, and assertions on
-//! properties that are nearly always true.
+//! Calls inside test bodies that a test gate wants counted: sleeps, assertions on
+//! properties that are nearly always true, and the use of test doubles (`mocks.rs`).
 //!
-//! Same walk as `mocks.rs`: call nodes, judged by the callee and the call text up to the
+//! One walk ([`count`]): call nodes, judged by the callee and the call text up to the
 //! first argument list, attributed to the innermost test whose span contains them.
 //!
 //! What is judged is code ([`code_text`]): the text of a string literal or a comment is
@@ -228,76 +228,120 @@ fn names(vocab: Vocab, callee: &str, head: &str) -> bool {
     })
 }
 
-/// Count calls whose callee or call prefix contains a `vocab` entry, per test, into the
-/// field `pick` selects. A matching chain counts once.
-pub fn count(
-    root: Node,
-    src: &str,
-    tests: &mut [TestFn],
-    spec: &MockSpec,
-    vocab: Vocab,
-    pick: fn(&mut TestFn) -> &mut usize,
-) {
-    count_with(root, src, tests, spec, vocab, pick, &|_| None);
+/// What one walk of a file counts into its tests.
+pub struct Counted<'a> {
+    /// The grammar's call nodes and where their callee is.
+    pub spec: &'a MockSpec,
+    /// Configured names of mock set-up, beside the built-in ones (`mocks::double`).
+    pub mock_setup: &'a [String],
+    /// Configured names of mock verification, beside the built-in ones.
+    pub mock_verify: &'a [String],
+    /// The call vocabularies counted, each into the field its `Pick` selects.
+    pub vocabs: &'a [(Vocab, Pick)],
+    /// For a pack some of whose call nodes do not hold their arguments as syntax: the
+    /// code such a node is judged by for a vocabulary (a Rust macro's token tree, read
+    /// by the pack), and `None` for a node read the ordinary way.
+    pub judged: &'a dyn Fn(Node, Vocab) -> Option<String>,
 }
 
-/// [`count`], for a pack some of whose call nodes do not hold their arguments as syntax:
-/// `judged` returns the code such a node is judged by (a Rust macro's token tree, read by
-/// the pack), and `None` for a node read the ordinary way.
-pub fn count_with(
-    root: Node,
-    src: &str,
-    tests: &mut [TestFn],
-    spec: &MockSpec,
-    vocab: Vocab,
-    pick: fn(&mut TestFn) -> &mut usize,
-    judged: &dyn Fn(Node) -> Option<String>,
-) {
+/// The two vocabularies every pack that counts both counts.
+pub const SLEEPS_AND_TRIVIAL_ASSERTS: &[(Vocab, Pick)] = &[
+    (SLEEP_VOCAB, sleeps),
+    (TRIVIAL_ASSERT_VOCAB, trivial_asserts),
+];
+
+/// A call node's text as code, up to and with the `(` or `{` that opens its first
+/// argument list. Never the arguments: a test's own body would otherwise make the
+/// enclosing `test(...)` call a match.
+fn call_head(node: Node, src: &str) -> String {
+    let mut whole = code_text(node, src);
+    let cut = whole.find(['(', '{']).map_or(whole.len(), |i| i + 1);
+    whole.truncate(cut);
+    whole
+}
+
+/// Counts, in one walk and per test: the mock set-ups and mock verifications
+/// (`mocks::double`), and the calls whose callee or call prefix names an entry of each
+/// vocabulary of `counted.vocabs`. Each count is kept apart from the others: a matching
+/// chain counts once for the count it matched, and what is under it is still read for
+/// the others. The mock counts read every node; a vocabulary reads nothing inside a
+/// string or a comment except what a string interpolates.
+pub fn count(root: Node, src: &str, tests: &mut [TestFn], counted: &Counted) {
     if tests.is_empty() {
         return;
     }
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        if is_text(node) {
-            // Nothing inside a string or a comment is a call, except what a string
-            // interpolates.
-            push_interpolations(node, &mut stack);
-            continue;
+    const MOCKS: u32 = 1;
+    let vocab_bit = |at: usize| 2u32 << at;
+    let vocabs: u32 = (0..counted.vocabs.len()).map(vocab_bit).sum();
+    let mut stack = vec![(root, MOCKS | vocabs)];
+    let mut interpolated = Vec::new();
+    while let Some((node, mut live)) = stack.pop() {
+        if is_text(node) && live & vocabs != 0 {
+            // Nothing inside a string or a comment is a call a vocabulary names, except
+            // what a string interpolates.
+            push_interpolations(node, &mut interpolated);
+            stack.extend(interpolated.drain(..).map(|n| (n, live & vocabs)));
+            live &= MOCKS;
+            if live == 0 {
+                continue;
+            }
         }
-        if spec.call_kinds.contains(&node.kind()) {
-            let callee = spec
+        if counted.spec.call_kinds.contains(&node.kind()) {
+            // Code only (`code_text`): the text of a string literal or a comment in the
+            // callee chain names nothing.
+            let callee = counted
+                .spec
                 .callee_fields
                 .iter()
                 .find_map(|f| node.child_by_field_name(f))
                 .map(|n| code_text(n, src))
                 .unwrap_or_else(|| code_text(node, src));
-            let head = match judged(node) {
-                Some(code) => code,
-                None => {
-                    let mut whole = code_text(node, src);
-                    let cut = whole.find(['(', '{']).map_or(whole.len(), |i| i + 1);
-                    whole.truncate(cut);
-                    whole
+            let line = node.start_position().row + 1;
+            let mut plain_head: Option<String> = None;
+            if live & MOCKS != 0 {
+                // Judge the callee (for a chained matcher, `expect(f).toHaveBeenCalled`,
+                // it carries the matcher) and the call text up to its first argument
+                // list (`verify(`, `new Mock<T>(`, `every {`).
+                let head = plain_head.get_or_insert_with(|| call_head(node, src));
+                let double =
+                    super::mocks::double(&callee, head, counted.mock_setup, counted.mock_verify);
+                if let Some(double) = double {
+                    if let Some(t) = super::innermost_test(tests, line) {
+                        match double {
+                            super::mocks::Double::Verify => t.mock_asserts += 1,
+                            super::mocks::Double::Setup => t.mock_setups += 1,
+                        }
+                    }
+                    // `when(x).thenReturn(y)` nests a matching call; count the chain once.
+                    live &= !MOCKS;
                 }
-            };
-            // The callee's tail is judged too: a chain's head (`a.b(`) stops before the
-            // `sleep(` it ends in.
-            if names(vocab, &callee, &head) {
-                let line = node.start_position().row + 1;
-                if let Some(t) = tests
-                    .iter_mut()
-                    .filter(|t| t.line <= line && line <= t.end_line.max(t.line))
-                    .min_by_key(|t| t.end_line.saturating_sub(t.line))
-                {
-                    *pick(t) += 1;
+            }
+            for (at, (vocab, pick)) in counted.vocabs.iter().enumerate() {
+                if live & vocab_bit(at) == 0 {
+                    continue;
                 }
+                let judged = (counted.judged)(node, *vocab);
+                let head = match &judged {
+                    Some(code) => code,
+                    None => plain_head.get_or_insert_with(|| call_head(node, src)),
+                };
+                // The callee's tail is judged too: a chain's head (`a.b(`) stops before
+                // the `sleep(` it ends in.
+                if names(*vocab, &callee, head) {
+                    if let Some(t) = super::innermost_test(tests, line) {
+                        *pick(t) += 1;
+                    }
+                    live &= !vocab_bit(at);
+                }
+            }
+            if live == 0 {
                 continue;
             }
         }
         let mut cursor = node.walk();
         let children: Vec<Node> = node.children(&mut cursor).collect();
         for child in children.into_iter().rev() {
-            stack.push(child);
+            stack.push((child, live));
         }
     }
 }
@@ -329,11 +373,7 @@ pub fn count_python_assert_statements(root: Node, src: &str, tests: &mut [TestFn
         if node.kind() == "assert_statement" {
             if python_assert_is_trivial(node, src) {
                 let line = node.start_position().row + 1;
-                if let Some(test) = tests
-                    .iter_mut()
-                    .filter(|x| x.line <= line && line <= x.end_line.max(x.line))
-                    .min_by_key(|x| x.end_line.saturating_sub(x.line))
-                {
+                if let Some(test) = super::innermost_test(tests, line) {
                     test.trivial_asserts += 1;
                 }
             }

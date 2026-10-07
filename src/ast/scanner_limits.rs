@@ -236,7 +236,9 @@ mod tests {
             std::fs::read_to_string(format!("{}/src/ast/ruby.rs", env!("CARGO_MANIFEST_DIR")))
                 .unwrap();
         let guard = "scanner_limits::ruby_heredoc_word(src)";
-        let parse = "source_text::parse_file(&mut parser, path, src)";
+        // The pack parses the file through `source_text::parse_file_as`, which builds
+        // the parser and parses in one call, and through nothing else.
+        let parse = "source_text::parse_file_as(";
         let guard_at = ruby
             .find(guard)
             .unwrap_or_else(|| panic!("the Ruby pack does not call `{guard}`"));
@@ -246,6 +248,11 @@ mod tests {
         assert!(
             guard_at < parse_at,
             "the limit check must run before the parse"
+        );
+        assert_eq!(
+            ruby.matches("source_text::parse_file").count(),
+            1,
+            "the Ruby pack parses the file in one place"
         );
     }
 
@@ -336,7 +343,9 @@ mod tests {
             std::fs::read_to_string(format!("{}/src/ast/python.rs", env!("CARGO_MANIFEST_DIR")))
                 .unwrap();
         let guard = "scanner_limits::python_indent_nesting(src)";
-        let parse = "source_text::parse_file(&mut parser, path, src)";
+        // The pack parses the file through `source_text::parse_file_as`, which builds
+        // the parser and parses in one call, and through nothing else.
+        let parse = "source_text::parse_file_as(";
         let guard_at = python
             .find(guard)
             .unwrap_or_else(|| panic!("the Python pack does not call `{guard}`"));
@@ -346,6 +355,11 @@ mod tests {
         assert!(
             guard_at < parse_at,
             "the limit check must run before the parse"
+        );
+        assert_eq!(
+            python.matches("source_text::parse_file").count(),
+            1,
+            "the Python pack parses the file in one place"
         );
     }
 }

@@ -50,11 +50,12 @@ impl LanguagePack for PythonPack {
         // an over-budget parse is (`crate::ast::scanner_limits`).
         crate::ast::scanner_limits::python_indent_nesting(src)
             .map_err(|why| anyhow!("could not parse `{path}`: {why}"))?;
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_python::LANGUAGE.into())
-            .map_err(|e| anyhow!("failed to load the Python grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
+        let tree = crate::ast::source_text::parse_file_as(
+            &tree_sitter_python::LANGUAGE.into(),
+            "the Python",
+            path,
+            src,
+        )?;
         let root = tree.root_node();
 
         let mut extractor = PythonExtractor {
@@ -83,68 +84,7 @@ impl LanguagePack for PythonPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
-        extractor.facts.functions = functions::extract(root, src, path, &PYTHON_FUNCTIONS);
-        super::mocks::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &PYTHON_MOCKS,
-            &vocab.mock_setup_fns,
-            &vocab.mock_assert_fns,
-        );
-        {
-            let tests = &extractor.facts.tests;
-            let spans: Vec<(usize, usize)> = tests
-                .iter()
-                .map(|t| (t.line, t.end_line.max(t.line)))
-                .collect();
-            // A file matching the shared test-path conventions, this pack's own test-file
-            // convention, or one the repository declares as test scope, is test code
-            // line for line.
-            let whole_file = super::functions::is_test_file(path, Some(is_python_test_path))
-                || super::functions::declared_test_path(path, &vocab.test_paths);
-            let is_test_line =
-                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            (
-                extractor.facts.swallowed,
-                extractor.facts.constant_fallbacks,
-            ) = super::handlers::extract_with_constants(
-                root,
-                src,
-                &PYTHON_HANDLERS,
-                Some(&PYTHON_CONSTANTS),
-                &is_test_line,
-            );
-        }
-        super::retries::mark(root, src, &mut extractor.facts.tests, &PYTHON_RETRIES);
-        if super::functions::declared_test_path(path, &vocab.test_paths) {
-            for f in &mut extractor.facts.functions {
-                f.is_test = true;
-            }
-        }
-        super::method_checks::count(root, src, &mut extractor.facts, &PYTHON_RECEIVER_CALLS);
-        super::helper_loops::count(
-            root,
-            src,
-            &mut extractor.facts,
-            &super::helper_loops::PYTHON,
-        );
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &PYTHON_MOCKS,
-            super::calls::SLEEP_VOCAB,
-            super::calls::sleeps,
-        );
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &PYTHON_MOCKS,
-            super::calls::TRIVIAL_ASSERT_VOCAB,
-            super::calls::trivial_asserts,
-        );
+        PYTHON_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
         super::bounds::python(root, src, &mut extractor.facts.tests);
         super::expectations::python(root, src, &mut extractor.facts.tests);
         super::caught_assertions::python(root, src, &mut extractor.facts.tests, vocab);
@@ -1100,27 +1040,13 @@ impl<'a> PythonExtractor<'a> {
         self.helper_calls
             .entry(key.clone())
             .or_insert_with(|| calls.clone());
-        self.helpers.entry(key.clone()).or_insert(HelperFacts {
-            total_asserts: facts.total_asserts,
-            strong_asserts: facts.strong_asserts,
-            tautologies: facts.tautologies,
-            fatal_asserts: facts.fatal_asserts,
-            wraps,
-        });
+        self.helpers
+            .entry(key.clone())
+            .or_insert(HelperFacts::from_scan(&facts, wraps));
         let line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
         self.facts.push_helper(
-            TestHelperFacts {
-                name: key,
-                line,
-                end_line,
-                total_asserts: facts.total_asserts,
-                strong_asserts: facts.strong_asserts,
-                tautologies: facts.tautologies,
-                fatal_asserts: facts.fatal_asserts,
-                helper_checks: 0,
-                equality_exits: 0,
-            },
+            TestHelperFacts::from_scan(key, line, end_line, &facts),
             calls,
         );
     }
@@ -1631,6 +1557,20 @@ fn python_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
         .unwrap_or("");
     functions::is_test_file(path, Some(is_python_test_path)) || name.starts_with("test_")
 }
+
+/// What the steps every pack shares read of this pack (`PackSpec::shared_facts`).
+const PYTHON_PACK: super::PackSpec = super::PackSpec {
+    functions: &PYTHON_FUNCTIONS,
+    own_test_path: Some(is_python_test_path),
+    handlers: &PYTHON_HANDLERS,
+    constants: Some(&PYTHON_CONSTANTS),
+    retries: Some(&PYTHON_RETRIES),
+    receiver_calls: &PYTHON_RECEIVER_CALLS,
+    helper_loops: &super::helper_loops::PYTHON,
+    calls: &PYTHON_MOCKS,
+    vocabs: super::calls::SLEEPS_AND_TRIVIAL_ASSERTS,
+    judged: None,
+};
 
 pub const PYTHON_FUNCTIONS: FunctionSpec = FunctionSpec {
     function_kinds: &["function_definition"],

@@ -67,11 +67,7 @@ pub(super) fn skeleton(whole: Node, lit: Node, src: &str) -> String {
 
 fn attribute(tests: &mut [TestFn], bound: Bound) {
     let line = bound.line;
-    if let Some(t) = tests
-        .iter_mut()
-        .filter(|t| t.line <= line && line <= t.end_line.max(t.line))
-        .min_by_key(|t| t.end_line.saturating_sub(t.line))
-    {
+    if let Some(t) = super::innermost_test(tests, line) {
         if !t.bounds.contains(&bound) {
             t.bounds.push(bound);
         }
