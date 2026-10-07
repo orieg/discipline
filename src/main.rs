@@ -14,17 +14,47 @@ use std::process::ExitCode;
 /// Rust ignores SIGPIPE, so a closed reader (`discipline gates | head -1`) turns every
 /// later `println!` into a panic. Restore the default so the process ends the way other
 /// Unix tools do: killed by the signal, which a pipeline still sees as a non-zero status.
+///
+/// The work runs on a second thread, and a signal raised by a write may be handed to
+/// any thread that does not block it. Handed to this one while it waits for the worker,
+/// it would be acted on only after the worker's write had returned an error and its
+/// `println!` had panicked. So this thread blocks the signal, and the worker, which
+/// inherits that, unblocks it ([`take_sigpipe`]): the worker is then the only thread the
+/// signal can be delivered to, and it ends the process inside the write.
 #[cfg(unix)]
 fn restore_sigpipe() {
-    // SAFETY: called first in `main`, before any thread is spawned; `signal` with
-    // `SIG_DFL` only resets the disposition of SIGPIPE and touches no Rust-managed memory.
+    // SAFETY: called first in `main`, before any thread is spawned. `signal` with
+    // `SIG_DFL` only resets the disposition of SIGPIPE. `sigemptyset` and `sigaddset`
+    // initialise the zeroed set they are given, and `pthread_sigmask` reads that set
+    // and changes this thread's mask only; none touches Rust-managed memory.
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, libc::SIGPIPE);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+    }
+}
+
+/// Let the calling thread receive SIGPIPE: the worker's first step (`restore_sigpipe`).
+#[cfg(unix)]
+fn take_sigpipe() {
+    // SAFETY: `sigemptyset` and `sigaddset` initialise the zeroed set they are given,
+    // and `pthread_sigmask` reads that set and changes the calling thread's mask only;
+    // none touches Rust-managed memory.
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, libc::SIGPIPE);
+        libc::pthread_sigmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut());
     }
 }
 
 #[cfg(not(unix))]
 fn restore_sigpipe() {}
+
+#[cfg(not(unix))]
+fn take_sigpipe() {}
 
 /// 0 = pass, 1 = violations, 2 = the check itself could not run. Keeping the
 /// last two apart lets CI tell "the change is bad" from "the gate is broken".
@@ -33,7 +63,10 @@ fn restore_sigpipe() {}
 /// tree may nest further than the main thread's stack lets a walker descend.
 fn main() -> ExitCode {
     restore_sigpipe();
-    match discipline::deep_stack::on_deep_stack(run) {
+    match discipline::deep_stack::on_deep_stack(|| {
+        take_sigpipe();
+        run()
+    }) {
         Ok(code) => code,
         Err(e) => {
             eprintln!(
