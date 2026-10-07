@@ -19,8 +19,6 @@ src/ast/mod.rs Tests | Fact vocabulary every pack lists in `supplies`; no gate a
 src/ast/mod.rs EscapeHatches | Fact vocabulary every pack lists in `supplies`; no gate asks for it
 src/forge.rs log | CannedApi request log, read by the unit tests of the forge readers
 src/forge.rs was_called | CannedApi request log, read by the unit tests of the forge readers
-src/gitctx.rs Sides | both sides of one file; only its unit test reads it
-src/gitctx.rs sides | both sides of one file; only its unit test reads it
 src/guards/perf/bounds.rs with_ci | builds the estimates of the interval-comparison unit tests; production sets `ci` directly
 src/guards/perf/bounds.rs regressed | exact-counter threshold; the gate compares `delta_pct` itself
 src/guards/perf/bounds.rs wilson_score_interval | reference-pinned bound with no caller yet

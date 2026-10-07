@@ -30,6 +30,9 @@ pub enum Direction {
     Floor,
     /// Number: a larger value is looser, and so is removing it.
     Cap,
+    /// Version (`1.90`, `1.90.1`): a lower version is looser, and so is removing it. The
+    /// two sides are compared as versions, never as text ([`version_order`]).
+    VersionFloor,
     /// Boolean: `true` is the looser value.
     LooserWhenTrue,
     /// Boolean: `false` is the looser value.
@@ -87,6 +90,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("constant_fallback_paths", Direction::Shrunk),
     ("hostname_denylist", Direction::Shrunk),
     ("superseded_json_paths", Direction::Shrunk),
+    ("record_paths", Direction::Shrunk),
     ("citation_source_paths", Direction::Shrunk),
     ("citation_measurement_jobs", Direction::Shrunk),
     ("unconditional_jobs", Direction::Shrunk),
@@ -123,12 +127,15 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("advisory_pct", Direction::Tolerance),
     ("max_noise_cv", Direction::Tolerance),
     ("tolerance", Direction::Tolerance),
+    ("figure_tolerance_pct", Direction::Tolerance),
     ("min_count", Direction::Floor),
     ("min_tests", Direction::Floor),
     ("test_report", Direction::Evidence),
     ("base_report", Direction::Evidence),
     ("head_report", Direction::Evidence),
     ("min_assertions_per_test", Direction::Floor),
+    // The version `msrv` reports and its command is said to pass under.
+    ("pinned_version", Direction::VersionFloor),
     // A lower cap leaves more archive entries unscanned.
     ("max_entry_bytes", Direction::Floor),
     ("max_unsafe", Direction::Cap),
@@ -155,6 +162,8 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("check_paired_figures", Direction::LooserWhenFalse),
     ("check_pending_citations", Direction::LooserWhenFalse),
     ("require_open_pending_issues", Direction::LooserWhenFalse),
+    ("verify_measured_commit", Direction::LooserWhenFalse),
+    ("verify_cited_figures", Direction::LooserWhenFalse),
     ("require_git_pins", Direction::LooserWhenFalse),
     ("scan_workflows", Direction::LooserWhenFalse),
     ("scan_scripts", Direction::LooserWhenFalse),
@@ -188,6 +197,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("scan_contents", Direction::LooserWhenFalse),
     // What the gate runs or checks against.
     ("superseded_registry", Direction::Evidence),
+    ("record_commit_key", Direction::Evidence),
     ("ratio_baseline", Direction::Evidence),
     ("workflow", Direction::Evidence),
     ("change_job", Direction::Evidence),
@@ -218,7 +228,6 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("provenance", Direction::Neutral),
     ("base_file", Direction::Neutral),
     ("head_file", Direction::Neutral),
-    ("pinned_version", Direction::Neutral),
     ("args", Direction::Neutral),
     ("name", Direction::Neutral),
     // `banned_actions` entry fields: an edited entry is a lost one.
@@ -382,6 +391,52 @@ fn within(small: Option<&Value>, big: Option<&Value>) -> bool {
         _ => false,
     }
 }
+
+/// The numeric components of a version written as dotted numbers (`1.90`, `1.90.1`), with
+/// trailing zero components dropped so that `1.90` and `1.90.0` are the same version.
+/// `None` for any other text: a pre-release suffix, an empty component, a sign.
+fn version_components(text: &str) -> Option<Vec<u64>> {
+    let mut parts = text
+        .trim()
+        .split('.')
+        .map(|p| {
+            (!p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| p.parse::<u64>().ok())
+                .flatten()
+        })
+        .collect::<Option<Vec<u64>>>()?;
+    while parts.last() == Some(&0) && parts.len() > 1 {
+        parts.pop();
+    }
+    Some(parts)
+}
+
+/// How version `head` stands to version `base`, component by component as numbers
+/// (`1.9` is below `1.10`). `None` when either is not a dotted-number version, so the
+/// two cannot be ordered.
+pub fn version_order(base: &str, head: &str) -> Option<std::cmp::Ordering> {
+    Some(version_components(head)?.cmp(&version_components(base)?))
+}
+
+/// Optional evidence keys with no value that stands in when unset: the gate then counts
+/// on another basis, so adding the key replaces the basis the base ref's floor was
+/// measured on. `(gate, key)`.
+pub const ADDED_IS_ANOTHER_BASIS: &[(&str, &str)] = &[
+    ("test-floor", "test_command"),
+    ("test-floor", "test_report"),
+    // The head-side report is what the count is read from, as `test_report` is.
+    // `base_report` is not here: it names what the head report is compared with, and
+    // the gate cannot run with it alone.
+    ("test-floor", "head_report"),
+];
+
+/// Why a changed version that cannot be ordered is reported.
+const UNORDERED_VERSION: &str =
+    "one side is not a dotted-number version, so the change cannot be shown to be no lower";
+
+/// What the sentence of an added [`ADDED_IS_ANOTHER_BASIS`] key says.
+const ANOTHER_BASIS: &str =
+    "the tests are then counted on a basis the base ref did not use, so its floor is compared with a different count";
 
 pub fn direction_of(key: &str) -> Option<Direction> {
     KEY_DIRECTIONS
@@ -636,9 +691,25 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
     }
 
     // Baseline file integrity: growing grandfathered baseline or adding new ungrandfathered fingerprints is a weakening
-    let baseline_filename = ctx
+    let baseline_given = ctx
         .baseline_path
         .unwrap_or(crate::baseline::DEFAULT_BASELINE_FILE);
+    let head_baseline_path = ctx.git.root().join(baseline_given);
+    // A baseline outside the repository is the operator's, as a configuration outside it
+    // is: no side of the change holds it, so there is no growth of the change's own to
+    // compare. It is named by its file name alone; its directory is the runner's.
+    let Some(baseline_in_tree) =
+        crate::baseline::path_in_repository(ctx.git.root(), &head_baseline_path)
+    else {
+        out.notes.push(format!(
+            "the baseline in force (`{}`) is outside the repository, so this change cannot edit it; baseline growth was not compared",
+            crate::baseline::path_for_message(ctx.git.root(), &head_baseline_path)
+        ));
+        return Ok(out);
+    };
+    // The path git knows the file by, which is also how messages and findings name it.
+    let baseline_filename = baseline_in_tree.as_str();
+    let baseline_shown = baseline_filename;
     let base_baseline: Option<crate::baseline::DisciplineBaseline> = match ctx
         .git
         .base_content(baseline_filename)?
@@ -647,7 +718,7 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
             Ok(baseline) => Some(baseline),
             Err(_) => {
                 out.notes.push(format!(
-                        "`{baseline_filename}` does not parse on the base side; baseline growth was not checked"
+                        "`{baseline_shown}` does not parse on the base side; baseline growth was not checked"
                     ));
                 None
             }
@@ -655,7 +726,6 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
         None => None,
     };
 
-    let head_baseline_path = ctx.git.root().join(baseline_filename);
     let head_baseline: Option<crate::baseline::DisciplineBaseline> = if head_baseline_path.exists()
     {
         std::fs::read_to_string(&head_baseline_path)
@@ -696,7 +766,7 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
             });
             if others.is_empty() && kept_places {
                 out.notes.push(format!(
-                    "`{baseline_filename}` migrated from fingerprint version {} to {} ({} of {} entries kept)",
+                    "`{baseline_shown}` migrated from fingerprint version {} to {} ({} of {} entries kept)",
                     b.version,
                     h.version,
                     h.findings.len(),
@@ -717,10 +787,10 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                 out.push(
                     ctx.overridable(severity),
                     &crate::findings::BASELINE_MIGRATION_NOT_ALONE,
-                    Some(baseline_filename),
+                    Some(baseline_shown),
                     None,
                     format!(
-                        "[baseline] `{baseline_filename}` is rewritten from fingerprint version {} to {} in a change that also touches {} other file(s) (e.g. `{}`); a migration is only verifiable on its own.",
+                        "[baseline] `{baseline_shown}` is rewritten from fingerprint version {} to {} in a change that also touches {} other file(s) (e.g. `{}`); a migration is only verifiable on its own.",
                         b.version,
                         h.version,
                         others.len(),
@@ -764,6 +834,15 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                 .find_override(GATE, lifts, tokens::ALLOW_GATE_WEAKENING, "baseline")
                 .or_else(|| {
                     ctx.find_override(GATE, lifts, tokens::ALLOW_GATE_WEAKENING, baseline_filename)
+                        .or_else(|| {
+                            // The file as the run was given it, when that differs.
+                            ctx.find_override(
+                                GATE,
+                                lifts,
+                                tokens::ALLOW_GATE_WEAKENING,
+                                baseline_given,
+                            )
+                        })
                 })
             {
                 out.overrides.push(record);
@@ -773,7 +852,7 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                 out.push(
                     ctx.overridable(severity),
                     &crate::findings::BASELINE_NEW_FINDINGS,
-                    Some(baseline_filename),
+                    Some(baseline_shown),
                     None,
                     format!("[baseline] Grandfathered baseline contains {count} new fingerprint(s) not present on base (e.g. `{sample}`). A 1-for-1 replacement of grandfathered findings with new ones is forbidden."),
                     "Revert the baseline modification, or justify it on its own line in the PR body or a commit message: `allow-gate-weakening: baseline <reason>`.",
@@ -783,7 +862,7 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                 out.push(
                     ctx.overridable(severity),
                     &crate::findings::BASELINE_INCREASED,
-                    Some(baseline_filename),
+                    Some(baseline_shown),
                     None,
                     format!("[baseline] Grandfathered baseline grew from {b_count} to {h_count} findings ({diff} new grandfathered findings)."),
                     "Revert the baseline growth, or justify it on its own line in the PR body or a commit message: `allow-gate-weakening: baseline <reason>`.",
@@ -1163,9 +1242,10 @@ pub fn diff_configs_under(
                     // Unset reads as the default: removing that very value changes nothing.
                     Direction::Evidence
                         if effective_default(gate, h, key).is_some_and(|(d, _)| d == *bv) => {}
-                    Direction::Evidence | Direction::Floor | Direction::Cap => {
-                        note(w(key, Change::Removed).was(bv))
-                    }
+                    Direction::Evidence
+                    | Direction::Floor
+                    | Direction::Cap
+                    | Direction::VersionFloor => note(w(key, Change::Removed).was(bv)),
                     // Absent means no limit at all (`max_noise_cv`: no noise check).
                     Direction::Tolerance if ABSENT_IS_UNLIMITED.contains(&key.as_str()) => {
                         note(w(key, Change::Removed).was(bv))
@@ -1235,6 +1315,24 @@ pub fn diff_configs_under(
                         }
                     }
                 }
+                Direction::VersionFloor if bv != hv => {
+                    let order = match (bv, hv) {
+                        (Value::String(b), Value::String(h)) => version_order(b, h),
+                        _ => None,
+                    };
+                    match order {
+                        Some(std::cmp::Ordering::Less) => {
+                            note(w(key, Change::Decreased).values(bv, hv))
+                        }
+                        Some(_) => {}
+                        // A value that is not a version cannot be shown to be no lower.
+                        None => {
+                            let mut changed = w(key, Change::Changed).values(bv, hv);
+                            changed.note = Some(UNORDERED_VERSION);
+                            note(changed);
+                        }
+                    }
+                }
                 Direction::Cap | Direction::Tolerance => {
                     if let (Some(bn), Some(hn)) = (num(bv), num(hv)) {
                         if hn > bn {
@@ -1277,8 +1375,9 @@ pub fn diff_configs_under(
         // means: `ci_skip_severity` unset is the gate's `severity`; a tolerance in
         // `ABSENT_IS_NONE` unset adds none; a gate's `allow_hidden` unset inherits
         // `[directives] allow_hidden`; an evidence key with an effective default unset is
-        // that default (`effective_default`). Any other added floor, cap or evidence key
-        // adds a check.
+        // that default (`effective_default`); an evidence key in `ADDED_IS_ANOTHER_BASIS`
+        // replaces the basis the gate counted on. Any other added floor, cap, version or
+        // evidence key adds a check.
         let names_new_preset = gate == "command"
             && command_change_authorised
             && h.get("preset").is_some_and(|p| b.get("preset") != Some(p));
@@ -1296,10 +1395,20 @@ pub fn diff_configs_under(
                             .flatten()
                             .map(|d| (d, FROM_NEW_PRESET))
                     });
-                    if let Some((default, why)) = reference.filter(|(d, _)| d != hv) {
-                        let mut changed = w(key, Change::Changed).values(default, hv);
-                        changed.note = Some(why);
-                        note(changed);
+                    match reference {
+                        Some((default, why)) if default != *hv => {
+                            let mut changed = w(key, Change::Changed).values(default, hv);
+                            changed.note = Some(why);
+                            note(changed);
+                        }
+                        Some(_) => {}
+                        // No value stood in: the gate counted on another basis.
+                        None if ADDED_IS_ANOTHER_BASIS.contains(&(gate.as_str(), key.as_str())) => {
+                            let mut changed = w(key, Change::Changed).values("unset", hv);
+                            changed.note = Some(ANOTHER_BASIS);
+                            note(changed);
+                        }
+                        None => {}
                     }
                 }
                 Some(Direction::Tolerance) if ABSENT_IS_NONE.contains(&key.as_str()) => {
@@ -1701,6 +1810,68 @@ mod tests {
         assert!(has("command", "`min_count` decreased from 10 to 5"));
         assert!(has("unsafe-budget", "`max_unsafe` increased from 5 to 10"));
         assert!(has("pii", "`diff_only` changed from false to true"));
+    }
+
+    #[test]
+    fn the_measured_citation_keys_loosen_when_switched_off_narrowed_or_widened() {
+        let table = |keys: &str| cfg(&format!("[gates.provenance-tags]\n{keys}"));
+        let strict = "verify_measured_commit = true\nverify_cited_figures = true\n\
+                      figure_tolerance_pct = 1.0\nrecord_paths = [\"results/**\", \"bench/**\"]\n";
+        let said = |head: &str| -> Vec<String> {
+            diff_configs(&table(strict), &table(head))
+                .unwrap()
+                .iter()
+                .map(|w| w.what())
+                .collect()
+        };
+        let has = |found: &[String], needle: &str| found.iter().any(|w| w.contains(needle));
+        // Each key loosened on its own is the one thing reported.
+        for (from, to, needle) in [
+            (
+                "verify_measured_commit = true",
+                "verify_measured_commit = false",
+                "`verify_measured_commit` changed from true to false",
+            ),
+            (
+                "verify_cited_figures = true",
+                "verify_cited_figures = false",
+                "`verify_cited_figures` changed from true to false",
+            ),
+            (
+                "figure_tolerance_pct = 1.0",
+                "figure_tolerance_pct = 2.5",
+                "`figure_tolerance_pct` increased from 1.0 to 2.5",
+            ),
+            (", \"bench/**\"", "", "`record_paths` lost 1"),
+        ] {
+            let found = said(&strict.replace(from, to));
+            assert!(has(&found, needle), "{needle}: {found:?}");
+            assert_eq!(found.len(), 1, "{found:?}");
+        }
+        // Removing a key returns it to its default: the three checks are off, and the
+        // tolerance is back at zero, which is stricter.
+        let found = said("");
+        assert_eq!(found.len(), 3, "{found:?}");
+        assert!(!has(&found, "figure_tolerance_pct"), "{found:?}");
+        // Another commit key reads another field of every record.
+        let found = said(&format!("{strict}record_commit_key = \"rev\"\n"));
+        assert!(has(&found, "`record_commit_key` changed"), "{found:?}");
+        // Controls: unchanged, and tightened, are not reported.
+        assert!(said(strict).is_empty());
+        let tighter = strict
+            .replace("1.0", "0.5")
+            .replace(", \"bench/**\"", ", \"bench/**\", \"runs/**\"");
+        assert!(said(&tighter).is_empty());
+        // Switching the keys on from their defaults adds checks. A tolerance written in
+        // the same change is above the default of zero, and is reported as raised.
+        let on = strict.replace("figure_tolerance_pct = 1.0\n", "");
+        assert!(diff_configs(&table(""), &table(&on)).unwrap().is_empty());
+        let raised: Vec<String> = diff_configs(&table(""), &table(strict))
+            .unwrap()
+            .iter()
+            .map(|w| w.what())
+            .collect();
+        assert_eq!(raised, ["`figure_tolerance_pct` increased from 0.0 to 1.0"]);
     }
 
     #[test]
@@ -2383,11 +2554,18 @@ mod tests {
                 &format!("[gates.test-floor]\n{key} = \"other.xml\"\n"),
             );
             assert_eq!((w.key(), w.change), (key, Change::Changed));
-            // Adopting it adds a check.
-            none(
-                "",
-                &format!("[gates.test-floor]\n{key} = \"reports/junit.xml\"\n"),
-            );
+            let adopted = format!("[gates.test-floor]\n{key} = \"reports/junit.xml\"\n");
+            if key == "base_report" {
+                // What the head report is compared with: adopting it adds a check.
+                none("", &adopted);
+            } else {
+                // What the count is read from: adopting it replaces the counting basis.
+                let w = one("", &adopted);
+                assert_eq!(
+                    (w.gate.as_str(), w.key(), w.change, w.before.as_deref()),
+                    ("test-floor", key, Change::Changed, Some("unset"))
+                );
+            }
         }
     }
 
@@ -2701,6 +2879,130 @@ mod tests {
                 .iter()
                 .any(|t| effective_default(gate, t, key).is_some());
             assert_eq!(has, *unset == Unset::Default, "{gate}.{key}");
+        }
+    }
+
+    #[test]
+    fn versions_are_ordered_by_their_numbers_not_their_text() {
+        use std::cmp::Ordering::{Equal, Greater, Less};
+        for (base, head, want) in [
+            ("1.90", "1.80", Some(Less)),
+            ("1.80", "1.90", Some(Greater)),
+            // Lower as a version, higher as text; and the reverse.
+            ("1.10", "1.9", Some(Less)),
+            ("1.9", "1.10", Some(Greater)),
+            ("1.90", "1.90.0", Some(Equal)),
+            ("1.90.0", "1.90", Some(Equal)),
+            ("1.90.1", "1.90", Some(Less)),
+            ("1.90", "1.90.1", Some(Greater)),
+            ("2", "1.99", Some(Less)),
+            // Not dotted numbers: no order.
+            ("1.90", "stable", None),
+            ("nightly", "1.90", None),
+            ("1.90", "1.90-beta", None),
+            ("1.90", "1..90", None),
+            ("1.90", "", None),
+            ("1.90", "-1.90", None),
+            ("1.90", "+1", None),
+        ] {
+            assert_eq!(version_order(base, head), want, "{base} -> {head}");
+        }
+    }
+
+    #[test]
+    fn a_pinned_version_is_a_floor_compared_as_a_version() {
+        let pinned = |v: &str| format!("[gates.msrv]\npinned_version = \"{v}\"\n");
+        let said = |base: &str, head: &str| -> Vec<String> {
+            diff_configs(&cfg(base), &cfg(head))
+                .unwrap()
+                .iter()
+                .map(|w| format!("{}: {}", w.gate, w.what()))
+                .collect()
+        };
+        assert_eq!(
+            said(&pinned("1.90"), &pinned("1.80")),
+            ["msrv: `pinned_version` decreased from \"1.90\" to \"1.80\""]
+        );
+        assert_eq!(
+            said(&pinned("1.10"), &pinned("1.9")),
+            ["msrv: `pinned_version` decreased from \"1.10\" to \"1.9\""]
+        );
+        assert_eq!(
+            said(&pinned("1.90"), ""),
+            ["msrv: `pinned_version` removed (was \"1.90\")"]
+        );
+        // A side that is not a version cannot be shown to be no lower.
+        let unordered = said(&pinned("1.90"), &pinned("stable"));
+        assert_eq!(unordered.len(), 1, "{unordered:?}");
+        assert!(
+            unordered[0]
+                .starts_with("msrv: `pinned_version` changed from \"1.90\" to \"stable\" (")
+                && unordered[0].contains("not a dotted-number version"),
+            "{unordered:?}"
+        );
+        // Raised, equal under another spelling, unchanged, or added: nothing loosens.
+        for (base, head) in [
+            (pinned("1.80"), pinned("1.90")),
+            (pinned("1.9"), pinned("1.10")),
+            (pinned("1.90"), pinned("1.90.0")),
+            (pinned("stable"), pinned("stable")),
+            (String::new(), pinned("1.50")),
+        ] {
+            assert!(said(&base, &head).is_empty(), "{base} -> {head}");
+        }
+        assert_eq!(
+            direction_of("pinned_version"),
+            Some(Direction::VersionFloor)
+        );
+    }
+
+    #[test]
+    fn a_counting_basis_added_where_the_base_had_none_is_a_change_of_evidence() {
+        let said = |base: &str, head: &str| -> Vec<String> {
+            diff_configs(&cfg(base), &cfg(head))
+                .unwrap()
+                .iter()
+                .map(|w| format!("{}: {}", w.gate, w.what()))
+                .collect()
+        };
+        for (key, value) in [
+            ("test_report", "reports/junit.xml"),
+            ("head_report", "reports/head.xml"),
+            ("test_command", "cargo test -- --list"),
+        ] {
+            let with = format!("[gates.test-floor]\nmin_tests = 4\n{key} = \"{value}\"\n");
+            let found = said("[gates.test-floor]\nmin_tests = 4\n", &with);
+            assert_eq!(found.len(), 1, "{found:?}");
+            assert!(
+                found[0].starts_with(&format!(
+                    "test-floor: `{key}` changed from unset to \"{value}\" ("
+                )) && found[0].contains("a basis the base ref did not use"),
+                "{found:?}"
+            );
+            // Unchanged on both sides, and removed (already judged).
+            assert!(said(&with, &with).is_empty());
+            assert_eq!(
+                said(&with, "[gates.test-floor]\nmin_tests = 4\n"),
+                [format!("test-floor: `{key}` removed (was \"{value}\")")]
+            );
+        }
+        // Controls: an optional evidence key whose absence means no check adds one, and
+        // `base_report` names what the head report is compared with, not what is counted.
+        assert!(said(
+            "",
+            "[gates.test-floor]\nconstant_file = \"a.rs\"\nconstant_name = \"N\"\n"
+        )
+        .is_empty());
+        let reports = "[gates.test-floor]\nhead_report = \"h.xml\"\n";
+        assert!(said(reports, &format!("{reports}base_report = \"b.xml\"\n")).is_empty());
+        // Every key judged this way is inventoried as counting on another basis.
+        for pair in ADDED_IS_ANOTHER_BASIS {
+            assert!(
+                OPTIONAL_EVIDENCE_KEYS
+                    .iter()
+                    .any(|(g, k, u)| (*g, *k) == *pair && *u == Unset::OtherBasis),
+                "{pair:?}"
+            );
         }
     }
 }

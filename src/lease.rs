@@ -96,6 +96,42 @@ fn safe_key(name: &str) -> String {
 }
 
 /// The lease key of the linked worktree named `name`, as [`open`] names it.
+/// Text a lease or the repository supplies, quoted in a message of the lease commands,
+/// the lease guard or the pre-tool hook: one code span on one line, with no control
+/// character and a bounded length ([`crate::report::text::agent_span`]). The reader may
+/// be a coding agent, and an agent name, a session id or a branch can hold a sentence
+/// that reads as an instruction; inside the span it is data.
+pub fn quote(text: impl std::fmt::Display) -> String {
+    crate::report::text::agent_span(&text.to_string())
+}
+
+/// The session a lease names, quoted; `-` for a lease that names none.
+pub fn quote_session(session: &str) -> String {
+    quote(if session.is_empty() { "-" } else { session })
+}
+
+/// Whether `name` can be written into a command a message suggests: a branch name of
+/// letters, digits and `/ . _ -` only, which a shell reads as one word.
+pub fn plain_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 200
+        && !name.starts_with('-')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-'))
+}
+
+/// The command that takes `branch` from the lease that holds it, as a message suggests
+/// it. The command is the tool's own words, so it names the branch only when the name is
+/// a plain one ([`plain_name`]); otherwise it shows `<branch>`.
+pub fn take_command(branch: &str) -> String {
+    if plain_name(branch) {
+        format!("`discipline lease take --branch {branch} --steal`")
+    } else {
+        "`discipline lease take --branch <branch> --steal`".to_string()
+    }
+}
+
 pub fn key_of(name: &str) -> String {
     safe_key(name)
 }
@@ -273,13 +309,11 @@ impl Store {
             if !steal {
                 for b in clash {
                     refused.push(format!(
-                        "`{b}` is leased by worktree `{other}` ({} session {}, heartbeat {}s ago)",
-                        held.agent,
-                        if held.session.is_empty() {
-                            "-"
-                        } else {
-                            &held.session
-                        },
+                        "{} is leased by worktree {} ({} session {}, heartbeat {}s ago)",
+                        quote(b),
+                        quote(other),
+                        quote(&held.agent),
+                        quote_session(&held.session),
                         now - held.heartbeat
                     ));
                 }

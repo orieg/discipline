@@ -242,6 +242,12 @@ pub fn worktrees(dir: &Path) -> anyhow::Result<Worktrees> {
     })
 }
 
+/// Text from the payload, the repository or the lease store, quoted in a refusal
+/// ([`crate::lease::quote`]): a path, a command word, a branch or a session id.
+fn q(text: impl std::fmt::Display) -> String {
+    crate::lease::quote(text)
+}
+
 /// What the check decided.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
@@ -271,8 +277,8 @@ pub fn judge(call: &ToolCall, cwd: &Path, scene: &Scene) -> Verdict {
     }
     if call.targets.is_empty() {
         return Verdict::Deny(format!(
-            "discipline could not read which file the `{}` call edits, so it cannot tell whether the edit stays in this session's worktree; it is refused",
-            call.tool
+            "discipline could not read which file the {} call edits, so it cannot tell whether the edit stays in this session's worktree; it is refused",
+            q(&call.tool)
         ));
     }
     let here = scene
@@ -288,10 +294,11 @@ pub fn judge(call: &ToolCall, cwd: &Path, scene: &Scene) -> Verdict {
         };
         if Some(key) != here.map(|(k, _)| k) {
             return Verdict::Deny(format!(
-                "`{}` is in worktree `{key}` ({}), not in this session's worktree `{}`. Each session edits only its own worktree; ask the session working in `{key}` to make this change, or make it in a worktree of your own",
-                path.display(),
-                root.display(),
-                scene.worktrees.here
+                "{} is in worktree {key} ({}), not in this session's worktree {}. Each session edits only its own worktree; ask the session working in {key} to make this change, or make it in a worktree of your own",
+                q(path.display()),
+                q(root.display()),
+                q(&scene.worktrees.here),
+                key = q(key)
             ));
         }
         if let Some((_, lease)) = scene.leases.iter().find(|(k, _)| k == key) {
@@ -302,10 +309,11 @@ pub fn judge(call: &ToolCall, cwd: &Path, scene: &Scene) -> Verdict {
                     .is_some_and(|s| !s.is_empty() && s != lease.session);
             if other_session {
                 return Verdict::Deny(format!(
-                    "worktree `{key}` is leased by {} session {}; this session ({}) may not edit it. Hand the work over, or take the worktree's lease with `discipline lease take --steal`",
-                    lease.agent,
-                    lease.session,
-                    call.session.as_deref().unwrap_or("-")
+                    "worktree {} is leased by {} session {}; this session ({}) may not edit it. Hand the work over, or take the worktree's lease with `discipline lease take --steal`",
+                    q(key),
+                    q(&lease.agent),
+                    q(&lease.session),
+                    q(call.session.as_deref().unwrap_or("-"))
                 ));
             }
         }
@@ -314,7 +322,8 @@ pub fn judge(call: &ToolCall, cwd: &Path, scene: &Scene) -> Verdict {
                 let rel = rel.to_string_lossy().replace('\\', "/");
                 if f.matches(&rel) {
                     return Verdict::Deny(format!(
-                        "`{rel}` matches `scope-confinement`'s forbidden_paths; this repository does not let an agent edit it"
+                        "{} matches `scope-confinement`'s forbidden_paths; this repository does not let an agent edit it",
+                        q(&rel)
                     ));
                 }
             }
@@ -447,7 +456,8 @@ pub fn run_with(agent: Agent, stdin: &str, observe: bool, if_configured: bool) -
     let (verdict, root) = decided.unwrap_or_else(|e| {
         let v = if call.edits || call.command.is_some() {
             Verdict::Deny(format!(
-                "discipline could not check where this edit goes ({e:#}), so it is refused"
+                "discipline could not check where this edit goes ({}), so it is refused",
+                q(format!("{e:#}"))
             ))
         } else {
             Verdict::Allow
@@ -481,7 +491,11 @@ fn finish(agent: Agent, verdict: &Verdict, observe: bool, root: Option<&Path>) -
                 if let Err(e) = written {
                     return HookOutput {
                         stdout: String::new(),
-                        stderr: format!("discipline (observe mode): would refuse: {reason}\n(could not write {}: {e})\n", log.display()),
+                        stderr: format!(
+                            "discipline (observe mode): would refuse: {reason}\n(could not write {}: {})\n",
+                            q(log.display()),
+                            q(&e)
+                        ),
                         code: 0,
                     };
                 }
@@ -670,9 +684,10 @@ pub fn judge_shell(cmd: &str, cwd: &Path, scene: &Scene) -> Verdict {
     };
     let other_wt = |what: &str, key: &str, root: &Path| {
         Verdict::Deny(format!(
-            "this command {what} worktree `{key}` ({}), not this session's worktree `{}`. Each session works only in its own worktree; ask the session working in `{key}`, or use a worktree of your own",
-            root.display(),
-            scene.worktrees.here
+            "this command {what} worktree {key} ({}), not this session's worktree {}. Each session works only in its own worktree; ask the session working in {key}, or use a worktree of your own",
+            q(root.display()),
+            q(&scene.worktrees.here),
+            key = q(key)
         ))
     };
     // Commands in source order; `cd` moves the directory the later ones run in.
@@ -795,7 +810,11 @@ pub fn judge_shell(cmd: &str, cwd: &Path, scene: &Scene) -> Verdict {
                         let sub = sub.unwrap_or_default();
                         if let Some((key, root)) = elsewhere {
                             if !GIT_READ_ONLY.contains(&sub.as_str()) {
-                                return other_wt(&format!("runs `git {sub}` in"), &key, &root);
+                                return other_wt(
+                                    &format!("runs {} in", q(format!("git {sub}"))),
+                                    &key,
+                                    &root,
+                                );
                             }
                         }
                         if sub == "push" {
@@ -855,10 +874,14 @@ fn judge_push(args: &[tree_sitter::Node], cmd: &str, scene: &Scene) -> Option<Ve
             .iter()
             .find(|(k, l)| *k != scene.worktrees.here && l.branches.contains(&b))
         {
+            // The command to run names the branch only when the name is one plain word.
+            let take = crate::lease::take_command(&b);
             return Some(Verdict::Deny(format!(
-                "this command force-pushes `{b}`, which worktree `{key}` has leased ({} session {}). Hand the work over, or take the branch with `discipline lease take --branch {b} --steal`",
-                lease.agent,
-                if lease.session.is_empty() { "-" } else { &lease.session }
+                "this command force-pushes {}, which worktree {} has leased ({} session {}). Hand the work over, or take the branch with {take}",
+                q(&b),
+                q(key),
+                q(&lease.agent),
+                q(if lease.session.is_empty() { "-" } else { &lease.session })
             )));
         }
     }
@@ -936,8 +959,10 @@ pub fn session_start_with(agent: Agent, stdin: &str, if_configured: bool) -> Hoo
         if let Some((_, held)) = store.list()?.into_iter().find(|(k, _)| *k == here.key) {
             if held.is_live(now) && !held.session.is_empty() && held.session != session {
                 return Ok(format!(
-                    "discipline: worktree `{}` is leased by {} session {}; this session did not take it, and its edits here will be refused until that lease is released or goes stale\n",
-                    here.key, held.agent, held.session
+                    "discipline: worktree {} is leased by {} session {}; this session did not take it, and its edits here will be refused until that lease is released or goes stale\n",
+                    q(&here.key),
+                    q(&held.agent),
+                    q(&held.session)
                 ));
             }
         }
@@ -956,8 +981,9 @@ pub fn session_start_with(agent: Agent, stdin: &str, if_configured: bool) -> Hoo
             Err(e) if !branches.is_empty() => {
                 store.take(&here.key, lease(Vec::new()), now, false)?;
                 Ok(format!(
-                    "discipline: this session leases worktree `{}` but not its branch: {e:#}\n",
-                    here.key
+                    "discipline: this session leases worktree {} but not its branch: {}\n",
+                    q(&here.key),
+                    q(format!("{e:#}"))
                 ))
             }
             Err(e) => Err(e),
@@ -965,7 +991,10 @@ pub fn session_start_with(agent: Agent, stdin: &str, if_configured: bool) -> Hoo
     })();
     pass(match result {
         Ok(note) => note,
-        Err(e) => format!("discipline: could not take this worktree's lease: {e:#}\n"),
+        Err(e) => format!(
+            "discipline: could not take this worktree's lease: {}\n",
+            q(format!("{e:#}"))
+        ),
     })
 }
 
@@ -1148,7 +1177,7 @@ mod tests {
         };
         let v = judge(&edit("a.txt", "s-me"), &cwd, &scene);
         assert!(
-            matches!(&v, Verdict::Deny(r) if r.contains("leased by copilot session s-other")),
+            matches!(&v, Verdict::Deny(r) if r.contains("leased by `copilot` session `s-other`")),
             "{v:?}"
         );
         assert_eq!(
@@ -1730,7 +1759,7 @@ mod tests {
         };
         let v = judge(&edit("r\u{e9}sum\u{e9}.txt", "s-me"), &cwd, &leased);
         assert!(
-            matches!(&v, Verdict::Deny(r) if r.contains("leased by copilot session s-other")),
+            matches!(&v, Verdict::Deny(r) if r.contains("leased by `copilot` session `s-other`")),
             "{v:?}"
         );
         assert_eq!(
