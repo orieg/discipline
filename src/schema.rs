@@ -51,6 +51,7 @@ pub fn generate_schema() -> Value {
             "toolchain-config" => "#/$defs/BasicGate",
             "sandbox-config" => "#/$defs/BasicGate",
             "stub-bodies" => "#/$defs/BasicGate",
+            "harness-tampering" => "#/$defs/BasicGate",
             "error-swallowing" => "#/$defs/ErrorSwallowingGate",
             "instruction-smuggling" => "#/$defs/InstructionSmugglingGate",
             "build-hooks" => "#/$defs/BasicGate",

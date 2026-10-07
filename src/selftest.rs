@@ -1144,6 +1144,114 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "harness-tampering: a TestMain that drops m.Run()'s result before os.Exit is read, os.Exit(m.Run()) is not",
+        || {
+            use crate::ast::harness::{go_test_file, Form};
+            let main = |body: &str| -> anyhow::Result<Vec<Form>> {
+                let src = format!("package p\n\nfunc TestMain(m *testing.M) {{\n{body}}}\n");
+                let file = go_test_file(&src).map_err(|e| anyhow::anyhow!(e))?;
+                Ok(file.scan.sites.iter().map(|s| s.form).collect())
+            };
+            Ok(main("\tm.Run()\n\tos.Exit(0)\n")? == vec![Form::GoResultDiscarded]
+                && main("\tos.Exit(0)\n")? == vec![Form::GoRunNeverCalled]
+                && main("\tos.Exit(m.Run())\n")?.is_empty()
+                && main("\tcode := m.Run()\n\tteardown()\n\tos.Exit(code)\n")?.is_empty()
+                && main("\tm.Run()\n")?.is_empty())
+        },
+    ),
+    (
+        "harness-tampering: a pytest hook that assigns an outcome or empties items is read, one that reads or sorts is not",
+        || {
+            use crate::ast::harness::{python, Form, PythonChecks};
+            let hooks = PythonChecks { hooks: true, ..PythonChecks::default() };
+            let forms = |src: &str| -> anyhow::Result<Vec<Form>> {
+                let scan = python(src, hooks).map_err(|e| anyhow::anyhow!(e))?;
+                Ok(scan.sites.iter().map(|s| s.form).collect())
+            };
+            Ok(forms("def pytest_runtest_logreport(report):\n    report.outcome = \"passed\"\n")?
+                == vec![Form::PytestOutcomeAssigned]
+                && forms("def pytest_runtest_logreport(report):\n    seen.append(report.outcome)\n")?.is_empty()
+                && forms("def pytest_collection_modifyitems(config, items):\n    items[:] = []\n")?
+                    == vec![Form::PytestItemsRemoved]
+                && forms("def pytest_collection_modifyitems(config, items):\n    items.sort(key=str)\n")?.is_empty()
+                && forms("def pytest_collection_modifyitems(config, items):\n    items[:] = [i for i in items if i.get_closest_marker(\"fast\")]\n")?.is_empty())
+        },
+    ),
+    (
+        "harness-tampering: a unittest result method assigned or overridden by an empty body is read, an override that calls super is not",
+        || {
+            use crate::ast::harness::{python, Form, PythonChecks};
+            let unittest = PythonChecks { unittest: true, ..PythonChecks::default() };
+            let forms = |src: &str| -> anyhow::Result<Vec<Form>> {
+                let scan = python(src, unittest).map_err(|e| anyhow::anyhow!(e))?;
+                Ok(scan.sites.iter().map(|s| s.form).collect())
+            };
+            Ok(forms("unittest.TestResult.addFailure = quiet\n")? == vec![Form::UnittestMethodAssigned]
+                && forms("class Q(unittest.TestResult):\n    def addError(self, test, err):\n        pass\n")?
+                    == vec![Form::UnittestMethodNeutralised]
+                && forms("class Q(unittest.TestResult):\n    def addError(self, test, err):\n        super().addError(test, err)\n")?.is_empty()
+                && forms("ok = result.wasSuccessful()\n")?.is_empty())
+        },
+    ),
+    (
+        "harness-tampering: an exit with status zero and no condition is read in each language, a non-zero or conditional one is not",
+        || {
+            use crate::ast::harness::{js_exit_zero, python, rust_exit_zero, PythonChecks};
+            let exit = PythonChecks { exit: true, ..PythonChecks::default() };
+            let py = |src: &str| python(src, exit).map(|s| s.sites.len());
+            let js = |src: &str| js_exit_zero("setup.js", src).map(|s| s.sites.len());
+            let rs = |src: &str| rust_exit_zero(src).map(|s| s.sites.len());
+            let read = [
+                py("import os\nos._exit(0)\n"),
+                py("import sys\nsys.exit(0)\n"),
+                js("module.exports = async () => {\n  process.exit(0);\n};\n"),
+                rs("fn main() {\n    std::process::exit(0);\n}\n"),
+            ];
+            let not_read = [
+                py("import sys\nsys.exit(1)\n"),
+                py("import sys\nif done:\n    sys.exit(0)\n"),
+                js("process.exit(1);\n"),
+                js("if (done) {\n  process.exit(0);\n}\n"),
+                js("process.on('SIGINT', () => process.exit(0));\n"),
+                rs("fn main() {\n    std::process::exit(1);\n}\n"),
+                rs("fn main() {\n    if done() {\n        std::process::exit(0);\n    }\n}\n"),
+            ];
+            Ok(read.iter().all(|r| r == &Ok(1)) && not_read.iter().all(|r| r == &Ok(0)))
+        },
+    ),
+    (
+        "harness-tampering: a harness file is known by its name or a configuration, and only added forms are new",
+        || {
+            use crate::ast::harness::{Form, Site};
+            use crate::ast::runner_collection::ConfiguredHarness;
+            use crate::guards::harness_tampering::{new_sites, roles};
+            let registry = crate::ast::default_registry();
+            let files = [
+                ("web/jest.config.json", "{\"globalTeardown\": \"./test/teardown.js\"}"),
+                ("web/test/teardown.js", ""),
+                ("web/test/other.js", ""),
+            ];
+            let tracked: Vec<String> = files.iter().map(|(path, _)| path.to_string()).collect();
+            let configured = ConfiguredHarness::from_tree(
+                |path| files.iter().find(|(p, _)| *p == path).map(|(_, src)| src.to_string()),
+                &tracked,
+            );
+            let is_harness = |path: &str| roles(path, &configured, &registry, &[]).any();
+            let site = |subject: &str| Site {
+                form: Form::ExitZero,
+                line: 1,
+                subject: subject.to_string(),
+                what: String::new(),
+            };
+            Ok(is_harness("pkg/conftest.py")
+                && is_harness("web/test/teardown.js")
+                && !is_harness("web/test/other.js")
+                && !is_harness("src/harness_setup.py")
+                && new_sites(&[site("teardown")], vec![site("teardown")]).is_empty()
+                && new_sites(&[site("teardown")], vec![site("teardown"), site("setup")]).len() == 1)
+        },
+    ),
+    (
         "mocks: an interaction check counts as a mock assertion, an equality check does not",
         || {
             let v = AssertVocabulary::default();

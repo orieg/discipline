@@ -1648,6 +1648,14 @@
           ],
           "description": "prevents stealth edits to committed golden/test output files without explicit override"
         },
+        "harness-tampering": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/BasicGate"
+            }
+          ],
+          "description": "a file the test runner loads does not make a failing run pass"
+        },
         "ignored-tests": {
           "allOf": [
             {

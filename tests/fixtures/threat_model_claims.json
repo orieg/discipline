@@ -947,6 +947,17 @@
       "verdict": "holds"
     },
     {
+      "id": "gate-harness-tampering",
+      "category": "gates",
+      "claim": "a change that adds one of the listed forms to a file the test runner loads is reported (exact forms, no value-flow analysis; the gate is off until enabled)",
+      "source": "docs/GATES.md:harness-tampering",
+      "code": "src/guards/harness_tampering.rs:harness_tampering",
+      "pinning_tests": [
+        "tests/test_harness_tampering.rs::each_exact_form_is_reported_at_its_severity_and_no_near_miss_is"
+      ],
+      "verdict": "holds"
+    },
+    {
       "id": "gate-error-swallowing",
       "category": "gates",
       "claim": "no new empty error handler or discarded Result outside tests",

@@ -17,6 +17,7 @@ pub mod confusables;
 mod confusables_tests;
 pub mod dependency;
 pub mod error_swallowing;
+pub mod harness_tampering;
 pub mod hygiene;
 pub mod instruction_smuggling;
 pub mod integrity;
@@ -1010,6 +1011,7 @@ pub fn run_checks(
             "toolchain-config" => toolchain_config::toolchain_config(ctx),
             "sandbox-config" => sandbox_config::sandbox_config(ctx),
             "stub-bodies" => stub_bodies::stub_bodies(ctx),
+            "harness-tampering" => harness_tampering::harness_tampering(ctx),
             "error-swallowing" => error_swallowing::error_swallowing(ctx),
             "instruction-smuggling" => instruction_smuggling::instruction_smuggling(ctx),
             "build-hooks" => build_hooks::build_hooks(ctx),
@@ -1140,6 +1142,8 @@ pub fn run_checks(
             "error-swallowing"
         } else if note.contains("allow-stub") {
             "stub-bodies"
+        } else if note.contains("allow-harness-tampering") {
+            "harness-tampering"
         } else if note.contains("allow-toolchain-weakening") {
             "toolchain-config"
         } else if note.contains("allow-sandbox-widening") {
@@ -1174,6 +1178,7 @@ pub fn run_checks(
                         | "toolchain-config"
                         | "sandbox-config"
                         | "stub-bodies"
+                        | "harness-tampering"
                         | "error-swallowing"
                         | "instruction-smuggling"
                         | "commit-provenance"
@@ -2058,6 +2063,7 @@ mod tests {
             "suppression-delta",
             "error-swallowing",
             "stub-bodies",
+            "harness-tampering",
             "scope-confinement",
             "ratified-paths",
             "review-threads",

@@ -21,10 +21,11 @@ use super::gitattributes::{wildmatch, GitAttributes};
 use super::go_build::{go_build_constraint, go_build_constraint_line, GoBuild};
 use super::go_work::{parse_go_work, GoWork};
 use super::runner_config::{
-    imports_node_test, parse_conftest, parse_deno_config, parse_vitest_config, plain_semver_major,
-    read_jest_scripts, scripts_run_node_test, ConftestIgnores, DenoTest, VitestConfig,
+    imports_node_test, jest_setup_files, parse_conftest, parse_deno_config, parse_vitest_config,
+    plain_semver_major, read_jest_scripts, script_setup_files, scripts_run_node_test,
+    ConftestIgnores, DenoTest, SetupFiles, VitestConfig,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use tree_sitter::Node;
 
 /// Matches pattern against text using globset with literal_separator disabled.
@@ -1697,6 +1698,10 @@ pub struct CargoTestTarget {
     /// `test` and `harness` both left on: `cargo test` builds the target with the test
     /// harness, so its `#[test]` functions run.
     pub runs: bool,
+    /// `test` left on: `cargo test` builds and runs the target.
+    pub tested: bool,
+    /// `harness` left on. With it off, the target's own `main` is the test run.
+    pub harness: bool,
 }
 
 impl CargoTestTarget {
@@ -2311,6 +2316,8 @@ impl RustCollectionRules {
                         .map(str::to_string),
                     path: path_of(t),
                     runs: flag(t, "test") && flag(t, "harness"),
+                    tested: flag(t, "test"),
+                    harness: flag(t, "harness"),
                 })
                 .collect(),
             has_binary: (!tables("bin").is_empty()).then_some(true),
@@ -3363,6 +3370,191 @@ fn go_tool_ignores(norm: &str) -> bool {
     })
 }
 
+/// The files a runner loads around the tests because of where they are or what they are
+/// called, read from the path alone: the name is how the runner finds them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NamedHarness {
+    /// A `conftest.py`: pytest imports each one in the directories it collects.
+    Conftest,
+    /// `sitecustomize.py` / `usercustomize.py`: the interpreter imports the one on its
+    /// path when it starts.
+    PythonStartup,
+    /// A `_test.go` file the go tool does not ignore: where a package's `TestMain` is.
+    GoTest,
+    /// A Jest or Vitest configuration written as code, which the runner executes.
+    JsRunnerConfig,
+}
+
+/// What kind of harness file `path` is by its name, if any.
+pub fn named_harness(path: &str) -> Option<NamedHarness> {
+    let norm = path.replace('\\', "/");
+    let name = norm.rsplit('/').next().unwrap_or(&norm);
+    match name {
+        "conftest.py" => Some(NamedHarness::Conftest),
+        "sitecustomize.py" | "usercustomize.py" => Some(NamedHarness::PythonStartup),
+        _ if name.ends_with("_test.go") && !go_tool_ignores(&norm) => Some(NamedHarness::GoTest),
+        _ if is_script_config(name, &["jest.config", "vitest.config", "vite.config"])
+            && !format!("/{norm}").contains("/node_modules/") =>
+        {
+            Some(NamedHarness::JsRunnerConfig)
+        }
+        _ => None,
+    }
+}
+
+/// A runner configuration whose list of harness files could not be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreadHarnessConfig {
+    /// The configuration file.
+    pub config: String,
+    /// Its directory (empty for the repository root): the files below it may be loaded.
+    pub dir: String,
+    /// The extensions of the files it could name.
+    pub extensions: &'static [&'static str],
+}
+
+/// The files a runner loads around the tests because a tracked configuration names
+/// them: the set-up and global set-up / tear-down files of a Jest or Vitest
+/// configuration, and the root file of each Cargo test target.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConfiguredHarness {
+    /// Each JavaScript or TypeScript set-up file, with the configuration that names it.
+    pub js_setup: BTreeMap<String, String>,
+    /// The root file of each Cargo test target `cargo test` runs, with whether the
+    /// target sets `harness = false` (its `main` is then the whole test run).
+    pub rust_targets: BTreeMap<String, bool>,
+    /// The configurations whose list could not be read.
+    pub unread: Vec<UnreadHarnessConfig>,
+}
+
+const JS_HARNESS_EXTENSIONS: &[&str] = &["js", "ts", "mjs", "cjs", "mts", "cts", "jsx", "tsx"];
+
+/// The tracked file a set-up entry names. `<rootDir>/x`, `./x` and `x` resolve against
+/// `root`; an entry may leave out its extension or name a directory with an `index`
+/// file. `None` for a name that is no tracked file: a package, which is outside the
+/// repository.
+fn resolve_setup_entry(root: &str, entry: &str, tracked: &HashSet<&str>) -> Option<String> {
+    let rest = entry.strip_prefix("<rootDir>").unwrap_or(entry);
+    let path = clean_relative(&join_dir(root, rest.trim_start_matches('/')))?;
+    if tracked.contains(path.as_str()) {
+        return Some(path);
+    }
+    JS_HARNESS_EXTENSIONS
+        .iter()
+        .flat_map(|ext| [format!("{path}.{ext}"), format!("{path}/index.{ext}")])
+        .find(|candidate| tracked.contains(candidate.as_str()))
+}
+
+impl ConfiguredHarness {
+    /// Reads every Jest and Vitest configuration and every `Cargo.toml` among `tracked`
+    /// through `reader`.
+    pub fn from_tree<F>(mut reader: F, tracked: &[String]) -> Self
+    where
+        F: FnMut(&str) -> Option<String>,
+    {
+        let known: HashSet<&str> = tracked.iter().map(String::as_str).collect();
+        let mut harness = Self::default();
+        let mut packages: HashMap<String, CargoPackage> = HashMap::new();
+        for path in tracked {
+            let (dir, name) = match path.rfind('/') {
+                Some(i) => (&path[..i], &path[i + 1..]),
+                None => ("", path.as_str()),
+            };
+            if name == "Cargo.toml" {
+                match reader(path).map(|src| {
+                    let parses = toml::from_str::<toml::Value>(&src).is_ok();
+                    (parses, RustCollectionRules::parse_package(&src))
+                }) {
+                    Some((true, Some(package))) => {
+                        packages.insert(dir.to_string(), package);
+                    }
+                    Some((true, None)) => {}
+                    Some((false, _)) | None => harness.unread.push(UnreadHarnessConfig {
+                        config: path.clone(),
+                        dir: dir.to_string(),
+                        extensions: &["rs"],
+                    }),
+                }
+                continue;
+            }
+            if format!("/{path}").contains("/node_modules/") {
+                continue;
+            }
+            let json = |src: String, key: Option<&str>| {
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(&src) else {
+                    return SetupFiles::Dynamic;
+                };
+                match key {
+                    None => jest_setup_files(&value),
+                    Some(key) => match value.get(key) {
+                        Some(config) if config.is_object() => jest_setup_files(config),
+                        _ => SetupFiles::Literal {
+                            root: None,
+                            entries: Vec::new(),
+                        },
+                    },
+                }
+            };
+            let setup = match name {
+                "package.json" => reader(path).map(|src| json(src, Some("jest"))),
+                "jest.config.json" => reader(path).map(|src| json(src, None)),
+                _ if named_harness(path) == Some(NamedHarness::JsRunnerConfig) => {
+                    reader(path).map(|src| script_setup_files(name, &src))
+                }
+                _ => continue,
+            };
+            match setup {
+                Some(SetupFiles::Literal { root, entries }) => {
+                    let root = join_dir(dir, root.as_deref().unwrap_or(""));
+                    for entry in entries {
+                        if let Some(file) = resolve_setup_entry(&root, &entry, &known) {
+                            harness.js_setup.entry(file).or_insert_with(|| path.clone());
+                        }
+                    }
+                }
+                Some(SetupFiles::Dynamic) | None => harness.unread.push(UnreadHarnessConfig {
+                    config: path.clone(),
+                    dir: dir.to_string(),
+                    extensions: JS_HARNESS_EXTENSIONS,
+                }),
+            }
+        }
+        // The targets a manifest declares, then the ones Cargo finds by itself.
+        for (dir, package) in &packages {
+            for target in package.tests.iter().filter(|t| t.tested) {
+                let candidates = match (&target.path, &target.name) {
+                    (Some(path), _) => vec![path.clone()],
+                    (None, Some(name)) => {
+                        vec![format!("tests/{name}.rs"), format!("tests/{name}/main.rs")]
+                    }
+                    (None, None) => Vec::new(),
+                };
+                if let Some(root) = candidates
+                    .iter()
+                    .map(|rel| join_dir(dir, rel))
+                    .find(|path| known.contains(path.as_str()))
+                {
+                    harness.rust_targets.insert(root, !target.harness);
+                }
+            }
+        }
+        for path in tracked.iter().filter(|p| p.ends_with(".rs")) {
+            // Each `tests/` component may be the one a package's target roots are under.
+            let auto = path.match_indices("tests/").any(|(at, _)| {
+                let component = at == 0 || path[..at].ends_with('/');
+                let dir = path[..at].trim_end_matches('/');
+                component
+                    && is_auto_test_root(&path[at..])
+                    && packages.get(dir).is_some_and(|p| p.autotests)
+            });
+            if auto && !harness.rust_targets.contains_key(path) {
+                harness.rust_targets.insert(path.clone(), false);
+            }
+        }
+        harness
+    }
+}
+
 /// Why a file that imports `node:test` is not counted.
 const NODE_TEST_NOT_RUN: &str =
     "a file that imports `node:test` is run by `node --test`, which no script of the root `package.json` runs (it counts when `[tests] paths` names it)";
@@ -3496,6 +3688,176 @@ pub fn is_runner_collected(path: &str, vocab: &crate::ast::AssertVocabulary) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn configured_harness(files: &[(&str, &str)]) -> ConfiguredHarness {
+        let tracked: Vec<String> = files.iter().map(|(path, _)| path.to_string()).collect();
+        ConfiguredHarness::from_tree(
+            |path| {
+                files
+                    .iter()
+                    .find(|(p, _)| *p == path)
+                    .map(|(_, src)| src.to_string())
+            },
+            &tracked,
+        )
+    }
+
+    #[test]
+    fn harness_files_named_by_a_js_configuration_resolve_to_tracked_files() {
+        let harness = configured_harness(&[
+            (
+                "package.json",
+                r#"{"jest": {"setupFiles": ["<rootDir>/test/setup.js", "./test/env", "jest-extended/all", "missing.js"], "globalTeardown": "test/down"}}"#,
+            ),
+            ("test/setup.js", ""),
+            ("test/env.ts", ""),
+            ("test/down/index.mjs", ""),
+            ("test/unnamed.js", ""),
+            (
+                "web/jest.config.json",
+                r#"{"rootDir": "..", "globalSetup": "<rootDir>/shared/up.js"}"#,
+            ),
+            ("shared/up.js", ""),
+            (
+                "app/vitest.config.ts",
+                "export default { root: 'src', test: { setupFiles: ['./setup.ts'] } };\n",
+            ),
+            ("app/src/setup.ts", ""),
+            ("app/setup.ts", ""),
+            // Not read: a dependency's own configuration.
+            (
+                "node_modules/dep/jest.config.json",
+                r#"{"globalSetup": "./steal.js"}"#,
+            ),
+            ("node_modules/dep/steal.js", ""),
+            // A package manifest with no `jest` key names nothing.
+            ("lib/package.json", r#"{"name": "lib"}"#),
+        ]);
+        let named: Vec<(&str, &str)> = harness
+            .js_setup
+            .iter()
+            .map(|(file, config)| (file.as_str(), config.as_str()))
+            .collect();
+        assert_eq!(
+            named,
+            vec![
+                ("app/src/setup.ts", "app/vitest.config.ts"),
+                ("shared/up.js", "web/jest.config.json"),
+                ("test/down/index.mjs", "package.json"),
+                ("test/env.ts", "package.json"),
+                ("test/setup.js", "package.json"),
+            ]
+        );
+        assert!(harness.unread.is_empty(), "{:?}", harness.unread);
+        assert!(harness.rust_targets.is_empty());
+    }
+
+    #[test]
+    fn a_js_configuration_that_cannot_be_read_is_recorded_as_unread() {
+        let harness = configured_harness(&[
+            ("web/jest.config.js", "module.exports = make();\n"),
+            ("web/test/setup.js", ""),
+            ("api/package.json", "{ not json"),
+            ("ok/jest.config.json", "{}"),
+        ]);
+        assert!(harness.js_setup.is_empty());
+        let unread: Vec<(&str, &str)> = harness
+            .unread
+            .iter()
+            .map(|u| (u.config.as_str(), u.dir.as_str()))
+            .collect();
+        assert_eq!(
+            unread,
+            vec![("web/jest.config.js", "web"), ("api/package.json", "api")]
+        );
+        assert!(harness.unread[0].extensions.contains(&"ts"));
+    }
+
+    #[test]
+    fn the_root_of_each_cargo_test_target_cargo_runs_is_a_harness_file() {
+        let package = "[package]\nname = \"p\"\nversion = \"0.1.0\"\n";
+        let harness = configured_harness(&[
+            (
+                "Cargo.toml",
+                &format!("{package}\n[[test]]\nname = \"own\"\npath = \"checks/own.rs\"\nharness = false\n\n[[test]]\nname = \"named\"\n\n[[test]]\nname = \"off\"\npath = \"checks/off.rs\"\ntest = false\n\n[[test]]\nname = \"gone\"\npath = \"checks/gone.rs\"\n"),
+            ),
+            ("checks/own.rs", ""),
+            ("checks/off.rs", ""),
+            ("tests/named/main.rs", ""),
+            ("tests/it.rs", ""),
+            ("tests/common/mod.rs", ""),
+            ("tests/data/sample.txt", ""),
+            ("src/main.rs", ""),
+            ("benches/b.rs", ""),
+            // A nested package with automatic targets off, and one with none declared.
+            (
+                "crates/a/Cargo.toml",
+                "[package]\nname = \"a\"\nversion = \"0.1.0\"\nautotests = false\n",
+            ),
+            ("crates/a/tests/skipped.rs", ""),
+            ("crates/b/Cargo.toml", package),
+            ("crates/b/tests/tests/main.rs", ""),
+            ("crates/b/tests/deep/inner/main.rs", ""),
+            // A directory with no manifest of its own is no package.
+            ("tools/tests/loose.rs", ""),
+            // A workspace manifest declares no target.
+            ("ws/Cargo.toml", "[workspace]\nmembers = []\n"),
+            ("ws/tests/none.rs", ""),
+        ]);
+        let targets: Vec<(&str, bool)> = harness
+            .rust_targets
+            .iter()
+            .map(|(file, own_main)| (file.as_str(), *own_main))
+            .collect();
+        assert_eq!(
+            targets,
+            vec![
+                ("checks/own.rs", true),
+                ("crates/b/tests/tests/main.rs", false),
+                ("tests/it.rs", false),
+                ("tests/named/main.rs", false),
+            ]
+        );
+        assert!(harness.unread.is_empty());
+
+        let broken =
+            configured_harness(&[("svc/Cargo.toml", "[package\n"), ("svc/tests/it.rs", "")]);
+        assert!(broken.rust_targets.is_empty());
+        assert_eq!(broken.unread.len(), 1);
+        assert_eq!(
+            (broken.unread[0].dir.as_str(), broken.unread[0].extensions),
+            ("svc", &["rs"][..])
+        );
+    }
+
+    #[test]
+    fn a_harness_file_by_name_is_what_its_runner_looks_for() {
+        for (path, kind) in [
+            ("conftest.py", Some(NamedHarness::Conftest)),
+            ("a/b/conftest.py", Some(NamedHarness::Conftest)),
+            ("sitecustomize.py", Some(NamedHarness::PythonStartup)),
+            ("env/usercustomize.py", Some(NamedHarness::PythonStartup)),
+            ("pkg/x_test.go", Some(NamedHarness::GoTest)),
+            ("vendor/x_test.go", Some(NamedHarness::GoTest)),
+            ("web/jest.config.cjs", Some(NamedHarness::JsRunnerConfig)),
+            ("vitest.config.mts", Some(NamedHarness::JsRunnerConfig)),
+            ("vite.config.ts", Some(NamedHarness::JsRunnerConfig)),
+            ("my_conftest.py", None),
+            ("conftest.pyi", None),
+            ("conftest/x.py", None),
+            ("pkg/testdata/x_test.go", None),
+            ("pkg/_x_test.go", None),
+            ("vendor/dep/x_test.go", None),
+            ("pkg/x_test.go.txt", None),
+            ("jest.config.json", None),
+            ("jest.config.js.bak", None),
+            ("node_modules/a/vitest.config.ts", None),
+            ("jest.setup.js", None),
+            ("test/setup.js", None),
+        ] {
+            assert_eq!(named_harness(path), kind, "{path}");
+        }
+    }
 
     #[test]
     fn test_pytest_defaults_and_custom() {

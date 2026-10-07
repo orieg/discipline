@@ -669,7 +669,7 @@ pub enum ConftestIgnores {
 const CONFTEST_NAMES: &[&str] = &["collect_ignore", "collect_ignore_glob"];
 
 /// The value of a Python string literal with no prefix, escape or interpolation.
-fn python_string(node: Node, src: &[u8]) -> Option<String> {
+pub(crate) fn python_string(node: Node, src: &[u8]) -> Option<String> {
     if node.kind() != "string" {
         return None;
     }
@@ -802,9 +802,346 @@ pub fn parse_conftest(source: &str) -> ConftestIgnores {
     }
 }
 
+/// The files a Jest or Vitest configuration has the runner load around the tests: set-up
+/// files, and global set-up and tear-down modules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SetupFiles {
+    /// Each entry as written. `root` is Jest's `rootDir` or Vitest's `root` as written:
+    /// the directory, relative to the configuration's own, that entries resolve against.
+    Literal {
+        root: Option<String>,
+        entries: Vec<String>,
+    },
+    /// The configuration, or one of the keys that name these files, is computed.
+    Dynamic,
+}
+
+/// The Jest keys that name a file the runner loads around the tests.
+const JEST_SETUP_KEYS: &[&str] = &[
+    "setupFiles",
+    "setupFilesAfterEnv",
+    "globalSetup",
+    "globalTeardown",
+];
+/// The same for a Vitest `test` block.
+const VITEST_SETUP_KEYS: &[&str] = &["setupFiles", "globalSetup"];
+
+/// Reads the set-up files of a Jest configuration given as JSON: `jest.config.json`, or
+/// the `jest` key of a `package.json`. A configuration with `projects` is not read: each
+/// project has its own lists.
+pub fn jest_setup_files(config: &serde_json::Value) -> SetupFiles {
+    let Some(table) = config.as_object() else {
+        return SetupFiles::Dynamic;
+    };
+    if table.get("projects").is_some_and(|p| !p.is_null()) {
+        return SetupFiles::Dynamic;
+    }
+    let root = match table.get("rootDir") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(dir)) => Some(dir.clone()),
+        Some(_) => return SetupFiles::Dynamic,
+    };
+    let mut entries = Vec::new();
+    for key in JEST_SETUP_KEYS {
+        match table.get(*key) {
+            None | Some(serde_json::Value::Null) => {}
+            Some(serde_json::Value::String(entry)) => entries.push(entry.clone()),
+            Some(list @ serde_json::Value::Array(_)) => match json_strings(list) {
+                Some(listed) => entries.extend(listed),
+                None => return SetupFiles::Dynamic,
+            },
+            Some(_) => return SetupFiles::Dynamic,
+        }
+    }
+    SetupFiles::Literal { root, entries }
+}
+
+/// The object literal a configuration file exports, through what commonly wraps it:
+/// `defineConfig(...)`, a type assertion (`as`, `satisfies`), parentheses, and a name
+/// bound once by `const` at the top level and used nowhere else (`const config = {...};
+/// export default config`).
+fn js_exported_object<'a>(root: Node<'a>, src: &[u8]) -> Option<Node<'a>> {
+    let mut export = js_default_export(root, src)?;
+    // Each step moves to a strictly smaller node or to one declaration, so this ends.
+    let mut resolved_name = false;
+    loop {
+        match export.kind() {
+            "object" => return Some(export),
+            "parenthesized_expression" | "as_expression" | "satisfies_expression" => {
+                export = export.named_child(0)?;
+            }
+            "call_expression" => {
+                let function = export.child_by_field_name("function")?;
+                if function.kind() != "identifier" || text(function, src) != "defineConfig" {
+                    return None;
+                }
+                let arguments = export.child_by_field_name("arguments")?;
+                if arguments.named_child_count() != 1 {
+                    return None;
+                }
+                export = arguments.named_child(0)?;
+            }
+            "identifier" if !resolved_name => {
+                resolved_name = true;
+                let name = text(export, src);
+                // The name is bound once, by `const`, and used nowhere but in the
+                // export: an object that is assigned to or built up afterwards is not
+                // the literal it was declared as.
+                let mut uses = 0;
+                let mut stack = vec![root];
+                while let Some(node) = stack.pop() {
+                    if node.kind() == "identifier" && text(node, src) == name {
+                        uses += 1;
+                    }
+                    let mut cursor = node.walk();
+                    stack.extend(node.children(&mut cursor));
+                }
+                if uses != 2 {
+                    return None;
+                }
+                let mut bound = None;
+                let mut cursor = root.walk();
+                for statement in root.named_children(&mut cursor) {
+                    let is_const = statement.kind() == "lexical_declaration"
+                        && statement
+                            .child_by_field_name("kind")
+                            .is_some_and(|kind| text(kind, src) == "const");
+                    if !is_const {
+                        continue;
+                    }
+                    let mut inner = statement.walk();
+                    for declarator in statement.named_children(&mut inner) {
+                        let named = declarator
+                            .child_by_field_name("name")
+                            .is_some_and(|n| n.kind() == "identifier" && text(n, src) == name);
+                        if named {
+                            bound = Some(declarator.child_by_field_name("value")?);
+                        }
+                    }
+                }
+                export = bound?;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Reads the set-up files of a configuration written as code: `jest.config.*`, whose
+/// keys are at the top of the exported object, or `vitest.config.*` / `vite.config.*`,
+/// whose keys are in its `test` block. Only the literal case is read: an exported
+/// object literal (see [`js_exported_object`]) whose set-up keys are string literals or
+/// arrays of them.
+pub fn script_setup_files(file_name: &str, source: &str) -> SetupFiles {
+    let typescript = [".ts", ".mts", ".cts"]
+        .iter()
+        .any(|ext| file_name.ends_with(ext));
+    let language: tree_sitter::Language = if typescript {
+        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+    } else {
+        tree_sitter_javascript::LANGUAGE.into()
+    };
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&language).is_err() {
+        return SetupFiles::Dynamic;
+    }
+    let Ok(tree) = crate::ast::source_text::parse(&mut parser, source) else {
+        return SetupFiles::Dynamic;
+    };
+    let root = tree.root_node();
+    if root.has_error() {
+        return SetupFiles::Dynamic;
+    }
+    let jest = file_name.starts_with("jest.config.");
+    read_script_setup_files(root, source.as_bytes(), jest).unwrap_or(SetupFiles::Dynamic)
+}
+
+fn read_script_setup_files(root: Node, src: &[u8], jest: bool) -> Option<SetupFiles> {
+    let top = js_object_pairs(js_exported_object(root, src)?, src)?;
+    let (keys, table, root_key) = if jest {
+        (JEST_SETUP_KEYS, top, "rootDir")
+    } else {
+        let mut test = None;
+        let mut top_root = None;
+        for (key, value) in &top {
+            match key.as_str() {
+                "test" => test = Some(*value),
+                "root" => top_root = Some(*value),
+                _ => {}
+            }
+        }
+        let Some(test) = test else {
+            return Some(SetupFiles::Literal {
+                root: None,
+                entries: Vec::new(),
+            });
+        };
+        let mut table = js_object_pairs(test, src)?;
+        if !table.iter().any(|(key, _)| key == "root") {
+            table.extend(top_root.map(|value| ("root".to_string(), value)));
+        }
+        (VITEST_SETUP_KEYS, table, "root")
+    };
+    let mut dir = None;
+    let mut entries = Vec::new();
+    for (key, value) in table {
+        if key == root_key {
+            dir = Some(js_string(value, src)?);
+        } else if key == "projects" || key == "workspace" {
+            return None;
+        } else if keys.contains(&key.as_str()) {
+            match value.kind() {
+                "string" => entries.push(js_string(value, src)?),
+                "array" => entries.extend(js_string_array(value, src)?),
+                _ => return None,
+            }
+        }
+    }
+    Some(SetupFiles::Literal { root: dir, entries })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn setup(root: Option<&str>, entries: &[&str]) -> SetupFiles {
+        SetupFiles::Literal {
+            root: root.map(str::to_string),
+            entries: entries.iter().map(|e| e.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn jest_setup_files_are_read_from_json_and_refused_when_not_literal() {
+        let read = |json: &str| jest_setup_files(&serde_json::from_str(json).unwrap());
+        assert_eq!(
+            read(
+                r#"{"rootDir": "web", "setupFiles": ["./a.js", "<rootDir>/b.js"], "setupFilesAfterEnv": ["c"], "globalSetup": "./up.js", "globalTeardown": "./down.js", "testMatch": ["**/*.js"]}"#
+            ),
+            setup(
+                Some("web"),
+                &["./a.js", "<rootDir>/b.js", "c", "./up.js", "./down.js"]
+            )
+        );
+        assert_eq!(read(r#"{"testEnvironment": "node"}"#), setup(None, &[]));
+        assert_eq!(read(r#"{"globalSetup": null}"#), setup(None, &[]));
+        for dynamic in [
+            r#"{"setupFiles": [1]}"#,
+            r#"{"globalSetup": {"path": "x"}}"#,
+            r#"{"rootDir": 3, "globalSetup": "./x.js"}"#,
+            r#"{"projects": ["a", "b"], "globalSetup": "./x.js"}"#,
+            r#"["not", "a", "table"]"#,
+        ] {
+            assert_eq!(read(dynamic), SetupFiles::Dynamic, "{dynamic}");
+        }
+    }
+
+    #[test]
+    fn script_setup_files_are_read_only_from_a_literal_export() {
+        for (name, source, expected) in [
+            (
+                "jest.config.js",
+                "module.exports = {\n  rootDir: 'web',\n  globalTeardown: './down.js',\n  setupFiles: ['./a.js', \"./b.js\"],\n};\n",
+                setup(Some("web"), &["./down.js", "./a.js", "./b.js"]),
+            ),
+            (
+                "jest.config.ts",
+                "import type { Config } from 'jest';\n\nconst config: Config = {\n  setupFilesAfterEnv: ['./jest.setup'],\n};\n\nexport default config;\n",
+                setup(None, &["./jest.setup"]),
+            ),
+            (
+                "jest.config.ts",
+                "export default { globalSetup: './up.ts' } satisfies Config;\n",
+                setup(None, &["./up.ts"]),
+            ),
+            (
+                "jest.config.mjs",
+                "export default { testEnvironment: 'node' };\n",
+                setup(None, &[]),
+            ),
+            (
+                "vitest.config.ts",
+                "import { defineConfig } from 'vitest/config';\n\nexport default defineConfig({\n  root: 'web',\n  test: { setupFiles: './setup.ts', globalSetup: ['./global.ts'] },\n});\n",
+                setup(Some("web"), &["./setup.ts", "./global.ts"]),
+            ),
+            (
+                "vitest.config.js",
+                "export default { test: { root: 'inner', setupFiles: ['a'] }, root: 'outer' };\n",
+                setup(Some("inner"), &["a"]),
+            ),
+            (
+                "vite.config.ts",
+                "export default defineConfig({ plugins: [] });\n",
+                setup(None, &[]),
+            ),
+            // A Jest key at the top of a Vitest configuration names nothing Vitest loads.
+            (
+                "vitest.config.js",
+                "export default { globalSetup: './x.js', test: {} };\n",
+                setup(None, &[]),
+            ),
+        ] {
+            assert_eq!(script_setup_files(name, source), expected, "{name}: {source}");
+        }
+        for (name, source) in [
+            (
+                "jest.config.js",
+                "module.exports = { ...base, globalSetup: './x.js' };\n",
+            ),
+            (
+                "jest.config.js",
+                "module.exports = { globalSetup: require.resolve('./x') };\n",
+            ),
+            (
+                "jest.config.js",
+                "module.exports = { setupFiles: [path.join(__dirname, 'x.js')] };\n",
+            ),
+            (
+                "jest.config.js",
+                "module.exports = async () => ({ globalSetup: './x.js' });\n",
+            ),
+            (
+                "jest.config.js",
+                "module.exports = createJestConfig({ globalSetup: './x.js' });\n",
+            ),
+            (
+                "jest.config.js",
+                "module.exports = { projects: [{ globalSetup: './x.js' }] };\n",
+            ),
+            (
+                "jest.config.js",
+                "module.exports = { rootDir: dir, globalSetup: './x.js' };\n",
+            ),
+            (
+                "jest.config.ts",
+                "let config = {};\nconfig = { globalSetup: './x.js' };\nexport default config;\n",
+            ),
+            ("jest.config.ts", "export default config;\n"),
+            (
+                "jest.config.ts",
+                "const config = {};\nconfig.globalSetup = './x.js';\nexport default config;\n",
+            ),
+            (
+                "jest.config.js",
+                "var config = { globalSetup: './x.js' };\nmodule.exports = config;\n",
+            ),
+            (
+                "vitest.config.ts",
+                "export default mergeConfig(base, { test: { setupFiles: ['a'] } });\n",
+            ),
+            (
+                "vitest.config.ts",
+                "export default defineConfig({ test: { setupFiles: files } });\n",
+            ),
+            ("jest.config.js", "module.exports = {\n"),
+            ("jest.config.js", "const x = 1;\n"),
+        ] {
+            assert_eq!(
+                script_setup_files(name, source),
+                SetupFiles::Dynamic,
+                "{name}: {source}"
+            );
+        }
+    }
 
     const DEFINE_CONFIG: &str = "\
 import { defineConfig } from 'vitest/config';
