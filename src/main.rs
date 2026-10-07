@@ -1443,11 +1443,7 @@ fn doctor(args: discipline::cli::DoctorArgs) -> Result<bool> {
     use discipline::doctor::{run, DoctorInput};
     let git = GitCtx::open_whole_tree()?;
     let env = |k: &str| std::env::var(k).ok();
-    // An SSH remote may name a `~/.ssh/config` alias; the forge is at its HostName.
-    let origin = git.remote_url("origin").map(|o| {
-        discipline::forge::resolve_ssh_alias(&o, &|a| discipline::forge::ssh_hostname_from_home(a))
-    });
-    let mut forge = discipline::forge::detect(&env, origin.as_deref());
+    let mut forge = discipline::forge::detect_for(&git);
     if let Some(repo) = &args.repo {
         forge = match forge {
             Ok(mut f) => {

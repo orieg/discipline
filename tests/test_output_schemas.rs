@@ -511,20 +511,6 @@ fn mcp_check_diff_conforms_to_its_output_schema() {
     assert_valid(&mcp_check_schema(), &broken);
 }
 
-#[test]
-fn committed_schema_files_match_the_generator() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    for (file, schema) in [
-        ("discipline.report.schema.json", report_schema()),
-        ("discipline.replay.schema.json", replay_schema()),
-        ("discipline.audit.schema.json", audit_schema()),
-    ] {
-        let committed: Value =
-            serde_json::from_str(&std::fs::read_to_string(root.join(file)).unwrap()).unwrap();
-        assert_eq!(committed, schema, "{file}: run `discipline docs --write`");
-    }
-}
-
 /// The subset of JSON Schema the two schemas use: `type`, `enum`, `const`, `pattern`, `minimum`,
 /// `properties` / `required` / `additionalProperties`, `items`, local `$ref`, `oneOf`.
 fn validate(root: &Value, node: &Value, v: &Value, at: &str, errs: &mut Vec<String>) {

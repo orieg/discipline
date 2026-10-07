@@ -1329,7 +1329,9 @@ pub fn run(opts: &Options) -> Result<Summary> {
         tightenings.extend(t);
         protected.extend(p);
     }
-    let forge = detect_forge(&repo);
+    // The forge the `origin` remote names, the same detection `replay` uses; nothing is
+    // read from the network.
+    let forge = crate::forge::detect_for_repo(&repo);
     let (pulls, read) = if opts.forge {
         let f = forge.as_ref().map_err(|e| {
             crate::could_not_check::tag(
@@ -2355,17 +2357,6 @@ pub fn forge_checks(checks: &mut [Check], read: &ForgeRead, pulls: &[Pull], reco
             format!("none of {prs} edited after the merge"),
         );
     }
-}
-
-/// The forge the `origin` remote names, the same detection `replay` uses; nothing is read
-/// from the network.
-fn detect_forge(repo: &Repository) -> Result<crate::forge::Forge, String> {
-    let origin = repo
-        .find_remote("origin")
-        .ok()
-        .and_then(|r| r.url().ok().map(str::to_string))
-        .map(|o| crate::forge::resolve_ssh_alias(&o, &|a| crate::forge::ssh_hostname_from_home(a)));
-    crate::forge::detect(&|k| std::env::var(k).ok(), origin.as_deref())
 }
 
 #[cfg(test)]

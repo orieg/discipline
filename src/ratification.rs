@@ -237,12 +237,18 @@ fn owner_name(repo: &str) -> Result<(&str, &str), ForgeError> {
     })
 }
 
+/// The `$owner` and `$name` variables of a GraphQL query for `repo`; a name that is not
+/// `owner/name` is sent whole as the owner, and the forge answers that it has none such.
+pub(crate) fn owner_and_name(repo: &str) -> (&str, &str) {
+    repo.split_once('/').unwrap_or((repo, ""))
+}
+
 /// The GitHub GraphQL query for an issue's comments, with what makes them trustworthy.
 pub const ISSUE_COMMENTS_QUERY: &str = "query IssueComments($owner: String!, $name: String!, $number: Int!, $after: String) { repository(owner: $owner, name: $name) { issue(number: $number) { comments(first: 100, after: $after) { totalCount pageInfo { hasNextPage endCursor } nodes { databaseId body createdAt lastEditedAt createdViaEmail author { login __typename } editor { login } } } } } }";
 
 /// The variables of [`ISSUE_COMMENTS_QUERY`].
 pub fn issue_comments_vars(repo: &str, number: u64, after: Option<&str>) -> Value {
-    let (owner, name) = repo.split_once('/').unwrap_or((repo, ""));
+    let (owner, name) = owner_and_name(repo);
     json!({"owner": owner, "name": name, "number": number, "after": after})
 }
 
@@ -375,7 +381,7 @@ pub const CLOSING_ISSUES_QUERY: &str = "query ClosingIssues($owner: String!, $na
 
 /// The variables of [`CLOSING_ISSUES_QUERY`].
 pub fn closing_issues_vars(repo: &str, number: u64) -> Value {
-    let (owner, name) = repo.split_once('/').unwrap_or((repo, ""));
+    let (owner, name) = owner_and_name(repo);
     json!({"owner": owner, "name": name, "number": number})
 }
 

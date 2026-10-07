@@ -1022,7 +1022,7 @@ fn claude_code_install_writes_the_cloud_bootstrap() {
         again.stdout
     );
     // Run locally, the bootstrap does nothing: no CLAUDE_CODE_REMOTE.
-    let out = Command::new("bash")
+    let out = common::script_command("bash")
         .arg(&script)
         .env_remove("CLAUDE_CODE_REMOTE")
         .output()
@@ -1791,7 +1791,11 @@ console.log(JSON.stringify({
 /// each handler did. `None`, said on stderr past the test harness's capture, when `node`
 /// is not installed: the test then proved nothing.
 fn run_opencode_plugin(observe: bool, test: &str) -> Option<serde_json::Value> {
-    if Command::new("node").arg("--version").output().is_err() {
+    if common::script_command("node")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
         // Written to the stream itself: the test harness captures `eprintln!` of a test
         // that passes, and a skip nobody sees reads as evidence.
         std::io::stderr()
@@ -1814,7 +1818,7 @@ fn run_opencode_plugin(observe: bool, test: &str) -> Option<serde_json::Value> {
     )
     .unwrap();
     std::fs::write(dir.path().join("driver.mjs"), OPENCODE_DRIVER).unwrap();
-    let out = Command::new("node")
+    let out = common::script_command("node")
         .arg("driver.mjs")
         .current_dir(dir.path())
         .output()

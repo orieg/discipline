@@ -525,12 +525,6 @@ pub fn render_cli_markdown() -> String {
 /// Render the options of every visible subcommand (and nested subcommand) from clap:
 /// one table per command with the flag, its environment variable, default and help.
 pub fn render_cli_options_markdown() -> String {
-    fn cell(s: &str) -> String {
-        s.replace('|', "\\|")
-            .replace('\n', " ")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-    }
     fn walk(cmd: &clap::Command, path: &str, out: &mut String) {
         for sub in cmd.get_subcommands() {
             if sub.is_hide_set() || sub.get_name() == "help" {
@@ -570,7 +564,7 @@ pub fn render_cli_options_markdown() -> String {
                     let help = a.get_help().map(|h| h.to_string()).unwrap_or_default();
                     out.push_str(&format!(
                         "| {name} | {env} | {default} | {} |\n",
-                        cell(&help)
+                        table_cell(&help)
                     ));
                 }
             }
@@ -800,6 +794,36 @@ pub fn unified_diff(path: &Path, old: &str, new: &str) -> String {
     diff
 }
 
+/// Brings the generated file at `path` in line with `generated`: prints the difference
+/// when there is one and, with `write`, writes the file (creating its directory).
+/// Returns whether the file differed.
+fn reconcile(path: &Path, existing: &str, generated: &str, write: bool) -> Result<bool> {
+    if existing == generated {
+        return Ok(false);
+    }
+    eprintln!("{}", unified_diff(path, existing, generated));
+    if write {
+        if let Some(dir) = path.parent() {
+            if !dir.exists() {
+                std::fs::create_dir_all(dir)?;
+            }
+        }
+        std::fs::write(path, generated)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+        println!("Updated {}", path.display());
+    }
+    Ok(true)
+}
+
+/// The text of a wholly generated file, or nothing when it does not exist yet.
+fn existing_or_empty(path: &Path) -> Result<String> {
+    if path.exists() {
+        Ok(std::fs::read_to_string(path)?)
+    } else {
+        Ok(String::new())
+    }
+}
+
 /// Execute docs check or write across repository files.
 pub fn run_docs_check_or_write(root: &Path, write: bool) -> Result<bool> {
     let action_path = root.join("action.yml");
@@ -825,18 +849,7 @@ pub fn run_docs_check_or_write(root: &Path, write: bool) -> Result<bool> {
         let original = std::fs::read_to_string(file_path)
             .with_context(|| format!("failed to read {}", file_path.display()))?;
         let updated = update_generated_regions(file_path, &original, &action_spec, GATES)?;
-
-        if original != updated {
-            has_diffs = true;
-            let diff = unified_diff(file_path, &original, &updated);
-            eprintln!("{diff}");
-
-            if write {
-                std::fs::write(file_path, &updated)
-                    .with_context(|| format!("failed to write {}", file_path.display()))?;
-                println!("Updated {}", file_path.display());
-            }
-        }
+        has_diffs |= reconcile(file_path, &original, &updated, write)?;
     }
 
     // 2. Process the JSON Schemas: the configuration, the `check` report and the
@@ -857,52 +870,16 @@ pub fn run_docs_check_or_write(root: &Path, write: bool) -> Result<bool> {
         ),
     ] {
         let schema_path = root.join(file_name);
-        let generated_schema_str = serde_json::to_string_pretty(&generated_schema_val)? + "\n";
-
-        let existing_schema_str = if schema_path.exists() {
-            std::fs::read_to_string(&schema_path)?
-        } else {
-            String::new()
-        };
-
-        if existing_schema_str != generated_schema_str {
-            has_diffs = true;
-            let diff = unified_diff(&schema_path, &existing_schema_str, &generated_schema_str);
-            eprintln!("{diff}");
-
-            if write {
-                std::fs::write(&schema_path, &generated_schema_str)
-                    .with_context(|| format!("failed to write {}", schema_path.display()))?;
-                println!("Updated {}", schema_path.display());
-            }
-        }
+        let generated = serde_json::to_string_pretty(&generated_schema_val)? + "\n";
+        let existing = existing_or_empty(&schema_path)?;
+        has_diffs |= reconcile(&schema_path, &existing, &generated, write)?;
     }
 
     // 3. Process man/man1/discipline.1
-    let man1_dir = root.join("man/man1");
-    let man1_path = man1_dir.join("discipline.1");
-    let generated_man1_str = generate_man1()?;
-
-    let existing_man1_str = if man1_path.exists() {
-        std::fs::read_to_string(&man1_path)?
-    } else {
-        String::new()
-    };
-
-    if existing_man1_str != generated_man1_str {
-        has_diffs = true;
-        let diff = unified_diff(&man1_path, &existing_man1_str, &generated_man1_str);
-        eprintln!("{diff}");
-
-        if write {
-            if !man1_dir.exists() {
-                std::fs::create_dir_all(&man1_dir)?;
-            }
-            std::fs::write(&man1_path, &generated_man1_str)
-                .with_context(|| format!("failed to write {}", man1_path.display()))?;
-            println!("Updated {}", man1_path.display());
-        }
-    }
+    let man1_path = root.join("man/man1/discipline.1");
+    let generated_man1 = generate_man1()?;
+    let existing_man1 = existing_or_empty(&man1_path)?;
+    has_diffs |= reconcile(&man1_path, &existing_man1, &generated_man1, write)?;
 
     // 3b. Shell completion scripts under completions/: committed like the man pages so
     // every packaging path installs them from files without executing the binary.
@@ -911,8 +888,7 @@ pub fn run_docs_check_or_write(root: &Path, write: bool) -> Result<bool> {
         (clap_complete::Shell::Bash, "discipline.bash"),
         (clap_complete::Shell::Fish, "discipline.fish"),
     ] {
-        let dir = root.join("completions");
-        let path = dir.join(file);
+        let path = root.join("completions").join(file);
         let mut buf: Vec<u8> = Vec::new();
         clap_complete::generate(
             shell,
@@ -921,23 +897,8 @@ pub fn run_docs_check_or_write(root: &Path, write: bool) -> Result<bool> {
             &mut buf,
         );
         let generated = String::from_utf8(buf).context("completion script is not UTF-8")?;
-        let existing = if path.exists() {
-            std::fs::read_to_string(&path)?
-        } else {
-            String::new()
-        };
-        if existing != generated {
-            has_diffs = true;
-            eprintln!("{}", unified_diff(&path, &existing, &generated));
-            if write {
-                if !dir.exists() {
-                    std::fs::create_dir_all(&dir)?;
-                }
-                std::fs::write(&path, &generated)
-                    .with_context(|| format!("failed to write {}", path.display()))?;
-                println!("Updated {}", path.display());
-            }
-        }
+        let existing = existing_or_empty(&path)?;
+        has_diffs |= reconcile(&path, &existing, &generated, write)?;
     }
 
     // 4. Process the generated gate list in man/man5/discipline.toml.5
@@ -946,15 +907,7 @@ pub fn run_docs_check_or_write(root: &Path, write: bool) -> Result<bool> {
         let original = std::fs::read_to_string(&man5_path)?;
         let updated = update_roff_region(&original, "gates", &render_gates_roff(GATES))
             .with_context(|| format!("in {}", man5_path.display()))?;
-        if original != updated {
-            has_diffs = true;
-            eprintln!("{}", unified_diff(&man5_path, &original, &updated));
-            if write {
-                std::fs::write(&man5_path, &updated)
-                    .with_context(|| format!("failed to write {}", man5_path.display()))?;
-                println!("Updated {}", man5_path.display());
-            }
-        }
+        has_diffs |= reconcile(&man5_path, &original, &updated, write)?;
     }
 
     if has_diffs {

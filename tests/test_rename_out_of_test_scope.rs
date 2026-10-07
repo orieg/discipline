@@ -4,7 +4,7 @@
 mod common;
 use common::Repo;
 
-const HEAD: &str = "[meta]\nversion = 1\nname = \"t\"\n";
+const HEAD: &str = common::CONFIG_HEAD;
 const HELPER: &str = "import os\n\n\ndef load(path):\n    data = open(path).read()\n    lines = data.splitlines()\n    cleaned = [line.strip() for line in lines if line]\n    return cleaned\n\n\ndef size(path):\n    return os.path.getsize(path)\n";
 const SWALLOW: &str =
     "\n\ndef remove(path):\n    try:\n        os.remove(path)\n    except OSError:\n        pass\n";
