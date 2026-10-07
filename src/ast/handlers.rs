@@ -450,18 +450,9 @@ fn is_constant_fallback(handler: Node, src: &str, spec: &HandlerSpec, c: &Consta
     fallbacks > 0
 }
 
-/// Sites in `root`, in source order. `is_test_line` excludes handlers inside tests.
-pub fn extract(
-    root: Node,
-    src: &str,
-    spec: &HandlerSpec,
-    is_test_line: &dyn Fn(usize) -> bool,
-) -> Vec<SwallowSite> {
-    extract_with_constants(root, src, spec, None, is_test_line).0
-}
-
-/// The sites of [`extract`], and beside them the handlers that replace the failure with a
-/// numeric literal (`constant-fallback`), read when the pack passes its [`ConstantSpec`].
+/// Sites in `root`, in source order (`is_test_line` excludes handlers inside tests), and
+/// beside them the handlers that replace the failure with a numeric literal
+/// (`constant-fallback`), read when the pack passes its [`ConstantSpec`].
 /// The two lists share no handler: a body the first list holds (empty, default literal,
 /// logging only) is never in the second. `error-swallowing` reads the second only in the
 /// files `constant_fallback_paths` names.

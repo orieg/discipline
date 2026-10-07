@@ -10,8 +10,8 @@
 //! trailing lambda and no parentheses) as two comparisons; that shape is recognised by
 //! its text.
 
-use anyhow::{anyhow, Result};
-use tree_sitter::{Node, Parser};
+use anyhow::Result;
+use tree_sitter::Node;
 
 use super::ci_condition::{CiVerdict, Lang, SkipCondition};
 use super::functions::{self, FunctionSpec};
@@ -45,11 +45,12 @@ impl LanguagePack for KotlinPack {
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_kotlin_ng::LANGUAGE.into())
-            .map_err(|e| anyhow!("failed to load the Kotlin grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
+        let tree = crate::ast::source_text::parse_file_as(
+            &tree_sitter_kotlin_ng::LANGUAGE.into(),
+            "the Kotlin",
+            path,
+            src,
+        )?;
         let root = tree.root_node();
 
         let mut extractor = KotlinExtractor {
@@ -69,65 +70,7 @@ impl LanguagePack for KotlinPack {
         extractor.collect_escape_hatches(root);
         extractor.visit_node(root, &mut Vec::new(), false);
         extractor.resolve_same_file_helpers();
-        extractor.facts.functions = functions::extract(root, src, path, &KOTLIN_FUNCTIONS);
-        super::mocks::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &KOTLIN_MOCKS,
-            &vocab.mock_setup_fns,
-            &vocab.mock_assert_fns,
-        );
-        {
-            let tests = &extractor.facts.tests;
-            let spans: Vec<(usize, usize)> = tests
-                .iter()
-                .map(|t| (t.line, t.end_line.max(t.line)))
-                .collect();
-            let whole_file = functions::is_test_file(path, Some(is_kotlin_test_path))
-                || functions::declared_test_path(path, &vocab.test_paths);
-            let is_test_line =
-                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            (
-                extractor.facts.swallowed,
-                extractor.facts.constant_fallbacks,
-            ) = super::handlers::extract_with_constants(
-                root,
-                src,
-                &KOTLIN_HANDLERS,
-                Some(&KOTLIN_CONSTANTS),
-                &is_test_line,
-            );
-        }
-        super::retries::mark(root, src, &mut extractor.facts.tests, &KOTLIN_RETRIES);
-        if functions::declared_test_path(path, &vocab.test_paths) {
-            for f in &mut extractor.facts.functions {
-                f.is_test = true;
-            }
-        }
-        super::method_checks::count(root, src, &mut extractor.facts, &KOTLIN_RECEIVER_CALLS);
-        super::helper_loops::count(
-            root,
-            src,
-            &mut extractor.facts,
-            &super::helper_loops::KOTLIN,
-        );
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &KOTLIN_MOCKS,
-            super::calls::SLEEP_VOCAB,
-            super::calls::sleeps,
-        );
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &KOTLIN_MOCKS,
-            super::calls::TRIVIAL_ASSERT_VOCAB,
-            super::calls::trivial_asserts,
-        );
+        KOTLIN_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
         super::caught_assertions::kotlin(root, src, &mut extractor.facts.tests, vocab);
         extractor.facts.prose = super::prose::extract(
             root,
@@ -625,34 +568,21 @@ impl<'a> KotlinExtractor<'a> {
                 );
                 self.helpers.insert(
                     name.to_string(),
-                    super::HelperFacts {
-                        total_asserts: helper_fn.total_asserts,
-                        strong_asserts: helper_fn.strong_asserts,
-                        tautologies: helper_fn.tautologies,
-                        fatal_asserts: helper_fn.fatal_asserts,
-                        wraps: super::forwarding_wrapper_callee(
+                    super::HelperFacts::from_scan(
+                        &helper_fn,
+                        super::forwarding_wrapper_callee(
                             body,
                             &KOTLIN_WRAPPER,
                             &KOTLIN_LOCALS,
                             &dummy_calls,
                             self.src,
                         ),
-                    },
+                    ),
                 );
                 let line = node.start_position().row + 1;
                 let end_line = node.end_position().row + 1;
                 self.facts.push_helper(
-                    super::TestHelperFacts {
-                        name: name.to_string(),
-                        line,
-                        end_line,
-                        total_asserts: helper_fn.total_asserts,
-                        strong_asserts: helper_fn.strong_asserts,
-                        tautologies: helper_fn.tautologies,
-                        fatal_asserts: helper_fn.fatal_asserts,
-                        helper_checks: 0,
-                        equality_exits: 0,
-                    },
+                    super::TestHelperFacts::from_scan(name.to_string(), line, end_line, &helper_fn),
                     dummy_calls,
                 );
             }
@@ -890,6 +820,20 @@ fn kotlin_fn_is_test(node: Node, src: &str, path: &str) -> bool {
     });
     annotated || functions::is_test_file(path, Some(is_kotlin_test_path))
 }
+
+/// What the steps every pack shares read of this pack (`PackSpec::shared_facts`).
+const KOTLIN_PACK: super::PackSpec = super::PackSpec {
+    functions: &KOTLIN_FUNCTIONS,
+    own_test_path: Some(is_kotlin_test_path),
+    handlers: &KOTLIN_HANDLERS,
+    constants: Some(&KOTLIN_CONSTANTS),
+    retries: Some(&KOTLIN_RETRIES),
+    receiver_calls: &KOTLIN_RECEIVER_CALLS,
+    helper_loops: &super::helper_loops::KOTLIN,
+    calls: &KOTLIN_MOCKS,
+    vocabs: super::calls::SLEEPS_AND_TRIVIAL_ASSERTS,
+    judged: None,
+};
 
 pub const KOTLIN_FUNCTIONS: FunctionSpec = FunctionSpec {
     // An abstract or interface member without a body has no `function_body`.

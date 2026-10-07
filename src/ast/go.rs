@@ -4,7 +4,7 @@ use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
 use super::functions::{self, FunctionSpec};
-use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
+use super::{AssertVocabulary, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
 /// Go language pack implementing [`LanguagePack`].
 pub struct GoPack;
@@ -34,11 +34,12 @@ impl LanguagePack for GoPack {
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_go::LANGUAGE.into())
-            .map_err(|e| anyhow!("failed to load the Go grammar: {e}"))?;
-        let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
+        let tree = crate::ast::source_text::parse_file_as(
+            &tree_sitter_go::LANGUAGE.into(),
+            "the Go",
+            path,
+            src,
+        )?;
         let root = tree.root_node();
 
         let mut extractor = GoExtractor {
@@ -63,55 +64,7 @@ impl LanguagePack for GoPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
-        extractor.facts.functions = functions::extract(root, src, path, &GO_FUNCTIONS);
-        super::mocks::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &GO_MOCKS,
-            &vocab.mock_setup_fns,
-            &vocab.mock_assert_fns,
-        );
-        {
-            let tests = &extractor.facts.tests;
-            let spans: Vec<(usize, usize)> = tests
-                .iter()
-                .map(|t| (t.line, t.end_line.max(t.line)))
-                .collect();
-            // A file matching the shared test-path conventions, this pack's own test-file
-            // convention, or one the repository declares as test scope, is test code
-            // line for line.
-            let whole_file = super::functions::is_test_file(path, Some(is_go_test_path))
-                || super::functions::declared_test_path(path, &vocab.test_paths);
-            let is_test_line =
-                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
-            extractor.facts.swallowed =
-                super::handlers::extract(root, src, &GO_HANDLERS, &is_test_line);
-        }
-        super::retries::mark(root, src, &mut extractor.facts.tests, &GO_RETRIES);
-        if super::functions::declared_test_path(path, &vocab.test_paths) {
-            for f in &mut extractor.facts.functions {
-                f.is_test = true;
-            }
-        }
-        super::method_checks::count(root, src, &mut extractor.facts, &GO_RECEIVER_CALLS);
-        super::helper_loops::count(root, src, &mut extractor.facts, &super::helper_loops::GO);
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &GO_MOCKS,
-            super::calls::SLEEP_VOCAB,
-            super::calls::sleeps,
-        );
-        super::calls::count(
-            root,
-            src,
-            &mut extractor.facts.tests,
-            &GO_MOCKS,
-            super::calls::TRIVIAL_ASSERT_VOCAB,
-            super::calls::trivial_asserts,
-        );
+        GO_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
         super::bounds::go(root, src, &mut extractor.facts.tests);
         super::expectations::go(root, src, &mut extractor.facts.tests);
         super::expected_exceptions::go(root, src, &mut extractor.facts.tests, &extractor.imports);
@@ -562,41 +515,25 @@ fn suite_types(root: Node, src: &str) -> std::collections::HashSet<String> {
     suites
 }
 
+/// The comments that suppress a Go linter.
+const GO_SUPPRESSIONS: super::CommentSuppressions = super::CommentSuppressions {
+    hash_comments: false,
+    markers: &["nolint", "lint:ignore", "revive:disable"],
+};
+
 impl<'a> GoExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
         node.utf8_text(self.src).unwrap_or("")
     }
 
     fn collect_comments_and_escape_hatches(&mut self, node: Node) {
-        let kind = node.kind();
-        if kind == "comment" {
-            let text = self.text(node);
-            let line = node.start_position().row + 1;
-            let trimmed = text
-                .trim_start_matches("//")
-                .trim_start_matches("/*")
-                .trim_end_matches("*/")
-                .trim();
-
-            if trimmed.starts_with("nolint")
-                || trimmed.starts_with("lint:ignore")
-                || trimmed.starts_with("revive:disable")
-            {
-                self.facts
-                    .escape_hatches
-                    .push(EscapeHatchSite::LinterDisable {
-                        line,
-                        rule: trimmed.to_string(),
-                        snippet: text.to_string(),
-                    });
-            }
-            return;
-        }
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.collect_comments_and_escape_hatches(child);
-        }
+        super::collect_comment_suppressions(
+            node,
+            self.src,
+            &GO_SUPPRESSIONS,
+            &mut |_, _| true,
+            &mut self.facts.escape_hatches,
+        );
     }
 
     fn visit_root(&mut self, root: Node) {
@@ -961,35 +898,22 @@ impl<'a> GoExtractor<'a> {
             &["func_literal"],
         );
         if resolvable {
-            let facts = super::HelperFacts {
-                total_asserts: helper_fn.total_asserts,
-                strong_asserts: helper_fn.strong_asserts,
-                tautologies: helper_fn.tautologies,
-                fatal_asserts: helper_fn.fatal_asserts,
-                wraps: super::forwarding_wrapper_callee(
+            let facts = super::HelperFacts::from_scan(
+                &helper_fn,
+                super::forwarding_wrapper_callee(
                     body,
                     &GO_WRAPPER,
                     &GO_LOCALS,
                     &dummy_calls,
                     self.src,
                 ),
-            };
+            );
             self.helpers.insert(name.clone(), facts);
         }
         let line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
         self.facts.push_helper(
-            super::TestHelperFacts {
-                name,
-                line,
-                end_line,
-                total_asserts: helper_fn.total_asserts,
-                strong_asserts: helper_fn.strong_asserts,
-                tautologies: helper_fn.tautologies,
-                fatal_asserts: helper_fn.fatal_asserts,
-                helper_checks: 0,
-                equality_exits: 0,
-            },
+            super::TestHelperFacts::from_scan(name, line, end_line, &helper_fn),
             dummy_calls,
         );
     }
@@ -1543,6 +1467,20 @@ fn enclosing_if_condition(node: Node, src: &[u8]) -> Option<String> {
     }
     None
 }
+
+/// What the steps every pack shares read of this pack (`PackSpec::shared_facts`).
+const GO_PACK: super::PackSpec = super::PackSpec {
+    functions: &GO_FUNCTIONS,
+    own_test_path: Some(is_go_test_path),
+    handlers: &GO_HANDLERS,
+    constants: None,
+    retries: Some(&GO_RETRIES),
+    receiver_calls: &GO_RECEIVER_CALLS,
+    helper_loops: &super::helper_loops::GO,
+    calls: &GO_MOCKS,
+    vocabs: super::calls::SLEEPS_AND_TRIVIAL_ASSERTS,
+    judged: None,
+};
 
 pub const GO_FUNCTIONS: FunctionSpec = FunctionSpec {
     function_kinds: &["function_declaration", "method_declaration"],

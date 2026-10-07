@@ -99,6 +99,21 @@ pub(crate) fn parse_file(parser: &mut Parser, path: &str, src: &str) -> anyhow::
     parse(parser, src).map_err(|why| anyhow::anyhow!("could not parse `{path}`: {why}"))
 }
 
+/// [`parse_file`] with a parser of `language`. `grammar` is the language as the error of
+/// a grammar that cannot be loaded names it (`the Go`).
+pub(crate) fn parse_file_as(
+    language: &tree_sitter::Language,
+    grammar: &str,
+    path: &str,
+    src: &str,
+) -> anyhow::Result<Tree> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(language)
+        .map_err(|e| anyhow::anyhow!("failed to load {grammar} grammar: {e}"))?;
+    parse_file(&mut parser, path, src)
+}
+
 /// The syntax tree of `text` as it stands, within [`step_budget`]. The caller has taken
 /// out what its grammar must not be given ([`parse`] does for source text).
 pub(crate) fn parse_within_budget(parser: &mut Parser, text: &[u8]) -> Result<Tree, NoTree> {

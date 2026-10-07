@@ -5,12 +5,9 @@
 //! **mock assertions** (the test checks that the double was called, not what the code
 //! produced: `assert_called_with`, `toHaveBeenCalled`, `verify(`, `.Received(`).
 //!
-//! One walk over the call nodes of a file; each call is attributed to the test whose line
-//! span contains it. Packs pass their call-node kinds and callee field; the vocabulary is
-//! shared and extended from configuration.
-
-use super::TestFn;
-use tree_sitter::Node;
+//! The call nodes of a file are walked once (`calls::count`); each call is attributed to
+//! the test whose line span contains it. Packs pass their call-node kinds and callee
+//! field; the vocabulary is shared and extended from configuration.
 
 pub struct MockSpec {
     /// Node kinds that are calls (`call_expression`, `call`, `macro_invocation`).
@@ -140,64 +137,30 @@ pub const VERIFY_VOCAB: &[&str] = &[
     "have_received",
 ];
 
-/// Count mock setups and mock assertions per test in place.
-pub fn count(
-    root: Node,
-    src: &str,
-    tests: &mut [TestFn],
-    spec: &MockSpec,
+/// What a call is to a test double.
+pub enum Double {
+    /// It constructs one or programs what it returns.
+    Setup,
+    /// It asserts on the double's interactions.
+    Verify,
+}
+
+/// What a call with this callee and call prefix (`calls::count` reads both as code) is
+/// to a test double, from the built-in vocabulary and the configured names. A call that
+/// reads as both is a verification.
+pub fn double(
+    callee: &str,
+    head: &str,
     extra_setup: &[String],
     extra_verify: &[String],
-) {
-    if tests.is_empty() {
-        return;
-    }
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        if spec.call_kinds.contains(&node.kind()) {
-            // Code only (`calls::code_text`): the text of a string literal or a comment
-            // in the callee chain names no double.
-            let callee = spec
-                .callee_fields
-                .iter()
-                .find_map(|f| node.child_by_field_name(f))
-                .map(|n| super::calls::code_text(n, src))
-                .unwrap_or_else(|| super::calls::code_text(node, src));
-            // Judge the callee (for a chained matcher, `expect(f).toHaveBeenCalled`, it
-            // carries the matcher) and the call text up to its first argument list
-            // (`verify(`, `new Mock<T>(`, `every {`). Never the arguments: a test's own
-            // body would otherwise make the enclosing `test(...)` call a match.
-            let whole = super::calls::code_text(node, src);
-            let cut = whole.find(['(', '{']).map_or(whole.len(), |i| i + 1);
-            let head = &whole[..cut.min(whole.len())];
-            let hit = |v: &str| callee.contains(v) || head.contains(v);
-            let is_verify =
-                VERIFY_VOCAB.iter().any(|v| hit(v)) || extra_verify.iter().any(|v| hit(v.as_str()));
-            let is_setup = !is_verify
-                && (SETUP_VOCAB.iter().any(|v| hit(v))
-                    || extra_setup.iter().any(|v| hit(v.as_str())));
-            if is_verify || is_setup {
-                let line = node.start_position().row + 1;
-                if let Some(t) = tests
-                    .iter_mut()
-                    .filter(|t| t.line <= line && line <= t.end_line.max(t.line))
-                    .min_by_key(|t| t.end_line.saturating_sub(t.line))
-                {
-                    if is_verify {
-                        t.mock_asserts += 1;
-                    } else {
-                        t.mock_setups += 1;
-                    }
-                }
-                // `when(x).thenReturn(y)` nests a matching call; count the chain once.
-                continue;
-            }
-        }
-        let mut cursor = node.walk();
-        let children: Vec<Node> = node.children(&mut cursor).collect();
-        for child in children.into_iter().rev() {
-            stack.push(child);
-        }
+) -> Option<Double> {
+    let hit = |v: &str| callee.contains(v) || head.contains(v);
+    if VERIFY_VOCAB.iter().any(|v| hit(v)) || extra_verify.iter().any(|v| hit(v.as_str())) {
+        Some(Double::Verify)
+    } else if SETUP_VOCAB.iter().any(|v| hit(v)) || extra_setup.iter().any(|v| hit(v.as_str())) {
+        Some(Double::Setup)
+    } else {
+        None
     }
 }
 
