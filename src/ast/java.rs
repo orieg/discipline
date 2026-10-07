@@ -659,15 +659,41 @@ impl<'a> JavaExtractor<'a> {
             "assertEquals" | "assertSame" => {
                 test_fn.total_asserts += 1;
                 if args.len() >= 2 {
-                    let a = self.text(args[0]).trim();
-                    let b = self.text(args[1]).trim();
-                    if a == b {
+                    if super::self_comparison::note(
+                        &mut test_fn.equality_operands,
+                        args[0],
+                        args[1],
+                        self.src,
+                    ) {
                         test_fn.tautologies += 1;
                     } else {
                         test_fn.strong_asserts += 1;
                     }
                 } else {
                     test_fn.strong_asserts += 1;
+                }
+            }
+            // `assertThat(x).isEqualTo(x)` (AssertJ, Truth): the `assertThat` call is
+            // counted where it is read; the same operand on both sides takes it out.
+            "isEqualTo" | "isSameAs" | "isSameInstanceAs" => {
+                let subject = object
+                    .filter(|o| {
+                        o.kind() == "method_invocation"
+                            && o.child_by_field_name("name")
+                                .is_some_and(|n| self.text(n) == "assertThat")
+                    })
+                    .map(|o| Self::collect_arguments(o.child_by_field_name("arguments")))
+                    .filter(|a| a.len() == 1)
+                    .map(|a| a[0]);
+                if let (Some(subject), [expected]) = (subject, args.as_slice()) {
+                    if super::self_comparison::note(
+                        &mut test_fn.equality_operands,
+                        subject,
+                        *expected,
+                        self.src,
+                    ) {
+                        test_fn.tautologies += 1;
+                    }
                 }
             }
             "assertNotEquals" | "assertNotSame" => {

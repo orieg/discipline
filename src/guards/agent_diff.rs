@@ -2112,12 +2112,16 @@ pub fn evaluate_assertion_reduction(
         if total_drop || strong_drop {
             widened.retain(|w| !w.dropped);
         }
+        // Equality assertions that compare an operand with itself and that the base
+        // side did not hold (`ast::self_comparison`).
+        let self_compared = h.equality_operands.introduced_since(&b.equality_operands);
         let dropped = total_drop || strong_drop || fatal_drop || mock_growth || cases_drop;
         if !dropped
             && loosened.is_empty()
             && changed.is_empty()
             && newly_caught.is_empty()
             && widened.is_empty()
+            && self_compared.is_empty()
         {
             continue;
         }
@@ -2142,8 +2146,10 @@ pub fn evaluate_assertion_reduction(
             &crate::findings::ASSERTION_BOUND_LOOSENED
         } else if !widened.is_empty() {
             &crate::findings::EXPECTED_EXCEPTION_WIDENED
-        } else {
+        } else if !changed.is_empty() {
             &crate::findings::EXPECTED_VALUE_CHANGED
+        } else {
+            &crate::findings::SELF_COMPARISON_ASSERTION_INTRODUCED
         };
         let lift = |subject: &str| {
             tokens::find_override(
@@ -2216,6 +2222,30 @@ pub fn evaluate_assertion_reduction(
                     directive_name
                 ),
             );
+        }
+
+        // One finding for one act: a rewrite that also lowers the count is the
+        // `assertions-reduced` finding below, at the gate's severity, whose message names
+        // these lines. Reported here only while the count holds, as a warning: the form
+        // is exact, and a deliberate reflexivity check is a legitimate test.
+        let folded_into_reduction = total_drop || strong_drop;
+        for s in self_compared.iter().filter(|_| !folded_into_reduction) {
+            out.push(
+                crate::config::Severity::Warning,
+                &crate::findings::SELF_COMPARISON_ASSERTION_INTRODUCED,
+                Some(p.path),
+                Some(s.line),
+                format!(
+                    "{test_label}: the equality assertion on line {} now compares an expression with itself, so it holds whatever the code does. {SELF_COMPARISON_SCOPE}",
+                    s.line
+                ),
+                &format!(
+                    "Compare the value with what is expected of it. A deliberate reflexivity check takes, on its own line in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
+                    directive_name
+                ),
+            );
+            out.anchor_last(h.name.clone());
+            note_self_comparison_scope(&mut out);
         }
 
         for l in &loosened {
@@ -2404,13 +2434,24 @@ pub fn evaluate_assertion_reduction(
             &crate::findings::ASSERTIONS_REDUCED,
             Some(p.path),
             Some(violation_line),
-            format!("{test_label}: {what}."),
+            if self_compared.is_empty() {
+                format!("{test_label}: {what}.")
+            } else {
+                format!(
+                    "{test_label}: {what}; {} equality assertion(s) now compare an expression with itself (line {}). {SELF_COMPARISON_SCOPE}",
+                    self_compared.len(),
+                    lines_of(&self_compared)
+                )
+            },
             &format!(
                 "Restore the assertions, or justify the drop on its own line in the PR body or \
                  a commit message: `allow-assertion-drop: {} <reason>`.",
                 directive_name
             ),
         );
+        if !self_compared.is_empty() {
+            note_self_comparison_scope(&mut out);
+        }
     }
     Ok(out)
 }
@@ -2498,6 +2539,27 @@ enum CaseDrop {
     NotParametrized(usize),
 }
 
+/// What the self-comparison findings do and do not read, stated in each message.
+const SELF_COMPARISON_SCOPE: &str = "Exact form only: the two operands are the same tokens; no alias or value-flow analysis, so two names for one value are not seen.";
+
+/// The note a gate carries, once, when it reports a self-comparison.
+const SELF_COMPARISON_NOTE: &str = "self-comparison findings read the exact form only (an equality assertion whose two operands are the same tokens, with no call in them and outside a macro definition); no alias/value-flow analysis: two names bound to one value, and an assertion whose operands never reach the code under test, are not reported";
+
+fn note_self_comparison_scope(out: &mut GateOutcome) {
+    if !out.notes.iter().any(|n| n == SELF_COMPARISON_NOTE) {
+        out.notes.push(SELF_COMPARISON_NOTE.to_string());
+    }
+}
+
+/// The lines of `found`, in order, as `3, 7`.
+fn lines_of(found: &[&crate::ast::self_comparison::SelfComparison]) -> String {
+    found
+        .iter()
+        .map(|s| s.line.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 pub fn evaluate_vacuous_tests(
     added: &[Located],
     settings: &crate::config::AssertionGate,
@@ -2523,6 +2585,10 @@ pub fn evaluate_vacuous_tests(
         let below_floor = settings
             .min_assertions_per_test
             .is_some_and(|min| a.test.checks() < min);
+        // Equality assertions that compare an operand with itself
+        // (`ast::self_comparison`). One finding a test: a test with nothing else that
+        // can fail is the vacuous test below, which names them.
+        let self_compared = a.test.equality_operands.reportable();
         let lifts = if mocks_only {
             &crate::findings::ASSERTS_ONLY_ON_MOCKS
         } else if trivial_only {
@@ -2531,6 +2597,8 @@ pub fn evaluate_vacuous_tests(
             &crate::findings::VACUOUS_TEST_ADDED
         } else if below_floor {
             &crate::findings::ASSERTION_DENSITY_BELOW_FLOOR
+        } else if !self_compared.is_empty() {
+            &crate::findings::SELF_COMPARISON_ASSERTION_ADDED
         } else {
             continue;
         };
@@ -2591,10 +2659,18 @@ pub fn evaluate_vacuous_tests(
         if a.test.is_vacuous() {
             let why = if a.test.total_asserts == 0 {
                 "contains no assertion".to_string()
-            } else {
+            } else if self_compared.is_empty() {
                 format!(
                     "contains only tautological assertions ({} of {})",
                     a.test.tautologies, a.test.total_asserts
+                )
+            } else {
+                format!(
+                    "contains only tautological assertions ({} of {}), of which {} compare(s) an expression with itself (line {})",
+                    a.test.tautologies,
+                    a.test.total_asserts,
+                    self_compared.len(),
+                    lines_of(&self_compared)
                 )
             };
             out.push(
@@ -2608,7 +2684,29 @@ pub fn evaluate_vacuous_tests(
                  is meant not to assert (a smoke test) takes `allow-vacuous-test: <test> <reason>`.",
             );
             out.anchor_last(a.test.name.clone());
-        } else if let Some(min) = settings.min_assertions_per_test {
+            continue;
+        }
+        if !self_compared.is_empty() {
+            out.push(
+                crate::config::Severity::Warning,
+                &crate::findings::SELF_COMPARISON_ASSERTION_ADDED,
+                Some(a.path),
+                Some(self_compared[0].line),
+                format!(
+                    "New test `{}`: {} equality assertion(s) compare an expression with itself (line {}), so they hold whatever the code does. {SELF_COMPARISON_SCOPE}",
+                    a.test.name,
+                    self_compared.len(),
+                    lines_of(&self_compared)
+                ),
+                &format!(
+                    "Compare the value with what is expected of it. A deliberate reflexivity check takes `allow-vacuous-test: {} <reason>`.",
+                    leaf_name(a.test)
+                ),
+            );
+            out.anchor_last(a.test.name.clone());
+            note_self_comparison_scope(&mut out);
+        }
+        if let Some(min) = settings.min_assertions_per_test {
             if a.test.checks() < min {
                 out.push(
                     settings.severity(),

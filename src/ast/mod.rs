@@ -57,6 +57,7 @@ pub mod rust;
 pub mod scala;
 #[cfg(any(feature = "lang-ruby", feature = "lang-python"))]
 pub(crate) mod scanner_limits;
+pub mod self_comparison;
 pub(crate) mod source_text;
 #[cfg(feature = "lang-swift")]
 pub mod swift;
@@ -316,6 +317,10 @@ pub struct TestFn {
     pub counted_helper_calls: Vec<String>,
     /// What the test's helper calls reach beyond the checks counted into it.
     pub helper_reach: HelperReach,
+    /// The operands of its equality assertions: which compare an expression with itself
+    /// (`self_comparison`), reported by line, and which operands are compared with
+    /// another.
+    pub equality_operands: self_comparison::EqualityOperands,
 }
 
 /// What `assertion-reduction` reads about the helpers a test calls, beside the checks
@@ -1521,6 +1526,7 @@ impl Default for ParsedFileFacts {
                 method_checks: 0,
                 counted_helper_calls: Vec::new(),
                 helper_reach: HelperReach::default(),
+                equality_operands: Default::default(),
             }),
             has_parse_errors: false,
             first_parse_error_line: None,
@@ -1563,6 +1569,7 @@ impl ParsedFileFacts {
             method_checks: 0,
             counted_helper_calls: Vec::new(),
             helper_reach: HelperReach::default(),
+            equality_operands: Default::default(),
         });
     }
 }

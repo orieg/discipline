@@ -430,7 +430,14 @@ impl<'a> ObjcExtractor<'a> {
         match name {
             n if XCT_EQUALITY.contains(&n) => {
                 test_fn.total_asserts += 1;
-                if args.len() >= 2 && arg(0) == arg(1) {
+                if args.len() >= 2
+                    && super::self_comparison::note(
+                        &mut test_fn.equality_operands,
+                        args[0],
+                        args[1],
+                        self.src,
+                    )
+                {
                     test_fn.tautologies += 1;
                 } else {
                     test_fn.strong_asserts += 1;
