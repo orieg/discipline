@@ -94,6 +94,14 @@ const PAYLOADS: &[(&str, &str, &str, &str, &str, &str)] = &[
         "",
     ),
     (
+        "opencode/write_v2.json",
+        "/input/tool",
+        "write",
+        "/output/args/path",
+        "/input/sessionID",
+        "",
+    ),
+    (
         "copilot/bash.json",
         "/toolName",
         "bash",

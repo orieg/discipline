@@ -1,0 +1,12 @@
+{
+  "input": {
+    "sessionID": "00000000-0000-0000-0000-000000000000",
+    "tool": "write"
+  },
+  "output": {
+    "args": {
+      "content": "hi",
+      "path": "/work/repo/a.txt"
+    }
+  }
+}
