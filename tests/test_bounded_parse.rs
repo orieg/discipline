@@ -23,7 +23,7 @@ const LIMIT: Duration = Duration::from_secs(240);
 const UNFINISHED: &str = "(>\u{fffd}t(0(.t();}";
 const FINISHED: &str = "(>\u{e9}t(0(.t();}";
 const UNFINISHED_WHY: &str =
-    "the parser did not finish within its budget of 316 steps for 15 bytes";
+    "the parser did not finish within its budget of 259 steps for 15 bytes";
 
 /// The gates that need the facts of every changed file and stop on one they cannot get.
 const NEED_EVERY_FILE: &[&str] = &[
@@ -104,7 +104,7 @@ fn a_change_adding_the_fuzz_seed_is_refused_by_name() {
     assert_eq!(
         detail,
         "gate `assertion-reduction` could not run: could not parse `src/stuck.rs`: \
-         the parser did not finish within its budget of 1344 steps for 272 bytes"
+         the parser did not finish within its budget of 324 steps for 272 bytes"
     );
     assert!(run.stderr.contains(&detail), "{}", run.stderr);
     // No gate reported an outcome, so nothing reads as a pass.
