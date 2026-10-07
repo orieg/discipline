@@ -420,6 +420,33 @@ fn closed_stdout_pipe_does_not_panic() {
     assert_eq!(out.status.signal(), Some(libc::SIGPIPE), "{:?}", out.status);
 }
 
+/// The work runs on a second thread, and the signal a write to a closed pipe raises may
+/// be handed to either. Handed to the waiting one, it was acted on only after the write
+/// had failed and `println!` had panicked: the process still ended by the signal, with a
+/// panic message first. Which thread gets it varies from run to run, so this runs many.
+#[test]
+fn a_closed_stdout_pipe_ends_every_run_by_the_signal_with_no_panic_message() {
+    use std::os::unix::process::ExitStatusExt;
+    for run in 0..40 {
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let out = common::discipline_cmd(std::path::Path::new(env!("CARGO_MANIFEST_DIR")))
+            .arg("gates")
+            .stdout(writer)
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(stderr, "", "run {run}");
+        assert_eq!(
+            out.status.signal(),
+            Some(libc::SIGPIPE),
+            "run {run}: {:?}",
+            out.status
+        );
+    }
+}
+
 /// The committed completion scripts are exactly what `discipline completions <shell>`
 /// emits, so a packaged install and a hand-generated one behave the same.
 #[test]

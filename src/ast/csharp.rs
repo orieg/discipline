@@ -163,82 +163,103 @@ impl<'a> CSharpExtractor<'a> {
         self.walk_scope(root, false);
     }
 
-    fn walk_scope(&mut self, scope: Node, class_ignored: bool) {
-        let mut cursor = scope.walk();
-        for child in scope.children(&mut cursor) {
-            let kind = child.kind();
-            if matches!(
-                kind,
-                "class_declaration"
-                    | "struct_declaration"
-                    | "record_declaration"
-                    | "interface_declaration"
-            ) {
-                let is_ignored = class_ignored || self.has_ignore_attribute(child);
+    /// Reads every declaration under `root` in source order. The scopes still open are
+    /// kept in a list, not on the thread's stack, so a deep tree costs the walk no stack
+    /// (`source_text::TREE_DEPTH_LIMIT`).
+    fn walk_scope(&mut self, root: Node, class_ignored: bool) {
+        fn children(scope: Node) -> std::vec::IntoIter<Node> {
+            let mut cursor = scope.walk();
+            scope.children(&mut cursor).collect::<Vec<_>>().into_iter()
+        }
+        let mut open = vec![(children(root), class_ignored)];
+        while let Some((rest, class_ignored)) = open.last_mut() {
+            let class_ignored = *class_ignored;
+            let Some(child) = rest.next() else {
+                open.pop();
+                continue;
+            };
+            if let Some((scope, ignored)) = self.read_member(child, class_ignored) {
+                open.push((children(scope), ignored));
+            }
+        }
+    }
+
+    /// Reads one child of a scope. `Some` is a scope under it to read next, and whether
+    /// the class around that scope is ignored.
+    fn read_member<'t>(
+        &mut self,
+        child: Node<'t>,
+        class_ignored: bool,
+    ) -> Option<(Node<'t>, bool)> {
+        let kind = child.kind();
+        if matches!(
+            kind,
+            "class_declaration"
+                | "struct_declaration"
+                | "record_declaration"
+                | "interface_declaration"
+        ) {
+            let is_ignored = class_ignored || self.has_ignore_attribute(child);
+            child
+                .child_by_field_name("body")
+                .map(|body| (body, is_ignored))
+        } else if kind == "method_declaration" {
+            let name_node = child.child_by_field_name("name");
+            let method_name = name_node.map(|n| self.text(n)).unwrap_or("");
+            if let Some((test_fn, calls)) = self.try_extract_method_test(child, class_ignored) {
+                self.facts.tests.push(test_fn);
+                self.test_calls.push(calls);
+            } else if self.is_test_path {
+                let mut helper_fn = TestFn::default();
+                let mut dummy_calls = Vec::new();
+                let mut wrap_body = None;
                 if let Some(body) = child.child_by_field_name("body") {
-                    self.walk_scope(body, is_ignored);
-                }
-            } else if kind == "method_declaration" {
-                let name_node = child.child_by_field_name("name");
-                let method_name = name_node.map(|n| self.text(n)).unwrap_or("");
-                if let Some((test_fn, calls)) = self.try_extract_method_test(child, class_ignored) {
-                    self.facts.tests.push(test_fn);
-                    self.test_calls.push(calls);
-                } else if self.is_test_path {
-                    let mut helper_fn = TestFn::default();
-                    let mut dummy_calls = Vec::new();
-                    let mut wrap_body = None;
-                    if let Some(body) = child.child_by_field_name("body") {
-                        wrap_body = Some(body);
-                        self.extract_assertions_in_body(body, &mut helper_fn, &mut dummy_calls);
-                    } else {
-                        let mut cursor = child.walk();
-                        for c in child.children(&mut cursor) {
-                            if c.kind() == "arrow_expression_clause" {
-                                wrap_body = Some(c);
-                                self.extract_assertions_in_body(
-                                    c,
-                                    &mut helper_fn,
-                                    &mut dummy_calls,
-                                );
-                            }
+                    wrap_body = Some(body);
+                    self.extract_assertions_in_body(body, &mut helper_fn, &mut dummy_calls);
+                } else {
+                    let mut cursor = child.walk();
+                    for c in child.children(&mut cursor) {
+                        if c.kind() == "arrow_expression_clause" {
+                            wrap_body = Some(c);
+                            self.extract_assertions_in_body(c, &mut helper_fn, &mut dummy_calls);
                         }
                     }
-                    helper_fn.total_asserts += super::count_failure_exits(
-                        child,
-                        self.src,
-                        &["throw_statement", "throw_expression"],
-                        &[],
-                        &["lambda_expression", "local_function_statement"],
-                    );
-                    let facts = super::HelperFacts::from_scan(
-                        &helper_fn,
-                        wrap_body.and_then(|b| {
-                            super::forwarding_wrapper_callee(
-                                b,
-                                &CS_WRAPPER,
-                                &CS_LOCALS,
-                                &dummy_calls,
-                                self.src,
-                            )
-                        }),
-                    );
-                    self.helpers.insert(method_name.to_string(), facts);
-                    let line = child.start_position().row + 1;
-                    let end_line = child.end_position().row + 1;
-                    self.facts.push_helper(
-                        super::TestHelperFacts::from_scan(
-                            method_name.to_string(),
-                            line,
-                            end_line,
-                            &helper_fn,
-                        ),
-                        dummy_calls,
-                    );
                 }
-            } else {
-                self.walk_scope(child, class_ignored);
+                helper_fn.total_asserts += super::count_failure_exits(
+                    child,
+                    self.src,
+                    &["throw_statement", "throw_expression"],
+                    &[],
+                    &["lambda_expression", "local_function_statement"],
+                );
+                let facts = super::HelperFacts::from_scan(
+                    &helper_fn,
+                    wrap_body.and_then(|b| {
+                        super::forwarding_wrapper_callee(
+                            b,
+                            &CS_WRAPPER,
+                            &CS_LOCALS,
+                            &dummy_calls,
+                            self.src,
+                        )
+                    }),
+                );
+                self.helpers.insert(method_name.to_string(), facts);
+                let line = child.start_position().row + 1;
+                let end_line = child.end_position().row + 1;
+                self.facts.push_helper(
+                    super::TestHelperFacts::from_scan(
+                        method_name.to_string(),
+                        line,
+                        end_line,
+                        &helper_fn,
+                    ),
+                    dummy_calls,
+                );
             }
+            None
+        } else {
+            Some((child, class_ignored))
         }
     }
 
@@ -1139,6 +1160,68 @@ public class NUnitTests
         assert_eq!(facts.tests.len(), 2);
         assert_eq!(facts.tests[0].name, "NUnitTest");
         assert!(facts.tests[1].ignored);
+    }
+
+    /// A class's `[Ignore]` reaches the tests of the classes nested in it and no test
+    /// after it: the scope walk reads a class's members before the next sibling, and
+    /// the classes read after an ignored one are not ignored.
+    #[test]
+    fn an_ignored_class_ignores_the_tests_nested_in_it_and_none_after_it() {
+        let src = r#"
+using NUnit.Framework;
+
+public class Before
+{
+    [Test]
+    public void First() { Assert.AreEqual(1, One()); }
+}
+
+[Ignore("not run")]
+public class Skipped
+{
+    [Test]
+    public void Second() { Assert.AreEqual(1, One()); }
+
+    public class Inner
+    {
+        public class Innermost
+        {
+            [Test]
+            public void Third() { Assert.AreEqual(1, One()); }
+        }
+    }
+
+    [Test]
+    public void Fourth() { Assert.AreEqual(1, One()); }
+}
+
+public class After
+{
+    public class Inner
+    {
+        [Test]
+        public void Fifth() { Assert.AreEqual(1, One()); }
+    }
+}
+"#;
+        let facts = CSharpPack
+            .extract("tests/ScopeTests.cs", src, &AssertVocabulary::default())
+            .expect("extract succeeds");
+        let read: Vec<(&str, bool)> = facts
+            .tests
+            .iter()
+            .map(|t| (t.name.as_str(), t.ignored))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                ("First", false),
+                ("Second", true),
+                ("Third", true),
+                ("Fourth", true),
+                ("Fifth", false),
+            ]
+        );
     }
 
     #[test]
