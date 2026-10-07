@@ -44,6 +44,7 @@
 //! only where none exists. An existing file is never rewritten, except by `--upgrade`
 //! when an earlier release generated it; otherwise the snippet to add is printed.
 
+use crate::style;
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
@@ -2406,6 +2407,271 @@ pub fn repo_root() -> Result<PathBuf> {
     match repo.workdir() {
         Some(w) => Ok(w.to_path_buf()),
         None => bail!("bare repositories have no working tree to install hooks into"),
+    }
+}
+
+/// The `discipline hook` subcommand.
+pub fn run_cli(args: crate::cli::HookArgs) -> Result<bool> {
+    use crate::cli::HookCommand;
+    use crate::hook::Installed;
+    use std::io::{IsTerminal, Read, Write};
+    match args.command {
+        HookCommand::Run(a) => {
+            let mut stdin = String::new();
+            // Only the agents that send a payload are read from: an inherited pipe that
+            // is never closed must not hang Aider's lint command.
+            if a.agent != crate::hook::Agent::Aider && !std::io::stdin().is_terminal() {
+                std::io::stdin()
+                    .read_to_string(&mut stdin)
+                    .context("cannot read the hook payload on stdin")?;
+            }
+            let out = if a.event == crate::cli::HookEvent::PreTool {
+                crate::pretool::run_with(a.agent, &stdin, a.observe, a.if_configured)
+            } else if a.event == crate::cli::HookEvent::SessionStart {
+                crate::pretool::session_start_with(a.agent, &stdin, a.if_configured)
+            } else {
+                crate::hook::run_with(a.agent, a.base, &stdin, a.if_configured, a.observe)?
+            };
+            print!("{}", out.stdout);
+            eprint!("{}", out.stderr);
+            std::io::stdout()
+                .flush()
+                .context("cannot write the hook response")?;
+            std::process::exit(i32::from(out.code));
+        }
+        HookCommand::Install(a) => {
+            let pin = match &a.pin_sums {
+                Some(_) if a.agent != crate::hook::Agent::ClaudeCode => bail!(
+                    "`--pin-sums` is for claude-code: it pins the digests the Claude Code bootstrap checks"
+                ),
+                Some(f) => Some(crate::hook::parse_release_sums(
+                    &std::fs::read_to_string(f)
+                        .with_context(|| format!("cannot read {}", f.display()))?,
+                )?),
+                None => None,
+            };
+            if a.timeout.is_some() && crate::hook::default_timeout(a.agent).is_none() {
+                bail!(
+                    "`--timeout` is for agy, qwen and copilot, whose hook files carry a check timeout; the {} file does not",
+                    a.agent.id()
+                );
+            }
+            let how = crate::hook::Refresh {
+                upgrade: a.upgrade,
+                force: a.force,
+            };
+            let mut results = vec![if a.user {
+                crate::hook::install_user(a.agent, a.observe, how, a.timeout)?
+            } else {
+                crate::hook::install_with(
+                    a.agent,
+                    &crate::hook::repo_root()?,
+                    a.observe,
+                    how,
+                    a.timeout,
+                )?
+            }];
+            if a.agent == crate::hook::Agent::ClaudeCode && !a.user {
+                results.push(crate::hook::install_claude_bootstrap_with(
+                    &crate::hook::repo_root()?,
+                    how,
+                    pin.as_ref(),
+                )?);
+            }
+            let mut cloud_note = None;
+            if a.cloud_agent {
+                if a.agent != crate::hook::Agent::Copilot {
+                    bail!("`--cloud-agent` is for copilot: Copilot cloud agent runs the repository's hooks");
+                }
+                let root = crate::hook::repo_root()?;
+                match crate::hook::non_github_remote_hosts(&root) {
+                    Some(hosts) => cloud_note = Some(format!(
+                        "`--cloud-agent` wrote nothing: Copilot cloud agent runs only on GitHub, and no remote of this repository is ({}), so {} would never run.",
+                        hosts.join(", "),
+                        crate::hook::COPILOT_SETUP_STEPS
+                    )),
+                    None => results.push(crate::hook::install_cloud_agent_with(&root, how)?),
+                }
+            }
+            let untrusted = (a.agent == crate::hook::Agent::Copilot && !a.user)
+                .then(|| {
+                    let home = crate::hook::copilot_home()?;
+                    crate::hook::copilot_untrusted_note(&home, &crate::hook::repo_root().ok()?)
+                })
+                .flatten();
+            // The mode of the agent's hook file after this run, when it is a generated
+            // file whose mode can be read: said with what was done to it.
+            let hook_file = match results.first() {
+                Some(
+                    Installed::Written(p)
+                    | Installed::AlreadyPresent(p)
+                    | Installed::Upgraded(p)
+                    | Installed::Outdated(p)
+                    | Installed::ModeDiffers(p)
+                    | Installed::Forced { path: p, .. },
+                ) => Some(p.clone()),
+                _ => None,
+            };
+            let observing = hook_file.as_ref().and_then(|p| {
+                let text = std::fs::read_to_string(p).ok()?;
+                crate::hook::generated_mode(a.agent, a.user, &text)
+            });
+            let mode_of = |p: &std::path::Path| match observing {
+                Some(true) if hook_file.as_deref() == Some(p) => ", in observe mode",
+                Some(false) if hook_file.as_deref() == Some(p) => ", in enforcing mode",
+                _ => "",
+            };
+            let mut ok = true;
+            for installed in results {
+                match installed {
+                    Installed::Written(p) => {
+                        println!("{} wrote {}", style::green("ok:"), p.display());
+                        if let Some(why) = crate::hook::ignored_by_git(&p) {
+                            println!("{} {why}", style::yellow("warning:"));
+                        }
+                    }
+                    Installed::AlreadyPresent(p) => {
+                        println!(
+                            "{} {} already runs discipline for {}{}",
+                            style::green("ok:"),
+                            p.display(),
+                            a.agent.id(),
+                            mode_of(&p)
+                        );
+                        // `hook install` only turns observe mode on; `--upgrade` keeps it.
+                        if !a.upgrade && !a.observe && mode_of(&p) == ", in observe mode" {
+                            println!(
+                                "{} {} is in observe mode and this command asked for enforcing mode; it was not changed. `hook install` only turns observe mode on: to enforce, delete the file and run this command again",
+                                style::yellow("note:"),
+                                p.display()
+                            );
+                        }
+                        if let Some(why) = crate::hook::ignored_by_git(&p) {
+                            println!("{} {why}", style::yellow("warning:"));
+                        }
+                    }
+                    Installed::Upgraded(p) => {
+                        println!(
+                            "{} upgraded {} to discipline {}{}",
+                            style::green("ok:"),
+                            p.display(),
+                            env!("CARGO_PKG_VERSION"),
+                            mode_of(&p)
+                        );
+                    }
+                    Installed::ModeDiffers(p) => {
+                        println!(
+                            "{} {} is in enforcing mode and this command asked for observe mode; it was not changed. Run this command again with `--upgrade` to rewrite it in observe mode",
+                            style::yellow("note:"),
+                            p.display()
+                        );
+                    }
+                    Installed::ModeUnreadable(p) => {
+                        println!(
+                            "{} was written by `discipline hook install` but its mode cannot be read (its observe-mode marker line and the `--observe` flag of its commands disagree); it was not changed. Run this command again with `--upgrade --observe` to rewrite it in observe mode (it then prints the difference, and needs `--force` when the file was changed after it was written), or delete the file and run `discipline hook install --agent {}` to write an enforcing one",
+                            p.display(),
+                            a.agent.id()
+                        );
+                        ok = false;
+                    }
+                    Installed::Outdated(p) => {
+                        println!(
+                            "{} {} was written by an earlier discipline release and differs from this one's; run this command again with `--upgrade` to rewrite it",
+                            style::yellow("note:"),
+                            p.display()
+                        );
+                    }
+                    Installed::PinKept(p) => {
+                        println!(
+                            "{} {} pins an earlier release's digests and was kept: rewriting it without them would trust the release's own SHA256SUMS. Run this command again with `--upgrade --pin-sums <SHA256SUMS of v{}>` to move it to this release",
+                            style::yellow("note:"),
+                            p.display(),
+                            env!("CARGO_PKG_VERSION")
+                        );
+                    }
+                    Installed::Refused(p, snippet) => {
+                        println!(
+                            "{} exists and was not changed. Merge this into it:\n\n{snippet}",
+                            p.display()
+                        );
+                        ok = false;
+                    }
+                    Installed::Differs(p, why) => {
+                        println!(
+                            "{} {} {}; it differs from what discipline {} writes and was not changed. Run this command again with `--upgrade` to see the difference; `--upgrade --force` overwrites the file",
+                            style::yellow("note:"),
+                            p.display(),
+                            unproven_reason(why),
+                            env!("CARGO_PKG_VERSION")
+                        );
+                    }
+                    Installed::LocalEdits {
+                        path,
+                        why,
+                        diff,
+                        snippet,
+                    } => {
+                        let merges = why == crate::hook::Unproven::OwnContent;
+                        if let Some(snippet) = snippet {
+                            println!(
+                                "{} exists and was not changed. Merge this into it:\n\n{snippet}",
+                                path.display()
+                            );
+                        }
+                        println!(
+                            "{} {} {}; it was not changed. {}, discarding the lines marked `-` below. Run this command again with `--upgrade --force` to do that{}:\n\n{diff}",
+                            style::red("refused:"),
+                            path.display(),
+                            unproven_reason(why),
+                            if merges {
+                                "`--force` replaces the discipline entries in it with this release's, keeps everything else and re-indents the file"
+                            } else {
+                                "`--force` overwrites it with what this release writes"
+                            },
+                            if why == crate::hook::Unproven::ShortTimeout {
+                                ", or with `--upgrade --timeout <seconds>` to keep a timeout"
+                            } else {
+                                ""
+                            }
+                        );
+                        ok = false;
+                    }
+                    Installed::Forced { path, why, diff } => {
+                        println!(
+                            "{} {} {} with what discipline {} writes{}. The lines marked `-` below were discarded:\n\n{diff}",
+                            style::green("ok:"),
+                            if why == crate::hook::Unproven::OwnContent {
+                                "replaced the discipline entries in"
+                            } else {
+                                "overwrote"
+                            },
+                            path.display(),
+                            env!("CARGO_PKG_VERSION"),
+                            mode_of(&path)
+                        );
+                    }
+                }
+            }
+            if let Some(note) = cloud_note {
+                println!("{} {note}", style::yellow("note:"));
+            }
+            if let Some(note) = untrusted {
+                println!("{} {note}", style::yellow("note:"));
+            }
+            Ok(ok)
+        }
+    }
+}
+
+/// Why `hook install` cannot tell an existing file from an edited one, as the clause after
+/// the file's name.
+fn unproven_reason(why: Unproven) -> &'static str {
+    use Unproven;
+    match why {
+        Unproven::NoDigest => "has the `hook install` header but carries no digest of its content (an earlier discipline release wrote none), so what that release wrote cannot be told from a later edit",
+        Unproven::Edited => "was changed after `hook install` wrote it (the digest on its `discipline-hook-file:` line does not match its content)",
+        Unproven::OwnContent => "has hooks or settings of its own, and its discipline entries differ from this release's (entries an earlier release wrote cannot be told from edited ones there)",
+        Unproven::ShortTimeout => "has a check timeout below the default, which `hook install` writes only when `--timeout` says so",
     }
 }
 

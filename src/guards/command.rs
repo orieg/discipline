@@ -880,6 +880,44 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
     // Collect resolved commands (from top-level command/preset and commands list)
     let mut resolved = Vec::new();
 
+    resolve_table_command(ctx, gate, &mut resolved)?;
+    resolve_entry_commands(ctx, gate, &mut resolved)?;
+
+    if resolved.is_empty() {
+        outcome.notes.push("no commands declared".to_string());
+        return Ok(outcome);
+    }
+
+    // The commands are the base's own text, so the guard above lets them run; that they
+    // run at all is this change's doing, which the report should say.
+    if base_disables_gate(ctx)? {
+        outcome.notes.push(
+            "`[gates.command]` is disabled on the base side and this change enables it: the commands the base configuration declares were run"
+                .to_string(),
+        );
+    }
+
+    for item in resolved {
+        if item.is_base_tests {
+            evaluate_base_tests(ctx, &item, gate, &mut outcome)?;
+            continue;
+        }
+
+        evaluate_one_command(ctx, gate, item, &mut outcome)?;
+
+        outcome.examined += 1;
+    }
+
+    Ok(outcome)
+}
+
+/// Resolves the command `[gates.command]` itself declares (its `command` or `preset`),
+/// when it declares one.
+fn resolve_table_command(
+    ctx: &Context,
+    gate: &crate::config::CommandGate,
+    resolved: &mut Vec<ResolvedCommand>,
+) -> Result<()> {
     let runner_default = runner_command(None);
     let preset_def = match gate.preset.as_deref() {
         Some(name) => match presets::resolve_preset(name) {
@@ -959,6 +997,15 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
         ));
     }
 
+    Ok(())
+}
+
+/// Resolves every `[[gates.command.commands]]` entry over the table's own keys.
+fn resolve_entry_commands(
+    ctx: &Context,
+    gate: &crate::config::CommandGate,
+    resolved: &mut Vec<ResolvedCommand>,
+) -> Result<()> {
     for entry in &gate.commands {
         let preset_def = match entry.preset.as_deref() {
             Some(name) => match presets::resolve_preset(name) {
@@ -1060,83 +1107,141 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
         });
     }
 
-    if resolved.is_empty() {
-        outcome.notes.push("no commands declared".to_string());
-        return Ok(outcome);
-    }
+    Ok(())
+}
 
-    // The commands are the base's own text, so the guard above lets them run; that they
-    // run at all is this change's doing, which the report should say.
-    if base_disables_gate(ctx)? {
-        outcome.notes.push(
-            "`[gates.command]` is disabled on the base side and this change enables it: the commands the base configuration declares were run"
-                .to_string(),
-        );
-    }
+/// Runs one resolved command and judges it: its policy files, its canary, the run itself,
+/// its snapshot and its count against the ratchet, then the findings or the directive that
+/// lifts them.
+fn evaluate_one_command(
+    ctx: &Context,
+    gate: &crate::config::CommandGate,
+    item: ResolvedCommand,
+    outcome: &mut GateOutcome,
+) -> Result<()> {
+    let mut command_violations: Vec<Violation> = Vec::new();
 
-    for item in resolved {
-        if item.is_base_tests {
-            evaluate_base_tests(ctx, &item, gate, &mut outcome)?;
-            continue;
+    check_policy_files(ctx, &item, &mut command_violations)?;
+
+    check_canary(ctx, &item, &mut command_violations)?;
+
+    // 2. Primary command execution
+    let run_res = run_command_bounded(
+        &item.name,
+        &item.command,
+        item.timeout_seconds,
+        ctx.git.root(),
+    )?;
+    if run_res.stdout_truncated || run_res.stderr_truncated {
+        // Every pattern is matched against stdout and stderr together.
+        let reads_output = if !item.forbid_output.is_empty() {
+            Some("`forbid_output`")
+        } else if item.zero_items_pattern.is_some() {
+            Some("`zero_items_pattern`")
+        } else if item.count_pattern.is_some() {
+            Some("`count_pattern`")
+        } else {
+            None
+        };
+        match reads_output {
+            Some(what) => return Err(incomplete_capture(&item.name, what)),
+            // The snapshot comparison reads stdout alone and refuses a cut one itself.
+            None => outcome.notes.push(format!(
+                "command `{}`: output went past the {MAX_CAPTURE_BYTES}-byte capture limit or could not be read; no output pattern is configured, so only the exit status was judged",
+                item.name
+            )),
         }
+    }
 
-        let mut command_violations: Vec<Violation> = Vec::new();
+    let extracted_count = check_run_output(&item, &run_res, &mut command_violations)?;
 
-        // 0. Check required policy files for stealth deletion
-        for pf in &item.policy_files {
-            if ctx.git.base_content(pf)?.is_some() {
-                let pf_path = ctx.git.root().join(pf);
-                if !pf_path.exists() {
-                    command_violations.push(
-                        Violation::new(
-                            &crate::findings::POLICY_FILE_DELETED,
-                            format!(
+    // Compare stdout with the committed snapshot. A failed run's output is not compared.
+    if let Some(ref snap) = item.snapshot {
+        if run_res.status.success() {
+            if let Some(v) = check_snapshot(ctx, &item, snap, &run_res)? {
+                command_violations.push(v);
+            }
+        } else {
+            outcome.notes.push(format!(
+                "command `{}`: snapshot `{}` not compared: the command failed",
+                item.name, snap.path
+            ));
+        }
+    }
+
+    check_count_ratchet(
+        ctx,
+        &item,
+        extracted_count,
+        outcome,
+        &mut command_violations,
+    )?;
+
+    apply_findings(ctx, gate, &item, command_violations, outcome);
+
+    Ok(())
+}
+
+/// A policy file the base has and the working tree does not.
+fn check_policy_files(
+    ctx: &Context,
+    item: &ResolvedCommand,
+    command_violations: &mut Vec<Violation>,
+) -> Result<()> {
+    // 0. Check required policy files for stealth deletion
+    for pf in &item.policy_files {
+        if ctx.git.base_content(pf)?.is_some() {
+            let pf_path = ctx.git.root().join(pf);
+            if !pf_path.exists() {
+                command_violations.push(
+                    Violation::new(
+                        &crate::findings::POLICY_FILE_DELETED,
+                        format!(
                             "Command `{}` required policy file `{pf}` was deleted in this change.",
                             item.name
                         ),
-                            "Restore the policy file or justify its removal.",
-                        )
-                        .about(pf),
-                    );
-                }
+                        "Restore the policy file or justify its removal.",
+                    )
+                    .about(pf),
+                );
             }
         }
+    }
 
-        // 1. Negative-control canary execution
-        if let Some(ref canary_cmd) = item.canary_command {
-            let canary_res = run_command_bounded(
-                &format!("{}:canary", item.name),
-                canary_cmd,
-                item.timeout_seconds,
-                ctx.git.root(),
+    Ok(())
+}
+
+/// Runs the command's negative-control canary, when it has one.
+fn check_canary(
+    ctx: &Context,
+    item: &ResolvedCommand,
+    command_violations: &mut Vec<Violation>,
+) -> Result<()> {
+    // 1. Negative-control canary execution
+    if let Some(ref canary_cmd) = item.canary_command {
+        let canary_res = run_command_bounded(
+            &format!("{}:canary", item.name),
+            canary_cmd,
+            item.timeout_seconds,
+            ctx.git.root(),
+        )?;
+        let canary_output = format!("{}\n{}", canary_res.stdout, canary_res.stderr);
+        if let Some(ref expected_diag) = item.canary_expected_diagnostic {
+            let expected = output_pattern(
+                expected_diag,
+                &entry_key(None, "canary_expected_diagnostic"),
             )?;
-            let canary_output = format!("{}\n{}", canary_res.stdout, canary_res.stderr);
-            if let Some(ref expected_diag) = item.canary_expected_diagnostic {
-                let expected = output_pattern(
-                    expected_diag,
-                    &entry_key(None, "canary_expected_diagnostic"),
-                )?;
-                if !expected.is_match(&canary_output) {
-                    command_violations.push(Violation::new(
-                        &crate::findings::CANARY_DIAGNOSTIC_MISSING,
-                        format!(
-                            "Command `{}` negative-control canary did not produce expected diagnostic `{expected_diag}`.",
-                            item.name
-                        ),
-                        "Ensure negative-control canary produces the expected diagnostic or failure message.",
-                    ));
-                }
-                if canary_res.status.success() {
-                    command_violations.push(Violation::new(
-                        &crate::findings::CANARY_COMMAND_SUCCEEDED,
-                        format!(
-                            "Command `{}` negative-control canary exited with status 0 but was expected to fail.",
-                            item.name
-                        ),
-                        "Ensure negative-control canary fails when testing invalid or error conditions.",
-                    ));
-                }
-            } else if canary_res.status.success() {
+            if !expected.is_match(&canary_output) {
+                command_violations.push(Violation::new(
+                    &crate::findings::CANARY_DIAGNOSTIC_MISSING,
+                    format!(
+                        "Command `{}` negative-control canary did not produce expected diagnostic `{expected_diag}`.",
+                        item.name
+                    ),
+                    "Ensure negative-control canary produces the expected diagnostic or failure message.",
+                ));
+            }
+            if canary_res.status.success() {
                 command_violations.push(Violation::new(
                     &crate::findings::CANARY_COMMAND_SUCCEEDED,
                     format!(
@@ -1146,196 +1251,191 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
                     "Ensure negative-control canary fails when testing invalid or error conditions.",
                 ));
             }
-        }
-
-        // 2. Primary command execution
-        let run_res = run_command_bounded(
-            &item.name,
-            &item.command,
-            item.timeout_seconds,
-            ctx.git.root(),
-        )?;
-        let combined_output = format!("{}\n{}", run_res.stdout, run_res.stderr);
-        if run_res.stdout_truncated || run_res.stderr_truncated {
-            // Every pattern is matched against stdout and stderr together.
-            let reads_output = if !item.forbid_output.is_empty() {
-                Some("`forbid_output`")
-            } else if item.zero_items_pattern.is_some() {
-                Some("`zero_items_pattern`")
-            } else if item.count_pattern.is_some() {
-                Some("`count_pattern`")
-            } else {
-                None
-            };
-            match reads_output {
-                Some(what) => return Err(incomplete_capture(&item.name, what)),
-                // The snapshot comparison reads stdout alone and refuses a cut one itself.
-                None => outcome.notes.push(format!(
-                    "command `{}`: output went past the {MAX_CAPTURE_BYTES}-byte capture limit or could not be read; no output pattern is configured, so only the exit status was judged",
-                    item.name
-                )),
-            }
-        }
-
-        // Check exit status
-        if !run_res.status.success() {
-            let code_str = run_res
-                .status
-                .code()
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| "signal".to_string());
+        } else if canary_res.status.success() {
             command_violations.push(Violation::new(
-                &crate::findings::COMMAND_FAILED,
+                &crate::findings::CANARY_COMMAND_SUCCEEDED,
                 format!(
-                    "Command `{}` failed with exit status {code_str}.",
+                    "Command `{}` negative-control canary exited with status 0 but was expected to fail.",
                     item.name
                 ),
-                "Fix errors reported by the command execution.",
+                "Ensure negative-control canary fails when testing invalid or error conditions.",
             ));
         }
-
-        // Check forbid_output patterns
-        for pattern in &item.forbid_output {
-            // Checked with the configuration before any gate runs; compiled the same way
-            // here so a caller that skips that check gets the error, not a literal match.
-            if output_pattern(pattern, &entry_key(None, "forbid_output"))?
-                .is_match(&combined_output)
-            {
-                command_violations.push(
-                    Violation::new(
-                        &crate::findings::FORBIDDEN_OUTPUT,
-                        format!(
-                            "Command `{}` produced forbidden output matching pattern `{pattern}`.",
-                            item.name
-                        ),
-                        "Eliminate forbidden output patterns from verification command execution.",
-                    )
-                    .about(pattern),
-                );
-            }
-        }
-
-        // Check count pattern & zero-items detection
-        let mut zero_items = false;
-        if let Some(ref zpat) = item.zero_items_pattern {
-            zero_items = output_pattern(zpat, &entry_key(None, "zero_items_pattern"))?
-                .is_match(&combined_output);
-        }
-
-        // Checked with the configuration before any gate runs; compiled the same way here
-        // so a caller that skips that check gets the error, not a count that is never read.
-        let extracted_count = match item.count_pattern {
-            Some(ref cpat) => super::capture_pattern(cpat, &count_pattern_key(None))?
-                .captures(&combined_output)
-                .and_then(|caps| caps.get(1))
-                .and_then(|m| m.as_str().parse::<u64>().ok()),
-            None => None,
-        };
-
-        if item.count_pattern.is_some() && extracted_count == Some(0) {
-            zero_items = true;
-        }
-
-        if !item.allow_zero && zero_items {
-            command_violations.push(Violation::new(
-                &crate::findings::ZERO_ITEMS_EXECUTED,
-                format!("Command `{}` selected or executed zero items.", item.name),
-                "Ensure test or verification commands select and execute tests.",
-            ));
-        }
-
-        // Compare stdout with the committed snapshot. A failed run's output is not compared.
-        if let Some(ref snap) = item.snapshot {
-            if run_res.status.success() {
-                if let Some(v) = check_snapshot(ctx, &item, snap, &run_res)? {
-                    command_violations.push(v);
-                }
-            } else {
-                outcome.notes.push(format!(
-                    "command `{}`: snapshot `{}` not compared: the command failed",
-                    item.name, snap.path
-                ));
-            }
-        }
-
-        // Check count ratchet against BASE ref
-        let base_min = get_base_min_count(ctx, &item.name)?;
-        if base_config_does_not_load(ctx)? {
-            let note = "the base-side configuration does not load with this binary; the base `min_count` ratchet was not checked";
-            if !outcome.notes.iter().any(|n| n == note) {
-                outcome.notes.push(note.to_string());
-            }
-        }
-        let effective_floor = item.min_count.unwrap_or(0).max(base_min.unwrap_or(0));
-
-        if effective_floor > 0 {
-            match extracted_count {
-                Some(cnt) if cnt < effective_floor => {
-                    command_violations.push(Violation::new(
-                        &crate::findings::COUNT_BELOW_RATCHET,
-                        format!(
-                            "Command `{}` count {cnt} fell below ratchet floor {effective_floor} (enforced from base ref).",
-                            item.name
-                        ),
-                        "Restore missing tests or justify ratchet lowering with an explicit override.",
-                    ));
-                }
-                None if item.count_pattern.is_some() => {
-                    command_violations.push(Violation::new(
-                        &crate::findings::COUNT_PATTERN_UNMATCHED,
-                        format!(
-                            "Command `{}` count pattern could not extract count to verify against ratchet floor {effective_floor}.",
-                            item.name
-                        ),
-                        "Ensure count_pattern matches command output format.",
-                    ));
-                }
-                _ => {}
-            }
-        }
-
-        // Apply findings or an override directive covering this command name or
-        // "default". One directive lifts every finding of the command; the record names
-        // the first, as the report would list it.
-        if let Some(first) = command_violations.first() {
-            let lifts = first.kind;
-            let override_rec = ctx
-                .find_override(GATE, lifts, tokens::ALLOW_COMMAND, &item.name)
-                .or_else(|| {
-                    if item.name != "default" {
-                        ctx.find_override(GATE, lifts, tokens::ALLOW_COMMAND, "default")
-                    } else {
-                        None
-                    }
-                });
-            if let Some(rec) = override_rec {
-                outcome.overrides.push(rec);
-            } else {
-                for v in command_violations {
-                    outcome.push(
-                        gate.severity(),
-                        v.kind,
-                        Some(v.file.as_deref().unwrap_or(ctx.config_path)),
-                        v.line,
-                        v.message,
-                        &v.remediation,
-                    );
-                    // Located at the configuration file, which every command shares: the
-                    // command's name tells its findings from another command's.
-                    if v.file.is_none() {
-                        outcome.anchor_last(match &v.detail {
-                            Some(d) => format!("command:{}:{d}", item.name),
-                            None => format!("command:{}", item.name),
-                        });
-                    }
-                }
-            }
-        }
-
-        outcome.examined += 1;
     }
 
-    Ok(outcome)
+    Ok(())
+}
+
+/// Judges a run by its exit status and its output patterns. Returns the count
+/// `count_pattern` read from the output, when it read one.
+fn check_run_output(
+    item: &ResolvedCommand,
+    run_res: &CommandRunResult,
+    command_violations: &mut Vec<Violation>,
+) -> Result<Option<u64>> {
+    let combined_output = format!("{}\n{}", run_res.stdout, run_res.stderr);
+
+    // Check exit status
+    if !run_res.status.success() {
+        let code_str = run_res
+            .status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "signal".to_string());
+        command_violations.push(Violation::new(
+            &crate::findings::COMMAND_FAILED,
+            format!(
+                "Command `{}` failed with exit status {code_str}.",
+                item.name
+            ),
+            "Fix errors reported by the command execution.",
+        ));
+    }
+
+    // Check forbid_output patterns
+    for pattern in &item.forbid_output {
+        // Checked with the configuration before any gate runs; compiled the same way
+        // here so a caller that skips that check gets the error, not a literal match.
+        if output_pattern(pattern, &entry_key(None, "forbid_output"))?.is_match(&combined_output) {
+            command_violations.push(
+                Violation::new(
+                    &crate::findings::FORBIDDEN_OUTPUT,
+                    format!(
+                        "Command `{}` produced forbidden output matching pattern `{pattern}`.",
+                        item.name
+                    ),
+                    "Eliminate forbidden output patterns from verification command execution.",
+                )
+                .about(pattern),
+            );
+        }
+    }
+
+    // Check count pattern & zero-items detection
+    let mut zero_items = false;
+    if let Some(ref zpat) = item.zero_items_pattern {
+        zero_items = output_pattern(zpat, &entry_key(None, "zero_items_pattern"))?
+            .is_match(&combined_output);
+    }
+
+    // Checked with the configuration before any gate runs; compiled the same way here
+    // so a caller that skips that check gets the error, not a count that is never read.
+    let extracted_count = match item.count_pattern {
+        Some(ref cpat) => super::capture_pattern(cpat, &count_pattern_key(None))?
+            .captures(&combined_output)
+            .and_then(|caps| caps.get(1))
+            .and_then(|m| m.as_str().parse::<u64>().ok()),
+        None => None,
+    };
+
+    if item.count_pattern.is_some() && extracted_count == Some(0) {
+        zero_items = true;
+    }
+
+    if !item.allow_zero && zero_items {
+        command_violations.push(Violation::new(
+            &crate::findings::ZERO_ITEMS_EXECUTED,
+            format!("Command `{}` selected or executed zero items.", item.name),
+            "Ensure test or verification commands select and execute tests.",
+        ));
+    }
+
+    Ok(extracted_count)
+}
+
+/// Holds the count a command reported to its floor: its own `min_count` or the base's,
+/// whichever is higher.
+fn check_count_ratchet(
+    ctx: &Context,
+    item: &ResolvedCommand,
+    extracted_count: Option<u64>,
+    outcome: &mut GateOutcome,
+    command_violations: &mut Vec<Violation>,
+) -> Result<()> {
+    // Check count ratchet against BASE ref
+    let base_min = get_base_min_count(ctx, &item.name)?;
+    if base_config_does_not_load(ctx)? {
+        let note = "the base-side configuration does not load with this binary; the base `min_count` ratchet was not checked";
+        if !outcome.notes.iter().any(|n| n == note) {
+            outcome.notes.push(note.to_string());
+        }
+    }
+    let effective_floor = item.min_count.unwrap_or(0).max(base_min.unwrap_or(0));
+
+    if effective_floor > 0 {
+        match extracted_count {
+            Some(cnt) if cnt < effective_floor => {
+                command_violations.push(Violation::new(
+                    &crate::findings::COUNT_BELOW_RATCHET,
+                    format!(
+                        "Command `{}` count {cnt} fell below ratchet floor {effective_floor} (enforced from base ref).",
+                        item.name
+                    ),
+                    "Restore missing tests or justify ratchet lowering with an explicit override.",
+                ));
+            }
+            None if item.count_pattern.is_some() => {
+                command_violations.push(Violation::new(
+                    &crate::findings::COUNT_PATTERN_UNMATCHED,
+                    format!(
+                        "Command `{}` count pattern could not extract count to verify against ratchet floor {effective_floor}.",
+                        item.name
+                    ),
+                    "Ensure count_pattern matches command output format.",
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+/// Reports one command's findings, or records the directive that lifts them.
+fn apply_findings(
+    ctx: &Context,
+    gate: &crate::config::CommandGate,
+    item: &ResolvedCommand,
+    command_violations: Vec<Violation>,
+    outcome: &mut GateOutcome,
+) {
+    // Apply findings or an override directive covering this command name or
+    // "default". One directive lifts every finding of the command; the record names
+    // the first, as the report would list it.
+    if let Some(first) = command_violations.first() {
+        let lifts = first.kind;
+        let override_rec = ctx
+            .find_override(GATE, lifts, tokens::ALLOW_COMMAND, &item.name)
+            .or_else(|| {
+                if item.name != "default" {
+                    ctx.find_override(GATE, lifts, tokens::ALLOW_COMMAND, "default")
+                } else {
+                    None
+                }
+            });
+        if let Some(rec) = override_rec {
+            outcome.overrides.push(rec);
+        } else {
+            for v in command_violations {
+                outcome.push(
+                    gate.severity(),
+                    v.kind,
+                    Some(v.file.as_deref().unwrap_or(ctx.config_path)),
+                    v.line,
+                    v.message,
+                    &v.remediation,
+                );
+                // Located at the configuration file, which every command shares: the
+                // command's name tells its findings from another command's.
+                if v.file.is_none() {
+                    outcome.anchor_last(match &v.detail {
+                        Some(d) => format!("command:{}:{d}", item.name),
+                        None => format!("command:{}", item.name),
+                    });
+                }
+            }
+        }
+    }
 }
 
 /// Compares one command's stdout with its snapshot. Output that cannot be compared is exit 2;
