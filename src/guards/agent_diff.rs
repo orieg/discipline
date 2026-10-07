@@ -66,19 +66,52 @@ pub(crate) fn assert_vocabulary(config: &crate::config::DisciplineConfig) -> Ass
 
 pub(crate) fn assert_vocabulary_for_head(ctx: &Context) -> Result<AssertVocabulary> {
     let mut vocab = assert_vocabulary(ctx.config);
-    let tracked = ctx.git.tracked_files()?;
-    let reads = crate::gitctx::ReadRecorder::new();
-    let head = reads.head(ctx.git);
-    vocab.runner_rules = crate::ast::runner_collection::RunnerCollectionRules::from_tree(
-        |path| {
-            head(path).or_else(|| {
-                std::fs::read_to_string(std::path::Path::new(ctx.git.root()).join(path)).ok()
-            })
-        },
-        &tracked,
-    );
-    reads.finish()?;
+    vocab.runner_rules = head_runner_rules(ctx)?;
     Ok(vocab)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Every path a build of the head-side rules read, in order, for the tests that
+    /// count builds and reads.
+    static HEAD_RULE_READS: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+thread_local! {
+    /// The runner collection rules of the head side of the last run that asked for
+    /// them, by the run's id.
+    static HEAD_RUNNER_RULES: RulesSlot = const { std::cell::RefCell::new(None) };
+}
+
+/// The runner collection rules of the head side. They are read from the working tree
+/// (the index, for a staged run) and from nothing else, and neither changes during a
+/// run, so the rules built for one opened repository are the rules of every later
+/// request in that run: the diff gates and `test-floor` read each manifest, and each
+/// JavaScript or TypeScript file for its `node:test` import, once. The working tree has
+/// no object id to name it, so the key is the run itself ([`crate::gitctx::GitCtx::run_id`]),
+/// which no other opened repository shares. A build that met a read error is not kept.
+fn head_runner_rules(
+    ctx: &Context,
+) -> Result<crate::ast::runner_collection::RunnerCollectionRules> {
+    let run = ctx.git.run_id().to_string();
+    rules_for_key(&HEAD_RUNNER_RULES, Some(&run), || {
+        let tracked = ctx.git.tracked_files()?;
+        let reads = crate::gitctx::ReadRecorder::new();
+        let head = reads.head(ctx.git);
+        let rules = crate::ast::runner_collection::RunnerCollectionRules::from_tree(
+            |path| {
+                #[cfg(test)]
+                HEAD_RULE_READS.with(|reads| reads.borrow_mut().push(path.to_string()));
+                head(path).or_else(|| {
+                    std::fs::read_to_string(std::path::Path::new(ctx.git.root()).join(path)).ok()
+                })
+            },
+            &tracked,
+        );
+        reads.finish()?;
+        Ok(rules)
+    })
 }
 
 /// A base configuration that does not load falls back to the head vocabulary:
@@ -93,11 +126,13 @@ pub(crate) fn assert_vocabulary_for_base(ctx: &Context) -> Result<AssertVocabula
     Ok(vocab)
 }
 
+/// One kept set of runner collection rules, with the key it was built for.
+type RulesSlot =
+    std::cell::RefCell<Option<(String, crate::ast::runner_collection::RunnerCollectionRules)>>;
+
 thread_local! {
     /// The runner collection rules of the last base tree read, by the tree's object id.
-    static BASE_RUNNER_RULES: std::cell::RefCell<
-        Option<(String, crate::ast::runner_collection::RunnerCollectionRules)>,
-    > = const { std::cell::RefCell::new(None) };
+    static BASE_RUNNER_RULES: RulesSlot = const { std::cell::RefCell::new(None) };
 }
 
 /// The rules kept for the tree `id`, or those `build` returns, which are then kept for
@@ -107,10 +142,20 @@ fn rules_for_tree(
     id: Option<&str>,
     build: impl FnOnce() -> Result<crate::ast::runner_collection::RunnerCollectionRules>,
 ) -> Result<crate::ast::runner_collection::RunnerCollectionRules> {
+    rules_for_key(&BASE_RUNNER_RULES, id, build)
+}
+
+/// As [`rules_for_tree`], in the slot `slot` and for any key that names what the rules
+/// were read from.
+fn rules_for_key(
+    slot: &'static std::thread::LocalKey<RulesSlot>,
+    id: Option<&str>,
+    build: impl FnOnce() -> Result<crate::ast::runner_collection::RunnerCollectionRules>,
+) -> Result<crate::ast::runner_collection::RunnerCollectionRules> {
     let Some(id) = id else {
         return build();
     };
-    let kept = BASE_RUNNER_RULES.with(|cache| {
+    let kept = slot.with(|cache| {
         cache
             .borrow()
             .as_ref()
@@ -121,7 +166,7 @@ fn rules_for_tree(
         return Ok(rules);
     }
     let rules = build()?;
-    BASE_RUNNER_RULES.with(|cache| *cache.borrow_mut() = Some((id.to_string(), rules.clone())));
+    slot.with(|cache| *cache.borrow_mut() = Some((id.to_string(), rules.clone())));
     Ok(rules)
 }
 
@@ -5891,5 +5936,106 @@ mod base_rules_cache_tests {
         let after = rules_for_tree(Some("cache-test-tree-c"), build("c")).unwrap();
         assert_eq!(after, rules_with("c"));
         assert_eq!(builds.get(), 6);
+    }
+}
+
+#[cfg(test)]
+mod head_rules_cache_tests {
+    use super::{assert_vocabulary_for_head, HEAD_RULE_READS};
+    use crate::gitctx::GitCtx;
+    use crate::guards::Context;
+
+    const NODE_TEST: &str = "import test from 'node:test';\ntest('one', () => {});\n";
+    const PACKAGE: &str = r#"{"name": "app", "scripts": {"test": "node --test"}}"#;
+
+    /// A repository whose one commit holds a manifest and two JavaScript test files.
+    fn repository() -> (tempfile::TempDir, git2::Oid) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let mut index = repo.index().unwrap();
+        for (path, content) in [
+            ("package.json", PACKAGE),
+            ("test/a.test.js", NODE_TEST),
+            ("test/b.test.js", NODE_TEST),
+        ] {
+            let full = dir.path().join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, content).unwrap();
+            index.add_path(std::path::Path::new(path)).unwrap();
+        }
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.invalid").unwrap();
+        let commit = repo
+            .commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+            .unwrap();
+        (dir, commit)
+    }
+
+    fn context<'a>(config: &'a crate::config::DisciplineConfig, git: &'a GitCtx) -> Context<'a> {
+        Context {
+            config,
+            head_config: None,
+            git,
+            config_path: "discipline.toml",
+            baseline_path: None,
+            baseline: None,
+            staged: false,
+            pr_title: None,
+            pr_body: None,
+            directives: Vec::new(),
+            directive_notes: Vec::new(),
+            bench_provenance: None,
+            allow_cross_host_bench: false,
+            bench_base_file: None,
+            bench_head_file: None,
+            test_base_report: None,
+            test_head_report: None,
+            test_report: None,
+            forge: None,
+        }
+    }
+
+    /// How many times the builds so far read `path`.
+    fn reads_of(path: &str) -> usize {
+        HEAD_RULE_READS.with(|reads| reads.borrow().iter().filter(|p| *p == path).count())
+    }
+
+    /// The diff gates and `test-floor` both ask for the head-side rules. In one run the
+    /// rules are built once: each manifest, and each JavaScript file for its `node:test`
+    /// import, is read once. Another opened repository builds its own.
+    #[test]
+    fn two_gates_in_one_run_build_the_head_side_rules_once() {
+        let (dir, commit) = repository();
+        let config = crate::config::DisciplineConfig::default_for_repo("cache-test");
+        let open = || GitCtx::for_test(git2::Repository::open(dir.path()).unwrap(), Some(commit));
+        HEAD_RULE_READS.with(|reads| reads.borrow_mut().clear());
+        let git = open();
+        let ctx = context(&config, &git);
+
+        // The diff gates.
+        let outcomes = super::run(&ctx).unwrap();
+        assert!(!outcomes.is_empty());
+        assert_eq!(reads_of("test/a.test.js"), 1);
+        assert_eq!(reads_of("test/b.test.js"), 1);
+        let manifest_reads = reads_of("package.json");
+        assert!(manifest_reads >= 1);
+        // `test-floor`, in the same run: nothing is read again.
+        let floor = crate::guards::test_floor::evaluate_test_floor(&ctx).unwrap();
+        assert_eq!(floor.examined, 2, "{:?}", floor.notes);
+        assert_eq!(reads_of("test/a.test.js"), 1);
+        assert_eq!(reads_of("test/b.test.js"), 1);
+        assert_eq!(reads_of("package.json"), manifest_reads);
+        let kept = assert_vocabulary_for_head(&ctx).unwrap();
+        assert!(kept.runner_rules.js.node_test_script);
+        assert_eq!(reads_of("test/a.test.js"), 1);
+
+        // Another run over a changed working tree reads it again, and sees the change.
+        std::fs::write(dir.path().join("package.json"), r#"{"name": "app"}"#).unwrap();
+        let later = open();
+        let ctx = context(&config, &later);
+        let rebuilt = assert_vocabulary_for_head(&ctx).unwrap();
+        assert!(!rebuilt.runner_rules.js.node_test_script);
+        assert_eq!(reads_of("test/a.test.js"), 2);
     }
 }

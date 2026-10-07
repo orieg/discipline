@@ -953,6 +953,90 @@ not_vacuous!(
     "assert.doesNotThrow(() => f(1));"
 );
 
+// Deno's standard assertion module: `assertThrows(fn, Class, includes, message)` and
+// `assertRejects(..)`, imported by name (#650).
+const DENO_ASSERT: &str = "import { assertThrows, assertRejects } from \"jsr:@std/assert\";\n";
+const DENO_ASSERT_URL: &str =
+    "import { assertThrows } from \"https://deno.land/std@0.224.0/assert/mod.ts\";\n";
+const NOT_DENO_ASSERT: &str = "import { assertThrows } from \"./helpers.ts\";\n";
+
+reported!(
+    ts_deno_assert_throws_widened_is_reported,
+    Ts,
+    [DENO_ASSERT],
+    "assertThrows(() => f(-1), RangeError);",
+    "assertThrows(() => f(-1), Error);",
+    "from `RangeError` to `Error`"
+);
+
+reported!(
+    ts_deno_assert_throws_type_dropped_is_reported,
+    Ts,
+    [DENO_ASSERT_URL],
+    "assertThrows(() => f(-1), RangeError);",
+    "assertThrows(() => f(-1));",
+    "type was removed"
+);
+
+reported!(
+    ts_deno_assert_throws_message_text_dropped_is_reported,
+    Ts,
+    [DENO_ASSERT],
+    "assertThrows(() => f(-1), RangeError, \"negative\");",
+    "assertThrows(() => f(-1), RangeError);",
+    "matcher was removed"
+);
+
+reported!(
+    ts_deno_assert_rejects_widened_is_reported,
+    Ts,
+    [DENO_ASSERT],
+    "await assertRejects(() => f(-1), RangeError);",
+    "await assertRejects(() => f(-1), Error);",
+    "from `RangeError` to `Error`"
+);
+
+silent!(
+    ts_deno_assert_throws_narrowed_is_silent,
+    Ts,
+    [DENO_ASSERT],
+    "assertThrows(() => f(-1), Error);",
+    "assertThrows(() => f(-2), RangeError);"
+);
+
+// The fourth argument, and a text given with no class, is the message of the assertion.
+silent!(
+    ts_deno_assert_throws_assertion_message_dropped_is_silent,
+    Ts,
+    [DENO_ASSERT],
+    "assertThrows(() => f(-1), RangeError, \"negative\", \"must reject\");",
+    "assertThrows(() => f(-1), RangeError, \"negative\");"
+);
+
+silent!(
+    ts_deno_assert_throws_message_alone_dropped_is_silent,
+    Ts,
+    [DENO_ASSERT],
+    "assertThrows(() => f(-1), \"must reject\");",
+    "assertThrows(() => f(-1));"
+);
+
+// A function of that name from another module is not the standard one.
+silent!(
+    ts_assert_throws_of_another_module_is_not_read,
+    Ts,
+    [NOT_DENO_ASSERT],
+    "assertThrows(() => f(-1), RangeError);",
+    "assertThrows(() => f(-1), Error);"
+);
+
+not_vacuous!(
+    ts_deno_assert_throws_only_test_is_not_vacuous,
+    Ts,
+    [DENO_ASSERT],
+    "assertThrows(() => f(-1), RangeError);"
+);
+
 reported!(
     js_chai_expect_throw_widened_is_reported,
     Js,

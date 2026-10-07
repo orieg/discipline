@@ -1545,6 +1545,22 @@ pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
         let Some(callee) = node.child_by_field_name("function") else {
             return true;
         };
+        // `assertThrows(..)` / `assertRejects(..)` imported by name from Deno's standard
+        // assertion module.
+        if callee.kind() == "identifier" {
+            let method = match text(callee, src) {
+                "assertThrows" => "throws",
+                "assertRejects" => "rejects",
+                _ => return true,
+            };
+            let from_std = modules.iter().any(|(local, module)| {
+                local == text(callee, src) && super::javascript::is_std_assert_module(module)
+            });
+            if from_std {
+                inspect_js_assert(node, method, JsAssert::DenoStd, src, tests);
+            }
+            return true;
+        }
         if callee.kind() != "member_expression" {
             return true;
         }
@@ -1661,6 +1677,8 @@ enum JsAssert {
     Node,
     /// Chai's `assert`: a class and a message matcher, in that order, each optional.
     Chai,
+    /// `assertThrows(fn, Class, includes, message)` of Deno's standard assertion module.
+    DenoStd,
 }
 
 /// Reads the receiver of `<receiver>.throws(..)`: a name the file binds to Node's
@@ -1886,6 +1904,19 @@ fn inspect_js_assert(node: Node, method: &str, library: JsAssert, src: &str, tes
         JsAssert::Chai => {
             for arg in named.iter().skip(1).take(2) {
                 constraint.read(*arg, src);
+            }
+        }
+        // `assertThrows(fn, Class, includes, message)` takes the class and a text the
+        // message must hold, as Chai's does; `assertThrows(fn, message)` constrains
+        // nothing, the text being the message of the assertion.
+        JsAssert::DenoStd => {
+            let message_only = named
+                .get(1)
+                .is_some_and(|a| matches!(a.kind(), "string" | "template_string"));
+            if !message_only {
+                for arg in named.iter().skip(1).take(2) {
+                    constraint.read(*arg, src);
+                }
             }
         }
     }
