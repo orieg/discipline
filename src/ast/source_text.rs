@@ -46,16 +46,20 @@ pub(crate) fn parse_text(src: &str) -> Cow<'_, str> {
 /// length of the text adds to them.
 pub(crate) const STEP_FLOOR: u64 = 256;
 
-/// Steps a parse may take per byte of text. The sources of this repository take at most
-/// 0.016 steps per byte with their own grammar (`tests/test_gates_e2e.rs`, the largest,
-/// takes 0.010), and at most 0.05 when each is parsed with every other grammar, which is
-/// error recovery from the first line to the last. Four is 250 times the first figure
-/// and 80 times the second.
-pub(crate) const STEPS_PER_BYTE: u64 = 4;
+/// Bytes of text that add one step to a parse's budget. The sources of this repository
+/// take at most 0.016 steps per byte with their own grammar (`tests/test_gates_e2e.rs`,
+/// the largest, takes 0.010), and at most 0.05 when each is parsed with every other
+/// grammar, which is error recovery from the first line to the last. One step for every
+/// four bytes is 16 times the first figure and 5 times the second.
+///
+/// The rate also bounds what a parse that never finishes costs, since it runs its whole
+/// budget: a 34,026-byte input on which the Rust grammar's error recovery did not
+/// finish ran 136,360 steps at four steps per byte, and runs 8,762 at this rate.
+pub(crate) const BYTES_PER_STEP: u64 = 4;
 
 /// The steps a parse of `len` bytes may take.
 pub(crate) fn step_budget(len: usize) -> u64 {
-    STEP_FLOOR.saturating_add(STEPS_PER_BYTE.saturating_mul(len as u64))
+    STEP_FLOOR.saturating_add(len as u64 / BYTES_PER_STEP)
 }
 
 /// Why a parse has no tree.
@@ -222,12 +226,15 @@ mod tests {
     #[test]
     fn the_budget_is_a_floor_plus_a_share_per_byte() {
         assert_eq!(step_budget(0), STEP_FLOOR);
-        assert_eq!(step_budget(15), STEP_FLOOR + 15 * STEPS_PER_BYTE);
+        assert_eq!(step_budget(15), STEP_FLOOR + 3);
+        assert_eq!(step_budget(1_000_000), STEP_FLOOR + 250_000);
+        // The largest input the fuzz job gives a target is 64 KiB; a parse of it that
+        // never finishes runs this many steps and no more.
+        assert_eq!(step_budget(64 * 1024), 16_640);
         assert_eq!(
-            step_budget(1_000_000),
-            STEP_FLOOR + 1_000_000 * STEPS_PER_BYTE
+            step_budget(usize::MAX),
+            STEP_FLOOR + usize::MAX as u64 / BYTES_PER_STEP
         );
-        assert_eq!(step_budget(usize::MAX), u64::MAX);
     }
 
     /// `run` on a thread of its own, or a failure when it has not returned in `LIMIT`: a
@@ -280,7 +287,7 @@ mod tests {
         assert_eq!(steps, budget + 1);
         assert_eq!(
             outcome.unwrap_err().to_string(),
-            "the parser did not finish within its budget of 316 steps for 15 bytes"
+            "the parser did not finish within its budget of 259 steps for 15 bytes"
         );
         // The same through `parse`, and a character that starts a name instead is read.
         assert!(returns(|| parse(&mut rust_parser(), UNFINISHED).is_err()));
@@ -346,10 +353,10 @@ mod tests {
     }
 
     /// The control: every Rust source of this repository, the largest of them 700 kB,
-    /// parses whole and takes less than a hundredth of its budget.
+    /// parses whole and takes less than a tenth of its budget.
     #[cfg(feature = "lang-rust")]
     #[test]
-    fn the_sources_of_this_repository_take_a_hundredth_of_their_budget() {
+    fn the_sources_of_this_repository_take_a_tenth_of_their_budget() {
         let root = env!("CARGO_MANIFEST_DIR");
         let mut dirs = vec![
             PathBuf::from(format!("{root}/src")),
@@ -370,7 +377,7 @@ mod tests {
                     let tree = tree.unwrap_or_else(|e| panic!("{}: {e}", path.display()));
                     assert_eq!(tree.root_node().end_byte(), text.len());
                     assert!(
-                        steps * 100 < budget,
+                        steps * 10 < budget,
                         "{}: {steps} of {budget} steps",
                         path.display()
                     );
@@ -382,7 +389,7 @@ mod tests {
         }
         assert!(files > 100, "{files}");
         assert!(largest > 500_000, "{largest}");
-        // The figure `STEPS_PER_BYTE` is set against.
-        assert!(dearest < STEPS_PER_BYTE as f64 / 200.0, "{dearest}");
+        // The figure `BYTES_PER_STEP` is set against.
+        assert!(dearest < 0.1 / BYTES_PER_STEP as f64, "{dearest}");
     }
 }
