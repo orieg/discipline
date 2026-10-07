@@ -378,6 +378,254 @@ pub fn read_jest_scripts(package: &serde_json::Value) -> JestScripts {
     out
 }
 
+/// The `include` and `exclude` lists `deno test` reads from a `deno.json` / `deno.jsonc`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DenoTest {
+    /// `test.include`, when it is in force: `None` when the key is unset, and when a
+    /// task passes `deno test` paths of its own, which replace it.
+    pub include: Option<Vec<String>>,
+    /// `test.exclude` and the top-level `exclude`, which both apply.
+    pub exclude: Vec<String>,
+}
+
+/// JSON with comments and trailing commas (`deno.jsonc`, and `deno.json`, which Deno
+/// reads the same way) as plain JSON. `None` when a string or a block comment is not
+/// closed.
+fn strip_jsonc(source: &str) -> Option<String> {
+    // Comments first, so that a comma followed by a comment and a closing bracket is
+    // seen as the trailing comma it is.
+    let without_comments =
+        rewrite_outside_strings(source, |bytes, i, out| match (bytes[i], bytes.get(i + 1)) {
+            (b'/', Some(b'/')) => {
+                let line = bytes[i..].iter().position(|b| *b == b'\n');
+                Some(i + line.unwrap_or(bytes.len() - i))
+            }
+            (b'/', Some(b'*')) => {
+                let end = bytes[i + 2..].windows(2).position(|w| w == b"*/")?;
+                out.push(b' ');
+                Some(i + end + 4)
+            }
+            (other, _) => {
+                out.push(other);
+                Some(i + 1)
+            }
+        })?;
+    rewrite_outside_strings(&without_comments, |bytes, i, out| {
+        let closes = || {
+            bytes[i + 1..]
+                .iter()
+                .find(|b| !b.is_ascii_whitespace())
+                .is_some_and(|b| matches!(b, b']' | b'}'))
+        };
+        if bytes[i] != b',' || !closes() {
+            out.push(bytes[i]);
+        }
+        Some(i + 1)
+    })
+}
+
+/// Copies `source`, keeping each JSON string as it is and passing every other byte to
+/// `step`, which writes what stays and returns the index to go on from (`None` to give
+/// up). `None` when a string is not closed.
+fn rewrite_outside_strings(
+    source: &str,
+    step: impl Fn(&[u8], usize, &mut Vec<u8>) -> Option<usize>,
+) -> Option<String> {
+    let bytes = source.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'"' {
+            let start = i;
+            i += 1;
+            loop {
+                match bytes.get(i)? {
+                    b'\\' => i += 2,
+                    b'"' => break,
+                    _ => i += 1,
+                }
+            }
+            i += 1;
+            out.extend_from_slice(bytes.get(start..i)?);
+        } else {
+            i = step(bytes, i, &mut out)?;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// A list of path or glob strings. `None` when the value is anything else.
+fn json_strings(value: &serde_json::Value) -> Option<Vec<String>> {
+    value
+        .as_array()?
+        .iter()
+        .map(|entry| entry.as_str().map(str::to_string))
+        .collect()
+}
+
+/// What the tasks of a Deno configuration say about `deno test`: whether one passes it
+/// a configuration file of its own, and whether one passes it paths.
+fn deno_test_tasks(config: &serde_json::Value) -> (bool, bool) {
+    let (mut other_config, mut paths) = (false, false);
+    let Some(tasks) = config.get("tasks").and_then(|t| t.as_object()) else {
+        return (other_config, paths);
+    };
+    for task in tasks.values() {
+        let command = task
+            .as_str()
+            .or_else(|| task.get("command").and_then(|c| c.as_str()))
+            .unwrap_or("");
+        let words: Vec<&str> = command.split_whitespace().collect();
+        for (at, pair) in words.windows(2).enumerate() {
+            if pair != ["deno", "test"] {
+                continue;
+            }
+            for word in words[at + 2..]
+                .iter()
+                .take_while(|w| !matches!(**w, "&&" | "||" | ";" | "|"))
+            {
+                let flag = word.split('=').next().unwrap_or(word);
+                if matches!(flag, "--config" | "-c" | "--no-config") {
+                    other_config = true;
+                } else if !word.starts_with('-') {
+                    paths = true;
+                }
+            }
+        }
+    }
+    (other_config, paths)
+}
+
+/// Reads the lists `deno test` takes from a `deno.json` / `deno.jsonc`: `test.include`,
+/// `test.exclude` and the top-level `exclude`. `None` when they cannot be told from the
+/// file: it does not parse, a list holds something that is not a string, an `exclude`
+/// entry is negated (`!path` brings a path back), or a task runs `deno test` with a
+/// configuration file of its own. The top-level `include` does not limit `deno test`.
+pub fn parse_deno_config(source: &str) -> Option<DenoTest> {
+    let config: serde_json::Value = serde_json::from_str(&strip_jsonc(source)?).ok()?;
+    let (other_config, paths) = deno_test_tasks(&config);
+    if other_config {
+        return None;
+    }
+    let test = config.get("test");
+    let mut exclude = Vec::new();
+    for list in [config.get("exclude"), test.and_then(|t| t.get("exclude"))]
+        .into_iter()
+        .flatten()
+    {
+        exclude.extend(json_strings(list)?);
+    }
+    if exclude
+        .iter()
+        .any(|entry| entry.trim_start().starts_with('!'))
+    {
+        return None;
+    }
+    let include = match test.and_then(|t| t.get("include")) {
+        Some(list) if !paths => Some(json_strings(list)?),
+        _ => None,
+    };
+    Some(DenoTest { include, exclude })
+}
+
+/// Whether a script of a parsed `package.json` runs Node's own test runner: a command
+/// whose program is `node` with the `--test` flag among its words (`node --test`,
+/// `node --import tsx --test test/`). The words are split on white space, and a command
+/// list is read command by command (`&&`, `||`, `;`, `|`).
+pub fn scripts_run_node_test(package: &serde_json::Value) -> bool {
+    let Some(scripts) = package.get("scripts").and_then(|s| s.as_object()) else {
+        return false;
+    };
+    scripts
+        .values()
+        .filter_map(|script| script.as_str())
+        .any(script_runs_node_test)
+}
+
+fn script_runs_node_test(script: &str) -> bool {
+    let mut in_node = false;
+    for raw in script.split_whitespace() {
+        if matches!(raw, "&&" | "||" | ";" | "|") {
+            in_node = false;
+            continue;
+        }
+        let ends_command = raw.ends_with(';');
+        let word = raw.trim_end_matches(';').trim_matches(['"', '\'']);
+        if in_node && word == "--test" {
+            return true;
+        }
+        if matches!(word.rsplit('/').next(), Some("node" | "node.exe")) {
+            in_node = true;
+        }
+        if ends_command {
+            in_node = false;
+        }
+    }
+    false
+}
+
+/// Whether a JavaScript or TypeScript file imports Node's test runner: an `import`
+/// declaration from `node:test`, or a `require('node:test')` call, anywhere in the
+/// file. The words in a comment or in another string are not an import. `false` for a
+/// file that does not parse.
+pub fn imports_node_test(file_name: &str, source: &str) -> bool {
+    // The module name is in the text of every file that imports it.
+    if !source.contains(NODE_TEST_MODULE) {
+        return false;
+    }
+    let lower = file_name.to_ascii_lowercase();
+    let language: tree_sitter::Language = if lower.ends_with(".tsx") {
+        tree_sitter_typescript::LANGUAGE_TSX.into()
+    } else if [".ts", ".mts", ".cts"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+    {
+        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+    } else {
+        tree_sitter_javascript::LANGUAGE.into()
+    };
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&language).is_err() {
+        return false;
+    }
+    let Ok(tree) = crate::ast::source_text::parse(&mut parser, source) else {
+        return false;
+    };
+    let src = source.as_bytes();
+    let mut stack = vec![tree.root_node()];
+    while let Some(node) = stack.pop() {
+        match node.kind() {
+            "import_statement" => {
+                let from = node.child_by_field_name("source");
+                if from.and_then(|n| js_string(n, src)).as_deref() == Some(NODE_TEST_MODULE) {
+                    return true;
+                }
+                continue;
+            }
+            "call_expression" => {
+                let callee = node.child_by_field_name("function");
+                let is_require =
+                    callee.is_some_and(|f| f.kind() == "identifier" && text(f, src) == "require");
+                let argument = node
+                    .child_by_field_name("arguments")
+                    .filter(|a| a.named_child_count() == 1)
+                    .and_then(|a| a.named_child(0));
+                if is_require
+                    && argument.and_then(|n| js_string(n, src)).as_deref() == Some(NODE_TEST_MODULE)
+                {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.children(&mut cursor));
+    }
+    false
+}
+
+const NODE_TEST_MODULE: &str = "node:test";
+
 /// The major version a dependency range pins, when the range is a plain one: an
 /// optional `^`, `~`, `=` or `v`, then `<major>` and optional `.<minor>.<patch>` parts
 /// (`^29.7.0`, `~30.0`, `29.x`, `30`). Any other range (`*`, `>=29`, `29 || 30`, a tag,

@@ -18,10 +18,11 @@
 //!   or `cfg(any())` / `cfg(all(any()))`, treated as an unconditional ignore.
 
 use super::gitattributes::{wildmatch, GitAttributes};
-use super::go_build::{go_build_constraint, GoBuild};
+use super::go_build::{go_build_constraint, go_build_constraint_line, GoBuild};
+use super::go_work::{parse_go_work, GoWork};
 use super::runner_config::{
-    parse_conftest, parse_vitest_config, plain_semver_major, read_jest_scripts, ConftestIgnores,
-    VitestConfig,
+    imports_node_test, parse_conftest, parse_deno_config, parse_vitest_config, plain_semver_major,
+    read_jest_scripts, scripts_run_node_test, ConftestIgnores, DenoTest, VitestConfig,
 };
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
@@ -63,6 +64,8 @@ pub struct PytestCollectionRules {
     /// The ignore lists of each tracked `conftest.py`, by its directory. Present only
     /// when the tree was listed.
     pub conftests: Vec<(String, ConftestIgnores)>,
+    /// The file the configuration was read from.
+    pub source: Option<String>,
 }
 
 /// pytest's default `norecursedirs` (`_pytest/main.py`, pytest 8.4). `__pycache__` is
@@ -108,6 +111,7 @@ impl Default for PytestCollectionRules {
             classes_configured: false,
             norecursedirs: None,
             conftests: Vec::new(),
+            source: None,
         }
     }
 }
@@ -319,6 +323,24 @@ impl PytestCollectionRules {
     /// applies both while it recurses, so the directories of a `testpaths` entry itself
     /// are not checked.
     pub fn directories(&self, path: &str) -> PytestDirectories {
+        let (hit, start, dynamic) = self.directory_rule(path);
+        match (hit.is_some(), start) {
+            (true, Some(_)) => PytestDirectories::Excluded,
+            (true, None) => PytestDirectories::Unknown(
+                "a pytest `norecursedirs` or `conftest.py` ignore below a `testpaths` glob",
+            ),
+            (false, _) if dynamic => PytestDirectories::Unknown(
+                "a `conftest.py` sets `collect_ignore` in a way that is not read",
+            ),
+            (false, _) => PytestDirectories::Clear,
+        }
+    }
+
+    /// The directory rule that keeps pytest from reaching `path` (the first found:
+    /// `norecursedirs`, then a `conftest.py` list), where recursion starts for it
+    /// (`None` when only a `testpaths` glob holds it), and whether a `conftest.py`
+    /// above it builds its list at run time.
+    fn directory_rule(&self, path: &str) -> (Option<PytestDirectoryRule>, Option<usize>, bool) {
         let norm = path.replace('\\', "/");
         // Where recursion starts: the `testpaths` entry that holds the file, as a
         // number of leading path segments. `None` when only a glob entry holds it.
@@ -339,7 +361,7 @@ impl PytestCollectionRules {
         // Each path pytest decides on while recursing: the directories below the
         // start, then the file.
         let from = start.unwrap_or(0);
-        let mut hit = false;
+        let mut hit: Option<PytestDirectoryRule> = None;
         let default_list: Vec<String>;
         let patterns: &[String] = match &self.norecursedirs {
             Some(list) => list,
@@ -354,7 +376,7 @@ impl PytestCollectionRules {
         for end in (from + 1)..segments.len() {
             let name = segments[end - 1];
             let dir = segments[..end].join("/");
-            hit |= name == "__pycache__"
+            let named = name == "__pycache__"
                 || patterns.iter().any(|pattern| {
                     if pattern.contains('/') {
                         wildmatch(&format!("*/{pattern}"), &format!("/{dir}"), false)
@@ -362,6 +384,9 @@ impl PytestCollectionRules {
                         wildmatch(pattern, name, false)
                     }
                 });
+            if named {
+                hit.get_or_insert(PytestDirectoryRule::NoRecurse);
+            }
         }
         let mut dynamic = false;
         for (conftest_dir, ignores) in &self.conftests {
@@ -375,25 +400,89 @@ impl PytestCollectionRules {
                 ConftestIgnores::Literal { paths, globs } => {
                     for end in (depth.max(from) + 1)..=segments.len() {
                         let candidate = segments[..end].join("/");
-                        hit |= paths.iter().any(|entry| {
+                        let named = paths.iter().any(|entry| {
                             clean_relative(&join_dir(conftest_dir, entry)).as_deref()
                                 == Some(candidate.as_str())
                         }) || globs.iter().any(|glob| {
                             wildmatch(&join_dir(conftest_dir, glob), &candidate, false)
                         });
+                        if named {
+                            hit.get_or_insert_with(|| {
+                                PytestDirectoryRule::Conftest(join_dir(conftest_dir, "conftest.py"))
+                            });
+                        }
                     }
                 }
             }
         }
-        match (hit, start) {
-            (true, Some(_)) => PytestDirectories::Excluded,
-            (true, None) => PytestDirectories::Unknown(
-                "a pytest `norecursedirs` or `conftest.py` ignore below a `testpaths` glob",
-            ),
-            (false, _) if dynamic => PytestDirectories::Unknown(
-                "a `conftest.py` sets `collect_ignore` in a way that is not read",
-            ),
-            (false, _) => PytestDirectories::Clear,
+        (hit, start, dynamic)
+    }
+
+    /// The rules of this configuration that leave `norm` out, for
+    /// [`RunnerCollectionRules::mechanisms`].
+    fn mechanisms(&self, norm: &str, out: &mut Vec<Mechanism>) {
+        if !self.configured || !norm.ends_with(".py") {
+            return;
+        }
+        let source = self.source.clone().unwrap_or_default();
+        let in_testpaths =
+            self.testpaths.is_empty() || self.testpaths.iter().any(|tp| testpath_holds(tp, norm));
+        if !in_testpaths {
+            out.push(Mechanism::new(&source, "testpaths", "`testpaths` in"));
+            return;
+        }
+        if !self.is_collected(norm) {
+            out.push(Mechanism::new(&source, "python_files", "`python_files` in"));
+            return;
+        }
+        match self.directory_rule(norm).0 {
+            Some(PytestDirectoryRule::NoRecurse) => {
+                out.push(Mechanism::new(
+                    &source,
+                    "norecursedirs",
+                    "`norecursedirs` in",
+                ));
+            }
+            Some(PytestDirectoryRule::Conftest(file)) => out.push(Mechanism::new(
+                &file,
+                "collect_ignore",
+                "`collect_ignore` / `collect_ignore_glob` in",
+            )),
+            None => {}
+        }
+    }
+}
+
+/// Which of pytest's directory rules keeps it from a file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PytestDirectoryRule {
+    /// `norecursedirs`, or the `__pycache__` pytest always skips.
+    NoRecurse,
+    /// A literal `collect_ignore` / `collect_ignore_glob` list, with the `conftest.py`.
+    Conftest(String),
+}
+
+/// A rule that takes a test file out of the default run, as a change can add it: the
+/// file that holds it and what it is. Never a configured value.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Mechanism {
+    /// The file that holds the rule.
+    pub file: String,
+    /// A short stable name of the rule, which tells two rules of one file apart.
+    pub key: &'static str,
+    /// The rule in words that the path of `file` completes: "`testpaths` in".
+    pub what: &'static str,
+    /// The line of the rule in `file`, when it is one line.
+    pub line: Option<usize>,
+}
+
+impl Mechanism {
+    fn new(file: &str, key: &'static str, what: &'static str) -> Self {
+        Self {
+            file: file.to_string(),
+            key,
+            what,
+            line: None,
         }
     }
 }
@@ -530,6 +619,19 @@ pub struct JsCollectionRules {
     pub jest_major: Option<u32>,
     /// The `package.json` scripts run Jest in a way that is not read, with the kind.
     pub script_problem: Option<&'static str>,
+    /// The file the parsed Jest or Vitest configuration was read from.
+    pub config_source: Option<String>,
+    /// Each tracked file that imports `node:test`: a `node --test` test, whatever the
+    /// Jest or Vitest patterns say. Present only when the tree was listed.
+    pub node_test_files: HashSet<String>,
+    /// A script of the root `package.json` runs `node --test`.
+    pub node_test_script: bool,
+    /// The Vitest major version the manifest pins, when its range is a plain one.
+    pub vitest_major: Option<u32>,
+    /// The lists of the root `deno.json` / `deno.jsonc`, with the file's name, in a
+    /// repository with no root `package.json`. `None` when there is no such file or
+    /// its lists cannot be told.
+    pub deno: Option<(String, DenoTest)>,
     /// Each glob with whether it is negated (`!pattern`), in configured order.
     compiled_globs: Vec<(globset::GlobMatcher, bool)>,
     compiled_regexes: Vec<regex::Regex>,
@@ -546,6 +648,17 @@ const JEST_VERSION_UNKNOWN: &str =
     "jest's default patterns for `.mjs` / `.cjs` / `.mts` / `.cts` depend on its version, which the manifest does not pin";
 /// The first Jest major whose default `testMatch` holds the module extensions.
 const JEST_MODULE_EXTENSIONS_SINCE: u32 = 30;
+/// Why a file below one of the directories Vitest left out by default before Vitest 4
+/// is not determined.
+const VITEST_VERSION_UNKNOWN: &str =
+    "vitest's default `exclude` for `dist`, `cypress` and the `.idea` / `.git` / `.cache` / `.output` / `.temp` directories depends on its version, which the manifest does not pin";
+/// The first Vitest major whose default `exclude` holds `node_modules` and `.git` only.
+const VITEST_SHORT_DEFAULT_EXCLUDE_SINCE: u32 = 4;
+/// The directories Vitest 1 to 3 leave out by default, at any depth, beside
+/// `node_modules`.
+const VITEST_OLD_DEFAULT_EXCLUDED_DIRS: &[&str] = &[
+    "dist", "cypress", ".idea", ".git", ".cache", ".output", ".temp",
+];
 const JEST_SCRIPT_CONFIG_UNREAD: &str =
     "the jest configuration a package script names is not a tracked JSON file";
 
@@ -572,6 +685,11 @@ impl PartialEq for JsCollectionRules {
             && self.vitest_base == other.vitest_base
             && self.jest_major == other.jest_major
             && self.script_problem == other.script_problem
+            && self.config_source == other.config_source
+            && self.node_test_files == other.node_test_files
+            && self.node_test_script == other.node_test_script
+            && self.vitest_major == other.vitest_major
+            && self.deno == other.deno
     }
 }
 
@@ -628,8 +746,9 @@ fn is_script_config(name: &str, stems: &[&str]) -> bool {
 /// Whether a tracked file name is a JavaScript package manifest or a runner
 /// configuration: a sign that some JavaScript runner may run in the repository.
 /// `deno.json` / `deno.jsonc` and `bunfig.toml` are the configuration of `deno test`
-/// and `bun test`; their `include` / `exclude` are not read, so the files of such a
-/// repository are counted with collection not determined.
+/// and `bun test`. The lists of a root Deno configuration leave files out
+/// ([`JsCollectionRules::deno`]); nothing else of either is read, so the other files of
+/// such a repository are counted with collection not determined.
 fn is_js_runner_sign(name: &str) -> bool {
     matches!(
         name,
@@ -882,6 +1001,8 @@ impl JsCollectionRules {
         let ignores: Vec<String> = match &self.ignore_patterns {
             // Under a preset an unset list may be the preset's: nothing is excluded by it.
             None if self.preset => Vec::new(),
+            // A Vitest `exclude` replaces Vitest's default list, `node_modules` included.
+            None if self.vitest && self.vitest_exclude.is_some() => Vec::new(),
             None => vec!["/node_modules/".to_string()],
             Some(v) => {
                 let listed: Option<Vec<String>> = v
@@ -1011,8 +1132,12 @@ impl JsCollectionRules {
             return JsCollectionResult::Unknown(mocha.clone());
         }
 
-        // 4. If no runner config found
+        // 4. If no runner config found. A root Deno configuration still says what
+        // `deno test` leaves out.
         if !self.config_parsed {
+            if self.deno_leaves_out(&norm).is_some() {
+                return JsCollectionResult::NotCollected;
+            }
             return JsCollectionResult::Unknown("no runner config found".to_string());
         }
 
@@ -1026,6 +1151,15 @@ impl JsCollectionRules {
         // 6. The parsed configuration decides. Beside a second runner, a file it leaves
         // out may be that runner's test: not determined, rather than excluded.
         match (self.configuration_collects(&norm), &self.second_runner) {
+            (true, _) if self.default_exclude_depends_on_version(&norm) => {
+                match self.vitest_major {
+                    Some(major) if major >= VITEST_SHORT_DEFAULT_EXCLUDE_SINCE => {
+                        JsCollectionResult::Collected
+                    }
+                    Some(major) if major >= 1 => JsCollectionResult::NotCollected,
+                    _ => JsCollectionResult::Unknown(VITEST_VERSION_UNKNOWN.to_string()),
+                }
+            }
             (true, _) if self.default_patterns_depend_on_version(&lower) => match self.jest_major {
                 Some(major) if major >= JEST_MODULE_EXTENSIONS_SINCE => {
                     JsCollectionResult::Collected
@@ -1037,6 +1171,103 @@ impl JsCollectionRules {
             (false, Some(second)) => JsCollectionResult::Unknown(second.clone()),
             (false, None) => JsCollectionResult::NotCollected,
         }
+    }
+
+    /// Whether a literal Vitest `exclude` leaves `norm` out: a pattern that matches the
+    /// file, or a directory above it (`exclude: ['legacy']` leaves out what `legacy/`
+    /// holds).
+    fn vitest_excludes(&self, norm: &str) -> bool {
+        let mut end = norm.len();
+        loop {
+            if self
+                .compiled_excludes
+                .iter()
+                .any(|glob| glob.is_match(&norm[..end]))
+            {
+                return true;
+            }
+            match norm[..end].rfind('/') {
+                Some(i) => end = i,
+                None => return false,
+            }
+        }
+    }
+
+    /// Whether Vitest's default `exclude` decides for this file and differs by Vitest
+    /// version: no `exclude` is configured, and the file is below a directory the
+    /// default list held before Vitest 4.
+    fn default_exclude_depends_on_version(&self, norm: &str) -> bool {
+        self.vitest
+            && self.vitest_exclude.is_none()
+            && norm
+                .split('/')
+                .rev()
+                .skip(1)
+                .any(|dir| VITEST_OLD_DEFAULT_EXCLUDED_DIRS.contains(&dir))
+    }
+
+    /// What the root Deno configuration says about `norm` in a repository where no
+    /// other runner configuration was found: the key that leaves it out, if one does.
+    fn deno_leaves_out(&self, norm: &str) -> Option<(&str, &'static str)> {
+        let (source, deno) = self.deno.as_ref()?;
+        if self.config_parsed || self.second_runner.is_some() {
+            return None;
+        }
+        // An entry is a path relative to the file, or a glob.
+        let glob = |entry: &str| {
+            globset::GlobBuilder::new(entry)
+                .literal_separator(true)
+                .build()
+                .ok()
+                .map(|g| g.compile_matcher())
+        };
+        let cleaned: Option<Vec<String>> = deno
+            .exclude
+            .iter()
+            .chain(deno.include.iter().flatten())
+            .map(|entry| clean_relative(entry))
+            .collect();
+        cleaned?;
+        let is_glob = |entry: &str| entry.contains(['*', '?', '[', '{']);
+        let below = |entry: &str| entry.is_empty() || norm == entry || dir_holds(entry, norm);
+        for raw in &deno.exclude {
+            let entry = clean_relative(raw)?;
+            let excluded = if is_glob(&entry) {
+                // A glob that matches a directory leaves out what it holds.
+                let matcher = glob(&entry)?;
+                let mut end = norm.len();
+                loop {
+                    if matcher.is_match(&norm[..end]) {
+                        break true;
+                    }
+                    match norm[..end].rfind('/') {
+                        Some(i) => end = i,
+                        None => break false,
+                    }
+                }
+            } else {
+                below(&entry)
+            };
+            if excluded {
+                return Some((source, "exclude"));
+            }
+        }
+        if let Some(include) = &deno.include {
+            let mut held = false;
+            for raw in include {
+                let entry = clean_relative(raw)?;
+                // A glob names files: one that matches a directory finds nothing in it.
+                held |= if is_glob(&entry) {
+                    glob(&entry)?.is_match(norm)
+                } else {
+                    below(&entry)
+                };
+            }
+            if !held {
+                return Some((source, "include"));
+            }
+        }
+        None
     }
 
     /// Whether Jest's default patterns decide for this file and differ by Jest version:
@@ -1068,14 +1299,15 @@ impl JsCollectionRules {
 
         // Jest matches regexes against the absolute path, which this is the tail of.
         let rooted = format!("/{norm}");
+        // Jest's file map holds no path below `node_modules` (`haste.retainAllFiles`
+        // is off unless set), so no pattern can collect one.
+        if !self.vitest && rooted.contains("/node_modules/") {
+            return false;
+        }
         if self.compiled_ignores.iter().any(|re| re.is_match(&rooted)) {
             return false;
         }
-        if self
-            .compiled_excludes
-            .iter()
-            .any(|glob| glob.is_match(norm))
-        {
+        if self.vitest_excludes(norm) {
             return false;
         }
 
@@ -1107,6 +1339,81 @@ impl JsCollectionRules {
 
         // 2. Basename is `test.<ext>` / `spec.<ext>` or ends in `.test.<ext>` / `.spec.<ext>`
         matches!(stem, "test" | "spec") || stem.ends_with(".test") || stem.ends_with(".spec")
+    }
+
+    /// The rules of the parsed configuration that leave `norm` out, for
+    /// [`RunnerCollectionRules::mechanisms`]: none when the configuration is not one
+    /// this model evaluates, or when only the runner's default names leave the file out.
+    fn mechanisms(&self, norm: &str, out: &mut Vec<Mechanism>) {
+        let lower = norm.to_ascii_lowercase();
+        let evaluated = js_runner_extension(&lower)
+            && self.script_problem.is_none()
+            && self.invalid_pattern.is_none()
+            && self.unparseable_config.is_none()
+            && self.mocha_detected.is_none()
+            && self.config_parsed
+            && !self.nested_config_for(norm);
+        if js_runner_extension(&lower)
+            && self.script_problem.is_none()
+            && self.invalid_pattern.is_none()
+            && self.unparseable_config.is_none()
+            && self.mocha_detected.is_none()
+        {
+            if let Some((source, key)) = self.deno_leaves_out(norm) {
+                let (key, what) = if key == "exclude" {
+                    ("deno-exclude", "`exclude` / `test.exclude` in")
+                } else {
+                    ("deno-include", "`test.include` in")
+                };
+                out.push(Mechanism::new(source, key, what));
+                return;
+            }
+        }
+        let Some(source) = self.config_source.as_deref().filter(|_| evaluated) else {
+            return;
+        };
+        if !self.effective_roots.is_empty()
+            && !self
+                .effective_roots
+                .iter()
+                .any(|r| norm == *r || norm.starts_with(&format!("{r}/")))
+        {
+            let (key, what) = if self.vitest {
+                ("root", "`root` / `dir` in")
+            } else {
+                ("roots", "`roots` in")
+            };
+            out.push(Mechanism::new(source, key, what));
+            return;
+        }
+        let rooted = format!("/{norm}");
+        if self.compiled_ignores.iter().any(|re| re.is_match(&rooted)) {
+            // Jest's own default leaves `node_modules` out with no key written.
+            if self.ignore_patterns.is_some() {
+                out.push(Mechanism::new(
+                    source,
+                    "testPathIgnorePatterns",
+                    "`testPathIgnorePatterns` in",
+                ));
+            }
+            return;
+        }
+        if self.vitest_excludes(norm) {
+            if self.vitest_exclude.is_some() {
+                out.push(Mechanism::new(source, "exclude", "`exclude` in"));
+            }
+            return;
+        }
+        let has_custom =
+            !self.test_regex.is_empty() || !self.test_match.is_empty() || !self.include.is_empty();
+        if has_custom && !self.configuration_collects(norm) {
+            let (key, what) = if self.vitest {
+                ("include", "`include` in")
+            } else {
+                ("testMatch", "`testMatch` / `testRegex` in")
+            };
+            out.push(Mechanism::new(source, key, what));
+        }
     }
 
     /// Jest's rule for a list of globs: in configured order, a negated glob that
@@ -1156,13 +1463,21 @@ impl JsCollectionRules {
             .find_map(|key| val.get(*key).and_then(|d| d.get("jest")))
             .and_then(|range| range.as_str())
             .and_then(plain_semver_major);
+        // And the Vitest major decides Vitest's default `exclude`.
+        self.vitest_major = ["devDependencies", "dependencies"]
+            .iter()
+            .find_map(|key| val.get(*key).and_then(|d| d.get("vitest")))
+            .and_then(|range| range.as_str())
+            .and_then(plain_semver_major);
 
         // Jest reads a `jest` key of `package.json`. Vitest reads no key there: its
         // configuration is a `vitest.config.*` or `vite.config.*` file.
         if let Some(jest) = val.get("jest") {
             self.config_parsed = true;
+            self.config_source = Some("package.json".to_string());
             self.extract_from_json(jest);
         }
+        self.node_test_script = scripts_run_node_test(&val);
 
         self.compile_patterns();
     }
@@ -1171,6 +1486,7 @@ impl JsCollectionRules {
     /// `--config` reads that file and nothing else.
     fn reset_jest_configuration(&mut self) {
         self.config_parsed = false;
+        self.config_source = None;
         self.unparseable_config = None;
         self.test_match.clear();
         self.test_regex.clear();
@@ -1209,6 +1525,9 @@ impl JsCollectionRules {
             match content.and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok()) {
                 Some(config) => {
                     self.config_parsed = true;
+                    // An object on the command line is written in the manifest.
+                    self.config_source =
+                        Some(path.clone().unwrap_or_else(|| "package.json".to_string()));
                     self.extract_from_json(&config);
                     // `rootDir` is relative to the configuration file, and defaults to
                     // its directory.
@@ -1246,6 +1565,7 @@ impl JsCollectionRules {
         match parse_vitest_config(name, source) {
             VitestConfig::Literal(literal) => {
                 self.config_parsed = true;
+                self.config_source = Some(name.to_string());
                 self.vitest = true;
                 if let Some(include) = literal.include {
                     self.include = include;
@@ -1294,6 +1614,7 @@ impl JsCollectionRules {
             return;
         };
         self.config_parsed = true;
+        self.config_source = Some("jest.config.json".to_string());
         self.extract_from_json(&val);
         self.compile_patterns();
     }
@@ -1796,6 +2117,24 @@ impl RustCollectionRules {
             if above.is_empty() {
                 return None;
             }
+        }
+    }
+
+    /// The workspace manifest whose `exclude` list names the package of `norm`, for
+    /// [`RunnerCollectionRules::mechanisms`].
+    fn mechanisms(&self, norm: &str, out: &mut Vec<Mechanism>) {
+        if !norm.ends_with(".rs") {
+            return;
+        }
+        let excluding = self
+            .owning_package(norm)
+            .and_then(|(dir, _)| self.excluding_workspace(&dir));
+        if let Some(manifest) = excluding {
+            out.push(Mechanism::new(
+                &manifest,
+                "workspace-exclude",
+                "The `exclude` list of the workspace in",
+            ));
         }
     }
 
@@ -2566,11 +2905,113 @@ pub struct RunnerCollectionRules {
 pub struct GoCollectionRules {
     /// The build constraint of each `_test.go` file a default build does not select.
     pub constraints: HashMap<String, GoBuild>,
+    /// The 1-based line of each constraint in `constraints`.
+    pub constraint_lines: HashMap<String, usize>,
     /// The directory of every tracked `go.mod` (empty for the repository root).
     pub modules: Vec<String>,
+    /// Every tracked `go.work`, by its directory (empty for the repository root).
+    pub works: HashMap<String, GoWork>,
+}
+
+/// Whether the directory `dir` (empty for the repository root) holds `path`.
+fn dir_holds(dir: &str, path: &str) -> bool {
+    dir.is_empty() || path.starts_with(&format!("{dir}/"))
+}
+
+/// A directory as a report names it.
+fn named_dir(dir: &str) -> String {
+    if dir.is_empty() {
+        "at the repository root".to_string()
+    } else {
+        format!("in `{dir}`")
+    }
 }
 
 impl GoCollectionRules {
+    /// The module that holds the file at `norm`: the nearest `go.mod` above it.
+    fn module_of(&self, norm: &str) -> Option<&String> {
+        self.modules
+            .iter()
+            .filter(|m| dir_holds(m, norm))
+            .max_by_key(|m| m.len())
+    }
+
+    /// The module of `norm` and the module it is nested below, when there is one.
+    /// `./...` in a module never matches a package of a module nested below it.
+    fn nesting(&self, norm: &str) -> Option<(&String, &String)> {
+        let own = self.module_of(norm).filter(|m| !m.is_empty())?;
+        let parent = self
+            .modules
+            .iter()
+            .filter(|m| m.len() < own.len() && dir_holds(m, &format!("{own}/")))
+            .max_by_key(|m| m.len())?;
+        Some((own, parent))
+    }
+
+    /// The `go.work` in force for the module of `norm`, by its directory: the nearest
+    /// one at or above the module. `None` for a file in no module.
+    fn work_of(&self, norm: &str) -> Option<(&String, &GoWork, &String)> {
+        let own = self.module_of(norm)?;
+        self.works
+            .iter()
+            .filter(|(dir, _)| dir.is_empty() || *dir == own || dir_holds(dir, &format!("{own}/")))
+            .max_by_key(|(dir, _)| dir.len())
+            .map(|(dir, work)| (dir, work, own))
+    }
+
+    /// The `go.work` that leaves the module of `norm` out of its `use` list, by its
+    /// path. `Err` with the path when that file cannot be read.
+    fn unused_by_work(&self, norm: &str) -> Result<Option<String>, String> {
+        let Some((dir, work, own)) = self.work_of(norm) else {
+            return Ok(None);
+        };
+        let file = join_dir(dir, "go.work");
+        match work {
+            GoWork::Unreadable => Err(file),
+            GoWork::Uses(uses) => {
+                let used = uses
+                    .iter()
+                    .filter_map(|entry| clean_relative(&join_dir(dir, entry)))
+                    .any(|module| module == *own);
+                Ok((!used).then_some(file))
+            }
+        }
+    }
+
+    /// The rules that take the `_test.go` file at `norm` out of a default `go test`,
+    /// for [`RunnerCollectionRules::mechanisms`]. `before` is the base side, which says
+    /// which `go.mod` of a nested pair the change added.
+    fn mechanisms(&self, norm: &str, before: Option<&Self>, out: &mut Vec<Mechanism>) {
+        if !norm.ends_with("_test.go") || go_tool_ignores(norm) {
+            return;
+        }
+        if matches!(
+            self.constraints.get(norm),
+            Some(GoBuild::Never | GoBuild::NeedsTags(_))
+        ) {
+            let mut mechanism = Mechanism::new(norm, "build-constraint", "The build constraint of");
+            mechanism.line = self.constraint_lines.get(norm).copied();
+            out.push(mechanism);
+        }
+        if let Ok(Some(file)) = self.unused_by_work(norm) {
+            out.push(Mechanism::new(
+                &file,
+                "go-work-use",
+                "The `use` list, which leaves the module out, of",
+            ));
+        }
+        if let Some((own, parent)) = self.nesting(norm) {
+            // The `go.mod` the change added: the nested one, unless it was there.
+            let nested_is_old = before.is_some_and(|b| b.modules.contains(own));
+            let dir = if nested_is_old { parent } else { own };
+            out.push(Mechanism::new(
+                &join_dir(dir, "go.mod"),
+                "nested-module",
+                "The nesting of one Go module below another made by",
+            ));
+        }
+    }
+
     /// Whether a default `go test ./...` builds the `_test.go` file at `norm`.
     fn status(&self, norm: &str) -> RunnerCollectionStatus {
         match self.constraints.get(norm) {
@@ -2592,37 +3033,62 @@ impl GoCollectionRules {
             }
             Some(GoBuild::Built) | None => {}
         }
-        // The module that holds the file is the nearest `go.mod` above it. `./...` in a
-        // module never matches a package of a module nested below it.
-        let holds =
-            |module: &str, path: &str| module.is_empty() || path.starts_with(&format!("{module}/"));
-        let own = self
-            .modules
-            .iter()
-            .filter(|m| holds(m, norm))
-            .max_by_key(|m| m.len());
-        if let Some(own) = own.filter(|m| !m.is_empty()) {
-            let parent = self
-                .modules
-                .iter()
-                .filter(|m| m.len() < own.len() && holds(m, &format!("{own}/")))
-                .max_by_key(|m| m.len());
-            if let Some(parent) = parent {
-                let above = if parent.is_empty() {
-                    "at the repository root".to_string()
-                } else {
-                    format!("in `{parent}`")
-                };
+        match self.unused_by_work(norm) {
+            Err(file) => {
                 return RunnerCollectionStatus::Unknown(format!(
-                    "the Go module in `{own}` is below the module {above}, so `go test ./...` there does not run its tests"
+                    "the workspace file `{file}` cannot be read, so whether `go test` runs in the modules below it is not known"
+                ))
+            }
+            Ok(Some(file)) => {
+                let own = self.module_of(norm).map_or("", String::as_str);
+                return RunnerCollectionStatus::Unknown(format!(
+                    "the Go module {} is not in the `use` list of `{file}`, so `go test` in that module fails while the workspace file is in force",
+                    named_dir(own)
                 ));
             }
+            Ok(None) => {}
+        }
+        if let Some((own, parent)) = self.nesting(norm) {
+            let above = if parent.is_empty() {
+                "at the repository root".to_string()
+            } else {
+                format!("in `{parent}`")
+            };
+            return RunnerCollectionStatus::Unknown(format!(
+                "the Go module in `{own}` is below the module {above}, so `go test ./...` there does not run its tests"
+            ));
         }
         RunnerCollectionStatus::Collected
     }
 }
 
 impl RunnerCollectionRules {
+    /// Every rule read here that takes the file at `norm` out of the default run under
+    /// these rules: a Cargo workspace `exclude` entry, a Go build constraint, a nested
+    /// `go.mod`, a `go.work` `use` list, pytest `testpaths` / `python_files` /
+    /// `norecursedirs` / `collect_ignore`, Jest `roots` / `testPathIgnorePatterns` /
+    /// `testMatch` / `testRegex`, Vitest `root` / `exclude` / `include`, the lists of a
+    /// root Deno configuration, and a `.gitattributes` attribute. `[tests] paths` is not consulted: a rule applies to a
+    /// file whether or not the configuration declares the file a test path.
+    pub fn mechanisms(&self, norm: &str, before: Option<&Self>) -> Vec<Mechanism> {
+        let mut out = Vec::new();
+        if let Some((attribute, file)) = self.attributes.set_on(norm) {
+            let (key, what) = if attribute == "linguist-vendored" {
+                ("linguist-vendored", "`linguist-vendored` in")
+            } else {
+                ("linguist-generated", "`linguist-generated` in")
+            };
+            out.push(Mechanism::new(&file, key, what));
+        }
+        self.pytest.mechanisms(norm, &mut out);
+        if !self.js.node_test_files.contains(norm) {
+            self.js.mechanisms(norm, &mut out);
+        }
+        self.rust.mechanisms(norm, &mut out);
+        self.go.mechanisms(norm, before.map(|b| &b.go), &mut out);
+        out
+    }
+
     #[cfg(test)]
     pub fn from_files<F>(reader: F) -> Self
     where
@@ -2658,6 +3124,10 @@ impl RunnerCollectionRules {
                     }
                 }
                 "go.mod" => rules.go.modules.push(dir.to_string()),
+                "go.work" => {
+                    let work = reader(path).map_or(GoWork::Unreadable, |src| parse_go_work(&src));
+                    rules.go.works.insert(dir.to_string(), work);
+                }
                 "conftest.py" => {
                     if let Some(src) = reader(path) {
                         rules
@@ -2666,10 +3136,22 @@ impl RunnerCollectionRules {
                             .push((dir.to_string(), parse_conftest(&src)));
                     }
                 }
+                _ if js_runner_extension(&name.to_ascii_lowercase())
+                    && !format!("/{path}").contains("/node_modules/") =>
+                {
+                    if reader(path).is_some_and(|src| imports_node_test(name, &src)) {
+                        rules.js.node_test_files.insert(path.clone());
+                    }
+                }
                 _ if name.ends_with("_test.go") && !go_tool_ignores(path) => {
-                    let build =
-                        reader(path).map_or(GoBuild::Built, |src| go_build_constraint(&src));
+                    let Some(src) = reader(path) else {
+                        continue;
+                    };
+                    let build = go_build_constraint(&src);
                     if build != GoBuild::Built {
+                        if let Some(line) = go_build_constraint_line(&src) {
+                            rules.go.constraint_lines.insert(path.clone(), line);
+                        }
                         rules.go.constraints.insert(path.clone(), build);
                     }
                 }
@@ -2732,6 +3214,7 @@ impl RunnerCollectionRules {
             };
             parsed.configured |= matches!(*file, "pytest.ini" | ".pytest.ini");
             if parsed.configured {
+                parsed.source = Some((*file).to_string());
                 rules.pytest = parsed;
                 break;
             }
@@ -2791,6 +3274,17 @@ impl RunnerCollectionRules {
             None => {
                 if reader("vitest.config.json").is_some() {
                     rules.js.unparseable_config = Some("vitest.config.json".to_string());
+                }
+            }
+        }
+
+        // Deno: `deno.json` wins over `deno.jsonc`. In a repository with a root
+        // `package.json` the runner may be another one, and the lists are not applied.
+        if package_src.is_none() {
+            for name in ["deno.json", "deno.jsonc"] {
+                if let Some(src) = reader(name) {
+                    rules.js.deno = parse_deno_config(&src).map(|deno| (name.to_string(), deno));
+                    break;
                 }
             }
         }
@@ -2869,6 +3363,35 @@ fn go_tool_ignores(norm: &str) -> bool {
     })
 }
 
+/// Why a file that imports `node:test` is not counted.
+const NODE_TEST_NOT_RUN: &str =
+    "a file that imports `node:test` is run by `node --test`, which no script of the root `package.json` runs (it counts when `[tests] paths` names it)";
+
+/// The rules the change adds that take `path` out of the default run: those that apply
+/// to it on the head side and did not on the base side, when the base side's default
+/// run collected the file and the head side's does not. Empty for a file the base side
+/// did not collect, one the head side still collects (a `[tests] paths` entry
+/// included), and one that left collection for a reason that is not one of
+/// [`RunnerCollectionRules::mechanisms`].
+pub fn moved_out_by(
+    path: &str,
+    base: &crate::ast::AssertVocabulary,
+    head: &crate::ast::AssertVocabulary,
+) -> Vec<Mechanism> {
+    if check_runner_collected(path, base) != RunnerCollectionStatus::Collected
+        || check_runner_collected(path, head) == RunnerCollectionStatus::Collected
+    {
+        return Vec::new();
+    }
+    let norm = path.replace('\\', "/");
+    let before = base.runner_rules.mechanisms(&norm, None);
+    head.runner_rules
+        .mechanisms(&norm, Some(&base.runner_rules))
+        .into_iter()
+        .filter(|m| !before.iter().any(|b| b.file == m.file && b.key == m.key))
+        .collect()
+}
+
 /// Evaluates whether a file path is collected by its language runner given repository vocabulary.
 ///
 /// `NotCollected` only when a parsed runner configuration, or a rule the language fixes
@@ -2916,6 +3439,14 @@ pub fn check_runner_collected(
         }
     } else if js_runner_extension(&lower) {
         let js = &vocab.runner_rules.js;
+        // A file that imports `node:test` is run by `node --test`, not by Jest or Vitest.
+        if js.node_test_files.contains(&norm) {
+            return if js.node_test_script {
+                RunnerCollectionStatus::Collected
+            } else {
+                RunnerCollectionStatus::NoRunner(NODE_TEST_NOT_RUN.to_string())
+            };
+        }
         match js.is_collected(&norm) {
             JsCollectionResult::Collected => RunnerCollectionStatus::Collected,
             JsCollectionResult::NotCollected => RunnerCollectionStatus::NotCollected,
@@ -2925,7 +3456,9 @@ pub fn check_runner_collected(
                         .to_string(),
                 )
             }
-            JsCollectionResult::Unknown(reason) if reason == JEST_VERSION_UNKNOWN => {
+            JsCollectionResult::Unknown(reason)
+                if reason == JEST_VERSION_UNKNOWN || reason == VITEST_VERSION_UNKNOWN =>
+            {
                 RunnerCollectionStatus::Unknown(reason)
             }
             JsCollectionResult::Unknown(reason) => {
@@ -3927,10 +4460,11 @@ path = "tests/custom/entry.rs"
             ignore.is_collected("src/build/a.test.js"),
             JsCollectionResult::Collected
         );
-        // A configured list replaces Jest's default.
+        // A configured list replaces Jest's default, and a file below `node_modules`
+        // stays out all the same: Jest's file map does not hold it.
         assert_eq!(
             ignore.is_collected("node_modules/dep/a.test.js"),
-            JsCollectionResult::Collected
+            JsCollectionResult::NotCollected
         );
         let under_root = jest_rules(
             r#"{"rootDir": "packages/a", "testPathIgnorePatterns": ["<rootDir>/build/"]}"#,
@@ -4053,12 +4587,13 @@ path = "tests/custom/entry.rs"
             own.is_collected("src/a.test.js"),
             JsCollectionResult::Collected
         );
-        // An unset ignore list may be the preset's: Jest's default is not assumed, so a
-        // matched file stays collected. Without a preset the default applies.
+        // An unset ignore list may be the preset's, and Jest's default is not assumed
+        // for it. A file below `node_modules` is out whatever the list is, with a
+        // preset as without one.
         let unset = jest_rules(r#"{"preset": "ts-jest", "testMatch": ["**/*.test.js"]}"#);
         assert_eq!(
             unset.is_collected("node_modules/dep/a.test.js"),
-            JsCollectionResult::Collected
+            JsCollectionResult::NotCollected
         );
         let plain = jest_rules(r#"{"testMatch": ["**/*.test.js"]}"#);
         assert_eq!(
