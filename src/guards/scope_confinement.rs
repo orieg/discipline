@@ -13,11 +13,6 @@ pub fn evaluate_scope_confinement(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.scope_confinement;
     let mut out = GateOutcome::new(GATE);
 
-    if !settings.enabled {
-        out.enabled = false;
-        return Ok(out);
-    }
-
     let changed = ctx.git.changed_files()?;
     out.examined = changed.len();
 

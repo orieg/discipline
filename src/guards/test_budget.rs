@@ -15,7 +15,6 @@
 //!   under `fuzz/`, plus the manifests and harness files `fuzz_targets` globs name elsewhere)
 //! - Seed corpus directories do not shrink without a directive (`fuzz/corpus/**`, `corpus/**`)
 
-use crate::config::GateSettings;
 use crate::gitctx::ChangeKind;
 use crate::guards::{Context, GateOutcome, PathFilter, Violation};
 use crate::tokens;
@@ -225,11 +224,6 @@ fn read_budgets_for_file(content: &str, path: &str) -> Result<Vec<BudgetMetric>>
 pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
     let mut outcome = GateOutcome::new(GATE);
     let gate = &ctx.config.gates.test_budget;
-
-    if !gate.enabled() {
-        outcome.enabled = false;
-        return Ok(outcome);
-    }
 
     // Build exemption matcher
     let exempt = PathFilter::new(&gate.exempt_paths)?;

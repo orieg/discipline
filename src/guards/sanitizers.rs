@@ -15,11 +15,6 @@ pub fn evaluate_sanitizers(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.sanitizers;
     let mut out = GateOutcome::new(GATE);
 
-    if !settings.enabled {
-        out.enabled = false;
-        return Ok(out);
-    }
-
     // `sanitizer` reaches `cargo` and `canary` selects a second command: a change cannot
     // supply either (`configured_execution`). Nothing runs before this, the canary included.
     let Some(execution_notes) = crate::guards::command::vouched_execution(
