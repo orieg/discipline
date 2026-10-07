@@ -614,9 +614,21 @@ impl<'a> SwiftExtractor<'a> {
         match first.kind() {
             "boolean_literal" if self.text(*first) == "true" => test_fn.tautologies += 1,
             "equality_expression" | "comparison_expression" => {
-                let lhs = first.child_by_field_name("lhs").map(|n| self.text(n));
-                let rhs = first.child_by_field_name("rhs").map(|n| self.text(n));
-                if lhs.is_some() && lhs == rhs {
+                let lhs = first.child_by_field_name("lhs");
+                let rhs = first.child_by_field_name("rhs");
+                // `a == a` is recorded; `a != a` and `a <= a` are counted as before.
+                let mut cursor = first.walk();
+                let equality = first
+                    .children(&mut cursor)
+                    .any(|c| matches!(self.text(c).trim(), "==" | "==="));
+                let same = match (lhs, rhs) {
+                    (Some(l), Some(r)) if equality => {
+                        super::self_comparison::note(&mut test_fn.equality_operands, l, r, self.src)
+                    }
+                    (Some(l), Some(r)) => super::self_comparison::same(l, r, self.src),
+                    _ => false,
+                };
+                if same {
                     test_fn.tautologies += 1;
                 } else {
                     test_fn.strong_asserts += 1;
@@ -648,7 +660,14 @@ impl<'a> SwiftExtractor<'a> {
         match name {
             n if XCT_EQUALITY.contains(&n) => {
                 test_fn.total_asserts += 1;
-                if args.len() >= 2 && arg(0) == arg(1) {
+                if args.len() >= 2
+                    && super::self_comparison::note(
+                        &mut test_fn.equality_operands,
+                        args[0],
+                        args[1],
+                        self.src,
+                    )
+                {
                     test_fn.tautologies += 1;
                 } else {
                     test_fn.strong_asserts += 1;

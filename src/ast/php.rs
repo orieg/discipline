@@ -769,6 +769,30 @@ impl<'a> PhpExtractor<'a> {
                 "toBe" | "toEqual" | "toMatch" | "toContain" | "toHaveCount" => {
                     test_fn.total_asserts += 1;
                     test_fn.strong_asserts += 1;
+                    // `expect($x)->toBe($x)`: the receiver is the `expect` call itself.
+                    // Recorded, and still counted as an assertion: this pack has never
+                    // taken a Pest matcher out of the count for its operands.
+                    if matches!(call_name, "toBe" | "toEqual") && args.len() == 1 {
+                        let subject = node
+                            .child_by_field_name("object")
+                            .filter(|o| {
+                                o.kind() == "function_call_expression"
+                                    && o.child_by_field_name("function")
+                                        .is_some_and(|f| self.text(f) == "expect")
+                            })
+                            .and_then(|o| o.child_by_field_name("arguments"))
+                            .map(|a| self.collect_arguments(a))
+                            .filter(|a| a.len() == 1)
+                            .map(|a| a[0]);
+                        if let Some(subject) = subject {
+                            super::self_comparison::note(
+                                &mut test_fn.equality_operands,
+                                subject,
+                                args[0],
+                                self.src,
+                            );
+                        }
+                    }
                     return;
                 }
                 "toBeTrue" => {
@@ -822,9 +846,26 @@ impl<'a> PhpExtractor<'a> {
                 test_fn.strong_asserts += 1;
                 // Check tautologies: assertEquals($x, $x), assertSame(1, 1)
                 if args.len() >= 2 {
-                    let a0 = self.text(args[0]).trim();
-                    let a1 = self.text(args[1]).trim();
-                    if a0 == a1 {
+                    // The equality assertions are recorded; the same operands under
+                    // another assertion of this list are counted as before.
+                    let same = if matches!(
+                        name,
+                        "assertEquals"
+                            | "assertSame"
+                            | "assertEqualsCanonicalizing"
+                            | "assertEqualsIgnoringCase"
+                            | "assertEqualsWithDelta"
+                    ) {
+                        super::self_comparison::note(
+                            &mut test_fn.equality_operands,
+                            args[0],
+                            args[1],
+                            self.src,
+                        )
+                    } else {
+                        super::self_comparison::same(args[0], args[1], self.src)
+                    };
+                    if same {
                         test_fn.tautologies += 1;
                     }
                 }
