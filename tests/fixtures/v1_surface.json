@@ -185,6 +185,7 @@
       "gates -c",
       "hook install --agent",
       "hook install --cloud-agent",
+      "hook install --force",
       "hook install --observe",
       "hook install --pin-sums",
       "hook install --timeout",
