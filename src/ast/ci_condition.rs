@@ -16,6 +16,7 @@
 //! `assumeTrue(..)`) is read by [`skip_condition`]: the same evaluation, after a check
 //! for a condition that is a constant.
 
+use crate::ast::ancestry::{Above, Ancestry};
 use std::collections::{BTreeSet, HashMap};
 use tree_sitter::Node;
 
@@ -1317,37 +1318,34 @@ impl<'t, 's> Eval<'t, 's> {
 
 /// Every function around `site`, innermost first: a test callback, and the `describe`
 /// callback or outer test whose variables it closes over.
-fn enclosing_functions(site: Node) -> Vec<Node> {
+fn enclosing_functions<'t>(site: Node<'t>, anc: &Ancestry<'t>) -> Vec<Node<'t>> {
     let mut out = Vec::new();
-    let mut cur = site;
-    while let Some(p) = cur.parent() {
-        if FUNCTION_KINDS.contains(&p.kind()) {
-            out.push(p);
-        }
-        cur = p;
+    let mut below = site;
+    while let Some((function, _)) = anc.nearest(below, Above::Function, |above, _| {
+        FUNCTION_KINDS.contains(&above.kind())
+    }) {
+        out.push(function);
+        below = function;
     }
     out
 }
 
-fn root_of(site: Node) -> Node {
-    let mut cur = site;
-    while let Some(p) = cur.parent() {
-        cur = p;
-    }
-    cur
-}
-
-fn evaluator<'t, 's>(lang: Lang, site: Node<'t>, src: &'s [u8]) -> (Eval<'t, 's>, Bindings<'t>) {
+fn evaluator<'t, 's>(
+    lang: Lang,
+    site: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &'s [u8],
+) -> (Eval<'t, 's>, Bindings<'t>) {
     let mut eval = Eval {
         lang,
         src,
         module: Bindings::new(),
     };
     let mut module = Bindings::new();
-    eval.collect_bindings(root_of(site), &mut module, true);
+    eval.collect_bindings(anc.root(), &mut module, true);
     eval.module = module;
     let mut locals = Bindings::new();
-    for function in enclosing_functions(site) {
+    for function in enclosing_functions(site, anc) {
         if let Some(body) = eval.body_of(function) {
             eval.collect_bindings(body, &mut locals, false);
         }
@@ -1364,13 +1362,13 @@ fn verdict_of(value: &Val) -> CiVerdict {
 
 /// The conditions under which `site` (a skip call or an early `return`) runs: every `if`
 /// between it and its function. `None` when no `if` encloses it.
-pub fn site(lang: Lang, site: Node, src: &[u8]) -> Option<Site> {
-    let (eval, locals) = evaluator(lang, site, src);
+pub fn site<'t>(lang: Lang, site: Node<'t>, anc: &Ancestry<'t>, src: &[u8]) -> Option<Site> {
+    let (eval, locals) = evaluator(lang, site, anc, src);
     // Innermost first: (condition text, value, in the else branch).
     let mut chain: Vec<(String, Val, bool)> = Vec::new();
     let mut always = true;
     let mut cur = site;
-    while let Some(p) = cur.parent() {
+    while let Some(p) = anc.parent(cur) {
         if FUNCTION_KINDS.contains(&p.kind()) {
             break;
         }
@@ -1461,8 +1459,14 @@ pub fn conditional(legacy: Option<String>, site: Option<Site>) -> Option<(String
 /// skip, always false is no skip. The constants read are a boolean or number literal, its
 /// negation, `and` / `or` of constants, a comparison of two literals, and a name the file
 /// binds once to one of these. Any other condition is a conditional skip.
-pub fn skip_condition(lang: Lang, expr: Node, src: &[u8], negated: bool) -> SkipCondition {
-    let (eval, locals) = evaluator(lang, expr, src);
+pub fn skip_condition<'t>(
+    lang: Lang,
+    expr: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &[u8],
+    negated: bool,
+) -> SkipCondition {
+    let (eval, locals) = evaluator(lang, expr, anc, src);
     if let Some(holds) = eval.constant(expr, &locals, 0) {
         return if holds != negated {
             SkipCondition::Always
@@ -1537,7 +1541,12 @@ pub fn jvm_annotation(
 /// other matcher a CI variable in `v` decides the skip undecidedly), bare or on
 /// `Assumptions` / `Assume`. Returns the call as reported and what it does; `None` for
 /// any other statement.
-pub fn jvm_assumption(lang: Lang, statement: Node, src: &[u8]) -> Option<(String, SkipCondition)> {
+pub fn jvm_assumption<'t>(
+    lang: Lang,
+    statement: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &[u8],
+) -> Option<(String, SkipCondition)> {
     let mut call = statement;
     if call.kind() == "expression_statement" {
         call = call.named_child(0)?;
@@ -1552,16 +1561,28 @@ pub fn jvm_assumption(lang: Lang, statement: Node, src: &[u8]) -> Option<(String
     {
         call = call.named_child(0)?;
     }
-    let (eval, locals) = evaluator(lang, call, src);
-    let parts = eval.jvm_call(call)?;
+    // The shape of the call is read first, with no name bound: reading what the file and
+    // every function around the call bind is needed for an assumption only, and a test
+    // body is mostly statements that are not one.
+    let unbound = Eval {
+        lang,
+        src,
+        module: Bindings::new(),
+    };
+    let parts = unbound.jvm_call(call)?;
     if parts.negated
         || !matches!(
-            parts.receiver.map(|r| eval.text(r)),
+            parts.receiver.map(|r| unbound.text(r)),
             None | Some("Assumptions" | "Assume")
+        )
+        || !matches!(
+            parts.name,
+            "assumeTrue" | "assumingThat" | "assumeNotNull" | "assumeFalse" | "assumeThat"
         )
     {
         return None;
     }
+    let (eval, locals) = evaluator(lang, call, anc, src);
     let runs_when = match parts.name {
         "assumeTrue" | "assumingThat" | "assumeNotNull" => true,
         "assumeFalse" => false,
@@ -1581,7 +1602,7 @@ pub fn jvm_assumption(lang: Lang, statement: Node, src: &[u8]) -> Option<(String
     let condition = *parts.args.first()?;
     Some((
         eval.text(call).trim().to_string(),
-        skip_condition(lang, condition, src, runs_when),
+        skip_condition(lang, condition, anc, src, runs_when),
     ))
 }
 
@@ -1605,18 +1626,19 @@ fn both(a: CiVerdict, b: CiVerdict) -> CiVerdict {
 
 /// The JUnit assumptions of a test body that stand under an `if`: each is a skip under
 /// the conditions around it and its own.
-pub fn jvm_assumptions_under_if(
+pub fn jvm_assumptions_under_if<'t>(
     lang: Lang,
-    body: Node,
+    body: Node<'t>,
+    anc: &Ancestry<'t>,
     src: &[u8],
 ) -> Vec<(String, SkipCondition)> {
-    let is_assumption = |n: Node| jvm_assumption(lang, n, src).is_some();
+    let is_assumption = |n: Node<'t>| jvm_assumption(lang, n, anc, src).is_some();
     let mut out = Vec::new();
     for statement in exits_under_if(body, &is_assumption) {
-        let Some((own_text, own)) = jvm_assumption(lang, statement, src) else {
+        let Some((own_text, own)) = jvm_assumption(lang, statement, anc, src) else {
             continue;
         };
-        let Some(around) = site(lang, statement, src) else {
+        let Some(around) = site(lang, statement, anc, src) else {
             continue;
         };
         out.push(match own {
@@ -1637,13 +1659,14 @@ pub fn jvm_assumptions_under_if(
 /// (`enabled`: when it returns false), read from what its body reads. `None` when the
 /// annotation names no method of that class: a method of another class
 /// (`"com.example.Conditions#onCi"`) is not followed.
-pub fn jvm_condition_method(
+pub fn jvm_condition_method<'t>(
     lang: Lang,
-    annotation: Node,
+    annotation: Node<'t>,
+    anc: &Ancestry<'t>,
     src: &[u8],
     enabled: bool,
 ) -> Option<SkipCondition> {
-    let (eval, _) = evaluator(lang, annotation, src);
+    let (eval, _) = evaluator(lang, annotation, anc, src);
     // The method name: the only argument, or the one named `value`.
     let mut name = None;
     let mut cursor = annotation.walk();
@@ -1665,7 +1688,7 @@ pub fn jvm_condition_method(
     let name = name?;
     let mut class = annotation;
     loop {
-        class = class.parent()?;
+        class = anc.parent(class)?;
         if matches!(
             class.kind(),
             "class_declaration"

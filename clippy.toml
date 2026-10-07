@@ -1,0 +1,11 @@
+# The parser library keeps no link from a node to its parent: `Node::parent` descends from
+# the root of the tree, and the sibling methods call it first. One call costs the node's
+# depth, and a climb with it costs the depth squared (#669). A walker asks
+# `ast::ancestry::Ancestry` (src/ast/ancestry.rs) instead.
+disallowed-methods = [
+    { path = "tree_sitter::Node::parent", reason = "costs the node's depth; ask `ast::ancestry::Ancestry::parent`" },
+    { path = "tree_sitter::Node::prev_sibling", reason = "costs the node's depth; ask `ast::ancestry::Ancestry::prev_sibling`" },
+    { path = "tree_sitter::Node::next_sibling", reason = "costs the node's depth; ask `ast::ancestry::Ancestry::next_sibling`" },
+    { path = "tree_sitter::Node::prev_named_sibling", reason = "costs the node's depth; ask `ast::ancestry::Ancestry::prev_named_sibling`" },
+    { path = "tree_sitter::Node::next_named_sibling", reason = "costs the node's depth; ask `ast::ancestry::Ancestry::next_named_sibling`" },
+]

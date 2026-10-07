@@ -6,6 +6,7 @@
 //! `throw new UnsupportedOperationException`) and what counts as a trivial body
 //! (`return null`, `pass`). The `stub-bodies` gate compares these facts base against head.
 
+use super::ancestry::Ancestry;
 use tree_sitter::Node;
 
 /// What a function body amounts to.
@@ -42,9 +43,9 @@ pub struct FunctionSpec {
     /// Node kinds ignored when counting statements (comments, docstrings).
     pub ignored_kinds: &'static [&'static str],
     /// Whether the node is an abstract, overload or interface member: no body to judge.
-    pub skip: fn(Node, &str) -> bool,
+    pub skip: for<'t> fn(Node<'t>, &Ancestry<'t>, &str) -> bool,
     /// Whether the function is a test.
-    pub is_test: fn(Node, &str, &str) -> bool,
+    pub is_test: for<'t> fn(Node<'t>, &Ancestry<'t>, &str, &str) -> bool,
     /// Classify a single statement's text. `None` = substantive.
     pub classify: fn(&str) -> Option<BodyShape>,
 }
@@ -54,12 +55,21 @@ fn text<'a>(node: Node, src: &'a str) -> &'a str {
 }
 
 /// Walk `root` and collect every function `spec` describes.
-pub fn extract(root: Node, src: &str, path: &str, spec: &FunctionSpec) -> Vec<FunctionFacts> {
+pub fn extract<'t>(
+    root: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    path: &str,
+    spec: &FunctionSpec,
+) -> Vec<FunctionFacts> {
     let mut out = Vec::new();
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
+    let mut stack = vec![(root, 0usize, root.id())];
+    while let Some((node, depth, parent)) = stack.pop() {
+        // The walk knows where it stands, so the predicates climb from here with no
+        // descent from the root.
+        anc.stand_at(depth, parent, node);
         if spec.function_kinds.contains(&node.kind()) {
-            if let Some(f) = describe(node, src, path, spec) {
+            if let Some(f) = describe(node, anc, src, path, spec) {
                 out.push(f);
             }
         }
@@ -67,14 +77,20 @@ pub fn extract(root: Node, src: &str, path: &str, spec: &FunctionSpec) -> Vec<Fu
         let children: Vec<Node> = node.children(&mut cursor).collect();
         // Push in reverse so the walk visits in source order.
         for child in children.into_iter().rev() {
-            stack.push(child);
+            stack.push((child, depth + 1, node.id()));
         }
     }
     out
 }
 
-fn describe(node: Node, src: &str, path: &str, spec: &FunctionSpec) -> Option<FunctionFacts> {
-    if (spec.skip)(node, src) {
+fn describe<'t>(
+    node: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    path: &str,
+    spec: &FunctionSpec,
+) -> Option<FunctionFacts> {
+    if (spec.skip)(node, anc, src) {
         return None;
     }
     let name = spec
@@ -92,7 +108,7 @@ fn describe(node: Node, src: &str, path: &str, spec: &FunctionSpec) -> Option<Fu
         .map(unwrap_declarator)
         .map(|n| text(n, src).trim().to_string())
         .filter(|n| !n.is_empty())
-        .or_else(|| declarator_name(node, src))?;
+        .or_else(|| declarator_name(node, anc, src))?;
     let body = spec.body_fields.iter().find_map(|f| {
         node.child_by_field_name(f).or_else(|| {
             let mut cursor = node.walk();
@@ -118,7 +134,7 @@ fn describe(node: Node, src: &str, path: &str, spec: &FunctionSpec) -> Option<Fu
         line: node.start_position().row + 1,
         end_line: node.end_position().row + 1,
         shape,
-        is_test: (spec.is_test)(node, src, path),
+        is_test: (spec.is_test)(node, anc, src, path),
     })
 }
 
@@ -140,8 +156,8 @@ fn unwrap_declarator(node: Node) -> Node {
 }
 
 /// `const f = () => {}` and `let g = function() {}`: the name is on the declarator.
-fn declarator_name(node: Node, src: &str) -> Option<String> {
-    let parent = node.parent()?;
+fn declarator_name<'t>(node: Node<'t>, anc: &Ancestry<'t>, src: &str) -> Option<String> {
+    let parent = anc.parent(node)?;
     if parent.kind() != "variable_declarator" && parent.kind() != "pair" {
         return None;
     }
@@ -493,7 +509,7 @@ pub fn classify_c(t: &str) -> Option<BodyShape> {
 }
 
 /// Never skip.
-pub fn skip_none(_: Node, _: &str) -> bool {
+pub fn skip_none<'t>(_: Node<'t>, _: &Ancestry<'t>, _: &str) -> bool {
     false
 }
 

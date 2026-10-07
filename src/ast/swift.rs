@@ -5,6 +5,7 @@
 //! the `.disabled` trait), `// swiftlint:disable` as an escape hatch, `catch { }` and a
 //! discarded `try?` as swallowed errors.
 
+use super::ancestry::Ancestry;
 use anyhow::Result;
 use tree_sitter::Node;
 
@@ -122,9 +123,11 @@ impl LanguagePack for SwiftPack {
             .map_err(|why| anyhow::anyhow!("could not parse `{path}`: {why}"))?;
         let root = tree.root_node();
 
+        let anc = Ancestry::new(root);
         let mut extractor = SwiftExtractor {
             dead: super::reach::dead_ranges(root, src, &SWIFT_REACH),
             src: src.as_bytes(),
+            anc: &anc,
             vocab,
             is_test_path: is_swift_test_path(path),
             facts: ParsedFileFacts {
@@ -139,8 +142,8 @@ impl LanguagePack for SwiftPack {
         extractor.collect_escape_hatches(root);
         extractor.visit_node(root, &mut Vec::new(), false, false);
         extractor.resolve_same_file_helpers();
-        SWIFT_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
-        super::expected_exceptions::swift(root, src, &mut extractor.facts.tests);
+        SWIFT_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
+        super::expected_exceptions::swift(root, &anc, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
             src,
@@ -180,6 +183,8 @@ struct SwiftExtractor<'a> {
     /// Byte ranges no execution reaches (`super::reach`).
     dead: super::reach::DeadRanges,
     src: &'a [u8],
+    /// The ancestors of the nodes of the file's tree (`super::ancestry`).
+    anc: &'a Ancestry<'a>,
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
     facts: ParsedFileFacts,
@@ -196,7 +201,7 @@ impl<'a> SwiftExtractor<'a> {
 
     /// Attributes on a declaration: (name, whole text). `@Test(.disabled())` is
     /// `("Test", "@Test(.disabled())")`.
-    fn attributes(&self, node: Node) -> Vec<(&'a str, &'a str)> {
+    fn attributes(&self, node: Node<'a>) -> Vec<(&'a str, &'a str)> {
         let mut out = Vec::new();
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -217,7 +222,7 @@ impl<'a> SwiftExtractor<'a> {
     /// `.disabled(..)` skips, `.disabled(if: c)` skips when `c` holds, `.enabled(if: c)`
     /// when it does not. A trait that takes its condition another way (a closure) is
     /// read through the whole trait.
-    fn trait_skips(&self, node: Node, attribute: &str) -> Vec<SkipRead> {
+    fn trait_skips(&self, node: Node<'a>, attribute: &str) -> Vec<SkipRead> {
         let mut out = Vec::new();
         let mut cursor = node.walk();
         for modifiers in node.children(&mut cursor) {
@@ -272,7 +277,7 @@ impl<'a> SwiftExtractor<'a> {
                         None if enabled || trailing_closure => Some((call, false)),
                         None => None,
                     };
-                    out.push(read_skip(Grammar::Swift, attr, own, self.src));
+                    out.push(read_skip(Grammar::Swift, attr, self.anc, own, self.src));
                 }
             }
         }
@@ -280,7 +285,7 @@ impl<'a> SwiftExtractor<'a> {
     }
 
     /// `// swiftlint:disable rule` and `// swiftlint:disable:next rule` comments.
-    fn collect_escape_hatches(&mut self, node: Node) {
+    fn collect_escape_hatches(&mut self, node: Node<'a>) {
         if matches!(node.kind(), "comment" | "multiline_comment") {
             let text = self.text(node);
             let body = text
@@ -314,7 +319,7 @@ impl<'a> SwiftExtractor<'a> {
     }
 
     /// Whether a type inherits from `XCTestCase` (directly, as the grammar shows it).
-    fn is_xctest_case(&self, node: Node) -> bool {
+    fn is_xctest_case(&self, node: Node<'a>) -> bool {
         let mut cursor = node.walk();
         let found = node
             .children(&mut cursor)
@@ -324,7 +329,7 @@ impl<'a> SwiftExtractor<'a> {
 
     fn visit_node(
         &mut self,
-        node: Node,
+        node: Node<'a>,
         type_stack: &mut Vec<String>,
         in_xctest: bool,
         parent_ignored: bool,
@@ -365,19 +370,19 @@ impl<'a> SwiftExtractor<'a> {
         }
     }
 
-    fn has_parameters(node: Node) -> bool {
+    fn has_parameters(node: Node<'a>) -> bool {
         let mut cursor = node.walk();
         let found = node.children(&mut cursor).any(|c| c.kind() == "parameter");
         found
     }
 
-    fn function_body(node: Node) -> Option<Node> {
+    fn function_body(node: Node<'a>) -> Option<Node<'a>> {
         node.child_by_field_name("body")
     }
 
     fn visit_function(
         &mut self,
-        node: Node,
+        node: Node<'a>,
         type_stack: &[String],
         in_xctest: bool,
         parent_ignored: bool,
@@ -419,7 +424,7 @@ impl<'a> SwiftExtractor<'a> {
             let mut direct_calls = Vec::new();
             if let Some(body) = Self::function_body(node) {
                 self.scan_node(body, &mut test_fn, &mut direct_calls);
-                super::dispatch_calls(body, self.src, &SWIFT_DISPATCH, &mut direct_calls);
+                super::dispatch_calls(body, self.anc, self.src, &SWIFT_DISPATCH, &mut direct_calls);
             }
             self.facts.tests.push(test_fn);
             self.test_calls.push(direct_calls);
@@ -461,7 +466,7 @@ impl<'a> SwiftExtractor<'a> {
 
     /// The callee of a call or macro: `XCTAssertEqual(...)`, `#expect(...)` as `expect`,
     /// `self.check(...)` as `check`. The flag says whether it resolves to this type.
-    fn callee(&self, call: Node) -> (&'a str, bool) {
+    fn callee(&self, call: Node<'a>) -> (&'a str, bool) {
         let Some(c0) = call.named_child(0) else {
             return ("", false);
         };
@@ -506,7 +511,7 @@ impl<'a> SwiftExtractor<'a> {
         out
     }
 
-    fn scan_node(&self, node: Node, test_fn: &mut TestFn, direct_calls: &mut Vec<String>) {
+    fn scan_node(&self, node: Node<'a>, test_fn: &mut TestFn, direct_calls: &mut Vec<String>) {
         if super::reach::is_dead(&self.dead, node.start_byte()) {
             return;
         }
@@ -522,7 +527,7 @@ impl<'a> SwiftExtractor<'a> {
                     .named_children(&mut cursor)
                     .any(|c| c.kind() == "call_expression");
                 if t.starts_with("throw") && t.contains("XCTSkip") && !throws_call {
-                    test_fn.record_skip(read_skip(Grammar::Swift, node, None, self.src));
+                    test_fn.record_skip(read_skip(Grammar::Swift, node, self.anc, None, self.src));
                 }
             }
             _ => {}
@@ -535,7 +540,7 @@ impl<'a> SwiftExtractor<'a> {
 
     /// `#expect(cond)` / `#require(value)`: strong when the condition compares two
     /// values, a tautology when it is a literal `true` or compares a value with itself.
-    fn inspect_macro(&self, node: Node, test_fn: &mut TestFn) {
+    fn inspect_macro(&self, node: Node<'a>, test_fn: &mut TestFn) {
         let (name, _) = self.callee(node);
         if !matches!(name, "expect" | "require") {
             return;
@@ -556,9 +561,13 @@ impl<'a> SwiftExtractor<'a> {
                     .children(&mut cursor)
                     .any(|c| matches!(self.text(c).trim(), "==" | "==="));
                 let same = match (lhs, rhs) {
-                    (Some(l), Some(r)) if equality => {
-                        super::self_comparison::note(&mut test_fn.equality_operands, l, r, self.src)
-                    }
+                    (Some(l), Some(r)) if equality => super::self_comparison::note(
+                        &mut test_fn.equality_operands,
+                        l,
+                        r,
+                        self.anc,
+                        self.src,
+                    ),
                     (Some(l), Some(r)) => super::self_comparison::same(l, r, self.src),
                     _ => false,
                 };
@@ -573,7 +582,7 @@ impl<'a> SwiftExtractor<'a> {
         }
     }
 
-    fn inspect_call(&self, node: Node, test_fn: &mut TestFn, direct_calls: &mut Vec<String>) {
+    fn inspect_call(&self, node: Node<'a>, test_fn: &mut TestFn, direct_calls: &mut Vec<String>) {
         let (name, local) = self.callee(node);
         if local && !name.is_empty() {
             direct_calls.push(name.to_string());
@@ -586,7 +595,7 @@ impl<'a> SwiftExtractor<'a> {
                 "XCTSkipUnless" => condition.map(|c| (c, true)),
                 _ => None,
             };
-            test_fn.record_skip(read_skip(Grammar::Swift, node, own, self.src));
+            test_fn.record_skip(read_skip(Grammar::Swift, node, self.anc, own, self.src));
             return;
         }
         let args = self.arguments(node);
@@ -599,6 +608,7 @@ impl<'a> SwiftExtractor<'a> {
                         &mut test_fn.equality_operands,
                         args[0],
                         args[1],
+                        self.anc,
                         self.src,
                     )
                 {
@@ -659,7 +669,7 @@ impl<'a> SwiftExtractor<'a> {
     }
 }
 
-fn swift_fn_is_test(node: Node, src: &str, path: &str) -> bool {
+fn swift_fn_is_test<'t>(node: Node<'t>, _: &Ancestry<'t>, src: &str, path: &str) -> bool {
     let mut cursor = node.walk();
     let annotated = node.children(&mut cursor).any(|c| {
         c.kind() == "modifiers" && c.utf8_text(src.as_bytes()).unwrap_or("").contains("@Test")

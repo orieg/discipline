@@ -1,5 +1,6 @@
 //! PHP language pack: tree-sitter AST extraction of tests, assertions, and escape hatches.
 
+use super::ancestry::Ancestry;
 use anyhow::Result;
 use tree_sitter::Node;
 
@@ -43,9 +44,11 @@ impl LanguagePack for PhpPack {
         )?;
         let root = tree.root_node();
 
+        let anc = Ancestry::new(root);
         let mut extractor = PhpExtractor {
             dead: super::reach::dead_ranges(root, src, &PHP_REACH),
             src: src.as_bytes(),
+            anc: &anc,
             vocab,
             is_test_path: is_php_test_path(path),
             declared_test_path: functions::declared_test_path(path, &vocab.test_paths),
@@ -59,9 +62,9 @@ impl LanguagePack for PhpPack {
 
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
-        PHP_PACK.facts_to_method_checks(root, src, path, vocab, &mut extractor.facts);
+        PHP_PACK.facts_to_method_checks(root, &anc, src, path, vocab, &mut extractor.facts);
         super::expected_exceptions::php_declared(root, src, &mut extractor.facts.tests);
-        PHP_PACK.facts_from_helper_loops(root, src, vocab, &mut extractor.facts);
+        PHP_PACK.facts_from_helper_loops(root, &anc, src, vocab, &mut extractor.facts);
         extractor.facts.prose = super::prose::extract(
             root,
             src,
@@ -71,7 +74,7 @@ impl LanguagePack for PhpPack {
     }
 }
 
-fn php_fn_is_test(node: Node, src: &str, path: &str) -> bool {
+fn php_fn_is_test<'t>(node: Node<'t>, _: &Ancestry<'t>, src: &str, path: &str) -> bool {
     let name = node
         .child_by_field_name("name")
         .and_then(|n| n.utf8_text(src.as_bytes()).ok())
@@ -207,6 +210,8 @@ struct PhpExtractor<'a> {
     /// Byte ranges no execution reaches (`super::reach`).
     dead: super::reach::DeadRanges,
     src: &'a [u8],
+    /// The ancestors of the nodes of the file's tree (`super::ancestry`).
+    anc: &'a Ancestry<'a>,
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
     /// Under a `[tests] paths` glob: a `test*` top-level function there is a test.
@@ -245,7 +250,7 @@ impl<'a> PhpExtractor<'a> {
         node.utf8_text(self.src).unwrap_or("")
     }
 
-    fn collect_comments_and_escape_hatches(&mut self, node: Node) {
+    fn collect_comments_and_escape_hatches(&mut self, node: Node<'a>) {
         super::collect_comment_suppressions(
             node,
             self.src,
@@ -255,14 +260,14 @@ impl<'a> PhpExtractor<'a> {
         );
     }
 
-    fn visit_root(&mut self, root: Node) {
+    fn visit_root(&mut self, root: Node<'a>) {
         self.walk_top_level(root);
         self.resolve_same_file_helpers();
     }
 
     /// Records a non-test method or function as a helper: its assertions and its
     /// `throw`s are the failure paths a test inherits when it calls it.
-    fn record_helper(&mut self, key: String, node: Node) {
+    fn record_helper(&mut self, key: String, node: Node<'a>) {
         if self.helpers.contains_key(&key) {
             return;
         }
@@ -296,12 +301,25 @@ impl<'a> PhpExtractor<'a> {
     /// The same-file callees a test body runs: `$this->m()`, `self::m()`,
     /// `static::m()` resolve to a method of `class_name`, `f()` to a function. A
     /// closure assigned and not called runs nothing.
-    fn collect_calls(&self, node: Node, class_name: &str, calls: &mut Vec<String>) {
-        if PHP_CLOSURE_KINDS.contains(&node.kind())
-            && node
-                .parent()
-                .is_some_and(|p| p.kind() == "assignment_expression")
-        {
+    fn collect_calls(&self, node: Node<'a>, class_name: &str, calls: &mut Vec<String>) {
+        // Only a closure asks what it stands under, and below `node` the walk knows.
+        let above = PHP_CLOSURE_KINDS
+            .contains(&node.kind())
+            .then(|| self.anc.parent(node))
+            .flatten()
+            .map(|p| p.kind());
+        self.collect_calls_under(node, above, class_name, calls);
+    }
+
+    /// [`Self::collect_calls`] for `node`, a child of a node of the kind `above`.
+    fn collect_calls_under(
+        &self,
+        node: Node<'a>,
+        above: Option<&'static str>,
+        class_name: &str,
+        calls: &mut Vec<String>,
+    ) {
+        if PHP_CLOSURE_KINDS.contains(&node.kind()) && above == Some("assignment_expression") {
             return;
         }
         match node.kind() {
@@ -335,7 +353,7 @@ impl<'a> PhpExtractor<'a> {
         }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.collect_calls(child, class_name, calls);
+            self.collect_calls_under(child, Some(node.kind()), class_name, calls);
         }
     }
 
@@ -349,7 +367,7 @@ impl<'a> PhpExtractor<'a> {
         }
     }
 
-    fn walk_top_level(&mut self, node: Node) {
+    fn walk_top_level(&mut self, node: Node<'a>) {
         let kind = node.kind();
         // A trait's methods are the shared helpers of the test classes that `use` it.
         if kind == "class_declaration" || kind == "trait_declaration" {
@@ -393,7 +411,7 @@ impl<'a> PhpExtractor<'a> {
     /// `#[Requires..]` attributes on it: PHPUnit runs the test only where each holds
     /// (an operating system, a PHP version, an extension), which is a conditional skip
     /// on no CI variable.
-    fn check_doc_or_attrs_for_test(&self, node: Node) -> (bool, bool, Vec<String>) {
+    fn check_doc_or_attrs_for_test(&self, node: Node<'a>) -> (bool, bool, Vec<String>) {
         let mut is_test = false;
         let mut is_ignored = false;
         let mut requires = Vec::new();
@@ -426,7 +444,7 @@ impl<'a> PhpExtractor<'a> {
         requires.reverse();
 
         // Check preceding comments / docblocks
-        if let Some(prev) = node.prev_sibling() {
+        if let Some(prev) = self.anc.prev_sibling(node) {
             if prev.kind() == "comment" {
                 let comment = self.text(prev);
                 if comment.contains("@test") {
@@ -447,7 +465,7 @@ impl<'a> PhpExtractor<'a> {
 
     fn visit_method(
         &mut self,
-        node: Node,
+        node: Node<'a>,
         class_name: &str,
         class_ignored: bool,
         class_requires: &[String],
@@ -496,7 +514,7 @@ impl<'a> PhpExtractor<'a> {
         self.test_calls.push(calls);
     }
 
-    fn visit_function(&mut self, node: Node) {
+    fn visit_function(&mut self, node: Node<'a>) {
         let name_node = node.child_by_field_name("name");
         let func_name = name_node.map(|n| self.text(n)).unwrap_or("");
 
@@ -539,7 +557,7 @@ impl<'a> PhpExtractor<'a> {
         self.test_calls.push(calls);
     }
 
-    fn try_pest_test(&mut self, node: Node) {
+    fn try_pest_test(&mut self, node: Node<'a>) {
         let func_node = node.child_by_field_name("function");
         let func_text = func_node.map(|n| self.text(n)).unwrap_or("");
 
@@ -625,7 +643,7 @@ impl<'a> PhpExtractor<'a> {
         out
     }
 
-    fn scan_block(&self, node: Node, test_fn: &mut TestFn) {
+    fn scan_block(&self, node: Node<'a>, test_fn: &mut TestFn) {
         if super::reach::is_dead(&self.dead, node.start_byte()) {
             return;
         }
@@ -644,7 +662,7 @@ impl<'a> PhpExtractor<'a> {
         }
     }
 
-    fn scan_call(&self, node: Node, test_fn: &mut TestFn) {
+    fn scan_call(&self, node: Node<'a>, test_fn: &mut TestFn) {
         let kind = node.kind();
         let name_node = node.child_by_field_name("name");
         let call_name = name_node.map(|n| self.text(n)).unwrap_or("");
@@ -657,7 +675,7 @@ impl<'a> PhpExtractor<'a> {
 
         // Test skip: $this->markTestSkipped(...), $this->markTestIncomplete(...)
         if call_name == "markTestSkipped" || call_name == "markTestIncomplete" {
-            test_fn.record_skip(read_skip(Grammar::Php, node, None, self.src));
+            test_fn.record_skip(read_skip(Grammar::Php, node, self.anc, None, self.src));
             return;
         }
 
@@ -721,6 +739,7 @@ impl<'a> PhpExtractor<'a> {
                                 &mut test_fn.equality_operands,
                                 subject,
                                 args[0],
+                                self.anc,
                                 self.src,
                             );
                         }
@@ -757,7 +776,7 @@ impl<'a> PhpExtractor<'a> {
         }
     }
 
-    fn classify_phpunit_assertion(&self, name: &str, args: &[Node], test_fn: &mut TestFn) {
+    fn classify_phpunit_assertion(&self, name: &str, args: &[Node<'a>], test_fn: &mut TestFn) {
         test_fn.total_asserts += 1;
 
         match name {
@@ -792,6 +811,7 @@ impl<'a> PhpExtractor<'a> {
                             &mut test_fn.equality_operands,
                             args[0],
                             args[1],
+                            self.anc,
                             self.src,
                         )
                     } else {

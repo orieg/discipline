@@ -1,5 +1,6 @@
 //! Rust language pack: tree-sitter AST extraction of tests, assertions, and unsafe sites.
 
+use super::ancestry::{Above, Ancestry};
 use std::collections::HashSet;
 
 use anyhow::Result;
@@ -61,9 +62,11 @@ impl LanguagePack for RustPack {
                 .push(format!("failed to parse manifest at '{err_path}'"));
         }
 
+        let anc = Ancestry::new(root);
         let mut cx = Extractor {
             dead: super::reach::dead_ranges(root, src, &RS_REACH),
             src: src.as_bytes(),
+            anc: &anc,
             lines: src.lines().collect(),
             line_starts: std::iter::once(0)
                 .chain(src.match_indices('\n').map(|(i, _)| i + 1))
@@ -73,6 +76,7 @@ impl LanguagePack for RustPack {
             in_fn: 0,
             in_const: 0,
             in_test: 0,
+            gates: Vec::new(),
             test_file: super::functions::test_path(path)
                 || super::functions::declared_test_path(path, &vocab.test_paths),
             library_helper: false,
@@ -85,10 +89,10 @@ impl LanguagePack for RustPack {
         cx.visit(root, &mut Vec::new());
         cx.resolve_same_file_helpers();
         cx.facts.build_compile_time_test();
-        RUST_PACK.shared_facts(root, src, path, vocab, &mut cx.facts);
+        RUST_PACK.shared_facts(root, &anc, src, path, vocab, &mut cx.facts);
         super::bounds::rust(root, src, &mut cx.facts.tests);
         super::expectations::rust(root, src, &mut cx.facts.tests);
-        super::caught_assertions::rust(root, src, &mut cx.facts.tests, vocab);
+        super::caught_assertions::rust(root, &anc, src, &mut cx.facts.tests, vocab);
         cx.facts.prose = super::prose::extract(
             root,
             src,
@@ -113,7 +117,11 @@ use super::HelperFacts;
 enum Scope {
     None,
     Module,
-    Function { is_test: bool },
+    /// A module body or the file: its `#![cfg]` attributes gate what is in it.
+    Gate,
+    Function {
+        is_test: bool,
+    },
     Const,
 }
 
@@ -129,6 +137,8 @@ struct Extractor<'a> {
     /// Byte ranges no execution reaches (`super::reach`).
     dead: super::reach::DeadRanges,
     src: &'a [u8],
+    /// The ancestors of the nodes of the file's tree (`super::ancestry`).
+    anc: &'a Ancestry<'a>,
     lines: Vec<&'a str>,
     /// Byte offset of each line start (robust to CRLF, unlike summing `lines`).
     line_starts: Vec<usize>,
@@ -137,6 +147,12 @@ struct Extractor<'a> {
     in_fn: usize,
     in_const: usize,
     in_test: usize,
+    /// For each module, module body and the file around the node being read, the
+    /// outermost first: whether the `cfg` attributes down to it leave its content out
+    /// of the build, and otherwise the nearest condition they build it under
+    /// (`Self::open_gate`). A climb from each test to the root read the same attributes
+    /// once for each test.
+    gates: Vec<(bool, Option<String>)>,
     /// The whole file is test code (a test directory or a declared test path).
     test_file: bool,
     /// Counting a library function's checks: one outside `#[cfg(test)]` in a non-test
@@ -158,7 +174,7 @@ impl<'a> Extractor<'a> {
     /// A callee chosen at the call, `(if c { a } else { b })(x)`, named by every function
     /// it can be, joined by `|` (resolved in `ast::resolve_helper`); `None` for any other
     /// callee.
-    fn selected_callee(&self, f: Node) -> Option<String> {
+    fn selected_callee(&self, f: Node<'a>) -> Option<String> {
         if f.kind() != "parenthesized_expression" {
             return None;
         }
@@ -167,7 +183,7 @@ impl<'a> Extractor<'a> {
         (!names.is_empty()).then(|| names.join("|"))
     }
 
-    fn collect_comments(&mut self, node: Node) {
+    fn collect_comments(&mut self, node: Node<'a>) {
         if matches!(node.kind(), "line_comment" | "block_comment") {
             let text = self.text(node);
             // A line comment's end position sits at column 0 of the next row; that row is
@@ -201,7 +217,7 @@ impl<'a> Extractor<'a> {
     /// what is still to read, so its depth is the tree's and not the thread's: this
     /// function took more of the thread's stack for each level than any other walker
     /// (`source_text::TREE_DEPTH_LIMIT`).
-    fn visit(&mut self, root: Node, mods: &mut Vec<String>) {
+    fn visit(&mut self, root: Node<'a>, mods: &mut Vec<String>) {
         enum Step<'t> {
             Enter(Node<'t>),
             Leave(Scope),
@@ -229,6 +245,10 @@ impl<'a> Extractor<'a> {
             Scope::None => {}
             Scope::Module => {
                 mods.pop();
+                self.gates.pop();
+            }
+            Scope::Gate => {
+                self.gates.pop();
             }
             Scope::Function { is_test } => {
                 if is_test {
@@ -242,7 +262,7 @@ impl<'a> Extractor<'a> {
 
     /// Reads `node` itself. `None` when its children are not read; otherwise what it
     /// opened, which [`Self::leave`] closes after them.
-    fn enter(&mut self, node: Node, mods: &mut Vec<String>) -> Option<Scope> {
+    fn enter(&mut self, node: Node<'a>, mods: &mut Vec<String>) -> Option<Scope> {
         match node.kind() {
             "attribute_item" | "inner_attribute_item" => {
                 let text = self.text(node);
@@ -269,7 +289,12 @@ impl<'a> Extractor<'a> {
                     .map(|n| self.text(n).to_string())
                     .unwrap_or_default();
                 mods.push(name);
+                self.open_gate(node);
                 return Some(Scope::Module);
+            }
+            "declaration_list" | "source_file" => {
+                self.open_gate(node);
+                return Some(Scope::Gate);
             }
             "function_item" => {
                 let mut direct_calls = Vec::new();
@@ -301,8 +326,8 @@ impl<'a> Extractor<'a> {
                     if let Some(body) = node.child_by_field_name("body") {
                         let src = std::str::from_utf8(self.src).unwrap_or("");
                         self.library_helper = !self.test_file
-                            && !rust_fn_skip(node, src)
-                            && !has_cfg_test_attribute(node, src);
+                            && !rust_fn_skip(node, self.anc, src)
+                            && !has_cfg_test_attribute(node, self.anc, src);
                         self.count_asserts(
                             body,
                             &mut helper_test,
@@ -421,7 +446,7 @@ impl<'a> Extractor<'a> {
 
     fn test_fn(
         &self,
-        node: Node,
+        node: Node<'a>,
         mods: &[String],
         direct_calls: &mut Vec<String>,
     ) -> Option<TestFn> {
@@ -435,7 +460,7 @@ impl<'a> Extractor<'a> {
         let mut should_panic = None;
         let mut has_commented_out_test = false;
         let mut is_quickcheck = false;
-        let mut prev = node.prev_sibling();
+        let mut prev = self.anc.prev_sibling(node);
         while let Some(p) = prev {
             match p.kind() {
                 "attribute_item" => {
@@ -486,19 +511,19 @@ impl<'a> Extractor<'a> {
                     if name == "cfg" {
                         self.apply_cfg(p, &mut ignored, &mut conditional_ignore);
                     }
-                    prev = p.prev_sibling();
+                    prev = self.anc.prev_sibling(p);
                 }
                 "line_comment" | "block_comment" => {
                     let text = self.text(p);
                     if is_commented_out_test(text) {
                         has_commented_out_test = true;
                     }
-                    prev = p.prev_sibling();
+                    prev = self.anc.prev_sibling(p);
                 }
                 _ => break,
             }
         }
-        let (mod_ign, mod_cond) = self.eval_parent_mod_cfgs(node);
+        let (mod_ign, mod_cond) = self.eval_parent_mod_cfgs();
         if mod_ign {
             ignored = true;
             conditional_ignore = None;
@@ -524,7 +549,7 @@ impl<'a> Extractor<'a> {
             .join("::");
 
         let (cases, non_literal_cases, case_rows) =
-            super::test_cases::extract_rust_cases(node, self.src).into_parts();
+            super::test_cases::extract_rust_cases(node, self.anc, self.src).into_parts();
 
         let mut test = TestFn {
             name: qualified,
@@ -581,7 +606,7 @@ impl<'a> Extractor<'a> {
                 );
             }
             self.macro_argument_calls(body, &mut test, direct_calls);
-            super::dispatch_calls(body, self.src, &RS_DISPATCH, direct_calls);
+            super::dispatch_calls(body, self.anc, self.src, &RS_DISPATCH, direct_calls);
             if !test.ignored {
                 self.record_conditional_early_exits(body, &mut test);
             }
@@ -592,10 +617,10 @@ impl<'a> Extractor<'a> {
     /// Early exits under a condition: the first `if` the text rule below accepts, then
     /// every `return` under an `if` (nested and `else` branches included) that a CI
     /// variable is involved in, through a variable, constant or helper of this file.
-    fn record_conditional_early_exits(&self, body: Node, test: &mut TestFn) {
+    fn record_conditional_early_exits(&self, body: Node<'a>, test: &mut TestFn) {
         use super::ci_condition::{self, CiVerdict, Lang};
         if let Some((cond, consequence)) = self.detect_conditional_early_exit(body) {
-            let verdict = ci_condition::site(Lang::Rust, consequence, self.src)
+            let verdict = ci_condition::site(Lang::Rust, consequence, self.anc, self.src)
                 .map_or(CiVerdict::NotCi, |s| s.verdict);
             test.record_conditional_skip(cond, verdict);
         }
@@ -606,7 +631,7 @@ impl<'a> Extractor<'a> {
                         .is_some_and(|c| c.kind() == "return_expression"))
         };
         for exit in ci_condition::exits_under_if(body, &is_return) {
-            if let Some(site) = ci_condition::site(Lang::Rust, exit, self.src) {
+            if let Some(site) = ci_condition::site(Lang::Rust, exit, self.anc, self.src) {
                 if site.related {
                     test.record_conditional_skip(site.text, site.verdict);
                 }
@@ -678,7 +703,7 @@ impl<'a> Extractor<'a> {
 
     fn apply_cfg(
         &self,
-        attr_node: Node,
+        attr_node: Node<'a>,
         ignored: &mut bool,
         conditional_ignore: &mut Option<String>,
     ) {
@@ -694,13 +719,14 @@ impl<'a> Extractor<'a> {
             self.src,
             self.owning_features.as_ref(),
         );
-        let names_feature = super::runner_collection::cfg_mentions_feature(attr_node, self.src);
+        let names_feature =
+            super::runner_collection::cfg_mentions_feature(attr_node, self.anc, self.src);
         Self::consume_cfg_result(val, cond_str, names_feature, ignored, conditional_ignore);
     }
 
     fn apply_cfg_attr_ignore(
         &self,
-        attr_node: Node,
+        attr_node: Node<'a>,
         fallback_cond_str: &str,
         ignored: &mut bool,
         conditional_ignore: &mut Option<String>,
@@ -732,50 +758,71 @@ impl<'a> Extractor<'a> {
         None
     }
 
-    fn eval_parent_mod_cfgs(&self, node: Node) -> (bool, Option<String>) {
+    /// Whether the modules around the node being read leave it out of the build, and
+    /// the condition they build it under: what the `#[cfg]` attributes of every module
+    /// around it and the `#![cfg]` attributes of every module body around it say, the
+    /// nearest first. Read from [`Self::gates`], which the walk keeps as it descends.
+    fn eval_parent_mod_cfgs(&self) -> (bool, Option<String>) {
+        self.gates.last().cloned().unwrap_or((false, None))
+    }
+
+    /// What `scope` (a module, a module body, or the file) adds to the conditions of
+    /// everything in it: its attributes applied in the order a climb from inside it
+    /// meets them.
+    fn gate_of(&self, scope: Node<'a>) -> (bool, Option<String>) {
         let mut ignored = false;
         let mut conditional_ignore = None;
-        let mut cur = node.parent();
-        while let Some(p) = cur {
-            if p.kind() == "mod_item" {
-                let mut prev_mod = p.prev_sibling();
-                while let Some(a) = prev_mod {
-                    // A comment between the attribute and the module changes nothing.
-                    if matches!(a.kind(), "line_comment" | "block_comment") {
-                        prev_mod = a.prev_sibling();
-                        continue;
-                    }
-                    if a.kind() != "attribute_item" {
-                        break;
-                    }
-                    let text = a.utf8_text(self.src).unwrap_or("");
-                    let name = attribute_name(text);
-                    if name == "cfg" {
-                        self.apply_cfg(a, &mut ignored, &mut conditional_ignore);
-                    }
-                    prev_mod = a.prev_sibling();
+        if scope.kind() == "mod_item" {
+            let mut prev_mod = self.anc.prev_sibling(scope);
+            while let Some(a) = prev_mod {
+                // A comment between the attribute and the module changes nothing.
+                if matches!(a.kind(), "line_comment" | "block_comment") {
+                    prev_mod = self.anc.prev_sibling(a);
+                    continue;
+                }
+                if a.kind() != "attribute_item" {
+                    break;
+                }
+                let text = a.utf8_text(self.src).unwrap_or("");
+                let name = attribute_name(text);
+                if name == "cfg" {
+                    self.apply_cfg(a, &mut ignored, &mut conditional_ignore);
+                }
+                prev_mod = self.anc.prev_sibling(a);
+            }
+        }
+        // `#![cfg(..)]` inside a module body, or at the top of the file, gates
+        // everything in it.
+        if matches!(scope.kind(), "declaration_list" | "source_file") {
+            let mut cursor = scope.walk();
+            let inner: Vec<Node> = scope
+                .children(&mut cursor)
+                .filter(|c| c.kind() == "inner_attribute_item")
+                .collect();
+            for a in inner {
+                if attribute_name(a.utf8_text(self.src).unwrap_or("")) == "cfg" {
+                    self.apply_cfg(a, &mut ignored, &mut conditional_ignore);
                 }
             }
-            // `#![cfg(..)]` inside a module body, or at the top of the file, gates
-            // everything in it.
-            if matches!(p.kind(), "declaration_list" | "source_file") {
-                let mut cursor = p.walk();
-                let inner: Vec<Node> = p
-                    .children(&mut cursor)
-                    .filter(|c| c.kind() == "inner_attribute_item")
-                    .collect();
-                for a in inner {
-                    if attribute_name(a.utf8_text(self.src).unwrap_or("")) == "cfg" {
-                        self.apply_cfg(a, &mut ignored, &mut conditional_ignore);
-                    }
-                }
-            }
-            cur = p.parent();
         }
         (ignored, conditional_ignore)
     }
 
-    fn extract_property_tests(&mut self, node: Node, macro_name: &str, mods: &[String]) {
+    /// Opens `scope` for the nodes under it: its conditions, then those of the scopes
+    /// around it. A scope that leaves its content out leaves it out whatever stands
+    /// around it; otherwise the nearest condition is the one reported.
+    fn open_gate(&mut self, scope: Node<'a>) {
+        let (ignored, condition) = self.gate_of(scope);
+        let (outer_ignored, outer_condition) = self.eval_parent_mod_cfgs();
+        let gate = if ignored || outer_ignored {
+            (true, None)
+        } else {
+            (false, condition.or(outer_condition))
+        };
+        self.gates.push(gate);
+    }
+
+    fn extract_property_tests(&mut self, node: Node<'a>, macro_name: &str, mods: &[String]) {
         let Some(token_tree) = node
             .children(&mut node.walk())
             .find(|c| c.kind() == "token_tree")
@@ -940,7 +987,7 @@ impl<'a> Extractor<'a> {
                 let mut ci_verdict = None;
                 let mut should_panic = None;
 
-                let (mod_ign, mod_cond) = self.eval_parent_mod_cfgs(node);
+                let (mod_ign, mod_cond) = self.eval_parent_mod_cfgs();
                 if mod_ign {
                     ignored = true;
                 } else if let Some(cond_str) = mod_cond {
@@ -1035,7 +1082,7 @@ impl<'a> Extractor<'a> {
     /// is the property's result (`count_property_result`).
     fn read_property_body(
         &mut self,
-        body_node: Node,
+        body_node: Node<'a>,
         test: &mut TestFn,
         direct_calls: &mut Vec<String>,
         result_is_checked: bool,
@@ -1055,6 +1102,8 @@ impl<'a> Extractor<'a> {
             return;
         };
         let root = tree.root_node();
+        // The re-parsed text has a tree of its own, and so ancestors of its own.
+        let part = Ancestry::new(root);
         // The first line of the re-parsed text is the line the body starts on.
         let first_row = body_node.start_position().row;
         // The macro's token tree accepts tokens that are not a function body. A body the
@@ -1074,7 +1123,14 @@ impl<'a> Extractor<'a> {
         else {
             return;
         };
-        self.count_property_body_asserts(body, fake_fn.as_bytes(), &dead, test, direct_calls);
+        self.count_property_body_asserts(
+            body,
+            &part,
+            fake_fn.as_bytes(),
+            &dead,
+            test,
+            direct_calls,
+        );
         if result_is_checked {
             count_property_result(
                 body,
@@ -1093,7 +1149,7 @@ impl<'a> Extractor<'a> {
         }];
         super::bounds::rust(root, &fake_fn, &mut read);
         super::expectations::rust(root, &fake_fn, &mut read);
-        super::caught_assertions::rust(root, &fake_fn, &mut read, self.vocab);
+        super::caught_assertions::rust(root, &part, &fake_fn, &mut read, self.vocab);
         let [read] = read;
         let file_byte = |byte: usize| body_node.start_byte() + byte.saturating_sub(PREFIX.len());
         for mut bound in read.bounds {
@@ -1153,9 +1209,10 @@ impl<'a> Extractor<'a> {
         }
     }
 
-    fn count_property_body_asserts(
+    fn count_property_body_asserts<'t>(
         &self,
-        node: Node,
+        node: Node<'t>,
+        part: &Ancestry<'t>,
         src: &[u8],
         dead: &super::reach::DeadRanges,
         test: &mut TestFn,
@@ -1186,7 +1243,7 @@ impl<'a> Extractor<'a> {
                             .find(|c| c.kind() == "token_tree")
                             .and_then(|t| t.utf8_text(src).ok())
                             .unwrap_or("");
-                        let same = note_macro_operands(node, macro_ident, test, src);
+                        let same = note_macro_operands(node, part, macro_ident, test, src);
                         if is_tautology(macro_ident, args) || same {
                             test.tautologies += 1;
                         }
@@ -1247,14 +1304,14 @@ impl<'a> Extractor<'a> {
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.count_property_body_asserts(child, src, dead, test, direct_calls);
+            self.count_property_body_asserts(child, part, src, dead, test, direct_calls);
         }
     }
 
     /// Records where the tautologies counted under `node` are (`TestFn::mark_tautologies`).
     fn count_asserts(
         &self,
-        node: Node,
+        node: Node<'a>,
         test: &mut TestFn,
         is_fallible_return: bool,
         direct_calls: &mut Vec<String>,
@@ -1266,7 +1323,7 @@ impl<'a> Extractor<'a> {
 
     fn count_asserts_unmarked(
         &self,
-        node: Node,
+        node: Node<'a>,
         test: &mut TestFn,
         is_fallible_return: bool,
         direct_calls: &mut Vec<String>,
@@ -1299,7 +1356,7 @@ impl<'a> Extractor<'a> {
                             .find(|c| c.kind() == "token_tree")
                             .map(|t| self.text(t))
                             .unwrap_or("");
-                        let same = note_macro_operands(node, name, test, self.src);
+                        let same = note_macro_operands(node, self.anc, name, test, self.src);
                         if is_tautology(name, args) || same {
                             test.tautologies += 1;
                         }
@@ -1343,7 +1400,12 @@ impl<'a> Extractor<'a> {
     /// to `direct_calls` as calls outside a macro are. A macro in `NON_EVALUATING_MACROS`
     /// runs none of its arguments, so its tree is not read. Only test bodies are read:
     /// a helper's collected calls must match its call nodes (`forwarding_wrapper_callee`).
-    fn macro_argument_calls(&self, node: Node, test: &mut TestFn, direct_calls: &mut Vec<String>) {
+    fn macro_argument_calls(
+        &self,
+        node: Node<'a>,
+        test: &mut TestFn,
+        direct_calls: &mut Vec<String>,
+    ) {
         if super::reach::is_dead(&self.dead, node.start_byte()) || node.kind() == "function_item" {
             return;
         }
@@ -1368,7 +1430,7 @@ impl<'a> Extractor<'a> {
         }
     }
 
-    fn token_tree_calls(&self, tree: Node, test: &mut TestFn, direct_calls: &mut Vec<String>) {
+    fn token_tree_calls(&self, tree: Node<'a>, test: &mut TestFn, direct_calls: &mut Vec<String>) {
         let mut cursor = tree.walk();
         let tokens: Vec<Node> = tree.children(&mut cursor).collect();
         let mut skip = None;
@@ -1407,7 +1469,7 @@ impl<'a> Extractor<'a> {
         is_assert_macro_name(name, &self.vocab.extra_macros)
     }
 
-    fn unsafe_site(&mut self, node: Node, kind: &'static str) {
+    fn unsafe_site(&mut self, node: Node<'a>, kind: &'static str) {
         let documented = self.is_documented(node);
         let row = node.start_position().row;
         let snippet = self
@@ -1436,10 +1498,10 @@ impl<'a> Extractor<'a> {
     /// comment / attribute run directly above the unsafe node or above any
     /// ancestor up to its enclosing statement, or inline between the start of
     /// that statement and the `unsafe` keyword.
-    fn is_documented(&self, node: Node) -> bool {
+    fn is_documented(&self, node: Node<'a>) -> bool {
         let mut rows = vec![node.start_position().row];
         let mut statement = node;
-        while let Some(parent) = statement.parent() {
+        while let Some(parent) = self.anc.parent(statement) {
             if matches!(
                 parent.kind(),
                 "block" | "source_file" | "declaration_list" | "unsafe_block"
@@ -2052,7 +2114,13 @@ fn property_result(expr: Node, body: Node, src: &[u8], depth: usize) -> Property
 /// Returns whether they are the same tokens. Arguments are the runs of tokens between
 /// the commas of the tree; a comma inside `<..>` splits a run, and such an argument is
 /// then never equal to its neighbour.
-fn note_macro_operands(invocation: Node, name: &str, test: &mut TestFn, src: &[u8]) -> bool {
+fn note_macro_operands<'t>(
+    invocation: Node<'t>,
+    anc: &Ancestry<'t>,
+    name: &str,
+    test: &mut TestFn,
+    src: &[u8],
+) -> bool {
     if !name.contains("_eq") {
         return false;
     }
@@ -2077,6 +2145,7 @@ fn note_macro_operands(invocation: Node, name: &str, test: &mut TestFn, src: &[u
         &mut test.equality_operands,
         super::self_comparison::Operand { nodes: a },
         super::self_comparison::Operand { nodes: b },
+        anc,
         src,
     )
 }
@@ -2336,11 +2405,16 @@ fn is_safety_doc_section(comment: &str) -> bool {
 }
 
 /// A `#[test]`-like attribute precedes the function.
-fn rust_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
+fn rust_fn_is_test<'t>(
+    node: tree_sitter::Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    path: &str,
+) -> bool {
     if functions::test_path(path) {
         return true;
     }
-    let mut prev = node.prev_sibling();
+    let mut prev = anc.prev_sibling(node);
     while let Some(p) = prev {
         match p.kind() {
             "attribute_item" => {
@@ -2351,9 +2425,9 @@ fn rust_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
                 ) {
                     return true;
                 }
-                prev = p.prev_sibling();
+                prev = anc.prev_sibling(p);
             }
-            "line_comment" | "block_comment" => prev = p.prev_sibling(),
+            "line_comment" | "block_comment" => prev = anc.prev_sibling(p),
             _ => break,
         }
     }
@@ -2361,8 +2435,8 @@ fn rust_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
 }
 
 /// The item itself carries `#[cfg(test)]` (an attribute right above it).
-fn has_cfg_test_attribute(node: tree_sitter::Node, src: &str) -> bool {
-    let mut prev = node.prev_sibling();
+fn has_cfg_test_attribute<'t>(node: tree_sitter::Node<'t>, anc: &Ancestry<'t>, src: &str) -> bool {
+    let mut prev = anc.prev_sibling(node);
     while let Some(a) = prev {
         if a.kind() != "attribute_item" {
             break;
@@ -2371,33 +2445,33 @@ fn has_cfg_test_attribute(node: tree_sitter::Node, src: &str) -> bool {
         if is_cfg_test_suppression(a, src.as_bytes()) || text.replace(' ', "") == "#[cfg(test)]" {
             return true;
         }
-        prev = a.prev_sibling();
+        prev = anc.prev_sibling(a);
     }
     false
 }
 
 /// A trait method with a default body is a real body; one without is not a `function_item`
 /// with a `body` field, so nothing to skip here beyond `#[cfg(test)]` modules.
-fn rust_fn_skip(node: tree_sitter::Node, src: &str) -> bool {
-    let mut cur = node.parent();
-    while let Some(p) = cur {
-        if p.kind() == "mod_item" {
-            let mut prev = p.prev_sibling();
-            while let Some(a) = prev {
-                if a.kind() != "attribute_item" {
-                    break;
-                }
-                if is_cfg_test_suppression(a, src.as_bytes())
-                    || a.utf8_text(src.as_bytes()).unwrap_or("").replace(' ', "") == "#[cfg(test)]"
-                {
-                    return true;
-                }
-                prev = a.prev_sibling();
+fn rust_fn_skip<'t>(node: tree_sitter::Node<'t>, anc: &Ancestry<'t>, src: &str) -> bool {
+    let under_cfg_test = |module: tree_sitter::Node<'t>| {
+        let mut prev = anc.prev_sibling(module);
+        while let Some(a) = prev {
+            if a.kind() != "attribute_item" {
+                break;
             }
+            if is_cfg_test_suppression(a, src.as_bytes())
+                || a.utf8_text(src.as_bytes()).unwrap_or("").replace(' ', "") == "#[cfg(test)]"
+            {
+                return true;
+            }
+            prev = anc.prev_sibling(a);
         }
-        cur = p.parent();
-    }
-    false
+        false
+    };
+    anc.nearest(node, Above::RustTestModule, |above, _| {
+        above.kind() == "mod_item" && under_cfg_test(above)
+    })
+    .is_some()
 }
 
 /// What the steps every pack shares read of this pack (`PackSpec::shared_facts`).

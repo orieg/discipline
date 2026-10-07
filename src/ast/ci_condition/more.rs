@@ -15,6 +15,7 @@ use super::{
     and, combine, exact_mention, flip, is_ci_env_read_name, mention, one, verdict_of, Ci,
     CiVerdict, SkipCondition, Truth, Val,
 };
+use crate::ast::ancestry::{Above, Ancestry};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use tree_sitter::Node;
 
@@ -1391,19 +1392,25 @@ impl<'t, 's> Reader<'t, 's> {
     }
 }
 
-fn reader<'t, 's>(g: Grammar, site: Node<'t>, src: &'s [u8]) -> (Reader<'t, 's>, Binds<'t>) {
+fn reader<'t, 's>(
+    g: Grammar,
+    site: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &'s [u8],
+) -> (Reader<'t, 's>, Binds<'t>) {
     let mut reader = Reader {
         g,
         src,
         module: Binds::new(),
     };
-    let mut root = site;
+    let root = anc.root();
     let mut scopes = Vec::new();
-    while let Some(parent) = root.parent() {
-        if reader.is_function(parent) || (g == Grammar::Scala && parent.kind() == "block") {
-            scopes.push(parent);
-        }
-        root = parent;
+    let mut below = site;
+    while let Some((scope, _)) = anc.nearest(below, Above::SkipScope, |above, _| {
+        reader.is_function(above) || (g == Grammar::Scala && above.kind() == "block")
+    }) {
+        scopes.push(scope);
+        below = scope;
     }
     let mut seen = HashSet::new();
     let mut module = Binds::new();
@@ -1423,8 +1430,14 @@ fn reader<'t, 's>(g: Grammar, site: Node<'t>, src: &'s [u8]) -> (Reader<'t, 's>,
 ///
 /// A condition that is a constant is not a condition: a skip all of whose conditions
 /// always hold is unconditional, and one under a condition that never holds is no skip.
-pub fn read_skip(g: Grammar, site: Node, own: Option<(Node, bool)>, src: &[u8]) -> SkipRead {
-    let (reader, locals) = reader(g, site, src);
+pub fn read_skip<'t>(
+    g: Grammar,
+    site: Node<'t>,
+    anc: &Ancestry<'t>,
+    own: Option<(Node<'t>, bool)>,
+    src: &[u8],
+) -> SkipRead {
+    let (reader, locals) = reader(g, site, anc, src);
     // Innermost first: the condition as reported, its value, and its value as a constant.
     let mut chain: Vec<(String, Val, Option<bool>)> = Vec::new();
     if let Some((cond, runs_when)) = own {
@@ -1442,7 +1455,7 @@ pub fn read_skip(g: Grammar, site: Node, own: Option<(Node, bool)>, src: &[u8]) 
         ));
     }
     let mut cur = site;
-    while let Some(parent) = cur.parent() {
+    while let Some(parent) = anc.parent(cur) {
         if reader.is_function(parent) {
             break;
         }

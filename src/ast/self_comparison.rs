@@ -28,6 +28,7 @@
 //! of the same test (`assert_eq!(a, a); assert_eq!(a, b);`): the test exercises the
 //! equality of that value, and it holds a comparison of it that can fail.
 
+use super::ancestry::{Above, Ancestry};
 use std::hash::{Hash, Hasher};
 use tree_sitter::Node;
 
@@ -199,15 +200,13 @@ pub fn same(a: Node, b: Node, src: &[u8]) -> bool {
     !a.is_empty() && a == b
 }
 
-fn inside_macro_definition(node: Node) -> bool {
-    let mut at = Some(node);
-    while let Some(n) = at {
-        if MACRO_DEFINITION_KINDS.contains(&n.kind()) {
-            return true;
-        }
-        at = n.parent();
-    }
-    false
+fn inside_macro_definition<'t>(node: Node<'t>, anc: &Ancestry<'t>) -> bool {
+    MACRO_DEFINITION_KINDS.contains(&node.kind())
+        || anc
+            .nearest(node, Above::MacroDefinition, |above, _| {
+                MACRO_DEFINITION_KINDS.contains(&above.kind())
+            })
+            .is_some()
 }
 
 fn holds_kind(node: Node, kinds: &[&str]) -> bool {
@@ -248,7 +247,13 @@ fn token_run_calls(nodes: &[Node], src: &[u8]) -> bool {
 /// tokens, which is what a pack counts as a tautology; when they are, and the form is
 /// one this module records (see the module text), the assertion is recorded on `eq`.
 /// Two different operands are recorded as compared with one another.
-pub fn note_operands(eq: &mut EqualityOperands, a: Operand, b: Operand, src: &[u8]) -> bool {
+pub fn note_operands<'t>(
+    eq: &mut EqualityOperands,
+    a: Operand<'_, 't>,
+    b: Operand<'_, 't>,
+    anc: &Ancestry<'t>,
+    src: &[u8],
+) -> bool {
     let (ta, tb) = (operand_tokens(a, src), operand_tokens(b, src));
     if ta.is_empty() || tb.is_empty() {
         return false;
@@ -261,7 +266,7 @@ pub fn note_operands(eq: &mut EqualityOperands, a: Operand, b: Operand, src: &[u
     let Some(first) = a.nodes.first() else {
         return true;
     };
-    let in_macro = inside_macro_definition(*first)
+    let in_macro = inside_macro_definition(*first, anc)
         || a.nodes.iter().any(|n| holds_kind(*n, &["metavariable"]));
     let evaluates =
         a.nodes.iter().any(|n| holds_kind(*n, EFFECT_KINDS)) || token_run_calls(a.nodes, src);
@@ -275,8 +280,20 @@ pub fn note_operands(eq: &mut EqualityOperands, a: Operand, b: Operand, src: &[u
 }
 
 /// [`note_operands`] for two expression nodes.
-pub fn note(eq: &mut EqualityOperands, a: Node, b: Node, src: &[u8]) -> bool {
-    note_operands(eq, Operand { nodes: &[a] }, Operand { nodes: &[b] }, src)
+pub fn note<'t>(
+    eq: &mut EqualityOperands,
+    a: Node<'t>,
+    b: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &[u8],
+) -> bool {
+    note_operands(
+        eq,
+        Operand { nodes: &[a] },
+        Operand { nodes: &[b] },
+        anc,
+        src,
+    )
 }
 
 /// The two sides of an `==` (or `===`, `is`, `eq`) comparison that is the whole
@@ -342,7 +359,13 @@ mod tests {
         let tree = rust_tree(&code);
         let (l, r) = sides(&tree);
         let mut eq = EqualityOperands::default();
-        let same = note(&mut eq, l, r, code.as_bytes());
+        let same = note(
+            &mut eq,
+            l,
+            r,
+            &Ancestry::new(tree.root_node()),
+            code.as_bytes(),
+        );
         (same, eq)
     }
 
@@ -378,7 +401,16 @@ mod tests {
             }
             let (l, r) = sides(&tree);
             let mut eq = EqualityOperands::default();
-            assert!(!note(&mut eq, l, r, code.as_bytes()), "{a} / {b}");
+            assert!(
+                !note(
+                    &mut eq,
+                    l,
+                    r,
+                    &Ancestry::new(tree.root_node()),
+                    code.as_bytes(),
+                ),
+                "{a} / {b}"
+            );
             assert!(eq.same.is_empty(), "{a} / {b}");
             assert_eq!(eq.different.len(), 2, "{a} / {b}");
         }
@@ -426,6 +458,7 @@ mod tests {
             &mut eq,
             Operand { nodes: &a },
             Operand { nodes: &b },
+            &Ancestry::new(tree.root_node()),
             code.as_bytes()
         ));
         assert!(eq.same.is_empty(), "{eq:?}");
@@ -446,6 +479,7 @@ mod tests {
             &mut eq,
             Operand { nodes: &a },
             Operand { nodes: &b },
+            &Ancestry::new(tree.root_node()),
             code.as_bytes()
         ));
         assert!(eq.same.is_empty(), "{eq:?}");
@@ -465,6 +499,7 @@ mod tests {
             &mut eq,
             Operand { nodes: &a },
             Operand { nodes: &b },
+            &Ancestry::new(tree.root_node()),
             code.as_bytes()
         ));
         assert_eq!(eq.same.len(), 1, "{eq:?}");

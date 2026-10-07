@@ -1,5 +1,6 @@
 //! C# language pack: tree-sitter AST extraction of tests, assertions, and escape hatches.
 
+use super::ancestry::{Above, Ancestry};
 use anyhow::Result;
 use tree_sitter::Node;
 
@@ -44,9 +45,11 @@ impl LanguagePack for CSharpPack {
         let root = tree.root_node();
 
         let (has_errors, first_line, error_count) = super::collect_error_nodes_info(root);
+        let anc = Ancestry::new(root);
         let mut extractor = CSharpExtractor {
             dead: super::reach::dead_ranges(root, src, &CS_REACH),
             src: src.as_bytes(),
+            anc: &anc,
             vocab,
             is_test_path: is_csharp_test_path(path),
             facts: ParsedFileFacts {
@@ -62,9 +65,9 @@ impl LanguagePack for CSharpPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
-        CSHARP_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
-        super::caught_assertions::csharp(root, src, &mut extractor.facts.tests, vocab);
-        super::expected_exceptions::csharp(root, src, &mut extractor.facts.tests);
+        CSHARP_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
+        super::caught_assertions::csharp(root, &anc, src, &mut extractor.facts.tests, vocab);
+        super::expected_exceptions::csharp(root, &anc, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
             src,
@@ -96,6 +99,8 @@ struct CSharpExtractor<'a> {
     /// Byte ranges no execution reaches (`super::reach`).
     dead: super::reach::DeadRanges,
     src: &'a [u8],
+    /// The ancestors of the nodes of the file's tree (`super::ancestry`).
+    anc: &'a Ancestry<'a>,
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
     facts: ParsedFileFacts,
@@ -119,7 +124,7 @@ impl<'a> CSharpExtractor<'a> {
         node.utf8_text(self.src).unwrap_or("")
     }
 
-    fn collect_comments_and_escape_hatches(&mut self, node: Node) {
+    fn collect_comments_and_escape_hatches(&mut self, node: Node<'a>) {
         let src = self.src;
         super::collect_comment_suppressions(
             node,
@@ -159,14 +164,14 @@ impl<'a> CSharpExtractor<'a> {
         );
     }
 
-    fn visit_root(&mut self, root: Node) {
+    fn visit_root(&mut self, root: Node<'a>) {
         self.walk_scope(root, false);
     }
 
     /// Reads every declaration under `root` in source order. The scopes still open are
     /// kept in a list, not on the thread's stack, so a deep tree costs the walk no stack
     /// (`source_text::TREE_DEPTH_LIMIT`).
-    fn walk_scope(&mut self, root: Node, class_ignored: bool) {
+    fn walk_scope(&mut self, root: Node<'a>, class_ignored: bool) {
         fn children(scope: Node) -> std::vec::IntoIter<Node> {
             let mut cursor = scope.walk();
             scope.children(&mut cursor).collect::<Vec<_>>().into_iter()
@@ -186,11 +191,7 @@ impl<'a> CSharpExtractor<'a> {
 
     /// Reads one child of a scope. `Some` is a scope under it to read next, and whether
     /// the class around that scope is ignored.
-    fn read_member<'t>(
-        &mut self,
-        child: Node<'t>,
-        class_ignored: bool,
-    ) -> Option<(Node<'t>, bool)> {
+    fn read_member(&mut self, child: Node<'a>, class_ignored: bool) -> Option<(Node<'a>, bool)> {
         let kind = child.kind();
         if matches!(
             kind,
@@ -263,7 +264,7 @@ impl<'a> CSharpExtractor<'a> {
         }
     }
 
-    fn has_ignore_attribute(&self, node: Node) -> bool {
+    fn has_ignore_attribute(&self, node: Node<'a>) -> bool {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "attribute_list" {
@@ -289,7 +290,7 @@ impl<'a> CSharpExtractor<'a> {
     /// Returns whether the attribute has an argument named `Skip`, and the conditional
     /// skip when it carries such a pair. The argument is found by its name in the tree:
     /// a display name whose text contains `Skip` is not one.
-    fn attribute_skip_condition(&self, attr: Node) -> (bool, Option<SkipRead>) {
+    fn attribute_skip_condition(&self, attr: Node<'a>) -> (bool, Option<SkipRead>) {
         let mut cursor = attr.walk();
         let Some(list) = attr
             .children(&mut cursor)
@@ -316,7 +317,7 @@ impl<'a> CSharpExtractor<'a> {
         }
         let read = condition
             .filter(|_| skips)
-            .map(|condition| read_skip(Grammar::CSharp, attr, Some(condition), self.src));
+            .map(|condition| read_skip(Grammar::CSharp, attr, self.anc, Some(condition), self.src));
         (skips, read)
     }
 
@@ -361,7 +362,7 @@ impl<'a> CSharpExtractor<'a> {
 
     fn try_extract_method_test(
         &self,
-        node: Node,
+        node: Node<'a>,
         class_ignored: bool,
     ) -> Option<(TestFn, Vec<String>)> {
         let name_node = node.child_by_field_name("name")?;
@@ -448,14 +449,20 @@ impl<'a> CSharpExtractor<'a> {
         let mut direct_calls = Vec::new();
         if let Some(body) = node.child_by_field_name("body") {
             self.extract_assertions_in_body(body, &mut test_fn, &mut direct_calls);
-            super::dispatch_calls(body, self.src, &CS_DISPATCH, &mut direct_calls);
+            super::dispatch_calls(body, self.anc, self.src, &CS_DISPATCH, &mut direct_calls);
         } else {
             // Check for expression-bodied method (arrow_expression_clause)
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if child.kind() == "arrow_expression_clause" {
                     self.extract_assertions_in_body(child, &mut test_fn, &mut direct_calls);
-                    super::dispatch_calls(child, self.src, &CS_DISPATCH, &mut direct_calls);
+                    super::dispatch_calls(
+                        child,
+                        self.anc,
+                        self.src,
+                        &CS_DISPATCH,
+                        &mut direct_calls,
+                    );
                 }
             }
         }
@@ -466,7 +473,7 @@ impl<'a> CSharpExtractor<'a> {
     /// Records where the tautologies counted under `node` are (`TestFn::mark_tautologies`).
     fn extract_assertions_in_body(
         &self,
-        node: Node,
+        node: Node<'a>,
         test_fn: &mut TestFn,
         direct_calls: &mut Vec<String>,
     ) {
@@ -477,7 +484,7 @@ impl<'a> CSharpExtractor<'a> {
 
     fn extract_assertions_in_body_unmarked(
         &self,
-        node: Node,
+        node: Node<'a>,
         test_fn: &mut TestFn,
         direct_calls: &mut Vec<String>,
     ) {
@@ -498,11 +505,17 @@ impl<'a> CSharpExtractor<'a> {
                 if (class_name == "Assert" || class_name == "ClassicAssert")
                     && (method_name == "Skip" || method_name == "Ignore")
                 {
-                    test_fn.record_skip(read_skip(Grammar::CSharp, node, None, self.src));
+                    test_fn.record_skip(read_skip(Grammar::CSharp, node, self.anc, None, self.src));
                     return;
                 }
                 if let Some(own) = self.condition_taking_skip(node, class_name, method_name) {
-                    test_fn.record_skip(read_skip(Grammar::CSharp, node, Some(own), self.src));
+                    test_fn.record_skip(read_skip(
+                        Grammar::CSharp,
+                        node,
+                        self.anc,
+                        Some(own),
+                        self.src,
+                    ));
                     return;
                 }
 
@@ -549,7 +562,7 @@ impl<'a> CSharpExtractor<'a> {
         }
     }
 
-    fn inspect_invocation_target(&self, node: Node) -> (&'a str, &'a str) {
+    fn inspect_invocation_target(&self, node: Node<'a>) -> (&'a str, &'a str) {
         let kind = node.kind();
         if kind == "member_access_expression" {
             let expr = node
@@ -599,7 +612,7 @@ impl<'a> CSharpExtractor<'a> {
             .collect()
     }
 
-    fn handle_assert_call(&self, method_name: &str, args: &[Node], test_fn: &mut TestFn) {
+    fn handle_assert_call(&self, method_name: &str, args: &[Node<'a>], test_fn: &mut TestFn) {
         test_fn.total_asserts += 1;
 
         let is_strong = matches!(
@@ -648,6 +661,7 @@ impl<'a> CSharpExtractor<'a> {
                     &mut test_fn.equality_operands,
                     args[0],
                     expected,
+                    self.anc,
                     self.src,
                 ) {
                     test_fn.tautologies += 1;
@@ -675,6 +689,7 @@ impl<'a> CSharpExtractor<'a> {
                     &mut test_fn.equality_operands,
                     args[0],
                     args[1],
+                    self.anc,
                     self.src,
                 )
             {
@@ -709,17 +724,17 @@ impl<'a> CSharpExtractor<'a> {
         (args.len() == 1).then(|| args[0])
     }
 
-    fn is_literal_true(&self, node: Node) -> bool {
+    fn is_literal_true(&self, node: Node<'a>) -> bool {
         let txt = self.text(node).trim();
         txt == "true" || node.kind() == "boolean_literal" && txt == "true"
     }
 
-    fn is_literal_false(&self, node: Node) -> bool {
+    fn is_literal_false(&self, node: Node<'a>) -> bool {
         let txt = self.text(node).trim();
         txt == "false" || node.kind() == "boolean_literal" && txt == "false"
     }
 
-    fn is_tautology_comparison(&self, node: Node) -> bool {
+    fn is_tautology_comparison(&self, node: Node<'a>) -> bool {
         let kind = node.kind();
         if kind == "binary_expression" {
             if let (Some(left), Some(right)) = (
@@ -750,7 +765,7 @@ impl<'a> CSharpExtractor<'a> {
     }
 }
 
-fn csharp_fn_skip(node: tree_sitter::Node, src: &str) -> bool {
+fn csharp_fn_skip<'t>(node: tree_sitter::Node<'t>, anc: &Ancestry<'t>, src: &str) -> bool {
     let mut cursor = node.walk();
     let is_abstract = node.children(&mut cursor).any(|c| {
         c.kind() == "modifier"
@@ -760,17 +775,18 @@ fn csharp_fn_skip(node: tree_sitter::Node, src: &str) -> bool {
     if is_abstract {
         return true;
     }
-    let mut cur = node.parent();
-    while let Some(p) = cur {
-        if p.kind() == "interface_declaration" {
-            return true;
-        }
-        cur = p.parent();
-    }
-    false
+    anc.nearest(node, Above::CsharpInterface, |above, _| {
+        above.kind() == "interface_declaration"
+    })
+    .is_some()
 }
 
-fn csharp_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
+fn csharp_fn_is_test<'t>(
+    node: tree_sitter::Node<'t>,
+    _: &Ancestry<'t>,
+    src: &str,
+    path: &str,
+) -> bool {
     if functions::is_test_file(path, Some(is_csharp_test_path)) {
         return true;
     }

@@ -17,6 +17,7 @@
 //! - Rust `#[cfg]` on a test: `cfg(feature = "x")` where `x` is not declared in `[features]`,
 //!   or `cfg(any())` / `cfg(all(any()))`, treated as an unconditional ignore.
 
+use super::ancestry::Ancestry;
 use super::gitattributes::{wildmatch, GitAttributes};
 use super::go_build::{go_build_constraint, go_build_constraint_line, GoBuild};
 use super::go_work::{parse_go_work, GoWork};
@@ -2080,9 +2081,13 @@ fn rust_leaf_is(node: Node, src: &[u8], word: &str) -> bool {
 }
 
 /// `(name, value)` of the attributes right above `node`, comments skipped.
-fn rust_outer_attributes<'a>(node: Node<'a>, src: &'a [u8]) -> Vec<(String, Node<'a>)> {
+fn rust_outer_attributes<'a>(
+    node: Node<'a>,
+    anc: &Ancestry<'a>,
+    src: &[u8],
+) -> Vec<(String, Node<'a>)> {
     let mut out = Vec::new();
-    let mut prev = node.prev_sibling();
+    let mut prev = anc.prev_sibling(node);
     while let Some(p) = prev {
         match p.kind() {
             "attribute_item" => {
@@ -2100,13 +2105,14 @@ fn rust_outer_attributes<'a>(node: Node<'a>, src: &'a [u8]) -> Vec<(String, Node
             "line_comment" | "block_comment" => {}
             _ => break,
         }
-        prev = p.prev_sibling();
+        prev = anc.prev_sibling(p);
     }
     out
 }
 
-fn scan_rust_module_items(
-    node: Node,
+fn scan_rust_module_items<'t>(
+    node: Node<'t>,
+    anc: &Ancestry<'t>,
     src: &[u8],
     parents: &mut Vec<String>,
     scan: &mut ModuleScan,
@@ -2132,7 +2138,7 @@ fn scan_rust_module_items(
                 // `go.rs`).
                 let name = name.strip_prefix("r#").unwrap_or(name);
                 let mut path = None;
-                for (attr_name, attr) in rust_outer_attributes(item, src) {
+                for (attr_name, attr) in rust_outer_attributes(item, anc, src) {
                     match attr_name.as_str() {
                         "path" => {
                             let value = attr
@@ -2158,7 +2164,7 @@ fn scan_rust_module_items(
                             scan.open = true;
                         }
                         parents.push(name.to_string());
-                        scan_rust_module_items(body, src, parents, scan);
+                        scan_rust_module_items(body, anc, src, parents, scan);
                         parents.pop();
                     }
                 }
@@ -2202,6 +2208,7 @@ fn scan_rust_modules(source: &str) -> ModuleScan {
     }
     scan_rust_module_items(
         tree.root_node(),
+        &Ancestry::new(tree.root_node()),
         source.as_bytes(),
         &mut Vec::new(),
         &mut scan,
@@ -3232,13 +3239,13 @@ fn eval_predicate(
 }
 
 /// Whether the attribute names a Cargo feature (`feature = "..."`) anywhere in its predicate.
-pub fn cfg_mentions_feature(node: Node, src: &[u8]) -> bool {
+pub fn cfg_mentions_feature<'t>(node: Node<'t>, anc: &Ancestry<'t>, src: &[u8]) -> bool {
     let mut cursor = node.walk();
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
         if n.kind() == "identifier"
             && n.utf8_text(src).ok() == Some("feature")
-            && n.next_sibling().is_some_and(|s| s.kind() == "=")
+            && anc.next_sibling(n).is_some_and(|s| s.kind() == "=")
         {
             return true;
         }
