@@ -783,10 +783,7 @@ impl<'a> CCppExtractor<'a> {
                 .first()
                 .map(|n| self.text(*n).trim_matches('"').to_string())
                 .unwrap_or_else(|| "Catch2Test".to_string());
-            let is_ignored = param_nodes.iter().any(|n| {
-                let txt = self.text(*n);
-                txt.contains("[.") || txt.contains("[!hide]")
-            });
+            let is_ignored = self.catch2_hidden(&param_nodes);
             let line = declarator_node.start_position().row + 1;
             let end_line = body.end_position().row + 1;
             let mut test_fn = TestFn {
@@ -914,11 +911,19 @@ impl<'a> CCppExtractor<'a> {
             .first()
             .map(|n| self.clean_param_text(*n))
             .unwrap_or_else(|| "Catch2Test".to_string());
-        let is_ignored = args.iter().any(|n| {
-            let txt = self.text(*n);
-            txt.contains("[.") || txt.contains("[!hide]")
-        });
+        let is_ignored = self.catch2_hidden(&args);
         (name, is_ignored)
+    }
+
+    /// Whether the tags of a Catch2 test case hide it (`[.]`, `[.name]`, `[!hide]`). The
+    /// tags are the string argument after the test's name: a name that contains `[.` is
+    /// not a tag.
+    fn catch2_hidden(&self, args: &[Node]) -> bool {
+        args.iter()
+            .map(|n| self.text(*n).trim())
+            .filter(|text| text.starts_with('"'))
+            .skip(1)
+            .any(|tags| tags.contains("[.") || tags.contains("[!hide]"))
     }
 
     fn get_call_fn_name(&self, call: Node) -> &'a str {

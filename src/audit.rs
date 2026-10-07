@@ -57,7 +57,7 @@ pub struct Options {
 pub struct Record {
     /// Full commit id of the change.
     pub sha: String,
-    /// The pull request number, from the subject's `(#N)`.
+    /// The pull request number, from a `(#N)` the subject ends with.
     pub pr: Option<u64>,
     /// Commit time, seconds since the Unix epoch.
     pub time: i64,
@@ -1258,7 +1258,7 @@ type ChangeParts = (Vec<Record>, Vec<Record>, Vec<Record>);
 fn change_records(repo: &Repository, c: &Commit, ord: usize, reasons: bool) -> Result<ChangeParts> {
     let parent = c.parent(0)?;
     let (pt, ct) = (parent.tree()?, c.tree()?);
-    let subject = c.summary().ok().flatten().unwrap_or("").to_string();
+    let subject = crate::gitctx::commit_subject(c);
     let info = ChangeInfoRef {
         sha: c.id().to_string(),
         pr: crate::replay::pr_from_subject(&subject),
@@ -1266,7 +1266,7 @@ fn change_records(repo: &Repository, c: &Commit, ord: usize, reasons: bool) -> R
         ord,
         subject,
     };
-    let mut out = directive_records(c.message().unwrap_or(""), &info, reasons);
+    let mut out = directive_records(&crate::gitctx::commit_message(c), &info, reasons);
     let parent_config = blob_text(repo, &pt, CONFIG_NAME)?;
     let (loosened, tightened) = config_changes(
         parent_config.as_deref(),
@@ -1313,7 +1313,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
             author_name: c.author().name().unwrap_or("").to_string(),
             author_email: c.author().email().unwrap_or("").to_string(),
             committer_email: c.committer().email().unwrap_or("").to_string(),
-            message: c.message().unwrap_or("").to_string(),
+            message: crate::gitctx::commit_message(c),
             parent_count: c.parent_count(),
         };
         if crate::guards::commit_provenance::is_agent_commit(
@@ -1351,7 +1351,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
                 pr: None,
                 time: c.time().seconds(),
                 ord,
-                subject: c.summary().ok().flatten().unwrap_or("").to_string(),
+                subject: crate::gitctx::commit_subject(c),
             })
             .collect();
         let (pulls, read, body) = read_pulls(&api, f, &changes, &records, opts.reasons);

@@ -1403,14 +1403,11 @@ impl<'a> GoExtractor<'a> {
         }
 
         for stmt in statements {
-            if stmt.kind() == "short_var_declaration" {
-                let text = self.text(stmt);
-                if is_go_env_check(text) {
-                    if let Some(left) = stmt.child_by_field_name("left") {
-                        let name = self.text(left).trim();
-                        if !name.is_empty() {
-                            env_bindings.insert(name.to_string());
-                        }
+            if stmt.kind() == "short_var_declaration" && is_go_env_check(stmt, self.src) {
+                if let Some(left) = stmt.child_by_field_name("left") {
+                    let name = self.text(left).trim();
+                    if !name.is_empty() {
+                        env_bindings.insert(name.to_string());
                     }
                 }
             }
@@ -1427,13 +1424,10 @@ impl<'a> GoExtractor<'a> {
                     .unwrap_or("")
                     .trim();
 
-                let is_env = is_go_env_check(init_str)
-                    || is_go_env_check(cond_str)
-                    || env_bindings.iter().any(|v| {
-                        cond_str == v
-                            || cond_str
-                                .split(|c: char| !c.is_alphanumeric() && c != '_')
-                                .any(|t| t == v)
+                let is_env = init.is_some_and(|n| is_go_env_check(n, self.src))
+                    || cond.is_some_and(|n| {
+                        is_go_env_check(n, self.src)
+                            || super::code_names_one_of(n, self.src, &GO_NOT_CODE, &env_bindings)
                     });
 
                 if is_env {
@@ -1462,12 +1456,23 @@ fn go_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
     functions::is_test_file(path, Some(is_go_test_path)) || is_go_test_function_name(name)
 }
 
-fn is_go_env_check(text: &str) -> bool {
-    text.contains("os.Getenv")
-        || text.contains("os.LookupEnv")
-        || text.contains("Getenv")
-        || text.contains("LookupEnv")
-        || super::is_ci_condition(text)
+const GO_NOT_CODE: super::NotCode = super::NotCode {
+    strings: &[
+        "interpreted_string_literal",
+        "raw_string_literal",
+        "rune_literal",
+    ],
+    comments: &["comment"],
+    interpolations: &[],
+};
+
+/// Whether `node` is a candidate for a condition on the environment: its code, outside
+/// string literals and comments, spells an environment read or names a CI variable. A CI
+/// variable named in a string (`os.Getenv("CI")`, `lookup("CI")`) is read by
+/// `ci_condition::site`, from the tree.
+fn is_go_env_check(node: Node, src: &[u8]) -> bool {
+    let code = super::code_text(node, src, &GO_NOT_CODE);
+    code.contains("Getenv") || code.contains("LookupEnv") || super::is_ci_condition(&code)
 }
 
 fn go_consequence_returns_early(consequence: Node, src: &[u8]) -> bool {

@@ -233,7 +233,7 @@ impl<'a> KotlinExtractor<'a> {
     }
 
     /// Annotations on a declaration: (name, whole text).
-    fn annotations(&self, node: Node) -> Vec<(&'a str, &'a str)> {
+    fn annotations<'n>(&self, node: Node<'n>) -> Vec<(&'a str, Node<'n>)> {
         let mut out = Vec::new();
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -241,7 +241,7 @@ impl<'a> KotlinExtractor<'a> {
                 let mut inner = child.walk();
                 for m in child.children(&mut inner) {
                     if m.kind() == "annotation" {
-                        out.push((self.annotation_name(m), self.text(m)));
+                        out.push((self.annotation_name(m), m));
                     }
                 }
             }
@@ -549,7 +549,16 @@ impl<'a> KotlinExtractor<'a> {
             match aname {
                 "Test" => {
                     annotated_test = true;
-                    if atext.contains("enabled = false") || atext.contains("enabled=false") {
+                    if super::annotation_disables(
+                        atext,
+                        self.src,
+                        &[
+                            "string_literal",
+                            "line_comment",
+                            "block_comment",
+                            "multiline_comment",
+                        ],
+                    ) {
                         ignored = true;
                     }
                 }

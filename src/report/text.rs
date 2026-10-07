@@ -21,8 +21,10 @@
 //! | returned to an agent, a JSON field | [`agent_field`], [`agent_field_text`] | no control character, bounded length |
 //!
 //! Markdown is rendered by a forge, so its two functions also write emphasis (`*`, `_`,
-//! `~`), link text (`[`) and a word a renderer would link by itself as text. The terminal
-//! formats do not: a terminal renders none of that.
+//! `~`), link text (`[`) and a word a renderer would link by itself as text, and a word
+//! a forge would read as a reference (`#123`, `owner/repo#123`, `GH-123`, `!123`, a
+//! commit id, a mail address) as a code span. The terminal formats do not: a terminal
+//! renders none of that.
 //!
 //! The pre-tool hook and the MCP server answer a coding agent, which may act on what it
 //! reads. Text they quote (a path, a command, a branch, a session id, an error) is
@@ -147,6 +149,59 @@ fn would_link(word: &[char]) -> bool {
         .any(|t| lower.contains(t))
 }
 
+/// Whether a forge could make a reference of `word` (or of part of it) by itself, after
+/// the Markdown is rendered: an issue or pull request (`#123`, `owner/repo#123`,
+/// `GH-123`, and `!123` on GitLab, Gitea and Forgejo), a commit (a run of seven or more
+/// hexadecimal digits standing as a word, alone or after `user@`), or a mail address
+/// (`name@host`). A reference notifies whoever it names and writes a line in the
+/// timeline of the issue it points at, so quoted text must not make one. As with
+/// [`would_link`] an escape inside the word is not relied on: the word is written as a
+/// code span, which no forge reads for references.
+///
+/// The test is wider than what any one forge links (a commit is linked only when it
+/// exists; a seven-digit number is hexadecimal too): a word that is wrapped without
+/// need still says what it said.
+fn would_reference(word: &[char]) -> bool {
+    let alnum = |i: usize| word.get(i).is_some_and(char::is_ascii_alphanumeric);
+    let digit = |i: usize| word.get(i).is_some_and(char::is_ascii_digit);
+    let in_word = |i: usize| {
+        word.get(i)
+            .is_some_and(|c| c.is_alphanumeric() || *c == '_')
+    };
+    let mut i = 0;
+    while i < word.len() {
+        match word[i] {
+            '#' | '!' if digit(i + 1) => return true,
+            '@' if i > 0 && alnum(i - 1) && alnum(i + 1) => return true,
+            'g' | 'G'
+                if matches!(word.get(i + 1), Some('h' | 'H'))
+                    && word.get(i + 2) == Some(&'-')
+                    && digit(i + 3)
+                    && !(i > 0 && in_word(i - 1)) =>
+            {
+                return true
+            }
+            c if c.is_ascii_hexdigit() && !(i > 0 && in_word(i - 1)) => {
+                let run = word[i..]
+                    .iter()
+                    .take_while(|c| c.is_ascii_hexdigit())
+                    .count();
+                if run >= 7 && !in_word(i + run) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Whether `word` is written as a code span unless it is a link of the report's own.
+fn needs_a_span(word: &[char]) -> bool {
+    would_link(word) || would_reference(word)
+}
+
 /// The part of `word` that is a link of the report's own, as a range of it: it starts
 /// with [`OWN_LINK_PREFIX`] and runs over the characters a page address of the
 /// documentation site is made of. The prefix fixes the host and the first part of the
@@ -162,7 +217,7 @@ fn own_link(word: &[char]) -> Option<(usize, usize)> {
             .iter()
             .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '#' | '.' | '-'))
             .count();
-    (!would_link(&word[..start]) && !would_link(&word[end..])).then_some((start, end))
+    (!needs_a_span(&word[..start]) && !needs_a_span(&word[end..])).then_some((start, end))
 }
 
 /// A pipe inside a code span of a table cell, after `before` (the span's text so far).
@@ -190,9 +245,12 @@ fn push_code_pipe(out: &mut String, before: &[char]) {
 /// strikethrough); a backslash before any of these is itself escaped, so it cannot
 /// undo the escape. In a table cell a pipe is escaped as well, inside a span or out.
 ///
-/// A word a renderer would link by itself ([`would_link`]) is written whole as a code
-/// span, with a space between it and a code span next to it, so the two stay two. The
-/// one exception is a link of the report's own ([`own_link`]), written as it is.
+/// A word a renderer would link by itself ([`would_link`]), or a forge would read as a
+/// reference to an issue, a commit or a mail address ([`would_reference`]), is written
+/// whole as a code span, with a space between it and a code span next to it, so the two
+/// stay two. The one exception is a link of the report's own ([`own_link`]), written as
+/// it is. A reference the report makes itself (the pull request an override was read
+/// from) is written by the report beside the quoted text, not through this function.
 fn inline(text: &str, cell: bool) -> String {
     let chars = flat(text);
     let mut out = String::with_capacity(text.len() + 16);
@@ -208,7 +266,7 @@ fn inline(text: &str, cell: bool) -> String {
                 .take_while(|c| **c != '`' && !c.is_whitespace())
                 .count();
             let word = &chars[i..word_end];
-            if would_link(word) {
+            if needs_a_span(word) {
                 match own_link(word) {
                     Some((start, end)) => verbatim = (i + start, i + end),
                     None => {
@@ -609,10 +667,9 @@ mod tests {
     /// Text the binary writes itself, which must come through byte for byte.
     const PLAIN: &[&str] = &[
         "",
-        "1 directive(s) read from merged pull request #12 (author agent)",
         "continuing without it (`directives.degrade_offline`)",
         "`gates.x.old` is deprecated; use `gates.x.new`",
-        "Raise ``a`b`` to #5 (seven) {eight} 9% + 10 = 10!",
+        "Raise ``a`b`` to (seven) {eight} 9% + 10 = 10!",
         "src/a b/c.rs:12",
         "caf\u{e9} \u{65e5}\u{672c}\u{8a9e} \u{1f600}",
         "a\tb",
@@ -621,11 +678,22 @@ mod tests {
     ];
 
     /// Text the binary could write itself with the characters Markdown reads as emphasis,
-    /// strikethrough or a link's text: byte for byte on a terminal, escaped in Markdown.
-    const PLAIN_ON_A_TERMINAL: &[(&str, &str)] = &[(
-        "Raise ``a`b`` to *two* _three_ ~four~ #5 [six] (seven) {eight} 9% + 10 = 10!",
-        "Raise ``a`b`` to \\*two\\* \\_three\\_ \\~four\\~ #5 \\[six] (seven) {eight} 9% + 10 = 10!",
-    )];
+    /// strikethrough or a link's text, or with a number a forge would read as a reference:
+    /// byte for byte on a terminal; escaped, or a code span, in Markdown.
+    const PLAIN_ON_A_TERMINAL: &[(&str, &str)] = &[
+        (
+            "Raise ``a`b`` to *two* _three_ ~four~ #5 [six] (seven) {eight} 9% + 10 = 10!",
+            "Raise ``a`b`` to \\*two\\* \\_three\\_ \\~four\\~ `#5` \\[six] (seven) {eight} 9% + 10 = 10!",
+        ),
+        (
+            "1 directive(s) read from merged pull request #12 (author agent)",
+            "1 directive(s) read from merged pull request `#12` (author agent)",
+        ),
+        (
+            "Raise ``a`b`` to #5 (seven) {eight} 9% + 10 = 10!",
+            "Raise ``a`b`` to `#5` (seven) {eight} 9% + 10 = 10!",
+        ),
+    ];
 
     #[test]
     fn text_with_nothing_to_neutralise_is_written_byte_for_byte() {
@@ -1241,6 +1309,314 @@ mod tests {
         for text in PLAIN {
             assert_eq!(agent_field(text), one_line(text));
             assert_eq!(agent_field_text(text), *text);
+        }
+    }
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::*;
+
+    /// What a renderer hands a forge's reference pass for `md`: the text of every text
+    /// node, with an escaped character as the character, an entity written here as its
+    /// character, and each code span as U+0003 (a forge reads no reference in one, and
+    /// the text on its two sides is not joined). Independent of [`inline`].
+    fn text_nodes(md: &str) -> String {
+        let c: Vec<char> = md.chars().collect();
+        let mut out = String::new();
+        let mut i = 0;
+        while i < c.len() {
+            if c[i] == '\\' && i + 1 < c.len() && c[i + 1].is_ascii_punctuation() {
+                out.push(c[i + 1]);
+                i += 2;
+            } else if c[i] == '`' {
+                let run = c[i..].iter().take_while(|x| **x == '`').count();
+                match closing_run(&c, i + run, run) {
+                    Some(close) => {
+                        out.push('\u{3}');
+                        i = close + run;
+                    }
+                    None => {
+                        out.extend(std::iter::repeat_n('`', run));
+                        i += run;
+                    }
+                }
+            } else if c[i..].starts_with(&['&', '#', '6', '4', ';']) {
+                out.push('@');
+                i += 5;
+            } else {
+                out.push(c[i]);
+                i += 1;
+            }
+        }
+        out
+    }
+
+    /// `text` without the links the report keeps (an address of the documentation site).
+    fn without_own_links(text: &str) -> String {
+        let mut out = String::new();
+        let mut rest = text;
+        while let Some(at) = rest.find(OWN_LINK_PREFIX) {
+            out.push_str(&rest[..at]);
+            out.push('\u{2}');
+            rest = rest[at + OWN_LINK_PREFIX.len()..].trim_start_matches(|c: char| {
+                c.is_ascii_alphanumeric() || matches!(c, '/' | '#' | '.' | '-')
+            });
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// The references a forge could make in `text` (what [`text_nodes`] returns), each
+    /// named with where it starts.
+    fn references(text: &str) -> Vec<String> {
+        let c: Vec<char> = text.chars().collect();
+        let word = |i: usize| c.get(i).is_some_and(|x| x.is_alphanumeric() || *x == '_');
+        let starts_word = |i: usize| i == 0 || !word(i - 1);
+        let digit = |i: usize| c.get(i).is_some_and(char::is_ascii_digit);
+        let alnum = |i: usize| c.get(i).is_some_and(char::is_ascii_alphanumeric);
+        let mut found = Vec::new();
+        for i in 0..c.len() {
+            if matches!(c[i], '#' | '!') && digit(i + 1) {
+                found.push(format!("number at {i}"));
+            }
+            if c[i] == '@' && i > 0 && alnum(i - 1) && alnum(i + 1) {
+                found.push(format!("address at {i}"));
+            }
+            let gh: String = c[i..].iter().take(3).collect();
+            if gh.eq_ignore_ascii_case("gh-") && digit(i + 3) && starts_word(i) {
+                found.push(format!("GH number at {i}"));
+            }
+            if c[i].is_ascii_hexdigit() && starts_word(i) {
+                let run = c[i..].iter().take_while(|x| x.is_ascii_hexdigit()).count();
+                if run >= 7 && !word(i + run) {
+                    found.push(format!("commit id at {i}"));
+                }
+            }
+        }
+        found
+    }
+
+    const PIECES: &[&str] = &[
+        " ",
+        " ",
+        " ",
+        "\n",
+        "`",
+        "``",
+        "*",
+        "_",
+        "~",
+        "[",
+        "]",
+        "(",
+        ")",
+        "|",
+        "\\",
+        "<",
+        ">",
+        "&",
+        "@",
+        "#",
+        "!",
+        "-",
+        "/",
+        ".",
+        ":",
+        "#1",
+        "#123",
+        "!7",
+        "GH-",
+        "gh-4",
+        "GH-12",
+        "1",
+        "23",
+        "4567",
+        "a",
+        "f",
+        "abc",
+        "deadbeef",
+        "0123456",
+        "ABCDEF0",
+        "g",
+        "x",
+        "_x",
+        "word",
+        "owner/repo",
+        "user",
+        "h.example.invalid",
+        "a@b.co",
+        "@name",
+        "&#64;",
+        "&#35;",
+        "\\#",
+        "https://orieg.github.io/discipline/gates/#pii",
+        "https://orieg.github.io/discipline/gates/#7",
+        "http://",
+        "www.",
+        "\u{1b}[31m",
+        "caf\u{e9}",
+        "Status: PASS",
+    ];
+
+    /// Arbitrary quoted texts, the same on every run.
+    fn arbitrary(count: usize, longest: usize) -> Vec<String> {
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) as usize
+        };
+        (0..count)
+            .map(|_| {
+                let n = 1 + next() % longest;
+                (0..n).map(|_| PIECES[next() % PIECES.len()]).collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_reference_reader_of_this_test_finds_each_form() {
+        for text in [
+            "#1",
+            "see #123.",
+            "owner/repo#5",
+            "(GH-12)",
+            "gh-4",
+            "!7",
+            "a@b.co",
+            "user@deadbeef",
+            "deadbeef",
+            "at 0123456,",
+            "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+        ] {
+            assert!(!references(text).is_empty(), "{text:?}");
+        }
+        for text in [
+            "# 1",
+            "#one",
+            "10!",
+            "high-5",
+            "GH-x",
+            "@name",
+            "a @b",
+            "abcdef",
+            "abcdefg1234567",
+            "x0123456",
+            "0123456_x",
+            "a\u{3}bcdef1",
+        ] {
+            assert_eq!(references(text), Vec::<String>::new(), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn quoted_markdown_makes_no_reference_to_an_issue_a_commit_or_an_address() {
+        let texts = arbitrary(6000, 16);
+        for text in &texts {
+            for (cell, md) in [(false, markdown(text)), (true, markdown_cell(text))] {
+                let nodes = without_own_links(&text_nodes(&md));
+                assert_eq!(
+                    references(&nodes),
+                    Vec::<String>::new(),
+                    "{text:?}: a reference in {md:?} (text nodes: {nodes:?}, cell: {cell})"
+                );
+            }
+        }
+        // The generator does write references: the property is not empty.
+        let with_reference = texts
+            .iter()
+            .filter(|t| !references(&flat(t).into_iter().collect::<String>()).is_empty())
+            .count();
+        assert!(with_reference > 1000, "{with_reference}");
+    }
+
+    #[test]
+    fn a_reference_is_written_as_a_code_span_and_the_rest_as_before() {
+        let cases: &[(&str, &str)] = &[
+            ("fixes #123", "fixes `#123`"),
+            ("(#12)", "`(#12)`"),
+            ("see owner/repo#5.", "see `owner/repo#5.`"),
+            ("GH-12 and gh-4", "`GH-12` and `gh-4`"),
+            ("merge !7", "merge `!7`"),
+            (
+                "mail a.b@h.example.invalid now",
+                "mail `a.b@h.example.invalid` now",
+            ),
+            (
+                "at deadbeef1 and user@0123456",
+                "at `deadbeef1` and `user@0123456`",
+            ),
+            ("count 1048576", "count `1048576`"),
+            // A number with its unit attached or with thousands separators has no run of
+            // seven digits standing as a word. One with a decimal point has, before the
+            // point, and is wrapped: nothing here shows a forge reads past the point.
+            ("took 1234567ns of 1,234,567", "took 1234567ns of 1,234,567"),
+            ("ratio 1234567.5", "ratio `1234567.5`"),
+            // Beside a code span of the text, a space keeps the two spans apart.
+            ("`a`#1", "`a` `#1`"),
+            ("#1`a`", "`#1` `a`"),
+            // A code span the text wrote is kept as it is.
+            ("`#1 a@b.co`", "`#1 a@b.co`"),
+            // Not a reference: written as before.
+            ("# 1 and #one", "# 1 and #one"),
+            ("10! is 3628800", "10! is `3628800`"),
+            ("high-5 abcdef 123456", "high-5 abcdef 123456"),
+            ("@name", "&#64;name"),
+            ("abcdefg1234567 x_0123456", "abcdefg1234567 x\\_0123456"),
+            // The documentation site's links stay links, an anchor of digits included.
+            (
+                "see https://orieg.github.io/discipline/gates/#7",
+                "see https://orieg.github.io/discipline/gates/#7",
+            ),
+            // Not when the word carries a reference beside the link.
+            (
+                "https://orieg.github.io/discipline/gates/?x#1",
+                "`https://orieg.github.io/discipline/gates/?x#1`",
+            ),
+        ];
+        for (text, want) in cases {
+            assert_eq!(markdown(text), *want, "{text:?}");
+        }
+        assert_eq!(markdown_cell("a|b#1 *c*"), "`a\\|b#1` \\*c\\*");
+        // The terminal formats and a code span leave a reference as it is.
+        let text = "fixes #123, GH-4, a@b.co and deadbeef1";
+        assert_eq!(terminal_line(text), text);
+        assert_eq!(terminal_text(text), text);
+        assert_eq!(code_span(text), format!("`{text}`"));
+    }
+
+    #[test]
+    fn what_a_renderer_shows_is_the_quoted_text() {
+        let squeeze = |s: &str| s.replace([' ', '`', '\u{3}'], "");
+        for text in arbitrary(3000, 16) {
+            if text.contains(['\\', '`']) || text.contains("&#") {
+                continue;
+            }
+            let want: String = flat(&text).into_iter().collect();
+            let md = markdown(&text);
+            // Every character of the text is in the Markdown, in order: a code span adds
+            // backticks and nothing else.
+            let shown: String = {
+                let c: Vec<char> = md.chars().collect();
+                let mut out = String::new();
+                let mut i = 0;
+                while i < c.len() {
+                    if c[i] == '\\' && i + 1 < c.len() && c[i + 1].is_ascii_punctuation() {
+                        out.push(c[i + 1]);
+                        i += 2;
+                    } else {
+                        out.push(c[i]);
+                        i += 1;
+                    }
+                }
+                out.replace("&amp;", "&")
+                    .replace("&lt;", "<")
+                    .replace("&gt;", ">")
+                    .replace("&#64;", "@")
+            };
+            assert_eq!(squeeze(&shown), squeeze(&want), "{text:?} as {md:?}");
         }
     }
 }

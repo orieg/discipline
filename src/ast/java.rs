@@ -360,13 +360,14 @@ impl<'a> JavaExtractor<'a> {
                         "Test" => {
                             is_test_annotated = true;
                             // Check if TestNG `@Test(enabled = false)` or JUnit 4 `@Test(expected = ...)`
-                            if child.kind() == "annotation" {
-                                let text = self.text(child);
-                                if text.contains("enabled = false")
-                                    || text.contains("enabled=false")
-                                {
-                                    is_ignored = true;
-                                }
+                            if child.kind() == "annotation"
+                                && super::annotation_disables(
+                                    child,
+                                    self.src,
+                                    &["string_literal", "line_comment", "block_comment"],
+                                )
+                            {
+                                is_ignored = true;
                             }
                         }
                         "ParameterizedTest" | "RepeatedTest" | "TestFactory" | "TestTemplate" => {

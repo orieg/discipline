@@ -296,9 +296,15 @@ fn a_negated_jest_test_match_pattern_excludes_a_file() {
 }
 
 #[test]
-fn a_jest_test_match_pattern_that_is_not_anchored_is_undetermined() {
-    // Jest matches the absolute path, which `tests/**` never starts.
+fn a_jest_test_match_pattern_that_starts_with_a_literal_matches_nothing() {
+    // Jest matches the absolute path, which `tests/**` never starts: Jest 27.5 and 29.7
+    // list nothing for such a pattern.
     let pkg = jest(r#"{"testMatch": ["tests/**/*.test.js"]}"#);
+    let (n, run) = counted(&[("package.json", &pkg), ("tests/a.test.js", JS_3)]);
+    assert_eq!(n, 2, "{}", run.stdout);
+    assert!(!has_unknown_note(&run), "{:?}", notes(&run));
+    // One that starts with a wildcard can match, and is not evaluated.
+    let pkg = jest(r#"{"testMatch": ["*/**/*.test.js"]}"#);
     let (n, run) = counted(&[("package.json", &pkg), ("tests/a.test.js", JS_3)]);
     assert_eq!(n, 5, "{}", run.stdout);
     assert!(has_unknown_note(&run), "{:?}", notes(&run));

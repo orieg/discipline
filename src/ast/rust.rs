@@ -652,14 +652,11 @@ impl<'a> Extractor<'a> {
                 child
             };
 
-            if stmt.kind() == "let_declaration" {
-                let text = self.text(stmt);
-                if is_rust_env_check(text) {
-                    if let Some(pat) = stmt.child_by_field_name("pattern") {
-                        let name = self.text(pat).trim();
-                        if !name.is_empty() {
-                            env_bindings.insert(name.to_string());
-                        }
+            if stmt.kind() == "let_declaration" && is_rust_env_check(stmt, self.src) {
+                if let Some(pat) = stmt.child_by_field_name("pattern") {
+                    let name = self.text(pat).trim();
+                    if !name.is_empty() {
+                        env_bindings.insert(name.to_string());
                     }
                 }
             }
@@ -668,14 +665,8 @@ impl<'a> Extractor<'a> {
                 let cond_node = stmt.child_by_field_name("condition")?;
                 let cond_text = self.text(cond_node).trim();
 
-                let is_env_check = is_rust_env_check(cond_text)
-                    || super::is_ci_condition(cond_text)
-                    || env_bindings.iter().any(|v| {
-                        cond_text == v
-                            || cond_text
-                                .split(|c: char| !c.is_alphanumeric() && c != '_')
-                                .any(|t| t == v)
-                    });
+                let is_env_check = is_rust_env_check(cond_node, self.src)
+                    || super::code_names_one_of(cond_node, self.src, &RUST_NOT_CODE, &env_bindings);
 
                 if is_env_check {
                     let consequence = stmt.child_by_field_name("consequence")?;
@@ -1733,14 +1724,22 @@ fn attribute_name(attr_text: &str) -> String {
     last_segment(&path).to_string()
 }
 
-fn is_rust_env_check(text: &str) -> bool {
-    text.contains("env::var")
-        || text.contains("std::env::var")
-        || text.contains("option_env!")
-        || text.contains("env::var_os")
-        || text.contains("std::env::var_os")
-        || text.contains("var_os")
-        || super::is_ci_condition(text)
+const RUST_NOT_CODE: super::NotCode = super::NotCode {
+    strings: &["string_literal", "raw_string_literal", "char_literal"],
+    comments: &["line_comment", "block_comment"],
+    interpolations: &[],
+};
+
+/// Whether `node` is a candidate for a condition on the environment: its code, outside
+/// string literals and comments, spells an environment read or names a CI variable. A CI
+/// variable named in a string (`os.Getenv("CI")`, `lookup("CI")`) is read by
+/// `ci_condition::site`, from the tree.
+fn is_rust_env_check(node: Node, src: &[u8]) -> bool {
+    let code = super::code_text(node, src, &RUST_NOT_CODE);
+    code.contains("env::var")
+        || code.contains("option_env!")
+        || code.contains("var_os")
+        || super::is_ci_condition(&code)
 }
 
 fn rust_block_returns_early(consequence: Node) -> bool {

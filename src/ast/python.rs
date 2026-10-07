@@ -287,6 +287,9 @@ fn python_string_condition(code: &str) -> SkipCondition {
     }
 }
 
+/// The node kinds whose text is not code a mark can be spelled in.
+const PYTHON_NOT_CODE: &[&str] = &["string", "concatenated_string", "comment"];
+
 fn statement_has_skip_mark(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.starts_with("pytestmark") {
@@ -618,7 +621,7 @@ impl<'a> PythonExtractor<'a> {
             .named_child(0)
             .filter(|a| statement.kind() == "expression_statement" && a.kind() == "assignment");
         let Some(value) = assignment.and_then(|a| a.child_by_field_name("right")) else {
-            if statement_has_skip_mark(self.text(statement)) {
+            if statement_has_skip_mark(&self.code_text(statement)) {
                 marks.ignored = true;
             }
             return;
@@ -647,7 +650,7 @@ impl<'a> PythonExtractor<'a> {
                 }
                 continue;
             }
-            let text = self.text(element);
+            let text = self.code_text(element);
             if !(text.contains("skip") || text.contains("xfail")) {
                 continue;
             }
@@ -978,14 +981,11 @@ impl<'a> PythonExtractor<'a> {
         for child in body.children(&mut cursor) {
             if child.kind() == "expression_statement" {
                 if let Some(assign) = child.child(0) {
-                    if assign.kind() == "assignment" {
-                        let text = self.text(assign);
-                        if is_python_env_check(text) {
-                            if let Some(left) = assign.child_by_field_name("left") {
-                                let name = self.text(left).trim();
-                                if !name.is_empty() {
-                                    env_bindings.insert(name.to_string());
-                                }
+                    if assign.kind() == "assignment" && is_python_env_check(assign, self.src) {
+                        if let Some(left) = assign.child_by_field_name("left") {
+                            let name = self.text(left).trim();
+                            if !name.is_empty() {
+                                env_bindings.insert(name.to_string());
                             }
                         }
                     }
@@ -996,13 +996,8 @@ impl<'a> PythonExtractor<'a> {
                 let cond_node = child.child_by_field_name("condition")?;
                 let cond_text = self.text(cond_node).trim();
 
-                let is_env_check = is_python_env_check(cond_text)
-                    || env_bindings.iter().any(|v| {
-                        cond_text == v
-                            || cond_text
-                                .split(|c: char| !c.is_alphanumeric() && c != '_')
-                                .any(|t| t == v)
-                    });
+                let is_env_check = is_python_env_check(cond_node, self.src)
+                    || super::code_names_one_of(cond_node, self.src, &PYTHON_CODE, &env_bindings);
 
                 let consequence = child.child_by_field_name("consequence")?;
                 let calls_skip = python_block_calls_skip(consequence, self.src);
@@ -1186,8 +1181,16 @@ impl<'a> PythonExtractor<'a> {
         }
     }
 
+    /// The text of `node` outside its string literals and comments: a mark is looked for
+    /// in what the code spells, so a fixture name, a parameter value or a reason that
+    /// contains `skip` is not one.
+    fn code_text(&self, node: Node) -> String {
+        super::text_without(node, self.src, PYTHON_NOT_CODE)
+    }
+
     fn is_skip_decorator(&self, dec: Node) -> bool {
-        let text = self.text(dec).trim();
+        let text = self.code_text(dec);
+        let text = text.trim();
         text.contains("pytest.mark.skip")
             || text.contains("pytest.mark.xfail")
             || text.contains("unittest.skip")
@@ -1450,11 +1453,22 @@ impl<'a> PythonExtractor<'a> {
     }
 }
 
-fn is_python_env_check(text: &str) -> bool {
-    text.contains("os.environ")
-        || text.contains("os.getenv")
-        || text.contains("environ.get")
-        || super::is_ci_condition(text)
+const PYTHON_CODE: super::NotCode = super::NotCode {
+    strings: &["string"],
+    comments: &["comment"],
+    interpolations: &["interpolation"],
+};
+
+/// Whether `node` is a candidate for a condition on the environment: its code, outside
+/// string literals and comments, spells an environment read or names a CI variable. A CI
+/// variable named in a string (`os.Getenv("CI")`, `lookup("CI")`) is read by
+/// `ci_condition::site`, from the tree.
+fn is_python_env_check(node: Node, src: &[u8]) -> bool {
+    let code = super::code_text(node, src, &PYTHON_CODE);
+    code.contains("os.environ")
+        || code.contains("os.getenv")
+        || code.contains("environ.get")
+        || super::is_ci_condition(&code)
 }
 
 fn python_block_returns_early(consequence: Node) -> bool {
