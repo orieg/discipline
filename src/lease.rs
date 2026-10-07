@@ -423,6 +423,174 @@ pub fn guard_hook() -> String {
     )
 }
 
+/// The `discipline lease` subcommand.
+pub fn run_cli(args: crate::cli::LeaseArgs) -> Result<bool> {
+    use crate::cli::LeaseCommand;
+    use crate::lease::{now, open, quote, quote_session, take_command, Lease};
+    let (store, here) = open(Path::new("."))?;
+    let t = now();
+    match args.command {
+        LeaseCommand::Take(a) => {
+            let branches = if a.branches.is_empty() {
+                vec![here.branch.clone().ok_or_else(|| {
+                    anyhow::anyhow!("no branch is checked out here; name one with --branch")
+                })?]
+            } else {
+                a.branches
+            };
+            let taken = store.take(
+                &here.key,
+                Lease {
+                    agent: a.agent,
+                    session: a.session,
+                    worktree: here.root.display().to_string(),
+                    branches,
+                    taken_at: t,
+                    heartbeat: t,
+                    ttl_secs: a.ttl,
+                },
+                t,
+                a.steal,
+            )?;
+            for (other, branch) in &taken.stolen {
+                eprintln!(
+                    "lease: took {} from worktree {} (--steal)",
+                    quote(branch),
+                    quote(other)
+                );
+            }
+            println!(
+                "lease: worktree {} holds {} for {} (live {}s without a refresh)",
+                quote(&here.key),
+                taken
+                    .lease
+                    .branches
+                    .iter()
+                    .map(quote)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                quote(&taken.lease.agent),
+                taken.lease.ttl_secs
+            );
+            Ok(true)
+        }
+        LeaseCommand::Release => {
+            if store.release(&here.key)? {
+                println!("lease: released worktree {}", quote(&here.key));
+            } else {
+                println!("lease: worktree {} held no lease", quote(&here.key));
+            }
+            Ok(true)
+        }
+        LeaseCommand::List(a) => {
+            let all = store.list()?;
+            if a.json {
+                let rows: Vec<serde_json::Value> = all
+                    .iter()
+                    .map(|(k, l)| {
+                        let mut v = serde_json::to_value(l).unwrap_or_default();
+                        v["key"] = serde_json::json!(k);
+                        v["live"] = serde_json::json!(l.is_live(t));
+                        v["here"] = serde_json::json!(*k == here.key);
+                        v
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            } else if all.is_empty() {
+                println!("lease: no leases");
+            } else {
+                // One row a lease: what a lease holds is written on one line, with no
+                // control character and a bounded length.
+                let field = crate::report::text::agent_field;
+                for (k, l) in &all {
+                    println!(
+                        "{:<8} {}{:<24} {:<14} {}  heartbeat {}s ago",
+                        if l.is_live(t) { "live" } else { "stale" },
+                        if *k == here.key { "*" } else { " " },
+                        field(k),
+                        field(&l.agent),
+                        field(&l.branches.join(",")),
+                        t - l.heartbeat
+                    );
+                }
+            }
+            Ok(true)
+        }
+        LeaseCommand::InstallGuard => {
+            let repo = crate::gitctx::discover_repository(".")?;
+            let hooks = match repo
+                .config()
+                .ok()
+                .and_then(|c| c.get_path("core.hooksPath").ok())
+            {
+                Some(p) if p.is_absolute() => p,
+                Some(p) => here.root.join(p),
+                None => repo.commondir().join("hooks"),
+            };
+            let path = hooks.join("reference-transaction");
+            match std::fs::read_to_string(&path) {
+                Ok(existing) if existing == crate::lease::guard_hook() => {
+                    println!("lease: the guard is already installed at {}", path.display());
+                    return Ok(true);
+                }
+                // An earlier release's guard is ours to rewrite.
+                Ok(existing) if existing.contains(crate::lease::GUARD_MARKER) => {}
+                Ok(_) => anyhow::bail!(
+                    "{} already exists and is not the lease guard; add `discipline lease guard \"$1\"` to it (when $1 is `prepared`, a non-zero exit aborts the update)",
+                    path.display()
+                ),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+            std::fs::create_dir_all(&hooks)?;
+            std::fs::write(&path, crate::lease::guard_hook())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+            }
+            println!("lease: installed the guard at {}", path.display());
+            Ok(true)
+        }
+        LeaseCommand::Guard(a) => {
+            if a.state != "prepared" {
+                return Ok(true);
+            }
+            let mut stdin = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut stdin)?;
+            let refused = crate::lease::refused_updates(&store, &here.key, &stdin, t)?;
+            for r in &refused {
+                eprintln!(
+                    "discipline lease guard: {} is leased by worktree {} ({} session {}, heartbeat {}s ago); this worktree ({}) may not move it. Hand the work over to that session, or take the branch with {}.",
+                    quote(&r.branch),
+                    quote(&r.holder),
+                    quote(&r.lease.agent),
+                    quote_session(&r.lease.session),
+                    t - r.lease.heartbeat,
+                    quote(&here.key),
+                    take_command(&r.branch)
+                );
+            }
+            Ok(refused.is_empty())
+        }
+        LeaseCommand::Check(a) => match store.holder(&a.branch, &here.key, t)? {
+            None => Ok(true),
+            Some((other, l)) => {
+                eprintln!(
+                    "lease: {} is leased by worktree {} ({} session {}, heartbeat {}s ago); hand the work over to that session, or take it with {}",
+                    quote(&a.branch),
+                    quote(&other),
+                    quote(&l.agent),
+                    quote_session(&l.session),
+                    t - l.heartbeat,
+                    take_command(&a.branch)
+                );
+                Ok(false)
+            }
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

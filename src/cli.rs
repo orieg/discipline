@@ -1,5 +1,8 @@
+use crate::config::{split_list, DisciplineConfig, Overrides, HOSTNAME_DENYLIST_ENV};
+use crate::style;
+use anyhow::{bail, Context as _, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
 #[command(name = "discipline")]
@@ -701,6 +704,87 @@ pub enum PolicyFrom {
 
 fn parse_path(s: &str) -> Result<PathBuf, std::convert::Infallible> {
     Ok(PathBuf::from(s))
+}
+
+pub fn build_overrides(
+    args: &ConfigArgs,
+    extra_fail_on_overrides: Option<bool>,
+    extra_directive_sources: Option<Vec<String>>,
+) -> Overrides {
+    Overrides {
+        config_override: args
+            .config_override
+            .clone()
+            .filter(|s| !s.trim().is_empty()),
+        enable: args.enable.iter().flat_map(|s| split_list(s)).collect(),
+        disable: args.disable.iter().flat_map(|s| split_list(s)).collect(),
+        hostname_denylist: std::env::var(HOSTNAME_DENYLIST_ENV)
+            .or_else(|_| std::env::var("DOCS_HOSTNAME_DENYLIST"))
+            .map(|v| split_list(&v))
+            .unwrap_or_default(),
+        directive_sources: extra_directive_sources,
+        fail_on_overrides: extra_fail_on_overrides,
+    }
+}
+
+pub fn load_config(
+    args: &ConfigArgs,
+    repo_root: Option<&Path>,
+    extra_fail_on_overrides: Option<bool>,
+    extra_directive_sources: Option<Vec<String>>,
+) -> Result<(DisciplineConfig, String)> {
+    let overrides = build_overrides(args, extra_fail_on_overrides, extra_directive_sources);
+    let explicit = args.config != Path::new("discipline.toml");
+    let resolved_path = match repo_root {
+        Some(root) if !args.config.is_absolute() => root.join(&args.config),
+        _ => args.config.clone(),
+    };
+
+    let config_path_for_ctx = if let Some(root) = repo_root {
+        let root_canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let res_canon = resolved_path
+            .canonicalize()
+            .unwrap_or_else(|_| resolved_path.clone());
+        if let Ok(rel) = res_canon.strip_prefix(&root_canon) {
+            rel.to_string_lossy().replace('\\', "/")
+        } else if let Ok(rel) = resolved_path.strip_prefix(root) {
+            rel.to_string_lossy().replace('\\', "/")
+        } else {
+            args.config.to_string_lossy().replace('\\', "/")
+        }
+    } else {
+        args.config.to_string_lossy().replace('\\', "/")
+    };
+    let config_path_for_ctx = config_path_for_ctx.trim_start_matches("./").to_string();
+
+    if resolved_path.exists() {
+        let bytes = std::fs::read(&resolved_path).with_context(|| {
+            format!(
+                "failed to read configuration file {}",
+                resolved_path.display()
+            )
+        })?;
+        if bytes.contains(&0) {
+            bail!(
+                "configuration file {} contains a NUL byte",
+                resolved_path.display()
+            );
+        }
+        let config = DisciplineConfig::resolve(Some(&resolved_path), &overrides)?;
+        Ok((config, config_path_for_ctx))
+    } else if explicit {
+        bail!(
+            "configuration file {} does not exist",
+            args.config.display()
+        );
+    } else {
+        eprintln!(
+            "{} no discipline.toml; using built-in defaults (`discipline gates` shows which gates are on).",
+            style::yellow("note:")
+        );
+        let config = DisciplineConfig::resolve(None, &overrides)?;
+        Ok((config, config_path_for_ctx))
+    }
 }
 
 #[cfg(test)]
