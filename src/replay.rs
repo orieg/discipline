@@ -339,21 +339,23 @@ fn last_line(detail: &str) -> String {
     }
 }
 
+/// The output of one `check --format json` run, parsed once for every reader below. Text
+/// that is not JSON is `null`, in which each reader finds nothing.
+pub(crate) fn parse_report(json: &str) -> serde_json::Value {
+    serde_json::from_str(json).unwrap_or(serde_json::Value::Null)
+}
+
 /// The reason a `check --format json` report that could not check gives. A report that
 /// names none (it did not start) is [`Reason::Internal`].
-pub fn read_reason(json: &str) -> Reason {
-    serde_json::from_str::<serde_json::Value>(json)
-        .ok()
-        .and_then(|v| {
-            v["could_not_check"]["reason"]
-                .as_str()
-                .and_then(Reason::parse)
-        })
+pub fn read_reason(v: &serde_json::Value) -> Reason {
+    v["could_not_check"]["reason"]
+        .as_str()
+        .and_then(Reason::parse)
         .unwrap_or(Reason::Internal)
 }
 
 /// The verdict and gates of one `check --format json` run.
-pub fn read_verdict(code: i32, json: &str) -> (&'static str, Vec<String>, Vec<String>) {
+pub fn read_verdict(code: i32, v: &serde_json::Value) -> (&'static str, Vec<String>, Vec<String>) {
     let verdict = match code {
         0 => "passed",
         1 => "blocked",
@@ -361,21 +363,19 @@ pub fn read_verdict(code: i32, json: &str) -> (&'static str, Vec<String>, Vec<St
     };
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(json) {
-        for o in v["outcomes"].as_array().into_iter().flatten() {
-            let gate = o["gate"].as_str().unwrap_or("").to_string();
-            let sevs: Vec<&str> = o["violations"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|x| x["severity"].as_str())
-                .collect();
-            if sevs.contains(&"error") {
-                errors.push(gate.clone());
-            }
-            if sevs.contains(&"warning") {
-                warnings.push(gate);
-            }
+    for o in v["outcomes"].as_array().into_iter().flatten() {
+        let gate = o["gate"].as_str().unwrap_or("").to_string();
+        let sevs: Vec<&str> = o["violations"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|x| x["severity"].as_str())
+            .collect();
+        if sevs.contains(&"error") {
+            errors.push(gate.clone());
+        }
+        if sevs.contains(&"warning") {
+            warnings.push(gate);
         }
     }
     (verdict, errors, warnings)
@@ -383,13 +383,10 @@ pub fn read_verdict(code: i32, json: &str) -> (&'static str, Vec<String>, Vec<St
 
 /// The errors and warnings of one `check --format json` run, in report order: code,
 /// severity and location only, never the message. A run that could not check has none.
-pub fn read_findings(code: i32, json: &str) -> Vec<CaseFinding> {
+pub fn read_findings(code: i32, v: &serde_json::Value) -> Vec<CaseFinding> {
     if !matches!(code, 0 | 1) {
         return Vec::new();
     }
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
-        return Vec::new();
-    };
     v["outcomes"]
         .as_array()
         .into_iter()
@@ -413,10 +410,7 @@ pub fn read_findings(code: i32, json: &str) -> Vec<CaseFinding> {
 /// The parts of gates one `check --format json` run skipped because the configuration
 /// names a file the change does not have: the notes ending with
 /// [`crate::guards::PREDATES_CONFIG_NOTE`], in report order.
-pub fn read_skipped_checks(json: &str) -> Vec<SkippedCheck> {
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
-        return Vec::new();
-    };
+pub fn read_skipped_checks(v: &serde_json::Value) -> Vec<SkippedCheck> {
     let mut out = Vec::new();
     for o in v["outcomes"].as_array().into_iter().flatten() {
         let gate = o["gate"].as_str().unwrap_or("");
@@ -444,13 +438,10 @@ pub fn read_skipped_checks(json: &str) -> Vec<SkippedCheck> {
 
 /// The overrides one `check --format json` run applied, in report order; empty when
 /// the check itself could not run.
-pub fn read_overrides(code: i32, json: &str) -> Vec<CaseOverride> {
+pub fn read_overrides(code: i32, v: &serde_json::Value) -> Vec<CaseOverride> {
     if !matches!(code, 0 | 1) {
         return Vec::new();
     }
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
-        return Vec::new();
-    };
     v["outcomes"]
         .as_array()
         .into_iter()
@@ -472,10 +463,7 @@ pub fn read_overrides(code: i32, json: &str) -> Vec<CaseOverride> {
 }
 
 /// Gates that applied an override, in report order.
-pub fn gates_with_overrides(json: &str) -> Vec<String> {
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
-        return Vec::new();
-    };
+pub fn gates_with_overrides(v: &serde_json::Value) -> Vec<String> {
     v["outcomes"]
         .as_array()
         .into_iter()
@@ -489,7 +477,7 @@ pub fn gates_with_overrides(json: &str) -> Vec<String> {
 /// `fail_on_overrides`, every override fails the change unless the actor is in
 /// `allowed_override_actors` (case-insensitive).
 pub fn refused_overrides(
-    json: &str,
+    report: &serde_json::Value,
     directives: &crate::config::DirectivesConfig,
     actor: Option<&str>,
 ) -> Vec<String> {
@@ -502,7 +490,7 @@ pub fn refused_overrides(
     if !directives.fail_on_overrides || authorized {
         return Vec::new();
     }
-    gates_with_overrides(json)
+    gates_with_overrides(report)
 }
 
 /// `(#123)` at the end of a squash-merge subject.
@@ -639,16 +627,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
         .map(|c| c.directives)
         .unwrap_or_default();
 
-    let forge = {
-        let origin = src
-            .find_remote("origin")
-            .ok()
-            .and_then(|r| r.url().ok().map(str::to_string))
-            .map(|o| {
-                crate::forge::resolve_ssh_alias(&o, &|a| crate::forge::ssh_hostname_from_home(a))
-            });
-        crate::forge::detect(&|k| std::env::var(k).ok(), origin.as_deref())
-    };
+    let forge = crate::forge::detect_for_repo(&src);
     let api = crate::forge::HttpApi::from_env();
     let exe = std::env::current_exe().context("cannot locate the discipline binary")?;
 
@@ -758,29 +737,25 @@ pub fn run(opts: &Options) -> Result<Summary> {
         }
         let out = cmd.output().context("cannot run discipline check")?;
         let code = out.status.code().unwrap_or(2);
-        let (mut verdict, blocking, warning) =
-            read_verdict(code, &String::from_utf8_lossy(&out.stdout));
-        let findings = read_findings(code, &String::from_utf8_lossy(&out.stdout));
-        let overrides = read_overrides(code, &String::from_utf8_lossy(&out.stdout));
+        let report = parse_report(&String::from_utf8_lossy(&out.stdout));
+        let (mut verdict, blocking, warning) = read_verdict(code, &report);
+        let findings = read_findings(code, &report);
+        let overrides = read_overrides(code, &report);
         let skipped_checks = if matches!(code, 0 | 1) {
-            read_skipped_checks(&String::from_utf8_lossy(&out.stdout))
+            read_skipped_checks(&report)
         } else {
             Vec::new()
         };
         let (mut detail, mut reason) = if verdict == "could_not_check" {
             (
                 String::from_utf8_lossy(&out.stderr).trim().to_string(),
-                Some(read_reason(&String::from_utf8_lossy(&out.stdout))),
+                Some(read_reason(&report)),
             )
         } else {
             (String::new(), None)
         };
         let refused = if verdict == "blocked" {
-            refused_overrides(
-                &String::from_utf8_lossy(&out.stdout),
-                &directives,
-                author.as_deref(),
-            )
+            refused_overrides(&report, &directives, author.as_deref())
         } else {
             Vec::new()
         };
@@ -874,7 +849,7 @@ mod tests {
             {"gate":"assertion-reduction","violations":[{"severity":"error"}]},
             {"gate":"pr-checklist","violations":[{"severity":"warning"}]},
             {"gate":"pii","violations":[]}]}"#;
-        let (v, e, w) = read_verdict(1, json);
+        let (v, e, w) = read_verdict(1, &parse_report(json));
         assert_eq!(
             (v, e, w),
             (
@@ -883,8 +858,11 @@ mod tests {
                 vec!["pr-checklist".to_string()]
             )
         );
-        assert_eq!(read_verdict(0, "{}").0, "passed");
-        assert_eq!(read_verdict(2, json), ("could_not_check", vec![], vec![]));
+        assert_eq!(read_verdict(0, &parse_report("{}")).0, "passed");
+        assert_eq!(
+            read_verdict(2, &parse_report(json)),
+            ("could_not_check", vec![], vec![])
+        );
     }
 
     #[test]
@@ -894,7 +872,7 @@ mod tests {
             {"gate":"pr-checklist","violations":[
                 {"code":"pr-checklist/unchecked","severity":"warning","file":null,"line":null,"message":"m"},
                 {"code":"pr-checklist/info","severity":"note","file":"b.md","line":1,"message":"m"}]}]}"#;
-        let f = read_findings(1, json);
+        let f = read_findings(1, &parse_report(json));
         assert_eq!(
             f,
             vec![
@@ -913,7 +891,7 @@ mod tests {
             ]
         );
         assert!(!serde_json::to_string(&f).unwrap().contains("AKIA"));
-        assert!(read_findings(2, json).is_empty());
+        assert!(read_findings(2, &parse_report(json)).is_empty());
     }
 
     #[test]
@@ -927,10 +905,16 @@ mod tests {
             ..Default::default()
         };
         let gates = vec!["dependency-delta".to_string()];
-        assert!(refused_overrides(json, &policy(false), None).is_empty());
-        assert!(refused_overrides(json, &policy(true), Some("lead")).is_empty());
-        assert_eq!(refused_overrides(json, &policy(true), Some("other")), gates);
-        assert_eq!(refused_overrides(json, &policy(true), None), gates);
+        assert!(refused_overrides(&parse_report(json), &policy(false), None).is_empty());
+        assert!(refused_overrides(&parse_report(json), &policy(true), Some("lead")).is_empty());
+        assert_eq!(
+            refused_overrides(&parse_report(json), &policy(true), Some("other")),
+            gates
+        );
+        assert_eq!(
+            refused_overrides(&parse_report(json), &policy(true), None),
+            gates
+        );
     }
 
     #[test]
@@ -941,7 +925,7 @@ mod tests {
             {"gate":"pii","notes":["the configuration is newer, said in passing"]}
         ]}"#;
         assert_eq!(
-            read_skipped_checks(report),
+            read_skipped_checks(&parse_report(report)),
             vec![
                 SkippedCheck {
                     gate: "version-lockstep".into(),
@@ -953,7 +937,7 @@ mod tests {
                 },
             ]
         );
-        assert!(read_skipped_checks("").is_empty());
+        assert!(read_skipped_checks(&parse_report("")).is_empty());
     }
 
     #[test]
@@ -966,11 +950,13 @@ mod tests {
     #[test]
     fn the_reason_is_read_from_the_child_report() {
         let report = r#"{"schema_version":1,"outcomes":[],"could_not_check":{"reason":"tool-missing","gate":"miri","detail":"x"}}"#;
-        assert_eq!(read_reason(report), Reason::ToolMissing);
+        assert_eq!(read_reason(&parse_report(report)), Reason::ToolMissing);
         // No report (the child did not start) or a reason this binary does not know.
-        assert_eq!(read_reason(""), Reason::Internal);
+        assert_eq!(read_reason(&parse_report("")), Reason::Internal);
         assert_eq!(
-            read_reason(r#"{"could_not_check":{"reason":"from-the-future"}}"#),
+            read_reason(&parse_report(
+                r#"{"could_not_check":{"reason":"from-the-future"}}"#
+            )),
             Reason::Internal
         );
     }
@@ -1074,7 +1060,7 @@ mod tests {
             {"gate":"dependency-delta","overrides":[{"gate":"dependency-delta","code":"dependency-delta/direct-dependency-added","subject":"serde","directive":"allow-dependency","reason":"serde AKIA-SECRET","source":{"type":"MergedPrBody","detail":12},"hidden":true}]},
             {"gate":"pii","overrides":[{"gate":"pii","subject":"a.rs","directive":"discipline:allow(pii)","reason":"a.rs fixture","source":{"type":"Commit","detail":"abc"},"hidden":false}]},
             {"gate":"stub-bodies","overrides":[]}]}"#;
-        let o = read_overrides(1, json);
+        let o = read_overrides(1, &parse_report(json));
         assert_eq!(
             o,
             vec![
@@ -1101,7 +1087,7 @@ mod tests {
         let out = serde_json::to_string(&o).unwrap();
         assert!(!out.contains("AKIA"));
         assert_eq!(out.matches("\"code\"").count(), 1, "{out}");
-        assert!(read_overrides(2, json).is_empty());
-        assert!(read_overrides(0, "not json").is_empty());
+        assert!(read_overrides(2, &parse_report(json)).is_empty());
+        assert!(read_overrides(0, &parse_report("not json")).is_empty());
     }
 }

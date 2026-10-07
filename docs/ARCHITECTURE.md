@@ -458,12 +458,12 @@ Discipline exports standard structured formats:
 
 In the terminal formats a message with none of these characters is written byte for byte. What is left as it is, on purpose: in Markdown, a `#` (a forge links `#12` to its own issue), and an address of the form `name@host.tld`, which a renderer may link as a mail address after `@` is written as an entity.
 
-### 7.1 Pure-Rust SHA-256 Implementation & Cryptographic Hygiene
+### 7.1 SHA-256 & Cryptographic Hygiene
 
 GitLab Code Quality issue tracking and Discipline's grandfathering baseline engine require unique, deterministic 32-byte hex fingerprints:
-- Discipline implements a zero-dependency NIST FIPS 180-4 compliant SHA-256 algorithm in `src/report/gitlab.rs` (reused across reporting and `src/baseline.rs`).
-- Fingerprints do not depend on a hashing crate (`sha2`). TLS for the forge client is `rustls` with `ring` as its cryptographic provider; OpenSSL is not in the dependency tree, which keeps the musl build static.
-- Verified directly against NIST CAVP test vectors.
+- `sha256_hex` in `src/report/gitlab.rs` (reused across reporting and `src/baseline.rs`) computes SHA-256 (NIST FIPS 180-4) with `ring::digest`.
+- `ring` is already in the dependency tree as the cryptographic provider of `rustls`, the TLS stack of the forge client, so fingerprints add no crate (`sha2` is not a dependency). OpenSSL is not in the dependency tree, which keeps the musl build static.
+- Verified against NIST test vectors (`test_sha256_nist_vectors`).
 
 ### 7.2 Grandfathering Baseline Architecture
 

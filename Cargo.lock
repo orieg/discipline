@@ -288,6 +288,7 @@ dependencies = [
  "libc",
  "lzma-rs",
  "regex",
+ "ring",
  "ruzstd",
  "serde",
  "serde_json",
