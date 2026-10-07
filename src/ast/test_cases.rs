@@ -20,6 +20,7 @@
 //! A literal source also yields its rows as text (`row_text`), so a case that leaves one
 //! test can be looked for in another by what it is, not by how many there are.
 
+use super::ancestry::Ancestry;
 use tree_sitter::Node;
 
 fn text<'a>(node: Node, src: &'a [u8]) -> &'a str {
@@ -728,6 +729,8 @@ fn go_type_name(node: Node) -> Option<Node> {
 /// What the file a test stands in says about the names its body uses.
 struct GoFile<'a, 'tree> {
     src: &'a [u8],
+    /// The ancestors of the nodes of this file's tree.
+    anc: &'a Ancestry<'tree>,
     /// Types declared at package level as a struct with fields.
     struct_types: Vec<String>,
     /// Identifiers the test body ranges over (`for _, c := range cases`).
@@ -742,6 +745,19 @@ struct GoFile<'a, 'tree> {
 pub struct GoSibling<'s, 'tree> {
     pub src: &'s [u8],
     pub root: Node<'tree>,
+    /// The ancestors of the nodes of the sibling's own tree.
+    pub(crate) anc: Ancestry<'tree>,
+}
+
+impl<'s, 'tree> GoSibling<'s, 'tree> {
+    /// The file `src` whose tree has the root `root`.
+    pub fn new(src: &'s [u8], root: Node<'tree>) -> Self {
+        Self {
+            src,
+            root,
+            anc: Ancestry::new(root),
+        }
+    }
 }
 
 /// The name of the package a Go file declares (`package calc_test`).
@@ -756,18 +772,16 @@ pub fn go_package_name<'s>(root: Node, src: &'s [u8]) -> Option<&'s str> {
 }
 
 impl<'a, 'tree> GoFile<'a, 'tree> {
-    fn new(body: Node<'tree>, src: &'a [u8]) -> Self {
+    fn new(body: Node<'tree>, anc: &'a Ancestry<'tree>, src: &'a [u8]) -> Self {
         let mut file = Self {
             src,
+            anc,
             struct_types: Vec::new(),
             ranged: Vec::new(),
             used: Vec::new(),
             package_vars: Vec::new(),
         };
-        let mut root = body;
-        while let Some(parent) = root.parent() {
-            root = parent;
-        }
+        let root = anc.root();
         // The body itself is the root when a caller hands in a detached block.
         if root.id() != body.id() {
             file.read_package_level(root);
@@ -900,10 +914,13 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
 
     /// The variable a composite literal is bound to: `cases` in `cases := []T{..}`,
     /// `var cases = []T{..}` and `cases = []T{..}`.
-    fn bound_name(&self, literal: Node) -> Option<&'a str> {
-        let list = literal.parent().filter(|p| p.kind() == "expression_list")?;
+    fn bound_name(&self, literal: Node<'tree>) -> Option<&'a str> {
+        let anc = self.anc;
+        let list = anc
+            .parent(literal)
+            .filter(|p| p.kind() == "expression_list")?;
         let index = elements(list).iter().position(|e| e.id() == literal.id())?;
-        let statement = list.parent()?;
+        let statement = anc.parent(list)?;
         let name = match statement.kind() {
             "short_var_declaration" | "assignment_statement" => {
                 let left = statement.child_by_field_name("left")?;
@@ -922,7 +939,12 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
     }
 
     /// Collects the rows of every case table under `node`.
-    fn count_tables(&self, node: Node, total: &mut Option<Vec<String>>, non_literal: &mut bool) {
+    fn count_tables(
+        &self,
+        node: Node<'tree>,
+        total: &mut Option<Vec<String>>,
+        non_literal: &mut bool,
+    ) {
         if node.kind() == "composite_literal" {
             if let (Some(type_node), Some(body)) = (
                 node.child_by_field_name("type"),
@@ -931,7 +953,9 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
                 let is_table = match self.rows(type_node) {
                     GoRows::Table => true,
                     GoRows::NamedStruct => {
-                        node.parent().is_some_and(|p| p.kind() == "range_clause")
+                        self.anc
+                            .parent(node)
+                            .is_some_and(|p| p.kind() == "range_clause")
                             || self
                                 .bound_name(node)
                                 .is_some_and(|name| self.ranged.iter().any(|r| r == name))
@@ -974,25 +998,27 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
 /// counted, and neither is a set (`map[string]struct{}`).
 /// If a `range` loop in the test iterates over a non-literal (function call or external slice),
 /// sets `non_literal = true`.
-pub fn extract_go_cases(body_node: Node, src: &[u8]) -> CaseList {
-    extract_go_cases_in_package(body_node, src, &[])
+pub fn extract_go_cases<'t>(body_node: Node<'t>, anc: &Ancestry<'t>, src: &[u8]) -> CaseList {
+    extract_go_cases_in_package(body_node, anc, src, &[])
 }
 
 /// [`extract_go_cases`] with the other files of the test's package read too: a struct
 /// type one of them declares is a row type as one of the test's own file is, and a
 /// package-level `var` one of them holds counts toward every test whose body names it.
 /// A table or row type moved to another file of the package therefore keeps its rows.
-pub fn extract_go_cases_in_package(
-    body_node: Node,
+pub fn extract_go_cases_in_package<'t>(
+    body_node: Node<'t>,
+    anc: &Ancestry<'t>,
     src: &[u8],
     siblings: &[GoSibling],
 ) -> CaseList {
-    let mut file = GoFile::new(body_node, src);
+    let mut file = GoFile::new(body_node, anc, src);
     let mut others: Vec<GoFile> = siblings
         .iter()
         .map(|sibling| {
             let mut other = GoFile {
                 src: sibling.src,
+                anc: &sibling.anc,
                 struct_types: Vec::new(),
                 ranged: file.ranged.clone(),
                 used: Vec::new(),
@@ -1571,12 +1597,12 @@ fn rust_values(token_tree: Node, src: &[u8]) -> Vec<String> {
 /// Recognizes `#[case(...)]` and `#[test_case(...)]` attribute count on function.
 /// Also handles combinations of `#[values(...)]` in argument attributes, which multiply
 /// each other and the cases they sit beside.
-pub fn extract_rust_cases(fn_node: Node, src: &[u8]) -> CaseList {
+pub fn extract_rust_cases<'t>(fn_node: Node<'t>, anc: &Ancestry<'t>, src: &[u8]) -> CaseList {
     let mut cases: Vec<String> = Vec::new();
     let mut values = CaseList::none();
 
     // Check preceding attribute_item siblings
-    let mut prev = fn_node.prev_sibling();
+    let mut prev = anc.prev_sibling(fn_node);
     while let Some(p) = prev {
         match p.kind() {
             "attribute_item" => {
@@ -1586,10 +1612,10 @@ pub fn extract_rust_cases(fn_node: Node, src: &[u8]) -> CaseList {
                         cases.extend(rust_case_row(attr, src));
                     }
                 }
-                prev = p.prev_sibling();
+                prev = anc.prev_sibling(p);
             }
             "line_comment" | "block_comment" => {
-                prev = p.prev_sibling();
+                prev = anc.prev_sibling(p);
             }
             _ => break,
         }
@@ -1884,7 +1910,7 @@ func TestAdd(t *testing.T) {
             count: cases,
             non_literal,
             ..
-        } = extract_go_cases(body, code.as_bytes());
+        } = extract_go_cases(body, &Ancestry::new(root), code.as_bytes());
         assert_eq!(cases, Some(3));
         assert!(!non_literal);
     }
@@ -1913,7 +1939,7 @@ func TestAdd(t *testing.T) {
             count: cases,
             non_literal,
             ..
-        } = extract_go_cases(body, code.as_bytes());
+        } = extract_go_cases(body, &Ancestry::new(root), code.as_bytes());
         assert_eq!(cases, None);
         assert!(non_literal);
     }
@@ -2126,7 +2152,7 @@ fn test_add(#[case] a: i32, #[case] b: i32, #[case] s: i32) {
             count: cases,
             non_literal,
             ..
-        } = extract_rust_cases(fn_node, code.as_bytes());
+        } = extract_rust_cases(fn_node, &Ancestry::new(root), code.as_bytes());
         assert_eq!(cases, Some(3));
         assert!(!non_literal);
     }
@@ -2154,7 +2180,7 @@ fn test_matrix(#[values(1, 2)] a: i32, #[values(10, 20, 30)] b: i32) {
             count: cases,
             non_literal,
             ..
-        } = extract_rust_cases(fn_node, code.as_bytes());
+        } = extract_rust_cases(fn_node, &Ancestry::new(root), code.as_bytes());
         assert_eq!(cases, Some(6));
         assert!(!non_literal);
     }

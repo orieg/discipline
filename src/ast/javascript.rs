@@ -1,5 +1,6 @@
 //! JavaScript and TypeScript language pack: tree-sitter AST extraction of tests, assertions, and escape hatches.
 
+use super::ancestry::{Above, Ancestry};
 use anyhow::Result;
 use tree_sitter::Node;
 
@@ -48,9 +49,11 @@ impl LanguagePack for JavaScriptPack {
         let tree = crate::ast::source_text::parse_file_as(&lang, "JS/TS", path, src)?;
         let root = tree.root_node();
 
+        let anc = Ancestry::new(root);
         let mut extractor = JsExtractor {
             dead: super::reach::dead_ranges(root, src, &JS_REACH),
             src: src.as_bytes(),
+            anc: &anc,
             vocab,
             facts: ParsedFileFacts {
                 has_parse_errors: root.has_error(),
@@ -59,19 +62,19 @@ impl LanguagePack for JavaScriptPack {
             test_calls: Vec::new(),
             suite_cases: Vec::new(),
             suite_skips: Vec::new(),
-            runner_names: runner_names(root, src),
-            deno_global: !binds_name(root, src, "Deno"),
-            std_asserts: std_assert_names(root, src),
+            runner_names: runner_names(root, &anc, src),
+            deno_global: !binds_name(root, &anc, src, "Deno"),
+            std_asserts: std_assert_names(root, &anc, src),
         };
 
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers(root);
-        JS_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
+        JS_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
         super::bounds::javascript(root, src, &mut extractor.facts.tests);
         super::expectations::javascript(root, src, &mut extractor.facts.tests);
-        super::caught_assertions::javascript(root, src, &mut extractor.facts.tests, vocab);
-        super::expected_exceptions::javascript(root, src, &mut extractor.facts.tests);
+        super::caught_assertions::javascript(root, &anc, src, &mut extractor.facts.tests, vocab);
+        super::expected_exceptions::javascript(root, &anc, src, &mut extractor.facts.tests);
         extractor.facts.prose =
             super::prose::extract(root, src, &["comment", "string", "template_string"]);
         extractor.facts.budgets = super::budgets::extract(root, src, &JS_BUDGETS);
@@ -177,6 +180,8 @@ struct JsExtractor<'a> {
     /// Byte ranges no execution reaches (`super::reach`).
     dead: super::reach::DeadRanges,
     src: &'a [u8],
+    /// The ancestors of the nodes of the file's tree (`super::ancestry`).
+    anc: &'a Ancestry<'a>,
     vocab: &'a AssertVocabulary,
     facts: ParsedFileFacts,
     /// Same-file callees of each test, in `facts.tests` order.
@@ -217,8 +222,12 @@ pub(super) fn is_std_assert_module(module: &str) -> bool {
 /// counterpart (`assertExists`, `assertInstanceOf`) is counted as a plain `assert.*`
 /// call. Only a name that starts with `assert` is read: an import under another name
 /// (`assertEquals as eq`) and a namespace import are not.
-fn std_assert_names(root: Node, src: &str) -> Vec<(String, &'static str)> {
-    super::expected_exceptions::js_bindings(root, src)
+fn std_assert_names<'t>(
+    root: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+) -> Vec<(String, &'static str)> {
+    super::expected_exceptions::js_bindings(root, anc, src)
         .into_iter()
         .filter(|(bound, module)| bound.starts_with("assert") && is_std_assert_module(module))
         .map(|(bound, _)| {
@@ -240,11 +249,11 @@ fn std_assert_names(root: Node, src: &str) -> Vec<(String, &'static str)> {
 
 /// Whether the file binds `name` itself: an import or a `require`, a declaration, or a
 /// parameter of that name.
-fn binds_name(root: Node, src: &str, name: &str) -> bool {
+fn binds_name<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, name: &str) -> bool {
     if !src.contains(name) {
         return false;
     }
-    if super::expected_exceptions::js_bindings(root, src)
+    if super::expected_exceptions::js_bindings(root, anc, src)
         .iter()
         .any(|(bound, _)| bound == name)
     {
@@ -260,8 +269,8 @@ fn binds_name(root: Node, src: &str, name: &str) -> bool {
             | "variable_declarator" => node.child_by_field_name("name"),
             "required_parameter" | "optional_parameter" => node.child_by_field_name("pattern"),
             "identifier"
-                if node
-                    .parent()
+                if anc
+                    .parent(node)
                     .is_some_and(|p| p.kind() == "formal_parameters") =>
             {
                 Some(node)
@@ -282,10 +291,14 @@ fn binds_name(root: Node, src: &str, name: &str) -> bool {
 /// name, and a variable of that name whose value is not derived from a runner's
 /// (`const test = base.extend({..})`, where `base` is a runner's name, stays the
 /// runner's); and which it imports or requires from a module that is not a runner.
-fn runner_names(root: Node, src: &str) -> super::test_cases::RunnerNames {
+fn runner_names<'t>(
+    root: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+) -> super::test_cases::RunnerNames {
     use super::test_cases::{RUNNER_FUNCTIONS, RUNNER_MODULES};
     let text = |n: Node| n.utf8_text(src.as_bytes()).unwrap_or("");
-    let bindings = super::expected_exceptions::js_bindings(root, src);
+    let bindings = super::expected_exceptions::js_bindings(root, anc, src);
     let from_runner = |name: &str| {
         bindings
             .iter()
@@ -308,8 +321,8 @@ fn runner_names(root: Node, src: &str) -> super::test_cases::RunnerNames {
             }
             "required_parameter" | "optional_parameter" => node.child_by_field_name("pattern"),
             "identifier"
-                if node
-                    .parent()
+                if anc
+                    .parent(node)
                     .is_some_and(|p| p.kind() == "formal_parameters") =>
             {
                 Some(node)
@@ -365,7 +378,7 @@ impl<'a> JsExtractor<'a> {
         node.utf8_text(self.src).unwrap_or("")
     }
 
-    fn collect_comments_and_escape_hatches(&mut self, node: Node) {
+    fn collect_comments_and_escape_hatches(&mut self, node: Node<'a>) {
         if node.kind() == "comment" {
             let text = self.text(node);
             let line = node.start_position().row + 1;
@@ -424,12 +437,12 @@ impl<'a> JsExtractor<'a> {
         }
     }
 
-    fn visit_root(&mut self, root: Node) {
+    fn visit_root(&mut self, root: Node<'a>) {
         let mut scope = Vec::new();
         self.visit_node(root, &mut scope, false);
     }
 
-    fn visit_node(&mut self, node: Node, scope: &mut Vec<String>, parent_ignored: bool) {
+    fn visit_node(&mut self, node: Node<'a>, scope: &mut Vec<String>, parent_ignored: bool) {
         if node.kind() == "call_expression" {
             if let Some(func_node) = node.child_by_field_name("function") {
                 if let Some(modifier_skips) = self.deno_test_callee(func_node) {
@@ -524,7 +537,13 @@ impl<'a> JsExtractor<'a> {
                             self.scan_test_body(callback, &mut test_fn);
                             if let Some(body) = callback.child_by_field_name("body") {
                                 self.collect_calls(body, &mut calls);
-                                super::dispatch_calls(body, self.src, &JS_DISPATCH, &mut calls);
+                                super::dispatch_calls(
+                                    body,
+                                    self.anc,
+                                    self.src,
+                                    &JS_DISPATCH,
+                                    &mut calls,
+                                );
                                 if !test_fn.ignored {
                                     self.record_conditional_early_exits(body, &mut test_fn);
                                 }
@@ -550,7 +569,7 @@ impl<'a> JsExtractor<'a> {
     /// (`Some(true)`: a test the run leaves out or that makes the run fail, flagged as
     /// `it.only` and `it.skip` are). `None` for anything else, and in a file that binds
     /// `Deno` to something of its own.
-    fn deno_test_callee(&self, func: Node) -> Option<bool> {
+    fn deno_test_callee(&self, func: Node<'a>) -> Option<bool> {
         if !self.deno_global || func.kind() != "member_expression" {
             return None;
         }
@@ -614,7 +633,7 @@ impl<'a> JsExtractor<'a> {
     /// beside the tests, not among them.
     fn record_deno_test(
         &mut self,
-        call: Node,
+        call: Node<'a>,
         parent: Option<&str>,
         scope: &[String],
         mut ignored: bool,
@@ -657,7 +676,7 @@ impl<'a> JsExtractor<'a> {
         let mut conditional = None;
         if let Some(value) = option("ignore") {
             use super::ci_condition::{self, Lang};
-            match ci_condition::skip_condition(Lang::JavaScript, value, self.src, false) {
+            match ci_condition::skip_condition(Lang::JavaScript, value, self.anc, self.src, false) {
                 SkipCondition::Always => ignored = true,
                 SkipCondition::Never => {}
                 SkipCondition::When(verdict) => {
@@ -694,7 +713,7 @@ impl<'a> JsExtractor<'a> {
         }
         if let Some(body) = body {
             self.collect_calls(body, &mut calls);
-            super::dispatch_calls(body, self.src, &JS_DISPATCH, &mut calls);
+            super::dispatch_calls(body, self.anc, self.src, &JS_DISPATCH, &mut calls);
             if !test_fn.ignored {
                 self.record_conditional_early_exits(body, &mut test_fn);
             }
@@ -743,12 +762,24 @@ impl<'a> JsExtractor<'a> {
 
     /// The same-file callees a test body runs: `name(...)`. A function defined in the
     /// body and not called there (`const f = () => helper()`) runs nothing.
-    fn collect_calls(&self, node: Node, calls: &mut Vec<String>) {
-        if JS_FUNCTION_KINDS.contains(&node.kind())
-            && node
-                .parent()
-                .is_some_and(|p| p.kind() == "variable_declarator")
-        {
+    fn collect_calls(&self, node: Node<'a>, calls: &mut Vec<String>) {
+        // Only a function asks what it stands under, and below `node` the walk knows.
+        let above = JS_FUNCTION_KINDS
+            .contains(&node.kind())
+            .then(|| self.anc.parent(node))
+            .flatten()
+            .map(|p| p.kind());
+        self.collect_calls_under(node, above, calls);
+    }
+
+    /// [`Self::collect_calls`] for `node`, a child of a node of the kind `above`.
+    fn collect_calls_under(
+        &self,
+        node: Node<'a>,
+        above: Option<&'static str>,
+        calls: &mut Vec<String>,
+    ) {
+        if JS_FUNCTION_KINDS.contains(&node.kind()) && above == Some("variable_declarator") {
             return;
         }
         if node.kind() == "call_expression" {
@@ -760,7 +791,7 @@ impl<'a> JsExtractor<'a> {
         }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.collect_calls(child, calls);
+            self.collect_calls_under(child, Some(node.kind()), calls);
         }
     }
 
@@ -797,7 +828,7 @@ impl<'a> JsExtractor<'a> {
     /// `assert` calls and its `throw` statements. One level: a helper's own callees
     /// are not followed, except through a thin wrapper (`super::helper_through_wrappers`,
     /// bounded and cycle-safe).
-    fn resolve_same_file_helpers(&mut self, root: Node) {
+    fn resolve_same_file_helpers(&mut self, root: Node<'a>) {
         let mut named = Vec::new();
         self.named_functions(root, &mut named);
         let mut helpers: std::collections::HashMap<String, super::HelperFacts> =
@@ -901,7 +932,7 @@ impl<'a> JsExtractor<'a> {
         }
     }
 
-    fn classify_call(&self, func: Node) -> (bool, bool, bool, bool) {
+    fn classify_call(&self, func: Node<'a>) -> (bool, bool, bool, bool) {
         // (is_test, is_suite, is_ignored, is_todo)
         // The names of the chain only: `test.each([".skip"])` is `test.each`, not a skip.
         let text = super::text_without(
@@ -930,7 +961,7 @@ impl<'a> JsExtractor<'a> {
         }
     }
 
-    fn extract_first_arg_title(&self, call_node: Node) -> String {
+    fn extract_first_arg_title(&self, call_node: Node<'a>) -> String {
         if let Some(args) = call_node.child_by_field_name("arguments") {
             let mut cursor = args.walk();
             for child in args.children(&mut cursor) {
@@ -958,7 +989,7 @@ impl<'a> JsExtractor<'a> {
         None
     }
 
-    fn scan_test_body(&self, body_or_fn: Node, test: &mut TestFn) {
+    fn scan_test_body(&self, body_or_fn: Node<'a>, test: &mut TestFn) {
         if super::reach::is_dead(&self.dead, body_or_fn.start_byte()) {
             return;
         }
@@ -997,7 +1028,7 @@ impl<'a> JsExtractor<'a> {
     /// `describe.runIf(c)`), read from the member chain of its function: whether one is
     /// exactly `skip`, `only` or `todo`, and each condition a `skipIf` / `runIf` takes,
     /// as the condition under which the test is skipped and what it does.
-    fn chain_modifiers(&self, func: Node) -> (bool, Vec<(String, SkipCondition)>) {
+    fn chain_modifiers(&self, func: Node<'a>) -> (bool, Vec<(String, SkipCondition)>) {
         use super::ci_condition::{self, Lang};
         let mut plain_skip = false;
         let mut conditions = Vec::new();
@@ -1031,6 +1062,7 @@ impl<'a> JsExtractor<'a> {
                                     ci_condition::skip_condition(
                                         Lang::JavaScript,
                                         condition,
+                                        self.anc,
                                         self.src,
                                         run_if,
                                     ),
@@ -1063,7 +1095,7 @@ impl<'a> JsExtractor<'a> {
     /// under an `if` it is a conditional skip read by its condition, in the `else` branch
     /// by the negated condition, as a skip call is in the other packs. Elsewhere (a loop,
     /// a nested callback) it is not read.
-    fn record_this_skip(&self, call: Node, test: &mut TestFn) {
+    fn record_this_skip(&self, call: Node<'a>, test: &mut TestFn) {
         use super::ci_condition::{self, Lang};
         let Some(func) = call.child_by_field_name("function") else {
             return;
@@ -1074,25 +1106,28 @@ impl<'a> JsExtractor<'a> {
         {
             return;
         }
-        match ci_condition::site(Lang::JavaScript, call, self.src) {
+        match ci_condition::site(Lang::JavaScript, call, self.anc, self.src) {
             Some(site) if site.always => test.ignored = true,
             Some(site) => test.record_conditional_skip(site.text, site.verdict),
             None => {
                 // `this.skip();` directly in the body of the test callback.
-                let statement = call.parent().filter(|p| p.kind() == "expression_statement");
+                let statement = self
+                    .anc
+                    .parent(call)
+                    .filter(|p| p.kind() == "expression_statement");
                 let block = statement
-                    .and_then(|s| s.parent())
+                    .and_then(|s| self.anc.parent(s))
                     .filter(|b| b.kind() == "statement_block");
-                let callback = block.and_then(|b| b.parent()).filter(|f| {
+                let callback = block.and_then(|b| self.anc.parent(b)).filter(|f| {
                     matches!(
                         f.kind(),
                         "arrow_function" | "function_expression" | "function"
                     )
                 });
                 let test_call = callback
-                    .and_then(|f| f.parent())
+                    .and_then(|f| self.anc.parent(f))
                     .filter(|args| args.kind() == "arguments")
-                    .and_then(|args| args.parent());
+                    .and_then(|args| self.anc.parent(args));
                 if test_call.is_some_and(|c| {
                     c.start_position().row + 1 == test.line
                         && c.end_position().row + 1 == test.end_line
@@ -1106,15 +1141,15 @@ impl<'a> JsExtractor<'a> {
     /// Early exits under a condition: the first `if` the text rule below accepts, then
     /// every `return` under an `if` (nested and `else` branches included) that a CI
     /// variable is involved in, through a variable, constant or helper of this file.
-    fn record_conditional_early_exits(&self, body: Node, test: &mut TestFn) {
+    fn record_conditional_early_exits(&self, body: Node<'a>, test: &mut TestFn) {
         use super::ci_condition::{self, CiVerdict, Lang};
         if let Some((cond, consequence)) = self.detect_js_conditional_early_exit(body) {
-            let verdict = ci_condition::site(Lang::JavaScript, consequence, self.src)
+            let verdict = ci_condition::site(Lang::JavaScript, consequence, self.anc, self.src)
                 .map_or(CiVerdict::NotCi, |s| s.verdict);
             test.record_conditional_skip(cond, verdict);
         }
         for exit in ci_condition::exits_under_if(body, &|n| n.kind() == "return_statement") {
-            if let Some(site) = ci_condition::site(Lang::JavaScript, exit, self.src) {
+            if let Some(site) = ci_condition::site(Lang::JavaScript, exit, self.anc, self.src) {
                 if site.related {
                     test.record_conditional_skip(site.text, site.verdict);
                 }
@@ -1170,13 +1205,13 @@ impl<'a> JsExtractor<'a> {
     }
 
     /// Records where the tautologies counted under `call` are (`TestFn::mark_tautologies`).
-    fn check_assertion_call(&self, call: Node, test: &mut TestFn) {
+    fn check_assertion_call(&self, call: Node<'a>, test: &mut TestFn) {
         let mark = test.tautology_mark();
         self.check_assertion_call_unmarked(call, test);
         test.mark_tautologies(mark, call);
     }
 
-    fn check_assertion_call_unmarked(&self, call: Node, test: &mut TestFn) {
+    fn check_assertion_call_unmarked(&self, call: Node<'a>, test: &mut TestFn) {
         let text = self.text(call);
         if let Some(func) = call.child_by_field_name("function") {
             let func_text = self.text(func);
@@ -1251,7 +1286,7 @@ impl<'a> JsExtractor<'a> {
         )
     }
 
-    fn is_tautological_expect(&self, call: Node, prop_name: &str, test: &mut TestFn) -> bool {
+    fn is_tautological_expect(&self, call: Node<'a>, prop_name: &str, test: &mut TestFn) -> bool {
         // Find subject in expect(subject)
         // Structure of call: expect(subject).toBe(expected)
         let call_text = self.text(call);
@@ -1279,6 +1314,7 @@ impl<'a> JsExtractor<'a> {
                                     &mut test.equality_operands,
                                     subject,
                                     arg_nodes[0],
+                                    self.anc,
                                     self.src,
                                 ) {
                                     return true;
@@ -1321,7 +1357,12 @@ impl<'a> JsExtractor<'a> {
         args.named_child(0).filter(|a| a.kind() != "comment")
     }
 
-    fn is_tautological_assert_call(&self, call: Node, func_text: &str, test: &mut TestFn) -> bool {
+    fn is_tautological_assert_call(
+        &self,
+        call: Node<'a>,
+        func_text: &str,
+        test: &mut TestFn,
+    ) -> bool {
         if let Some(args) = call.child_by_field_name("arguments") {
             let mut cursor = args.walk();
             let arg_nodes: Vec<_> = args
@@ -1346,6 +1387,7 @@ impl<'a> JsExtractor<'a> {
                     &mut test.equality_operands,
                     arg_nodes[0],
                     arg_nodes[1],
+                    self.anc,
                     self.src,
                 )
             {
@@ -1387,47 +1429,56 @@ fn js_consequence_returns_early(consequence: Node) -> bool {
 }
 
 /// Overload signatures, abstract members and `declare` blocks carry no body.
-fn js_fn_skip(node: tree_sitter::Node, src: &str) -> bool {
-    let mut cur = node.parent();
-    while let Some(p) = cur {
-        match p.kind() {
-            "ambient_declaration" | "interface_declaration" | "abstract_class_declaration"
-                if node.kind() != "method_definition" =>
-            {
-                return true
-            }
-            "ambient_declaration" | "interface_declaration" => return true,
-            _ => {}
-        }
-        cur = p.parent();
+fn js_fn_skip<'t>(node: tree_sitter::Node<'t>, anc: &Ancestry<'t>, src: &str) -> bool {
+    // A method of an abstract class has a body; anything else in one, and anything in an
+    // ambient declaration or an interface, does not.
+    let declared = if node.kind() == "method_definition" {
+        anc.nearest(node, Above::JsDeclaration, |above, _| {
+            matches!(
+                above.kind(),
+                "ambient_declaration" | "interface_declaration"
+            )
+        })
+    } else {
+        anc.nearest(node, Above::JsDeclarationOrAbstractClass, |above, _| {
+            matches!(
+                above.kind(),
+                "ambient_declaration" | "interface_declaration" | "abstract_class_declaration"
+            )
+        })
+    };
+    if declared.is_some() {
+        return true;
     }
     let t = node.utf8_text(src.as_bytes()).unwrap_or("");
     t.trim_start().starts_with("abstract ") || t.trim_start().starts_with("declare ")
 }
 
-fn js_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
+fn js_fn_is_test<'t>(
+    node: tree_sitter::Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    path: &str,
+) -> bool {
     if functions::test_path(path) {
         return true;
     }
     // A callback passed to `it(` / `test(` / `describe(`.
-    let mut cur = node.parent();
-    while let Some(p) = cur {
-        if p.kind() == "call_expression" {
-            let callee = p
-                .child_by_field_name("function")
-                .and_then(|f| f.utf8_text(src.as_bytes()).ok())
-                .unwrap_or("");
-            let leaf = callee.rsplit('.').next().unwrap_or(callee);
-            if matches!(
-                leaf,
-                "it" | "test" | "describe" | "beforeEach" | "afterEach"
-            ) {
-                return true;
-            }
+    anc.nearest(node, Above::JsRunnerCall, |above, _| {
+        if above.kind() != "call_expression" {
+            return false;
         }
-        cur = p.parent();
-    }
-    false
+        let callee = above
+            .child_by_field_name("function")
+            .and_then(|f| f.utf8_text(src.as_bytes()).ok())
+            .unwrap_or("");
+        let leaf = callee.rsplit('.').next().unwrap_or(callee);
+        matches!(
+            leaf,
+            "it" | "test" | "describe" | "beforeEach" | "afterEach"
+        )
+    })
+    .is_some()
 }
 
 /// What the steps every pack shares read of this pack (`PackSpec::shared_facts`).

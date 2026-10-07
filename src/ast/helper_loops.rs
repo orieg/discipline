@@ -32,6 +32,7 @@
 //! `assertion-reduction` sets against a strength-only shortfall. An exit under any other
 //! condition (`<`, a truthiness test, a call, none) is not counted.
 
+use super::ancestry::{Above, Ancestry};
 use super::{helper_leaf, ParsedFileFacts};
 use tree_sitter::Node;
 
@@ -305,8 +306,8 @@ fn is_loop_body(looped: Node, child: Node) -> bool {
 }
 
 /// The closure is an argument of a call to an iterator method.
-fn runs_per_element(closure: Node, src: &str, spec: &LoopSpec) -> bool {
-    let mut cur = closure.parent();
+fn runs_per_element<'t>(closure: Node<'t>, anc: &Ancestry<'t>, src: &str, spec: &LoopSpec) -> bool {
+    let mut cur = anc.parent(closure);
     for _ in 0..4 {
         let Some(node) = cur else {
             return false;
@@ -315,31 +316,28 @@ fn runs_per_element(closure: Node, src: &str, spec: &LoopSpec) -> bool {
             return closure.start_byte() >= callee.end_byte()
                 && spec.iterators.contains(&last_leaf(callee, src));
         }
-        cur = node.parent();
+        cur = anc.parent(node);
     }
     false
 }
 
 /// `node` sits in a loop that starts at or after line `floor`, the first line of the
 /// function it belongs to.
-fn in_loop(node: Node, floor: usize, src: &str, spec: &LoopSpec) -> bool {
-    let mut child = node;
-    let mut cur = node.parent();
-    while let Some(parent) = cur {
-        if parent.start_position().row + 1 < floor {
-            return false;
-        }
-        let kind = parent.kind();
-        if spec.loops.contains(&kind) && is_loop_body(parent, child) {
-            return true;
-        }
-        if spec.closures.contains(&kind) && runs_per_element(parent, src, spec) {
-            return true;
-        }
-        child = parent;
-        cur = parent.parent();
-    }
-    false
+fn in_loop<'t>(
+    node: Node<'t>,
+    anc: &Ancestry<'t>,
+    floor: usize,
+    src: &str,
+    spec: &LoopSpec,
+) -> bool {
+    // The nearest loop around the node decides: an ancestor starts no later than what it
+    // holds, so a loop that starts before `floor` has every loop above it before `floor`.
+    anc.nearest(node, Above::Loop, |above, child| {
+        let kind = above.kind();
+        (spec.loops.contains(&kind) && is_loop_body(above, child))
+            || (spec.closures.contains(&kind) && runs_per_element(above, anc, src, spec))
+    })
+    .is_some_and(|(looped, _)| looped.start_position().row + 1 >= floor)
 }
 
 /// The condition is an equality or inequality comparison, possibly negated or
@@ -383,24 +381,25 @@ fn is_failure_exit(node: Node, src: &str, spec: &LoopSpec) -> bool {
 
 /// The nearest conditional that holds `node` in one of its branches, at or after line
 /// `floor`, compares for equality.
-fn guarded_by_equality(node: Node, floor: usize, src: &str, spec: &LoopSpec) -> bool {
-    let mut child = node;
-    let mut cur = node.parent();
-    while let Some(parent) = cur {
-        if parent.start_position().row + 1 < floor {
-            return false;
-        }
-        if CONDITIONALS.contains(&parent.kind()) {
-            let condition = parent
-                .child_by_field_name("condition")
-                .or_else(|| parent.named_child(0));
-            return condition
-                .is_some_and(|c| c.id() != child.id() && compares_for_equality(c, src, spec));
-        }
-        child = parent;
-        cur = parent.parent();
+fn guarded_by_equality<'t>(
+    node: Node<'t>,
+    anc: &Ancestry<'t>,
+    floor: usize,
+    src: &str,
+    spec: &LoopSpec,
+) -> bool {
+    let Some((conditional, child)) = anc.nearest(node, Above::Conditional, |above, _| {
+        CONDITIONALS.contains(&above.kind())
+    }) else {
+        return false;
+    };
+    if conditional.start_position().row + 1 < floor {
+        return false;
     }
-    false
+    let condition = conditional
+        .child_by_field_name("condition")
+        .or_else(|| conditional.named_child(0));
+    condition.is_some_and(|c| c.id() != child.id() && compares_for_equality(c, src, spec))
 }
 
 /// The innermost of `spans` (first and last line) that holds `line`.
@@ -417,7 +416,13 @@ fn innermost(spans: &[(usize, usize)], line: usize) -> Option<usize> {
 /// equality-guarded failure exits of the helpers it calls into
 /// `HelperReach::equality_exits`. Run after the pack
 /// has resolved the same-file helpers its tests call.
-pub fn count(root: Node, src: &str, facts: &mut ParsedFileFacts, spec: &LoopSpec) {
+pub fn count<'t>(
+    root: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    facts: &mut ParsedFileFacts,
+    spec: &LoopSpec,
+) {
     // A file whose tests call no helper still has its helpers' exits read: a test of
     // another file may call them.
     if facts.test_helpers.is_empty() {
@@ -433,29 +438,33 @@ pub fn count(root: Node, src: &str, facts: &mut ParsedFileFacts, spec: &LoopSpec
     let mut equality_exits = vec![0usize; helpers.len()];
     // Calls made in a loop of a test: the test and the name the callee ends in.
     let mut looped_sites: Vec<(usize, &str)> = Vec::new();
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
+    let mut stack = vec![(root, 0usize, root.id())];
+    while let Some((node, depth, above)) = stack.pop() {
+        anc.stand_at(depth, above, node);
         let called = callee(node, spec);
         if called.is_some() || spec.exits.contains(&node.kind()) {
             let line = node.start_position().row + 1;
             if let Some(at) = innermost(&helpers, line) {
-                if !helper_loops[at] && in_loop(node, helpers[at].0, src, spec) {
+                if !helper_loops[at] && in_loop(node, anc, helpers[at].0, src, spec) {
                     helper_loops[at] = true;
                 }
                 if is_failure_exit(node, src, spec)
-                    && guarded_by_equality(node, helpers[at].0, src, spec)
+                    && guarded_by_equality(node, anc, helpers[at].0, src, spec)
                 {
                     equality_exits[at] += 1;
                 }
             }
             if let (Some(called), Some(at)) = (called, innermost(&tests, line)) {
-                if in_loop(node, tests[at].0, src, spec) {
+                if in_loop(node, anc, tests[at].0, src, spec) {
                     looped_sites.push((at, last_leaf(called, src)));
                 }
             }
         }
         let mut cursor = node.walk();
-        stack.extend(node.children(&mut cursor));
+        stack.extend(
+            node.children(&mut cursor)
+                .map(|child| (child, depth + 1, node.id())),
+        );
     }
     let helper_checks_in_a_loop = |name: &str| {
         let mut named = (0..helpers.len())
