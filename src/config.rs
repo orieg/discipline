@@ -1279,6 +1279,20 @@ pub struct ProvenanceTagsGate {
     pub deterministic_units: Vec<String>,
     /// Judge only paragraphs that contain an added line (default: whole changed file).
     pub diff_only: bool,
+    /// A `(measured: <host>, <commit>)` tag on an added line must name a host and a commit
+    /// that resolves in the local object database.
+    pub verify_measured_commit: bool,
+    /// Globs of JSON / JSONL result records whose commit key must be a full object id that
+    /// resolves to a commit.
+    pub record_paths: Vec<String>,
+    /// Key of a result record that holds the commit it was measured at.
+    pub record_commit_key: String,
+    /// Each figure of a paragraph or table carrying a `measured` tag must equal a numeric
+    /// value of the tracked data artifact (`.json`, `.jsonl`, `.csv`) the paragraph cites.
+    pub verify_cited_figures: bool,
+    /// Relative tolerance, in percent, added to rounding when a figure is compared with
+    /// the artifact's values.
+    pub figure_tolerance_pct: f64,
 }
 
 impl Default for ProvenanceTagsGate {
@@ -1299,6 +1313,11 @@ impl Default for ProvenanceTagsGate {
             ratio_satisfied_by: Vec::new(),
             deterministic_units: Vec::new(),
             diff_only: false,
+            verify_measured_commit: false,
+            record_paths: Vec::new(),
+            record_commit_key: "commit".to_string(),
+            verify_cited_figures: false,
+            figure_tolerance_pct: 0.0,
         }
     }
 }
