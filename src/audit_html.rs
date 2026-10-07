@@ -747,21 +747,23 @@ fn external(r: &Record, s: &Summary) -> String {
     }
 }
 
-/// Render the audit as one self-contained HTML page.
-pub fn render(s: &Summary) -> String {
-    let n = s.changes;
+/// The span of dates the records cover, as the eyebrow states it.
+fn record_span(s: &Summary) -> String {
     let times = s
         .records
         .iter()
         .chain(&s.tightenings)
         .chain(&s.protected_edits)
         .map(|r| r.time);
-    let span = match (times.clone().min(), times.max()) {
+    match (times.clone().min(), times.max()) {
         (Some(a), Some(b)) => format!(", records from {} to {}", date(a), date(b)),
         _ => String::new(),
-    };
-    let repo_name = s
-        .links
+    }
+}
+
+/// The audited repository as `owner/name`, from its forge link.
+fn repository_name(s: &Summary) -> String {
+    s.links
         .as_ref()
         .map(|l| {
             l.repository
@@ -773,10 +775,13 @@ pub fn render(s: &Summary) -> String {
                 .collect::<Vec<_>>()
                 .join("/")
         })
-        .unwrap_or_else(|| "this repository".to_string());
+        .unwrap_or_else(|| "this repository".to_string())
+}
 
-    // --- lede ---
-    let lede = if s.signals.is_empty() {
+/// The headline: how many findings need a look.
+fn lede_text(s: &Summary) -> String {
+    let n = s.changes;
+    if s.signals.is_empty() {
         format!("Nothing in the last {n} merged changes needs a look.")
     } else {
         format!(
@@ -788,7 +793,11 @@ pub fn render(s: &Summary) -> String {
                 "need"
             }
         )
-    };
+    }
+}
+
+/// The paragraph that points at the first signal, when there is one.
+fn start_here(s: &Summary) -> String {
     let top = s.signals.first().map(|first| {
         format!(
             "Start here: {} ({}).",
@@ -796,33 +805,70 @@ pub fn render(s: &Summary) -> String {
             change_links(first, s)
         )
     });
+    top.map(|t| format!(r##"<p class="top">{t}</p>"##))
+        .unwrap_or_default()
+}
+
+/// How many changes carry a record other than a skipped issue link.
+fn nonroutine_changes(s: &Summary) -> usize {
     let nonroutine: BTreeSet<&str> = s
         .records
         .iter()
         .filter(|r| r.class != "process")
         .map(|r| r.sha.as_str())
         .collect();
-    let top = top
-        .map(|t| format!(r##"<p class="top">{t}</p>"##))
-        .unwrap_or_default();
-    let sublede = format!(
+    nonroutine.len()
+}
+
+/// The sentence under the headline: how many changes used an escape hatch.
+fn sublede_text(s: &Summary, nonroutine: usize) -> String {
+    let n = s.changes;
+    format!(
         "{} of {n} merged changes used an escape hatch, not counting pull requests that skipped linking an issue. Waivers are shown as their authors wrote them; {}",
-        nonroutine.len(),
+        nonroutine,
         if s.replay.is_some() {
             "the replay says which ones lifted a finding when re-checked with the current discipline."
         } else {
             "the report does not say whether each one was needed."
         }
-    );
+    )
+}
 
-    // --- trust panel and checks ---
-    let links_line = match &s.links {
+/// The trust panel's line on where the links point.
+fn forge_links_line(s: &Summary) -> String {
+    match &s.links {
         Some(l) => format!(
             r##"<a href="{0}">{0}</a>, from the <code>origin</code> remote"##,
             esc(&l.repository)
         ),
         None => "none: the <code>origin</code> remote names no known forge".to_string(),
+    }
+}
+
+/// The trust panel's line on what was read: git objects, the forge, a replay report.
+fn read_line(s: &Summary) -> String {
+    let read = match &s.forge {
+        None => "Git objects only: commit messages, <code>discipline.toml</code>, <code>discipline-baseline.toml</code> and the changed files. Nothing was read from the network.".to_string(),
+        Some(f) => format!(
+            "Git objects, and from the forge each change's merged pull request and its reviews ({} of {} changes arrived through one{}).",
+            f.pulls,
+            f.changes,
+            if f.failed > 0 { format!("; the forge could not answer for {}", f.failed) } else { String::new() }
+        ),
     };
+    let replay = match &s.replay {
+        Some(r) => format!(
+            " A <code>discipline replay</code> report of {} changes ({} checked) says which waivers lifted a finding.",
+            r.cases, r.checked
+        ),
+        None => String::new(),
+    };
+    read + &replay
+}
+
+/// The strip of what was checked: protected-path edits first, then each check, found
+/// ones first.
+fn checks_list(s: &Summary) -> String {
     let mut checks = String::new();
     let mut protected_check = String::new();
     if !s.protected_edits.is_empty() {
@@ -857,8 +903,11 @@ pub fn render(s: &Summary) -> String {
         checks.push_str(&format!(r##"<li class="chk {cls}"><span class="st">{st}</span><span class="what">{}</span><span class="src">{src}</span></li>"##,
             esc(check_label(c.id))));
     }
+    checks
+}
 
-    // --- decisions ---
+/// The ranked list of signals that need a decision.
+fn decisions_list(s: &Summary) -> String {
     let mut decisions = String::new();
     for sg in &s.signals {
         let (l, cls) = rank(sg.rank);
@@ -870,9 +919,12 @@ pub fn render(s: &Summary) -> String {
     if decisions.is_empty() {
         decisions.push_str(r##"<li class="dec low"><span class="sev">Clean</span><div><p>No signal found anything in these changes. The checks above say what was not looked at.</p></div></li>"##);
     }
+    decisions
+}
 
-    // --- figures ---
-    let loosenings: Vec<&Record> = s.records.iter().filter(|r| r.kind == "config").collect();
+/// The four figures of the overview.
+fn figures(s: &Summary, loosenings: &[&Record], nonroutine: usize) -> String {
+    let n = s.changes;
     let open = loosenings
         .iter()
         .filter(|r| restored_by(r, s).is_none())
@@ -885,7 +937,7 @@ pub fn render(s: &Summary) -> String {
             format!("{open} not restored"),
         ),
         (
-            format!("{}/{n}", nonroutine.len()),
+            format!("{}/{n}", nonroutine),
             "changes with an exception",
             "beyond a skipped issue link".to_string(),
         ),
@@ -900,14 +952,15 @@ pub fn render(s: &Summary) -> String {
             "see the strip above".to_string(),
         ),
     ];
-    let figs: String = figs
-        .iter()
+    figs.iter()
         .map(|(v, k, d)| {
             format!(r##"<div class="fig"><b>{v}</b><span>{k}</span><small>{d}</small></div>"##)
         })
-        .collect();
+        .collect()
+}
 
-    // --- protected view ---
+/// The protected-paths view: one row per change that edited a protected path.
+fn protected_view_html(s: &Summary) -> String {
     let mut by_change: Vec<(&Record, Vec<&Record>)> = Vec::new();
     for r in &s.protected_edits {
         match by_change.iter_mut().find(|(f, _)| f.sha == r.sha) {
@@ -924,7 +977,7 @@ pub fn render(s: &Summary) -> String {
             format!(r##"<tr><td>{}</td><td>{}</td><td>{paths}</td><td>{gate_badge}</td><td>{}</td><td>{}</td><td>{}</td></tr>"##, ch(f), date(f.time), ratification_cell(rs, s), review_cell(f, s), external(f, s))
         })
         .collect();
-    let protected_view = if by_change.is_empty() {
+    if by_change.is_empty() {
         r##"<p class="muted">No change edited a path protected by <code>ratified-paths</code> in its parent configuration.</p>"##.to_string()
     } else {
         table(
@@ -939,9 +992,11 @@ pub fn render(s: &Summary) -> String {
             ],
             &prot_rows,
         )
-    };
+    }
+}
 
-    // --- configuration view ---
+/// The configuration view's table of loosenings.
+fn loosenings_table(s: &Summary, loosenings: &[&Record]) -> String {
     let cfg_rows: String = loosenings
         .iter()
         .map(|r| {
@@ -971,6 +1026,18 @@ pub fn render(s: &Summary) -> String {
             format!(r##"<tr><td>{}</td><td>{}</td><td><a href="#g-{g}"><code>{g}</code></a></td><td><code>{}</code> {val}{}</td><td>{}</td><td>{restored}</td></tr>"##, ch(r), date(r.time), esc(r.key.as_deref().unwrap_or("")), source(r, s), flags.join(" "))
         })
         .collect();
+    if loosenings.is_empty() {
+        r##"<p class="muted">No loosening.</p>"##.to_string()
+    } else {
+        table(
+            &["Change", "Date", "Gate", "What", "Flags", "Restored"],
+            &cfg_rows,
+        )
+    }
+}
+
+/// The configuration view's table of tightenings.
+fn tightenings_table(s: &Summary) -> String {
     let tight_rows: String = s
         .tightenings
         .iter()
@@ -983,8 +1050,16 @@ pub fn render(s: &Summary) -> String {
             format!(r##"<tr><td>{}</td><td>{}</td><td><a href="#g-{g}"><code>{g}</code></a></td><td><code>{}</code> {val}{}</td></tr>"##, ch(t), date(t.time), esc(t.key.as_deref().unwrap_or("")), source(t, s))
         })
         .collect();
+    if s.tightenings.is_empty() {
+        r##"<p class="muted">No tightening.</p>"##.to_string()
+    } else {
+        table(&["Change", "Date", "Gate", "What"], &tight_rows)
+    }
+}
 
-    // --- waivers view ---
+/// The waivers view's table of waived findings, grouped by change, with the number of
+/// waivers it holds.
+fn waived_findings(s: &Summary) -> (usize, String) {
     let mut det: Vec<(&Record, Vec<&Record>)> = Vec::new();
     for r in s
         .records
@@ -1009,9 +1084,28 @@ pub fn render(s: &Summary) -> String {
             format!(r##"<tr><td>{}</td><td>{}</td><td>{d}{}</td><td>{g}</td><td>{len}</td><td class="muted">not checked</td></tr>"##, ch(f), date(f.time), source(f, s))
         })
         .collect();
-    let process: Vec<&Record> = s.records.iter().filter(|r| r.class == "process").collect();
+    let waived = if det.is_empty() {
+        r##"<p class="muted">No finding waiver.</p>"##.to_string()
+    } else {
+        table(
+            &[
+                "Change",
+                "Date",
+                "Directive",
+                "Gate",
+                "Reason length",
+                "Lifted a finding",
+            ],
+            &det_rows,
+        )
+    };
+    (det_n, waived)
+}
+
+/// The waivers view's table of skipped-issue-link reasons reused three times or more.
+fn reused_reasons_table(process: &[&Record]) -> String {
     let mut reuse: BTreeMap<&str, Vec<&Record>> = BTreeMap::new();
-    for r in &process {
+    for r in process {
         if let Some(h) = r.reason_sha256.as_deref() {
             reuse.entry(h).or_default().push(r);
         }
@@ -1031,6 +1125,15 @@ pub fn render(s: &Summary) -> String {
             )
         })
         .collect();
+    if reuse.is_empty() {
+        r##"<p class="muted">No reason reused three times.</p>"##.to_string()
+    } else {
+        table(&["Reason hash", "Times", "Length", "Changes"], &reuse_rows)
+    }
+}
+
+/// The waivers view's line counting inline markers by the kind of file they are in.
+fn marker_roles_line(s: &Summary) -> String {
     let mut roles: BTreeMap<&str, usize> = BTreeMap::new();
     for r in s.records.iter().filter(|r| r.kind == "inline-marker") {
         *roles.entry(role(r.file.as_deref())).or_default() += 1;
@@ -1052,6 +1155,15 @@ pub fn render(s: &Summary) -> String {
             judged.len() - nothing
         ));
     }
+    if roles_line.is_empty() {
+        "none".to_string()
+    } else {
+        roles_line
+    }
+}
+
+/// The waivers view's table of inline markers outside tests and docs.
+fn markers_table(s: &Summary) -> String {
     let marker_rows: String = s
         .records
         .iter()
@@ -1065,8 +1177,16 @@ pub fn render(s: &Summary) -> String {
             format!(r##"<tr><td>{}</td><td><a href="#g-{g}"><code>{g}</code></a></td><td>{}</td><td>{}</td></tr>"##, ch(r), source(r, s), role(r.file.as_deref()))
         })
         .collect();
+    if marker_rows.is_empty() {
+        r##"<p class="muted">None.</p>"##.to_string()
+    } else {
+        table(&["Change", "Gate", "Where", "Kind of file"], &marker_rows)
+    }
+}
 
-    // --- changes view ---
+/// The changes that carry a record, one entry each, in the order the changes view lists
+/// them.
+fn changes_in_order(s: &Summary) -> Vec<&Record> {
     let mut order: Vec<&Record> = Vec::new();
     for r in s
         .records
@@ -1079,8 +1199,13 @@ pub fn render(s: &Summary) -> String {
         }
     }
     order.sort_by_key(|r| r.ord);
+    order
+}
+
+/// The changes view: everything each change did.
+fn changes_list(s: &Summary, order: &[&Record]) -> String {
     let mut changes_html = String::new();
-    for f in &order {
+    for f in order {
         let mut facts = String::new();
         let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
         for r in s
@@ -1091,77 +1216,7 @@ pub fn render(s: &Summary) -> String {
             .filter(|r| r.sha == f.sha)
         {
             *counts.entry(r.class).or_default() += 1;
-            let g = esc(r.gate.as_deref().unwrap_or(""));
-            let item = match r.kind {
-                "directive" => format!(
-                    "Directive <code>{}</code> in the {} ({}), reason {} chars{}{}{}",
-                    esc(r.directive.as_deref().unwrap_or("")),
-                    if r.source == Some("pull-request-body") {
-                        "pull request body"
-                    } else {
-                        "commit message"
-                    },
-                    if g.is_empty() {
-                        "no gate".to_string()
-                    } else {
-                        g.clone()
-                    },
-                    r.reason_len.unwrap_or(0),
-                    if r.hidden == Some(true) {
-                        r##" <span class="badge warn">hidden</span>"##
-                    } else {
-                        ""
-                    },
-                    if r.cites.is_empty() {
-                        String::new()
-                    } else {
-                        format!("; cites {}", cites_cell(r, s))
-                    },
-                    lifted_badge(r)
-                ),
-                "config" => format!(
-                    "Loosened <code>{g}.{}</code>: {} {}{}",
-                    esc(r.key.as_deref().unwrap_or("")),
-                    change_str(r),
-                    r.count.map(|c| c.to_string()).unwrap_or_default(),
-                    set_aside(r)
-                ),
-                "config-tightening" => format!(
-                    "Tightened <code>{g}.{}</code>{}",
-                    esc(r.key.as_deref().unwrap_or("")),
-                    set_aside(r)
-                ),
-                "config-unreadable" => format!(
-                    "Configuration unreadable: {}",
-                    esc(r.detail.as_deref().unwrap_or(""))
-                ),
-                "baseline" => format!(
-                    "{} <code>{g}</code> findings grandfathered",
-                    r.count.unwrap_or(0)
-                ),
-                "inline-marker" => format!(
-                    "Inline marker for <code>{g}</code> at <code>{}:{}</code> ({}){}",
-                    esc(r.file.as_deref().unwrap_or("")),
-                    r.line.unwrap_or(0),
-                    role(r.file.as_deref()),
-                    lifted_badge(r)
-                ),
-                "protected-edit" if r.ratification.is_some() => format!(
-                    "Edited protected path <code>{}</code>: {}",
-                    esc(r.file.as_deref().unwrap_or("")),
-                    ratification_cell(&[r], s)
-                ),
-                "protected-edit" => format!(
-                    "Edited protected path <code>{}</code> (gate {}); ratification not checked",
-                    esc(r.file.as_deref().unwrap_or("")),
-                    if r.detail.as_deref() == Some("gate on") {
-                        "on"
-                    } else {
-                        "off"
-                    }
-                ),
-                _ => esc(r.kind),
-            };
+            let item = change_fact(r, s);
             facts.push_str(&format!("<li>{}{item}{}</li>", dot(r.class), source(r, s)));
         }
         let summary = counts
@@ -1189,8 +1244,86 @@ pub fn render(s: &Summary) -> String {
             external(f, s),
             &f.sha[..f.sha.len().min(10)]));
     }
+    changes_html
+}
 
-    // --- gates view ---
+/// One record as the changes view states it.
+fn change_fact(r: &Record, s: &Summary) -> String {
+    let g = esc(r.gate.as_deref().unwrap_or(""));
+    match r.kind {
+        "directive" => format!(
+            "Directive <code>{}</code> in the {} ({}), reason {} chars{}{}{}",
+            esc(r.directive.as_deref().unwrap_or("")),
+            if r.source == Some("pull-request-body") {
+                "pull request body"
+            } else {
+                "commit message"
+            },
+            if g.is_empty() {
+                "no gate".to_string()
+            } else {
+                g.clone()
+            },
+            r.reason_len.unwrap_or(0),
+            if r.hidden == Some(true) {
+                r##" <span class="badge warn">hidden</span>"##
+            } else {
+                ""
+            },
+            if r.cites.is_empty() {
+                String::new()
+            } else {
+                format!("; cites {}", cites_cell(r, s))
+            },
+            lifted_badge(r)
+        ),
+        "config" => format!(
+            "Loosened <code>{g}.{}</code>: {} {}{}",
+            esc(r.key.as_deref().unwrap_or("")),
+            change_str(r),
+            r.count.map(|c| c.to_string()).unwrap_or_default(),
+            set_aside(r)
+        ),
+        "config-tightening" => format!(
+            "Tightened <code>{g}.{}</code>{}",
+            esc(r.key.as_deref().unwrap_or("")),
+            set_aside(r)
+        ),
+        "config-unreadable" => format!(
+            "Configuration unreadable: {}",
+            esc(r.detail.as_deref().unwrap_or(""))
+        ),
+        "baseline" => format!(
+            "{} <code>{g}</code> findings grandfathered",
+            r.count.unwrap_or(0)
+        ),
+        "inline-marker" => format!(
+            "Inline marker for <code>{g}</code> at <code>{}:{}</code> ({}){}",
+            esc(r.file.as_deref().unwrap_or("")),
+            r.line.unwrap_or(0),
+            role(r.file.as_deref()),
+            lifted_badge(r)
+        ),
+        "protected-edit" if r.ratification.is_some() => format!(
+            "Edited protected path <code>{}</code>: {}",
+            esc(r.file.as_deref().unwrap_or("")),
+            ratification_cell(&[r], s)
+        ),
+        "protected-edit" => format!(
+            "Edited protected path <code>{}</code> (gate {}); ratification not checked",
+            esc(r.file.as_deref().unwrap_or("")),
+            if r.detail.as_deref() == Some("gate on") {
+                "on"
+            } else {
+                "off"
+            }
+        ),
+        _ => esc(r.kind),
+    }
+}
+
+/// The gates view: each gate's records as a timeline.
+fn gates_list(s: &Summary) -> String {
     let mut gates: BTreeSet<&str> = BTreeSet::new();
     for r in s
         .records
@@ -1262,8 +1395,11 @@ pub fn render(s: &Summary) -> String {
         gates_html.push_str(&format!(r##"<details id="g-{g}"><summary><code class="lbl">{g}</code>{badge}<span class="cnt">{summary}</span></summary><ol class="timeline">{tl}</ol></details>"##,
             g = esc(g)));
     }
+    gates_html
+}
 
-    // --- records view ---
+/// The table of all records.
+fn records_table(s: &Summary) -> String {
     let class_label = |c: &str| match c {
         "detector" => "Waived finding",
         "config" => "Config loosening",
@@ -1289,14 +1425,62 @@ pub fn render(s: &Summary) -> String {
             format!(r##"<tr data-class="{}" data-gate="{}"><td>{}</td><td>{}</td><td>{}{}</td><td><code>{}</code></td><td>{what}</td><td>{status}</td><td>{source}</td></tr>"##, esc(r.class), esc(r.gate.as_deref().unwrap_or("")), ch(r), date(r.time), dot(r.class), class_label(r.class), esc(r.gate.as_deref().unwrap_or("–")))
         })
         .collect();
-    let gate_opts: String = s
-        .records
+    table(
+        &["Change", "Date", "Kind", "Gate", "What", "Status", "Source"],
+        &rec_rows,
+    )
+}
+
+/// The gate filter's options: every gate a record names.
+fn gate_options(s: &Summary) -> String {
+    s.records
         .iter()
         .filter_map(|r| r.gate.as_deref())
         .collect::<BTreeSet<_>>()
         .iter()
         .map(|g| format!(r##"<option value="{0}">{0}</option>"##, esc(g)))
-        .collect();
+        .collect()
+}
+
+/// Render the audit as one self-contained HTML page.
+pub fn render(s: &Summary) -> String {
+    let n = s.changes;
+    let span = record_span(s);
+    let repo_name = repository_name(s);
+
+    // --- lede ---
+    let lede = lede_text(s);
+    let top = start_here(s);
+    let nonroutine = nonroutine_changes(s);
+    let sublede = sublede_text(s, nonroutine);
+
+    // --- trust panel and checks ---
+    let links_line = forge_links_line(s);
+    let checks = checks_list(s);
+
+    // --- decisions ---
+    let decisions = decisions_list(s);
+
+    // --- figures ---
+    let loosenings: Vec<&Record> = s.records.iter().filter(|r| r.kind == "config").collect();
+    let figs = figures(s, &loosenings, nonroutine);
+
+    // --- protected view ---
+    let protected_view = protected_view_html(s);
+
+    // --- waivers view ---
+    let (det_n, det) = waived_findings(s);
+    let process: Vec<&Record> = s.records.iter().filter(|r| r.class == "process").collect();
+
+    // --- changes view ---
+    let order = changes_in_order(s);
+    let changes_html = changes_list(s, &order);
+
+    // --- gates view ---
+    let gates_html = gates_list(s);
+
+    // --- records view ---
+    let gate_opts = gate_options(s);
 
     let mut o = String::new();
     o.push_str(&format!(r##"<!doctype html>
@@ -1412,21 +1596,7 @@ pub fn render(s: &Summary) -> String {
 </html>
 "##,
         version = esc(&s.version),
-        read_line = match &s.forge {
-            None => "Git objects only: commit messages, <code>discipline.toml</code>, <code>discipline-baseline.toml</code> and the changed files. Nothing was read from the network.".to_string(),
-            Some(f) => format!(
-                "Git objects, and from the forge each change's merged pull request and its reviews ({} of {} changes arrived through one{}).",
-                f.pulls,
-                f.changes,
-                if f.failed > 0 { format!("; the forge could not answer for {}", f.failed) } else { String::new() }
-            ),
-        } + &match &s.replay {
-            Some(r) => format!(
-                " A <code>discipline replay</code> report of {} changes ({} checked) says which waivers lifted a finding.",
-                r.cases, r.checked
-            ),
-            None => String::new(),
-        },
+        read_line = read_line(s),
         repo = esc(&repo_name),
         reference = esc(&s.reference),
         tip = esc(&s.tip[..s.tip.len().min(10)]),
@@ -1437,54 +1607,13 @@ pub fn render(s: &Summary) -> String {
         gate = gate_chart(s),
         dd = dot("detector"),
         di = dot("inline"),
-        cfg = if loosenings.is_empty() {
-            r##"<p class="muted">No loosening.</p>"##.to_string()
-        } else {
-            table(
-                &["Change", "Date", "Gate", "What", "Flags", "Restored"],
-                &cfg_rows,
-            )
-        },
-        tight = if s.tightenings.is_empty() {
-            r##"<p class="muted">No tightening.</p>"##.to_string()
-        } else {
-            table(&["Change", "Date", "Gate", "What"], &tight_rows)
-        },
-        det = if det.is_empty() {
-            r##"<p class="muted">No finding waiver.</p>"##.to_string()
-        } else {
-            table(
-                &[
-                    "Change",
-                    "Date",
-                    "Directive",
-                    "Gate",
-                    "Reason length",
-                    "Lifted a finding",
-                ],
-                &det_rows,
-            )
-        },
+        cfg = loosenings_table(s, &loosenings),
+        tight = tightenings_table(s),
         proc_n = process.len(),
-        reuse = if reuse.is_empty() {
-            r##"<p class="muted">No reason reused three times.</p>"##.to_string()
-        } else {
-            table(&["Reason hash", "Times", "Length", "Changes"], &reuse_rows)
-        },
-        roles = if roles_line.is_empty() {
-            "none".to_string()
-        } else {
-            roles_line
-        },
-        markers = if marker_rows.is_empty() {
-            r##"<p class="muted">None.</p>"##.to_string()
-        } else {
-            table(&["Change", "Gate", "Where", "Kind of file"], &marker_rows)
-        },
-        records = table(
-            &["Change", "Date", "Kind", "Gate", "What", "Status", "Source"],
-            &rec_rows
-        ),));
+        reuse = reused_reasons_table(&process),
+        roles = marker_roles_line(s),
+        markers = markers_table(s),
+        records = records_table(s),));
     o
 }
 
