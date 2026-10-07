@@ -57,6 +57,7 @@ impl LanguagePack for GoPack {
             suite_package: suite_package(root, src),
             assertion_locals: Vec::new(),
             gocheck: Vec::new(),
+            imports: super::expected_exceptions::go_imports(root, src),
         };
 
         extractor.collect_comments_and_escape_hatches(root);
@@ -113,6 +114,7 @@ impl LanguagePack for GoPack {
         );
         super::bounds::go(root, src, &mut extractor.facts.tests);
         super::expectations::go(root, src, &mut extractor.facts.tests);
+        super::expected_exceptions::go(root, src, &mut extractor.facts.tests, &extractor.imports);
         super::caught_assertions::go(root, src, &mut extractor.facts.tests, vocab);
         extractor.facts.prose = super::prose::extract(
             root,
@@ -253,6 +255,8 @@ struct GoExtractor<'a> {
     assertion_locals: Vec<(String, bool)>,
     /// The gocheck `*C` parameters of the function being read ([`gocheck_parameters`]).
     gocheck: Vec<String>,
+    /// The package each name of the file is bound to by an `import`.
+    imports: super::expected_exceptions::GoImports,
 }
 
 /// The parameters of a function or method declared as gocheck's `*C` (`c *C`,
@@ -823,6 +827,17 @@ impl<'a> GoExtractor<'a> {
         }
         let checker = self.text(args[1]);
         let checker = checker.rsplit('.').next().unwrap_or(checker);
+        if let Some(call) = callee.parent() {
+            let src = std::str::from_utf8(self.src).unwrap_or("");
+            test_fn
+                .expected_exceptions
+                .extend(super::expected_exceptions::go_gocheck(
+                    args,
+                    call,
+                    src,
+                    &self.imports,
+                ));
+        }
         test_fn.total_asserts += 1;
         if fatal {
             test_fn.fatal_asserts += 1;
@@ -834,6 +849,29 @@ impl<'a> GoExtractor<'a> {
             test_fn.strong_asserts += 1;
         }
         true
+    }
+
+    /// The testify method a call invokes, whatever it is called on, and the position of
+    /// its first value argument: 1 on the `assert` or `require` package the file imports
+    /// (`require.ErrorIs(t, err, target)`), 0 on the suite being read, on its
+    /// `Require()` / `Assert()`, and on a local bound to an assertion object.
+    fn testify_call(&self, callee: Node) -> Option<(&'a str, usize)> {
+        if callee.kind() != "selector_expression" {
+            return None;
+        }
+        let on = callee.child_by_field_name("operand")?;
+        let method = self.text(callee.child_by_field_name("field")?);
+        if on.kind() == "identifier" {
+            let name = self.text(on);
+            let object = self.suite_receiver.as_deref() == Some(name)
+                || self.assertion_locals.iter().any(|(local, _)| local == name);
+            return if object {
+                Some((method, 0))
+            } else {
+                self.imports.testify(name).then_some((method, 1))
+            };
+        }
+        self.suite_assertion(callee).map(|(method, _)| (method, 0))
     }
 
     /// Whether a call is `suite.Run(t, <suite value>)`: `Run` of testify's `suite`
@@ -1135,6 +1173,21 @@ impl<'a> GoExtractor<'a> {
                 _ => {}
             }
             return;
+        }
+
+        // The expected failure a testify assertion states (`require.ErrorIs(t, err, ErrGone)`).
+        if let Some((method, first)) = self.testify_call(func_node) {
+            let src = std::str::from_utf8(self.src).unwrap_or("");
+            let values = args.get(first..).unwrap_or(&[]);
+            test_fn
+                .expected_exceptions
+                .extend(super::expected_exceptions::go_testify(
+                    method,
+                    values,
+                    node,
+                    src,
+                    &self.imports,
+                ));
         }
 
         // An assertion made on a testify suite: `s.Equal(..)`, `s.Require().NoError(..)`.
