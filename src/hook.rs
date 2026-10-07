@@ -1032,7 +1032,7 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
     }
 "
     };
-    format!(
+    let plugin = format!(
         "// Written by `discipline hook install --agent opencode`.
 // When a session is created, takes this worktree's lease for it. Before an edit tool, refuses an edit outside this session's worktree (the tool call
 // is sent on stdin; a refusal throws, and the model reads the reason). After it, runs
@@ -1068,7 +1068,13 @@ export default {{
 {unregistered}  }}
 }}
 "
-    )
+    );
+    let mode = if observe {
+        "mode=observe"
+    } else {
+        "mode=enforcing"
+    };
+    crate::hookfile::stamp(&plugin, GENERATED_HEADER, &[mode])
 }
 
 /// What `install` did.
@@ -1092,6 +1098,108 @@ pub enum Installed {
     /// A file with the generated header whose mode cannot be read ([`opencode_plugin_mode`]),
     /// when no mode was asked for; left as it is.
     ModeUnreadable(PathBuf),
+    /// A file that differs from what this release writes and is not provably what a
+    /// release wrote, without `--upgrade`; left as it is.
+    Differs(PathBuf, Unproven),
+    /// The same with `--upgrade` and no `--force`: left as it is. `diff` is what `--force`
+    /// would change; `snippet` is what to merge by hand, when the file lacks a hook
+    /// command this release writes.
+    LocalEdits {
+        path: PathBuf,
+        why: Unproven,
+        diff: String,
+        snippet: Option<String>,
+    },
+    /// The same with `--upgrade --force`: rewritten. `diff` is what was discarded.
+    Forced {
+        path: PathBuf,
+        why: Unproven,
+        diff: String,
+    },
+}
+
+/// Whether `hook install` may rewrite an existing file: `upgrade` one a release provably
+/// generated, and with `force` also one it cannot tell from an edited file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Refresh {
+    pub upgrade: bool,
+    pub force: bool,
+}
+
+impl From<bool> for Refresh {
+    /// `--upgrade` alone.
+    fn from(upgrade: bool) -> Self {
+        Refresh {
+            upgrade,
+            force: false,
+        }
+    }
+}
+
+/// Why an existing file is not provably what a release of `hook install` wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unproven {
+    /// It has the generated header and no digest line ([`crate::hookfile::Stamp::Absent`]).
+    NoDigest,
+    /// Its digest line does not match its content ([`crate::hookfile::Stamp::Edited`]).
+    Edited,
+    /// A JSON hook file with hooks or settings that are not discipline's, whose
+    /// discipline entries differ from this release's: entries an earlier release wrote
+    /// and entries somebody edited look the same there.
+    OwnContent,
+    /// A JSON hook file a release generated, except that its check timeout is below the
+    /// default, which `hook install` writes only when `--timeout` says so.
+    ShortTimeout,
+}
+
+/// Why a file with the generated header is not provably a release's output, by its
+/// digest line; `None` when the digest matches. A file without a digest line is proven
+/// too when it is one of `current` (what this release writes there, in each mode) apart
+/// from that line ([`crate::hookfile::lacks_only_the_digest`]).
+fn unproven_text(existing: &str, current: &[&str]) -> Option<Unproven> {
+    if current
+        .iter()
+        .any(|c| crate::hookfile::lacks_only_the_digest(existing, c))
+    {
+        return None;
+    }
+    match crate::hookfile::stamp_state(existing) {
+        crate::hookfile::Stamp::Unedited => None,
+        crate::hookfile::Stamp::Edited => Some(Unproven::Edited),
+        crate::hookfile::Stamp::Absent => Some(Unproven::NoDigest),
+    }
+}
+
+/// For an existing file that is not provably a release's output and differs from
+/// `content`: reported without `upgrade`, refused with the difference without `force`,
+/// and rewritten with it. Nothing is written in the first two cases.
+fn replace_unproven(
+    path: PathBuf,
+    existing: &str,
+    content: &str,
+    why: Unproven,
+    how: Refresh,
+    snippet: Option<String>,
+) -> Result<Installed> {
+    if !how.upgrade {
+        return Ok(Installed::Differs(path, why));
+    }
+    let diff = crate::hookfile::unified_diff(
+        existing,
+        content,
+        &path.display().to_string(),
+        crate::hookfile::DIFF_LINES,
+    );
+    if !how.force {
+        return Ok(Installed::LocalEdits {
+            path,
+            why,
+            diff,
+            snippet,
+        });
+    }
+    std::fs::write(&path, content).with_context(|| format!("cannot write {}", path.display()))?;
+    Ok(Installed::Forced { path, why, diff })
 }
 
 /// Set by [`run_check`] for the check a hook runs: the only run in which a hook file
@@ -1154,25 +1262,33 @@ pub fn is_generated_hook_change(path: &str, base: Option<&str>, head: &str) -> b
 static TIMEOUT_VALUE: std::sync::LazyLock<regex::Regex> =
     std::sync::LazyLock::new(|| regex::Regex::new(r#""timeout(?:Sec)?": (\d+)"#).unwrap());
 
-/// What every file `hook install` generates says about itself. A file carrying it and
-/// differing from what this binary writes came from an earlier release (a pinned version,
-/// a changed template); a file without it was written or merged by a person.
+/// What every script, workflow and plugin `hook install` generates says about itself, with
+/// a digest of its content on the next line ([`crate::hookfile::stamp`]). A file carrying
+/// the header and differing from what this binary writes came from an earlier release (a
+/// pinned version, a changed template) when that digest matches; when it does not, or
+/// there is none, the file may have been edited. A file without the header was written or
+/// merged by a person.
 pub const GENERATED_HEADER: &str = "Written by `discipline hook install";
 
 /// For an existing generated file that has no mode (the Claude Code bootstrap, the Copilot
-/// setup-steps workflow): rewritten to `content` with `upgrade`, else reported as
+/// setup-steps workflow): rewritten to `content` with `how.upgrade`, else reported as
 /// outdated. `None` when it is not generated, or already current. A file that has a mode
-/// goes through [`refresh_in_mode`], which keeps it.
+/// goes through [`refresh_in_mode`], which keeps it. One whose digest line is missing or
+/// does not match is not provably a release's output ([`replace_unproven`]), unless it is
+/// `content` without the digest line.
 fn refresh_generated(
     path: &Path,
     existing: &str,
     content: &str,
-    upgrade: bool,
+    how: Refresh,
 ) -> Result<Option<Installed>> {
     if !existing.contains(GENERATED_HEADER) || existing == content {
         return Ok(None);
     }
-    if !upgrade {
+    if let Some(why) = unproven_text(existing, &[content]) {
+        return replace_unproven(path.to_path_buf(), existing, content, why, how, None).map(Some);
+    }
+    if !how.upgrade {
         return Ok(Some(Installed::Outdated(path.to_path_buf())));
     }
     std::fs::write(path, content).with_context(|| format!("cannot write {}", path.display()))?;
@@ -1182,20 +1298,27 @@ fn refresh_generated(
 /// For an existing generated file that has a mode: `was` is the mode read back from it
 /// (`None` when it cannot be read, which the caller allows only with `observe`), and
 /// `write` gives this release's content in a mode. The file keeps its mode; `observe` can
-/// only turn observe mode on. It is rewritten only with `upgrade`.
+/// only turn observe mode on. It is rewritten only with `how.upgrade`, and when `unproven`
+/// says why it is not provably a release's output, only as [`replace_unproven`] allows.
 fn refresh_in_mode(
     path: PathBuf,
     existing: &str,
     was: Option<bool>,
     observe: bool,
-    upgrade: bool,
+    how: Refresh,
+    unproven: Option<Unproven>,
     write: impl Fn(bool) -> Result<String>,
 ) -> Result<Installed> {
     let content = write(observe || was == Some(true))?;
     if existing == content {
         return Ok(Installed::AlreadyPresent(path));
     }
-    if !upgrade {
+    // This release's own file in the other mode differs too, and is never unproven: its
+    // digest matches, and a JSON file with a short timeout is not what `write` gives.
+    if let Some(why) = unproven {
+        return replace_unproven(path, existing, &content, why, how, None);
+    }
+    if !how.upgrade {
         // This release's own file in the other mode is not an earlier release's.
         return Ok(match was {
             Some(mode) if existing == write(mode)? => Installed::ModeDiffers(path),
@@ -1488,23 +1611,27 @@ pub fn install(agent: Agent, root: &Path, observe: bool) -> Result<Installed> {
     install_with(agent, root, observe, false, None)
 }
 
-/// `install`, rewriting a generated file an earlier release wrote when `upgrade`.
+/// `install`, rewriting a generated file an earlier release wrote when `how.upgrade`.
 /// `timeout` replaces [`default_timeout`] in the agents whose file carries one.
 ///
 /// A file some release generated keeps the mode it was written in (`observe` can only
 /// turn observe mode on): a JSON hook file ([`generated_json_hooks`]), which also keeps a
 /// check timeout longer than the default unless `timeout` is given, and the OpenCode
 /// plugin, by its generated header ([`opencode_plugin_mode`]). A plugin whose mode cannot
-/// be read is left as it is unless `observe` says which mode to write. Any other file that
-/// runs discipline is left as it is: `upgrade` refuses it, with the snippet to merge, when
-/// it lacks a hook command this release writes.
+/// be read is left as it is unless `observe` says which mode to write.
+///
+/// A file that is not provably a release's output is rewritten only with `how.force`
+/// ([`replace_unproven`]): a plugin whose digest line is missing or does not match, a
+/// generated JSON file whose check timeout is below the default, and a JSON file with
+/// content of its own, into which this release's entries are merged ([`refresh_merged`]).
 pub fn install_with(
     agent: Agent,
     root: &Path,
     observe: bool,
-    upgrade: bool,
+    how: impl Into<Refresh>,
     timeout: Option<u32>,
 ) -> Result<Installed> {
+    let how = how.into();
     let (rel, content) = config_for_opts(agent, observe, timeout);
     let path = root.join(rel);
     if path.exists() {
@@ -1515,36 +1642,24 @@ pub fn install_with(
             if was.is_none() && !observe {
                 return Ok(Installed::ModeUnreadable(path));
             }
-            return refresh_in_mode(path, &existing, was, observe, upgrade, |mode| {
+            let modes = [false, true].map(|mode| config_for_opts(agent, mode, timeout).1);
+            let unproven = unproven_text(&existing, &[&modes[0], &modes[1]]);
+            return refresh_in_mode(path, &existing, was, observe, how, unproven, |mode| {
                 Ok(config_for_opts(agent, mode, timeout).1)
             });
         }
-        if let Some(r) = refresh_generated(&path, &existing, &content, upgrade)? {
+        if let Some(r) = refresh_generated(&path, &existing, &content, how)? {
             return Ok(r);
         }
-        if let Some(was) = generated_json_hooks(agent, &existing) {
-            let timeout = timeout.or(was
-                .timeout
-                .filter(|t| default_timeout(agent).is_some_and(|d| *t > d)));
-            return refresh_in_mode(
-                path,
-                &existing,
-                Some(was.observe),
-                observe,
-                upgrade,
-                |mode| Ok(config_for_opts(agent, mode, timeout).1),
-            );
-        }
-        if !existing.contains(&format!("discipline hook run --agent {}", agent.id())) {
-            return Ok(Installed::Refused(path, content));
-        }
-        // Merged by hand: what to merge is written in the file's own mode.
-        let (_, content) =
-            config_for_opts(agent, observe || existing.contains(" --observe"), timeout);
-        if upgrade && lacks_a_generated_command(&existing, &content) {
-            return Ok(Installed::Refused(path, content));
-        }
-        return Ok(Installed::AlreadyPresent(path));
+        return refresh_json(
+            agent,
+            path,
+            &existing,
+            (observe, timeout),
+            how,
+            false,
+            |mode, t| Ok(config_for_opts(agent, mode, t).1),
+        );
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -1552,6 +1667,112 @@ pub fn install_with(
     }
     std::fs::write(&path, content).with_context(|| format!("cannot write {}", path.display()))?;
     Ok(Installed::Written(path))
+}
+
+/// For an existing hook file of `agent` without the generated header (the user-level one
+/// with `user`), `write` giving this release's content in a mode and with a check timeout;
+/// `observe` and `timeout` are what the command asked for.
+///
+/// A JSON file some release generated ([`generated_json_against`]) keeps its mode and a
+/// longer check timeout, and is rewritten with `how.upgrade`; with a check timeout below
+/// the default and no `timeout` given it is not provably generated. A file that does not
+/// run discipline is refused with the snippet to merge. Any other file runs discipline
+/// and has content of its own: [`refresh_merged`].
+fn refresh_json(
+    agent: Agent,
+    path: PathBuf,
+    existing: &str,
+    (observe, timeout): (bool, Option<u32>),
+    how: Refresh,
+    user: bool,
+    write: impl Fn(bool, Option<u32>) -> Result<String>,
+) -> Result<Installed> {
+    let was = if user {
+        generated_user_json_hooks(agent, existing)
+    } else {
+        generated_json_hooks(agent, existing)
+    };
+    if let Some(was) = was {
+        let default = default_timeout(agent);
+        let short =
+            timeout.is_none() && was.timeout.is_some_and(|t| default.is_some_and(|d| t < d));
+        let timeout = timeout.or(was.timeout.filter(|t| default.is_some_and(|d| *t > d)));
+        return refresh_in_mode(
+            path,
+            existing,
+            Some(was.observe),
+            observe,
+            how,
+            short.then_some(Unproven::ShortTimeout),
+            |mode| write(mode, timeout),
+        );
+    }
+    if !existing.contains(&format!("discipline hook run --agent {}", agent.id())) {
+        return Ok(Installed::Refused(path, write(observe, timeout)?));
+    }
+    // Merged by hand: what to merge is written in the file's own mode.
+    let content = write(observe || existing.contains(" --observe"), timeout)?;
+    refresh_merged(agent, path, existing, &content, how, user)
+}
+
+/// Whether `cmd`, a hook command in a JSON hook file of `agent`, is discipline's: one a
+/// release writes ([`json_command`]), or any command that runs `hook run` for that agent
+/// or the Claude Code bootstrap (an entry of ours that was edited).
+fn is_our_command(agent: Agent, cmd: &str, user: bool) -> bool {
+    json_command(agent, cmd, user).is_some()
+        || cmd.contains(&format!("discipline hook run --agent {}", agent.id()))
+        || (agent == Agent::ClaudeCode && cmd.contains(CLAUDE_BOOTSTRAP))
+}
+
+/// For an existing hook file that runs discipline and has content of its own, `content`
+/// being this release's file in that file's mode. Without `how.upgrade` it is left as it
+/// is. With it, this release's entries are merged in ([`crate::hookfile::merge_json`]):
+/// when that changes nothing the file is current; otherwise its discipline entries were
+/// written by an earlier release or edited, which cannot be told apart, and it is
+/// rewritten only with `how.force` ([`replace_unproven`]). Everything that is not
+/// discipline's is kept either way. A file nothing can be merged into by rule (not strict
+/// JSON, Aider's YAML) is refused with the snippet when it lacks a hook command this
+/// release writes, and otherwise left as it is.
+fn refresh_merged(
+    agent: Agent,
+    path: PathBuf,
+    existing: &str,
+    content: &str,
+    how: Refresh,
+    user: bool,
+) -> Result<Installed> {
+    if !how.upgrade {
+        return Ok(Installed::AlreadyPresent(path));
+    }
+    let lacks = lacks_a_generated_command(existing, content);
+    let ours = |cmd: &str| is_our_command(agent, cmd, user);
+    let Some(merged) = crate::hookfile::merge_json(existing, content, &ours) else {
+        return Ok(if lacks {
+            Installed::Refused(path, content.to_string())
+        } else {
+            Installed::AlreadyPresent(path)
+        });
+    };
+    if serde_json::from_str::<serde_json::Value>(existing).is_ok_and(|e| e == merged) {
+        return Ok(Installed::AlreadyPresent(path));
+    }
+    // Both sides are printed the way this release writes JSON, so that the difference
+    // shown is in what the file says and not in how it was indented.
+    let pretty = |v: &serde_json::Value| -> Result<String> {
+        Ok(serde_json::to_string_pretty(v)
+            .with_context(|| format!("cannot write {}", path.display()))?
+            + "\n")
+    };
+    let was = pretty(&serde_json::from_str(existing).unwrap_or_default())?;
+    let text = pretty(&merged)?;
+    replace_unproven(
+        path.clone(),
+        &was,
+        &text,
+        Unproven::OwnContent,
+        how,
+        lacks.then(|| content.to_string()),
+    )
 }
 
 /// Whether the JSON hook file `existing` lacks a hook command of the JSON file `content`
@@ -1814,44 +2035,31 @@ fn copilot_repo_hook_runs(dir: &Path) -> bool {
         && copilot_home().and_then(|h| copilot_trusts(&h, dir)) == Some(true)
 }
 
-/// Write the user-level hook file ([`user_config_for`]). An existing file some release
-/// generated ([`generated_user_json_hooks`]) that differs from this release's is
-/// rewritten only with `upgrade`, keeping its mode and a longer check timeout as
-/// [`install_with`] does; any other existing file is never rewritten, and `upgrade`
-/// refuses one that runs discipline but lacks a hook command this release writes.
+/// Write the user-level hook file ([`user_config_for`]). An existing file is treated as
+/// [`install_with`] treats a repository's JSON hook file ([`refresh_json`]): one some
+/// release generated ([`generated_user_json_hooks`]) is rewritten with `how.upgrade`,
+/// keeping its mode and a longer check timeout; one that does not run discipline is never
+/// rewritten; one with content of its own gets this release's entries merged in, only
+/// with `how.force` when its discipline entries differ.
 pub fn install_user(
     agent: Agent,
     observe: bool,
-    upgrade: bool,
+    how: impl Into<Refresh>,
     timeout: Option<u32>,
 ) -> Result<Installed> {
     let (path, content) = user_config_for(agent, observe, timeout)?;
     if path.exists() {
         let existing = std::fs::read_to_string(&path)
             .with_context(|| format!("cannot read {}", path.display()))?;
-        if let Some(was) = generated_user_json_hooks(agent, &existing) {
-            let timeout = timeout.or(was
-                .timeout
-                .filter(|t| default_timeout(agent).is_some_and(|d| *t > d)));
-            return refresh_in_mode(
-                path,
-                &existing,
-                Some(was.observe),
-                observe,
-                upgrade,
-                |mode| Ok(user_config_for(agent, mode, timeout)?.1),
-            );
-        }
-        if !existing.contains(&format!("discipline hook run --agent {}", agent.id())) {
-            return Ok(Installed::Refused(path, content));
-        }
-        // Merged by hand: what to merge is written in the file's own mode.
-        let (_, content) =
-            user_config_for(agent, observe || existing.contains(" --observe"), timeout)?;
-        if upgrade && lacks_a_generated_command(&existing, &content) {
-            return Ok(Installed::Refused(path, content));
-        }
-        return Ok(Installed::AlreadyPresent(path));
+        return refresh_json(
+            agent,
+            path,
+            &existing,
+            (observe, timeout),
+            how.into(),
+            true,
+            |mode, t| Ok(user_config_for(agent, mode, t)?.1),
+        );
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -1953,7 +2161,7 @@ want="$(awk -v f="${asset}" '$2 == f || $2 == "*" f { print $1 }' "${dir}/SHA256
             .to_string(),
         ),
     };
-    format!(
+    let script = format!(
         r#"#!/bin/bash
 # Written by `discipline hook install --agent claude-code`.
 # A Claude Code cloud session starts on a fresh VM without discipline. This installs
@@ -2002,7 +2210,13 @@ fi
 exit 0
 "#,
         version = env!("CARGO_PKG_VERSION")
-    )
+    );
+    let sums = if pin.is_some() {
+        "sums=pinned"
+    } else {
+        "sums=release"
+    };
+    crate::hookfile::stamp(&script, GENERATED_HEADER, &[sums])
 }
 
 /// Write [`CLAUDE_BOOTSTRAP`] under `root` unless a file is there.
@@ -2011,13 +2225,16 @@ pub fn install_claude_bootstrap(root: &Path) -> Result<Installed> {
     install_claude_bootstrap_with(root, false, None)
 }
 
-/// `install_claude_bootstrap`, rewriting one an earlier release wrote when `upgrade`.
-/// With `pin`, the script checks the download against those digests ([`claude_bootstrap_script_with`]).
+/// `install_claude_bootstrap`, rewriting one an earlier release wrote when `how.upgrade`
+/// ([`refresh_generated`]). With `pin`, the script checks the download against those
+/// digests ([`claude_bootstrap_script_with`]). Without it a pinned script is kept,
+/// `how.force` included: an unpinned one would trust the release's own `SHA256SUMS`.
 pub fn install_claude_bootstrap_with(
     root: &Path,
-    upgrade: bool,
+    how: impl Into<Refresh>,
     pin: Option<&ReleaseDigests>,
 ) -> Result<Installed> {
+    let how = how.into();
     let path = root.join(CLAUDE_BOOTSTRAP);
     let script = claude_bootstrap_script_with(pin);
     if path.exists() {
@@ -2032,7 +2249,7 @@ pub fn install_claude_bootstrap_with(
                 Installed::PinKept(path)
             });
         }
-        if let Some(r) = refresh_generated(&path, &existing, &script, upgrade)? {
+        if let Some(r) = refresh_generated(&path, &existing, &script, how)? {
             return Ok(r);
         }
         if existing.contains("orieg/discipline/releases") {
@@ -2092,10 +2309,11 @@ fn setup_step_for(sha: Option<&str>) -> String {
 
 /// The whole setup-steps workflow ([`COPILOT_SETUP_STEPS`]).
 pub fn copilot_setup_steps() -> String {
-    format!(
+    let workflow = format!(
         "# Written by `discipline hook install --agent copilot --cloud-agent`.\n# Copilot cloud agent runs this job before it starts working: it reads the\n# repository's .github/hooks/ too, and a hook whose command is missing is skipped.\nname: \"Copilot Setup Steps\"\n\non:\n  workflow_dispatch:\n  push:\n    paths:\n      - .github/workflows/copilot-setup-steps.yml\n  pull_request:\n    paths:\n      - .github/workflows/copilot-setup-steps.yml\n\npermissions:\n  contents: read\n\njobs:\n  # The job must be called `copilot-setup-steps`, or Copilot does not run it.\n  copilot-setup-steps:\n    runs-on: ubuntu-latest\n    timeout-minutes: 10\n    permissions:\n      contents: read\n    steps:\n{}",
         copilot_setup_step()
-    )
+    );
+    crate::hookfile::stamp(&workflow, GENERATED_HEADER, &[])
 }
 
 /// Write [`COPILOT_SETUP_STEPS`] under `root`. A workflow that already installs
@@ -2105,13 +2323,15 @@ pub fn install_cloud_agent(root: &Path) -> Result<Installed> {
     install_cloud_agent_with(root, false)
 }
 
-/// `install_cloud_agent`, rewriting one an earlier release wrote when `upgrade`.
-pub fn install_cloud_agent_with(root: &Path, upgrade: bool) -> Result<Installed> {
+/// `install_cloud_agent`, rewriting one an earlier release wrote when `how.upgrade`
+/// ([`refresh_generated`]).
+pub fn install_cloud_agent_with(root: &Path, how: impl Into<Refresh>) -> Result<Installed> {
+    let how = how.into();
     let path = root.join(COPILOT_SETUP_STEPS);
     if path.exists() {
         let existing = std::fs::read_to_string(&path)
             .with_context(|| format!("cannot read {}", path.display()))?;
-        if let Some(r) = refresh_generated(&path, &existing, &copilot_setup_steps(), upgrade)? {
+        if let Some(r) = refresh_generated(&path, &existing, &copilot_setup_steps(), how)? {
             return Ok(r);
         }
         if existing.contains("orieg/discipline") {
@@ -2236,21 +2456,25 @@ pub fn run_cli(args: crate::cli::HookArgs) -> Result<bool> {
                     a.agent.id()
                 );
             }
+            let how = crate::hook::Refresh {
+                upgrade: a.upgrade,
+                force: a.force,
+            };
             let mut results = vec![if a.user {
-                crate::hook::install_user(a.agent, a.observe, a.upgrade, a.timeout)?
+                crate::hook::install_user(a.agent, a.observe, how, a.timeout)?
             } else {
                 crate::hook::install_with(
                     a.agent,
                     &crate::hook::repo_root()?,
                     a.observe,
-                    a.upgrade,
+                    how,
                     a.timeout,
                 )?
             }];
             if a.agent == crate::hook::Agent::ClaudeCode && !a.user {
                 results.push(crate::hook::install_claude_bootstrap_with(
                     &crate::hook::repo_root()?,
-                    a.upgrade,
+                    how,
                     pin.as_ref(),
                 )?);
             }
@@ -2266,9 +2490,7 @@ pub fn run_cli(args: crate::cli::HookArgs) -> Result<bool> {
                         hosts.join(", "),
                         crate::hook::COPILOT_SETUP_STEPS
                     )),
-                    None => results.push(crate::hook::install_cloud_agent_with(
-                        &root, a.upgrade,
-                    )?),
+                    None => results.push(crate::hook::install_cloud_agent_with(&root, how)?),
                 }
             }
             let untrusted = (a.agent == crate::hook::Agent::Copilot && !a.user)
@@ -2285,7 +2507,8 @@ pub fn run_cli(args: crate::cli::HookArgs) -> Result<bool> {
                     | Installed::AlreadyPresent(p)
                     | Installed::Upgraded(p)
                     | Installed::Outdated(p)
-                    | Installed::ModeDiffers(p),
+                    | Installed::ModeDiffers(p)
+                    | Installed::Forced { path: p, .. },
                 ) => Some(p.clone()),
                 _ => None,
             };
@@ -2345,7 +2568,7 @@ pub fn run_cli(args: crate::cli::HookArgs) -> Result<bool> {
                     }
                     Installed::ModeUnreadable(p) => {
                         println!(
-                            "{} was written by `discipline hook install` but its mode cannot be read (its observe-mode marker line and the `--observe` flag of its commands disagree); it was not changed. Run this command again with `--upgrade --observe` to rewrite it in observe mode, or delete the file and run `discipline hook install --agent {}` to write an enforcing one",
+                            "{} was written by `discipline hook install` but its mode cannot be read (its observe-mode marker line and the `--observe` flag of its commands disagree); it was not changed. Run this command again with `--upgrade --observe` to rewrite it in observe mode (it then prints the difference, and needs `--force` when the file was changed after it was written), or delete the file and run `discipline hook install --agent {}` to write an enforcing one",
                             p.display(),
                             a.agent.id()
                         );
@@ -2373,6 +2596,60 @@ pub fn run_cli(args: crate::cli::HookArgs) -> Result<bool> {
                         );
                         ok = false;
                     }
+                    Installed::Differs(p, why) => {
+                        println!(
+                            "{} {} {}; it differs from what discipline {} writes and was not changed. Run this command again with `--upgrade` to see the difference; `--upgrade --force` overwrites the file",
+                            style::yellow("note:"),
+                            p.display(),
+                            unproven_reason(why),
+                            env!("CARGO_PKG_VERSION")
+                        );
+                    }
+                    Installed::LocalEdits {
+                        path,
+                        why,
+                        diff,
+                        snippet,
+                    } => {
+                        let merges = why == crate::hook::Unproven::OwnContent;
+                        if let Some(snippet) = snippet {
+                            println!(
+                                "{} exists and was not changed. Merge this into it:\n\n{snippet}",
+                                path.display()
+                            );
+                        }
+                        println!(
+                            "{} {} {}; it was not changed. {}, discarding the lines marked `-` below. Run this command again with `--upgrade --force` to do that{}:\n\n{diff}",
+                            style::red("refused:"),
+                            path.display(),
+                            unproven_reason(why),
+                            if merges {
+                                "`--force` replaces the discipline entries in it with this release's, keeps everything else and re-indents the file"
+                            } else {
+                                "`--force` overwrites it with what this release writes"
+                            },
+                            if why == crate::hook::Unproven::ShortTimeout {
+                                ", or with `--upgrade --timeout <seconds>` to keep a timeout"
+                            } else {
+                                ""
+                            }
+                        );
+                        ok = false;
+                    }
+                    Installed::Forced { path, why, diff } => {
+                        println!(
+                            "{} {} {} with what discipline {} writes{}. The lines marked `-` below were discarded:\n\n{diff}",
+                            style::green("ok:"),
+                            if why == crate::hook::Unproven::OwnContent {
+                                "replaced the discipline entries in"
+                            } else {
+                                "overwrote"
+                            },
+                            path.display(),
+                            env!("CARGO_PKG_VERSION"),
+                            mode_of(&path)
+                        );
+                    }
                 }
             }
             if let Some(note) = cloud_note {
@@ -2383,6 +2660,18 @@ pub fn run_cli(args: crate::cli::HookArgs) -> Result<bool> {
             }
             Ok(ok)
         }
+    }
+}
+
+/// Why `hook install` cannot tell an existing file from an edited one, as the clause after
+/// the file's name.
+fn unproven_reason(why: Unproven) -> &'static str {
+    use Unproven;
+    match why {
+        Unproven::NoDigest => "has the `hook install` header but carries no digest of its content (an earlier discipline release wrote none), so what that release wrote cannot be told from a later edit",
+        Unproven::Edited => "was changed after `hook install` wrote it (the digest on its `discipline-hook-file:` line does not match its content)",
+        Unproven::OwnContent => "has hooks or settings of its own, and its discipline entries differ from this release's (entries an earlier release wrote cannot be told from edited ones there)",
+        Unproven::ShortTimeout => "has a check timeout below the default, which `hook install` writes only when `--timeout` says so",
     }
 }
 
@@ -3462,10 +3751,24 @@ mod tests {
             let plain = install_with(agent, dir.path(), false, false, None).unwrap();
             assert_eq!(plain, Installed::AlreadyPresent(path.clone()));
             let up = install_with(agent, dir.path(), false, true, None).unwrap();
-            let Installed::Refused(p, snippet) = up else {
+            // Its discipline entries differ from this release's: left as it is, with the
+            // difference and, since an entry is missing, the snippet to merge.
+            let Installed::LocalEdits {
+                path: p,
+                why,
+                diff,
+                snippet: Some(snippet),
+            } = up
+            else {
                 panic!("{agent:?}: {up:?}");
             };
             assert_eq!(p, path);
+            assert_eq!(why, Unproven::OwnContent);
+            assert!(
+                diff.lines()
+                    .any(|l| l.starts_with('+') && l.contains("--event pre-tool")),
+                "{diff}"
+            );
             assert!(snippet.contains("--event pre-tool"), "{snippet}");
             // The snippet is in the file's own mode.
             assert_eq!(

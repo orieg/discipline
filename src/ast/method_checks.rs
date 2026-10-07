@@ -25,6 +25,7 @@
 //! because which one the receiver runs is not known here: when one of them asserts
 //! nothing, the call is credited with nothing.
 
+use super::ancestry::Ancestry;
 use super::{helper_leaf, ParsedFileFacts};
 use tree_sitter::Node;
 
@@ -109,9 +110,14 @@ fn receiver_method<'a>(node: Node, src: &'a str, spec: &ReceiverCalls) -> Option
 
 /// The method a member access with no argument list calls (`ReceiverCalls::bare`), when
 /// it is one on a receiver other than the object itself and not the callee of a call.
-fn bare_method<'a>(node: Node, src: &'a str, spec: &ReceiverCalls) -> Option<&'a str> {
+fn bare_method<'a, 't>(
+    node: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &'a str,
+    spec: &ReceiverCalls,
+) -> Option<&'a str> {
     let (_, name_field) = spec.bare.iter().find(|(kind, _)| node.kind() == *kind)?;
-    let is_callee = node.parent().is_some_and(|p| {
+    let is_callee = anc.parent(node).is_some_and(|p| {
         spec.member.iter().any(|(call, callee_field, _, _)| {
             p.kind() == *call
                 && if callee_field.is_empty() {
@@ -161,19 +167,26 @@ fn token_methods<'a>(node: Node, src: &'a str, spec: &ReceiverCalls) -> Vec<(&'a
 /// and records those calls on the test (`HelperReach::receiver_calls`) for
 /// `assertion-reduction`, which resolves them against the helpers of the change.
 /// Run after the pack has resolved the calls it follows itself, which are skipped here.
-pub fn count(root: Node, src: &str, facts: &mut ParsedFileFacts, spec: &ReceiverCalls) {
+pub fn count<'t>(
+    root: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    facts: &mut ParsedFileFacts,
+    spec: &ReceiverCalls,
+) {
     if facts.tests.is_empty() {
         return;
     }
     let mut credits: Vec<(usize, usize)> = Vec::new();
     let mut sites: Vec<(usize, &str)> = Vec::new();
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
+    let mut stack = vec![(root, 0usize, root.id())];
+    while let Some((node, depth, above)) = stack.pop() {
+        anc.stand_at(depth, above, node);
         let mut called: Vec<(&str, usize)> = token_methods(node, src, spec);
         let line = node.start_position().row + 1;
         if let Some(method) = receiver_method(node, src, spec) {
             called.push((method, line));
-        } else if let Some(method) = bare_method(node, src, spec) {
+        } else if let Some(method) = bare_method(node, anc, src, spec) {
             if facts.least_helper_named(method).is_some() {
                 called.push((method, line));
             }
@@ -200,7 +213,10 @@ pub fn count(root: Node, src: &str, facts: &mut ParsedFileFacts, spec: &Receiver
             }
         }
         let mut cursor = node.walk();
-        stack.extend(node.children(&mut cursor));
+        stack.extend(
+            node.children(&mut cursor)
+                .map(|child| (child, depth + 1, node.id())),
+        );
     }
     for (at, checks) in credits {
         facts.tests[at].method_checks += checks;

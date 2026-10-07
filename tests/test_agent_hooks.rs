@@ -1193,9 +1193,19 @@ fn install_upgrade_rewrites_only_files_an_earlier_release_generated() {
     let current_boot = read(&fresh, boot);
     let v = env!("CARGO_PKG_VERSION");
 
-    // An earlier release's files: another version pinned, the header kept.
-    let old_setup = current_setup.replace(&format!("v{v}"), "v0.0.1");
-    let old_boot = current_boot.replace(&format!("v{v}"), "v0.0.1");
+    // An earlier release's files: another version pinned, the header kept, and the digest
+    // that release would have written for that content.
+    let restamped = |text: &str| {
+        discipline::hookfile::stamp(
+            &discipline::hookfile::unstamped(text),
+            discipline::hook::GENERATED_HEADER,
+            &[],
+        )
+    };
+    let altered_setup = current_setup.replace(&format!("v{v}"), "v0.0.1");
+    let altered_boot = current_boot.replace(&format!("v{v}"), "v0.0.1");
+    let old_setup = restamped(&altered_setup);
+    let old_boot = restamped(&altered_boot);
     assert_ne!(old_setup, current_setup);
     let repo = Repo::new();
     repo.write(setup, &old_setup);
@@ -1236,6 +1246,41 @@ fn install_upgrade_rewrites_only_files_an_earlier_release_generated() {
     }
     assert_eq!(read(&repo, setup), current_setup);
     assert_eq!(read(&repo, boot), current_boot);
+
+    // The same alteration under the digest of the unaltered file is an edit: refused with
+    // the difference, and both files are left as they were.
+    repo.write(setup, &altered_setup);
+    repo.write(boot, &altered_boot);
+    for (args, file, altered) in [
+        (
+            &[
+                "hook",
+                "install",
+                "--agent",
+                "copilot",
+                "--cloud-agent",
+                "--upgrade",
+            ][..],
+            setup,
+            &altered_setup,
+        ),
+        (
+            &["hook", "install", "--agent", "claude-code", "--upgrade"][..],
+            boot,
+            &altered_boot,
+        ),
+    ] {
+        let refused = repo.run(args, &[]);
+        assert_eq!(refused.code, 1, "{}", refused.stdout);
+        assert!(
+            refused.stdout.contains("@@ ")
+                && refused.stdout.contains("v0.0.1")
+                && refused.stdout.contains("--force"),
+            "{}",
+            refused.stdout
+        );
+        assert_eq!(&read(&repo, file), altered);
+    }
 
     // Control: a bootstrap a person wrote (no generated header) is never rewritten.
     let own = Repo::new();

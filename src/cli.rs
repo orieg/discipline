@@ -329,13 +329,22 @@ pub struct HookInstallArgs {
     pub cloud_agent: bool,
     /// Rewrite a file an earlier discipline release generated to this release: one with the
     /// `Written by \`discipline hook install\`` header (the Claude Code bootstrap, the Copilot
-    /// setup step, the OpenCode plugin), or a JSON hook file holding only the entries a
-    /// release writes. A hook file keeps its mode (observe or enforcing; --observe can only
-    /// turn observe mode on) and a JSON file its longer check timeout. A file with
-    /// hooks or settings of its own is never rewritten; one missing an entry is refused
-    /// with the snippet to merge. With --user, the same for the user-level file
+    /// setup step, the OpenCode plugin) whose digest line matches its content, or a JSON hook
+    /// file holding only the entries a release writes. A hook file keeps its mode (observe or
+    /// enforcing; --observe can only turn observe mode on) and a JSON file its longer check
+    /// timeout. Any other file is left as it is, with the difference printed and exit 1: one
+    /// edited after it was written, one an earlier release wrote without a digest, and a JSON
+    /// file with hooks or settings of its own whose discipline entries differ (see --force).
+    /// With --user, the same for the user-level file
     #[arg(long)]
     pub upgrade: bool,
+
+    /// With --upgrade, also rewrite a file that cannot be told from an edited one, and print
+    /// what was discarded. In a JSON hook file with hooks or settings of its own, only the
+    /// discipline entries are replaced. A bootstrap pinned with --pin-sums is still never
+    /// replaced by an unpinned one
+    #[arg(long, requires = "upgrade")]
+    pub force: bool,
 
     /// Seconds the agent gives each check before killing it (agy, qwen, copilot; default: agy 300, the others 120). Raise it on a machine where a check can run long
     #[arg(long, value_name = "SECONDS", value_parser = clap::value_parser!(u32).range(1..=86400))]

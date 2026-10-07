@@ -16,6 +16,7 @@
 //!   ([`python`]), `process.exit(0)` ([`js_exit_zero`]), `std::process::exit(0)`
 //!   ([`rust_exit_zero`]).
 
+use super::ancestry::Ancestry;
 use tree_sitter::Node;
 
 /// The version of the forms read here. It is written into the gate's notes, and
@@ -152,10 +153,15 @@ fn holds_leave(node: Node, spec: &ExitSpec) -> bool {
 ///   `spec.always_run`;
 /// - a statement before it, in its block or a block around it, is a guard clause: one
 ///   of `spec.guards` holding one of `spec.leaves`.
-fn exit_is_conditional(call: Node, src: &[u8], spec: &ExitSpec) -> bool {
+fn exit_is_conditional<'t>(
+    call: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &[u8],
+    spec: &ExitSpec,
+) -> bool {
     let mut node = call;
-    while let Some(parent) = node.parent() {
-        let mut earlier = node.prev_named_sibling();
+    while let Some(parent) = anc.parent(node) {
+        let mut earlier = anc.prev_named_sibling(node);
         while let Some(statement) = earlier {
             let inner = if statement.kind() == "expression_statement" {
                 statement.named_child(0).unwrap_or(statement)
@@ -168,7 +174,7 @@ fn exit_is_conditional(call: Node, src: &[u8], spec: &ExitSpec) -> bool {
             if is_guard && holds_leave(statement, spec) {
                 return true;
             }
-            earlier = statement.prev_named_sibling();
+            earlier = anc.prev_named_sibling(statement);
         }
         let kind = parent.kind();
         if spec.conditional.contains(&kind) {
@@ -190,10 +196,10 @@ fn exit_is_conditional(call: Node, src: &[u8], spec: &ExitSpec) -> bool {
             return true;
         }
         if spec.callbacks.contains(&kind) {
-            let passed_to = parent
-                .parent()
+            let passed_to = anc
+                .parent(parent)
                 .filter(|list| list.kind() == spec.arguments)
-                .and_then(|list| list.parent());
+                .and_then(|list| anc.parent(list));
             if let Some(callee_call) = passed_to {
                 let callee = callee_call
                     .child_by_field_name("function")
@@ -210,21 +216,30 @@ fn exit_is_conditional(call: Node, src: &[u8], spec: &ExitSpec) -> bool {
 }
 
 /// The name of the nearest named function around `node`; `<module>` when there is none.
-fn enclosing_function(node: Node, src: &[u8], spec: &ExitSpec) -> String {
-    let mut up = node.parent();
-    while let Some(parent) = up {
+fn enclosing_function<'t>(
+    node: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &[u8],
+    spec: &ExitSpec,
+) -> String {
+    for parent in anc.ancestors(node) {
         if spec.functions.contains(&parent.kind()) {
             if let Some(name) = parent.child_by_field_name("name") {
                 return text(name, src).to_string();
             }
         }
-        up = parent.parent();
     }
     "<module>".to_string()
 }
 
-fn exit_site(call: Node, src: &[u8], spec: &ExitSpec, spelled: &str) -> Site {
-    let subject = enclosing_function(call, src, spec);
+fn exit_site<'t>(
+    call: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &[u8],
+    spec: &ExitSpec,
+    spelled: &str,
+) -> Site {
+    let subject = enclosing_function(call, anc, src, spec);
     let place = if subject == "<module>" {
         "at the top level".to_string()
     } else {
@@ -279,6 +294,7 @@ pub fn go_test_file(src: &str) -> Result<GoTestFile, String> {
         .map_err(|e| format!("failed to load the Go grammar: {e}"))?;
     let tree = super::source_text::parse(&mut parser, src).map_err(|why| why.to_string())?;
     let root = tree.root_node();
+    let anc = Ancestry::new(root);
     let bytes = src.as_bytes();
     let mut file = GoTestFile {
         scan: Scan {
@@ -299,7 +315,7 @@ pub fn go_test_file(src: &str) -> Result<GoTestFile, String> {
         if name == "TestMain" {
             if let Some(m) = go_test_main_parameter(item, bytes) {
                 file.has_test_main = true;
-                go_test_main(item, m, bytes, &mut file.scan);
+                go_test_main(item, &anc, m, bytes, &mut file.scan);
                 continue;
             }
         }
@@ -350,10 +366,10 @@ enum GoResult<'a> {
     Used,
 }
 
-fn go_result_of<'a>(call: Node, src: &'a [u8]) -> GoResult<'a> {
-    let mut parent = call.parent();
+fn go_result_of<'a, 't>(call: Node<'t>, anc: &Ancestry<'t>, src: &'a [u8]) -> GoResult<'a> {
+    let mut parent = anc.parent(call);
     while let Some(p) = parent.filter(|p| p.kind() == "parenthesized_expression") {
-        parent = p.parent();
+        parent = anc.parent(p);
     }
     let Some(parent) = parent else {
         return GoResult::Used;
@@ -361,7 +377,7 @@ fn go_result_of<'a>(call: Node, src: &'a [u8]) -> GoResult<'a> {
     match parent.kind() {
         "expression_statement" | "defer_statement" | "go_statement" => GoResult::Dropped,
         "expression_list" => {
-            let Some(statement) = parent.parent() else {
+            let Some(statement) = anc.parent(parent) else {
                 return GoResult::Used;
             };
             let alone = operands(parent).len() == 1;
@@ -400,11 +416,11 @@ fn go_result_of<'a>(call: Node, src: &'a [u8]) -> GoResult<'a> {
 
 /// Whether the identifier `node` is only written, or only handed to the blank
 /// identifier: the left side of an assignment, or the right side of `_ = name`.
-fn go_not_a_read(node: Node, src: &[u8]) -> bool {
-    let Some(list) = node.parent().filter(|p| p.kind() == "expression_list") else {
+fn go_not_a_read<'t>(node: Node<'t>, anc: &Ancestry<'t>, src: &[u8]) -> bool {
+    let Some(list) = anc.parent(node).filter(|p| p.kind() == "expression_list") else {
         return false;
     };
-    let Some(statement) = list.parent() else {
+    let Some(statement) = anc.parent(list) else {
         return false;
     };
     if !matches!(
@@ -428,9 +444,9 @@ fn go_not_a_read(node: Node, src: &[u8]) -> bool {
 
 /// Whether `call`, inside `body`, runs only on a condition: inside a branch, a loop or
 /// a function literal that is not the body of a `defer`.
-fn go_is_conditional(call: Node, body: Node) -> bool {
+fn go_is_conditional<'t>(call: Node<'t>, body: Node<'t>, anc: &Ancestry<'t>) -> bool {
     let mut node = call;
-    while let Some(parent) = node.parent() {
+    while let Some(parent) = anc.parent(node) {
         if parent.id() == body.id() {
             return false;
         }
@@ -441,10 +457,10 @@ fn go_is_conditional(call: Node, body: Node) -> bool {
             | "select_statement"
             | "for_statement" => return true,
             "func_literal" => {
-                let deferred = parent
-                    .parent()
+                let deferred = anc
+                    .parent(parent)
                     .filter(|c| c.kind() == "call_expression")
-                    .and_then(|c| c.parent())
+                    .and_then(|c| anc.parent(c))
                     .is_some_and(|d| d.kind() == "defer_statement");
                 if !deferred {
                     return true;
@@ -457,7 +473,7 @@ fn go_is_conditional(call: Node, body: Node) -> bool {
     false
 }
 
-fn go_test_main(func: Node, m: &str, src: &[u8], scan: &mut Scan) {
+fn go_test_main<'t>(func: Node<'t>, anc: &Ancestry<'t>, m: &str, src: &[u8], scan: &mut Scan) {
     let Some(body) = func.child_by_field_name("body") else {
         return;
     };
@@ -501,13 +517,16 @@ fn go_test_main(func: Node, m: &str, src: &[u8], scan: &mut Scan) {
         }
         return;
     }
-    let results: Vec<GoResult> = runs.iter().map(|run| go_result_of(*run, src)).collect();
+    let results: Vec<GoResult> = runs
+        .iter()
+        .map(|run| go_result_of(*run, anc, src))
+        .collect();
     let read_after = |name: &str, from: usize| {
         nodes.iter().any(|n| {
             n.kind() == "identifier"
                 && n.start_byte() >= from
                 && text(*n, src) == name
-                && !go_not_a_read(*n, src)
+                && !go_not_a_read(*n, anc, src)
         })
     };
     let reaches_something = results.iter().any(|r| match r {
@@ -523,11 +542,11 @@ fn go_test_main(func: Node, m: &str, src: &[u8], scan: &mut Scan) {
         if !selector_call(n, "os", "Exit") {
             return false;
         }
-        let mut up = n.parent();
+        let mut up = anc.parent(*n);
         let mut deferred = false;
         while let Some(p) = up.filter(|p| p.id() != body.id()) {
             deferred |= p.kind() == "defer_statement";
-            up = p.parent();
+            up = anc.parent(p);
         }
         let zero = n
             .child_by_field_name("arguments")
@@ -536,7 +555,7 @@ fn go_test_main(func: Node, m: &str, src: &[u8], scan: &mut Scan) {
                 a.len() == 1 && a[0].kind() == "int_literal" && text(a[0], src) == "0"
             });
         (deferred || n.start_byte() > first_run.start_byte())
-            && (zero || !go_is_conditional(*n, body))
+            && (zero || !go_is_conditional(*n, body, anc))
     });
     // Without an `os.Exit`, a `TestMain` that returns leaves the status to the test
     // binary, which exits with what `m.Run()` returned (Go 1.15 and later).
@@ -864,6 +883,7 @@ pub fn python(src: &str, checks: PythonChecks) -> Result<Scan, String> {
         .map_err(|e| format!("failed to load the Python grammar: {e}"))?;
     let tree = super::source_text::parse(&mut parser, src).map_err(|why| why.to_string())?;
     let root = tree.root_node();
+    let anc = Ancestry::new(root);
     let bytes = src.as_bytes();
     let mut scan = Scan {
         parse_errors: root.has_error(),
@@ -943,9 +963,9 @@ pub fn python(src: &str, checks: PythonChecks) -> Result<Scan, String> {
                 ("os", "_exit") if zero => "os._exit(0)",
                 _ => continue,
             };
-            if !exit_is_conditional(*call, bytes, &PYTHON_EXIT) {
+            if !exit_is_conditional(*call, &anc, bytes, &PYTHON_EXIT) {
                 scan.sites
-                    .push(exit_site(*call, bytes, &PYTHON_EXIT, spelled));
+                    .push(exit_site(*call, &anc, bytes, &PYTHON_EXIT, spelled));
             }
         }
     }
@@ -1004,6 +1024,7 @@ pub fn js_exit_zero(path: &str, src: &str) -> Result<Scan, String> {
         .map_err(|e| format!("failed to load the JS/TS grammar: {e}"))?;
     let tree = super::source_text::parse(&mut parser, src).map_err(|why| why.to_string())?;
     let root = tree.root_node();
+    let anc = Ancestry::new(root);
     let bytes = src.as_bytes();
     let mut scan = Scan {
         parse_errors: root.has_error(),
@@ -1032,9 +1053,9 @@ pub fn js_exit_zero(path: &str, src: &str) -> Result<Scan, String> {
         let zero = arguments.len() == 1
             && arguments[0].kind() == "number"
             && text(arguments[0], bytes) == "0";
-        if on_process && is_exit && zero && !exit_is_conditional(*call, bytes, &JS_EXIT) {
+        if on_process && is_exit && zero && !exit_is_conditional(*call, &anc, bytes, &JS_EXIT) {
             scan.sites
-                .push(exit_site(*call, bytes, &JS_EXIT, "process.exit(0)"));
+                .push(exit_site(*call, &anc, bytes, &JS_EXIT, "process.exit(0)"));
         }
     }
     Ok(scan)
@@ -1077,6 +1098,7 @@ pub fn rust_exit_zero(src: &str) -> Result<Scan, String> {
         .map_err(|e| format!("failed to load the Rust grammar: {e}"))?;
     let tree = super::source_text::parse(&mut parser, src).map_err(|why| why.to_string())?;
     let root = tree.root_node();
+    let anc = Ancestry::new(root);
     let bytes = src.as_bytes();
     let mut scan = Scan {
         parse_errors: root.has_error(),
@@ -1102,9 +1124,14 @@ pub fn rust_exit_zero(src: &str) -> Result<Scan, String> {
             callee.as_str(),
             "std::process::exit" | "::std::process::exit" | "process::exit"
         );
-        if is_exit && zero && !exit_is_conditional(*call, bytes, &RUST_EXIT) {
-            scan.sites
-                .push(exit_site(*call, bytes, &RUST_EXIT, "std::process::exit(0)"));
+        if is_exit && zero && !exit_is_conditional(*call, &anc, bytes, &RUST_EXIT) {
+            scan.sites.push(exit_site(
+                *call,
+                &anc,
+                bytes,
+                &RUST_EXIT,
+                "std::process::exit(0)",
+            ));
         }
     }
     Ok(scan)

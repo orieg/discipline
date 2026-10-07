@@ -2017,6 +2017,35 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "hook install: a generated file's digest line matches until the file is edited, and a merge keeps what is not discipline's",
+        || {
+            use crate::hook::{config_for_opts, Agent, GENERATED_HEADER};
+            use crate::hookfile::{merge_json, stamp, stamp_state, Stamp};
+            let (_, plugin) = config_for_opts(Agent::Opencode, true, None);
+            let body = "#!/bin/bash\n# Written by `discipline hook install --agent x`.\nset -u\n";
+            let stamped = stamp(body, GENERATED_HEADER, &["sums=release"]);
+            let (_, generated) = config_for_opts(Agent::Cursor, false, None);
+            let ours = |c: &str| c.contains("discipline hook run --agent cursor");
+            let own = r#"{"model":"m","hooks":{"stop":[{"command":"./mine.sh"},{"command":"x || discipline hook run --agent cursor"}]}}"#;
+            let merged = merge_json(own, &generated, &ours);
+            Ok(stamp_state(&plugin) == Stamp::Unedited
+                && stamp_state(&format!("{plugin}// a line of our own\n")) == Stamp::Edited
+                && stamp_state(&stamped) == Stamp::Unedited
+                && stamp_state(&stamped.replace("set -u", "set -eu")) == Stamp::Edited
+                && stamp_state(&stamped.replace("sums=release", "sums=pinned")) == Stamp::Edited
+                && stamp_state(body) == Stamp::Absent
+                && merged.as_ref().is_some_and(|m| {
+                    m["model"] == "m"
+                        && m["hooks"]["stop"][0]["command"] == "./mine.sh"
+                        && m["hooks"]["stop"].as_array().is_some_and(|l| l.len() == 2)
+                        && m["hooks"]["stop"][1]["command"]
+                            .as_str()
+                            .is_some_and(|c| !c.starts_with("x ||") && ours(c))
+                })
+                && merge_json("{ /* not strict JSON */ }", &generated, &ours).is_none())
+        },
+    ),
+    (
         "hook: findings block in each agent's contract, and a check that cannot run blocks too",
         || {
             use crate::hook::{translate, translate_event, Agent, Event};

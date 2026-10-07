@@ -1,0 +1,600 @@
+/class C0: XCTestCase { func testT0() { XCTAssertEqual(a(), 1) }
+class C1: XCTestCase { func testT1() { XCTAssertEqual(a(), 1) }
+class C2: XCTestCase { func testT2() { XCTAssertEqual(a(), 1) }
+class C3: XCTestCase { func testT3() { XCTAssertEqual(a(), 1) }
+class C4: XCTestCase { func testT4() { XCTAssertEqual(a(), 1) }
+class C5: XCTestCase { func testT5() { XCTAssertEqual(a(), 1) }
+class C6: XCTestCase { func testT6() { XCTAssertEqual(a(), 1) }
+class C7: XCTestCase { func testT7() { XCTAssertEqual(a(), 1) }
+class C8: XCTestCase { func testT8() { XCTAssertEqual(a(), 1) }
+class C9: XCTestCase { func testT9() { XCTAssertEqual(a(), 1) }
+class C10: XCTestCase { func testT10() { XCTAssertEqual(a(), 1) }
+class C11: XCTestCase { func testT11() { XCTAssertEqual(a(), 1) }
+class C12: XCTestCase { func testT12() { XCTAssertEqual(a(), 1) }
+class C13: XCTestCase { func testT13() { XCTAssertEqual(a(), 1) }
+class C14: XCTestCase { func testT14() { XCTAssertEqual(a(), 1) }
+class C15: XCTestCase { func testT15() { XCTAssertEqual(a(), 1) }
+class C16: XCTestCase { func testT16() { XCTAssertEqual(a(), 1) }
+class C17: XCTestCase { func testT17() { XCTAssertEqual(a(), 1) }
+class C18: XCTestCase { func testT18() { XCTAssertEqual(a(), 1) }
+class C19: XCTestCase { func testT19() { XCTAssertEqual(a(), 1) }
+class C20: XCTestCase { func testT20() { XCTAssertEqual(a(), 1) }
+class C21: XCTestCase { func testT21() { XCTAssertEqual(a(), 1) }
+class C22: XCTestCase { func testT22() { XCTAssertEqual(a(), 1) }
+class C23: XCTestCase { func testT23() { XCTAssertEqual(a(), 1) }
+class C24: XCTestCase { func testT24() { XCTAssertEqual(a(), 1) }
+class C25: XCTestCase { func testT25() { XCTAssertEqual(a(), 1) }
+class C26: XCTestCase { func testT26() { XCTAssertEqual(a(), 1) }
+class C27: XCTestCase { func testT27() { XCTAssertEqual(a(), 1) }
+class C28: XCTestCase { func testT28() { XCTAssertEqual(a(), 1) }
+class C29: XCTestCase { func testT29() { XCTAssertEqual(a(), 1) }
+class C30: XCTestCase { func testT30() { XCTAssertEqual(a(), 1) }
+class C31: XCTestCase { func testT31() { XCTAssertEqual(a(), 1) }
+class C32: XCTestCase { func testT32() { XCTAssertEqual(a(), 1) }
+class C33: XCTestCase { func testT33() { XCTAssertEqual(a(), 1) }
+class C34: XCTestCase { func testT34() { XCTAssertEqual(a(), 1) }
+class C35: XCTestCase { func testT35() { XCTAssertEqual(a(), 1) }
+class C36: XCTestCase { func testT36() { XCTAssertEqual(a(), 1) }
+class C37: XCTestCase { func testT37() { XCTAssertEqual(a(), 1) }
+class C38: XCTestCase { func testT38() { XCTAssertEqual(a(), 1) }
+class C39: XCTestCase { func testT39() { XCTAssertEqual(a(), 1) }
+class C40: XCTestCase { func testT40() { XCTAssertEqual(a(), 1) }
+class C41: XCTestCase { func testT41() { XCTAssertEqual(a(), 1) }
+class C42: XCTestCase { func testT42() { XCTAssertEqual(a(), 1) }
+class C43: XCTestCase { func testT43() { XCTAssertEqual(a(), 1) }
+class C44: XCTestCase { func testT44() { XCTAssertEqual(a(), 1) }
+class C45: XCTestCase { func testT45() { XCTAssertEqual(a(), 1) }
+class C46: XCTestCase { func testT46() { XCTAssertEqual(a(), 1) }
+class C47: XCTestCase { func testT47() { XCTAssertEqual(a(), 1) }
+class C48: XCTestCase { func testT48() { XCTAssertEqual(a(), 1) }
+class C49: XCTestCase { func testT49() { XCTAssertEqual(a(), 1) }
+class C50: XCTestCase { func testT50() { XCTAssertEqual(a(), 1) }
+class C51: XCTestCase { func testT51() { XCTAssertEqual(a(), 1) }
+class C52: XCTestCase { func testT52() { XCTAssertEqual(a(), 1) }
+class C53: XCTestCase { func testT53() { XCTAssertEqual(a(), 1) }
+class C54: XCTestCase { func testT54() { XCTAssertEqual(a(), 1) }
+class C55: XCTestCase { func testT55() { XCTAssertEqual(a(), 1) }
+class C56: XCTestCase { func testT56() { XCTAssertEqual(a(), 1) }
+class C57: XCTestCase { func testT57() { XCTAssertEqual(a(), 1) }
+class C58: XCTestCase { func testT58() { XCTAssertEqual(a(), 1) }
+class C59: XCTestCase { func testT59() { XCTAssertEqual(a(), 1) }
+class C60: XCTestCase { func testT60() { XCTAssertEqual(a(), 1) }
+class C61: XCTestCase { func testT61() { XCTAssertEqual(a(), 1) }
+class C62: XCTestCase { func testT62() { XCTAssertEqual(a(), 1) }
+class C63: XCTestCase { func testT63() { XCTAssertEqual(a(), 1) }
+class C64: XCTestCase { func testT64() { XCTAssertEqual(a(), 1) }
+class C65: XCTestCase { func testT65() { XCTAssertEqual(a(), 1) }
+class C66: XCTestCase { func testT66() { XCTAssertEqual(a(), 1) }
+class C67: XCTestCase { func testT67() { XCTAssertEqual(a(), 1) }
+class C68: XCTestCase { func testT68() { XCTAssertEqual(a(), 1) }
+class C69: XCTestCase { func testT69() { XCTAssertEqual(a(), 1) }
+class C70: XCTestCase { func testT70() { XCTAssertEqual(a(), 1) }
+class C71: XCTestCase { func testT71() { XCTAssertEqual(a(), 1) }
+class C72: XCTestCase { func testT72() { XCTAssertEqual(a(), 1) }
+class C73: XCTestCase { func testT73() { XCTAssertEqual(a(), 1) }
+class C74: XCTestCase { func testT74() { XCTAssertEqual(a(), 1) }
+class C75: XCTestCase { func testT75() { XCTAssertEqual(a(), 1) }
+class C76: XCTestCase { func testT76() { XCTAssertEqual(a(), 1) }
+class C77: XCTestCase { func testT77() { XCTAssertEqual(a(), 1) }
+class C78: XCTestCase { func testT78() { XCTAssertEqual(a(), 1) }
+class C79: XCTestCase { func testT79() { XCTAssertEqual(a(), 1) }
+class C80: XCTestCase { func testT80() { XCTAssertEqual(a(), 1) }
+class C81: XCTestCase { func testT81() { XCTAssertEqual(a(), 1) }
+class C82: XCTestCase { func testT82() { XCTAssertEqual(a(), 1) }
+class C83: XCTestCase { func testT83() { XCTAssertEqual(a(), 1) }
+class C84: XCTestCase { func testT84() { XCTAssertEqual(a(), 1) }
+class C85: XCTestCase { func testT85() { XCTAssertEqual(a(), 1) }
+class C86: XCTestCase { func testT86() { XCTAssertEqual(a(), 1) }
+class C87: XCTestCase { func testT87() { XCTAssertEqual(a(), 1) }
+class C88: XCTestCase { func testT88() { XCTAssertEqual(a(), 1) }
+class C89: XCTestCase { func testT89() { XCTAssertEqual(a(), 1) }
+class C90: XCTestCase { func testT90() { XCTAssertEqual(a(), 1) }
+class C91: XCTestCase { func testT91() { XCTAssertEqual(a(), 1) }
+class C92: XCTestCase { func testT92() { XCTAssertEqual(a(), 1) }
+class C93: XCTestCase { func testT93() { XCTAssertEqual(a(), 1) }
+class C94: XCTestCase { func testT94() { XCTAssertEqual(a(), 1) }
+class C95: XCTestCase { func testT95() { XCTAssertEqual(a(), 1) }
+class C96: XCTestCase { func testT96() { XCTAssertEqual(a(), 1) }
+class C97: XCTestCase { func testT97() { XCTAssertEqual(a(), 1) }
+class C98: XCTestCase { func testT98() { XCTAssertEqual(a(), 1) }
+class C99: XCTestCase { func testT99() { XCTAssertEqual(a(), 1) }
+class C100: XCTestCase { func testT100() { XCTAssertEqual(a(), 1) }
+class C101: XCTestCase { func testT101() { XCTAssertEqual(a(), 1) }
+class C102: XCTestCase { func testT102() { XCTAssertEqual(a(), 1) }
+class C103: XCTestCase { func testT103() { XCTAssertEqual(a(), 1) }
+class C104: XCTestCase { func testT104() { XCTAssertEqual(a(), 1) }
+class C105: XCTestCase { func testT105() { XCTAssertEqual(a(), 1) }
+class C106: XCTestCase { func testT106() { XCTAssertEqual(a(), 1) }
+class C107: XCTestCase { func testT107() { XCTAssertEqual(a(), 1) }
+class C108: XCTestCase { func testT108() { XCTAssertEqual(a(), 1) }
+class C109: XCTestCase { func testT109() { XCTAssertEqual(a(), 1) }
+class C110: XCTestCase { func testT110() { XCTAssertEqual(a(), 1) }
+class C111: XCTestCase { func testT111() { XCTAssertEqual(a(), 1) }
+class C112: XCTestCase { func testT112() { XCTAssertEqual(a(), 1) }
+class C113: XCTestCase { func testT113() { XCTAssertEqual(a(), 1) }
+class C114: XCTestCase { func testT114() { XCTAssertEqual(a(), 1) }
+class C115: XCTestCase { func testT115() { XCTAssertEqual(a(), 1) }
+class C116: XCTestCase { func testT116() { XCTAssertEqual(a(), 1) }
+class C117: XCTestCase { func testT117() { XCTAssertEqual(a(), 1) }
+class C118: XCTestCase { func testT118() { XCTAssertEqual(a(), 1) }
+class C119: XCTestCase { func testT119() { XCTAssertEqual(a(), 1) }
+class C120: XCTestCase { func testT120() { XCTAssertEqual(a(), 1) }
+class C121: XCTestCase { func testT121() { XCTAssertEqual(a(), 1) }
+class C122: XCTestCase { func testT122() { XCTAssertEqual(a(), 1) }
+class C123: XCTestCase { func testT123() { XCTAssertEqual(a(), 1) }
+class C124: XCTestCase { func testT124() { XCTAssertEqual(a(), 1) }
+class C125: XCTestCase { func testT125() { XCTAssertEqual(a(), 1) }
+class C126: XCTestCase { func testT126() { XCTAssertEqual(a(), 1) }
+class C127: XCTestCase { func testT127() { XCTAssertEqual(a(), 1) }
+class C128: XCTestCase { func testT128() { XCTAssertEqual(a(), 1) }
+class C129: XCTestCase { func testT129() { XCTAssertEqual(a(), 1) }
+class C130: XCTestCase { func testT130() { XCTAssertEqual(a(), 1) }
+class C131: XCTestCase { func testT131() { XCTAssertEqual(a(), 1) }
+class C132: XCTestCase { func testT132() { XCTAssertEqual(a(), 1) }
+class C133: XCTestCase { func testT133() { XCTAssertEqual(a(), 1) }
+class C134: XCTestCase { func testT134() { XCTAssertEqual(a(), 1) }
+class C135: XCTestCase { func testT135() { XCTAssertEqual(a(), 1) }
+class C136: XCTestCase { func testT136() { XCTAssertEqual(a(), 1) }
+class C137: XCTestCase { func testT137() { XCTAssertEqual(a(), 1) }
+class C138: XCTestCase { func testT138() { XCTAssertEqual(a(), 1) }
+class C139: XCTestCase { func testT139() { XCTAssertEqual(a(), 1) }
+class C140: XCTestCase { func testT140() { XCTAssertEqual(a(), 1) }
+class C141: XCTestCase { func testT141() { XCTAssertEqual(a(), 1) }
+class C142: XCTestCase { func testT142() { XCTAssertEqual(a(), 1) }
+class C143: XCTestCase { func testT143() { XCTAssertEqual(a(), 1) }
+class C144: XCTestCase { func testT144() { XCTAssertEqual(a(), 1) }
+class C145: XCTestCase { func testT145() { XCTAssertEqual(a(), 1) }
+class C146: XCTestCase { func testT146() { XCTAssertEqual(a(), 1) }
+class C147: XCTestCase { func testT147() { XCTAssertEqual(a(), 1) }
+class C148: XCTestCase { func testT148() { XCTAssertEqual(a(), 1) }
+class C149: XCTestCase { func testT149() { XCTAssertEqual(a(), 1) }
+class C150: XCTestCase { func testT150() { XCTAssertEqual(a(), 1) }
+class C151: XCTestCase { func testT151() { XCTAssertEqual(a(), 1) }
+class C152: XCTestCase { func testT152() { XCTAssertEqual(a(), 1) }
+class C153: XCTestCase { func testT153() { XCTAssertEqual(a(), 1) }
+class C154: XCTestCase { func testT154() { XCTAssertEqual(a(), 1) }
+class C155: XCTestCase { func testT155() { XCTAssertEqual(a(), 1) }
+class C156: XCTestCase { func testT156() { XCTAssertEqual(a(), 1) }
+class C157: XCTestCase { func testT157() { XCTAssertEqual(a(), 1) }
+class C158: XCTestCase { func testT158() { XCTAssertEqual(a(), 1) }
+class C159: XCTestCase { func testT159() { XCTAssertEqual(a(), 1) }
+class C160: XCTestCase { func testT160() { XCTAssertEqual(a(), 1) }
+class C161: XCTestCase { func testT161() { XCTAssertEqual(a(), 1) }
+class C162: XCTestCase { func testT162() { XCTAssertEqual(a(), 1) }
+class C163: XCTestCase { func testT163() { XCTAssertEqual(a(), 1) }
+class C164: XCTestCase { func testT164() { XCTAssertEqual(a(), 1) }
+class C165: XCTestCase { func testT165() { XCTAssertEqual(a(), 1) }
+class C166: XCTestCase { func testT166() { XCTAssertEqual(a(), 1) }
+class C167: XCTestCase { func testT167() { XCTAssertEqual(a(), 1) }
+class C168: XCTestCase { func testT168() { XCTAssertEqual(a(), 1) }
+class C169: XCTestCase { func testT169() { XCTAssertEqual(a(), 1) }
+class C170: XCTestCase { func testT170() { XCTAssertEqual(a(), 1) }
+class C171: XCTestCase { func testT171() { XCTAssertEqual(a(), 1) }
+class C172: XCTestCase { func testT172() { XCTAssertEqual(a(), 1) }
+class C173: XCTestCase { func testT173() { XCTAssertEqual(a(), 1) }
+class C174: XCTestCase { func testT174() { XCTAssertEqual(a(), 1) }
+class C175: XCTestCase { func testT175() { XCTAssertEqual(a(), 1) }
+class C176: XCTestCase { func testT176() { XCTAssertEqual(a(), 1) }
+class C177: XCTestCase { func testT177() { XCTAssertEqual(a(), 1) }
+class C178: XCTestCase { func testT178() { XCTAssertEqual(a(), 1) }
+class C179: XCTestCase { func testT179() { XCTAssertEqual(a(), 1) }
+class C180: XCTestCase { func testT180() { XCTAssertEqual(a(), 1) }
+class C181: XCTestCase { func testT181() { XCTAssertEqual(a(), 1) }
+class C182: XCTestCase { func testT182() { XCTAssertEqual(a(), 1) }
+class C183: XCTestCase { func testT183() { XCTAssertEqual(a(), 1) }
+class C184: XCTestCase { func testT184() { XCTAssertEqual(a(), 1) }
+class C185: XCTestCase { func testT185() { XCTAssertEqual(a(), 1) }
+class C186: XCTestCase { func testT186() { XCTAssertEqual(a(), 1) }
+class C187: XCTestCase { func testT187() { XCTAssertEqual(a(), 1) }
+class C188: XCTestCase { func testT188() { XCTAssertEqual(a(), 1) }
+class C189: XCTestCase { func testT189() { XCTAssertEqual(a(), 1) }
+class C190: XCTestCase { func testT190() { XCTAssertEqual(a(), 1) }
+class C191: XCTestCase { func testT191() { XCTAssertEqual(a(), 1) }
+class C192: XCTestCase { func testT192() { XCTAssertEqual(a(), 1) }
+class C193: XCTestCase { func testT193() { XCTAssertEqual(a(), 1) }
+class C194: XCTestCase { func testT194() { XCTAssertEqual(a(), 1) }
+class C195: XCTestCase { func testT195() { XCTAssertEqual(a(), 1) }
+class C196: XCTestCase { func testT196() { XCTAssertEqual(a(), 1) }
+class C197: XCTestCase { func testT197() { XCTAssertEqual(a(), 1) }
+class C198: XCTestCase { func testT198() { XCTAssertEqual(a(), 1) }
+class C199: XCTestCase { func testT199() { XCTAssertEqual(a(), 1) }
+class C200: XCTestCase { func testT200() { XCTAssertEqual(a(), 1) }
+class C201: XCTestCase { func testT201() { XCTAssertEqual(a(), 1) }
+class C202: XCTestCase { func testT202() { XCTAssertEqual(a(), 1) }
+class C203: XCTestCase { func testT203() { XCTAssertEqual(a(), 1) }
+class C204: XCTestCase { func testT204() { XCTAssertEqual(a(), 1) }
+class C205: XCTestCase { func testT205() { XCTAssertEqual(a(), 1) }
+class C206: XCTestCase { func testT206() { XCTAssertEqual(a(), 1) }
+class C207: XCTestCase { func testT207() { XCTAssertEqual(a(), 1) }
+class C208: XCTestCase { func testT208() { XCTAssertEqual(a(), 1) }
+class C209: XCTestCase { func testT209() { XCTAssertEqual(a(), 1) }
+class C210: XCTestCase { func testT210() { XCTAssertEqual(a(), 1) }
+class C211: XCTestCase { func testT211() { XCTAssertEqual(a(), 1) }
+class C212: XCTestCase { func testT212() { XCTAssertEqual(a(), 1) }
+class C213: XCTestCase { func testT213() { XCTAssertEqual(a(), 1) }
+class C214: XCTestCase { func testT214() { XCTAssertEqual(a(), 1) }
+class C215: XCTestCase { func testT215() { XCTAssertEqual(a(), 1) }
+class C216: XCTestCase { func testT216() { XCTAssertEqual(a(), 1) }
+class C217: XCTestCase { func testT217() { XCTAssertEqual(a(), 1) }
+class C218: XCTestCase { func testT218() { XCTAssertEqual(a(), 1) }
+class C219: XCTestCase { func testT219() { XCTAssertEqual(a(), 1) }
+class C220: XCTestCase { func testT220() { XCTAssertEqual(a(), 1) }
+class C221: XCTestCase { func testT221() { XCTAssertEqual(a(), 1) }
+class C222: XCTestCase { func testT222() { XCTAssertEqual(a(), 1) }
+class C223: XCTestCase { func testT223() { XCTAssertEqual(a(), 1) }
+class C224: XCTestCase { func testT224() { XCTAssertEqual(a(), 1) }
+class C225: XCTestCase { func testT225() { XCTAssertEqual(a(), 1) }
+class C226: XCTestCase { func testT226() { XCTAssertEqual(a(), 1) }
+class C227: XCTestCase { func testT227() { XCTAssertEqual(a(), 1) }
+class C228: XCTestCase { func testT228() { XCTAssertEqual(a(), 1) }
+class C229: XCTestCase { func testT229() { XCTAssertEqual(a(), 1) }
+class C230: XCTestCase { func testT230() { XCTAssertEqual(a(), 1) }
+class C231: XCTestCase { func testT231() { XCTAssertEqual(a(), 1) }
+class C232: XCTestCase { func testT232() { XCTAssertEqual(a(), 1) }
+class C233: XCTestCase { func testT233() { XCTAssertEqual(a(), 1) }
+class C234: XCTestCase { func testT234() { XCTAssertEqual(a(), 1) }
+class C235: XCTestCase { func testT235() { XCTAssertEqual(a(), 1) }
+class C236: XCTestCase { func testT236() { XCTAssertEqual(a(), 1) }
+class C237: XCTestCase { func testT237() { XCTAssertEqual(a(), 1) }
+class C238: XCTestCase { func testT238() { XCTAssertEqual(a(), 1) }
+class C239: XCTestCase { func testT239() { XCTAssertEqual(a(), 1) }
+class C240: XCTestCase { func testT240() { XCTAssertEqual(a(), 1) }
+class C241: XCTestCase { func testT241() { XCTAssertEqual(a(), 1) }
+class C242: XCTestCase { func testT242() { XCTAssertEqual(a(), 1) }
+class C243: XCTestCase { func testT243() { XCTAssertEqual(a(), 1) }
+class C244: XCTestCase { func testT244() { XCTAssertEqual(a(), 1) }
+class C245: XCTestCase { func testT245() { XCTAssertEqual(a(), 1) }
+class C246: XCTestCase { func testT246() { XCTAssertEqual(a(), 1) }
+class C247: XCTestCase { func testT247() { XCTAssertEqual(a(), 1) }
+class C248: XCTestCase { func testT248() { XCTAssertEqual(a(), 1) }
+class C249: XCTestCase { func testT249() { XCTAssertEqual(a(), 1) }
+class C250: XCTestCase { func testT250() { XCTAssertEqual(a(), 1) }
+class C251: XCTestCase { func testT251() { XCTAssertEqual(a(), 1) }
+class C252: XCTestCase { func testT252() { XCTAssertEqual(a(), 1) }
+class C253: XCTestCase { func testT253() { XCTAssertEqual(a(), 1) }
+class C254: XCTestCase { func testT254() { XCTAssertEqual(a(), 1) }
+class C255: XCTestCase { func testT255() { XCTAssertEqual(a(), 1) }
+class C256: XCTestCase { func testT256() { XCTAssertEqual(a(), 1) }
+class C257: XCTestCase { func testT257() { XCTAssertEqual(a(), 1) }
+class C258: XCTestCase { func testT258() { XCTAssertEqual(a(), 1) }
+class C259: XCTestCase { func testT259() { XCTAssertEqual(a(), 1) }
+class C260: XCTestCase { func testT260() { XCTAssertEqual(a(), 1) }
+class C261: XCTestCase { func testT261() { XCTAssertEqual(a(), 1) }
+class C262: XCTestCase { func testT262() { XCTAssertEqual(a(), 1) }
+class C263: XCTestCase { func testT263() { XCTAssertEqual(a(), 1) }
+class C264: XCTestCase { func testT264() { XCTAssertEqual(a(), 1) }
+class C265: XCTestCase { func testT265() { XCTAssertEqual(a(), 1) }
+class C266: XCTestCase { func testT266() { XCTAssertEqual(a(), 1) }
+class C267: XCTestCase { func testT267() { XCTAssertEqual(a(), 1) }
+class C268: XCTestCase { func testT268() { XCTAssertEqual(a(), 1) }
+class C269: XCTestCase { func testT269() { XCTAssertEqual(a(), 1) }
+class C270: XCTestCase { func testT270() { XCTAssertEqual(a(), 1) }
+class C271: XCTestCase { func testT271() { XCTAssertEqual(a(), 1) }
+class C272: XCTestCase { func testT272() { XCTAssertEqual(a(), 1) }
+class C273: XCTestCase { func testT273() { XCTAssertEqual(a(), 1) }
+class C274: XCTestCase { func testT274() { XCTAssertEqual(a(), 1) }
+class C275: XCTestCase { func testT275() { XCTAssertEqual(a(), 1) }
+class C276: XCTestCase { func testT276() { XCTAssertEqual(a(), 1) }
+class C277: XCTestCase { func testT277() { XCTAssertEqual(a(), 1) }
+class C278: XCTestCase { func testT278() { XCTAssertEqual(a(), 1) }
+class C279: XCTestCase { func testT279() { XCTAssertEqual(a(), 1) }
+class C280: XCTestCase { func testT280() { XCTAssertEqual(a(), 1) }
+class C281: XCTestCase { func testT281() { XCTAssertEqual(a(), 1) }
+class C282: XCTestCase { func testT282() { XCTAssertEqual(a(), 1) }
+class C283: XCTestCase { func testT283() { XCTAssertEqual(a(), 1) }
+class C284: XCTestCase { func testT284() { XCTAssertEqual(a(), 1) }
+class C285: XCTestCase { func testT285() { XCTAssertEqual(a(), 1) }
+class C286: XCTestCase { func testT286() { XCTAssertEqual(a(), 1) }
+class C287: XCTestCase { func testT287() { XCTAssertEqual(a(), 1) }
+class C288: XCTestCase { func testT288() { XCTAssertEqual(a(), 1) }
+class C289: XCTestCase { func testT289() { XCTAssertEqual(a(), 1) }
+class C290: XCTestCase { func testT290() { XCTAssertEqual(a(), 1) }
+class C291: XCTestCase { func testT291() { XCTAssertEqual(a(), 1) }
+class C292: XCTestCase { func testT292() { XCTAssertEqual(a(), 1) }
+class C293: XCTestCase { func testT293() { XCTAssertEqual(a(), 1) }
+class C294: XCTestCase { func testT294() { XCTAssertEqual(a(), 1) }
+class C295: XCTestCase { func testT295() { XCTAssertEqual(a(), 1) }
+class C296: XCTestCase { func testT296() { XCTAssertEqual(a(), 1) }
+class C297: XCTestCase { func testT297() { XCTAssertEqual(a(), 1) }
+class C298: XCTestCase { func testT298() { XCTAssertEqual(a(), 1) }
+class C299: XCTestCase { func testT299() { XCTAssertEqual(a(), 1) }
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}

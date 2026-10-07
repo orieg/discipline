@@ -6,6 +6,7 @@
 
 use anyhow::Result;
 
+pub mod ancestry;
 pub mod bounds;
 pub mod budgets;
 #[cfg(any(feature = "lang-c", feature = "lang-cpp"))]
@@ -1415,8 +1416,24 @@ pub struct DispatchSpec {
 /// Names a test body runs through a dispatch table: `for f in [check_a, check_b] { f() }`,
 /// `[checkA, checkB].forEach(f => f())`, `List.of(this::checkA)`. Each name is resolved
 /// like a direct call (an unknown name resolves to nothing).
-pub fn dispatch_calls(
-    node: tree_sitter::Node,
+pub fn dispatch_calls<'t>(
+    node: tree_sitter::Node<'t>,
+    anc: &ancestry::Ancestry<'t>,
+    src: &[u8],
+    spec: &DispatchSpec,
+    out: &mut Vec<String>,
+) {
+    let parent = anc.parent(node);
+    let grandparent = parent.and_then(|p| anc.parent(p));
+    dispatch_calls_below(node, parent, grandparent, src, spec, out);
+}
+
+/// [`dispatch_calls`] for `node` under `parent` under `grandparent`: the walk hands
+/// each node the two ancestors the rule reads.
+fn dispatch_calls_below<'t>(
+    node: tree_sitter::Node<'t>,
+    parent: Option<tree_sitter::Node<'t>>,
+    grandparent: Option<tree_sitter::Node<'t>>,
     src: &[u8],
     spec: &DispatchSpec,
     out: &mut Vec<String>,
@@ -1434,14 +1451,13 @@ pub fn dispatch_calls(
     if spec.names.contains(&kind) {
         let in_container =
             |n: Option<tree_sitter::Node>| n.is_some_and(|p| spec.containers.contains(&p.kind()));
-        let parent = node.parent();
-        if in_container(parent) || in_container(parent.and_then(|p| p.parent())) {
+        if in_container(parent) || in_container(grandparent) {
             out.push(text(node).trim_start_matches(':').to_string());
         }
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        dispatch_calls(child, src, spec, out);
+        dispatch_calls_below(child, Some(node), parent, src, spec, out);
     }
 }
 
@@ -1504,29 +1520,31 @@ impl PackSpec {
     /// and helpers: [`Self::facts_to_method_checks`], then
     /// [`Self::facts_from_helper_loops`]. A pack with a step of its own between the two
     /// calls them one after the other.
-    pub(crate) fn shared_facts(
+    pub(crate) fn shared_facts<'t>(
         &self,
-        root: tree_sitter::Node,
+        root: tree_sitter::Node<'t>,
+        anc: &ancestry::Ancestry<'t>,
         src: &str,
         path: &str,
         vocab: &AssertVocabulary,
         facts: &mut ParsedFileFacts,
     ) {
-        self.facts_to_method_checks(root, src, path, vocab, facts);
-        self.facts_from_helper_loops(root, src, vocab, facts);
+        self.facts_to_method_checks(root, anc, src, path, vocab, facts);
+        self.facts_from_helper_loops(root, anc, src, vocab, facts);
     }
 
     /// The functions of the file, its swallowing handlers outside test code, the retry
     /// markers of its tests, and the checks its tests reach through a receiver.
-    pub(crate) fn facts_to_method_checks(
+    pub(crate) fn facts_to_method_checks<'t>(
         &self,
-        root: tree_sitter::Node,
+        root: tree_sitter::Node<'t>,
+        anc: &ancestry::Ancestry<'t>,
         src: &str,
         path: &str,
         vocab: &AssertVocabulary,
         facts: &mut ParsedFileFacts,
     ) {
-        facts.functions = functions::extract(root, src, path, self.functions);
+        facts.functions = functions::extract(root, anc, src, path, self.functions);
         {
             let spans: Vec<(usize, usize)> = facts
                 .tests
@@ -1542,6 +1560,7 @@ impl PackSpec {
                 |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
             let (swallowed, fallbacks) = handlers::extract_with_constants(
                 root,
+                anc,
                 src,
                 self.handlers,
                 self.constants,
@@ -1560,19 +1579,20 @@ impl PackSpec {
                 f.is_test = true;
             }
         }
-        method_checks::count(root, src, facts, self.receiver_calls);
+        method_checks::count(root, anc, src, facts, self.receiver_calls);
     }
 
     /// The looped helper calls and equality exits of the file's helpers, and the mock,
     /// sleep and trivial-assertion counts of its tests.
-    pub(crate) fn facts_from_helper_loops(
+    pub(crate) fn facts_from_helper_loops<'t>(
         &self,
-        root: tree_sitter::Node,
+        root: tree_sitter::Node<'t>,
+        anc: &ancestry::Ancestry<'t>,
         src: &str,
         vocab: &AssertVocabulary,
         facts: &mut ParsedFileFacts,
     ) {
-        helper_loops::count(root, src, facts, self.helper_loops);
+        helper_loops::count(root, anc, src, facts, self.helper_loops);
         calls::count(
             root,
             src,

@@ -10,6 +10,7 @@
 //! trailing lambda and no parentheses) as two comparisons; that shape is recognised by
 //! its text.
 
+use super::ancestry::Ancestry;
 use anyhow::Result;
 use tree_sitter::Node;
 
@@ -53,9 +54,11 @@ impl LanguagePack for KotlinPack {
         )?;
         let root = tree.root_node();
 
+        let anc = Ancestry::new(root);
         let mut extractor = KotlinExtractor {
             dead: super::reach::dead_ranges(root, src, &KOTLIN_REACH),
             src: src.as_bytes(),
+            anc: &anc,
             vocab,
             is_test_path: is_kotlin_test_path(path),
             facts: ParsedFileFacts {
@@ -70,8 +73,8 @@ impl LanguagePack for KotlinPack {
         extractor.collect_escape_hatches(root);
         extractor.visit_node(root, &mut Vec::new(), false);
         extractor.resolve_same_file_helpers();
-        KOTLIN_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
-        super::caught_assertions::kotlin(root, src, &mut extractor.facts.tests, vocab);
+        KOTLIN_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
+        super::caught_assertions::kotlin(root, &anc, src, &mut extractor.facts.tests, vocab);
         extractor.facts.prose = super::prose::extract(
             root,
             src,
@@ -82,7 +85,7 @@ impl LanguagePack for KotlinPack {
                 "multiline_string_literal",
             ],
         );
-        super::expected_exceptions::kotlin(root, src, &mut extractor.facts.tests);
+        super::expected_exceptions::kotlin(root, &anc, src, &mut extractor.facts.tests);
         Ok(extractor.facts)
     }
 }
@@ -144,6 +147,8 @@ struct KotlinExtractor<'a> {
     /// Byte ranges no execution reaches (`super::reach`).
     dead: super::reach::DeadRanges,
     src: &'a [u8],
+    /// The ancestors of the nodes of the file's tree (`super::ancestry`).
+    anc: &'a Ancestry<'a>,
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
     facts: ParsedFileFacts,
@@ -195,7 +200,7 @@ impl<'a> KotlinExtractor<'a> {
     /// JUnit 5 conditional annotations on a class or function
     /// (`@DisabledIfEnvironmentVariable(named = "CI", ..)`, `@DisabledOnOs(..)`): whether
     /// one always skips, and each conditional skip as the annotation and its verdict.
-    fn conditional_annotations(&self, node: Node) -> (bool, Vec<(String, CiVerdict)>) {
+    fn conditional_annotations(&self, node: Node<'a>) -> (bool, Vec<(String, CiVerdict)>) {
         let mut always = false;
         let mut conditional = Vec::new();
         let mut cursor = node.walk();
@@ -234,6 +239,7 @@ impl<'a> KotlinExtractor<'a> {
                 "DisabledIf" | "EnabledIf" => super::ci_condition::jvm_condition_method(
                     Lang::Kotlin,
                     annotation,
+                    self.anc,
                     self.src,
                     name == "EnabledIf",
                 ),
@@ -254,7 +260,7 @@ impl<'a> KotlinExtractor<'a> {
 
     /// JUnit assumptions among the statements of a test body (`assumeTrue(..)`,
     /// `Assumptions.assumeFalse(..)`, `assumingThat(..) { .. }`), read by their condition.
-    fn record_assumptions(&self, body: Node, test: &mut TestFn) {
+    fn record_assumptions(&self, body: Node<'a>, test: &mut TestFn) {
         let mut cursor = body.walk();
         let block = body
             .named_children(&mut cursor)
@@ -262,7 +268,7 @@ impl<'a> KotlinExtractor<'a> {
             .unwrap_or(body);
         let mut statements = block.walk();
         for statement in block.named_children(&mut statements) {
-            match super::ci_condition::jvm_assumption(Lang::Kotlin, statement, self.src) {
+            match super::ci_condition::jvm_assumption(Lang::Kotlin, statement, self.anc, self.src) {
                 Some((_, SkipCondition::Always)) => test.ignored = true,
                 Some((text, SkipCondition::When(verdict))) => {
                     test.record_conditional_skip(text, verdict);
@@ -271,7 +277,7 @@ impl<'a> KotlinExtractor<'a> {
             }
         }
         for (text, outcome) in
-            super::ci_condition::jvm_assumptions_under_if(Lang::Kotlin, block, self.src)
+            super::ci_condition::jvm_assumptions_under_if(Lang::Kotlin, block, self.anc, self.src)
         {
             match outcome {
                 SkipCondition::Always => test.ignored = true,
@@ -281,7 +287,7 @@ impl<'a> KotlinExtractor<'a> {
         }
     }
 
-    fn collect_escape_hatches(&mut self, node: Node) {
+    fn collect_escape_hatches(&mut self, node: Node<'a>) {
         if node.kind() == "annotation" {
             let name = self.annotation_name(node);
             if matches!(name, "Suppress" | "SuppressWarnings" | "SuppressLint") {
@@ -306,7 +312,7 @@ impl<'a> KotlinExtractor<'a> {
         }
     }
 
-    fn visit_node(&mut self, node: Node, class_stack: &mut Vec<String>, parent_ignored: bool) {
+    fn visit_node(&mut self, node: Node<'a>, class_stack: &mut Vec<String>, parent_ignored: bool) {
         match node.kind() {
             "class_declaration" | "object_declaration" => {
                 let name = node
@@ -354,7 +360,7 @@ impl<'a> KotlinExtractor<'a> {
     }
 
     /// Every lambda passed to a supertype constructor holds Kotest test definitions.
-    fn visit_spec_lambdas(&mut self, node: Node, class_stack: &[String], ignored: bool) {
+    fn visit_spec_lambdas(&mut self, node: Node<'a>, class_stack: &[String], ignored: bool) {
         let mut stack = vec![node];
         while let Some(n) = stack.pop() {
             if n.kind() == "lambda_literal" {
@@ -370,7 +376,7 @@ impl<'a> KotlinExtractor<'a> {
     }
 
     /// Statements of a spec lambda: `"name" { }`, `test("name") { }`, `describe("x") { }`.
-    fn visit_spec_body(&mut self, lambda: Node, class_stack: &[String], ignored: bool) {
+    fn visit_spec_body(&mut self, lambda: Node<'a>, class_stack: &[String], ignored: bool) {
         let mut cursor = lambda.walk();
         let stmts: Vec<Node> = lambda.named_children(&mut cursor).collect();
         for stmt in stmts {
@@ -446,7 +452,13 @@ impl<'a> KotlinExtractor<'a> {
             };
             let mut direct_calls = Vec::new();
             self.scan_node(body, &mut test_fn, &mut direct_calls);
-            super::dispatch_calls(body, self.src, &KOTLIN_DISPATCH, &mut direct_calls);
+            super::dispatch_calls(
+                body,
+                self.anc,
+                self.src,
+                &KOTLIN_DISPATCH,
+                &mut direct_calls,
+            );
             self.facts.tests.push(test_fn);
             self.test_calls.push(direct_calls);
         }
@@ -467,7 +479,7 @@ impl<'a> KotlinExtractor<'a> {
         found
     }
 
-    fn first_string_argument(&self, call: Node) -> Option<&'a str> {
+    fn first_string_argument(&self, call: Node<'a>) -> Option<&'a str> {
         let mut cursor = call.walk();
         let args = call
             .named_children(&mut cursor)
@@ -481,7 +493,7 @@ impl<'a> KotlinExtractor<'a> {
         found
     }
 
-    fn visit_function(&mut self, node: Node, class_stack: &[String], parent_ignored: bool) {
+    fn visit_function(&mut self, node: Node<'a>, class_stack: &[String], parent_ignored: bool) {
         let name = node
             .child_by_field_name("name")
             .map(|n| self.text(n).trim_matches('`'))
@@ -535,7 +547,13 @@ impl<'a> KotlinExtractor<'a> {
             let mut direct_calls = Vec::new();
             if let Some(body) = Self::function_body(node) {
                 self.scan_node(body, &mut test_fn, &mut direct_calls);
-                super::dispatch_calls(body, self.src, &KOTLIN_DISPATCH, &mut direct_calls);
+                super::dispatch_calls(
+                    body,
+                    self.anc,
+                    self.src,
+                    &KOTLIN_DISPATCH,
+                    &mut direct_calls,
+                );
             }
             let (always, conditional) = self.conditional_annotations(node);
             test_fn.ignored |= always;
@@ -589,7 +607,7 @@ impl<'a> KotlinExtractor<'a> {
         }
     }
 
-    fn function_body(node: Node) -> Option<Node> {
+    fn function_body(node: Node<'a>) -> Option<Node<'a>> {
         let mut cursor = node.walk();
         let found = node
             .named_children(&mut cursor)
@@ -597,7 +615,7 @@ impl<'a> KotlinExtractor<'a> {
         found
     }
 
-    fn has_zero_parameters(node: Node) -> bool {
+    fn has_zero_parameters(node: Node<'a>) -> bool {
         let mut cursor = node.walk();
         let params = node
             .named_children(&mut cursor)
@@ -607,7 +625,7 @@ impl<'a> KotlinExtractor<'a> {
 
     /// The name a call is judged by: `assertEquals(...)`, `Assertions.assertEquals(...)`,
     /// `assertThat(x).isEqualTo(3)` (judged as `isEqualTo`, then `assertThat` on recursion).
-    fn callee_name(&self, call: Node) -> (&'a str, bool) {
+    fn callee_name(&self, call: Node<'a>) -> (&'a str, bool) {
         let Some(c0) = call.named_child(0) else {
             return ("", false);
         };
@@ -645,13 +663,18 @@ impl<'a> KotlinExtractor<'a> {
     }
 
     /// Records where the tautologies counted under `node` are (`TestFn::mark_tautologies`).
-    fn scan_node(&self, node: Node, test_fn: &mut TestFn, direct_calls: &mut Vec<String>) {
+    fn scan_node(&self, node: Node<'a>, test_fn: &mut TestFn, direct_calls: &mut Vec<String>) {
         let mark = test_fn.tautology_mark();
         self.scan_node_unmarked(node, test_fn, direct_calls);
         test_fn.mark_tautologies(mark, node);
     }
 
-    fn scan_node_unmarked(&self, node: Node, test_fn: &mut TestFn, direct_calls: &mut Vec<String>) {
+    fn scan_node_unmarked(
+        &self,
+        node: Node<'a>,
+        test_fn: &mut TestFn,
+        direct_calls: &mut Vec<String>,
+    ) {
         if super::reach::is_dead(&self.dead, node.start_byte()) {
             return;
         }
@@ -683,7 +706,13 @@ impl<'a> KotlinExtractor<'a> {
         }
     }
 
-    fn count_matcher(&self, op: &str, lhs: Option<Node>, rhs: Option<Node>, test_fn: &mut TestFn) {
+    fn count_matcher(
+        &self,
+        op: &str,
+        lhs: Option<Node<'a>>,
+        rhs: Option<Node<'a>>,
+        test_fn: &mut TestFn,
+    ) {
         test_fn.total_asserts += 1;
         if WEAK_MATCHERS.contains(&op) {
             return;
@@ -692,7 +721,13 @@ impl<'a> KotlinExtractor<'a> {
             (Some(l), Some(r))
                 if matches!(op, "shouldBe" | "shouldBeEqual" | "shouldBeSameInstanceAs") =>
             {
-                super::self_comparison::note(&mut test_fn.equality_operands, l, r, self.src)
+                super::self_comparison::note(
+                    &mut test_fn.equality_operands,
+                    l,
+                    r,
+                    self.anc,
+                    self.src,
+                )
             }
             _ => false,
         };
@@ -703,7 +738,7 @@ impl<'a> KotlinExtractor<'a> {
         }
     }
 
-    fn inspect_call(&self, node: Node, test_fn: &mut TestFn, direct_calls: &mut Vec<String>) {
+    fn inspect_call(&self, node: Node<'a>, test_fn: &mut TestFn, direct_calls: &mut Vec<String>) {
         let (name, is_local) = self.callee_name(node);
         if is_local && !name.is_empty() {
             direct_calls.push(name.to_string());
@@ -745,6 +780,7 @@ impl<'a> KotlinExtractor<'a> {
                         &mut test_fn.equality_operands,
                         args[0],
                         args[1],
+                        self.anc,
                         self.src,
                     )
                 {
@@ -810,7 +846,7 @@ impl<'a> KotlinExtractor<'a> {
     }
 }
 
-fn kotlin_fn_is_test(node: Node, src: &str, path: &str) -> bool {
+fn kotlin_fn_is_test<'t>(node: Node<'t>, _: &Ancestry<'t>, src: &str, path: &str) -> bool {
     let mut cursor = node.walk();
     let annotated = node.children(&mut cursor).any(|c| {
         c.kind() == "modifiers" && {

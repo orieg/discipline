@@ -1,5 +1,6 @@
 //! Ruby language pack: tree-sitter AST extraction of tests, assertions, and escape hatches.
 
+use super::ancestry::Ancestry;
 use anyhow::{anyhow, Result};
 use tree_sitter::Node;
 
@@ -50,9 +51,11 @@ impl LanguagePack for RubyPack {
         )?;
         let root = tree.root_node();
 
+        let anc = Ancestry::new(root);
         let mut extractor = RubyExtractor {
             dead: super::reach::dead_ranges(root, src, &RUBY_REACH),
             src: src.as_bytes(),
+            anc: &anc,
             vocab,
             is_test_path: is_ruby_test_path(path),
             facts: ParsedFileFacts {
@@ -66,7 +69,7 @@ impl LanguagePack for RubyPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
-        RUBY_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
+        RUBY_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
         extractor.facts.prose =
             super::prose::extract(root, src, &["comment", "string", "heredoc_body"]);
         super::expected_exceptions::ruby(root, src, &mut extractor.facts.tests);
@@ -74,7 +77,7 @@ impl LanguagePack for RubyPack {
     }
 }
 
-fn ruby_fn_is_test(node: Node, src: &str, path: &str) -> bool {
+fn ruby_fn_is_test<'t>(node: Node<'t>, _: &Ancestry<'t>, src: &str, path: &str) -> bool {
     let name = node
         .child_by_field_name("name")
         .and_then(|n| n.utf8_text(src.as_bytes()).ok())
@@ -199,6 +202,8 @@ struct RubyExtractor<'a> {
     /// Byte ranges no execution reaches (`super::reach`).
     dead: super::reach::DeadRanges,
     src: &'a [u8],
+    /// The ancestors of the nodes of the file's tree (`super::ancestry`).
+    anc: &'a Ancestry<'a>,
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
     facts: ParsedFileFacts,
@@ -211,7 +216,7 @@ impl<'a> RubyExtractor<'a> {
         node.utf8_text(self.src).unwrap_or("")
     }
 
-    fn collect_comments_and_escape_hatches(&mut self, node: Node) {
+    fn collect_comments_and_escape_hatches(&mut self, node: Node<'a>) {
         let kind = node.kind();
         if kind == "comment" {
             let text = self.text(node).trim();
@@ -237,12 +242,12 @@ impl<'a> RubyExtractor<'a> {
         }
     }
 
-    fn visit_root(&mut self, root: Node) {
+    fn visit_root(&mut self, root: Node<'a>) {
         let mut class_stack = Vec::new();
         self.walk_scope(root, &mut class_stack, false);
     }
 
-    fn walk_scope(&mut self, scope: Node, class_stack: &mut Vec<String>, parent_skipped: bool) {
+    fn walk_scope(&mut self, scope: Node<'a>, class_stack: &mut Vec<String>, parent_skipped: bool) {
         let mut cursor = scope.walk();
         for child in scope.children(&mut cursor) {
             let kind = child.kind();
@@ -336,7 +341,7 @@ impl<'a> RubyExtractor<'a> {
 
     fn extract_method(
         &self,
-        node: Node,
+        node: Node<'a>,
         class_stack: &[String],
         parent_skipped: bool,
     ) -> Option<(TestFn, Vec<String>)> {
@@ -366,7 +371,7 @@ impl<'a> RubyExtractor<'a> {
         let mut direct_calls = Vec::new();
         if let Some(body) = node.child_by_field_name("body") {
             self.extract_assertions_in_body(body, &mut test_fn, &mut direct_calls);
-            super::dispatch_calls(body, self.src, &RUBY_DISPATCH, &mut direct_calls);
+            super::dispatch_calls(body, self.anc, self.src, &RUBY_DISPATCH, &mut direct_calls);
         }
 
         Some((test_fn, direct_calls))
@@ -374,7 +379,7 @@ impl<'a> RubyExtractor<'a> {
 
     fn extract_block_test(
         &self,
-        node: Node,
+        node: Node<'a>,
         class_stack: &[String],
         parent_skipped: bool,
     ) -> Option<(TestFn, Vec<String>)> {
@@ -438,17 +443,17 @@ impl<'a> RubyExtractor<'a> {
         if let Some(b) = block {
             if let Some(body) = b.child_by_field_name("body") {
                 self.extract_assertions_in_body(body, &mut test_fn, &mut direct_calls);
-                super::dispatch_calls(body, self.src, &RUBY_DISPATCH, &mut direct_calls);
+                super::dispatch_calls(body, self.anc, self.src, &RUBY_DISPATCH, &mut direct_calls);
             } else {
                 self.extract_assertions_in_body(b, &mut test_fn, &mut direct_calls);
-                super::dispatch_calls(b, self.src, &RUBY_DISPATCH, &mut direct_calls);
+                super::dispatch_calls(b, self.anc, self.src, &RUBY_DISPATCH, &mut direct_calls);
             }
         }
 
         Some((test_fn, direct_calls))
     }
 
-    fn has_skip_metadata(&self, call_node: Node) -> bool {
+    fn has_skip_metadata(&self, call_node: Node<'a>) -> bool {
         // Look for arguments: :skip, skip: true, skip: "reason"
         if let Some(args) = call_node.child_by_field_name("arguments") {
             // Outside string literals and comments: a description that contains `skip:`
@@ -465,7 +470,7 @@ impl<'a> RubyExtractor<'a> {
         false
     }
 
-    fn get_call_string_argument(&self, call_node: Node) -> Option<&'a str> {
+    fn get_call_string_argument(&self, call_node: Node<'a>) -> Option<&'a str> {
         let args = call_node.child_by_field_name("arguments")?;
         let mut cursor = args.walk();
         for child in args.children(&mut cursor) {
@@ -486,7 +491,7 @@ impl<'a> RubyExtractor<'a> {
 
     fn extract_assertions_in_body(
         &self,
-        node: Node,
+        node: Node<'a>,
         test_fn: &mut TestFn,
         direct_calls: &mut Vec<String>,
     ) {
@@ -497,7 +502,7 @@ impl<'a> RubyExtractor<'a> {
         if kind == "identifier" {
             let name = self.text(node);
             if matches!(name, "skip" | "omit" | "pending") {
-                test_fn.record_skip(read_skip(Grammar::Ruby, node, None, self.src));
+                test_fn.record_skip(read_skip(Grammar::Ruby, node, self.anc, None, self.src));
                 return;
             }
         }
@@ -518,7 +523,7 @@ impl<'a> RubyExtractor<'a> {
             }
 
             if matches!(method_name, "skip" | "omit" | "pending") {
-                test_fn.record_skip(read_skip(Grammar::Ruby, node, None, self.src));
+                test_fn.record_skip(read_skip(Grammar::Ruby, node, self.anc, None, self.src));
                 return;
             }
             // test-unit: `omit_if(c)` skips when `c` holds, `omit_unless(c)` when not.
@@ -529,7 +534,7 @@ impl<'a> RubyExtractor<'a> {
                     first
                 });
                 let own = condition.map(|c| (c, method_name == "omit_unless"));
-                test_fn.record_skip(read_skip(Grammar::Ruby, node, own, self.src));
+                test_fn.record_skip(read_skip(Grammar::Ruby, node, self.anc, own, self.src));
                 return;
             }
 
@@ -586,7 +591,12 @@ impl<'a> RubyExtractor<'a> {
         }
     }
 
-    fn handle_rspec_expectation(&self, to_call: Node, expect_call: Node, test_fn: &mut TestFn) {
+    fn handle_rspec_expectation(
+        &self,
+        to_call: Node<'a>,
+        expect_call: Node<'a>,
+        test_fn: &mut TestFn,
+    ) {
         test_fn.total_asserts += 1;
         let args = self.get_call_arguments(to_call);
         let matcher = args.first();
@@ -619,6 +629,7 @@ impl<'a> RubyExtractor<'a> {
                             &mut test_fn.equality_operands,
                             *a,
                             *b,
+                            self.anc,
                             self.src,
                         ) {
                             test_fn.tautologies += 1;
@@ -637,7 +648,7 @@ impl<'a> RubyExtractor<'a> {
             || name == "should_not"
     }
 
-    fn handle_assertion(&self, call_node: Node, method_name: &str, test_fn: &mut TestFn) {
+    fn handle_assertion(&self, call_node: Node<'a>, method_name: &str, test_fn: &mut TestFn) {
         test_fn.total_asserts += 1;
 
         if method_name == "expect" {
@@ -683,6 +694,7 @@ impl<'a> RubyExtractor<'a> {
                             &mut test_fn.equality_operands,
                             *a,
                             *b,
+                            self.anc,
                             self.src,
                         )
                     } else {

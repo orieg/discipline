@@ -5,6 +5,7 @@
 //! pass because the error never surfaces. One walker with per-language node kinds finds
 //! each handler and judges its body the way `functions.rs` judges a function body.
 
+use super::ancestry::Ancestry;
 use tree_sitter::Node;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +21,10 @@ pub struct SwallowSite {
 
 /// Reads a silencing expression from the syntax tree: the site's kind, or `None`.
 pub type SilenceNode = fn(Node, &str, &HandlerSpec) -> Option<&'static str>;
+
+/// What a discarded result is, read from its node and the nodes around it; `None` when
+/// it is not a site.
+pub type ClassifyDiscard = for<'t> fn(Node<'t>, &Ancestry<'t>, &str) -> Option<&'static str>;
 
 pub struct HandlerSpec {
     /// Node kinds that are an error handler with a body (`catch_clause`, `except_clause`).
@@ -41,7 +46,7 @@ pub struct HandlerSpec {
     pub discards: fn(&str) -> bool,
     /// Sorts a discarding statement by what it discards: `Some(kind)` is the site's kind,
     /// `None` is not a discarded result. Unset: every discard is `discarded-result`.
-    pub classify_discard: Option<fn(Node, &str) -> Option<&'static str>>,
+    pub classify_discard: Option<ClassifyDiscard>,
     /// For a binding statement, the node kinds of a right-hand side that is a call; a
     /// binding of anything else (a tuple, an identifier) is not a discarded result.
     pub call_value_kinds: &'static [&'static str],
@@ -456,8 +461,9 @@ fn is_constant_fallback(handler: Node, src: &str, spec: &HandlerSpec, c: &Consta
 /// The two lists share no handler: a body the first list holds (empty, default literal,
 /// logging only) is never in the second. `error-swallowing` reads the second only in the
 /// files `constant_fallback_paths` names.
-pub fn extract_with_constants(
-    root: Node,
+pub fn extract_with_constants<'t>(
+    root: Node<'t>,
+    anc: &Ancestry<'t>,
     src: &str,
     spec: &HandlerSpec,
     constants: Option<&ConstantSpec>,
@@ -465,16 +471,17 @@ pub fn extract_with_constants(
 ) -> (Vec<SwallowSite>, Vec<SwallowSite>) {
     let mut out = Vec::new();
     let mut fallbacks = Vec::new();
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
+    let mut stack = vec![(root, 0usize, root.id())];
+    while let Some((node, depth, above)) = stack.pop() {
+        anc.stand_at(depth, above, node);
         let line = node.start_position().row + 1;
         // Ruby's `rescue` keyword token has the same kind as the `rescue` clause; only
         // the named node is a handler.
         let in_arm_parent = || {
             spec.arm_of.is_empty() || {
-                let p = node.parent();
+                let p = anc.parent(node);
                 let in_arm = |n: Option<Node>| n.is_some_and(|n| spec.arm_of.contains(&n.kind()));
-                in_arm(p) || in_arm(p.and_then(|p| p.parent()))
+                in_arm(p) || in_arm(p.and_then(|p| anc.parent(p)))
             }
         };
         if node.is_named()
@@ -512,7 +519,7 @@ pub fn extract_with_constants(
             };
             if swallows.is_none()
                 && constants.is_some_and(|c| is_constant_fallback(node, src, spec, c))
-                && !expects_the_error(node, src)
+                && !expects_the_error(node, anc, src)
                 && !catches_only_signals(node, src)
             {
                 fallbacks.push(SwallowSite {
@@ -522,7 +529,7 @@ pub fn extract_with_constants(
                 });
             }
             if let Some(kind) = swallows
-                .filter(|_| !expects_the_error(node, src) && !catches_only_signals(node, src))
+                .filter(|_| !expects_the_error(node, anc, src) && !catches_only_signals(node, src))
                 .map(|k| {
                     if k == "empty-handler" && skips_unparseable_input(node, src) {
                         "skipped-input"
@@ -544,7 +551,9 @@ pub fn extract_with_constants(
             });
             let kind = if binding_of_call && (spec.discards)(t) {
                 spec.classify_discard
-                    .map_or(Some("discarded-result"), |classify| classify(node, src))
+                    .map_or(Some("discarded-result"), |classify| {
+                        classify(node, anc, src)
+                    })
             } else {
                 None
             };
@@ -563,7 +572,7 @@ pub fn extract_with_constants(
             } else {
                 None
             };
-            if let Some(kind) = kind.filter(|_| !result_is_tested(node, src)) {
+            if let Some(kind) = kind.filter(|_| !result_is_tested(node, anc, src)) {
                 out.push(SwallowSite {
                     line,
                     kind,
@@ -575,7 +584,7 @@ pub fn extract_with_constants(
         let mut cursor = node.walk();
         let children: Vec<Node> = node.children(&mut cursor).collect();
         for child in children.into_iter().rev() {
-            stack.push(child);
+            stack.push((child, depth + 1, node.id()));
         }
     }
     (out, fallbacks)
@@ -587,8 +596,8 @@ pub fn extract_with_constants(
 /// raises or fails, or the handler is `continue` / `pass` / a bare `return` and the
 /// statement after the `try` records a failure (`try: fn() except E: return` then
 /// `raise AssertionError(...)`).
-fn expects_the_error(handler: Node, src: &str) -> bool {
-    let Some(try_stmt) = handler.parent() else {
+fn expects_the_error<'t>(handler: Node<'t>, anc: &Ancestry<'t>, src: &str) -> bool {
+    let Some(try_stmt) = anc.parent(handler) else {
         return false;
     };
     let always_fails = |t: &str| {
@@ -639,8 +648,8 @@ fn expects_the_error(handler: Node, src: &str) -> bool {
         .map(str::trim)
         .all(|l| l.is_empty() || matches!(l, "continue" | "pass" | "..." | "return"));
     handler_only_skips
-        && try_stmt
-            .next_named_sibling()
+        && anc
+            .next_named_sibling(try_stmt)
             .is_some_and(|next| fails(text(next, src)))
 }
 
@@ -648,9 +657,9 @@ fn expects_the_error(handler: Node, src: &str) -> bool {
 /// `if` / `while` / ternary, a comparison (`@f() === false`), or the left operand of
 /// `&&` / `||`, possibly under `!` and parentheses (not `?:`, which substitutes). The operator mutes the diagnostic,
 /// but the caller reads the failure from the return value, so nothing is swallowed.
-fn result_is_tested(node: Node, src: &str) -> bool {
+fn result_is_tested<'t>(node: Node<'t>, anc: &Ancestry<'t>, src: &str) -> bool {
     let mut cur = node;
-    while let Some(p) = cur.parent() {
+    while let Some(p) = anc.parent(cur) {
         let is = |field: &str| {
             p.child_by_field_name(field)
                 .is_some_and(|c| c.id() == cur.id())
@@ -994,7 +1003,7 @@ fn rust_callee(value: Node, src: &str) -> Option<String> {
 /// callee is a `discarded-value`, which the gate reports at `warning`. `f().ok();` and
 /// `let _ = f()?;` keep their reading: `.ok()` exists only to drop an error, and `?` has
 /// already propagated it.
-pub fn rust_discard_class(node: Node, src: &str) -> Option<&'static str> {
+pub fn rust_discard_class<'t>(node: Node<'t>, _: &Ancestry<'t>, src: &str) -> Option<&'static str> {
     let Some(value) = node.child_by_field_name("value") else {
         return Some("discarded-result");
     };
@@ -1213,7 +1222,7 @@ fn sort_by_callee(name: &str, fallible: &[&str], value_only: &[&str]) -> Option<
 /// `f`'s last value, sorted by `f`'s name. `_ = f()` drops `f`'s only value: a discarded
 /// result when `f` is a known-fallible name, nothing otherwise. A type assertion, map index or channel
 /// receive (`v, _ := x.(T)`, `m[k]`, `<-ch`) drops an ok flag and is not reported.
-pub fn go_discard_class(node: Node, src: &str) -> Option<&'static str> {
+pub fn go_discard_class<'t>(node: Node<'t>, _: &Ancestry<'t>, src: &str) -> Option<&'static str> {
     let right = node.child_by_field_name("right")?;
     let value = if right.kind() == "expression_list" {
         right.named_child(0)?
@@ -1245,7 +1254,7 @@ pub fn go_discard_class(node: Node, src: &str) -> Option<&'static str> {
 
 /// C / C++: sorts `(void)call()` by the callee's name; a known-fallible system call is
 /// `discarded-result`, any other callee `discarded-value`.
-pub fn c_discard_class(node: Node, src: &str) -> Option<&'static str> {
+pub fn c_discard_class<'t>(node: Node<'t>, _: &Ancestry<'t>, src: &str) -> Option<&'static str> {
     let value = node.child_by_field_name("value")?;
     let f = value.child_by_field_name("function")?;
     let name = match f.kind() {
@@ -1271,7 +1280,11 @@ fn objc_drops_error(t: &str) -> bool {
 
 /// Objective-C: an `error:nil` message is a discarded result; `(void)` of a call is sorted
 /// by callee as in C, and `(void)` of a message is a discarded value.
-pub fn objc_discard_class(node: Node, src: &str) -> Option<&'static str> {
+pub fn objc_discard_class<'t>(
+    node: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+) -> Option<&'static str> {
     match node.kind() {
         "message_expression" => {
             // Only the message that carries the argument, not an enclosing one.
@@ -1284,7 +1297,7 @@ pub fn objc_discard_class(node: Node, src: &str) -> Option<&'static str> {
         }
         "cast_expression" => match node.child_by_field_name("value").map(|v| v.kind()) {
             Some("message_expression") => Some("discarded-value"),
-            _ => c_discard_class(node, src),
+            _ => c_discard_class(node, anc, src),
         },
         _ => None,
     }
@@ -1305,8 +1318,12 @@ pub fn swift_discards(t: &str) -> bool {
 
 /// Swift: a `try?` whose value is thrown away, as a statement of its own or bound to
 /// `_`, drops the error; `let v = try? f()` keeps a value the code goes on to handle.
-pub fn swift_discard_class(node: Node, src: &str) -> Option<&'static str> {
-    let parent = node.parent()?;
+pub fn swift_discard_class<'t>(
+    node: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+) -> Option<&'static str> {
+    let parent = anc.parent(node)?;
     match parent.kind() {
         "statements" => Some("discarded-result"),
         "assignment" => {

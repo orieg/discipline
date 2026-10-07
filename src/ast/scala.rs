@@ -8,6 +8,7 @@
 //! `scalafix:off` comments as escape hatches; an empty `catch` arm and `Try(...)
 //! .getOrElse(...)` / `.toOption` as swallowed errors; `???` as a stub.
 
+use super::ancestry::Ancestry;
 use anyhow::Result;
 use tree_sitter::Node;
 
@@ -51,9 +52,11 @@ impl LanguagePack for ScalaPack {
         )?;
         let root = tree.root_node();
 
+        let anc = Ancestry::new(root);
         let mut extractor = ScalaExtractor {
             dead: super::reach::dead_ranges(root, src, &SCALA_REACH),
             src: src.as_bytes(),
+            anc: &anc,
             vocab,
             facts: ParsedFileFacts {
                 has_parse_errors: root.has_error(),
@@ -66,8 +69,8 @@ impl LanguagePack for ScalaPack {
         extractor.collect_escape_hatches(root);
         extractor.visit_node(root, &mut Vec::new(), false);
         extractor.resolve_same_file_helpers();
-        SCALA_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
-        super::expected_exceptions::scala(root, src, &mut extractor.facts.tests);
+        SCALA_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
+        super::expected_exceptions::scala(root, &anc, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
             src,
@@ -104,6 +107,8 @@ const TEST_CALLS: &[&str] = &["test", "it", "they", "scenario", "property"];
 struct ScalaExtractor<'a> {
     dead: super::reach::DeadRanges,
     src: &'a [u8],
+    /// The ancestors of the nodes of the file's tree (`super::ancestry`).
+    anc: &'a Ancestry<'a>,
     vocab: &'a AssertVocabulary,
     facts: ParsedFileFacts,
     helpers: std::collections::HashMap<String, super::HelperFacts>,
@@ -119,7 +124,7 @@ impl<'a> ScalaExtractor<'a> {
         t.trim().trim_matches('"').to_string()
     }
 
-    fn collect_escape_hatches(&mut self, node: Node) {
+    fn collect_escape_hatches(&mut self, node: Node<'a>) {
         match node.kind() {
             "annotation" => {
                 let name = node
@@ -177,7 +182,7 @@ impl<'a> ScalaExtractor<'a> {
         }
     }
 
-    fn visit_node(&mut self, node: Node, scope: &mut Vec<String>, ignored: bool) {
+    fn visit_node(&mut self, node: Node<'a>, scope: &mut Vec<String>, ignored: bool) {
         match node.kind() {
             "class_definition" | "object_definition" | "trait_definition" => {
                 let name = node
@@ -202,7 +207,7 @@ impl<'a> ScalaExtractor<'a> {
         self.visit_children(node, scope, ignored);
     }
 
-    fn visit_children(&mut self, node: Node, scope: &mut Vec<String>, ignored: bool) {
+    fn visit_children(&mut self, node: Node<'a>, scope: &mut Vec<String>, ignored: bool) {
         let mut cursor = node.walk();
         let children: Vec<Node> = node.children(&mut cursor).collect();
         for child in children {
@@ -213,7 +218,7 @@ impl<'a> ScalaExtractor<'a> {
     /// `test("x") { }`, `ignore("x") { }`, `test("x".ignore) { }`, `it("x") { }`,
     /// `describe("x") { }`: a call whose callee is itself a call with a name argument,
     /// and whose own argument is the body.
-    fn visit_call_test(&mut self, node: Node, scope: &mut Vec<String>, ignored: bool) -> bool {
+    fn visit_call_test(&mut self, node: Node<'a>, scope: &mut Vec<String>, ignored: bool) -> bool {
         let (Some(inner), Some(body)) = (
             node.child_by_field_name("function"),
             node.child_by_field_name("arguments"),
@@ -265,7 +270,7 @@ impl<'a> ScalaExtractor<'a> {
 
     /// `"A cart" should "sum" in { }`, `it should "x" ignore { }`, `"x" in { }`, `"x" >> { }`,
     /// and WordSpec containers `"A cart" should { }`.
-    fn visit_infix_test(&mut self, node: Node, scope: &mut Vec<String>, ignored: bool) -> bool {
+    fn visit_infix_test(&mut self, node: Node<'a>, scope: &mut Vec<String>, ignored: bool) -> bool {
         let (Some(left), Some(op), Some(right)) = (
             node.child_by_field_name("left"),
             node.child_by_field_name("operator"),
@@ -314,7 +319,14 @@ impl<'a> ScalaExtractor<'a> {
         false
     }
 
-    fn push_test(&mut self, desc: String, node: Node, body: Node, scope: &[String], ignored: bool) {
+    fn push_test(
+        &mut self,
+        desc: String,
+        node: Node<'a>,
+        body: Node<'a>,
+        scope: &[String],
+        ignored: bool,
+    ) {
         let name = if scope.is_empty() {
             desc
         } else {
@@ -329,12 +341,12 @@ impl<'a> ScalaExtractor<'a> {
         };
         let mut calls = Vec::new();
         self.scan_node(body, &mut test_fn, &mut calls);
-        super::dispatch_calls(body, self.src, &SCALA_DISPATCH, &mut calls);
+        super::dispatch_calls(body, self.anc, self.src, &SCALA_DISPATCH, &mut calls);
         self.facts.tests.push(test_fn);
         self.test_calls.push(calls);
     }
 
-    fn annotated_test(&self, node: Node) -> (bool, bool) {
+    fn annotated_test(&self, node: Node<'a>) -> (bool, bool) {
         let mut test = false;
         let mut ignored = false;
         let mut cursor = node.walk();
@@ -354,7 +366,7 @@ impl<'a> ScalaExtractor<'a> {
         (test, ignored)
     }
 
-    fn visit_function(&mut self, node: Node, scope: &[String], ignored: bool) {
+    fn visit_function(&mut self, node: Node<'a>, scope: &[String], ignored: bool) {
         let name = node
             .child_by_field_name("name")
             .map(|n| self.text(n))
@@ -416,7 +428,7 @@ impl<'a> ScalaExtractor<'a> {
     }
 
     /// Whether a condition compares a value with itself (`x == x`) or is `true`.
-    fn is_tautology(&self, cond: Node, test_fn: &mut TestFn) -> bool {
+    fn is_tautology(&self, cond: Node<'a>, test_fn: &mut TestFn) -> bool {
         match cond.kind() {
             "boolean_literal" => self.text(cond) == "true",
             "infix_expression" => {
@@ -429,7 +441,13 @@ impl<'a> ScalaExtractor<'a> {
                     cond.child_by_field_name("right"),
                 ) {
                     (Some(l), Some(r)) if matches!(op, "==" | "===" | "eq") => {
-                        super::self_comparison::note(&mut test_fn.equality_operands, l, r, self.src)
+                        super::self_comparison::note(
+                            &mut test_fn.equality_operands,
+                            l,
+                            r,
+                            self.anc,
+                            self.src,
+                        )
                     }
                     _ => false,
                 }
@@ -438,7 +456,7 @@ impl<'a> ScalaExtractor<'a> {
         }
     }
 
-    fn scan_node(&self, node: Node, test_fn: &mut TestFn, calls: &mut Vec<String>) {
+    fn scan_node(&self, node: Node<'a>, test_fn: &mut TestFn, calls: &mut Vec<String>) {
         if super::reach::is_dead(&self.dead, node.start_byte()) {
             return;
         }
@@ -447,14 +465,14 @@ impl<'a> ScalaExtractor<'a> {
             "infix_expression" => self.inspect_matcher(node, test_fn),
             "identifier" if self.text(node) == "pending" => {
                 // A statement of a block, or the whole branch of an `if`.
-                let standalone = node.parent().is_some_and(|p| {
+                let standalone = self.anc.parent(node).is_some_and(|p| {
                     matches!(p.kind(), "block" | "template_body")
                         || (p.kind() == "if_expression"
                             && p.child_by_field_name("condition")
                                 .is_none_or(|c| c.id() != node.id()))
                 });
                 if standalone {
-                    test_fn.record_skip(read_skip(Grammar::Scala, node, None, self.src));
+                    test_fn.record_skip(read_skip(Grammar::Scala, node, self.anc, None, self.src));
                 }
             }
             _ => {}
@@ -467,7 +485,7 @@ impl<'a> ScalaExtractor<'a> {
 
     /// `x shouldBe y`, `x should equal (y)`, `x mustBe y`: an assertion; strong unless it
     /// compares a value with itself or with a bare boolean.
-    fn inspect_matcher(&self, node: Node, test_fn: &mut TestFn) {
+    fn inspect_matcher(&self, node: Node<'a>, test_fn: &mut TestFn) {
         let op = node
             .child_by_field_name("operator")
             .map(|o| self.text(o))
@@ -488,7 +506,13 @@ impl<'a> ScalaExtractor<'a> {
             (Some(a), Some(b))
                 if matches!(op, "shouldBe" | "shouldEqual" | "mustBe" | "mustEqual") =>
             {
-                super::self_comparison::note(&mut test_fn.equality_operands, a, b, self.src)
+                super::self_comparison::note(
+                    &mut test_fn.equality_operands,
+                    a,
+                    b,
+                    self.anc,
+                    self.src,
+                )
             }
             (Some(a), Some(b)) => super::self_comparison::same(a, b, self.src),
             _ => false,
@@ -500,7 +524,7 @@ impl<'a> ScalaExtractor<'a> {
         }
     }
 
-    fn inspect_call(&self, node: Node, test_fn: &mut TestFn, calls: &mut Vec<String>) {
+    fn inspect_call(&self, node: Node<'a>, test_fn: &mut TestFn, calls: &mut Vec<String>) {
         let Some(f) = node.child_by_field_name("function") else {
             return;
         };
@@ -536,6 +560,7 @@ impl<'a> ScalaExtractor<'a> {
                             &mut test_fn.equality_operands,
                             args[0],
                             args[1],
+                            self.anc,
                             self.src,
                         )
                     };
@@ -553,11 +578,13 @@ impl<'a> ScalaExtractor<'a> {
                 test_fn.total_asserts += 1;
                 test_fn.strong_asserts += 1;
             }
-            "cancel" => test_fn.record_skip(read_skip(Grammar::Scala, node, None, self.src)),
+            "cancel" => {
+                test_fn.record_skip(read_skip(Grammar::Scala, node, self.anc, None, self.src))
+            }
             // `assume(c)` cancels the test when `c` does not hold.
             "assume" => {
                 let own = args.first().map(|c| (*c, true));
-                test_fn.record_skip(read_skip(Grammar::Scala, node, own, self.src));
+                test_fn.record_skip(read_skip(Grammar::Scala, node, self.anc, own, self.src));
             }
             other => {
                 if self
@@ -581,7 +608,7 @@ impl<'a> ScalaExtractor<'a> {
     }
 }
 
-fn scala_fn_is_test(node: Node, src: &str, path: &str) -> bool {
+fn scala_fn_is_test<'t>(node: Node<'t>, _: &Ancestry<'t>, src: &str, path: &str) -> bool {
     let mut cursor = node.walk();
     let annotated = node.children(&mut cursor).any(|c| {
         c.kind() == "annotation"
