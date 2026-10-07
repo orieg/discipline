@@ -165,7 +165,8 @@ fn a_worktree_leased_by_another_session_is_refused_until_released() {
     let o = pretool(&main, "claude-code", &p, &[]);
     assert_eq!(o.code, 2, "{}", o.stderr);
     assert!(
-        o.stderr.contains("leased by copilot session other-session"),
+        o.stderr
+            .contains("leased by `copilot` session `other-session`"),
         "{}",
         o.stderr
     );
@@ -348,7 +349,8 @@ fn a_shell_command_with_non_ascii_words_is_judged_by_its_own_text() {
         &[],
     );
     assert_eq!(take.code, 0, "{}", take.stderr);
-    let other = format!("{})", main.join("wt\u{e9}").display());
+    // The worktree's directory is quoted as one code span.
+    let other = format!("(`{}`)", main.join("wt\u{e9}").display());
     for (agent, _) in AGENTS {
         for (refused, names) in [
             ("git -C wt\u{e9} commit -m \u{1f389}", other.as_str()),
@@ -548,7 +550,8 @@ fn a_second_session_leaves_a_live_lease_alone_and_says_so() {
     let o = session_start(&main, "copilot", &start_payload("copilot", &main, "sess-b"));
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert!(
-        o.stderr.contains("leased by claude-code session sess-a"),
+        o.stderr
+            .contains("leased by `claude-code` session `sess-a`"),
         "{}",
         o.stderr
     );

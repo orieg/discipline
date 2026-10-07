@@ -225,15 +225,23 @@ fn control_the_recognised_422_a_404_and_a_200_read_as_before() {
         assert_eq!(one_note(&api), not_on_forge, "{body}");
     }
 
-    // 404: the forge has the commit and no pull request carries it.
-    let api = FakeForge::start();
-    api.serve_raw(&path, 404, &[], r#"{"message":"Not Found"}"#);
-    assert_eq!(one_note(&api), direct);
-
-    // 200 with an empty list: the same.
+    // 200 with an empty list: the forge has the commit and no pull request carries it.
     let api = FakeForge::start();
     api.serve(&path, serde_json::json!([]));
     assert_eq!(one_note(&api), direct);
+
+    // 404 is not that answer (#634): GitHub gives it for a repository that is not there
+    // or that the token cannot see, so the lookup failed.
+    let api = FakeForge::start();
+    api.serve_raw(&path, 404, &[], r#"{"message":"Not Found"}"#);
+    assert_eq!(
+        one_note(&api),
+        format!(
+            "merged-pr-body: cannot resolve the merged pull request of commit {short} on github \
+             (the forge answered HTTP 404 for the pull requests of commit {short}: the repository is not there, or this run cannot see it); \
+             continuing without it (`directives.degrade_offline`)"
+        )
+    );
 
     // 200 with a merged pull request.
     let api = FakeForge::start();

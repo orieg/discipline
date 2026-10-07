@@ -1070,16 +1070,15 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
         let p = git.root().join(&args.baseline_file);
         if p.exists() {
             // An unreadable baseline is not an empty one: rewriting it would drop entries.
-            Some(
-                discipline::baseline::DisciplineBaseline::load_from_file(&p).with_context(
-                    || {
+            Some({
+                let shown = discipline::baseline::path_for_message(git.root(), &p);
+                discipline::baseline::DisciplineBaseline::load_from_file_named(&p, &shown)
+                    .with_context(|| {
                         format!(
-                            "existing baseline `{}` could not be read; fix or remove it first",
-                            args.baseline_file.display()
+                            "existing baseline `{shown}` could not be read; fix or remove it first"
                         )
-                    },
-                )?,
-            )
+                    })?
+            })
         } else {
             None
         }
@@ -1143,6 +1142,7 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
     let summary = run_checks(&config, args.suite, &ctx)?;
 
     let baseline_path = git.root().join(&args.baseline_file);
+    let baseline_shown = discipline::baseline::path_for_message(git.root(), &baseline_path);
     let reads = discipline::gitctx::ReadRecorder::new();
     let read_head = reads.head(&git);
 
@@ -1156,7 +1156,7 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
             .collect();
         let (migrated, report) = discipline::baseline::migrate(&old, &findings, &read_head);
         reads.finish()?;
-        migrated.write_to_file(&baseline_path)?;
+        migrated.write_to_file(&baseline_path, &baseline_shown)?;
         println!(
             "{} rewrote {} to fingerprint version {}: {} entr{} migrated, {} stale entr{} dropped",
             style::green("ok:"),
@@ -1234,7 +1234,7 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
     };
 
     if args.write {
-        baseline_obj.write_to_file(&baseline_path)?;
+        baseline_obj.write_to_file(&baseline_path, &baseline_shown)?;
         println!(
             "{} recorded {} grandfathered finding{} to {}",
             style::green("ok:"),
@@ -1274,7 +1274,7 @@ fn baseline(mut args: BaselineArgs) -> Result<bool> {
 
 fn lease(args: discipline::cli::LeaseArgs) -> Result<bool> {
     use discipline::cli::LeaseCommand;
-    use discipline::lease::{now, open, Lease};
+    use discipline::lease::{now, open, quote, quote_session, take_command, Lease};
     let (store, here) = open(Path::new("."))?;
     let t = now();
     match args.command {
@@ -1301,22 +1301,32 @@ fn lease(args: discipline::cli::LeaseArgs) -> Result<bool> {
                 a.steal,
             )?;
             for (other, branch) in &taken.stolen {
-                eprintln!("lease: took `{branch}` from worktree `{other}` (--steal)");
+                eprintln!(
+                    "lease: took {} from worktree {} (--steal)",
+                    quote(branch),
+                    quote(other)
+                );
             }
             println!(
-                "lease: worktree `{}` holds {} for {} (live {}s without a refresh)",
-                here.key,
-                taken.lease.branches.join(", "),
-                taken.lease.agent,
+                "lease: worktree {} holds {} for {} (live {}s without a refresh)",
+                quote(&here.key),
+                taken
+                    .lease
+                    .branches
+                    .iter()
+                    .map(quote)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                quote(&taken.lease.agent),
                 taken.lease.ttl_secs
             );
             Ok(true)
         }
         LeaseCommand::Release => {
             if store.release(&here.key)? {
-                println!("lease: released worktree `{}`", here.key);
+                println!("lease: released worktree {}", quote(&here.key));
             } else {
-                println!("lease: worktree `{}` held no lease", here.key);
+                println!("lease: worktree {} held no lease", quote(&here.key));
             }
             Ok(true)
         }
@@ -1337,14 +1347,17 @@ fn lease(args: discipline::cli::LeaseArgs) -> Result<bool> {
             } else if all.is_empty() {
                 println!("lease: no leases");
             } else {
+                // One row a lease: what a lease holds is written on one line, with no
+                // control character and a bounded length.
+                let field = discipline::report::text::agent_field;
                 for (k, l) in &all {
                     println!(
                         "{:<8} {}{:<24} {:<14} {}  heartbeat {}s ago",
                         if l.is_live(t) { "live" } else { "stale" },
                         if *k == here.key { "*" } else { " " },
-                        k,
-                        l.agent,
-                        l.branches.join(","),
+                        field(k),
+                        field(&l.agent),
+                        field(&l.branches.join(",")),
                         t - l.heartbeat
                     );
                 }
@@ -1396,14 +1409,14 @@ fn lease(args: discipline::cli::LeaseArgs) -> Result<bool> {
             let refused = discipline::lease::refused_updates(&store, &here.key, &stdin, t)?;
             for r in &refused {
                 eprintln!(
-                    "discipline lease guard: `{}` is leased by worktree `{}` ({} session {}, heartbeat {}s ago); this worktree (`{}`) may not move it. Hand the work over to that session, or take the branch with `discipline lease take --branch {} --steal`.",
-                    r.branch,
-                    r.holder,
-                    r.lease.agent,
-                    if r.lease.session.is_empty() { "-" } else { &r.lease.session },
+                    "discipline lease guard: {} is leased by worktree {} ({} session {}, heartbeat {}s ago); this worktree ({}) may not move it. Hand the work over to that session, or take the branch with {}.",
+                    quote(&r.branch),
+                    quote(&r.holder),
+                    quote(&r.lease.agent),
+                    quote_session(&r.lease.session),
                     t - r.lease.heartbeat,
-                    here.key,
-                    r.branch
+                    quote(&here.key),
+                    take_command(&r.branch)
                 );
             }
             Ok(refused.is_empty())
@@ -1412,12 +1425,13 @@ fn lease(args: discipline::cli::LeaseArgs) -> Result<bool> {
             None => Ok(true),
             Some((other, l)) => {
                 eprintln!(
-                    "lease: `{}` is leased by worktree `{other}` ({} session {}, heartbeat {}s ago); hand the work over to that session, or take it with `discipline lease take --branch {} --steal`",
-                    a.branch,
-                    l.agent,
-                    if l.session.is_empty() { "-" } else { &l.session },
+                    "lease: {} is leased by worktree {} ({} session {}, heartbeat {}s ago); hand the work over to that session, or take it with {}",
+                    quote(&a.branch),
+                    quote(&other),
+                    quote(&l.agent),
+                    quote_session(&l.session),
                     t - l.heartbeat,
-                    a.branch
+                    take_command(&a.branch)
                 );
                 Ok(false)
             }
