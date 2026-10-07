@@ -86,6 +86,8 @@ const AGENTS: &[(&str, &str)] = &[
     ("copilot", "copilot/create.json"),
     ("agy", "agy/write_to_file.json"),
     ("opencode", "opencode/write.json"),
+    // OpenCode 2.x names the target `path`; `filePath` is its legacy spelling.
+    ("opencode", "opencode/write_v2.json"),
     ("qwen", "qwen/write_file.json"),
     ("codex", "codex/apply_patch.json"),
 ];
