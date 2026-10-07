@@ -411,7 +411,7 @@ fn the_locale_of_the_parent_process_does_not_reword_git() {
 
 /// Source text that starts the binary or `git` without the harness, or copies its scrub:
 /// what the scan below counts in every test source, by the name it reports.
-fn unisolated_spawn_needles() -> [(&'static str, String); 5] {
+fn unisolated_spawn_needles() -> [(&'static str, String); 9] {
     // Written in pieces so this file does not match itself.
     [
         (
@@ -423,6 +423,10 @@ fn unisolated_spawn_needles() -> [(&'static str, String); 5] {
             ["discipline", "_bin("].concat(),
         ),
         ("a bare git", ["Command::new(", "\"git\")"].concat()),
+        ("a bare bash", ["Command::new(", "\"bash\")"].concat()),
+        ("a bare sh", ["Command::new(", "\"sh\")"].concat()),
+        ("a bare python3", ["Command::new(", "\"python3\")"].concat()),
+        ("a bare node", ["Command::new(", "\"node\")"].concat()),
         (
             "a hand-rolled scrub (the variable list)",
             ["ISOLATED", "_ENV_VARS"].concat(),
@@ -481,6 +485,8 @@ fn rust_sources(dir: &str) -> Vec<String> {
     found
 }
 
+/// #603: the scripts a test runs (`bash`, `sh`, `python3`, `node`) inherited everything;
+/// they go through `common::script_command`.
 /// #572: `test_output_schemas.rs` and `test_stability_contract.rs` started the binary
 /// with `Command::new(env!(..))`, `test_lease.rs` with its own looser scrub, and three
 /// files ran a bare `git`. A spawn outside the harness inherits the parent's environment,
@@ -513,7 +519,7 @@ fn every_spawn_of_the_binary_and_of_git_goes_through_the_harness() {
     let stale: Vec<_> = allowed.difference(&found).collect();
     assert!(
         unlisted.is_empty() && stale.is_empty(),
-        "spawn the binary through common::discipline_cmd and git through common::git_command \
-         (file, what, occurrences): {unlisted:#?}\nSPAWN_ALLOW_LIST entries that no longer match: {stale:#?}"
+        "spawn the binary through common::discipline_cmd, git through common::git_command \
+         and a script through common::script_command (file, what, occurrences): {unlisted:#?}\nSPAWN_ALLOW_LIST entries that no longer match: {stale:#?}"
     );
 }

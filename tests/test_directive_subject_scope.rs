@@ -34,7 +34,7 @@ const BODY_SWALLOW_PROSE_NAMES_DIR: &str =
     "allow-swallow: pkg/io.py a missing cache file is the normal first run for every loader in pkg/";
 const BODY_SWALLOW_EACH_FILE: &str = "allow-swallow: pkg/io.py a missing cache file is the normal first run\nallow-swallow: config.py the defaults apply when the file is unreadable";
 
-const CONFIG_BASE: &str = "[meta]\nversion = 1\nname = \"t\"\n";
+const CONFIG_BASE: &str = common::CONFIG_HEAD;
 const CONFIG_TWO_GATES_OFF: &str = "[meta]\nversion = 1\nname = \"t\"\n\n[gates.pii]\nenabled = false\n\n[gates.time-estimates]\nenabled = false\n";
 const BODY_WEAKENING_PROSE_NAMES_GATE: &str = "allow-gate-weakening: time-estimates the plan documents come from a vendor and the pii gate stays under review";
 const BODY_WEAKENING_EACH_GATE: &str = "allow-gate-weakening: time-estimates the plan documents come from a vendor\nallow-gate-weakening: pii the fixtures carry sample addresses";

@@ -1721,14 +1721,16 @@ const CASES: &[Case] = &[
     (
         "replay: a blocked run names its error gates, a run that could not check names none",
         || {
-            use crate::replay::{pr_from_subject, read_verdict};
-            let json = r#"{"outcomes":[{"gate":"pii","violations":[{"severity":"error"}]},{"gate":"x","violations":[{"severity":"warning"}]}]}"#;
-            let (v, e, w) = read_verdict(1, json);
+            use crate::replay::{parse_report, pr_from_subject, read_verdict};
+            let json = parse_report(
+                r#"{"outcomes":[{"gate":"pii","violations":[{"severity":"error"}]},{"gate":"x","violations":[{"severity":"warning"}]}]}"#,
+            );
+            let (v, e, w) = read_verdict(1, &json);
             Ok(v == "blocked"
                 && e == ["pii"]
                 && w == ["x"]
-                && read_verdict(0, "{}").0 == "passed"
-                && read_verdict(2, json) == ("could_not_check", vec![], vec![])
+                && read_verdict(0, &parse_report("{}")).0 == "passed"
+                && read_verdict(2, &json) == ("could_not_check", vec![], vec![])
                 && pr_from_subject("fix: y (#1028)") == Some(1028))
         },
     ),
@@ -2404,6 +2406,271 @@ const CASES: &[Case] = &[
                 && wider(
                     cpp("EXPECT_THROW(f(), std::logic_error);")?,
                     cpp("EXPECT_THROW(f(), std::invalid_argument);")?,
+                ) == 0)
+        },
+    ),
+    (
+        "assertion-reduction: a Go expected error or panic (errors.Is, testify, gocheck) is read, and losing its sentinel or message is a widening while a sign flip is not",
+        || {
+            use crate::ast::default_registry;
+            use crate::ast::expected_exceptions::widened;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let pack = reg
+                .find_pack("sut_test.go")
+                .ok_or_else(|| anyhow::anyhow!("no go pack"))?;
+            let go = |body: &str| -> Result<_> {
+                // A gocheck method for an assertion on `c`, a test function otherwise.
+                let head = if body.starts_with("c.") {
+                    "(s *S) TestRejects(c *C)"
+                } else {
+                    "TestRejects(t *testing.T)"
+                };
+                let src = format!(
+                    "package sut\n\nimport (\n\t\"errors\"\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/require\"\n\t. \"gopkg.in/check.v1\"\n)\n\nfunc {head} {{\n\t{body}\n}}\n"
+                );
+                Ok(pack
+                    .extract("sut_test.go", &src, &v)?
+                    .tests
+                    .iter()
+                    .flat_map(|t| t.expected_exceptions.clone())
+                    .collect::<Vec<_>>())
+            };
+            let wider = |b: &str, h: &str| -> Result<usize> { Ok(widened(&go(b)?, &go(h)?).len()) };
+            Ok(wider("require.ErrorIs(t, err, ErrGone)", "require.Error(t, err)")? == 1
+                && wider("require.Error(t, err)", "require.ErrorIs(t, err, ErrGone)")? == 0
+                && wider("require.Error(t, err)", "require.NoError(t, err)")? == 0
+                && wider(
+                    "if !errors.Is(err, ErrGone) {\n\t\tt.Fatal(err)\n\t}",
+                    "require.Error(t, err)",
+                )? == 1
+                && wider(
+                    "require.EqualError(t, err, \"negative\")",
+                    "require.ErrorContains(t, err, \"negative\")",
+                )? == 1
+                && wider(
+                    "require.PanicsWithValue(t, \"boom\", func() { f() })",
+                    "require.Panics(t, func() { f() })",
+                )? == 1
+                && wider(
+                    "c.Assert(err, ErrorMatches, \"negative\")",
+                    "c.Assert(err, ErrorMatches, \".*\")",
+                )? == 1
+                && go("other.ErrorIs(t, err, ErrGone)")?.is_empty())
+        },
+    ),
+    (
+        "assertion-reduction: a Swift expected error (XCTAssertThrowsError's closure, #expect(throws:)) is read, and moving it to any Error or losing its type is a widening",
+        || {
+            use crate::ast::default_registry;
+            use crate::ast::expected_exceptions::widened;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let path = "Tests/SutTests/SutTests.swift";
+            let pack = reg
+                .find_pack(path)
+                .ok_or_else(|| anyhow::anyhow!("no swift pack"))?;
+            let read = |src: String| -> Result<_> {
+                Ok(pack.extract(path, &src, &v)?.tests[0]
+                    .expected_exceptions
+                    .clone())
+            };
+            let xct = |body: &str| {
+                read(format!(
+                    "import XCTest\n\nfinal class SutTests: XCTestCase {{\n    func testRejects() {{\n        {body}\n    }}\n}}\n"
+                ))
+            };
+            let st = |body: &str| {
+                read(format!("import Testing\n\n@Test func rejects() {{\n    {body}\n}}\n"))
+            };
+            let typed = "XCTAssertThrowsError(try f()) { error in\n    XCTAssertTrue(error is SutError)\n}";
+            Ok(widened(&xct(typed)?, &xct("XCTAssertThrowsError(try f())")?).len() == 1
+                && widened(&xct("XCTAssertThrowsError(try f())")?, &xct(typed)?).is_empty()
+                && widened(&xct(typed)?, &xct("XCTAssertNoThrow(try f())")?).is_empty()
+                && widened(
+                    &st("#expect(throws: SutError.self) { try f() }")?,
+                    &st("#expect(throws: (any Error).self) { try f() }")?,
+                )
+                .len()
+                    == 1
+                && widened(
+                    &st("#expect(throws: SutError.self) { try f() }")?,
+                    &st("#expect(throws: Client.Error.self) { try f() }")?,
+                )
+                .is_empty()
+                && st("#expect(f() == 1)")?.is_empty())
+        },
+    ),
+    (
+        "assertion-reduction: a Scala expected exception (intercept, thrownBy, specs2 throwA) is read on Java's table, and a parent class or a dropped message is a widening",
+        || {
+            use crate::ast::default_registry;
+            use crate::ast::expected_exceptions::widened;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let path = "src/test/scala/SutSpec.scala";
+            let pack = reg
+                .find_pack(path)
+                .ok_or_else(|| anyhow::anyhow!("no scala pack"))?;
+            let scala = |body: &str| -> Result<_> {
+                let src = format!(
+                    "class SutSpec extends AnyFunSuite {{\n  test(\"rejects\") {{\n    {body}\n  }}\n}}\n"
+                );
+                Ok(pack.extract(path, &src, &v)?.tests[0]
+                    .expected_exceptions
+                    .clone())
+            };
+            let wider = |b: &str, h: &str| -> Result<usize> {
+                Ok(widened(&scala(b)?, &scala(h)?).len())
+            };
+            Ok(wider(
+                "intercept[NumberFormatException] { f() }",
+                "intercept[IllegalArgumentException] { f() }",
+            )? == 1
+                && wider(
+                    "intercept[IllegalArgumentException] { f() }",
+                    "intercept[NumberFormatException] { f() }",
+                )? == 0
+                && wider(
+                    "the [IllegalArgumentException] thrownBy { f() } should have message \"negative\"",
+                    "an [IllegalArgumentException] should be thrownBy { f() }",
+                )? == 1
+                && wider(
+                    "f() must throwA[NumberFormatException]",
+                    "f() must throwA[RuntimeException]",
+                )? == 1
+                && wider(
+                    "an [IllegalArgumentException] should be thrownBy { f() }",
+                    "noException should be thrownBy { f() }",
+                )? == 0
+                && scala("proxy.intercept[IllegalArgumentException] { f() }")?.is_empty())
+        },
+    ),
+    (
+        "assertion-reduction: an Objective-C expected exception (XCTAssertThrowsSpecific, ..Named, XCTAssertNoThrow) is read, and moving it to NSException or losing its class or name is a widening",
+        || {
+            use crate::ast::default_registry;
+            use crate::ast::expected_exceptions::widened;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let path = "Tests/SutTests.m";
+            let pack = reg
+                .find_pack(path)
+                .ok_or_else(|| anyhow::anyhow!("no objc pack"))?;
+            let objc = |body: &str| -> Result<_> {
+                let src = format!(
+                    "@interface SutTests : XCTestCase\n@end\n\n@implementation SutTests\n- (void)testRejects {{\n    {body}\n}}\n@end\n"
+                );
+                Ok(pack.extract(path, &src, &v)?.tests[0]
+                    .expected_exceptions
+                    .clone())
+            };
+            let wider = |b: &str, h: &str| -> Result<usize> {
+                Ok(widened(&objc(b)?, &objc(h)?).len())
+            };
+            let specific = "XCTAssertThrowsSpecific([sut run], SutException);";
+            Ok(wider(specific, "XCTAssertThrowsSpecific([sut run], NSException);")? == 1
+                && wider(specific, "XCTAssertThrows([sut run]);")? == 1
+                && wider("XCTAssertThrows([sut run]);", specific)? == 0
+                && wider(specific, "XCTAssertThrowsSpecific([sut run], OtherException);")? == 0
+                && wider(
+                    "XCTAssertThrowsSpecificNamed([sut run], NSException, NSRangeException);",
+                    "XCTAssertThrowsSpecific([sut run], NSException);",
+                )? == 1
+                && wider(
+                    "XCTAssertNoThrow([sut run]);",
+                    "XCTAssertNoThrowSpecific([sut run], SutException);",
+                )? == 1
+                && objc("XCTAssertEqual([sut run], 1);")?.is_empty())
+        },
+    ),
+    (
+        "assertion-reduction: expected failures of Catch2 and doctest macros, AssertJ typed entry points and catchThrowable, Chai should, and a Kotest message assertion are read, and MSTest ThrowsException replaced by Throws loses exactness",
+        || {
+            use crate::ast::default_registry;
+            use crate::ast::expected_exceptions::widened;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let read = |path: &str, src: String| -> Result<_> {
+                let pack = reg
+                    .find_pack(path)
+                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
+                Ok(pack.extract(path, &src, &v)?.tests[0]
+                    .expected_exceptions
+                    .clone())
+            };
+            let catch2 = |call: &str| {
+                read(
+                    "tests/t_test.cpp",
+                    format!("#include <catch2/catch_test_macros.hpp>\nTEST_CASE(\"t\") {{\n  {call}\n}}\n"),
+                )
+            };
+            let java = |call: &str| {
+                read(
+                    "src/test/java/TTest.java",
+                    format!("class TTest {{\n    @Test\n    void t() {{\n        {call}\n    }}\n}}\n"),
+                )
+            };
+            let js = |call: &str| {
+                read(
+                    "tests/t.test.js",
+                    format!("it(\"t\", () => {{\n  {call}\n}});\n"),
+                )
+            };
+            let kt = |call: &str| {
+                read(
+                    "src/test/kotlin/TTest.kt",
+                    format!("class TTest {{\n    @Test\n    fun t() {{\n        {call}\n    }}\n}}\n"),
+                )
+            };
+            let cs = |call: &str| {
+                read(
+                    "tests/T.cs",
+                    format!("public class T {{\n    [TestMethod]\n    public void Run() {{\n        {call}\n    }}\n}}\n"),
+                )
+            };
+            let wider = |b: Vec<_>, h: Vec<_>| widened(&b, &h).len();
+            Ok(wider(
+                catch2("REQUIRE_THROWS_AS(f(), std::invalid_argument);")?,
+                catch2("REQUIRE_THROWS_AS(f(), std::logic_error);")?,
+            ) == 1
+                && wider(
+                    catch2("CHECK_THROWS_WITH(f(), \"negative\");")?,
+                    catch2("CHECK_THROWS(f());")?,
+                ) == 1
+                && wider(
+                    catch2("CHECK_THROWS(f());")?,
+                    catch2("CHECK_THROWS_AS_MESSAGE(f(), std::logic_error, \"why\");")?,
+                ) == 0
+                && wider(
+                    java("assertThatExceptionOfType(NumberFormatException.class).isThrownBy(() -> f());")?,
+                    java("assertThatIllegalArgumentException().isThrownBy(() -> f());")?,
+                ) == 1
+                && wider(
+                    java("assertThatIllegalArgumentException().isThrownBy(() -> f());")?,
+                    java("assertThatExceptionOfType(IllegalArgumentException.class).isThrownBy(() -> f());")?,
+                ) == 0
+                && wider(
+                    java("Throwable e = catchThrowable(() -> f());\n        assertThat(e).isInstanceOf(NumberFormatException.class);")?,
+                    java("Throwable e = catchThrowable(() -> f());\n        assertThat(e).isInstanceOf(RuntimeException.class);")?,
+                ) == 1
+                && java("Throwable e = catchThrowable(() -> f());")?.is_empty()
+                && wider(
+                    js("(() => f()).should.throw(RangeError, \"negative\");")?,
+                    js("(() => f()).should.throw(RangeError);")?,
+                ) == 1
+                && js("stub.throws(new RangeError());")?.is_empty()
+                && wider(
+                    kt("val e = shouldThrow<IllegalArgumentException> { f() }\n        e.message shouldBe \"negative\"")?,
+                    kt("val e = shouldThrow<IllegalArgumentException> { f() }\n        e.message shouldContain \"negative\"")?,
+                ) == 1
+                && wider(
+                    cs("Assert.ThrowsException<ArgumentException>(() => f());")?,
+                    cs("Assert.Throws<ArgumentException>(() => f());")?,
+                ) == 1
+                && wider(
+                    cs("Assert.ThrowsException<ArgumentException>(() => f());")?,
+                    cs("Assert.ThrowsExactly<ArgumentException>(() => f());")?,
                 ) == 0)
         },
     ),
@@ -4352,18 +4619,28 @@ command = "cargo test"
         },
     ),
     (
-        "assertion-reduction: MSTest Assert.Throws accepts subclasses beside Assert.ThrowsExactly, and ThrowsExactly replaced by it loses exactness",
+        "assertion-reduction: Assert.Throws is exact in an xUnit or NUnit file and accepts subclasses in an MSTest file by the using directives, and beside or opposite an MSTest name where none names a framework",
         || {
-            let file = |bodies: &[&str]| {
+            let file = |using: &str, bodies: &[&str]| {
                 let methods: String = bodies
                     .iter()
                     .enumerate()
                     .map(|(i, body)| format!("    [TestMethod]\n    public void Rejects{i}() {{\n        {body}\n    }}\n"))
                     .collect();
-                format!("[TestClass]\npublic class SutTests {{\n{methods}}}\n")
+                format!("{using}\n[TestClass]\npublic class SutTests {{\n{methods}}}\n")
             };
-            let change = |base: &[&str], head: &[&str]| {
-                helper_change(&[("tests/SutTests.cs", &file(base), &file(head))], "")
+            let change_in = |base: (&str, &[&str]), head: (&str, &[&str])| {
+                helper_change(
+                    &[("tests/SutTests.cs", &file(base.0, base.1), &file(head.0, head.1))],
+                    "",
+                )
+            };
+            let mstest = "using Microsoft.VisualStudio.TestTools.UnitTesting;";
+            let xunit = "using Xunit;";
+            // No directive names a framework.
+            let none = "";
+            let change = |using: &str, base: &[&str], head: &[&str]| {
+                change_in((using, base), (using, head))
             };
             let widened = vec!["assertion-reduction/expected-exception-widened".to_string()];
             let exactly = "Assert.ThrowsExactly<ArgumentException>(() => sut.Run());";
@@ -4371,15 +4648,24 @@ command = "cargo test"
             let throws_null = "Assert.Throws<ArgumentNullException>(() => sut.Run());";
             let legacy = "Assert.ThrowsException<ArgumentException>(() => sut.Run());";
             let other = "Assert.ThrowsExactly<FormatException>(() => sut.Parse());";
-            Ok(change(&[exactly], &[throws])? == widened
-                && change(&[throws_null, other], &[throws, other])? == widened
-                // Controls: the reverse; no sign of the version; the name on one side
-                // only beside an untouched site; the form that is exact in every version.
-                && change(&[throws], &[exactly])?.is_empty()
-                && change(&[throws_null], &[throws])?.is_empty()
-                && change(&[throws], &[throws, other])?.is_empty()
-                && change(&[legacy], &[throws])?.is_empty()
-                && change(&[exactly], &[legacy])?.is_empty())
+            // (c) No framework named: beside `ThrowsExactly`, or opposite an MSTest name.
+            Ok(change(none, &[exactly], &[throws])? == widened
+                && change(none, &[throws_null, other], &[throws, other])? == widened
+                && change(none, &[legacy], &[throws])? == widened
+                // Controls: the reverse; no sign of the framework; the name on one side
+                // only beside an untouched site; two exact forms.
+                && change(none, &[throws], &[exactly])?.is_empty()
+                && change(none, &[throws_null], &[throws])?.is_empty()
+                && change(none, &[throws], &[throws, other])?.is_empty()
+                && change(none, &[exactly], &[legacy])?.is_empty()
+                // (b) An MSTest file: `Throws` accepts subclasses without `ThrowsExactly`.
+                && change(mstest, &[legacy], &[throws])? == widened
+                && change(mstest, &[throws_null], &[throws])? == widened
+                && change(mstest, &[legacy], &[exactly])?.is_empty()
+                // (a) An xUnit head file: `Throws` is exact, also beside `ThrowsExactly`.
+                && change_in((mstest, &[legacy]), (xunit, &[throws]))?.is_empty()
+                && change_in((mstest, &[exactly]), (xunit, &[throws]))?.is_empty()
+                && change(xunit, &[throws_null, other], &[throws, other])?.is_empty())
         },
     ),
     (

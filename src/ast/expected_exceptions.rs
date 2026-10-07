@@ -43,7 +43,8 @@ pub struct ExpectedException {
     pub guarded_call: Option<String>,
     /// How a C# `Assert.Throws` kind was spelled, where the spelling decides whether the
     /// class is exact ([`is_exact_beside`]): [`THROWS_EXACTLY`], [`THROWS`],
-    /// [`THROWS_BESIDE_EXACTLY`]. Empty for every other expectation.
+    /// [`THROWS_BESIDE_EXACTLY`], [`THROWS_EXCEPTION`], [`THROWS_OF_MSTEST`],
+    /// [`THROWS_EXACT`]. Empty for every other expectation.
     pub form: &'static str,
 }
 
@@ -54,6 +55,14 @@ const THROWS: &str = "Throws";
 /// `Assert.Throws<T>` in a file that uses `Assert.ThrowsExactly`: MSTest 3.8 or later,
 /// where it accepts subclasses.
 const THROWS_BESIDE_EXACTLY: &str = "Throws beside ThrowsExactly";
+
+/// `Assert.ThrowsException<T>`: exact, and a name of MSTest only.
+const THROWS_EXCEPTION: &str = "ThrowsException";
+/// `Assert.Throws<T>` in a file whose `using` directives name MSTest: it accepts
+/// subclasses.
+const THROWS_OF_MSTEST: &str = "Throws of MSTest";
+/// `Assert.Throws<T>` in a file whose `using` directives name xUnit or NUnit: exact.
+const THROWS_EXACT: &str = "Throws of xUnit or NUnit";
 
 /// An expected exception or panic that was widened between base and head.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -344,7 +353,7 @@ fn attach_declared(root: Node, src: &str, tests: &mut [TestFn], syntax: &ClassSy
 }
 
 /// The language an expectation kind belongs to: which hierarchy and matcher rules apply.
-/// Kotlin's forms are kept under Java's kinds: they name the same classes.
+/// Kotlin's and Scala's forms are kept under Java's kinds: they name the same classes.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Family {
     Python,
@@ -354,6 +363,9 @@ enum Family {
     Php,
     Ruby,
     Cpp,
+    Go,
+    Swift,
+    ObjC,
     Other,
 }
 
@@ -369,6 +381,9 @@ fn family(kind: &str) -> Family {
         | "expectExceptionMessageMatches" => Family::Php,
         "raise_error" | "not.raise_error" | "assert_raises" => Family::Ruby,
         "EXPECT_THROW" | "EXPECT_NO_THROW" => Family::Cpp,
+        "go.Error" | "go.NoError" | "go.Panics" | "go.NotPanics" => Family::Go,
+        "swift.throws" | "swift.noThrow" => Family::Swift,
+        "objc.throws" | "objc.noThrow" => Family::ObjC,
         _ => Family::Other,
     }
 }
@@ -382,21 +397,42 @@ fn is_exact(kind: &str) -> bool {
 /// is compared with across the change.
 ///
 /// `Assert.Throws<T>` is exact in xUnit and NUnit. In MSTest it exists from 3.8 only, and
-/// accepts subclasses; the version is not written in a test file, but
-/// `Assert.ThrowsExactly` is a name of 3.8 and later. So `Assert.Throws<T>` accepts
-/// subclasses in a file that uses `Assert.ThrowsExactly`, and also when the expectation
-/// on the other side of the change is an `Assert.ThrowsExactly` or an `Assert.Throws`
-/// of such a file: the same call means the same on both sides. Otherwise it is exact.
+/// accepts subclasses. Whose `Assert` a file's is comes from its `using` directives
+/// ([`csharp_framework`]): in an xUnit or NUnit file `Assert.Throws<T>` is exact, in an
+/// MSTest file it accepts subclasses, whatever stands on the other side.
+///
+/// A file whose directives name none of them (global usings, a fragment) is read by what
+/// it calls: `Assert.ThrowsExactly` is a name of MSTest 3.8 and later, and
+/// `Assert.ThrowsException` a name of MSTest only. There `Assert.Throws<T>` accepts
+/// subclasses in a file that uses `Assert.ThrowsExactly`, and when the expectation on
+/// the other side of the change is an `Assert.ThrowsExactly`, an `Assert.ThrowsException`
+/// or an `Assert.Throws` that accepts subclasses: the same call means the same on both
+/// sides. Otherwise it is exact.
 fn is_exact_beside(e: &ExpectedException, other: &ExpectedException) -> bool {
-    let later = |x: &ExpectedException| matches!(x.form, THROWS_EXACTLY | THROWS_BESIDE_EXACTLY);
-    is_exact(&e.kind) && e.form != THROWS_BESIDE_EXACTLY && !(e.form == THROWS && later(other))
+    let mstest = |x: &ExpectedException| {
+        matches!(
+            x.form,
+            THROWS_EXACTLY | THROWS_BESIDE_EXACTLY | THROWS_EXCEPTION | THROWS_OF_MSTEST
+        )
+    };
+    is_exact(&e.kind)
+        && !matches!(e.form, THROWS_BESIDE_EXACTLY | THROWS_OF_MSTEST)
+        && !(e.form == THROWS && mstest(other))
 }
 
 /// Kinds that state the test passes when nothing (or nothing of the type) is thrown.
 fn is_negated(kind: &str) -> bool {
     matches!(
         kind,
-        "not.toThrow" | "doesNotThrow" | "Throws.Nothing" | "not.raise_error" | "EXPECT_NO_THROW"
+        "not.toThrow"
+            | "doesNotThrow"
+            | "Throws.Nothing"
+            | "not.raise_error"
+            | "EXPECT_NO_THROW"
+            | "go.NoError"
+            | "go.NotPanics"
+            | "swift.noThrow"
+            | "objc.noThrow"
     )
 }
 
@@ -408,9 +444,13 @@ fn is_attribute(kind: &str) -> bool {
 
 /// Expectations that can stand for each other when a test is rewritten. PHP states the
 /// class, the message and the code in separate calls, which never replace one another,
-/// and an expected warning is not an expected exception.
+/// an expected warning is not an expected exception, and in Go a panic is not a returned
+/// error.
 fn interchangeable(b: &str, h: &str) -> bool {
-    let alone = |k: &str| matches!(family(k), Family::Php | Family::Other) || k == "assertWarns";
+    let alone = |k: &str| {
+        matches!(family(k), Family::Php | Family::Other)
+            || matches!(k, "assertWarns" | "go.Panics" | "go.NotPanics")
+    };
     family(b) == family(h) && is_negated(b) == is_negated(h) && (b == h || !(alone(b) || alone(h)))
 }
 
@@ -421,9 +461,16 @@ fn interchangeable(b: &str, h: &str) -> bool {
 /// 0: Specific exception (`ValueError`, `IllegalArgumentException`, `TypeError`, `CustomError`, etc.).
 ///
 /// Ruby and C++ have the general names of their own language only: an `Error` there is
-/// a class of the project.
+/// a class of the project. Go has none: a sentinel or an error type is compared by name.
+/// Swift has `any Error`, as [`swift_type`] writes the protocol every error conforms to,
+/// and Objective-C has `NSException`.
 fn ancestor_rank(fam: Family, type_name: &str) -> usize {
     match (fam, type_name) {
+        (Family::ObjC, "NSException") => 1,
+        (Family::ObjC, _) => 0,
+        (Family::Go, _) => 0,
+        (Family::Swift, "any Error") => 1,
+        (Family::Swift, _) => 0,
         (Family::Cpp, "exception") => 1,
         (Family::Cpp, _) => 0,
         (Family::Ruby, "Exception") => 2,
@@ -444,7 +491,7 @@ fn hierarchy(fam: Family) -> Hierarchy {
         Family::Php => tables::PHP,
         Family::Ruby => tables::RUBY,
         Family::Cpp => tables::CPP,
-        Family::Other => &[],
+        Family::Go | Family::Swift | Family::ObjC | Family::Other => &[],
     }
 }
 
@@ -469,8 +516,9 @@ fn standard_qualifier(fam: Family, qualifier: &str) -> bool {
                     | "java.util.zip"
                     | "java.time"
                     | "java.time.format"
-                    // Kotlin's aliases of the `java.lang` classes.
+                    // Kotlin's and Scala's aliases of the `java.lang` classes.
                     | "kotlin"
+                    | "scala"
             )
         }
         Family::CSharp => matches!(
@@ -484,7 +532,9 @@ fn standard_qualifier(fam: Family, qualifier: &str) -> bool {
         Family::Js => matches!(qualifier, "globalThis" | "window" | "global" | "self"),
         Family::Cpp => matches!(qualifier.trim_start_matches(':'), "std" | "std::filesystem"),
         // `\LogicException` and `::StandardError` name the root namespace: no qualifier.
-        Family::Php | Family::Ruby | Family::Other => false,
+        Family::Php | Family::Ruby | Family::Go | Family::Swift | Family::ObjC | Family::Other => {
+            false
+        }
     }
 }
 
@@ -1830,6 +1880,8 @@ fn inspect_js_expect(node: Node, obj: Node, chai: bool, src: &str, tests: &mut [
         };
         link = next;
     }
+    // Chai's `should` style: `(() => f()).should.throw(E)`, the subject before `.should`.
+    let should = chai.then(|| js_should_subject(obj, src)).flatten();
     let expect_call = (link.kind() == "call_expression")
         .then_some(link)
         .filter(|c| {
@@ -1842,7 +1894,7 @@ fn inspect_js_expect(node: Node, obj: Node, chai: bool, src: &str, tests: &mut [
                 name.is_some_and(|n| text(n, src) == "expect")
             })
         });
-    if chai && expect_call.is_none() {
+    if chai && expect_call.is_none() && should.is_none() {
         return;
     }
 
@@ -1855,7 +1907,8 @@ fn inspect_js_expect(node: Node, obj: Node, chai: bool, src: &str, tests: &mut [
     }
     let code = expect_call
         .and_then(|c| c.child_by_field_name("arguments"))
-        .and_then(|a| a.named_child(0));
+        .and_then(|a| a.named_child(0))
+        .or(should);
 
     // Skeleton: obj text + ".toThrow(#)"
     let obj_text = text(obj, src);
@@ -1873,6 +1926,24 @@ fn inspect_js_expect(node: Node, obj: Node, chai: bool, src: &str, tests: &mut [
             ..Default::default()
         },
     );
+}
+
+/// The subject of a Chai `should` chain: what stands before the first `.should` of the
+/// member chain `chain` (`fn` of `fn.should.not.throw`).
+fn js_should_subject<'t>(chain: Node<'t>, src: &str) -> Option<Node<'t>> {
+    let mut link = chain;
+    let mut subject = None;
+    while link.kind() == "member_expression" {
+        let object = link.child_by_field_name("object")?;
+        if link
+            .child_by_field_name("property")
+            .is_some_and(|p| text(p, src) == "should")
+        {
+            subject = Some(object);
+        }
+        link = object;
+    }
+    subject
 }
 
 /// `assert.throws(code, ..)`, `assert.rejects(code, ..)` and their `doesNot` forms.
@@ -1973,8 +2044,13 @@ pub fn java(root: Node, src: &str, tests: &mut [TestFn]) {
                 if matches!(
                     name_text,
                     "assertThatThrownBy" | "assertThatExceptionOfType" | "assertThatCode"
-                ) {
+                ) || assertj_typed_entry(name_text).is_some()
+                {
                     inspect_java_assertj(node, name_text, src, tests);
+                    return true;
+                }
+                if matches!(name_text, "catchThrowable" | "catchThrowableOfType") {
+                    inspect_java_catch_throwable(node, src, tests);
                     return true;
                 }
                 if name_text != "assertThrows" && name_text != "assertThrowsExactly" {
@@ -2053,26 +2129,47 @@ fn java_class_argument(args: Option<Node>, src: &str) -> Option<String> {
     )
 }
 
+/// The class an AssertJ typed entry point stands for: `assertThatIllegalArgumentException()`
+/// is `assertThatExceptionOfType(IllegalArgumentException.class)`.
+fn assertj_typed_entry(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "assertThatIllegalArgumentException" => "IllegalArgumentException",
+        "assertThatNullPointerException" => "NullPointerException",
+        "assertThatIllegalStateException" => "IllegalStateException",
+        "assertThatIOException" => "IOException",
+        "assertThatIndexOutOfBoundsException" => "IndexOutOfBoundsException",
+        "assertThatReflectiveOperationException" => "ReflectiveOperationException",
+        "assertThatRuntimeException" => "RuntimeException",
+        "assertThatException" => "Exception",
+        _ => return None,
+    })
+}
+
 /// AssertJ: `assertThatThrownBy(code)` and `assertThatCode(code)` with `.isInstanceOf(X.class)`
 /// / `.isExactlyInstanceOf(X.class)` / `.hasMessage(..)` / `.hasMessageContaining(..)`;
 /// `assertThatExceptionOfType(X.class).isThrownBy(code)` with `.withMessage(..)` /
-/// `.withMessageContaining(..)`; and `assertThatCode(code).doesNotThrowAnyException()`,
-/// which states that nothing is thrown.
+/// `.withMessageContaining(..)`, also from a typed entry point ([`assertj_typed_entry`]);
+/// and `assertThatCode(code).doesNotThrowAnyException()`, which states that nothing is
+/// thrown.
 fn inspect_java_assertj(root: Node, entry: &str, src: &str, tests: &mut [TestFn]) {
+    let typed = assertj_typed_entry(entry);
+    let entry = if typed.is_some() {
+        "assertThatExceptionOfType"
+    } else {
+        entry
+    };
     let args = root.child_by_field_name("arguments");
     let links = java_chain(root, src);
-    let mut kind = "assertThrows";
-    let mut exception_type = None;
-    let mut matcher = None;
-    let mut whole_message = false;
+    let mut constraint = AssertjConstraint::default();
     let mut code = args.map_or("", |a| text(a, src)).to_string();
     if entry == "assertThatExceptionOfType" {
-        exception_type = java_class_argument(args, src);
+        constraint.exception_type = typed
+            .map(str::to_string)
+            .or_else(|| java_class_argument(args, src));
         code.clear();
     }
-    let mut constrained = entry != "assertThatCode";
+    constraint.constrained = entry != "assertThatCode";
     for (name, link_args) in &links {
-        let first = link_args.and_then(|a| a.named_child(0));
         match *name {
             "doesNotThrowAnyException" if entry == "assertThatCode" => {
                 attribute(
@@ -2086,24 +2183,45 @@ fn inspect_java_assertj(root: Node, entry: &str, src: &str, tests: &mut [TestFn]
                 );
                 return;
             }
-            "isInstanceOf" | "isExactlyInstanceOf" if exception_type.is_none() => {
-                exception_type = java_class_argument(*link_args, src);
-                if *name == "isExactlyInstanceOf" {
-                    kind = "assertThrowsExactly";
-                }
-                constrained = true;
-            }
             "isThrownBy" if entry == "assertThatExceptionOfType" => {
                 code = link_args.map_or("", |a| text(a, src)).to_string();
             }
-            "hasMessage" | "withMessage" if matcher.is_none() => {
-                matcher = first.map(|a| matcher_value(a, src));
-                whole_message = true;
-                constrained = true;
+            _ => constraint.read(name, *link_args, src),
+        }
+    }
+    // `assertThatCode(code)` followed by nothing read here states no expectation.
+    if !constraint.constrained {
+        return;
+    }
+    attribute(tests, constraint.expectation(root, &code));
+}
+
+/// What the calls chained on an AssertJ assertion of a thrown exception require of it.
+#[derive(Default)]
+struct AssertjConstraint {
+    exact: bool,
+    exception_type: Option<String>,
+    matcher: Option<String>,
+    whole_message: bool,
+    /// A call read here constrains the exception.
+    constrained: bool,
+}
+
+impl AssertjConstraint {
+    /// Reads one chained call: `.isInstanceOf(X.class)`, `.hasMessage("..")`, ..
+    fn read(&mut self, name: &str, args: Option<Node>, src: &str) {
+        let first = args.and_then(|a| a.named_child(0));
+        match name {
+            "isInstanceOf" | "isExactlyInstanceOf" if self.exception_type.is_none() => {
+                self.exception_type = java_class_argument(args, src);
+                self.exact = name == "isExactlyInstanceOf";
             }
-            "hasMessageContaining" | "withMessageContaining" if matcher.is_none() => {
-                matcher = first.map(|a| matcher_value(a, src));
-                constrained = true;
+            "hasMessage" | "withMessage" if self.matcher.is_none() => {
+                self.matcher = first.map(|a| matcher_value(a, src));
+                self.whole_message = true;
+            }
+            "hasMessageContaining" | "withMessageContaining" if self.matcher.is_none() => {
+                self.matcher = first.map(|a| matcher_value(a, src));
             }
             // A constraint on the message whose reach is not compared with another's.
             "hasMessageStartingWith"
@@ -2112,30 +2230,96 @@ fn inspect_java_assertj(root: Node, entry: &str, src: &str, tests: &mut [TestFn]
             | "withMessageStartingWith"
             | "withMessageEndingWith"
             | "withMessageMatching"
-                if matcher.is_none() =>
+                if self.matcher.is_none() =>
             {
-                matcher = first.map(|a| format!("{OPAQUE}{name}({})", text(a, src)));
-                constrained = true;
+                self.matcher = first.map(|a| format!("{OPAQUE}{name}({})", text(a, src)));
             }
-            _ => {}
+            _ => return,
+        }
+        self.constrained = true;
+    }
+
+    /// The expectation of the site at `at` that guards `code` (the argument list of
+    /// `assertThatThrownBy(..)`, as written).
+    fn expectation(self, at: Node, code: &str) -> ExpectedException {
+        ExpectedException {
+            line: at.start_position().row + 1,
+            skeleton: collapse_ws(&format!("assertThatThrownBy{code}#")),
+            kind: if self.exact {
+                "assertThrowsExactly"
+            } else {
+                "assertThrows"
+            }
+            .to_string(),
+            exception_type: self.exception_type,
+            matcher: self.matcher,
+            whole_message: self.whole_message,
+            ..Default::default()
         }
     }
-    // `assertThatCode(code)` followed by nothing read here states no expectation.
-    if !constrained {
+}
+
+/// AssertJ `Throwable thrown = catchThrowable(code)` and
+/// `X e = catchThrowableOfType(code, X.class)` (the class before or after the code),
+/// with the assertions the same method makes on the caught value:
+/// `assertThat(thrown).isInstanceOf(X.class).hasMessage("..")`. The call alone returns
+/// `null` when nothing is thrown, so it is an expectation only beside an `assertThat` on
+/// the value it is bound to.
+fn inspect_java_catch_throwable(call: Node, src: &str, tests: &mut [TestFn]) {
+    let bound = call.parent().and_then(|p| match p.kind() {
+        "variable_declarator" => p.child_by_field_name("name"),
+        "assignment_expression" => p.child_by_field_name("left"),
+        _ => None,
+    });
+    let Some(bound) = bound.filter(|b| b.kind() == "identifier") else {
         return;
+    };
+    let Some(args) = call.child_by_field_name("arguments") else {
+        return;
+    };
+    let mut cursor = args.walk();
+    let named: Vec<Node> = args.named_children(&mut cursor).collect();
+    let Some(code) = named.iter().find(|a| a.kind() != "class_literal") else {
+        return;
+    };
+    let mut constraint = AssertjConstraint {
+        exception_type: named
+            .iter()
+            .find(|a| a.kind() == "class_literal")
+            .map(|c| text(*c, src).trim_end_matches(".class").trim().to_string()),
+        ..Default::default()
+    };
+    let mut method = call;
+    while let Some(parent) = method.parent() {
+        method = parent;
+        if method.kind() == "method_declaration" {
+            break;
+        }
     }
-    attribute(
-        tests,
-        ExpectedException {
-            line: root.start_position().row + 1,
-            skeleton: collapse_ws(&format!("assertThatThrownBy{code}#")),
-            kind: kind.to_string(),
-            exception_type,
-            matcher,
-            whole_message,
-            ..Default::default()
-        },
-    );
+    let mut asserted = false;
+    walk(method, &mut |node| {
+        let on_value = node.kind() == "method_invocation"
+            && node
+                .child_by_field_name("name")
+                .is_some_and(|n| text(n, src) == "assertThat")
+            && node.child_by_field_name("arguments").is_some_and(|a| {
+                a.named_child_count() == 1
+                    && a.named_child(0).is_some_and(|v| {
+                        v.kind() == "identifier" && text(v, src) == text(bound, src)
+                    })
+            });
+        if on_value {
+            asserted = true;
+            for (name, link_args) in java_chain(node, src) {
+                constraint.read(name, link_args, src);
+            }
+        }
+        true
+    });
+    if asserted {
+        let code = format!("({})", text(*code, src));
+        attribute(tests, constraint.expectation(call, &code));
+    }
 }
 
 /// `@Test(expected = Foo.class)`, read from the annotation's `expected` element whatever
@@ -2203,6 +2387,41 @@ fn is_csharp_assert_class(receiver: Node, src: &str) -> bool {
     class.is_some_and(|c| c.kind() == "identifier" && CSHARP_ASSERT_CLASSES.contains(&text(c, src)))
 }
 
+/// The test framework a C# file's `using` directives name.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CsharpFramework {
+    XunitOrNunit,
+    MsTest,
+}
+
+/// Whose `Assert` a file's is: `using Xunit;` or `using NUnit.Framework;`, or
+/// `using Microsoft.VisualStudio.TestTools.UnitTesting;` (also `global using`). `None`
+/// when the file names none of them, or both kinds. An alias and a `using static` bind
+/// another name and are not read.
+fn csharp_framework(root: Node, src: &str) -> Option<CsharpFramework> {
+    let mut found: Vec<CsharpFramework> = Vec::new();
+    walk(root, &mut |node| {
+        if node.kind() != "using_directive" {
+            return true;
+        }
+        // An alias has its own name first, and a `using static` names a class.
+        let namespace = node.named_child(0).map_or("", |n| text(n, src));
+        let framework = match collapse_ws(namespace).replace(' ', "").as_str() {
+            "Xunit" | "NUnit.Framework" => Some(CsharpFramework::XunitOrNunit),
+            "Microsoft.VisualStudio.TestTools.UnitTesting" => Some(CsharpFramework::MsTest),
+            _ => None,
+        };
+        if let Some(framework) = framework.filter(|f| !found.contains(f)) {
+            found.push(framework);
+        }
+        false
+    });
+    match found.as_slice() {
+        [one] => Some(*one),
+        _ => None,
+    }
+}
+
 /// C#: `Assert.Throws<...>` / `Assert.ThrowsAny<...>` / `Assert.Catch<...>`, their async,
 /// exact, `typeof` and MSTest spellings, and FluentAssertions' `.Should().Throw<...>()`.
 /// A call is an expected exception only as a member of an assertion class or of a
@@ -2211,6 +2430,7 @@ pub fn csharp(root: Node, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
     }
+    let framework = csharp_framework(root, src);
     // Whether the file calls `Assert.ThrowsExactly`, a name of MSTest 3.8 and later.
     let mut uses_throws_exactly = false;
     walk(root, &mut |node| {
@@ -2275,8 +2495,13 @@ pub fn csharp(root: Node, src: &str, tests: &mut [TestFn]) {
         };
         let form = match text(method, src) {
             "ThrowsExactly" | "ThrowsExactlyAsync" => THROWS_EXACTLY,
+            "Throws" | "ThrowsAsync" if framework == Some(CsharpFramework::MsTest) => {
+                THROWS_OF_MSTEST
+            }
+            "Throws" | "ThrowsAsync" if framework.is_some() => THROWS_EXACT,
             "Throws" | "ThrowsAsync" if uses_throws_exactly => THROWS_BESIDE_EXACTLY,
             "Throws" | "ThrowsAsync" => THROWS,
+            "ThrowsException" | "ThrowsExceptionAsync" => THROWS_EXCEPTION,
             _ => "",
         };
         let Some(args) = node.child_by_field_name("arguments") else {
@@ -2740,7 +2965,11 @@ pub fn kotlin(root: Node, src: &str, tests: &mut [TestFn]) {
                     return true;
                 };
                 if callee.kind() != "call_expression" {
-                    (kotlin_callee_name(callee, src), None, lambda)
+                    // `name<T> { .. }.message`: before a `.`, the grammar reads the type
+                    // argument as one.
+                    let class =
+                        child_of_kind(node, &["type_arguments"]).and_then(|t| t.named_child(0));
+                    (kotlin_callee_name(callee, src), class, lambda)
                 } else {
                     let class = child_of_kind(callee, &["type_arguments"])
                         .and_then(|t| t.named_child(0))
@@ -2765,6 +2994,9 @@ pub fn kotlin(root: Node, src: &str, tests: &mut [TestFn]) {
         let Some((kind, names_class)) = name.and_then(kotlin_form) else {
             return true;
         };
+        let message = (kind != "doesNotThrow")
+            .then(|| kotlin_message(node, src))
+            .flatten();
         attribute(
             tests,
             ExpectedException {
@@ -2774,12 +3006,86 @@ pub fn kotlin(root: Node, src: &str, tests: &mut [TestFn]) {
                 exception_type: class
                     .filter(|_| names_class)
                     .map(|c| text(c, src).to_string()),
+                whole_message: message.as_ref().is_some_and(|(_, whole)| *whole),
+                matcher: message.map(|(matcher, _)| matcher),
                 ..Default::default()
             },
         );
         true
     });
     attach_declared(root, src, tests, &KOTLIN_CLASSES);
+}
+
+/// The Kotest assertion made on the message of the exception the expectation `site`
+/// returns, and whether it is on the whole message: `e.message shouldBe ".."` and
+/// `e shouldHaveMessage ".."` (whole), `e.message shouldContain ".."` (a part), any other
+/// `should..` matcher on the message (kept as written), each also as a call
+/// (`e.message.shouldBe("..")`). `e` is the name `site` is bound to in its function
+/// (`val e = shouldThrow<T> { }`), or `site` itself (`shouldThrow<T> { }.message ..`).
+fn kotlin_message(site: Node, src: &str) -> Option<(String, bool)> {
+    let bound = site
+        .parent()
+        .filter(|p| p.kind() == "property_declaration")
+        .and_then(|p| child_of_kind(p, &["variable_declaration"]))
+        .and_then(|v| v.named_child(0))
+        .map(|name| text(name, src));
+    let mut scope = site;
+    while let Some(parent) = scope.parent() {
+        scope = parent;
+        if scope.kind() == "function_declaration" {
+            break;
+        }
+    }
+    let is_value =
+        |n: Node| n.id() == site.id() || (n.kind() == "identifier" && Some(text(n, src)) == bound);
+    // `<value>.message`
+    let is_message = |n: Node| {
+        n.kind() == "navigation_expression"
+            && n.named_child_count() == 2
+            && n.named_child(0).is_some_and(is_value)
+            && n.named_child(1).is_some_and(|m| text(m, src) == "message")
+    };
+    let mut found = None;
+    walk(scope, &mut |n| {
+        if found.is_some() {
+            return false;
+        }
+        let (subject, matcher, value) = match n.kind() {
+            "infix_expression" if n.named_child_count() == 3 => {
+                (n.named_child(0), n.named_child(1), n.named_child(2))
+            }
+            // `<subject>.matcher(value)`
+            "call_expression" => {
+                let callee = n
+                    .named_child(0)
+                    .filter(|c| c.kind() == "navigation_expression" && c.named_child_count() == 2);
+                let value = child_of_kind(n, &["value_arguments"])
+                    .and_then(|a| a.named_child(0))
+                    .and_then(|a| a.named_child(0));
+                (
+                    callee.and_then(|c| c.named_child(0)),
+                    callee.and_then(|c| c.named_child(1)),
+                    value,
+                )
+            }
+            _ => return true,
+        };
+        let (Some(subject), Some(matcher), Some(value)) = (subject, matcher, value) else {
+            return true;
+        };
+        let matcher = text(matcher, src);
+        found = match matcher {
+            "shouldHaveMessage" if is_value(subject) => Some((matcher_value(value, src), true)),
+            "shouldBe" if is_message(subject) => Some((matcher_value(value, src), true)),
+            "shouldContain" if is_message(subject) => Some((matcher_value(value, src), false)),
+            _ if is_message(subject) && matcher.starts_with("should") => {
+                Some((format!("{OPAQUE}{matcher}({})", text(value, src)), false))
+            }
+            _ => None,
+        };
+        true
+    });
+    found
 }
 
 /// `class A(..) : B(..), I`: the class each delegation specifier names.
@@ -2953,9 +3259,32 @@ const RUBY_CLASSES: ClassSyntax = ClassSyntax {
     parents: ruby_parents,
 };
 
+/// What a Catch2 or doctest macro expects, from its name: the kind, the position of the
+/// class argument and the position of the message argument. `REQUIRE_THROWS(expr)`,
+/// `REQUIRE_THROWS_AS(expr, Type)`, `REQUIRE_THROWS_WITH(expr, message)`, Catch2
+/// `REQUIRE_THROWS_MATCHES(expr, Type, matcher)`, doctest
+/// `REQUIRE_THROWS_WITH_AS(expr, message, Type)`, and `REQUIRE_NOTHROW(expr)`; the same
+/// under `CHECK_`, and with doctest's `_MESSAGE` suffix, whose further argument is the
+/// assertion's own message.
+fn catch_form(name: &str) -> Option<(&'static str, Option<usize>, Option<usize>)> {
+    let name = name
+        .strip_prefix("REQUIRE_")
+        .or_else(|| name.strip_prefix("CHECK_"))?;
+    Some(match name.strip_suffix("_MESSAGE").unwrap_or(name) {
+        "THROWS" => ("EXPECT_THROW", None, None),
+        "THROWS_AS" => ("EXPECT_THROW", Some(1), None),
+        "THROWS_WITH" => ("EXPECT_THROW", None, Some(1)),
+        "THROWS_MATCHES" => ("EXPECT_THROW", Some(1), Some(2)),
+        "THROWS_WITH_AS" => ("EXPECT_THROW", Some(2), Some(1)),
+        "NOTHROW" => ("EXPECT_NO_THROW", None, None),
+        _ => return None,
+    })
+}
+
 /// C++ googletest: `EXPECT_THROW(statement, Type)` / `ASSERT_THROW`, `EXPECT_ANY_THROW` /
 /// `ASSERT_ANY_THROW` (any exception), and `EXPECT_NO_THROW` / `ASSERT_NO_THROW`, which
-/// state that nothing is thrown.
+/// state that nothing is thrown. Catch2 and doctest: the macros of [`catch_form`], where
+/// a string is the whole message and any other matcher is kept as written.
 pub fn cpp(root: Node, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
@@ -2970,11 +3299,14 @@ pub fn cpp(root: Node, src: &str, tests: &mut [TestFn]) {
         else {
             return true;
         };
-        let (kind, names_class) = match text(callee, src) {
-            "EXPECT_THROW" | "ASSERT_THROW" => ("EXPECT_THROW", true),
-            "EXPECT_ANY_THROW" | "ASSERT_ANY_THROW" => ("EXPECT_THROW", false),
-            "EXPECT_NO_THROW" | "ASSERT_NO_THROW" => ("EXPECT_NO_THROW", false),
-            _ => return true,
+        let (kind, class_at, message_at) = match text(callee, src) {
+            "EXPECT_THROW" | "ASSERT_THROW" => ("EXPECT_THROW", Some(1), None),
+            "EXPECT_ANY_THROW" | "ASSERT_ANY_THROW" => ("EXPECT_THROW", None, None),
+            "EXPECT_NO_THROW" | "ASSERT_NO_THROW" => ("EXPECT_NO_THROW", None, None),
+            other => match catch_form(other) {
+                Some(form) => form,
+                None => return true,
+            },
         };
         let Some(args) = node.child_by_field_name("arguments") else {
             return true;
@@ -2985,16 +3317,18 @@ pub fn cpp(root: Node, src: &str, tests: &mut [TestFn]) {
             .filter(|a| a.kind() != "comment")
             .collect();
         let statement = named.first().map_or("", |s| text(*s, src));
+        let message = message_at.and_then(|at| named.get(at));
         attribute(
             tests,
             ExpectedException {
                 line: node.start_position().row + 1,
                 skeleton: collapse_ws(&format!("EXPECT_THROW({statement}, #)")),
                 kind: kind.to_string(),
-                exception_type: named
-                    .get(1)
-                    .filter(|_| names_class)
+                exception_type: class_at
+                    .and_then(|at| named.get(at))
                     .map(|t| text(*t, src).to_string()),
+                matcher: message.map(|m| matcher_value(*m, src)),
+                whole_message: message.is_some_and(|m| string_literal(*m, src).is_some()),
                 ..Default::default()
             },
         );
@@ -3025,6 +3359,844 @@ const CPP_CLASSES: ClassSyntax = ClassSyntax {
     declarations: &["class_specifier", "struct_specifier"],
     parents: cpp_parents,
 };
+
+/// The package each name of a Go file is bound to by an `import`: `(local name, path)`.
+/// A dot import (`import . "gopkg.in/check.v1"`) is bound to `.`.
+#[derive(Debug, Default)]
+pub(super) struct GoImports(Vec<(String, String)>);
+
+/// The name a Go import path is bound to when the import gives none: its last segment,
+/// without a major-version segment (`.../v2`) or suffix (`check.v1`).
+fn go_default_name(path: &str) -> &str {
+    let is_version =
+        |s: &str| s.len() > 1 && s.starts_with('v') && s[1..].chars().all(|c| c.is_ascii_digit());
+    let mut segments = path.rsplit('/');
+    let mut last = segments.next().unwrap_or(path);
+    if is_version(last) {
+        last = segments.next().unwrap_or(last);
+    }
+    match last.rsplit_once('.') {
+        Some((name, version)) if is_version(version) => name,
+        _ => last,
+    }
+}
+
+pub(super) fn go_imports(root: Node, src: &str) -> GoImports {
+    let mut out = Vec::new();
+    walk(root, &mut |node| {
+        if node.kind() != "import_spec" {
+            return true;
+        }
+        let Some(path) = node.child_by_field_name("path") else {
+            return false;
+        };
+        let path = text(path, src).trim_matches(['"', '`']);
+        let name = match node.child_by_field_name("name") {
+            Some(name) if name.kind() == "dot" => ".",
+            Some(name) => text(name, src),
+            None => go_default_name(path),
+        };
+        out.push((name.to_string(), path.to_string()));
+        false
+    });
+    GoImports(out)
+}
+
+impl GoImports {
+    fn binds(&self, name: &str, is: fn(&str) -> bool) -> bool {
+        self.0.iter().any(|(n, path)| n == name && is(path))
+    }
+
+    /// Whether `name` is testify's `assert` or `require` package in this file.
+    pub(super) fn testify(&self, name: &str) -> bool {
+        self.binds(name, |p| {
+            p.ends_with("/testify/assert") || p.ends_with("/testify/require")
+        })
+    }
+
+    /// Whether `name` is a package whose `Is` and `As` walk an error chain.
+    fn errors(&self, name: &str) -> bool {
+        self.binds(name, |p| {
+            matches!(
+                p,
+                "errors" | "github.com/pkg/errors" | "golang.org/x/xerrors"
+            )
+        })
+    }
+
+    /// Whether `checker` (`Panics`, `check.Panics`) names a checker of gocheck: written
+    /// bare under a dot import of the package, or under the name the file imports it by.
+    fn gocheck_checker<'s>(&self, checker: Node, src: &'s str) -> Option<&'s str> {
+        let is = |p: &str| {
+            matches!(
+                p,
+                "gopkg.in/check.v1" | "github.com/go-check/check" | "launchpad.net/gocheck"
+            )
+        };
+        match checker.kind() {
+            "identifier" => self.binds(".", is).then(|| text(checker, src)),
+            "selector_expression" => {
+                let on = checker.child_by_field_name("operand")?;
+                let name = checker.child_by_field_name("field")?;
+                (on.kind() == "identifier" && self.binds(text(on, src), is))
+                    .then(|| text(name, src))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// A Go matcher argument: the content of a string literal, or behind [`OPAQUE`] the
+/// text of any other expression.
+fn go_matcher(node: Node, src: &str) -> String {
+    let raw = text(node, src);
+    match node.kind() {
+        "interpreted_string_literal" => raw
+            .strip_prefix('"')
+            .and_then(|r| r.strip_suffix('"'))
+            .unwrap_or(raw)
+            .to_string(),
+        "raw_string_literal" => raw.trim_matches('`').to_string(),
+        _ => format!("{OPAQUE}{raw}"),
+    }
+}
+
+/// A gocheck pattern (`ErrorMatches`, `PanicMatches`), which must match the whole
+/// message: one with no metacharacter is that message; any other is kept as a regular
+/// expression, which is told apart from another and from one that matches everything.
+fn go_pattern(node: Node, src: &str, out: &mut ExpectedException) {
+    let m = go_matcher(node, src);
+    if m.starts_with(OPAQUE) {
+        out.matcher = Some(m);
+    } else if is_literal_pattern(&m) {
+        out.matcher = Some(m);
+        out.whole_message = true;
+    } else {
+        out.matcher = Some(format!("{OPAQUE}/{m}/"));
+    }
+}
+
+/// What `errors.As(err, target)` names: the type `target` is declared with in the
+/// enclosing function (`var pe *fs.PathError`, then `&pe`), else the target as written.
+fn go_as_target(target: Node, src: &str) -> String {
+    let written = text(target, src).to_string();
+    let Some(name) = (target.kind() == "unary_expression")
+        .then(|| target.child_by_field_name("operand"))
+        .flatten()
+        .filter(|n| n.kind() == "identifier")
+    else {
+        return written;
+    };
+    let mut function = target;
+    while let Some(parent) = function.parent() {
+        function = parent;
+        if matches!(
+            function.kind(),
+            "function_declaration" | "method_declaration"
+        ) {
+            break;
+        }
+    }
+    let mut declared = None;
+    walk(function, &mut |n| {
+        if n.kind() == "var_spec" && declared.is_none() {
+            let mut cursor = n.walk();
+            let named = n
+                .children_by_field_name("name", &mut cursor)
+                .any(|c| text(c, src) == text(name, src));
+            if named {
+                declared = n.child_by_field_name("type").map(|t| text(t, src));
+            }
+        }
+        declared.is_none()
+    });
+    declared.map_or(written, |t| t.trim_start_matches('*').to_string())
+}
+
+/// `errors.Is(err, target)` / `errors.As(err, &target)` of a package the file imports
+/// as an errors package: the error and the sentinel or type it must be.
+fn go_errors_call(call: Node, src: &str, imports: &GoImports) -> Option<(String, String)> {
+    if call.kind() != "call_expression" {
+        return None;
+    }
+    let callee = call.child_by_field_name("function")?;
+    if callee.kind() != "selector_expression" {
+        return None;
+    }
+    let on = callee.child_by_field_name("operand")?;
+    if on.kind() != "identifier" || !imports.errors(text(on, src)) {
+        return None;
+    }
+    let args = call.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let named: Vec<Node> = args
+        .named_children(&mut cursor)
+        .filter(|a| a.kind() != "comment")
+        .collect();
+    let (err, target) = (named.first()?, named.get(1)?);
+    let class = match text(callee.child_by_field_name("field")?, src) {
+        "Is" => text(*target, src).to_string(),
+        "As" => go_as_target(*target, src),
+        _ => return None,
+    };
+    Some((text(*err, src).to_string(), class))
+}
+
+fn go_error_expectation(call: Node, err: &str, kind: &str) -> ExpectedException {
+    ExpectedException {
+        line: call.start_position().row + 1,
+        skeleton: collapse_ws(&format!("error#({err})")),
+        kind: kind.to_string(),
+        ..Default::default()
+    }
+}
+
+/// The expected failure a testify assertion states. `values` are its arguments after
+/// `t`: `ErrorIs` / `ErrorAs` (the sentinel or type), `ErrorContains` (a part of the
+/// message), `EqualError` (the whole message), `Error`, `NoError`, `True(errors.Is(..))`,
+/// `Panics`, `PanicsWithValue` / `PanicsWithError` (the value or the whole message) and
+/// `NotPanics`, each also with a trailing `f`.
+pub(super) fn go_testify(
+    method: &str,
+    values: &[Node],
+    call: Node,
+    src: &str,
+    imports: &GoImports,
+) -> Option<ExpectedException> {
+    const FORMS: &[&str] = &[
+        "Error",
+        "NoError",
+        "ErrorIs",
+        "ErrorAs",
+        "ErrorContains",
+        "EqualError",
+        "True",
+        "Panics",
+        "PanicsWithValue",
+        "PanicsWithError",
+        "NotPanics",
+    ];
+    let method = match method.strip_suffix('f') {
+        Some(plain) if FORMS.contains(&plain) => plain,
+        _ => method,
+    };
+    let first = values.first()?;
+    let error = |kind: &str| go_error_expectation(call, text(*first, src), kind);
+    let panics = |code: Node, kind: &str| ExpectedException {
+        line: call.start_position().row + 1,
+        skeleton: collapse_ws(&format!("panics#({})", text(code, src))),
+        kind: kind.to_string(),
+        ..Default::default()
+    };
+    Some(match method {
+        "Error" => error("go.Error"),
+        "NoError" => error("go.NoError"),
+        "ErrorIs" => ExpectedException {
+            exception_type: Some(text(*values.get(1)?, src).to_string()),
+            ..error("go.Error")
+        },
+        "ErrorAs" => ExpectedException {
+            exception_type: Some(go_as_target(*values.get(1)?, src)),
+            ..error("go.Error")
+        },
+        "ErrorContains" | "EqualError" => ExpectedException {
+            matcher: Some(go_matcher(*values.get(1)?, src)),
+            whole_message: method == "EqualError",
+            ..error("go.Error")
+        },
+        "True" => {
+            let (err, class) = go_errors_call(*first, src, imports)?;
+            ExpectedException {
+                exception_type: Some(class),
+                ..go_error_expectation(call, &err, "go.Error")
+            }
+        }
+        "Panics" => panics(*first, "go.Panics"),
+        "NotPanics" => panics(*first, "go.NotPanics"),
+        "PanicsWithValue" | "PanicsWithError" => ExpectedException {
+            matcher: Some(go_matcher(*first, src)),
+            whole_message: true,
+            ..panics(*values.get(1)?, "go.Panics")
+        },
+        _ => return None,
+    })
+}
+
+/// The expected failure a gocheck assertion states, from the arguments of
+/// `c.Assert(obtained, Checker, expected)`: `ErrorMatches` (a pattern for the whole
+/// message of the error), `Panics` (the panic value) and `PanicMatches` (a pattern for
+/// the whole panic message).
+pub(super) fn go_gocheck(
+    args: &[Node],
+    call: Node,
+    src: &str,
+    imports: &GoImports,
+) -> Option<ExpectedException> {
+    let (obtained, checker) = (args.first()?, args.get(1)?);
+    let checker = imports.gocheck_checker(*checker, src)?;
+    let mut out = match checker {
+        "ErrorMatches" => go_error_expectation(call, text(*obtained, src), "go.Error"),
+        "Panics" | "PanicMatches" => ExpectedException {
+            line: call.start_position().row + 1,
+            skeleton: collapse_ws(&format!("panics#({})", text(*obtained, src))),
+            kind: "go.Panics".to_string(),
+            ..Default::default()
+        },
+        _ => return None,
+    };
+    if let Some(expected) = args.get(2) {
+        if checker == "Panics" {
+            out.matcher = Some(go_matcher(*expected, src));
+            out.whole_message = true;
+        } else {
+            go_pattern(*expected, src, &mut out);
+        }
+    }
+    Some(out)
+}
+
+/// Whether a block calls a method that fails the test (`t.Fatal`, `t.Errorf`, ..).
+fn go_block_fails(block: Node, src: &str) -> bool {
+    let mut fails = false;
+    walk(block, &mut |n| {
+        if n.kind() == "func_literal" {
+            return false;
+        }
+        if n.kind() == "call_expression" {
+            let method = n
+                .child_by_field_name("function")
+                .filter(|f| f.kind() == "selector_expression")
+                .and_then(|f| f.child_by_field_name("field"))
+                .map_or("", |f| text(f, src));
+            fails |= matches!(
+                method,
+                "Fatal" | "Fatalf" | "Error" | "Errorf" | "FailNow" | "Fail"
+            );
+        }
+        !fails
+    });
+    fails
+}
+
+/// The `errors.Is` / `errors.As` calls whose failure makes `condition` hold: `!call`
+/// itself, or a side of an `||` (`err == nil || !errors.Is(err, ErrGone)`).
+fn go_required_errors(
+    condition: Node,
+    src: &str,
+    imports: &GoImports,
+    out: &mut Vec<(String, String)>,
+) {
+    match condition.kind() {
+        "parenthesized_expression" => {
+            if let Some(inner) = condition.named_child(0) {
+                go_required_errors(inner, src, imports, out);
+            }
+        }
+        "binary_expression" => {
+            let or = condition
+                .child_by_field_name("operator")
+                .is_some_and(|o| text(o, src) == "||");
+            if or {
+                for side in ["left", "right"] {
+                    if let Some(side) = condition.child_by_field_name(side) {
+                        go_required_errors(side, src, imports, out);
+                    }
+                }
+            }
+        }
+        "unary_expression" => {
+            let not = condition
+                .child_by_field_name("operator")
+                .is_some_and(|o| text(o, src) == "!");
+            let mut call = condition.child_by_field_name("operand").filter(|_| not);
+            while let Some(inner) = call.filter(|c| c.kind() == "parenthesized_expression") {
+                call = inner.named_child(0);
+            }
+            out.extend(call.and_then(|c| go_errors_call(c, src, imports)));
+        }
+        _ => {}
+    }
+}
+
+/// Go: `errors.Is(err, target)` / `errors.As(err, &target)` in the condition that fails
+/// a test (`if !errors.Is(err, ErrGone) { t.Fatal(..) }`). The testify and gocheck forms
+/// are read where the pack counts them ([`go_testify`], [`go_gocheck`]), since whose
+/// assertion a call is depends on the function it stands in.
+pub(super) fn go(root: Node, src: &str, tests: &mut [TestFn], imports: &GoImports) {
+    if tests.is_empty() {
+        return;
+    }
+    walk(root, &mut |node| {
+        if node.kind() != "if_statement" {
+            return true;
+        }
+        let fails = node
+            .child_by_field_name("consequence")
+            .is_some_and(|c| go_block_fails(c, src));
+        let Some(condition) = node.child_by_field_name("condition").filter(|_| fails) else {
+            return true;
+        };
+        let mut required = Vec::new();
+        go_required_errors(condition, src, imports, &mut required);
+        for (err, class) in required {
+            attribute(
+                tests,
+                ExpectedException {
+                    exception_type: Some(class),
+                    ..go_error_expectation(node, &err, "go.Error")
+                },
+            );
+        }
+        true
+    });
+}
+
+/// The modules a Swift file imports (`import XCTest`, `@testable import Sut`,
+/// `import struct Testing.Tag`): each identifier of each import declaration.
+fn swift_imports(root: Node, src: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    walk(root, &mut |node| {
+        if node.kind() != "import_declaration" {
+            return true;
+        }
+        walk(node, &mut |n| {
+            if n.kind() == "simple_identifier" {
+                out.push(text(n, src).to_string());
+            }
+            true
+        });
+        false
+    });
+    out
+}
+
+/// The arguments of a Swift call or macro, each with its label, and its trailing closure.
+fn swift_arguments<'t>(
+    call: Node<'t>,
+    src: &'t str,
+) -> (Vec<(&'t str, Node<'t>)>, Option<Node<'t>>) {
+    let mut arguments = Vec::new();
+    let mut closure = None;
+    let mut cursor = call.walk();
+    for suffix in call
+        .named_children(&mut cursor)
+        .filter(|c| c.kind() == "call_suffix")
+    {
+        let mut inner = suffix.walk();
+        for part in suffix.named_children(&mut inner) {
+            match part.kind() {
+                "lambda_literal" => closure = closure.or(Some(part)),
+                "value_arguments" => {
+                    let mut args = part.walk();
+                    for arg in part.named_children(&mut args) {
+                        let label = arg.child_by_field_name("name").map_or("", |l| text(l, src));
+                        if let Some(value) = arg.child_by_field_name("value") {
+                            arguments.push((label, value));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    (arguments, closure)
+}
+
+/// A Swift error type as it is compared: `Error`, `any Error` and `Swift.Error` are the
+/// general type, written `any Error`; any other type is its name (`Client.Error` is a
+/// type of the project).
+fn swift_type(written: &str) -> String {
+    let t = written.trim().trim_matches(['(', ')']).trim();
+    match t.strip_prefix("any ").unwrap_or(t).trim() {
+        "Error" | "Swift.Error" => "any Error".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// The type the closure of `XCTAssertThrowsError` checks the error to be: the first
+/// `error as? T` / `error is T` on the closure's parameter (`$0` when it names none).
+/// `error as NSError` holds for every error and names no type.
+fn swift_closure_type(closure: Node, src: &str) -> Option<String> {
+    let mut parameter = "$0";
+    walk(closure, &mut |n| {
+        if n.kind() == "lambda_parameter" {
+            if let Some(name) = n.child_by_field_name("name") {
+                parameter = text(name, src);
+            }
+            return false;
+        }
+        // The parameters stand before the statements.
+        n.kind() != "statements"
+    });
+    let mut found = None;
+    walk(closure, &mut |n| {
+        if found.is_some() {
+            return false;
+        }
+        let subject = match n.kind() {
+            "as_expression" => n.child_by_field_name("expr"),
+            "check_expression" => n.child_by_field_name("target"),
+            _ => None,
+        };
+        if subject.is_some_and(|s| text(s, src) == parameter) {
+            found = n
+                .child_by_field_name("name")
+                .map(|t| text(t, src))
+                .filter(|t| *t != "NSError")
+                .map(swift_type);
+        }
+        true
+    });
+    found
+}
+
+/// Swift: XCTest `XCTAssertThrowsError(expr) { error in .. }` (the type the closure
+/// casts or checks the error to) and `XCTAssertNoThrow(expr)`, in a file that imports
+/// `XCTest`; Swift Testing `#expect(throws: E.self) { }` / `#require(throws:)` (a type,
+/// or an error value such as `E.negative`) and `throws: Never.self`, which states that
+/// nothing is thrown, in a file that imports `Testing`.
+pub fn swift(root: Node, src: &str, tests: &mut [TestFn]) {
+    if tests.is_empty() {
+        return;
+    }
+    let imports = swift_imports(root, src);
+    let imported = |module: &str| imports.iter().any(|i| i == module);
+    walk(root, &mut |node| {
+        if !matches!(node.kind(), "call_expression" | "macro_invocation") {
+            return true;
+        }
+        let Some(name) = node
+            .named_child(0)
+            .filter(|c| c.kind() == "simple_identifier")
+            .map(|c| text(c, src))
+        else {
+            return true;
+        };
+        let (arguments, mut closure) = swift_arguments(node, src);
+        let mut expected = ExpectedException {
+            line: node.start_position().row + 1,
+            kind: "swift.throws".to_string(),
+            ..Default::default()
+        };
+        match (node.kind(), name) {
+            ("call_expression", "XCTAssertThrowsError" | "XCTAssertNoThrow")
+                if imported("XCTest") =>
+            {
+                let Some((_, code)) = arguments.first() else {
+                    return true;
+                };
+                expected.skeleton = collapse_ws(&format!("throws({})#", text(*code, src)));
+                if name == "XCTAssertNoThrow" {
+                    expected.kind = "swift.noThrow".to_string();
+                } else {
+                    expected.exception_type = closure.and_then(|c| swift_closure_type(c, src));
+                }
+            }
+            ("macro_invocation", "expect" | "require") if imported("Testing") => {
+                let Some((_, thrown)) = arguments.iter().find(|(label, _)| *label == "throws")
+                else {
+                    return true;
+                };
+                // `let error = #expect(throws: E.self) { .. }`: the closure follows the
+                // macro in the call the grammar wraps it in.
+                let wrapping = node.parent().filter(|p| p.kind() == "call_expression");
+                closure = closure.or_else(|| wrapping.and_then(|p| swift_arguments(p, src).1));
+                let code = closure
+                    .or_else(|| {
+                        arguments
+                            .iter()
+                            .find(|(label, _)| *label == "performing")
+                            .map(|(_, value)| *value)
+                    })
+                    .map_or("", |c| text(c, src));
+                expected.skeleton = collapse_ws(&format!("throws {code}#"));
+                let written = text(*thrown, src);
+                match written.strip_suffix(".self") {
+                    Some(ty) if swift_type(ty) == "Never" => {
+                        expected.kind = "swift.noThrow".to_string();
+                    }
+                    Some(ty) => expected.exception_type = Some(swift_type(ty)),
+                    // An error value: its type is what stands before the case or the
+                    // initializer's arguments, and the value is compared whole.
+                    None => {
+                        let ty = match thrown.kind() {
+                            "navigation_expression" => thrown.child_by_field_name("target"),
+                            "call_expression" => thrown.named_child(0),
+                            _ => None,
+                        };
+                        expected.exception_type = ty.map(|t| swift_type(text(t, src)));
+                        expected.matcher = Some(format!("{OPAQUE}{written}"));
+                        expected.whole_message = true;
+                    }
+                }
+            }
+            _ => return true,
+        }
+        attribute(tests, expected);
+        true
+    });
+}
+
+/// The operator of a Scala `infix_expression`, and its two sides.
+fn scala_infix<'t>(node: Node<'t>, src: &'t str) -> Option<(Node<'t>, &'t str, Node<'t>)> {
+    if node.kind() != "infix_expression" {
+        return None;
+    }
+    Some((
+        node.child_by_field_name("left")?,
+        text(node.child_by_field_name("operator")?, src),
+        node.child_by_field_name("right")?,
+    ))
+}
+
+/// `name[T]`: the name and the type argument of a Scala `generic_function` whose
+/// function is a plain identifier.
+fn scala_generic<'t>(node: Node<'t>, src: &'t str) -> Option<(&'t str, Node<'t>)> {
+    if node.kind() != "generic_function" {
+        return None;
+    }
+    let name = node
+        .child_by_field_name("function")
+        .filter(|f| f.kind() == "identifier")?;
+    let class = node.child_by_field_name("type_arguments")?.named_child(0)?;
+    Some((text(name, src), class))
+}
+
+/// A specs2 message argument (`throwA[T]("negative")`, `message = "negative"`), which
+/// is a pattern searched for in the message.
+fn scala_pattern(arg: Node, src: &str) -> String {
+    let value = if arg.kind() == "assignment_expression" {
+        arg.child_by_field_name("right").unwrap_or(arg)
+    } else {
+        arg
+    };
+    let m = matcher_value(value, src);
+    if m.starts_with(OPAQUE) || is_literal_pattern(&m) {
+        m
+    } else {
+        format!("{OPAQUE}/{m}/")
+    }
+}
+
+/// Scala: ScalaTest and munit `intercept[T] { }` / `assertThrows[T] { }`, ScalaTest
+/// matchers `the [T] thrownBy { } should have message ".."` (the whole message),
+/// `a [T] should be thrownBy { }` / `an [T] ..`, and `noException should be thrownBy
+/// { }`; specs2 `code must throwA[T]` / `throwAn[T]`, with a message pattern or an
+/// exception value. They are kept under Java's kinds, and name the same classes.
+pub fn scala(root: Node, src: &str, tests: &mut [TestFn]) {
+    if tests.is_empty() {
+        return;
+    }
+    walk(root, &mut |node| {
+        let mut expected = ExpectedException {
+            line: node.start_position().row + 1,
+            kind: "assertThrows".to_string(),
+            ..Default::default()
+        };
+        let code = match node.kind() {
+            // `intercept[T] { .. }`, `assertThrows[T](..)`.
+            "call_expression" => {
+                let Some((name, class)) = node
+                    .child_by_field_name("function")
+                    .and_then(|f| scala_generic(f, src))
+                else {
+                    return true;
+                };
+                if !matches!(name, "intercept" | "assertThrows") {
+                    return true;
+                }
+                expected.exception_type = Some(text(class, src).to_string());
+                node.child_by_field_name("arguments")
+            }
+            "infix_expression" => {
+                let Some((left, operator, right)) = scala_infix(node, src) else {
+                    return true;
+                };
+                if operator != "thrownBy" {
+                    return true;
+                }
+                // `a [T] should be thrownBy ..`: the subject stands before `should be`.
+                let subject = match scala_infix(left, src) {
+                    Some((subject, "should" | "must", be)) if text(be, src) == "be" => subject,
+                    Some(_) => return true,
+                    None => left,
+                };
+                match scala_generic(subject, src) {
+                    Some(("the", class)) if subject == left => {
+                        expected.exception_type = Some(text(class, src).to_string());
+                        // `.. should have message "m"`.
+                        let message = node
+                            .parent()
+                            .and_then(|p| scala_infix(p, src))
+                            .filter(|(l, op, have)| {
+                                *l == node
+                                    && matches!(*op, "should" | "must")
+                                    && text(*have, src) == "have"
+                            })
+                            .and_then(|_| node.parent()?.parent())
+                            .and_then(|g| scala_infix(g, src))
+                            .filter(|(_, op, _)| *op == "message")
+                            .map(|(_, _, value)| value);
+                        if let Some(value) = message {
+                            expected.matcher = Some(matcher_value(value, src));
+                            expected.whole_message = true;
+                        }
+                    }
+                    Some(("a" | "an", class)) if subject != left => {
+                        expected.exception_type = Some(text(class, src).to_string());
+                    }
+                    None if subject != left && text(subject, src) == "noException" => {
+                        expected.kind = "doesNotThrow".to_string();
+                    }
+                    _ => return true,
+                }
+                Some(right)
+            }
+            // `code must throwA[T]`: the grammar gives the type argument to the whole
+            // `code must throwA`.
+            "generic_function" => {
+                let Some((code, "must" | "should", matcher)) = node
+                    .child_by_field_name("function")
+                    .and_then(|f| scala_infix(f, src))
+                else {
+                    return true;
+                };
+                if !matches!(text(matcher, src), "throwA" | "throwAn") {
+                    return true;
+                }
+                expected.exception_type = node
+                    .child_by_field_name("type_arguments")
+                    .and_then(|t| t.named_child(0))
+                    .map(|c| text(c, src).to_string());
+                // `.. throwA[T]("negative")`: the call that wraps it.
+                expected.matcher = node
+                    .parent()
+                    .filter(|p| {
+                        p.kind() == "call_expression"
+                            && p.child_by_field_name("function") == Some(node)
+                    })
+                    .and_then(|p| p.child_by_field_name("arguments"))
+                    .and_then(|a| a.named_child(0))
+                    .map(|a| scala_pattern(a, src));
+                Some(code)
+            }
+            _ => return true,
+        };
+        if node.kind() == "infix_expression" || expected.exception_type.is_some() {
+            expected.skeleton = collapse_ws(&format!(
+                "assertThrows#{}",
+                code.map_or("", |c| text(c, src))
+            ));
+            attribute(tests, expected);
+        }
+        true
+    });
+    // `code must throwA(new T(".."))`: an exception value names its class.
+    walk(root, &mut |node| {
+        let Some((code, "must" | "should", matcher)) = scala_infix(node, src) else {
+            return true;
+        };
+        let value = (matcher.kind() == "call_expression"
+            && matcher
+                .child_by_field_name("function")
+                .is_some_and(|f| matches!(text(f, src), "throwA" | "throwAn")))
+        .then(|| matcher.child_by_field_name("arguments")?.named_child(0))
+        .flatten()
+        .filter(|v| v.kind() == "instance_expression")
+        .and_then(|v| v.named_child(0));
+        if let Some(class) = value {
+            attribute(
+                tests,
+                ExpectedException {
+                    line: node.start_position().row + 1,
+                    skeleton: collapse_ws(&format!("assertThrows#{}", text(code, src))),
+                    kind: "assertThrows".to_string(),
+                    exception_type: Some(text(class, src).to_string()),
+                    ..Default::default()
+                },
+            );
+        }
+        true
+    });
+    attach_declared(root, src, tests, &SCALA_CLASSES);
+}
+
+/// `class A(..) extends B(..) with C`: every type of the `extends` clause.
+fn scala_parents(class: Node, src: &str) -> Vec<String> {
+    let Some(extends) = class.child_by_field_name("extend") else {
+        return Vec::new();
+    };
+    let mut cursor = extends.walk();
+    extends
+        .children_by_field_name("type", &mut cursor)
+        .map(|t| text(t, src).to_string())
+        .collect()
+}
+
+const SCALA_CLASSES: ClassSyntax = ClassSyntax {
+    declarations: &["class_definition", "object_definition"],
+    parents: scala_parents,
+};
+
+/// Objective-C XCTest: `XCTAssertThrows(expr)`, `XCTAssertThrowsSpecific(expr, Class)`,
+/// `XCTAssertThrowsSpecificNamed(expr, Class, name)` (the exception's name, compared
+/// whole), and `XCTAssertNoThrow(expr)` / `XCTAssertNoThrowSpecific(expr, Class)` /
+/// `XCTAssertNoThrowSpecificNamed(expr, Class, name)`, which state what is not thrown.
+/// They are macros a header brings in, so they are read by name.
+pub fn objc(root: Node, src: &str, tests: &mut [TestFn]) {
+    if tests.is_empty() {
+        return;
+    }
+    walk(root, &mut |node| {
+        if node.kind() != "call_expression" {
+            return true;
+        }
+        let Some(callee) = node
+            .child_by_field_name("function")
+            .filter(|f| f.kind() == "identifier")
+        else {
+            return true;
+        };
+        // The kind, and how many of the arguments after the expression are constraints.
+        let (kind, constraints) = match text(callee, src) {
+            "XCTAssertThrows" => ("objc.throws", 0),
+            "XCTAssertThrowsSpecific" => ("objc.throws", 1),
+            "XCTAssertThrowsSpecificNamed" => ("objc.throws", 2),
+            "XCTAssertNoThrow" => ("objc.noThrow", 0),
+            "XCTAssertNoThrowSpecific" => ("objc.noThrow", 1),
+            "XCTAssertNoThrowSpecificNamed" => ("objc.noThrow", 2),
+            _ => return true,
+        };
+        let Some(args) = node.child_by_field_name("arguments") else {
+            return true;
+        };
+        let mut cursor = args.walk();
+        let named: Vec<Node> = args
+            .named_children(&mut cursor)
+            .filter(|a| a.kind() != "comment")
+            .collect();
+        let Some(code) = named.first() else {
+            return true;
+        };
+        let name = named.get(2).filter(|_| constraints == 2);
+        attribute(
+            tests,
+            ExpectedException {
+                line: node.start_position().row + 1,
+                skeleton: collapse_ws(&format!("throws({})#", text(*code, src))),
+                kind: kind.to_string(),
+                exception_type: named
+                    .get(1)
+                    .filter(|_| constraints >= 1)
+                    .map(|c| text(*c, src).to_string()),
+                matcher: name.map(|n| matcher_value(*n, src)),
+                whole_message: name.is_some(),
+                ..Default::default()
+            },
+        );
+        true
+    });
+}
 
 #[cfg(test)]
 mod tests {
@@ -5271,5 +6443,1388 @@ mod tests {
             assert!(!interchangeable(b, h), "{b} / {h}");
         }
         assert!(interchangeable("assertWarns", "assertWarns"));
+    }
+
+    const GO_HEAD: &str = "package sut\n\nimport (\n\t\"errors\"\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n\t\"github.com/stretchr/testify/require\"\n)\n\n";
+
+    fn go_file(src: &str) -> Vec<ExpectedException> {
+        crate::ast::go::GoPack
+            .extract("sut_test.go", src, &AssertVocabulary::default())
+            .expect("extract succeeds")
+            .tests
+            .into_iter()
+            .flat_map(|t| t.expected_exceptions)
+            .collect()
+    }
+
+    fn go(body: &str) -> Vec<ExpectedException> {
+        go_file(&format!(
+            "{GO_HEAD}func TestRejects(t *testing.T) {{\n\terr := f(-1)\n\t{body}\n}}\n"
+        ))
+    }
+
+    /// `(kind, type, matcher, whole message)` of the one expectation of `got`.
+    fn fact(got: &[ExpectedException]) -> (&str, Option<&str>, Option<&str>, bool) {
+        assert_eq!(got.len(), 1, "{got:?}");
+        (
+            got[0].kind.as_str(),
+            got[0].exception_type.as_deref(),
+            got[0].matcher.as_deref(),
+            got[0].whole_message,
+        )
+    }
+
+    #[test]
+    fn go_reads_testify_error_and_panic_assertions() {
+        for (body, want) in [
+            ("require.Error(t, err)", ("go.Error", None, None, false)),
+            (
+                "assert.Errorf(t, err, \"why %d\", 1)",
+                ("go.Error", None, None, false),
+            ),
+            ("require.NoError(t, err)", ("go.NoError", None, None, false)),
+            (
+                "require.ErrorIs(t, err, ErrGone)",
+                ("go.Error", Some("ErrGone"), None, false),
+            ),
+            (
+                "assert.ErrorIs(t, err, fs.ErrNotExist, \"why\")",
+                ("go.Error", Some("fs.ErrNotExist"), None, false),
+            ),
+            (
+                "var pe *fs.PathError\n\trequire.ErrorAs(t, err, &pe)",
+                ("go.Error", Some("fs.PathError"), None, false),
+            ),
+            (
+                "require.ErrorAs(t, err, target)",
+                ("go.Error", Some("target"), None, false),
+            ),
+            (
+                "require.ErrorContains(t, err, \"negative\")",
+                ("go.Error", None, Some("negative"), false),
+            ),
+            (
+                "require.EqualError(t, err, `negative value`)",
+                ("go.Error", None, Some("negative value"), true),
+            ),
+            (
+                "require.EqualError(t, err, want)",
+                ("go.Error", None, Some("\u{1}want"), true),
+            ),
+            (
+                "require.True(t, errors.Is(err, ErrGone))",
+                ("go.Error", Some("ErrGone"), None, false),
+            ),
+            (
+                "assert.Panics(t, func() { f(-1) })",
+                ("go.Panics", None, None, false),
+            ),
+            (
+                "assert.PanicsWithValue(t, \"boom\", func() { f(-1) })",
+                ("go.Panics", None, Some("boom"), true),
+            ),
+            (
+                "assert.PanicsWithError(t, \"boom\", func() { f(-1) })",
+                ("go.Panics", None, Some("boom"), true),
+            ),
+            (
+                "assert.NotPanics(t, func() { f(-1) })",
+                ("go.NotPanics", None, None, false),
+            ),
+        ] {
+            assert_eq!(fact(&go(body)), want, "{body}");
+        }
+        // One site of one error has one skeleton, whatever the assertion is.
+        let skeleton = |body: &str| go(body)[0].skeleton.clone();
+        assert_eq!(skeleton("require.ErrorIs(t, err, ErrGone)"), "error#(err)");
+        assert_eq!(
+            skeleton("require.NoError(t, err)"),
+            skeleton("if !errors.Is(err, ErrGone) {\n\t\tt.Fatal(err)\n\t}")
+        );
+        assert_eq!(
+            skeleton("assert.PanicsWithValue(t, \"boom\", func() { f(-1) })"),
+            skeleton("assert.Panics(t, func() { f(-1) })")
+        );
+        // Not an expected failure: a `testing.T` method, an equality, a negated walk.
+        for body in [
+            "t.Error(err)",
+            "t.Errorf(\"got %v\", err)",
+            "require.Equal(t, 1, n)",
+            "require.True(t, ok)",
+            "require.False(t, errors.Is(err, ErrGone))",
+            "other.ErrorIs(t, err, ErrGone)",
+        ] {
+            assert!(go(body).is_empty(), "{body}");
+        }
+    }
+
+    #[test]
+    fn go_reads_errors_is_and_as_in_a_failing_condition() {
+        for (body, want) in [
+            (
+                "if !errors.Is(err, ErrGone) {\n\t\tt.Fatalf(\"got %v\", err)\n\t}",
+                Some("ErrGone"),
+            ),
+            (
+                "if err == nil || !errors.Is(err, io.EOF) {\n\t\tt.Errorf(\"got %v\", err)\n\t}",
+                Some("io.EOF"),
+            ),
+            (
+                "var pe *PathError\n\tif !(errors.As(err, &pe)) {\n\t\tt.Fatal(err)\n\t}",
+                Some("PathError"),
+            ),
+            (
+                "if _, err := g(); !errors.Is(err, ErrGone) {\n\t\tt.Fatal(err)\n\t}",
+                Some("ErrGone"),
+            ),
+        ] {
+            let got = go(body);
+            assert_eq!(got.len(), 1, "{body}");
+            assert_eq!(fact(&got), ("go.Error", want, None, false), "{body}");
+            assert_eq!(got[0].line, body.lines().count() + 10, "{body}");
+        }
+        for body in [
+            // The condition holds when the error IS the sentinel.
+            "if errors.Is(err, ErrGone) {\n\t\tt.Fatal(err)\n\t}",
+            // Both must fail for the test to fail.
+            "if ok && !errors.Is(err, ErrGone) {\n\t\tt.Fatal(err)\n\t}",
+            // Nothing fails the test.
+            "if !errors.Is(err, ErrGone) {\n\t\tlog.Print(err)\n\t}",
+            "if !errors.Is(err, ErrGone) {\n\t\tdefer func() { t.Fatal(err) }()\n\t}",
+            "if !mine.Is(err, ErrGone) {\n\t\tt.Fatal(err)\n\t}",
+        ] {
+            assert!(go(body).is_empty(), "{body}");
+        }
+    }
+
+    #[test]
+    fn go_reads_whose_assertion_it_is_from_the_imports_and_the_function() {
+        let with = |imports: &str, body: &str| {
+            go_file(&format!(
+                "package sut\n\nimport (\n{imports}\n)\n\nfunc TestRejects(t *testing.T) {{\n\t{body}\n}}\n"
+            ))
+        };
+        // A testify package under another name; an errors package under another name.
+        assert_eq!(
+            fact(&with(
+                "\ttr \"github.com/stretchr/testify/require\"",
+                "tr.ErrorIs(t, err, ErrGone)"
+            )),
+            ("go.Error", Some("ErrGone"), None, false)
+        );
+        assert_eq!(
+            fact(&with(
+                "\tstderrors \"errors\"",
+                "if !stderrors.Is(err, ErrGone) {\n\t\tt.Fatal(err)\n\t}"
+            )),
+            ("go.Error", Some("ErrGone"), None, false)
+        );
+        // A name the file binds to another package, or to nothing, is not read.
+        assert!(with(
+            "\t\"example.com/own/require\"",
+            "require.ErrorIs(t, err, ErrGone)"
+        )
+        .is_empty());
+        assert!(with("\t\"testing\"", "require.ErrorIs(t, err, ErrGone)").is_empty());
+        assert!(with(
+            "\t\"example.com/own/errors\"",
+            "if !errors.Is(err, ErrGone) {\n\t\tt.Fatal(err)\n\t}"
+        )
+        .is_empty());
+
+        // A suite's receiver, its `Require()`, and a local bound to an assertion object.
+        let suite = |body: &str| {
+            go_file(&format!(
+                "package sut\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/require\"\n\t\"github.com/stretchr/testify/suite\"\n)\n\ntype S struct {{\n\tsuite.Suite\n}}\n\nfunc (s *S) TestRejects() {{\n\t{body}\n}}\n\nfunc TestS(t *testing.T) {{\n\tsuite.Run(t, new(S))\n}}\n"
+            ))
+        };
+        for body in [
+            "s.ErrorIs(err, ErrGone)",
+            "s.Require().ErrorIs(err, ErrGone)",
+            "s.Assert().ErrorIs(err, ErrGone)",
+            "r := s.Require()\n\tr.ErrorIs(err, ErrGone)",
+            "a := require.New(s.T())\n\ta.ErrorIs(err, ErrGone)",
+        ] {
+            assert_eq!(
+                fact(&suite(body)),
+                ("go.Error", Some("ErrGone"), None, false),
+                "{body}"
+            );
+        }
+        assert_eq!(
+            fact(&suite("s.Error(err)")),
+            ("go.Error", None, None, false)
+        );
+        assert_eq!(
+            fact(&suite("s.Require().Error(err)")),
+            ("go.Error", None, None, false)
+        );
+        assert!(suite("v.Require().ErrorIs(err, ErrGone)").is_empty());
+        assert!(suite("s.db.ErrorIs(err, ErrGone)").is_empty());
+    }
+
+    #[test]
+    fn go_reads_gocheck_checkers_as_expected_failures() {
+        let gocheck = |import: &str, body: &str| {
+            go_file(&format!(
+                "package sut\n\nimport (\n\t{import}\n)\n\ntype S struct{{}}\n\nfunc (s *S) TestRejects(c *C) {{\n\t{body}\n}}\n"
+            ))
+        };
+        let dot = ". \"gopkg.in/check.v1\"";
+        for (body, want) in [
+            (
+                "c.Assert(err, ErrorMatches, \"negative value\")",
+                ("go.Error", None, Some("negative value"), true),
+            ),
+            (
+                "c.Check(err, ErrorMatches, \"negative .*\")",
+                ("go.Error", None, Some("\u{1}/negative .*/"), false),
+            ),
+            (
+                "c.Assert(func() { f(-1) }, PanicMatches, `boom`)",
+                ("go.Panics", None, Some("boom"), true),
+            ),
+            (
+                "c.Assert(func() { f(-1) }, Panics, \"boom\")",
+                ("go.Panics", None, Some("boom"), true),
+            ),
+            (
+                "c.Assert(func() { f(-1) }, Panics, ErrBoom)",
+                ("go.Panics", None, Some("\u{1}ErrBoom"), true),
+            ),
+        ] {
+            assert_eq!(fact(&gocheck(dot, body)), want, "{body}");
+        }
+        assert!(gocheck(dot, "c.Assert(n, Equals, 1)").is_empty());
+        assert!(gocheck(dot, "c.Assert(err, IsNil)").is_empty());
+        // Under the name the file imports the package by, and by no other.
+        for import in [
+            "\"gopkg.in/check.v1\"",
+            "check \"github.com/go-check/check\"",
+        ] {
+            assert_eq!(
+                fact(&gocheck(import, "c.Assert(err, check.ErrorMatches, \"x\")")),
+                ("go.Error", None, Some("x"), true),
+                "{import}"
+            );
+        }
+        assert!(gocheck(
+            "\"gopkg.in/check.v1\"",
+            "c.Assert(err, ErrorMatches, \"x\")"
+        )
+        .is_empty());
+        assert!(gocheck(
+            "\"example.com/own/check\"",
+            "c.Assert(err, check.ErrorMatches, \"x\")"
+        )
+        .is_empty());
+        assert!(gocheck(dot, "c.Assert(err, gc.ErrorMatches, \"x\")").is_empty());
+    }
+
+    #[test]
+    fn go_expectations_are_compared_by_name_presence_and_message() {
+        let wider = |b: &str, h: &str| widened(&go(b), &go(h));
+        let one = |b: &str, h: &str| {
+            let got = wider(b, h);
+            assert_eq!(got.len(), 1, "{b} -> {h}: {got:?}");
+            got[0].detail.clone()
+        };
+        assert_eq!(
+            one("require.ErrorIs(t, err, ErrGone)", "require.Error(t, err)"),
+            "expected exception type was removed"
+        );
+        assert_eq!(
+            one(
+                "require.ErrorContains(t, err, \"negative\")",
+                "require.Error(t, err)"
+            ),
+            "expected pattern or message matcher was removed"
+        );
+        assert_eq!(
+            one(
+                "require.EqualError(t, err, \"negative value\")",
+                "require.ErrorContains(t, err, \"negative value\")"
+            ),
+            "expected pattern or message matcher is no longer the whole message and matches more messages"
+        );
+        assert!(one(
+            "require.EqualError(t, err, \"negative value\")",
+            "require.ErrorContains(t, err, \"negative\")"
+        )
+        .contains("matches more messages"));
+        assert_eq!(
+            one(
+                "assert.PanicsWithValue(t, \"boom\", func() { f(-1) })",
+                "assert.Panics(t, func() { f(-1) })"
+            ),
+            "expected pattern or message matcher was removed"
+        );
+        assert_eq!(
+            one(
+                "require.ErrorIs(t, err, ErrGone)\n\trequire.ErrorContains(t, err, \"negative\")",
+                "require.ErrorIs(t, err, ErrGone)"
+            ),
+            "expected message `negative` is no longer checked"
+        );
+        // A name Go has no relation for: `Error` and `Exception` are sentinels like any.
+        for (b, h) in [
+            (
+                "require.ErrorIs(t, err, ErrGone)",
+                "require.ErrorIs(t, err, ErrOther)",
+            ),
+            (
+                "require.ErrorIs(t, err, ErrGone)",
+                "require.ErrorIs(t, err, Error)",
+            ),
+            (
+                "require.ErrorIs(t, err, ErrGone)",
+                "require.ErrorIs(t, err, pkg.Exception)",
+            ),
+            ("require.Error(t, err)", "require.ErrorIs(t, err, ErrGone)"),
+            ("require.Error(t, err)", "require.NoError(t, err)"),
+            ("require.NoError(t, err)", "require.Error(t, err)"),
+            (
+                "require.ErrorContains(t, err, \"negative\")",
+                "require.EqualError(t, err, \"negative\")",
+            ),
+            (
+                "assert.Panics(t, func() { f(-1) })",
+                "assert.NotPanics(t, func() { f(-1) })",
+            ),
+            (
+                "assert.Panics(t, func() { f(-1) })",
+                "assert.PanicsWithError(t, \"boom\", func() { f(-1) })",
+            ),
+        ] {
+            assert!(wider(b, h).is_empty(), "{b} -> {h}");
+        }
+        // A panic and a returned error do not stand for each other.
+        assert!(!interchangeable("go.Panics", "go.Error"));
+        assert!(!interchangeable("go.NotPanics", "go.NoError"));
+        assert!(!interchangeable("go.Error", "go.NoError"));
+        assert!(interchangeable("go.Error", "go.Error"));
+    }
+
+    fn swift_file(src: &str) -> Vec<ExpectedException> {
+        crate::ast::swift::SwiftPack
+            .extract(
+                "Tests/SutTests/SutTests.swift",
+                src,
+                &AssertVocabulary::default(),
+            )
+            .expect("extract succeeds")
+            .tests
+            .into_iter()
+            .flat_map(|t| t.expected_exceptions)
+            .collect()
+    }
+
+    fn xctest(body: &str) -> Vec<ExpectedException> {
+        swift_file(&format!(
+            "import XCTest\n@testable import Sut\n\nfinal class SutTests: XCTestCase {{\n    func testRejects() throws {{\n        {body}\n    }}\n}}\n"
+        ))
+    }
+
+    fn swift_testing(body: &str) -> Vec<ExpectedException> {
+        swift_file(&format!(
+            "import Testing\n@testable import Sut\n\n@Test func rejects() throws {{\n    {body}\n}}\n"
+        ))
+    }
+
+    #[test]
+    fn swift_reads_xctest_throwing_assertions_and_the_type_their_closure_checks() {
+        for (body, want) in [
+            ("XCTAssertThrowsError(try f(-1))", ("swift.throws", None)),
+            ("XCTAssertThrowsError(try f(-1), \"why\")", ("swift.throws", None)),
+            (
+                "XCTAssertThrowsError(try f(-1)) { error in\n  XCTAssertEqual(error as? SutError, .negative)\n}",
+                ("swift.throws", Some("SutError")),
+            ),
+            (
+                "XCTAssertThrowsError(try f(-1)) { error in\n  XCTAssertTrue(error is SutError)\n}",
+                ("swift.throws", Some("SutError")),
+            ),
+            (
+                "XCTAssertThrowsError(try f(-1), \"why\") { (e) in\n  XCTAssertTrue(e is Client.Error)\n}",
+                ("swift.throws", Some("Client.Error")),
+            ),
+            (
+                "XCTAssertThrowsError(try f(-1)) {\n  XCTAssertEqual($0 as? SutError, SutError.negative)\n}",
+                ("swift.throws", Some("SutError")),
+            ),
+            (
+                "XCTAssertThrowsError(try f(-1)) { error in\n  XCTAssertTrue(error is any Error)\n}",
+                ("swift.throws", Some("any Error")),
+            ),
+            // Every error bridges to `NSError`, and a cast of another value names nothing.
+            (
+                "XCTAssertThrowsError(try f(-1)) { error in\n  XCTAssertEqual((error as NSError).code, 3)\n}",
+                ("swift.throws", None),
+            ),
+            (
+                "XCTAssertThrowsError(try f(-1)) { error in\n  XCTAssertTrue(other is SutError)\n}",
+                ("swift.throws", None),
+            ),
+            ("XCTAssertNoThrow(try f(1))", ("swift.noThrow", None)),
+        ] {
+            let got = xctest(body);
+            assert_eq!(got.len(), 1, "{body}: {got:?}");
+            assert_eq!(
+                (got[0].kind.as_str(), got[0].exception_type.as_deref()),
+                want,
+                "{body}"
+            );
+            assert_eq!(got[0].line, 6, "{body}");
+            assert_eq!(got[0].matcher, None, "{body}");
+        }
+        assert_eq!(
+            xctest("XCTAssertThrowsError(try f(-1)) { _ in }")[0].skeleton,
+            xctest("XCTAssertNoThrow(try  f(-1))")[0].skeleton
+        );
+        for body in [
+            "XCTAssertEqual(try f(1), 1)",
+            "sut.XCTAssertThrowsError(try f(-1))",
+        ] {
+            assert!(xctest(body).is_empty(), "{body}");
+        }
+        // A file that does not import XCTest calls a function of its own.
+        assert!(swift_file(
+            "import Testing\n\n@Test func rejects() {\n    XCTAssertThrowsError(try f(-1))\n}\n"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn swift_reads_the_throws_argument_of_expect_and_require() {
+        for (body, want) in [
+            (
+                "#expect(throws: SutError.self) { try f(-1) }",
+                ("swift.throws", Some("SutError"), None),
+            ),
+            (
+                "#expect(throws: SutError.self, \"why\") {\n    try f(-1)\n}",
+                ("swift.throws", Some("SutError"), None),
+            ),
+            (
+                "try #require(throws: Client.Error.self) { try f(-1) }",
+                ("swift.throws", Some("Client.Error"), None),
+            ),
+            (
+                "#expect(throws: (any Error).self) { try f(-1) }",
+                ("swift.throws", Some("any Error"), None),
+            ),
+            (
+                "#expect(throws: Error.self) { try f(-1) }",
+                ("swift.throws", Some("any Error"), None),
+            ),
+            (
+                "#expect(throws: SutError.negative) { try f(-1) }",
+                (
+                    "swift.throws",
+                    Some("SutError"),
+                    Some("\u{1}SutError.negative"),
+                ),
+            ),
+            (
+                "#expect(throws: SutError(code: 3)) { try f(-1) }",
+                (
+                    "swift.throws",
+                    Some("SutError"),
+                    Some("\u{1}SutError(code: 3)"),
+                ),
+            ),
+            (
+                "let error = #expect(throws: SutError.self) { try f(-1) }",
+                ("swift.throws", Some("SutError"), None),
+            ),
+            (
+                "#expect(throws: Never.self) { try f(1) }",
+                ("swift.noThrow", None, None),
+            ),
+        ] {
+            let got = swift_testing(body);
+            assert_eq!(got.len(), 1, "{body}: {got:?}");
+            assert_eq!(
+                (
+                    got[0].kind.as_str(),
+                    got[0].exception_type.as_deref(),
+                    got[0].matcher.as_deref()
+                ),
+                want,
+                "{body}"
+            );
+        }
+        // The closure is the site, bound to a name or not.
+        assert_eq!(
+            swift_testing("let error = #expect(throws: SutError.self) { try f(-1) }")[0].skeleton,
+            swift_testing("#expect(throws: Never.self) { try f(-1) }")[0].skeleton
+        );
+        for body in [
+            "#expect(f(1) == 1)",
+            "#expect(thrown: SutError.self) { try f(-1) }",
+        ] {
+            assert!(swift_testing(body).is_empty(), "{body}");
+        }
+        assert!(swift_file(
+            "import XCTest\n\nfinal class SutTests: XCTestCase {\n    func testRejects() {\n        #expect(throws: SutError.self) { try f(-1) }\n    }\n}\n"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn swift_error_types_are_compared_by_name_with_any_error_above_them() {
+        let wider = |b: &str, h: &str| widened(&swift_testing(b), &swift_testing(h));
+        let one = |b: &str, h: &str| {
+            let got = wider(b, h);
+            assert_eq!(got.len(), 1, "{b} -> {h}: {got:?}");
+            got[0].detail.clone()
+        };
+        assert_eq!(
+            one(
+                "#expect(throws: SutError.self) { try f(-1) }",
+                "#expect(throws: (any Error).self) { try f(-1) }"
+            ),
+            "expected exception type widened from `SutError` to `any Error`"
+        );
+        assert_eq!(
+            one(
+                "#expect(throws: SutError.negative) { try f(-1) }",
+                "#expect(throws: SutError.self) { try f(-1) }"
+            ),
+            "expected pattern or message matcher was removed"
+        );
+        for (b, h) in [
+            // Another type, a type of the project named `Error`, a narrower expectation.
+            (
+                "#expect(throws: SutError.self) { try f(-1) }",
+                "#expect(throws: OtherError.self) { try f(-1) }",
+            ),
+            (
+                "#expect(throws: SutError.self) { try f(-1) }",
+                "#expect(throws: Client.Error.self) { try f(-1) }",
+            ),
+            (
+                "#expect(throws: (any Error).self) { try f(-1) }",
+                "#expect(throws: SutError.self) { try f(-1) }",
+            ),
+            (
+                "#expect(throws: SutError.self) { try f(-1) }",
+                "#expect(throws: SutError.negative) { try f(-1) }",
+            ),
+            // A sign flip.
+            (
+                "#expect(throws: SutError.self) { try f(-1) }",
+                "#expect(throws: Never.self) { try f(-1) }",
+            ),
+        ] {
+            assert!(wider(b, h).is_empty(), "{b} -> {h}");
+        }
+        let x = |b: &str, h: &str| widened(&xctest(b), &xctest(h));
+        let typed =
+            "XCTAssertThrowsError(try f(-1)) { error in\n  XCTAssertTrue(error is SutError)\n}";
+        assert_eq!(
+            x(typed, "XCTAssertThrowsError(try f(-1))")[0].detail,
+            "expected exception type was removed"
+        );
+        assert!(x("XCTAssertThrowsError(try f(-1))", typed).is_empty());
+        assert!(x(typed, "XCTAssertNoThrow(try f(-1))").is_empty());
+        assert!(!interchangeable("swift.throws", "swift.noThrow"));
+        assert!(interchangeable("swift.throws", "swift.throws"));
+    }
+
+    fn scala_file(src: &str) -> Vec<ExpectedException> {
+        crate::ast::scala::ScalaPack
+            .extract(
+                "src/test/scala/SutSpec.scala",
+                src,
+                &AssertVocabulary::default(),
+            )
+            .expect("extract succeeds")
+            .tests
+            .into_iter()
+            .flat_map(|t| t.expected_exceptions)
+            .collect()
+    }
+
+    fn scalatest(body: &str) -> Vec<ExpectedException> {
+        scala_file(&format!(
+            "import org.scalatest.funsuite.AnyFunSuite\n\nclass SutSpec extends AnyFunSuite with Matchers {{\n  test(\"rejects\") {{\n    {body}\n  }}\n}}\n"
+        ))
+    }
+
+    fn specs2(body: &str) -> Vec<ExpectedException> {
+        scala_file(&format!(
+            "import org.specs2.mutable.Specification\n\nclass SutSpec extends Specification {{\n  \"sut\" should {{\n    \"reject\" in {{\n      {body}\n    }}\n  }}\n}}\n"
+        ))
+    }
+
+    #[test]
+    fn scala_reads_scalatest_and_specs2_expected_exceptions() {
+        let iae = Some("IllegalArgumentException");
+        for (got, want) in [
+            (
+                scalatest("intercept[IllegalArgumentException] { f(-1) }"),
+                ("assertThrows", iae, None, false),
+            ),
+            (
+                scalatest("val e = intercept[java.io.IOException] {\n      f(-1)\n    }"),
+                ("assertThrows", Some("java.io.IOException"), None, false),
+            ),
+            (
+                scalatest("assertThrows[IllegalArgumentException](f(-1))"),
+                ("assertThrows", iae, None, false),
+            ),
+            (
+                scalatest("the [IllegalArgumentException] thrownBy { f(-1) } should have message \"negative\""),
+                ("assertThrows", iae, Some("negative"), true),
+            ),
+            (
+                scalatest("val e = the [IllegalArgumentException] thrownBy f(-1)"),
+                ("assertThrows", iae, None, false),
+            ),
+            (
+                scalatest("a [IllegalArgumentException] should be thrownBy { f(-1) }"),
+                ("assertThrows", iae, None, false),
+            ),
+            (
+                scalatest("an [IllegalArgumentException] should be thrownBy f(-1)"),
+                ("assertThrows", iae, None, false),
+            ),
+            (
+                scalatest("noException should be thrownBy { f(1) }"),
+                ("doesNotThrow", None, None, false),
+            ),
+            (
+                specs2("f(-1) must throwA[IllegalArgumentException]"),
+                ("assertThrows", iae, None, false),
+            ),
+            (
+                specs2("f(-1) must throwAn[IllegalArgumentException](\"negative\")"),
+                ("assertThrows", iae, Some("negative"), false),
+            ),
+            (
+                specs2("f(-1) must throwAn[IllegalArgumentException](message = \"neg.*\")"),
+                ("assertThrows", iae, Some("\u{1}/neg.*/"), false),
+            ),
+            (
+                specs2("f(-1) must throwA(new IllegalArgumentException(\"negative\"))"),
+                ("assertThrows", iae, None, false),
+            ),
+        ] {
+            assert_eq!(fact(&got), want, "{got:?}");
+        }
+        // One guarded code is one site, whichever form states it.
+        assert_eq!(
+            scalatest("intercept[IllegalArgumentException] { f(-1) }")[0].skeleton,
+            scalatest("noException should be thrownBy { f(-1) }")[0].skeleton
+        );
+        for body in [
+            "assert(f(1) == 1)",
+            "sut.intercept[IllegalArgumentException] { f(-1) }",
+            "intercept(f(-1))",
+            "retry[IllegalArgumentException] { f(-1) }",
+            "f(1) must beLike[IllegalArgumentException]",
+            "a [Sut] should be definedAt 1",
+            "the [Sut] producedBy { f(-1) } should have message \"negative\"",
+            "f(1) must beA[Sut]",
+            "f(1) must not(throwA[Exception])",
+        ] {
+            assert!(scalatest(body).is_empty(), "{body}");
+        }
+    }
+
+    #[test]
+    fn scala_expectations_use_the_java_table_and_the_classes_of_the_file() {
+        let wider = |b: &str, h: &str| widened(&scalatest(b), &scalatest(h));
+        let one = |b: &str, h: &str| {
+            let got = wider(b, h);
+            assert_eq!(got.len(), 1, "{b} -> {h}: {got:?}");
+            got[0].detail.clone()
+        };
+        assert_eq!(
+            one(
+                "intercept[scala.NumberFormatException] { f(-1) }",
+                "intercept[IllegalArgumentException] { f(-1) }"
+            ),
+            "expected exception type widened from `NumberFormatException` to `IllegalArgumentException`"
+        );
+        assert!(one(
+            "the [IllegalArgumentException] thrownBy { f(-1) } should have message \"negative\"",
+            "an [IllegalArgumentException] should be thrownBy { f(-1) }"
+        )
+        .contains("matcher was removed"));
+        for (b, h) in [
+            (
+                "intercept[IllegalArgumentException] { f(-1) }",
+                "intercept[NumberFormatException] { f(-1) }",
+            ),
+            (
+                "intercept[my.IllegalArgumentException] { f(-1) }",
+                "intercept[RuntimeException] { f(-1) }",
+            ),
+            (
+                "intercept[IllegalArgumentException] { f(-1) }",
+                "noException should be thrownBy { f(-1) }",
+            ),
+        ] {
+            assert!(wider(b, h).is_empty(), "{b} -> {h}");
+        }
+        let declared = |body: &str| {
+            scala_file(&format!(
+                "class AppError(m: String) extends RuntimeException(m) with Marker\nclass OrderError(m: String) extends AppError(m)\nclass PaymentError(m: String) extends AppError(m)\n\nclass SutSpec extends AnyFunSuite {{\n  test(\"rejects\") {{\n    {body}\n  }}\n}}\n"
+            ))
+        };
+        let moved = |h: &str| widened(&declared("intercept[OrderError] { f(-1) }"), &declared(h));
+        assert_eq!(moved("intercept[AppError] { f(-1) }").len(), 1);
+        assert_eq!(moved("intercept[RuntimeException] { f(-1) }").len(), 1);
+        assert!(moved("intercept[PaymentError] { f(-1) }").is_empty());
+    }
+
+    fn objc(body: &str) -> Vec<ExpectedException> {
+        crate::ast::objc::ObjcPack
+            .extract(
+                "Tests/SutTests.m",
+                &format!(
+                    "#import <XCTest/XCTest.h>\n\n@interface SutTests : XCTestCase\n@end\n\n@implementation SutTests\n- (void)testRejects {{\n    {body}\n}}\n@end\n"
+                ),
+                &AssertVocabulary::default(),
+            )
+            .expect("extract succeeds")
+            .tests
+            .into_iter()
+            .flat_map(|t| t.expected_exceptions)
+            .collect()
+    }
+
+    #[test]
+    fn objc_reads_xctest_throwing_assertions() {
+        for (body, want) in [
+            ("XCTAssertThrows([sut run:-1]);", ("objc.throws", None, None, false)),
+            (
+                "XCTAssertThrows([sut run:-1], @\"why %d\", 1);",
+                ("objc.throws", None, None, false),
+            ),
+            (
+                "XCTAssertThrowsSpecific([sut run:-1], SutException);",
+                ("objc.throws", Some("SutException"), None, false),
+            ),
+            (
+                "XCTAssertThrowsSpecific([sut run:-1], SutException, @\"why\");",
+                ("objc.throws", Some("SutException"), None, false),
+            ),
+            (
+                "XCTAssertThrowsSpecificNamed([sut run:-1], NSException, NSInvalidArgumentException, @\"why\");",
+                (
+                    "objc.throws",
+                    Some("NSException"),
+                    Some("\u{1}NSInvalidArgumentException"),
+                    true,
+                ),
+            ),
+            (
+                "XCTAssertThrowsSpecificNamed([sut run:-1], SutException, @\"Negative\");",
+                ("objc.throws", Some("SutException"), Some("Negative"), true),
+            ),
+            ("XCTAssertNoThrow([sut run:1]);", ("objc.noThrow", None, None, false)),
+            (
+                "XCTAssertNoThrowSpecific([sut run:1], SutException);",
+                ("objc.noThrow", Some("SutException"), None, false),
+            ),
+        ] {
+            let got = objc(body);
+            assert_eq!(fact(&got), want, "{body}");
+            assert_eq!(got[0].skeleton, got[0].skeleton.replace("  ", " "), "{body}");
+            assert_eq!(got[0].line, 8, "{body}");
+        }
+        assert_eq!(
+            objc("XCTAssertThrowsSpecific([sut  run:-1], SutException);")[0].skeleton,
+            objc("XCTAssertNoThrow([sut run:-1]);")[0].skeleton
+        );
+        for body in [
+            "XCTAssertEqual([sut run:1], 1);",
+            "[helper XCTAssertThrows:value];",
+            "helper->XCTAssertThrows([sut run:-1]);",
+        ] {
+            assert!(objc(body).is_empty(), "{body}");
+        }
+    }
+
+    #[test]
+    fn objc_classes_are_compared_by_name_with_nsexception_above_them() {
+        let wider = |b: &str, h: &str| widened(&objc(b), &objc(h));
+        let one = |b: &str, h: &str| {
+            let got = wider(b, h);
+            assert_eq!(got.len(), 1, "{b} -> {h}: {got:?}");
+            got[0].detail.clone()
+        };
+        assert_eq!(
+            one(
+                "XCTAssertThrowsSpecific([sut run:-1], SutException);",
+                "XCTAssertThrowsSpecific([sut run:-1], NSException);"
+            ),
+            "expected exception type widened from `SutException` to `NSException`"
+        );
+        assert_eq!(
+            one(
+                "XCTAssertThrowsSpecific([sut run:-1], SutException);",
+                "XCTAssertThrows([sut run:-1]);"
+            ),
+            "expected exception type was removed"
+        );
+        assert_eq!(
+            one(
+                "XCTAssertThrowsSpecificNamed([sut run:-1], NSException, NSRangeException);",
+                "XCTAssertThrowsSpecific([sut run:-1], NSException);"
+            ),
+            "expected pattern or message matcher was removed"
+        );
+        // "Does not throw X" passes on any other failure: naming a class is the widening.
+        assert!(one(
+            "XCTAssertNoThrow([sut run:1]);",
+            "XCTAssertNoThrowSpecific([sut run:1], SutException);"
+        )
+        .starts_with("negated expectation now names a type"));
+        for (b, h) in [
+            (
+                "XCTAssertThrowsSpecific([sut run:-1], SutException);",
+                "XCTAssertThrowsSpecific([sut run:-1], OtherException);",
+            ),
+            (
+                "XCTAssertThrowsSpecific([sut run:-1], SutException);",
+                "XCTAssertThrowsSpecific([sut run:-1], Exception);",
+            ),
+            (
+                "XCTAssertThrows([sut run:-1]);",
+                "XCTAssertThrowsSpecific([sut run:-1], SutException);",
+            ),
+            (
+                "XCTAssertNoThrowSpecific([sut run:1], SutException);",
+                "XCTAssertNoThrow([sut run:1]);",
+            ),
+            (
+                "XCTAssertThrows([sut run:-1]);",
+                "XCTAssertNoThrow([sut run:-1]);",
+            ),
+        ] {
+            assert!(wider(b, h).is_empty(), "{b} -> {h}");
+        }
+    }
+
+    fn catch2(body: &str) -> Vec<ExpectedException> {
+        crate::ast::c_cpp::CppPack
+            .extract(
+                "tests/sut_test.cpp",
+                &format!("#include <catch2/catch_test_macros.hpp>\nTEST_CASE(\"rejects\") {{\n  {body}\n}}\n"),
+                &AssertVocabulary::default(),
+            )
+            .expect("extract succeeds")
+            .tests
+            .into_iter()
+            .flat_map(|t| t.expected_exceptions)
+            .collect()
+    }
+
+    #[test]
+    fn cpp_reads_catch2_and_doctest_throwing_macros() {
+        let ia = Some("std::invalid_argument");
+        for (body, want) in [
+            (
+                "REQUIRE_THROWS(f(-1));",
+                ("EXPECT_THROW", None, None, false),
+            ),
+            ("CHECK_THROWS(f(-1));", ("EXPECT_THROW", None, None, false)),
+            (
+                "REQUIRE_THROWS_AS(f(-1), std::invalid_argument);",
+                ("EXPECT_THROW", ia, None, false),
+            ),
+            (
+                "CHECK_THROWS_AS(f(-1), std::invalid_argument);",
+                ("EXPECT_THROW", ia, None, false),
+            ),
+            (
+                "REQUIRE_THROWS_WITH(f(-1), \"negative\");",
+                ("EXPECT_THROW", None, Some("negative"), true),
+            ),
+            (
+                "CHECK_THROWS_WITH(f(-1), ContainsSubstring(\"negative\"));",
+                (
+                    "EXPECT_THROW",
+                    None,
+                    Some("\u{1}ContainsSubstring(\"negative\")"),
+                    false,
+                ),
+            ),
+            (
+                "REQUIRE_THROWS_MATCHES(f(-1), std::invalid_argument, Message(\"negative\"));",
+                (
+                    "EXPECT_THROW",
+                    ia,
+                    Some("\u{1}Message(\"negative\")"),
+                    false,
+                ),
+            ),
+            (
+                "CHECK_THROWS_WITH_AS(f(-1), \"negative\", std::invalid_argument);",
+                ("EXPECT_THROW", ia, Some("negative"), true),
+            ),
+            (
+                "REQUIRE_THROWS_AS_MESSAGE(f(-1), std::invalid_argument, \"why\");",
+                ("EXPECT_THROW", ia, None, false),
+            ),
+            (
+                "CHECK_THROWS_WITH_MESSAGE(f(-1), \"negative\", \"why\");",
+                ("EXPECT_THROW", None, Some("negative"), true),
+            ),
+            (
+                "CHECK_THROWS_MESSAGE(f(-1), \"why\");",
+                ("EXPECT_THROW", None, None, false),
+            ),
+            (
+                "REQUIRE_NOTHROW(f(1));",
+                ("EXPECT_NO_THROW", None, None, false),
+            ),
+            (
+                "CHECK_NOTHROW_MESSAGE(f(1), \"why\");",
+                ("EXPECT_NO_THROW", None, None, false),
+            ),
+        ] {
+            let got = catch2(body);
+            assert_eq!(fact(&got), want, "{body}");
+            assert_eq!(
+                got[0].skeleton.replace("f(1)", "f(-1)"),
+                "EXPECT_THROW(f(-1), #)",
+                "{body}"
+            );
+        }
+        for body in [
+            "REQUIRE(f(1) == 1);",
+            "WARN_THROWS(f(-1));",
+            "REQUIRE_THROWS_LATER(f(-1));",
+            "REQUIRE_FALSE(f(1));",
+        ] {
+            assert!(catch2(body).is_empty(), "{body}");
+        }
+        let wider = |b: &str, h: &str| widened(&catch2(b), &catch2(h)).len();
+        assert_eq!(
+            wider(
+                "REQUIRE_THROWS_AS(f(-1), std::invalid_argument);",
+                "REQUIRE_THROWS_AS(f(-1), std::logic_error);"
+            ),
+            1
+        );
+        assert_eq!(
+            wider(
+                "REQUIRE_THROWS_AS(f(-1), std::invalid_argument);",
+                "REQUIRE_THROWS(f(-1));"
+            ),
+            1
+        );
+        assert_eq!(
+            wider(
+                "REQUIRE_THROWS_WITH(f(-1), \"negative\");",
+                "CHECK_THROWS(f(-1));"
+            ),
+            1
+        );
+        assert_eq!(
+            wider(
+                "CHECK_THROWS_WITH_AS(f(-1), \"negative\", std::invalid_argument);",
+                "CHECK_THROWS_AS(f(-1), std::invalid_argument);"
+            ),
+            1
+        );
+        assert_eq!(
+            wider(
+                "EXPECT_THROW(f(-1), std::invalid_argument);",
+                "REQUIRE_THROWS_AS(f(-1), std::invalid_argument);"
+            ),
+            0
+        );
+        assert_eq!(
+            wider(
+                "REQUIRE_THROWS(f(-1));",
+                "REQUIRE_THROWS_AS(f(-1), std::invalid_argument);"
+            ),
+            0
+        );
+        assert_eq!(
+            wider("REQUIRE_THROWS(f(-1));", "REQUIRE_NOTHROW(f(-1));"),
+            0
+        );
+    }
+
+    #[test]
+    fn java_reads_assertj_typed_entry_points_as_the_class_they_name() {
+        for (body, want) in [
+            (
+                "assertThatIllegalArgumentException().isThrownBy(() -> f(-1));",
+                ("assertThrows", Some("IllegalArgumentException"), None, false),
+            ),
+            (
+                "assertThatNullPointerException().isThrownBy(() -> f(-1)).withMessage(\"negative\");",
+                ("assertThrows", Some("NullPointerException"), Some("negative"), true),
+            ),
+            (
+                "assertThatIllegalStateException().isThrownBy(() -> f(-1)).withMessageContaining(\"neg\");",
+                ("assertThrows", Some("IllegalStateException"), Some("neg"), false),
+            ),
+            (
+                "assertThatIOException().isThrownBy(() -> f(-1));",
+                ("assertThrows", Some("IOException"), None, false),
+            ),
+        ] {
+            assert_eq!(fact(&java_test(body)), want, "{body}");
+        }
+        // The same site as the entry point that takes the class.
+        assert_eq!(
+            java_test("assertThatIllegalArgumentException().isThrownBy(() -> f(-1));")[0].skeleton,
+            java_test("assertThatExceptionOfType(Exception.class).isThrownBy(() -> f(-1));")[0]
+                .skeleton
+        );
+        assert!(java_test("assertThatSutException().isThrownBy(() -> f(-1));").is_empty());
+        let wider = |b: &str, h: &str| widened(&java_test(b), &java_test(h)).len();
+        assert_eq!(
+            wider(
+                "assertThatExceptionOfType(NumberFormatException.class).isThrownBy(() -> f(-1));",
+                "assertThatIllegalArgumentException().isThrownBy(() -> f(-1));"
+            ),
+            1
+        );
+        assert_eq!(
+            wider(
+                "assertThatIllegalArgumentException().isThrownBy(() -> f(-1)).withMessage(\"negative\");",
+                "assertThatIllegalArgumentException().isThrownBy(() -> f(-1));"
+            ),
+            1
+        );
+        assert_eq!(
+            wider(
+                "assertThatIllegalArgumentException().isThrownBy(() -> f(-1));",
+                "assertThatExceptionOfType(NumberFormatException.class).isThrownBy(() -> f(-1));"
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn js_reads_chai_should_style_from_the_subject_before_should() {
+        for (body, want) in [
+            (
+                "(() => f(-1)).should.throw(RangeError, \"negative\");",
+                ("toThrow", Some("RangeError"), Some("negative")),
+            ),
+            (
+                "fn.should.throw(RangeError);",
+                ("toThrow", Some("RangeError"), None),
+            ),
+            ("fn.should.throw();", ("toThrow", None, None)),
+            ("fn.should.not.throw();", ("not.toThrow", None, None)),
+            (
+                "fn.should.Throw(/negative/);",
+                ("toThrow", None, Some("\u{1}/negative/")),
+            ),
+        ] {
+            let got = js(body);
+            assert_eq!(got.len(), 1, "{body}: {got:?}");
+            assert_eq!(
+                (
+                    got[0].kind.as_str(),
+                    got[0].exception_type.as_deref(),
+                    got[0].matcher.as_deref()
+                ),
+                want,
+                "{body}"
+            );
+        }
+        assert_eq!(
+            js("(() => f(-1)).should.throw(RangeError);")[0]
+                .guarded_call
+                .as_deref(),
+            Some("f ( - 1 )")
+        );
+        // No `should` before the call: a stub told to throw, an object's own method.
+        for body in [
+            "stub.throws(new RangeError());",
+            "fn.shouldnt.throw(RangeError);",
+            "sut.throw(RangeError);",
+        ] {
+            assert!(js(body).is_empty(), "{body}");
+        }
+        let wider = |b: &str, h: &str| widened(&js(b), &js(h)).len();
+        assert_eq!(
+            wider(
+                "fn.should.throw(RangeError, \"negative\");",
+                "fn.should.throw(RangeError);"
+            ),
+            1
+        );
+        assert_eq!(
+            wider("fn.should.throw(RangeError);", "fn.should.throw(Error);"),
+            1
+        );
+        assert_eq!(
+            wider("fn.should.throw(RangeError);", "fn.should.throw();"),
+            1
+        );
+        assert_eq!(
+            wider("fn.should.not.throw();", "fn.should.not.throw(RangeError);"),
+            1
+        );
+        assert_eq!(
+            wider("fn.should.throw();", "fn.should.throw(RangeError);"),
+            0
+        );
+        // As with `expect(fn).to.throw()` -> `expect(fn).to.not.throw()`: the chain is the
+        // site, so the negated chain is another site and the expectation is gone.
+        assert_eq!(wider("fn.should.throw();", "fn.should.not.throw();"), 1);
+        assert_eq!(
+            wider("expect(fn).to.throw();", "expect(fn).to.not.throw();"),
+            1
+        );
+    }
+
+    #[test]
+    fn java_reads_catch_throwable_with_the_assertions_on_the_caught_value() {
+        let iae = Some("IllegalArgumentException");
+        for (body, want) in [
+            (
+                "Throwable thrown = catchThrowable(() -> f(-1));\n        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessage(\"negative\");",
+                ("assertThrows", iae, Some("negative"), true),
+            ),
+            (
+                "Throwable thrown = catchThrowable(() -> f(-1));\n        assertThat(thrown).isExactlyInstanceOf(IllegalArgumentException.class);\n        assertThat(thrown).hasMessageContaining(\"neg\");",
+                ("assertThrowsExactly", iae, Some("neg"), false),
+            ),
+            (
+                "IllegalArgumentException e = catchThrowableOfType(() -> f(-1), IllegalArgumentException.class);\n        assertThat(e).hasMessage(\"negative\");",
+                ("assertThrows", iae, Some("negative"), true),
+            ),
+            (
+                "var e = catchThrowableOfType(IllegalArgumentException.class, () -> f(-1));\n        assertThat(e).isNotNull();",
+                ("assertThrows", iae, None, false),
+            ),
+            (
+                "Throwable thrown;\n        thrown = catchThrowable(() -> f(-1));\n        assertThat(thrown).isNotNull();",
+                ("assertThrows", None, None, false),
+            ),
+        ] {
+            let got = java_test(body);
+            assert_eq!(fact(&got), want, "{body}");
+            assert_eq!(got[0].skeleton, "assertThatThrownBy(() -> f(-1))#", "{body}");
+        }
+        // The same site as `assertThatThrownBy` on the same code.
+        assert_eq!(
+            java_test("assertThatThrownBy(() -> f(-1)).isInstanceOf(Exception.class);")[0].skeleton,
+            "assertThatThrownBy(() -> f(-1))#"
+        );
+        for body in [
+            // Nothing asserts on the value: `null` passes.
+            "Throwable thrown = catchThrowable(() -> f(-1));",
+            "Throwable thrown = catchThrowable(() -> f(-1));\n        assertThat(other).isInstanceOf(IllegalArgumentException.class);",
+            "Throwable thrown = catchThrowable(() -> f(-1));\n        assertThat(thrown.getCause()).isNull();",
+            "use(catchThrowable(() -> f(-1)));",
+        ] {
+            assert!(java_test(body).is_empty(), "{body}");
+        }
+        let wider = |b: &str, h: &str| widened(&java_test(b), &java_test(h)).len();
+        let caught = |assertion: &str| {
+            format!("Throwable thrown = catchThrowable(() -> f(-1));\n        assertThat(thrown){assertion};")
+        };
+        assert_eq!(
+            wider(
+                &caught(".isInstanceOf(NumberFormatException.class)"),
+                &caught(".isInstanceOf(IllegalArgumentException.class)")
+            ),
+            1
+        );
+        assert_eq!(
+            wider(
+                &caught(".isInstanceOf(IllegalArgumentException.class).hasMessage(\"negative\")"),
+                &caught(".isInstanceOf(IllegalArgumentException.class)")
+            ),
+            1
+        );
+        assert_eq!(
+            wider(
+                "assertThatThrownBy(() -> f(-1)).isInstanceOf(NumberFormatException.class);",
+                &caught(".isInstanceOf(RuntimeException.class)")
+            ),
+            1
+        );
+        assert_eq!(
+            wider(
+                &caught(".isInstanceOf(IllegalArgumentException.class)"),
+                &caught(".isInstanceOf(NumberFormatException.class)")
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn kotlin_reads_the_kotest_assertion_on_the_message_of_the_returned_exception() {
+        let iae = Some("IllegalArgumentException");
+        let bound = |after: &str| {
+            kotlin_test(&format!(
+                "val e = shouldThrow<IllegalArgumentException> {{ f(-1) }}\n        {after}"
+            ))
+        };
+        for (got, want) in [
+            (bound("e.message shouldBe \"negative\""), ("assertThrows", iae, Some("negative"), true)),
+            (bound("e shouldHaveMessage \"negative\""), ("assertThrows", iae, Some("negative"), true)),
+            (bound("e.message shouldContain \"neg\""), ("assertThrows", iae, Some("neg"), false)),
+            (bound("e.message.shouldBe(\"negative\")"), ("assertThrows", iae, Some("negative"), true)),
+            (
+                bound("e.message shouldStartWith \"neg\""),
+                ("assertThrows", iae, Some("\u{1}shouldStartWith(\"neg\")"), false),
+            ),
+            (
+                kotlin_test("shouldThrow<IllegalArgumentException> { f(-1) }.message shouldBe \"negative\""),
+                ("assertThrows", iae, Some("negative"), true),
+            ),
+            (
+                kotlin_test("val e = shouldThrowExactly<IllegalArgumentException> {\n            f(-1)\n        }\n        e.message shouldBe \"negative\""),
+                ("assertThrowsExactly", iae, Some("negative"), true),
+            ),
+            // No assertion on the message of this value.
+            (bound("other.message shouldBe \"negative\""), ("assertThrows", iae, None, false)),
+            (bound("e.cause shouldBe null"), ("assertThrows", iae, None, false)),
+            (bound("n shouldBe 0"), ("assertThrows", iae, None, false)),
+        ] {
+            assert_eq!(fact(&got), want, "{got:?}");
+        }
+        // The site is the guarded block, with a message assertion or without.
+        assert_eq!(
+            bound("e.message shouldBe \"negative\"")[0].skeleton,
+            kotlin_test("shouldThrow<IllegalArgumentException> { f(-1) }")[0].skeleton
+        );
+        let wider = |b: &[ExpectedException], h: &[ExpectedException]| widened(b, h).len();
+        assert_eq!(
+            wider(
+                &bound("e.message shouldBe \"negative\""),
+                &bound("n shouldBe 0")
+            ),
+            1
+        );
+        assert_eq!(
+            wider(
+                &bound("e.message shouldBe \"negative\""),
+                &bound("e.message shouldContain \"negative\"")
+            ),
+            1
+        );
+        assert_eq!(
+            wider(
+                &bound("n shouldBe 0"),
+                &bound("e.message shouldBe \"negative\"")
+            ),
+            0
+        );
+    }
+
+    /// The expectations of one C# test with `body`, in a file with the `using` lines.
+    fn cs_using(using: &str, body: &str) -> Vec<ExpectedException> {
+        let src = format!(
+            "{using}\npublic class T {{\n    [TestMethod]\n    public void Run() {{\n        {body}\n    }}\n}}\n"
+        );
+        CSharpPack
+            .extract("tests/T.cs", &src, &AssertVocabulary::default())
+            .expect("extract succeeds")
+            .tests[0]
+            .expected_exceptions
+            .clone()
+    }
+
+    const MSTEST: &str = "using Microsoft.VisualStudio.TestTools.UnitTesting;";
+
+    #[test]
+    fn csharp_throws_is_exact_or_not_by_the_using_directives_of_its_file() {
+        let legacy = "Assert.ThrowsException<ArgumentException>(() => sut.Run());";
+        let throws = "Assert.Throws<ArgumentException>(() => sut.Run());";
+        let throws_null = "Assert.Throws<ArgumentNullException>(() => sut.Run());";
+        let exactly = "Assert.ThrowsExactly<ArgumentException>(() => sut.Run());";
+        let lost =
+            "expected exception is no longer checked as the exact type, so a subclass passes";
+        let change = |b: (&str, &str), h: (&str, &str)| -> Vec<String> {
+            widened(&cs_using(b.0, b.1), &cs_using(h.0, h.1))
+                .into_iter()
+                .map(|w| w.detail)
+                .collect()
+        };
+        // (a) The head file is xUnit's or NUnit's: `Assert.Throws<T>` is exact.
+        for exact in [
+            "using Xunit;",
+            "using NUnit.Framework;",
+            "global using Xunit;",
+        ] {
+            assert!(
+                change((MSTEST, legacy), (exact, throws)).is_empty(),
+                "{exact}"
+            );
+            assert!(
+                change((MSTEST, exactly), (exact, throws)).is_empty(),
+                "{exact}"
+            );
+            assert!(
+                change((exact, throws_null), (exact, throws)).is_empty(),
+                "{exact}"
+            );
+        }
+        // (b) The head file is MSTest's: `Assert.Throws<T>` accepts subclasses, with
+        // `Assert.ThrowsExactly` elsewhere in the file or without.
+        assert_eq!(change((MSTEST, legacy), (MSTEST, throws)), vec![lost]);
+        assert_eq!(change((MSTEST, exactly), (MSTEST, throws)), vec![lost]);
+        assert_eq!(
+            change(("using Xunit;", throws), (MSTEST, throws)),
+            vec![lost]
+        );
+        assert_eq!(
+            change((MSTEST, throws_null), (MSTEST, throws)),
+            vec!["expected exception type widened from `ArgumentNullException` to `ArgumentException`"]
+        );
+        assert!(change((MSTEST, legacy), (MSTEST, exactly)).is_empty());
+        assert!(change((MSTEST, throws), (MSTEST, legacy)).is_empty());
+        assert!(change((MSTEST, throws), (MSTEST, throws)).is_empty());
+        // (c) No directive names a framework, or two do, or one binds another name: the
+        // calls of the file decide.
+        for unknown in [
+            "",
+            "using System;",
+            "using Xunit;\nusing Microsoft.VisualStudio.TestTools.UnitTesting;",
+            "using Assert = Xunit.Assert;",
+            "using static Microsoft.VisualStudio.TestTools.UnitTesting.Assert;",
+        ] {
+            assert_eq!(
+                change((unknown, legacy), (unknown, throws)),
+                vec![lost],
+                "{unknown}"
+            );
+            assert_eq!(
+                change((unknown, exactly), (unknown, throws)),
+                vec![lost],
+                "{unknown}"
+            );
+            assert!(
+                change((unknown, throws_null), (unknown, throws)).is_empty(),
+                "{unknown}"
+            );
+            assert!(
+                change((unknown, legacy), (unknown, exactly)).is_empty(),
+                "{unknown}"
+            );
+        }
+        assert_eq!(
+            widened(
+                &cs_using(
+                    "",
+                    "await Assert.ThrowsExceptionAsync<ArgumentException>(() => sut.Run());"
+                ),
+                &cs_using(
+                    "",
+                    "await Assert.ThrowsAsync<ArgumentException>(() => sut.Run());"
+                )
+            )
+            .len(),
+            1
+        );
     }
 }

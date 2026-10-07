@@ -1449,7 +1449,12 @@ fn deepen_git_history(candidates: &[String], base_ref: &str, repo: &Repository) 
             .args(rest)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            // The message quoted below is git's own: in the C locale it reads the same
+            // whatever language the caller's shell is set to. `LANGUAGE` outranks
+            // `LC_ALL` for message catalogues on some systems, so it is removed.
+            .env("LC_ALL", "C")
+            .env_remove("LANGUAGE");
 
         let Ok(mut child) = cmd.spawn() else {
             return;

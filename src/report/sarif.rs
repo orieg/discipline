@@ -1,6 +1,6 @@
 //! OASIS SARIF v2.1.0 JSON formatter for GitHub Code Scanning, Gitea, and IDEs.
 
-use crate::config::{gate_info, Severity};
+use crate::config::gate_info;
 use crate::guards::CheckSummary;
 use serde_json::{json, Value};
 
@@ -40,11 +40,7 @@ pub fn format_sarif(summary: &CheckSummary) -> Value {
 
     // 2. Build results list from violations
     for v in summary.violations() {
-        let level = match v.severity {
-            Severity::Error => "error",
-            Severity::Warning => "warning",
-            Severity::Note => "note",
-        };
+        let level = v.severity.to_string();
 
         let mut message_text = v.message.clone();
         if let Some(rem) = &v.remediation {
@@ -168,6 +164,7 @@ fn sanitize_sarif_uri(file: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Severity;
     use crate::guards::{GateOutcome, Violation};
 
     #[test]

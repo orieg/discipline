@@ -20,6 +20,7 @@ enum Lang {
     Js,
     Ts,
     CSharp,
+    MsTest,
     Php,
     Kotlin,
     Rspec,
@@ -76,6 +77,13 @@ fn source(lang: Lang, prelude: &str, body: &str) -> (&'static str, String) {
             "tests/SutTests.cs",
             format!(
                 "using Xunit;\n{prelude}\npublic class SutTests {{\n    [Fact]\n    public async Task Rejects() {{\n{}    }}\n}}\n",
+                indent(body, "        ")
+            ),
+        ),
+        Lang::MsTest => (
+            "tests/SutTests.cs",
+            format!(
+                "using Microsoft.VisualStudio.TestTools.UnitTesting;\n{prelude}\n[TestClass]\npublic class SutTests {{\n    [TestMethod]\n    public async Task Rejects() {{\n{}    }}\n}}\n",
                 indent(body, "        ")
             ),
         ),
@@ -1181,23 +1189,32 @@ silent!(
     "(await act.Should().ThrowAsync<ArgumentException>()).WithMessage(\"*negative*\");\nsut.Run(2);"
 );
 
-// `Assert.ThrowsExactly` is a name of MSTest 3.8 and later, where `Assert.Throws<T>`
-// accepts subclasses (#626): replacing the one by the other gives up the exact class.
+// In an MSTest file `Assert.Throws<T>` accepts subclasses (#626, #649): replacing
+// `Assert.ThrowsExactly<T>` by it gives up the exact class.
 reported!(
     csharp_mstest_throws_exactly_to_throws_is_reported,
-    CSharp,
+    MsTest,
     "Assert.ThrowsExactly<ArgumentException>(() => sut.Run());",
     "Assert.Throws<ArgumentException>(() => sut.Run());",
     "no longer checked as the exact type"
 );
 
-// Control: `Assert.ThrowsException<T>`, exact in every version, says nothing of the
-// version, so `Assert.Throws<T>` in its place is read as exact.
+// Control: an xUnit file, where `Assert.Throws<T>` is exact. `Assert.ThrowsException<T>`
+// is exact too, so the one in place of the other keeps the exact class.
 silent!(
-    csharp_mstest_throws_exception_to_throws_is_silent,
+    csharp_xunit_file_throws_exception_to_throws_is_silent,
     CSharp,
     "Assert.ThrowsException<ArgumentException>(() => sut.Run());",
     "Assert.Throws<ArgumentException>(() => sut.Run());"
+);
+
+// Its twin in an MSTest file, where `Assert.Throws<T>` accepts subclasses.
+reported!(
+    csharp_mstest_file_throws_exception_to_throws_is_reported,
+    MsTest,
+    "Assert.ThrowsException<ArgumentException>(() => sut.Run());",
+    "Assert.Throws<ArgumentException>(() => sut.Run());",
+    "no longer checked as the exact type"
 );
 
 // ---------------------------------------------------------------------------

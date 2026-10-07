@@ -193,6 +193,7 @@ impl LanguagePack for SwiftPack {
             super::calls::TRIVIAL_ASSERT_VOCAB,
             super::calls::trivial_asserts,
         );
+        super::expected_exceptions::swift(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
             src,

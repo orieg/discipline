@@ -134,7 +134,11 @@ pub fn isolate_env(cmd: &mut Command) {
     cmd.env("DISCIPLINE_NO_NETWORK", "1");
     // Nor reads this machine's Copilot CLI configuration (trusted folders, hooks).
     cmd.env("COPILOT_HOME", NO_COPILOT_HOME);
-    // Nor this user's home directory, nor the machine's git configuration.
+    // Nor this user's home directory, nor the machine's git configuration. `HOME` (with
+    // `XDG_CONFIG_HOME` removed) is where both the `git` program and the binary's
+    // in-process git library look for the user's configuration. `GIT_CONFIG_NOSYSTEM`
+    // is read by the `git` program only: the library's system file (`/etc/gitconfig`)
+    // has no variable, so a machine that has one is not isolated from it here.
     cmd.env("HOME", NO_HOME);
     cmd.env("GIT_CONFIG_NOSYSTEM", "1");
 }
@@ -147,6 +151,16 @@ pub fn isolate_env(cmd: &mut Command) {
 pub fn discipline_cmd(dir: &Path) -> Command {
     let mut cmd = Command::new(discipline_bin());
     cmd.current_dir(dir);
+    isolate_env(&mut cmd);
+    cmd
+}
+
+/// A program a test runs that is neither the binary nor `git` (`bash`, `python3`,
+/// `node`), found through `PATH` and under [`isolate_env`]: a script sees no token, CI
+/// marker, home directory or temporary directory of whoever runs the tests. A test that
+/// needs one of them sets it on the returned command.
+pub fn script_command(program: &str) -> Command {
+    let mut cmd = Command::new(program);
     isolate_env(&mut cmd);
     cmd
 }
@@ -309,6 +323,10 @@ pub const ISOLATED_ENV_VARS: &[&str] = &[
     // them. With these and the `LC_` prefix gone, every program runs in the C locale.
     "LANG",
     "LANGUAGE",
+    // Where temporary files go: every spawned program uses the platform's default, not a
+    // directory the parent process names. A fixture's own directories are created by the
+    // test process and passed by path.
+    "TMPDIR",
 ];
 
 /// Configuration every harness git command runs with. No signing and no hooks, and no
