@@ -59,7 +59,7 @@ pub fn render(summary: &CheckSummary, success: bool) -> String {
         summary.total_overrides()
     ));
     for f in &summary.policy_failures {
-        out.push_str(&format!("- **Refused:** {}\n", cell(f)));
+        out.push_str(&format!("- **Refused:** {}\n", cell(&f.text)));
     }
     if !summary.policy_failures.is_empty() {
         out.push('\n');
@@ -395,6 +395,7 @@ mod tests {
             outcomes: vec![o],
             planned_gates: vec![],
             policy_failures: vec![],
+            refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
             unused_directives: Vec::new(),

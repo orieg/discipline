@@ -1379,6 +1379,12 @@
       "check_diff",
       "explain_finding",
       "list_gates"
+    ],
+    "policy_refusals": [
+      "policy/approval-required",
+      "policy/hidden-directive-refused",
+      "policy/max-inline-overrides-exceeded",
+      "policy/max-overrides-exceeded"
     ]
   }
 }
