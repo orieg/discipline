@@ -20,11 +20,6 @@ pub fn evaluate_pr_checklist(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.pr_checklist;
     let mut out = GateOutcome::new(GATE);
 
-    if !settings.enabled {
-        out.enabled = false;
-        return Ok(out);
-    }
-
     let Some(pr_body) = &ctx.pr_body else {
         out.notes
             .push("no PR body supplied; PR checklist reconciliation skipped".to_string());

@@ -16,7 +16,6 @@ use super::{Context, GateOutcome, PathFilter};
 use crate::ast::functions::{BodyShape, FunctionFacts};
 use crate::ast::{default_registry, Fact};
 use crate::config::GateSettings;
-use crate::gitctx::ChangeKind;
 use crate::tokens;
 use anyhow::Result;
 use std::collections::HashMap;
@@ -95,17 +94,13 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
     let mut unsupported: Vec<String> = Vec::new();
 
     let changed = ctx.git.changed_files()?;
-    for file in changed.iter().cloned() {
-        if file.kind == ChangeKind::Deleted || exempt.matches(&file.path) {
-            continue;
-        }
-        let Some(pack) = registry.find_pack(&file.path) else {
-            continue;
-        };
-        if !pack.supplies(Fact::Functions) {
-            unsupported.push(file.path.clone());
-            continue;
-        }
+    for (file, pack) in super::ast_changes(
+        &changed,
+        &exempt,
+        &registry,
+        Fact::Functions,
+        &mut unsupported,
+    ) {
         let Some(head_src) = ctx.git.head_content(&file.path)? else {
             out.notes.push(super::unread_note(&file.path));
             continue;
@@ -138,18 +133,8 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
             None => Vec::new(),
         };
         // A file added in test scope by its name only, with no test that checks.
-        let by_name_only = (!super::holds_a_checking_test(&head))
-            .then(|| {
-                super::test_scope_by_name_only(
-                    &file,
-                    &changed,
-                    pack,
-                    &registry,
-                    &vocab.test_paths,
-                    head.tests.len(),
-                )
-            })
-            .flatten();
+        let by_name_only =
+            super::name_only_scope(&file, &changed, pack, &registry, &vocab.test_paths, &head);
         if let Some(by_name) = by_name_only {
             match &by_name.classify_path {
                 None => out.notes.push(by_name.note),
@@ -188,14 +173,8 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
             );
         }
     }
-    if !unsupported.is_empty() {
-        let sample: Vec<&str> = unsupported.iter().take(3).map(String::as_str).collect();
-        out.notes.push(format!(
-            "{} changed file(s) are in a language whose pack supplies no function facts and were NOT analysed (e.g. {})",
-            unsupported.len(),
-            sample.join(", ")
-        ));
-    }
+    out.notes
+        .extend(super::unsupported_fact_note(&unsupported, "function"));
     if out.examined == 0 && unsupported.is_empty() {
         out.notes
             .push("no functions in changed files of an analysed language".to_string());

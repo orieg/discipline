@@ -864,11 +864,6 @@ pub fn evaluate_command(ctx: &Context) -> Result<GateOutcome> {
     let mut outcome = GateOutcome::new(GATE);
     let gate = &ctx.config.gates.command;
 
-    if !gate.enabled() {
-        outcome.enabled = false;
-        return Ok(outcome);
-    }
-
     // Security check: Untrusted PR text guard
     if let Some(err_msg) = check_untrusted_command_tampering(ctx)? {
         outcome.push(

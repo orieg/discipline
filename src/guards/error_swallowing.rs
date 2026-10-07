@@ -15,7 +15,6 @@ use super::{Context, GateOutcome, PathFilter};
 use crate::ast::handlers::SwallowSite;
 use crate::ast::{default_registry, Fact, ParsedFileFacts};
 use crate::config::GateSettings;
-use crate::gitctx::ChangeKind;
 use crate::tokens;
 use anyhow::Result;
 use std::collections::HashMap;
@@ -69,17 +68,13 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
     let mut unsupported: Vec<String> = Vec::new();
 
     let changed = ctx.git.changed_files()?;
-    for file in changed.iter().cloned() {
-        if file.kind == ChangeKind::Deleted || exempt.matches(&file.path) {
-            continue;
-        }
-        let Some(pack) = registry.find_pack(&file.path) else {
-            continue;
-        };
-        if !pack.supplies(Fact::Handlers) {
-            unsupported.push(file.path.clone());
-            continue;
-        }
+    for (file, pack) in super::ast_changes(
+        &changed,
+        &exempt,
+        &registry,
+        Fact::Handlers,
+        &mut unsupported,
+    ) {
         // Base-anchored classification: a renamed file that was production code on the
         // base side stays it, so a move into test scope cannot silence its findings.
         let anchored = super::base_anchored_classification(&file, &registry, &vocab.test_paths);
@@ -140,18 +135,8 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
         let head = match pack.extract(&anchored.classify_path, &head_src, &vocab) {
             Ok(f) => {
                 // A file added in test scope by its name only, with no test that checks.
-                let by_name_only = (!super::holds_a_checking_test(&f))
-                    .then(|| {
-                        super::test_scope_by_name_only(
-                            &file,
-                            &changed,
-                            pack,
-                            &registry,
-                            &vocab.test_paths,
-                            f.tests.len(),
-                        )
-                    })
-                    .flatten();
+                let by_name_only =
+                    super::name_only_scope(&file, &changed, pack, &registry, &vocab.test_paths, &f);
                 let as_production = by_name_only.and_then(|by_name| {
                     let Some(classify_path) = &by_name.classify_path else {
                         out.notes.push(by_name.note);
@@ -299,14 +284,8 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
             );
         }
     }
-    if !unsupported.is_empty() {
-        let sample: Vec<&str> = unsupported.iter().take(3).map(String::as_str).collect();
-        out.notes.push(format!(
-            "{} changed file(s) are in a language whose pack supplies no handler facts and were NOT analysed (e.g. {})",
-            unsupported.len(),
-            sample.join(", ")
-        ));
-    }
+    out.notes
+        .extend(super::unsupported_fact_note(&unsupported, "handler"));
     if out.examined == 0 && unsupported.is_empty() {
         out.notes
             .push("no error handlers in changed files of an analysed language".to_string());

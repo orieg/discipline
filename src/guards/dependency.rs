@@ -763,15 +763,11 @@ fn lock_violation(
     subject: &str,
     message: String,
 ) {
-    if let Some(rec) = ctx.find_override(GATE, kind, tokens::ALLOW_DEPENDENCY, subject) {
-        outcome.overrides.push(rec);
-        return;
-    }
-    outcome.push(
+    outcome.lift_or_push(
+        ctx.find_override(GATE, kind, tokens::ALLOW_DEPENDENCY, subject),
         ctx.overridable(severity),
         kind,
-        Some(file),
-        None,
+        (Some(file), None),
         message,
         &format!(
             "Regenerate the lockfile from the manifest, or justify it: `allow-dependency: {subject} <reason>`."
@@ -870,11 +866,6 @@ fn is_constraint_loosened(base_ver: Option<&str>, head_ver: Option<&str>) -> boo
 pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
     let mut outcome = GateOutcome::new(GATE);
     let gate = &ctx.config.gates.dependency_delta;
-
-    if !gate.enabled() {
-        outcome.enabled = false;
-        return Ok(outcome);
-    }
 
     // Build manifest matcher (`**/x` already matches a bare `x`, so no stripped
     // duplicate is added).

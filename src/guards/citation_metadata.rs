@@ -66,10 +66,6 @@ pub struct Problem {
 pub fn citation_metadata(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.citation_metadata;
     let mut out = GateOutcome::new(GATE);
-    if !settings.enabled {
-        out.enabled = false;
-        return Ok(out);
-    }
     let exempt = exempt_filter(settings)?;
     let root = ctx.git.root();
     let read = |name: &str| -> Result<Option<String>> {
