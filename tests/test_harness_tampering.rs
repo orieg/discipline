@@ -1106,7 +1106,7 @@ fn a_harness_file_that_does_not_parse_is_named_never_passed_in_silence() {
     let notes = notes(&run);
     assert!(
         notes.contains(
-            &"`tests/stuck.rs` (the root of a Cargo test target): NOT analysed, it could not be parsed (the parser did not finish within its budget of 316 steps for 15 bytes)"
+            &"`tests/stuck.rs` (the root of a Cargo test target): NOT analysed, it could not be parsed (the parser did not finish within its budget of 259 steps for 15 bytes)"
                 .to_string()
         ),
         "{notes:?}"
