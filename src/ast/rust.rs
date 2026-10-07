@@ -306,6 +306,18 @@ impl<'a> Extractor<'a> {
                             &mut dummy_calls,
                         );
                         self.library_helper = false;
+                        // A property closure in a helper (`proptest!(|(x in ..)| { .. })`)
+                        // is read as one in a test is: a test that calls the helper runs it.
+                        let mut closures = Vec::new();
+                        self.proptest_closure_bodies(body, &mut closures);
+                        for closure in closures {
+                            self.read_property_body(
+                                closure,
+                                &mut helper_test,
+                                &mut dummy_calls,
+                                false,
+                            );
+                        }
                         helper_test.total_asserts += super::count_failure_exits(
                             body,
                             self.src,
@@ -342,6 +354,7 @@ impl<'a> Extractor<'a> {
                             tautologies: helper_test.tautologies,
                             fatal_asserts: helper_test.fatal_asserts,
                             helper_checks: 0,
+                            equality_exits: 0,
                         },
                         dummy_calls,
                     );

@@ -517,6 +517,7 @@ impl<'a> SwiftExtractor<'a> {
                     tautologies: helper_fn.tautologies,
                     fatal_asserts: helper_fn.fatal_asserts,
                     helper_checks: 0,
+                    equality_exits: 0,
                 },
                 dummy_calls,
             );

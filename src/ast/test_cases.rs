@@ -182,12 +182,167 @@ pub fn multiply_cases(outer: CaseList, inner: CaseList) -> CaseList {
 /// call, a literal list for a list or tuple of values, and a non-literal one when the
 /// values are not a literal list. A list holding a splat (`[1, *more]`) stands for a
 /// number of values the source does not show, and is not literal.
-fn python_parametrize_call(call: Node, src: &[u8]) -> Option<CaseList> {
+/// What a Python file binds the names `pytest.mark.parametrize` is reached through to.
+///
+/// `parametrize` is a case source when the name it is reached through is pytest's:
+/// `pytest.mark.parametrize` under the name the file imports `pytest` by
+/// (`import pytest`, `import pytest as pt`), `mark.parametrize` under the name
+/// `from pytest import mark` binds, and a name the file assigns either of those to
+/// (`parametrize = pytest.mark.parametrize`, `mark = pytest.mark`). The name `pytest`
+/// itself counts in a file that binds it to nothing, as a fragment without its imports
+/// reads. A function or method merely named `parametrize` (`helpers.parametrize(..)`,
+/// `self.parametrize(..)`, a `pytest` the file defines or imports from elsewhere) is not
+/// a case source.
+#[derive(Debug, Default, Clone)]
+pub struct PytestNames {
+    /// Names bound to the `pytest` module.
+    modules: Vec<String>,
+    /// Names bound to `pytest.mark`.
+    marks: Vec<String>,
+    /// Names bound to `pytest.mark.parametrize`.
+    parametrize: Vec<String>,
+    /// Names the file binds to something else.
+    other: Vec<String>,
+}
+
+impl PytestNames {
+    /// Reads the bindings of the file `root` is the module of: its imports and
+    /// assignments outside function and class bodies.
+    pub fn read(root: Node, src: &[u8]) -> Self {
+        let mut names = Self::default();
+        names.read_block(root, src);
+        names
+    }
+
+    fn bind(&mut self, name: &str, to: Option<usize>) {
+        for (at, list) in [&mut self.modules, &mut self.marks, &mut self.parametrize]
+            .into_iter()
+            .enumerate()
+        {
+            list.retain(|n| n != name);
+            if to == Some(at) {
+                list.push(name.to_string());
+            }
+        }
+        self.other.retain(|n| n != name);
+        if to.is_none() {
+            self.other.push(name.to_string());
+        }
+    }
+
+    /// What a dotted expression is: `Some(0)` the module, `Some(1)` its `mark`,
+    /// `Some(2)` `parametrize`.
+    fn resolve(&self, dotted: &str) -> Option<usize> {
+        let parts: Vec<&str> = dotted.split('.').map(str::trim).collect();
+        let module = |p: &str| {
+            self.modules.iter().any(|m| m == p)
+                || (p == "pytest" && !self.other.iter().any(|o| o == p))
+        };
+        let mark = |m: &str| self.marks.iter().any(|n| n == m);
+        match parts.as_slice() {
+            [p] if self.parametrize.iter().any(|n| n == p) => Some(2),
+            [p] if mark(p) => Some(1),
+            [p] if module(p) => Some(0),
+            [p, "mark"] if module(p) => Some(1),
+            [m, "parametrize"] if mark(m) => Some(2),
+            [p, "mark", "parametrize"] if module(p) => Some(2),
+            _ => None,
+        }
+    }
+
+    fn read_block(&mut self, block: Node, src: &[u8]) {
+        for statement in elements(block) {
+            match statement.kind() {
+                "import_statement" => {
+                    for name in elements(statement) {
+                        let (module, bound) = match name.kind() {
+                            "aliased_import" => (
+                                name.child_by_field_name("name").map(|n| text(n, src)),
+                                name.child_by_field_name("alias").map(|n| text(n, src)),
+                            ),
+                            // `import a.b` binds `a`.
+                            _ => (Some(text(name, src)), text(name, src).split('.').next()),
+                        };
+                        if let (Some(module), Some(bound)) = (module, bound) {
+                            let whole = name.kind() == "aliased_import" || !module.contains('.');
+                            self.bind(bound, (module == "pytest" && whole).then_some(0));
+                        }
+                    }
+                }
+                "import_from_statement" => {
+                    let module = statement
+                        .child_by_field_name("module_name")
+                        .map(|m| text(m, src))
+                        .unwrap_or("");
+                    let mut cursor = statement.walk();
+                    let imported: Vec<Node> = statement
+                        .children_by_field_name("name", &mut cursor)
+                        .collect();
+                    for name in imported {
+                        let (item, bound) = match name.kind() {
+                            "aliased_import" => (
+                                name.child_by_field_name("name").map(|n| text(n, src)),
+                                name.child_by_field_name("alias").map(|n| text(n, src)),
+                            ),
+                            _ => (Some(text(name, src)), Some(text(name, src))),
+                        };
+                        if let (Some(item), Some(bound)) = (item, bound) {
+                            self.bind(bound, (module == "pytest" && item == "mark").then_some(1));
+                        }
+                    }
+                }
+                "function_definition" | "class_definition" => {
+                    if let Some(name) = statement.child_by_field_name("name") {
+                        self.bind(text(name, src), None);
+                    }
+                }
+                "decorated_definition" => {
+                    let name = statement
+                        .child_by_field_name("definition")
+                        .and_then(|d| d.child_by_field_name("name"));
+                    if let Some(name) = name {
+                        self.bind(text(name, src), None);
+                    }
+                }
+                "expression_statement" => {
+                    for assignment in elements(statement) {
+                        let (Some(left), Some(right)) = (
+                            assignment.child_by_field_name("left"),
+                            assignment.child_by_field_name("right"),
+                        ) else {
+                            continue;
+                        };
+                        if assignment.kind() == "assignment" && left.kind() == "identifier" {
+                            let to = matches!(right.kind(), "identifier" | "attribute")
+                                .then(|| self.resolve(text(right, src)))
+                                .flatten();
+                            self.bind(text(left, src), to);
+                        }
+                    }
+                }
+                // Imports under `try:` / `if TYPE_CHECKING:` bind module names too.
+                "try_statement" | "if_statement" | "with_statement" | "block" | "else_clause"
+                | "elif_clause" | "except_clause" | "finally_clause" => {
+                    self.read_block(statement, src);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Whether `func`, the callee of a call, is pytest's `parametrize`.
+    fn is_parametrize(&self, func: Node, src: &[u8]) -> bool {
+        matches!(func.kind(), "identifier" | "attribute")
+            && self.resolve(text(func, src)) == Some(2)
+    }
+}
+
+fn python_parametrize_call(call: Node, src: &[u8], names: &PytestNames) -> Option<CaseList> {
     if call.kind() != "call" {
         return None;
     }
     let func = call.child_by_field_name("function")?;
-    if !text(func, src).ends_with("parametrize") {
+    if !names.is_parametrize(func, src) {
         return None;
     }
     let args = call.child_by_field_name("arguments")?;
@@ -235,7 +390,11 @@ fn python_product(calls: impl Iterator<Item = CaseList>) -> CaseList {
 /// When multiple `@pytest.mark.parametrize` decorators are present,
 /// computes the Cartesian product (total test executions).
 /// Non-literal values (function calls, identifiers) set `non_literal = true`.
-pub fn extract_python_cases(decorators: Option<&[Node]>, src: &[u8]) -> CaseList {
+pub fn extract_python_cases(
+    decorators: Option<&[Node]>,
+    src: &[u8],
+    names: &PytestNames,
+) -> CaseList {
     let Some(decs) = decorators else {
         return CaseList::none();
     };
@@ -243,14 +402,14 @@ pub fn extract_python_cases(decorators: Option<&[Node]>, src: &[u8]) -> CaseList
         // Decorator has an expression, usually a call: `@pytest.mark.parametrize(...)`
         elements(*dec)
             .into_iter()
-            .filter_map(|child| python_parametrize_call(child, src))
+            .filter_map(|child| python_parametrize_call(child, src, names))
     }))
 }
 
 /// Extracts the case count a `pytestmark = ...` assignment gives every test of its
 /// module or class: one `pytest.mark.parametrize(...)` call, or a list or tuple of marks.
 /// `block` is the module or the class body; only its own statements are read.
-pub fn extract_python_pytestmark_cases(block: Node, src: &[u8]) -> CaseList {
+pub fn extract_python_pytestmark_cases(block: Node, src: &[u8], names: &PytestNames) -> CaseList {
     let mut calls = Vec::new();
     for statement in elements(block) {
         if statement.kind() != "expression_statement" {
@@ -273,9 +432,9 @@ pub fn extract_python_pytestmark_cases(block: Node, src: &[u8]) -> CaseList {
                 "list" | "tuple" => calls.extend(
                     elements(right)
                         .into_iter()
-                        .filter_map(|mark| python_parametrize_call(mark, src)),
+                        .filter_map(|mark| python_parametrize_call(mark, src, names)),
                 ),
-                _ => calls.extend(python_parametrize_call(right, src)),
+                _ => calls.extend(python_parametrize_call(right, src, names)),
             }
         }
     }
@@ -290,6 +449,89 @@ pub fn extract_python_pytestmark_cases(block: Node, src: &[u8]) -> CaseList {
 /// row, one case each, whatever the number of columns. A line is a line of the template's
 /// own text: a line break inside a `${..}` value is part of that value, not a row. A
 /// template holding only its header runs no case, and one with no text has no table.
+/// The names of a JavaScript or TypeScript file that are not the test runner's.
+///
+/// `.each` is a case source when it is the runner's: reached through `it`, `test`,
+/// `describe` and their spellings (`it.each`, `describe.skip.each`), where that name is
+/// the runner's global, a name the file imports from a runner ([`RUNNER_MODULES`]), or
+/// one it derives from such a name (`const test = base.extend({..})`). Under a name the
+/// file declares itself, and on any other receiver (`rows.each(..)`,
+/// `helpers.each(..)`), `each` is a project function and no case source. Under a name
+/// the file imports from another module (`import { test } from './fixtures'`), what it
+/// is cannot be told here: the module may hand on the runner's own function, so the
+/// test has a case source whose cases are not counted (`non_literal`).
+#[derive(Debug, Default, Clone)]
+pub struct RunnerNames {
+    /// Names the file declares as something that is not a runner's function.
+    pub not_runner: Vec<String>,
+    /// Names the file imports from a module that is not a runner.
+    pub imported: Vec<String>,
+}
+
+/// Modules whose `it` / `test` / `describe` are a test runner's.
+pub const RUNNER_MODULES: &[&str] = &[
+    "vitest",
+    "@jest/globals",
+    "bun:test",
+    "node:test",
+    "test",
+    "mocha",
+    "@playwright/test",
+    "jest-circus",
+    "@japa/runner",
+];
+
+/// The names a runner's test and suite functions go by.
+pub const RUNNER_FUNCTIONS: &[&str] = &[
+    "it",
+    "test",
+    "describe",
+    "context",
+    "suite",
+    "fit",
+    "xit",
+    "xtest",
+    "fdescribe",
+    "xdescribe",
+    "xcontext",
+];
+
+impl RunnerNames {
+    /// Whether `callee` is a runner's `each`: `<runner function>[.modifier..].each`.
+    fn is_each(&self, callee: Node, src: &[u8]) -> bool {
+        self.each_on(callee, src)
+            .is_some_and(|name| !self.imported.iter().any(|n| n == name))
+    }
+
+    /// Whether `callee` is `each` on a runner function name the file imports from a
+    /// module that is not a runner.
+    fn is_imported_each(&self, callee: Node, src: &[u8]) -> bool {
+        self.each_on(callee, src)
+            .is_some_and(|name| self.imported.iter().any(|n| n == name))
+    }
+
+    /// The runner function name `callee` reaches `each` through, when the file does not
+    /// declare that name as something else.
+    fn each_on<'s>(&self, callee: Node, src: &'s [u8]) -> Option<&'s str> {
+        if callee.kind() != "member_expression"
+            || callee
+                .child_by_field_name("property")
+                .is_none_or(|p| text(p, src) != "each")
+        {
+            return None;
+        }
+        let mut on = callee;
+        while on.kind() == "member_expression" {
+            on = on.child_by_field_name("object")?;
+        }
+        let name = text(on, src);
+        (on.kind() == "identifier"
+            && RUNNER_FUNCTIONS.contains(&name)
+            && !self.not_runner.iter().any(|n| n == name))
+        .then_some(name)
+    }
+}
+
 fn javascript_template_rows(template: Node, src: &[u8]) -> Option<Vec<String>> {
     fn add_text(fragment: &str, lines: &mut Vec<String>) {
         for (i, part) in fragment.split('\n').enumerate() {
@@ -350,13 +592,35 @@ fn javascript_array_rows(array: Node, src: &[u8]) -> CaseList {
 /// In JS AST: `test.each([...])("title", fn)` has an outer call whose `function` child
 /// is an inner call `test.each([...])` or a tagged template `test.each`\`...\`.
 /// A comment between the rows of the array is not a row.
-pub fn extract_javascript_cases(func_node: Node, src: &[u8]) -> CaseList {
+pub fn extract_javascript_cases(func_node: Node, src: &[u8], names: &RunnerNames) -> CaseList {
+    let is_each = |callee: Node| names.is_each(callee, src);
+    // `test.each(..)` under a `test` imported from a project module: a case source that
+    // may be the runner's, whose cases are not counted.
+    let callees = match func_node.kind() {
+        "call_expression" => [
+            func_node.child(0),
+            func_node.child_by_field_name("function"),
+        ],
+        "tagged_template_expression" => [
+            func_node
+                .child_by_field_name("tag")
+                .or_else(|| func_node.child(0)),
+            None,
+        ],
+        _ => [None, None],
+    };
+    if callees
+        .into_iter()
+        .flatten()
+        .any(|callee| names.is_imported_each(callee, src))
+    {
+        return CaseList::non_literal();
+    }
     if func_node.kind() == "call_expression" {
         let mut cursor = func_node.walk();
         let children: Vec<Node> = func_node.children(&mut cursor).collect();
         if let Some(first) = children.first() {
-            let fn_text = text(*first, src);
-            if fn_text.ends_with(".each") || fn_text == "each" {
+            if is_each(*first) {
                 if let Some(template) = children.iter().find(|c| c.kind() == "template_string") {
                     if let Some(rows) = javascript_template_rows(*template, src) {
                         return CaseList::literal(rows);
@@ -366,8 +630,7 @@ pub fn extract_javascript_cases(func_node: Node, src: &[u8]) -> CaseList {
         }
 
         if let Some(inner_fn) = func_node.child_by_field_name("function") {
-            let fn_text = text(inner_fn, src);
-            if fn_text.ends_with(".each") || fn_text == "each" {
+            if is_each(inner_fn) {
                 if let Some(args) = func_node.child_by_field_name("arguments") {
                     if let Some(arg) = elements(args).first() {
                         if arg.kind() == "array" {
@@ -384,8 +647,7 @@ pub fn extract_javascript_cases(func_node: Node, src: &[u8]) -> CaseList {
             .child_by_field_name("tag")
             .or_else(|| func_node.child(0));
         if let Some(tag) = tag {
-            let tag_text = text(tag, src);
-            if tag_text.ends_with(".each") || tag_text == "each" {
+            if is_each(tag) {
                 let mut cursor = func_node.walk();
                 let template = func_node
                     .children(&mut cursor)
@@ -467,13 +729,30 @@ fn go_type_name(node: Node) -> Option<Node> {
 struct GoFile<'a, 'tree> {
     src: &'a [u8],
     /// Types declared at package level as a struct with fields.
-    struct_types: Vec<&'a str>,
+    struct_types: Vec<String>,
     /// Identifiers the test body ranges over (`for _, c := range cases`).
-    ranged: Vec<&'a str>,
+    ranged: Vec<String>,
     /// Every identifier in the test body.
-    used: Vec<&'a str>,
+    used: Vec<String>,
     /// Package-level `var` specifications.
     package_vars: Vec<Node<'tree>>,
+}
+
+/// Another file of a test's package: its source and the root of its tree.
+pub struct GoSibling<'s, 'tree> {
+    pub src: &'s [u8],
+    pub root: Node<'tree>,
+}
+
+/// The name of the package a Go file declares (`package calc_test`).
+pub fn go_package_name<'s>(root: Node, src: &'s [u8]) -> Option<&'s str> {
+    let clause = elements(root)
+        .into_iter()
+        .find(|c| c.kind() == "package_clause")?;
+    elements(clause)
+        .into_iter()
+        .find(|c| c.kind() == "package_identifier")
+        .map(|name| text(name, src))
 }
 
 impl<'a, 'tree> GoFile<'a, 'tree> {
@@ -491,52 +770,75 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
         }
         // The body itself is the root when a caller hands in a detached block.
         if root.id() != body.id() {
-            for decl in elements(root) {
-                match decl.kind() {
-                    "type_declaration" => {
-                        for spec in elements(decl) {
-                            let (Some(name), Some(ty)) = (
-                                spec.child_by_field_name("name"),
-                                spec.child_by_field_name("type"),
-                            ) else {
-                                continue;
-                            };
-                            if spec.kind() == "type_spec"
-                                && ty.kind() == "struct_type"
-                                && go_struct_has_fields(ty)
-                            {
-                                file.struct_types.push(text(name, src));
-                            }
-                        }
-                    }
-                    "var_declaration" => {
-                        for spec in elements(decl) {
-                            match spec.kind() {
-                                "var_spec" => file.package_vars.push(spec),
-                                "var_spec_list" => file.package_vars.extend(
-                                    elements(spec)
-                                        .into_iter()
-                                        .filter(|s| s.kind() == "var_spec"),
-                                ),
-                                _ => {}
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
+            file.read_package_level(root);
         }
         file.collect_names(body);
         file
     }
 
+    /// Records the struct types and `var` specifications `root` declares at package
+    /// level.
+    fn read_package_level(&mut self, root: Node<'tree>) {
+        let src = self.src;
+        for decl in elements(root) {
+            match decl.kind() {
+                "type_declaration" => {
+                    for spec in elements(decl) {
+                        let (Some(name), Some(ty)) = (
+                            spec.child_by_field_name("name"),
+                            spec.child_by_field_name("type"),
+                        ) else {
+                            continue;
+                        };
+                        if spec.kind() == "type_spec"
+                            && ty.kind() == "struct_type"
+                            && go_struct_has_fields(ty)
+                        {
+                            self.struct_types.push(text(name, src).to_string());
+                        }
+                    }
+                }
+                "var_declaration" => {
+                    for spec in elements(decl) {
+                        match spec.kind() {
+                            "var_spec" => self.package_vars.push(spec),
+                            "var_spec_list" => self.package_vars.extend(
+                                elements(spec)
+                                    .into_iter()
+                                    .filter(|s| s.kind() == "var_spec"),
+                            ),
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Adds to `total` the rows of the package-level tables of this file that `named`
+    /// holds the name of.
+    fn count_named_package_tables(&self, named: &[String], total: &mut Option<Vec<String>>) {
+        for spec in &self.package_vars {
+            let mut cursor = spec.walk();
+            let named_in_body = spec
+                .children_by_field_name("name", &mut cursor)
+                .any(|name| named.iter().any(|n| n == text(name, self.src)));
+            if named_in_body {
+                // A call ranged over inside a package-level initialiser is not this test's.
+                let mut ignored = false;
+                self.count_tables(*spec, total, &mut ignored);
+            }
+        }
+    }
+
     fn collect_names(&mut self, node: Node<'tree>) {
         match node.kind() {
-            "identifier" => self.used.push(text(node, self.src)),
+            "identifier" => self.used.push(text(node, self.src).to_string()),
             "range_clause" => {
                 if let Some(right) = node.child_by_field_name("right") {
                     if right.kind() == "identifier" {
-                        self.ranged.push(text(right, self.src));
+                        self.ranged.push(text(right, self.src).to_string());
                     }
                 }
             }
@@ -587,7 +889,9 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
             .any(|word| words.contains(&word.as_str()));
         if by_name {
             GoRows::Table
-        } else if row.kind() == "type_identifier" && self.struct_types.contains(&text(row, src)) {
+        } else if row.kind() == "type_identifier"
+            && self.struct_types.iter().any(|t| t == text(row, src))
+        {
             GoRows::NamedStruct
         } else {
             GoRows::No
@@ -630,7 +934,7 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
                         node.parent().is_some_and(|p| p.kind() == "range_clause")
                             || self
                                 .bound_name(node)
-                                .is_some_and(|name| self.ranged.contains(&name))
+                                .is_some_and(|name| self.ranged.iter().any(|r| r == name))
                     }
                     GoRows::No => false,
                 };
@@ -671,21 +975,49 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
 /// If a `range` loop in the test iterates over a non-literal (function call or external slice),
 /// sets `non_literal = true`.
 pub fn extract_go_cases(body_node: Node, src: &[u8]) -> CaseList {
-    let file = GoFile::new(body_node, src);
+    extract_go_cases_in_package(body_node, src, &[])
+}
+
+/// [`extract_go_cases`] with the other files of the test's package read too: a struct
+/// type one of them declares is a row type as one of the test's own file is, and a
+/// package-level `var` one of them holds counts toward every test whose body names it.
+/// A table or row type moved to another file of the package therefore keeps its rows.
+pub fn extract_go_cases_in_package(
+    body_node: Node,
+    src: &[u8],
+    siblings: &[GoSibling],
+) -> CaseList {
+    let mut file = GoFile::new(body_node, src);
+    let mut others: Vec<GoFile> = siblings
+        .iter()
+        .map(|sibling| {
+            let mut other = GoFile {
+                src: sibling.src,
+                struct_types: Vec::new(),
+                ranged: file.ranged.clone(),
+                used: Vec::new(),
+                package_vars: Vec::new(),
+            };
+            other.read_package_level(sibling.root);
+            other
+        })
+        .collect();
+    // Every file of the package sees the struct types of all of them.
+    let mut struct_types = file.struct_types.clone();
+    for other in &others {
+        struct_types.extend(other.struct_types.iter().cloned());
+    }
+    file.struct_types = struct_types.clone();
+    for other in &mut others {
+        other.struct_types = struct_types.clone();
+    }
     let mut table_cases: Option<Vec<String>> = None;
     let mut has_non_literal = false;
 
     file.count_tables(body_node, &mut table_cases, &mut has_non_literal);
-    for spec in &file.package_vars {
-        let mut cursor = spec.walk();
-        let named_in_body = spec
-            .children_by_field_name("name", &mut cursor)
-            .any(|name| file.used.contains(&text(name, src)));
-        if named_in_body {
-            // A call ranged over inside a package-level initialiser is not this test's.
-            let mut ignored = false;
-            file.count_tables(*spec, &mut table_cases, &mut ignored);
-        }
+    file.count_named_package_tables(&file.used, &mut table_cases);
+    for other in &others {
+        other.count_named_package_tables(&file.used, &mut table_cases);
     }
 
     match table_cases {
@@ -765,8 +1097,18 @@ fn java_annotation_cases(annotation: Node, src: &[u8]) -> Result<Option<Vec<Stri
             "@NullSource".to_string(),
             "@EmptySource".to_string(),
         ])),
-        // `@ValueSource(ints = {1, 2})`: one typed array, whichever its name.
+        // `@ValueSource(ints = {1, 2})`: one typed array, whichever its name. A name
+        // in place of the array (`strings = NAME`) is one value: an annotation element
+        // takes constant expressions, and no array is one.
         "ValueSource" => match args.as_slice() {
+            [(_, value)]
+                if matches!(
+                    value.kind(),
+                    "identifier" | "field_access" | "scoped_identifier"
+                ) =>
+            {
+                Ok(Some(vec![row_text(*value, src)]))
+            }
             [(_, value)] => java_element_rows(*value, src).map(Some),
             _ => Err(()),
         },
@@ -1329,7 +1671,7 @@ def test_add(a, b, s):
             count: cases,
             non_literal,
             ..
-        } = extract_python_cases(Some(&decorators), code.as_bytes());
+        } = extract_python_cases(Some(&decorators), code.as_bytes(), &PytestNames::default());
         assert_eq!(cases, Some(3));
         assert!(!non_literal);
     }
@@ -1359,7 +1701,7 @@ def test_x(x):
             count: cases,
             non_literal,
             ..
-        } = extract_python_cases(Some(&decorators), code.as_bytes());
+        } = extract_python_cases(Some(&decorators), code.as_bytes(), &PytestNames::default());
         assert_eq!(cases, Some(4));
         assert!(!non_literal);
     }
@@ -1390,7 +1732,7 @@ def test_xy(x, y):
             count: cases,
             non_literal,
             ..
-        } = extract_python_cases(Some(&decorators), code.as_bytes());
+        } = extract_python_cases(Some(&decorators), code.as_bytes(), &PytestNames::default());
         assert_eq!(cases, Some(6));
         assert!(!non_literal);
     }
@@ -1420,7 +1762,7 @@ def test_dynamic(x):
             count: cases,
             non_literal,
             ..
-        } = extract_python_cases(Some(&decorators), code.as_bytes());
+        } = extract_python_cases(Some(&decorators), code.as_bytes(), &PytestNames::default());
         assert_eq!(cases, None);
         assert!(non_literal);
     }
@@ -1445,7 +1787,7 @@ test.each([[1, 2, 3], [2, 2, 4], [-1, 1, 0]])("add %i %i", (a, b, s) => {
             count: cases,
             non_literal,
             ..
-        } = extract_javascript_cases(func_node, code.as_bytes());
+        } = extract_javascript_cases(func_node, code.as_bytes(), &RunnerNames::default());
         assert_eq!(cases, Some(3));
         assert!(!non_literal);
     }
@@ -1470,7 +1812,7 @@ test.each(getCases())("add %i %i", (a, b, s) => {
             count: cases,
             non_literal,
             ..
-        } = extract_javascript_cases(func_node, code.as_bytes());
+        } = extract_javascript_cases(func_node, code.as_bytes(), &RunnerNames::default());
         assert_eq!(cases, None);
         assert!(non_literal);
     }
@@ -1512,7 +1854,7 @@ test.each`
             count: cases,
             non_literal,
             ..
-        } = extract_javascript_cases(func_node, code.as_bytes());
+        } = extract_javascript_cases(func_node, code.as_bytes(), &RunnerNames::default());
         assert_eq!(cases, Some(2));
         assert!(!non_literal);
     }

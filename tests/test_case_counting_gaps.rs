@@ -826,15 +826,22 @@ fn java_enum_source_names_and_null_sources_are_cases() {
     assert_clean(&run);
 }
 
+/// A `@ValueSource` that names a constant is one case (#626): an annotation element
+/// takes constant expressions, and no array is one.
 #[test]
-fn java_value_source_that_names_a_constant_is_not_a_literal_list() {
+fn java_value_source_that_names_a_constant_is_one_case() {
     let literal = java("    @ValueSource(strings = {\"a\", \"b\", \"c\"})");
     let run = judge(
         JAVA_PATH,
         &literal,
         &literal.replace("{\"a\", \"b\", \"c\"}", "ONE"),
     );
-    assert_reduced(&run, "no longer a literal list");
+    assert_reduced(&run, "3 to 1");
+
+    // Control: the constant written with and without braces is the same one case.
+    let named = java("    @ValueSource(strings = ONE)");
+    let run = judge(JAVA_PATH, &named, &named.replace("= ONE", "= {ONE}"));
+    assert_clean(&run);
 
     // Control: one literal value written with and without braces is one case.
     let one = java("    @ValueSource(strings = {\"a\"})");

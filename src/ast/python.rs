@@ -57,6 +57,7 @@ impl LanguagePack for PythonPack {
             src: src.as_bytes(),
             vocab,
             is_test_path: is_python_test_path(path),
+            pytest_names: super::test_cases::PytestNames::read(root, src.as_bytes()),
             facts: ParsedFileFacts {
                 has_parse_errors: root.has_error(),
                 ..Default::default()
@@ -168,6 +169,8 @@ struct PythonExtractor<'a> {
     src: &'a [u8],
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
+    /// What the file binds `pytest`, `mark` and `parametrize` to.
+    pytest_names: super::test_cases::PytestNames,
     facts: ParsedFileFacts,
     /// Every class defined in the file, keyed by name, with the last dotted
     /// segment of each base (`unittest.TestCase` -> `TestCase`).
@@ -486,7 +489,9 @@ impl<'a> PythonExtractor<'a> {
         let mut scope = Vec::new();
         self.inherited_cases
             .push(super::test_cases::extract_python_pytestmark_cases(
-                root, self.src,
+                root,
+                self.src,
+                &self.pytest_names,
             ));
         self.inherited_skips.push(marks.conditional);
         self.visit_node(root, &mut scope, marks.ignored);
@@ -809,10 +814,16 @@ impl<'a> PythonExtractor<'a> {
         self.unittest_stack.push(unittest);
         let body_cases = node
             .child_by_field_name("body")
-            .map(|body| super::test_cases::extract_python_pytestmark_cases(body, self.src))
+            .map(|body| {
+                super::test_cases::extract_python_pytestmark_cases(
+                    body,
+                    self.src,
+                    &self.pytest_names,
+                )
+            })
             .unwrap_or_default();
         self.inherited_cases.push(super::test_cases::multiply_cases(
-            super::test_cases::extract_python_cases(class_decorators, self.src),
+            super::test_cases::extract_python_cases(class_decorators, self.src, &self.pytest_names),
             body_cases,
         ));
 
@@ -894,7 +905,7 @@ impl<'a> PythonExtractor<'a> {
             .inherited_cases
             .iter()
             .fold(
-                super::test_cases::extract_python_cases(decorators, self.src),
+                super::test_cases::extract_python_cases(decorators, self.src, &self.pytest_names),
                 |own, outer| super::test_cases::multiply_cases(outer.clone(), own),
             )
             .into_parts();
@@ -1108,6 +1119,7 @@ impl<'a> PythonExtractor<'a> {
                 tautologies: facts.tautologies,
                 fatal_asserts: facts.fatal_asserts,
                 helper_checks: 0,
+                equality_exits: 0,
             },
             calls,
         );

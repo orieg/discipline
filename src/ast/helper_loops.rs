@@ -418,11 +418,9 @@ fn innermost(spans: &[(usize, usize)], line: usize) -> Option<usize> {
 /// `HelperReach::equality_exits`. Run after the pack
 /// has resolved the same-file helpers its tests call.
 pub fn count(root: Node, src: &str, facts: &mut ParsedFileFacts, spec: &LoopSpec) {
-    if facts
-        .tests
-        .iter()
-        .all(|t| t.counted_helper_calls.is_empty())
-    {
+    // A file whose tests call no helper still has its helpers' exits read: a test of
+    // another file may call them.
+    if facts.test_helpers.is_empty() {
         return;
     }
     let tests: Vec<(usize, usize)> = facts.tests.iter().map(|t| (t.line, t.end_line)).collect();
@@ -496,6 +494,9 @@ pub fn count(root: Node, src: &str, facts: &mut ParsedFileFacts, spec: &LoopSpec
     for (test, (looped, exits)) in facts.tests.iter_mut().zip(reach) {
         test.helper_reach.looped = looped;
         test.helper_reach.equality_exits = exits;
+    }
+    for (helper, exits) in facts.test_helpers.iter_mut().zip(equality_exits) {
+        helper.equality_exits = exits;
     }
 }
 
