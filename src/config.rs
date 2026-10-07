@@ -195,6 +195,14 @@ pub const GATES: &[GateInfo] = &[
         delta_only: true,
     },
     GateInfo {
+        id: "harness-tampering",
+        suite: Suite::AgentGuard,
+        summary: "a file the test runner loads does not make a failing run pass",
+        languages: "Go, Python, JS/TS, Rust",
+        available: true,
+        delta_only: true,
+    },
+    GateInfo {
         id: "error-swallowing",
         suite: Suite::AgentGuard,
         summary: "no new empty error handler or discarded Result outside tests",
@@ -695,6 +703,7 @@ pub struct Gates {
     pub sandbox_config: BasicGate,
     pub stub_bodies: BasicGate,
     pub error_swallowing: ErrorSwallowingGate,
+    pub harness_tampering: HarnessTamperingGate,
     pub instruction_smuggling: InstructionSmugglingGate,
     pub build_hooks: BasicGate,
     pub golden_output: GoldenGate,
@@ -792,6 +801,7 @@ macro_rules! impl_gate_settings {
 impl_gate_settings!(
     BasicGate,
     ErrorSwallowingGate,
+    HarnessTamperingGate,
     InstructionSmugglingGate,
     AgentsMdGate,
     IgnoredTestsGate,
@@ -858,6 +868,25 @@ impl Default for BasicGate {
     fn default() -> Self {
         Self {
             enabled: true,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+        }
+    }
+}
+
+/// `harness-tampering`: the common keys, off until a repository turns it on.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HarnessTamperingGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+}
+
+impl Default for HarnessTamperingGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
             severity: Severity::Error,
             exempt_paths: Vec::new(),
         }
@@ -2304,6 +2333,7 @@ impl Gates {
             "sandbox-config" => &self.sandbox_config,
             "stub-bodies" => &self.stub_bodies,
             "error-swallowing" => &self.error_swallowing,
+            "harness-tampering" => &self.harness_tampering,
             "instruction-smuggling" => &self.instruction_smuggling,
             "build-hooks" => &self.build_hooks,
             "golden-output" => &self.golden_output,

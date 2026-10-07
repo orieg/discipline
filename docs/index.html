@@ -979,7 +979,7 @@
       <div class="stat-item">
         <h3>
 <!-- generated:gate-count -->
-41
+42
 <!-- /generated -->
         </h3>
         <p>Fail-Closed Gates</p>
@@ -1357,8 +1357,8 @@ Test `adds`: effective assertions dropped from 2 to 0.
 
     <div class="gate-search-wrapper">
 <!-- generated:gate-search -->
-      <input type="text" id="gate-search" class="gate-search-input" placeholder="Search 41 gates by id, category, language, or rule..." aria-label="Search active gates">
-      <span id="gate-count" class="gate-count">Showing 41 of 41 gates</span>
+      <input type="text" id="gate-search" class="gate-search-input" placeholder="Search 42 gates by id, category, language, or rule..." aria-label="Search active gates">
+      <span id="gate-count" class="gate-count">Showing 42 of 42 gates</span>
 <!-- /generated -->
     </div>
 
@@ -1493,6 +1493,13 @@ Test `adds`: effective assertions dropped from 2 to 0.
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala, Objective-C</span></td>
             <td>added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null</td>
+          </tr>
+          <tr>
+            <td class="gate-id">harness-tampering</td>
+            <td>Agent Guard</td>
+            <td><span class="gate-badge badge-lang">Off</span></td>
+            <td><span class="gate-badge badge-lang">Go, Python, JS/TS, Rust</span></td>
+            <td>a file the test runner loads does not make a failing run pass</td>
           </tr>
           <tr>
             <td class="gate-id">error-swallowing</td>

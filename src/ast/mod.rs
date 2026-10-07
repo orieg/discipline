@@ -28,6 +28,7 @@ pub mod go_work;
 #[cfg(feature = "lang-golden")]
 pub mod golden;
 pub mod handlers;
+pub mod harness;
 pub mod helper_loops;
 #[cfg(feature = "lang-java")]
 pub mod java;
