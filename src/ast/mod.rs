@@ -24,6 +24,7 @@ pub mod gitattributes;
 #[cfg(feature = "lang-go")]
 pub mod r#go;
 pub mod go_build;
+pub mod go_work;
 #[cfg(feature = "lang-golden")]
 pub mod golden;
 pub mod handlers;

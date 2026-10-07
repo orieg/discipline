@@ -776,6 +776,12 @@ impl GitCtx {
         }
     }
 
+    /// The object id of the base side's tree, which names its whole content. `None`
+    /// when the base is the empty tree.
+    pub fn base_tree_id(&self) -> Result<Option<String>> {
+        Ok(self.base_tree()?.map(|tree| tree.id().to_string()))
+    }
+
     /// Submodule pointers (gitlinks) the change adds, moves, bumps or removes. They are
     /// left out of [`GitCtx::changed_files`]: no gate can read a submodule's content.
     pub fn changed_submodules(&self) -> Result<Vec<String>> {

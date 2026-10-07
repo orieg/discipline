@@ -5834,6 +5834,238 @@ test tests::c: test
         },
     ),
     (
+        "test-floor: a rule the change adds over collected tests is attributed to its file",
+        || {
+            use crate::ast::runner_collection::{moved_out_by, RunnerCollectionRules};
+            use crate::ast::AssertVocabulary;
+
+            let tree = |files: &[(&str, &str)]| {
+                let tracked: Vec<String> = files.iter().map(|(name, _)| name.to_string()).collect();
+                AssertVocabulary {
+                    runner_rules: RunnerCollectionRules::from_tree(
+                        |p| {
+                            files
+                                .iter()
+                                .find(|(name, _)| *name == p)
+                                .map(|(_, content)| content.to_string())
+                        },
+                        &tracked,
+                    ),
+                    ..Default::default()
+                }
+            };
+            // The file and the rule of each mechanism `moved_out_by` names for `path`.
+            let moved = |base: &[(&str, &str)], head: &[(&str, &str)], path: &str| {
+                moved_out_by(path, &tree(base), &tree(head))
+                    .into_iter()
+                    .map(|m| (m.file, m.key, m.line))
+                    .collect::<Vec<_>>()
+            };
+            let rule = |file: &str, key: &'static str| vec![(file.to_string(), key, None)];
+
+            // Cargo: an `exclude` entry added over a member's tests.
+            let package = "[package]\nname = \"p\"\nversion = \"0.1.0\"\n";
+            let members = "[workspace]\nmembers = [\"out\"]\n";
+            let excluded = "[workspace]\nmembers = []\nexclude = [\"out\"]\n";
+            let cargo = |root: &'static str| {
+                vec![
+                    ("Cargo.toml", root),
+                    ("out/Cargo.toml", package),
+                    ("out/tests/it.rs", "#[test]\nfn t() {}\n"),
+                ]
+            };
+            let cargo_ok = moved(&cargo(members), &cargo(excluded), "out/tests/it.rs")
+                == rule("Cargo.toml", "workspace-exclude")
+                // On both sides the rule is not the change's own.
+                && moved(&cargo(excluded), &cargo(excluded), "out/tests/it.rs").is_empty()
+                && moved(&cargo(members), &cargo(members), "out/tests/it.rs").is_empty();
+
+            // Go: a build tag, at its line; a `go.mod` that nests the directory; a
+            // `go.work` that stops using the module.
+            let go_mod = "module example.test/m\n\ngo 1.21\n";
+            let test = "package pkg\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n";
+            let tagged = "// Package pkg.\n\n//go:build integration\n\npackage pkg\n";
+            let plain = [("go.mod", go_mod), ("sub/pkg/a_test.go", test)];
+            let go_ok = moved(
+                &plain,
+                &[("go.mod", go_mod), ("sub/pkg/a_test.go", tagged)],
+                "sub/pkg/a_test.go",
+            ) == vec![("sub/pkg/a_test.go".to_string(), "build-constraint", Some(3))]
+                && moved(
+                    &plain,
+                    &[("go.mod", go_mod), ("sub/go.mod", go_mod), ("sub/pkg/a_test.go", test)],
+                    "sub/pkg/a_test.go",
+                ) == rule("sub/go.mod", "nested-module")
+                && moved(
+                    &[("sub/go.mod", go_mod), ("sub/pkg/a_test.go", test)],
+                    &[("go.mod", go_mod), ("sub/go.mod", go_mod), ("sub/pkg/a_test.go", test)],
+                    "sub/pkg/a_test.go",
+                ) == rule("go.mod", "nested-module")
+                && moved(
+                    &[("go.work", "go 1.21\nuse ./sub\n"), ("sub/go.mod", go_mod), ("sub/pkg/a_test.go", test)],
+                    &[("go.work", "go 1.21\nuse ./other\n"), ("sub/go.mod", go_mod), ("sub/pkg/a_test.go", test)],
+                    "sub/pkg/a_test.go",
+                ) == rule("go.work", "go-work-use")
+                && moved(&plain, &plain, "sub/pkg/a_test.go").is_empty();
+
+            // pytest, Jest and `.gitattributes`: the key that leaves the file out.
+            let pytest = |options: &'static str| {
+                vec![("pyproject.toml", options), ("legacy/test_a.py", "def test_a():\n    assert a()\n")]
+            };
+            let pytest_ok = moved(
+                &pytest("[tool.pytest.ini_options]\n"),
+                &pytest("[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\n"),
+                "legacy/test_a.py",
+            ) == rule("pyproject.toml", "testpaths")
+                && moved(
+                    &pytest("[tool.pytest.ini_options]\n"),
+                    &pytest("[tool.pytest.ini_options]\nnorecursedirs = [\"legacy\"]\n"),
+                    "legacy/test_a.py",
+                ) == rule("pyproject.toml", "norecursedirs");
+            let jest = |package: &'static str| vec![("package.json", package)];
+            let jest_ok = moved(
+                &jest(r#"{"jest": {}}"#),
+                &jest(r#"{"jest": {"testPathIgnorePatterns": ["/legacy/"]}}"#),
+                "legacy/a.test.js",
+            ) == rule("package.json", "testPathIgnorePatterns")
+                // A file the default names never collected was not moved.
+                && moved(
+                    &jest(r#"{"jest": {}}"#),
+                    &jest(r#"{"jest": {"testPathIgnorePatterns": ["/legacy/"]}}"#),
+                    "legacy/helper.js",
+                )
+                .is_empty();
+            let attributes_ok = moved(
+                &jest(r#"{"jest": {}}"#),
+                &[
+                    ("package.json", r#"{"jest": {}}"#),
+                    ("third_party/.gitattributes", "*.js linguist-vendored\n"),
+                ],
+                "third_party/a.test.js",
+            ) == rule("third_party/.gitattributes", "linguist-vendored");
+
+            Ok(cargo_ok && go_ok && pytest_ok && jest_ok && attributes_ok)
+        },
+    ),
+    (
+        "test-floor: go.work use lists, attribute macros and node:test files",
+        || {
+            use crate::ast::runner_collection::{
+                check_runner_collected, is_runner_collected, RunnerCollectionRules,
+                RunnerCollectionStatus,
+            };
+            use crate::ast::AssertVocabulary;
+
+            let tree = |files: &[(&str, &str)]| {
+                let tracked: Vec<String> = files.iter().map(|(name, _)| name.to_string()).collect();
+                AssertVocabulary {
+                    runner_rules: RunnerCollectionRules::from_tree(
+                        |p| {
+                            files
+                                .iter()
+                                .find(|(name, _)| *name == p)
+                                .map(|(_, content)| content.to_string())
+                        },
+                        &tracked,
+                    ),
+                    ..Default::default()
+                }
+            };
+            let unknown = |path: &str, vocab: &AssertVocabulary, part: &str| {
+                matches!(
+                    check_runner_collected(path, vocab),
+                    RunnerCollectionStatus::Unknown(reason) if reason.contains(part)
+                )
+            };
+            let collected = |path: &str, vocab: &AssertVocabulary| {
+                check_runner_collected(path, vocab) == RunnerCollectionStatus::Collected
+            };
+
+            // `go.work`: a module the file does not use is not determined; a used one
+            // is collected; a nested module stays its own whether or not it is used.
+            let go_mod = "module example.test/m\n\ngo 1.21\n";
+            let test = "package pkg\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n";
+            let work = tree(&[
+                ("go.work", "go 1.21\n\nuse (\n\t./a // first\n)\n"),
+                ("a/go.mod", go_mod),
+                ("a/pkg/a_test.go", test),
+                ("b/go.mod", go_mod),
+                ("b/pkg/b_test.go", test),
+            ]);
+            let nested = tree(&[
+                ("go.work", "go 1.21\nuse .\nuse ./sub\n"),
+                ("go.mod", go_mod),
+                ("pkg/a_test.go", test),
+                ("sub/go.mod", go_mod),
+                ("sub/pkg/b_test.go", test),
+            ]);
+            let broken = tree(&[
+                ("go.work", "go 1.21\nuse (\n\t./a\n"),
+                ("a/go.mod", go_mod),
+                ("a/pkg/a_test.go", test),
+            ]);
+            let work_ok = collected("a/pkg/a_test.go", &work)
+                && unknown("b/pkg/b_test.go", &work, "`use` list of `go.work`")
+                && collected("pkg/a_test.go", &nested)
+                && unknown("sub/pkg/b_test.go", &nested, "is below the module")
+                && unknown("a/pkg/a_test.go", &broken, "cannot be read");
+
+            // `[attr]` macros: expanded when set, through another macro too; not when
+            // unset, given a value, or defined below the top level.
+            let attributes = |root: &'static str| tree(&[("package.json", "{\"jest\": {}}"), (".gitattributes", root)]);
+            let out = |vocab: &AssertVocabulary| {
+                matches!(
+                    check_runner_collected("third_party/a.test.js", vocab),
+                    RunnerCollectionStatus::NoRunner(reason) if reason.contains("`linguist-vendored`")
+                )
+            };
+            let macro_ok = out(&attributes("[attr]vend linguist-vendored\nthird_party/** vend\n"))
+                && out(&attributes(
+                    "third_party/** outer\n[attr]outer vend\n[attr]vend linguist-vendored\n",
+                ))
+                && !out(&attributes("[attr]vend linguist-vendored\nthird_party/** -vend\n"))
+                && !out(&attributes("[attr]vend linguist-vendored\nthird_party/** vend=true\n"))
+                && !out(&attributes(
+                    "[attr]vend linguist-vendored\nthird_party/** vend\n*.js -linguist-vendored\n",
+                ))
+                && !out(&tree(&[
+                    ("package.json", "{\"jest\": {}}"),
+                    ("third_party/.gitattributes", "[attr]vend linguist-vendored\n*.js vend\n"),
+                ]));
+
+            // `node:test`: an import decides, and a script running `node --test` counts it.
+            let node = "import test from 'node:test';\ntest('a', () => {});\n";
+            let words = "// node:test\nconst s = 'node:test';\nit('a', () => {});\n";
+            let ignoring = r#""jest": {"testPathIgnorePatterns": ["/node/"]}"#;
+            let with_script = format!(r#"{{"scripts": {{"t": "node --test node/"}}, {ignoring}}}"#);
+            let without = format!(r#"{{"scripts": {{"t": "node --check x.js"}}, {ignoring}}}"#);
+            let run = tree(&[("package.json", &with_script), ("node/a.test.js", node)]);
+            let not_run = tree(&[
+                ("package.json", &without),
+                ("node/a.test.js", node),
+                ("src/b.test.js", node),
+                ("src/c.test.js", words),
+                ("node/d.test.js", words),
+            ]);
+            let node_ok = collected("node/a.test.js", &run)
+                && matches!(
+                    check_runner_collected("node/a.test.js", &not_run),
+                    RunnerCollectionStatus::NoRunner(reason) if reason.contains("`node --test`")
+                )
+                && !is_runner_collected("src/b.test.js", &not_run)
+                && collected("src/c.test.js", &not_run)
+                && check_runner_collected("node/d.test.js", &not_run)
+                    == RunnerCollectionStatus::NotCollected;
+
+            // Jest never collects below `node_modules`, whatever its ignore list holds.
+            let jest = tree(&[("package.json", r#"{"jest": {"testPathIgnorePatterns": []}}"#)]);
+            let modules_ok = collected("legacy/a.test.js", &jest)
+                && !is_runner_collected("node_modules/p/a.test.js", &jest);
+
+            Ok(work_ok && macro_ok && node_ok && modules_ok)
+        },
+    ),
+    (
         "ci-integrity: rollup needs detection, pinning, and error masks",
         || {
             use crate::guards::ci_integrity::parse_workflow_jobs;

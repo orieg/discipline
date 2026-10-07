@@ -313,6 +313,7 @@ findings! {
     TEST_COUNT_BELOW_FLOOR = ["test-floor"], "test-count-below-floor", "Test Count Below Floor", Same;
     TEST_IDENTITY_DROPPED = ["test-floor"], "test-dropped-from-suite", "Test Dropped From Suite", Same;
     UNTRUSTED_TEST_COMMAND = ["test-floor"], "untrusted-test-command", "Untrusted Test Command", Same;
+    TESTS_MOVED_OUT_OF_DEFAULT_RUN = ["test-floor"], "tests-moved-out-of-default-run", "Tests Moved Out Of Default Run", Same;
 
     // dependency-delta
     LOCKFILE_DELETED = ["dependency-delta"], "lockfile-deleted", "Lockfile Deleted", Same;

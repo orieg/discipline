@@ -89,14 +89,61 @@ pub(crate) fn assert_vocabulary_for_base(ctx: &Context) -> Result<AssertVocabula
         .base_config_text()?
         .and_then(|s| crate::config::DisciplineConfig::from_toml_str(&s).ok());
     let mut vocab = assert_vocabulary(base_cfg.as_ref().unwrap_or(ctx.config));
-    let tracked = ctx.git.base_tracked_files()?;
-    let reads = crate::gitctx::ReadRecorder::new();
-    vocab.runner_rules = crate::ast::runner_collection::RunnerCollectionRules::from_tree(
-        reads.base(ctx.git),
-        &tracked,
-    );
-    reads.finish()?;
+    vocab.runner_rules = base_runner_rules(ctx)?;
     Ok(vocab)
+}
+
+thread_local! {
+    /// The runner collection rules of the last base tree read, by the tree's object id.
+    static BASE_RUNNER_RULES: std::cell::RefCell<
+        Option<(String, crate::ast::runner_collection::RunnerCollectionRules)>,
+    > = const { std::cell::RefCell::new(None) };
+}
+
+/// The rules kept for the tree `id`, or those `build` returns, which are then kept for
+/// that id in place of any other tree's. With no id (the empty tree) nothing is kept.
+/// A build that fails keeps nothing.
+fn rules_for_tree(
+    id: Option<&str>,
+    build: impl FnOnce() -> Result<crate::ast::runner_collection::RunnerCollectionRules>,
+) -> Result<crate::ast::runner_collection::RunnerCollectionRules> {
+    let Some(id) = id else {
+        return build();
+    };
+    let kept = BASE_RUNNER_RULES.with(|cache| {
+        cache
+            .borrow()
+            .as_ref()
+            .filter(|(kept_id, _)| kept_id == id)
+            .map(|(_, rules)| rules.clone())
+    });
+    if let Some(rules) = kept {
+        return Ok(rules);
+    }
+    let rules = build()?;
+    BASE_RUNNER_RULES.with(|cache| *cache.borrow_mut() = Some((id.to_string(), rules.clone())));
+    Ok(rules)
+}
+
+/// The runner collection rules of the base side. They are read from the base tree and
+/// from nothing else, and a tree's object id names its whole content, so the rules
+/// built for one id are the rules of every later request for it in the run: the gates
+/// that need them (the diff gates, then `test-floor`) read each manifest once. A build
+/// that met a read error is not kept.
+fn base_runner_rules(
+    ctx: &Context,
+) -> Result<crate::ast::runner_collection::RunnerCollectionRules> {
+    let tree = ctx.git.base_tree_id()?;
+    rules_for_tree(tree.as_deref(), || {
+        let tracked = ctx.git.base_tracked_files()?;
+        let reads = crate::gitctx::ReadRecorder::new();
+        let rules = crate::ast::runner_collection::RunnerCollectionRules::from_tree(
+            reads.base(ctx.git),
+            &tracked,
+        );
+        reads.finish()?;
+        Ok(rules)
+    })
 }
 
 /// Runs every diff-based agent-guard gate and returns one outcome per gate.
@@ -5795,5 +5842,58 @@ mod tests {
         held.helper_checks = 1;
         held.helper_reach.equality_exits = 1;
         assert_eq!(weakened(&head(2, 1, 1), &held), 1);
+    }
+}
+
+#[cfg(test)]
+mod base_rules_cache_tests {
+    use super::rules_for_tree;
+    use crate::ast::runner_collection::RunnerCollectionRules;
+    use std::cell::Cell;
+
+    /// Rules that differ by the one tracked `go.mod` directory they hold.
+    fn rules_with(module: &str) -> RunnerCollectionRules {
+        let mut rules = RunnerCollectionRules::default();
+        rules.go.modules.push(module.to_string());
+        rules
+    }
+
+    #[test]
+    fn rules_are_built_once_per_tree_id_and_never_served_for_another() {
+        let builds = Cell::new(0);
+        let build = |module: &'static str| {
+            let builds = &builds;
+            move || {
+                builds.set(builds.get() + 1);
+                Ok(rules_with(module))
+            }
+        };
+        // The ids are unique to this test: the kept slot belongs to the thread.
+        let first = rules_for_tree(Some("cache-test-tree-a"), build("a")).unwrap();
+        assert_eq!(first, rules_with("a"));
+        assert_eq!(builds.get(), 1);
+        // The same id again: not built, and the same rules.
+        let again = rules_for_tree(Some("cache-test-tree-a"), build("never")).unwrap();
+        assert_eq!(again, rules_with("a"));
+        assert_eq!(builds.get(), 1);
+        // Another id: built, and its own rules, not the kept ones.
+        let second = rules_for_tree(Some("cache-test-tree-b"), build("b")).unwrap();
+        assert_eq!(second, rules_with("b"));
+        assert_eq!(builds.get(), 2);
+        // Back to the first id: one slot is kept, so it is built again, never served
+        // from the other tree.
+        let back = rules_for_tree(Some("cache-test-tree-a"), build("a")).unwrap();
+        assert_eq!(back, rules_with("a"));
+        assert_eq!(builds.get(), 3);
+        // No id (the empty tree): built every time, and nothing kept for it.
+        rules_for_tree(None, build("none")).unwrap();
+        rules_for_tree(None, build("none")).unwrap();
+        assert_eq!(builds.get(), 5);
+        // A build that fails keeps nothing: the next request builds.
+        let failed = rules_for_tree(Some("cache-test-tree-c"), || anyhow::bail!("read error"));
+        assert!(failed.is_err());
+        let after = rules_for_tree(Some("cache-test-tree-c"), build("c")).unwrap();
+        assert_eq!(after, rules_with("c"));
+        assert_eq!(builds.get(), 6);
     }
 }

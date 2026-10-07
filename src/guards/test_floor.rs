@@ -24,6 +24,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     }
 
     let filter = exempt_filter(settings)?;
+    let sides = SideVocabularies::new(ctx);
 
     // Read base discipline.toml to get base configuration
     let base_cfg = match ctx.base_config_text()? {
@@ -207,7 +208,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         };
         if lowered {
             if let Some(ov) =
-                find_test_floor_override(ctx, &crate::findings::CONFIGURED_FLOOR_DECREASED)?
+                find_test_floor_override(ctx, &sides, &crate::findings::CONFIGURED_FLOOR_DECREASED)?
             {
                 out.overrides.push(ov);
             } else {
@@ -471,6 +472,10 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         }
     }
 
+    // The test files the change moves out of the default run. This reads the runner
+    // rules of both sides, whatever the counting basis.
+    let moved = tests_moved_out(ctx, &filter, &sides)?;
+
     // A command the change supplies is not run, and no count stands in for it: the floor
     // was set on that command's basis, so a static count would compare two bases.
     if untrusted_test_command {
@@ -487,6 +492,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
             .to_string(),
             "Configure `test_command` in the merge base ref's discipline.toml, or set DISCIPLINE_ALLOW_COMMAND_CHANGE on the runner to accept the change.",
         );
+        report_tests_moved_out(ctx, &mut out, &moved, false);
         return Ok(out);
     }
 
@@ -497,7 +503,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     } else if let Some(head_cases) = &head_cases_opt {
         head_cases.len()
     } else {
-        let head = count_workspace_ast_tests(ctx, &filter)?;
+        let head = count_workspace_ast_tests(ctx, &filter, sides.head()?)?;
         for note in head.notes("head") {
             if !out.notes.contains(&note) {
                 out.notes.push(note);
@@ -510,10 +516,11 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     out.examined = measured_count;
 
     // 8. Compare against the effective floor.
+    let before_count = out.violations.len();
     if let Some(floor) = explicit_floor {
         if measured_count + settings.tolerance < floor {
             if let Some(ov) =
-                find_test_floor_override(ctx, &crate::findings::TEST_COUNT_BELOW_FLOOR)?
+                find_test_floor_override(ctx, &sides, &crate::findings::TEST_COUNT_BELOW_FLOOR)?
             {
                 out.overrides.push(ov);
             } else {
@@ -541,7 +548,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         let base_count = base_cases.len();
         if base_count > 0 && measured_count + settings.tolerance < base_count {
             if let Some(ov) =
-                find_test_floor_override(ctx, &crate::findings::TEST_COUNT_BELOW_FLOOR)?
+                find_test_floor_override(ctx, &sides, &crate::findings::TEST_COUNT_BELOW_FLOOR)?
             {
                 out.overrides.push(ov);
             } else {
@@ -568,7 +575,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         }
     } else {
         // Zero-config ratchet: compare head AST test count against base ref AST test count.
-        let base = count_base_workspace_ast_tests(ctx, &filter)?;
+        let base = count_base_workspace_ast_tests(ctx, &filter, sides.base()?)?;
         for note in base.notes("base") {
             if !out.notes.contains(&note) {
                 out.notes.push(note);
@@ -580,7 +587,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         let base_count = base.running;
         if base_count > 0 && measured_count + settings.tolerance < base_count {
             if let Some(ov) =
-                find_test_floor_override(ctx, &crate::findings::TEST_COUNT_BELOW_FLOOR)?
+                find_test_floor_override(ctx, &sides, &crate::findings::TEST_COUNT_BELOW_FLOOR)?
             {
                 out.overrides.push(ov);
             } else {
@@ -611,13 +618,204 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         }
     }
 
+    // 9. Tests the change moves out of the default run. A count finding this run
+    // reports already covers the files that left the count with them. One that a
+    // directive lifted does not: the directive named the count, not the rule.
+    let count_reported = before_count != out.violations.len();
+    report_tests_moved_out(ctx, &mut out, &moved, count_reported);
+
     Ok(out)
+}
+
+/// The assertion vocabulary of each side, with its runner collection rules, built at
+/// most once for one evaluation of the gate.
+struct SideVocabularies<'a, 'c> {
+    ctx: &'a Context<'c>,
+    base: std::cell::OnceCell<crate::ast::AssertVocabulary>,
+    head: std::cell::OnceCell<crate::ast::AssertVocabulary>,
+}
+
+impl<'a, 'c> SideVocabularies<'a, 'c> {
+    fn new(ctx: &'a Context<'c>) -> Self {
+        Self {
+            ctx,
+            base: std::cell::OnceCell::new(),
+            head: std::cell::OnceCell::new(),
+        }
+    }
+
+    fn base(&self) -> Result<&crate::ast::AssertVocabulary> {
+        if let Some(v) = self.base.get() {
+            return Ok(v);
+        }
+        let built = crate::guards::agent_diff::assert_vocabulary_for_base(self.ctx)?;
+        Ok(self.base.get_or_init(|| built))
+    }
+
+    fn head(&self) -> Result<&crate::ast::AssertVocabulary> {
+        if let Some(v) = self.head.get() {
+            return Ok(v);
+        }
+        let built = crate::guards::agent_diff::assert_vocabulary_for_head(self.ctx)?;
+        Ok(self.head.get_or_init(|| built))
+    }
+}
+
+/// The test files one rule of the change takes out of the default run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MovedOut {
+    mechanism: crate::ast::runner_collection::Mechanism,
+    /// Each file with the number of tests it holds on the head side, in path order.
+    files: Vec<(String, usize)>,
+    /// The head-side static count still counts the files (their collection is not
+    /// determined there), so the count does not show the move.
+    still_counted: bool,
+}
+
+impl MovedOut {
+    /// How many of the files a message names.
+    const NAMED: usize = 3;
+
+    fn tests(&self) -> usize {
+        self.files.iter().map(|(_, n)| n).sum()
+    }
+
+    fn message(&self) -> String {
+        let named: Vec<String> = self
+            .files
+            .iter()
+            .take(Self::NAMED)
+            .map(|(path, _)| format!("`{path}`"))
+            .collect();
+        let more = match self.files.len().saturating_sub(Self::NAMED) {
+            0 => String::new(),
+            n => format!(", and {n} more"),
+        };
+        let count = if self.still_counted {
+            "they are still in the static count, which does not show the move"
+        } else {
+            "they are no longer in the static count"
+        };
+        format!(
+            "{} `{}` now leaves {} test(s) in {} file(s) out of the default run that the base side's default run collected: {}{}; {}.",
+            self.mechanism.what,
+            self.mechanism.file,
+            self.tests(),
+            self.files.len(),
+            named.join(", "),
+            more,
+            count
+        )
+    }
+}
+
+/// The test files the change moves out of the default run, by the rule that does it:
+/// a file the base side's default run collected, that still exists and still holds
+/// tests on the head side, that the head side's default run does not collect, and that
+/// a rule the change added leaves out
+/// ([`crate::ast::runner_collection::moved_out_by`]). A deleted file, a file with no
+/// test left, and a file new in the change are not among them.
+fn tests_moved_out(
+    ctx: &Context,
+    filter: &crate::guards::PathFilter,
+    sides: &SideVocabularies,
+) -> Result<Vec<MovedOut>> {
+    use crate::ast::runner_collection::RunnerCollectionStatus;
+    use crate::ast::runner_collection::{check_runner_collected, moved_out_by, Mechanism};
+    if !ctx.git.has_base() {
+        return Ok(Vec::new());
+    }
+    let registry = crate::ast::default_registry();
+    let base_tracked = ctx.git.base_tracked_files()?;
+    if !base_tracked.iter().any(|p| registry.is_supported(p)) {
+        return Ok(Vec::new());
+    }
+    let head_tracked: std::collections::HashSet<String> =
+        ctx.git.tracked_files()?.into_iter().collect();
+    let (base_v, head_v) = (sides.base()?, sides.head()?);
+    let mut groups: std::collections::BTreeMap<Mechanism, MovedOut> = Default::default();
+    for path in &base_tracked {
+        if filter.matches(path) || !registry.is_supported(path) || !head_tracked.contains(path) {
+            continue;
+        }
+        let mechanisms = moved_out_by(path, base_v, head_v);
+        if mechanisms.is_empty() {
+            continue;
+        }
+        // The tests the file holds on each side: a file with none on the base side was
+        // not a test file, and one with none left is a deletion, which the count shows.
+        let mut base_found = AstTestCount::default();
+        base_found.add(path, ctx.git.base_content(path)?, &registry, base_v);
+        let mut head_found = AstTestCount::default();
+        head_found.add(path, ctx.git.head_content(path)?, &registry, head_v);
+        let tests = head_found.running + head_found.ignored;
+        if base_found.running + base_found.ignored == 0 || tests == 0 {
+            continue;
+        }
+        let still_counted = matches!(
+            check_runner_collected(path, head_v),
+            RunnerCollectionStatus::Unknown(_)
+        );
+        for mechanism in mechanisms {
+            let group = groups.entry(mechanism.clone()).or_insert_with(|| MovedOut {
+                mechanism,
+                files: Vec::new(),
+                still_counted: false,
+            });
+            group.files.push((path.clone(), tests));
+            group.still_counted |= still_counted;
+        }
+    }
+    Ok(groups.into_values().collect())
+}
+
+/// Reports each rule of [`tests_moved_out`] as `Tests Moved Out Of Default Run`, unless
+/// a directive naming the gate or the file that holds the rule lifts it. When a count
+/// finding this run reports already covers the files (`count_reported`, and the files
+/// left the static count with the move), the rule is a note beside that finding instead
+/// of a second finding for one cause.
+fn report_tests_moved_out(
+    ctx: &Context,
+    out: &mut GateOutcome,
+    moved: &[MovedOut],
+    count_reported: bool,
+) {
+    let kind = &crate::findings::TESTS_MOVED_OUT_OF_DEFAULT_RUN;
+    let settings = &ctx.config.gates.test_floor;
+    for group in moved {
+        if count_reported && !group.still_counted {
+            out.notes.push(format!("head: {}", group.message()));
+            continue;
+        }
+        // Only a directive that names the file holding the rule, or one that names the
+        // gate, lifts it: a subject that lifts a count finding (`min_tests`, a changed
+        // test file, a removed test) says nothing about this rule.
+        let lifted = ctx
+            .find_override(GATE, kind, tokens::ALLOW_GATE_WEAKENING, GATE)
+            .or_else(|| {
+                ctx.find_override(GATE, kind, tokens::ALLOW_TEST_SHRINK, &group.mechanism.file)
+            });
+        if let Some(ov) = lifted {
+            out.overrides.push(ov);
+            continue;
+        }
+        out.push(
+            ctx.overridable(settings.severity),
+            kind,
+            Some(&group.mechanism.file),
+            group.mechanism.line,
+            group.message(),
+            "Take the rule back so the default run collects the tests again, or provide an allow-test-shrink: <file> <reason> directive in the PR description naming the file that holds the rule.",
+        );
+        out.anchor_last(format!("moved-out:{}", group.mechanism.key));
+    }
 }
 
 /// An override for the test floor: a directive naming the gate, `min_tests`, a changed
 /// file or a test it removed. `lifts` is the finding the caller would report.
 fn find_test_floor_override(
     ctx: &Context,
+    sides: &SideVocabularies,
     lifts: &crate::findings::FindingKind,
 ) -> Result<Option<crate::tokens::OverrideRecord>> {
     if let Some(ov) = ctx.find_override(GATE, lifts, tokens::ALLOW_GATE_WEAKENING, GATE) {
@@ -628,8 +826,7 @@ fn find_test_floor_override(
     }
     let changed = ctx.git.changed_files()?;
     let registry = crate::ast::default_registry();
-    let base_v = crate::guards::agent_diff::assert_vocabulary_for_base(ctx)?;
-    let head_v = crate::guards::agent_diff::assert_vocabulary_for_head(ctx)?;
+    let (base_v, head_v) = (sides.base()?, sides.head()?);
 
     for cf in &changed {
         if let Some(ov) = ctx.find_override(GATE, lifts, tokens::ALLOW_TEST_SHRINK, &cf.path) {
@@ -655,15 +852,14 @@ fn find_test_floor_override(
 
         if let Some(base_src) = ctx.git.base_content(&cf.old_path)? {
             if let Some(pack) = registry.find_pack(&cf.old_path) {
-                if crate::ast::runner_collection::is_runner_collected(&cf.old_path, &base_v) {
-                    if let Ok(base_facts) = pack.extract(&cf.old_path, &base_src, &base_v) {
+                if crate::ast::runner_collection::is_runner_collected(&cf.old_path, base_v) {
+                    if let Ok(base_facts) = pack.extract(&cf.old_path, &base_src, base_v) {
                         let head_names: std::collections::HashSet<String> = if cf.is_deleted()
-                            || !crate::ast::runner_collection::is_runner_collected(
-                                &cf.path, &head_v,
-                            ) {
+                            || !crate::ast::runner_collection::is_runner_collected(&cf.path, head_v)
+                        {
                             std::collections::HashSet::new()
                         } else if let Some(head_src) = ctx.git.head_content(&cf.path)? {
-                            pack.extract(&cf.path, &head_src, &head_v)
+                            pack.extract(&cf.path, &head_src, head_v)
                                 .map(|f| f.tests.into_iter().map(|t| t.name).collect())
                                 .unwrap_or_default()
                         } else {
@@ -864,9 +1060,9 @@ impl AstTestCount {
 pub fn count_workspace_ast_tests(
     ctx: &Context,
     filter: &crate::guards::PathFilter,
+    v: &crate::ast::AssertVocabulary,
 ) -> Result<AstTestCount> {
     let registry = crate::ast::default_registry();
-    let v = crate::guards::agent_diff::assert_vocabulary_for_head(ctx)?;
     let mut count = AstTestCount::default();
     for path in ctx.git.tracked_files()? {
         if filter.matches(&path) || !registry.is_supported(&path) {
@@ -877,13 +1073,13 @@ pub fn count_workspace_ast_tests(
         if !full.exists() {
             continue;
         }
-        let status = crate::ast::runner_collection::check_runner_collected(&path, &v);
+        let status = crate::ast::runner_collection::check_runner_collected(&path, v);
         count.add_collected(
             &path,
             status,
             || Ok(std::fs::read_to_string(&full).ok()),
             &registry,
-            &v,
+            v,
         )?;
     }
     Ok(count)
@@ -893,16 +1089,16 @@ pub fn count_workspace_ast_tests(
 pub fn count_base_workspace_ast_tests(
     ctx: &Context,
     filter: &crate::guards::PathFilter,
+    v: &crate::ast::AssertVocabulary,
 ) -> Result<AstTestCount> {
     let registry = crate::ast::default_registry();
-    let v = crate::guards::agent_diff::assert_vocabulary_for_base(ctx)?;
     let mut count = AstTestCount::default();
     for path in ctx.git.base_tracked_files()? {
         if filter.matches(&path) || !registry.is_supported(&path) {
             continue;
         }
-        let status = crate::ast::runner_collection::check_runner_collected(&path, &v);
-        count.add_collected(&path, status, || ctx.git.base_content(&path), &registry, &v)?;
+        let status = crate::ast::runner_collection::check_runner_collected(&path, v);
+        count.add_collected(&path, status, || ctx.git.base_content(&path), &registry, v)?;
     }
     Ok(count)
 }
