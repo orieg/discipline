@@ -1611,21 +1611,25 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                     a.agent.id()
                 );
             }
+            let how = discipline::hook::Refresh {
+                upgrade: a.upgrade,
+                force: a.force,
+            };
             let mut results = vec![if a.user {
-                discipline::hook::install_user(a.agent, a.observe, a.upgrade, a.timeout)?
+                discipline::hook::install_user(a.agent, a.observe, how, a.timeout)?
             } else {
                 discipline::hook::install_with(
                     a.agent,
                     &discipline::hook::repo_root()?,
                     a.observe,
-                    a.upgrade,
+                    how,
                     a.timeout,
                 )?
             }];
             if a.agent == discipline::hook::Agent::ClaudeCode && !a.user {
                 results.push(discipline::hook::install_claude_bootstrap_with(
                     &discipline::hook::repo_root()?,
-                    a.upgrade,
+                    how,
                     pin.as_ref(),
                 )?);
             }
@@ -1641,9 +1645,7 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                         hosts.join(", "),
                         discipline::hook::COPILOT_SETUP_STEPS
                     )),
-                    None => results.push(discipline::hook::install_cloud_agent_with(
-                        &root, a.upgrade,
-                    )?),
+                    None => results.push(discipline::hook::install_cloud_agent_with(&root, how)?),
                 }
             }
             let untrusted = (a.agent == discipline::hook::Agent::Copilot && !a.user)
@@ -1663,7 +1665,8 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                     | Installed::AlreadyPresent(p)
                     | Installed::Upgraded(p)
                     | Installed::Outdated(p)
-                    | Installed::ModeDiffers(p),
+                    | Installed::ModeDiffers(p)
+                    | Installed::Forced { path: p, .. },
                 ) => Some(p.clone()),
                 _ => None,
             };
@@ -1723,7 +1726,7 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                     }
                     Installed::ModeUnreadable(p) => {
                         println!(
-                            "{} was written by `discipline hook install` but its mode cannot be read (its observe-mode marker line and the `--observe` flag of its commands disagree); it was not changed. Run this command again with `--upgrade --observe` to rewrite it in observe mode, or delete the file and run `discipline hook install --agent {}` to write an enforcing one",
+                            "{} was written by `discipline hook install` but its mode cannot be read (its observe-mode marker line and the `--observe` flag of its commands disagree); it was not changed. Run this command again with `--upgrade --observe` to rewrite it in observe mode (it then prints the difference, and needs `--force` when the file was changed after it was written), or delete the file and run `discipline hook install --agent {}` to write an enforcing one",
                             p.display(),
                             a.agent.id()
                         );
@@ -1751,6 +1754,60 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
                         );
                         ok = false;
                     }
+                    Installed::Differs(p, why) => {
+                        println!(
+                            "{} {} {}; it differs from what discipline {} writes and was not changed. Run this command again with `--upgrade` to see the difference; `--upgrade --force` overwrites the file",
+                            style::yellow("note:"),
+                            p.display(),
+                            unproven_reason(why),
+                            env!("CARGO_PKG_VERSION")
+                        );
+                    }
+                    Installed::LocalEdits {
+                        path,
+                        why,
+                        diff,
+                        snippet,
+                    } => {
+                        let merges = why == discipline::hook::Unproven::OwnContent;
+                        if let Some(snippet) = snippet {
+                            println!(
+                                "{} exists and was not changed. Merge this into it:\n\n{snippet}",
+                                path.display()
+                            );
+                        }
+                        println!(
+                            "{} {} {}; it was not changed. {}, discarding the lines marked `-` below. Run this command again with `--upgrade --force` to do that{}:\n\n{diff}",
+                            style::red("refused:"),
+                            path.display(),
+                            unproven_reason(why),
+                            if merges {
+                                "`--force` replaces the discipline entries in it with this release's, keeps everything else and re-indents the file"
+                            } else {
+                                "`--force` overwrites it with what this release writes"
+                            },
+                            if why == discipline::hook::Unproven::ShortTimeout {
+                                ", or with `--upgrade --timeout <seconds>` to keep a timeout"
+                            } else {
+                                ""
+                            }
+                        );
+                        ok = false;
+                    }
+                    Installed::Forced { path, why, diff } => {
+                        println!(
+                            "{} {} {} with what discipline {} writes{}. The lines marked `-` below were discarded:\n\n{diff}",
+                            style::green("ok:"),
+                            if why == discipline::hook::Unproven::OwnContent {
+                                "replaced the discipline entries in"
+                            } else {
+                                "overwrote"
+                            },
+                            path.display(),
+                            env!("CARGO_PKG_VERSION"),
+                            mode_of(&path)
+                        );
+                    }
                 }
             }
             if let Some(note) = cloud_note {
@@ -1761,6 +1818,18 @@ fn hook(args: discipline::cli::HookArgs) -> Result<bool> {
             }
             Ok(ok)
         }
+    }
+}
+
+/// Why `hook install` cannot tell an existing file from an edited one, as the clause after
+/// the file's name.
+fn unproven_reason(why: discipline::hook::Unproven) -> &'static str {
+    use discipline::hook::Unproven;
+    match why {
+        Unproven::NoDigest => "has the `hook install` header but carries no digest of its content (an earlier discipline release wrote none), so what that release wrote cannot be told from a later edit",
+        Unproven::Edited => "was changed after `hook install` wrote it (the digest on its `discipline-hook-file:` line does not match its content)",
+        Unproven::OwnContent => "has hooks or settings of its own, and its discipline entries differ from this release's (entries an earlier release wrote cannot be told from edited ones there)",
+        Unproven::ShortTimeout => "has a check timeout below the default, which `hook install` writes only when `--timeout` says so",
     }
 }
 
