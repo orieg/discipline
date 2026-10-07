@@ -10,6 +10,7 @@
 //! Grammar note: the grammar reads Objective-C, not Objective-C++. A `.mm` file whose
 //! C++ constructs it cannot read reports its parse errors like any other file.
 
+use super::ancestry::Ancestry;
 use anyhow::Result;
 use tree_sitter::Node;
 
@@ -75,9 +76,11 @@ impl LanguagePack for ObjcPack {
         let root = tree.root_node();
         let (has_errors, first_line, error_count) = super::collect_error_nodes_info(root);
 
+        let anc = Ancestry::new(root);
         let mut extractor = ObjcExtractor {
             dead: super::reach::dead_ranges(root, src, &OBJC_REACH),
             src: src.as_bytes(),
+            anc: &anc,
             vocab,
             is_test_path: is_objc_test_path(path),
             xctest_classes: Vec::new(),
@@ -95,7 +98,7 @@ impl LanguagePack for ObjcPack {
         extractor.collect_xctest_classes(root);
         extractor.visit_node(root, "");
         extractor.resolve_same_file_helpers();
-        OBJC_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
+        OBJC_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
         super::expected_exceptions::objc(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(root, src, &["comment", "string_literal"]);
         Ok(extractor.facts)
@@ -129,6 +132,8 @@ const XCT_EQUALITY: &[&str] = &[
 struct ObjcExtractor<'a> {
     dead: super::reach::DeadRanges,
     src: &'a [u8],
+    /// The ancestors of the nodes of the file's tree (`super::ancestry`).
+    anc: &'a Ancestry<'a>,
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
     /// Classes declared `@interface X : XCTestCase` in this file.
@@ -149,7 +154,7 @@ impl<'a> ObjcExtractor<'a> {
         node.utf8_text(self.src).unwrap_or("")
     }
 
-    fn first_identifier(&self, node: Node) -> &'a str {
+    fn first_identifier(&self, node: Node<'a>) -> &'a str {
         let mut cursor = node.walk();
         let found = node
             .named_children(&mut cursor)
@@ -160,7 +165,7 @@ impl<'a> ObjcExtractor<'a> {
     }
 
     /// `#pragma clang diagnostic ignored "-W..."` and `// NOLINT...`.
-    fn collect_escape_hatches(&mut self, node: Node) {
+    fn collect_escape_hatches(&mut self, node: Node<'a>) {
         let src = self.src;
         super::collect_comment_suppressions(
             node,
@@ -185,7 +190,7 @@ impl<'a> ObjcExtractor<'a> {
         );
     }
 
-    fn collect_xctest_classes(&mut self, node: Node) {
+    fn collect_xctest_classes(&mut self, node: Node<'a>) {
         if node.kind() == "class_interface" {
             let superclass = node
                 .child_by_field_name("superclass")
@@ -202,7 +207,7 @@ impl<'a> ObjcExtractor<'a> {
         }
     }
 
-    fn visit_node(&mut self, node: Node, class: &str) {
+    fn visit_node(&mut self, node: Node<'a>, class: &str) {
         match node.kind() {
             "class_implementation" => {
                 let name = self.first_identifier(node).to_string();
@@ -224,7 +229,7 @@ impl<'a> ObjcExtractor<'a> {
         }
     }
 
-    fn body(node: Node) -> Option<Node> {
+    fn body(node: Node<'a>) -> Option<Node<'a>> {
         let mut cursor = node.walk();
         let found = node
             .children(&mut cursor)
@@ -232,7 +237,7 @@ impl<'a> ObjcExtractor<'a> {
         found
     }
 
-    fn visit_method(&mut self, node: Node, class: &str) {
+    fn visit_method(&mut self, node: Node<'a>, class: &str) {
         let selector = self.first_identifier(node);
         let mut cursor = node.walk();
         let has_params = node
@@ -264,7 +269,7 @@ impl<'a> ObjcExtractor<'a> {
         }
     }
 
-    fn record_function_helper(&mut self, node: Node) {
+    fn record_function_helper(&mut self, node: Node<'a>) {
         let name = node
             .child_by_field_name("declarator")
             .and_then(|d| d.child_by_field_name("declarator"))
@@ -275,7 +280,7 @@ impl<'a> ObjcExtractor<'a> {
         }
     }
 
-    fn record_helper(&mut self, name: String, node: Node, body: Node) {
+    fn record_helper(&mut self, name: String, node: Node<'a>, body: Node<'a>) {
         let mut helper = TestFn::default();
         let mut dummy = Vec::new();
         self.scan_node(body, &mut helper, &mut dummy);
@@ -314,7 +319,7 @@ impl<'a> ObjcExtractor<'a> {
         a.named_children(&mut cursor).collect()
     }
 
-    fn scan_node(&self, node: Node, test_fn: &mut TestFn, calls: &mut Vec<String>) {
+    fn scan_node(&self, node: Node<'a>, test_fn: &mut TestFn, calls: &mut Vec<String>) {
         if super::reach::is_dead(&self.dead, node.start_byte()) {
             return;
         }
@@ -338,7 +343,7 @@ impl<'a> ObjcExtractor<'a> {
         }
     }
 
-    fn inspect_call(&self, node: Node, test_fn: &mut TestFn, calls: &mut Vec<String>) {
+    fn inspect_call(&self, node: Node<'a>, test_fn: &mut TestFn, calls: &mut Vec<String>) {
         let Some(f) = node.child_by_field_name("function") else {
             return;
         };
@@ -355,7 +360,7 @@ impl<'a> ObjcExtractor<'a> {
                 "XCTSkipUnless" => condition.map(|c| (c, true)),
                 _ => None,
             };
-            test_fn.record_skip(read_skip(Grammar::ObjC, node, own, self.src));
+            test_fn.record_skip(read_skip(Grammar::ObjC, node, self.anc, own, self.src));
             return;
         }
         let args = self.args(node);
@@ -368,6 +373,7 @@ impl<'a> ObjcExtractor<'a> {
                         &mut test_fn.equality_operands,
                         args[0],
                         args[1],
+                        self.anc,
                         self.src,
                     )
                 {
@@ -427,7 +433,7 @@ impl<'a> ObjcExtractor<'a> {
     }
 }
 
-fn objc_fn_is_test(node: Node, src: &str, path: &str) -> bool {
+fn objc_fn_is_test<'t>(node: Node<'t>, _: &Ancestry<'t>, src: &str, path: &str) -> bool {
     let first = {
         let mut cursor = node.walk();
         let found = node

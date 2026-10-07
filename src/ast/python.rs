@@ -1,5 +1,6 @@
 //! Python language pack: tree-sitter AST extraction of tests, assertions, and escape hatches.
 
+use super::ancestry::{Above, Ancestry};
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
@@ -59,9 +60,11 @@ impl LanguagePack for PythonPack {
         let root = tree.root_node();
         crate::ast::source_text::forget_unread_part();
 
+        let anc = Ancestry::new(root);
         let mut extractor = PythonExtractor {
             dead: super::reach::dead_ranges(root, src, &PY_REACH),
             src: src.as_bytes(),
+            anc: &anc,
             vocab,
             is_test_path: is_python_test_path(path),
             pytest_names: super::test_cases::PytestNames::read(root, src.as_bytes()),
@@ -85,11 +88,11 @@ impl LanguagePack for PythonPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
-        PYTHON_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
+        PYTHON_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
         super::bounds::python(root, src, &mut extractor.facts.tests);
         super::expectations::python(root, src, &mut extractor.facts.tests);
-        super::caught_assertions::python(root, src, &mut extractor.facts.tests, vocab);
-        super::expected_exceptions::python(root, src, &mut extractor.facts.tests);
+        super::caught_assertions::python(root, &anc, src, &mut extractor.facts.tests, vocab);
+        super::expected_exceptions::python(root, &anc, src, &mut extractor.facts.tests);
         super::calls::count_python_assert_statements(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(root, src, &["comment", "string"]);
         extractor.facts.budgets = super::budgets::extract(root, src, &PY_BUDGETS);
@@ -116,6 +119,8 @@ struct PythonExtractor<'a> {
     /// Byte ranges no execution reaches (`super::reach`).
     dead: super::reach::DeadRanges,
     src: &'a [u8],
+    /// The ancestors of the nodes of the file's tree (`super::ancestry`).
+    anc: &'a Ancestry<'a>,
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
     /// What the file binds `pytest`, `mark` and `parametrize` to.
@@ -226,9 +231,14 @@ fn python_string_condition(code: &str) -> SkipCondition {
         .filter(|s| s.kind() == "expression_statement" && s.named_child_count() == 1)
         .and_then(|s| s.named_child(0));
     match expression {
-        Some(expression) => {
-            ci_condition::skip_condition(Lang::Python, expression, code.as_bytes(), false)
-        }
+        // The condition has a tree of its own, and so ancestors of its own.
+        Some(expression) => ci_condition::skip_condition(
+            Lang::Python,
+            expression,
+            &Ancestry::new(root),
+            code.as_bytes(),
+            false,
+        ),
         None => undecided,
     }
 }
@@ -263,7 +273,7 @@ impl<'a> PythonExtractor<'a> {
         node.utf8_text(self.src).unwrap_or("")
     }
 
-    fn collect_class_bases(&mut self, node: Node) {
+    fn collect_class_bases(&mut self, node: Node<'a>) {
         if node.kind() == "class_definition" {
             let name = node
                 .child_by_field_name("name")
@@ -376,7 +386,7 @@ impl<'a> PythonExtractor<'a> {
         })
     }
 
-    fn collect_comments_and_escape_hatches(&mut self, node: Node) {
+    fn collect_comments_and_escape_hatches(&mut self, node: Node<'a>) {
         if node.kind() == "comment" {
             let text = self.text(node);
             let line = node.start_position().row + 1;
@@ -434,7 +444,7 @@ impl<'a> PythonExtractor<'a> {
         }
     }
 
-    fn visit_root(&mut self, root: Node) {
+    fn visit_root(&mut self, root: Node<'a>) {
         let mut marks = SkipMarks::default();
         let mut cursor = root.walk();
         for child in root.children(&mut cursor) {
@@ -487,11 +497,8 @@ impl<'a> PythonExtractor<'a> {
         if name.kind() != "identifier" {
             return Vec::new();
         }
-        let mut root = name;
+        let root = self.anc.root();
         let name = self.text(name);
-        while let Some(parent) = root.parent() {
-            root = parent;
-        }
         let mut out = Vec::new();
         let mut cursor = root.walk();
         for statement in root.named_children(&mut cursor) {
@@ -531,7 +538,7 @@ impl<'a> PythonExtractor<'a> {
     }
 
     /// The skip marks of one mark expression (`pytest.mark.skipif(c)`, `pytest.mark.skip`).
-    fn mark_skips(&self, expr: Node, marks: &mut SkipMarks) {
+    fn mark_skips(&self, expr: Node<'a>, marks: &mut SkipMarks) {
         if self.condition_skip(expr, marks) {
             return;
         }
@@ -607,7 +614,7 @@ impl<'a> PythonExtractor<'a> {
     }
 
     /// The last name of a dotted reference: `skipif` in `pytest.mark.skipif`.
-    fn last_name(&self, n: Node) -> Option<&'a str> {
+    fn last_name(&self, n: Node<'a>) -> Option<&'a str> {
         match n.kind() {
             "identifier" => Some(self.text(n)),
             "attribute" => n.child_by_field_name("attribute").map(|a| self.text(a)),
@@ -615,7 +622,7 @@ impl<'a> PythonExtractor<'a> {
         }
     }
 
-    fn callee_name(&self, call: Node) -> Option<&'a str> {
+    fn callee_name(&self, call: Node<'a>) -> Option<&'a str> {
         call.child_by_field_name("function")
             .and_then(|f| self.last_name(f))
     }
@@ -625,7 +632,7 @@ impl<'a> PythonExtractor<'a> {
     /// `pytest.mark.xfail(<condition>, ..)`, which expects the failure only where the
     /// condition holds. Returns whether it is one, with what it does added to `marks`. An
     /// `xfail` that takes no condition is not one.
-    fn condition_skip(&self, expr: Node, marks: &mut SkipMarks) -> bool {
+    fn condition_skip(&self, expr: Node<'a>, marks: &mut SkipMarks) -> bool {
         use super::ci_condition::{self, Lang};
         if expr.kind() != "call" {
             return false;
@@ -674,7 +681,9 @@ impl<'a> PythonExtractor<'a> {
                     SkipCondition::Never
                 }
             }
-            (_, None) => ci_condition::skip_condition(Lang::Python, condition, self.src, negated),
+            (_, None) => {
+                ci_condition::skip_condition(Lang::Python, condition, self.anc, self.src, negated)
+            }
         };
         match outcome {
             SkipCondition::Always => marks.ignored = true,
@@ -691,7 +700,7 @@ impl<'a> PythonExtractor<'a> {
         true
     }
 
-    fn visit_node(&mut self, node: Node, scope: &mut Vec<String>, parent_ignored: bool) {
+    fn visit_node(&mut self, node: Node<'a>, scope: &mut Vec<String>, parent_ignored: bool) {
         match node.kind() {
             "function_definition" => {
                 self.process_function_with_inherited_ignore(node, scope, None, parent_ignored);
@@ -738,9 +747,9 @@ impl<'a> PythonExtractor<'a> {
 
     fn process_class(
         &mut self,
-        node: Node,
+        node: Node<'a>,
         scope: &mut Vec<String>,
-        class_decorators: Option<&[Node]>,
+        class_decorators: Option<&[Node<'a>]>,
         parent_ignored: bool,
     ) {
         let class_name = node
@@ -825,9 +834,9 @@ impl<'a> PythonExtractor<'a> {
 
     fn process_function_with_inherited_ignore(
         &mut self,
-        node: Node,
+        node: Node<'a>,
         scope: &[String],
-        decorators: Option<&[Node]>,
+        decorators: Option<&[Node<'a>]>,
         parent_ignored: bool,
     ) {
         let fn_name = node
@@ -901,15 +910,15 @@ impl<'a> PythonExtractor<'a> {
     /// Early exits under a condition: the first `if` the text rule below accepts, then
     /// every `return` under an `if` (nested and `else` branches included) that a CI
     /// variable is involved in, through a variable, constant or helper of this file.
-    fn record_conditional_early_exits(&self, body: Node, test: &mut TestFn) {
+    fn record_conditional_early_exits(&self, body: Node<'a>, test: &mut TestFn) {
         use super::ci_condition::{self, CiVerdict, Lang};
         if let Some((cond, consequence)) = self.detect_python_conditional_early_exit(body) {
-            let verdict = ci_condition::site(Lang::Python, consequence, self.src)
+            let verdict = ci_condition::site(Lang::Python, consequence, self.anc, self.src)
                 .map_or(CiVerdict::NotCi, |s| s.verdict);
             test.record_conditional_skip(cond, verdict);
         }
         for exit in ci_condition::exits_under_if(body, &|n| n.kind() == "return_statement") {
-            if let Some(site) = ci_condition::site(Lang::Python, exit, self.src) {
+            if let Some(site) = ci_condition::site(Lang::Python, exit, self.anc, self.src) {
                 if site.related {
                     test.record_conditional_skip(site.text, site.verdict);
                 }
@@ -978,7 +987,7 @@ impl<'a> PythonExtractor<'a> {
     /// No other name is special: `self_test()` is a script entry point that
     /// neither runner collects, unless `[tests].functions` declares it, which wins over
     /// every rule above.
-    fn is_collected_test(&self, fn_name: &str, decorators: Option<&[Node]>) -> bool {
+    fn is_collected_test(&self, fn_name: &str, decorators: Option<&[Node<'a>]>) -> bool {
         // A name the repository declares (`[tests].functions`) is its test entry point
         // whatever its spelling: `_self_test` is private by convention, not by rule.
         if self.vocab.test_functions.iter().any(|f| f == fn_name) {
@@ -1028,7 +1037,7 @@ impl<'a> PythonExtractor<'a> {
     }
 
     /// Records a non-test function as a helper a test may call.
-    fn record_helper(&mut self, node: Node, key: String) {
+    fn record_helper(&mut self, node: Node<'a>, key: String) {
         let mut facts = TestFn::default();
         let mut calls = Vec::new();
         if let Some(body) = node.child_by_field_name("body") {
@@ -1061,7 +1070,7 @@ impl<'a> PythonExtractor<'a> {
     /// a module-level function, `self.name(...)` / `cls.name(...)` to a method
     /// of the enclosing class. Calls inside nested `def` / `lambda` bodies are
     /// not collected: defining them runs nothing.
-    fn collect_calls(&self, node: Node, scope: &[String], calls: &mut Vec<String>) {
+    fn collect_calls(&self, node: Node<'a>, scope: &[String], calls: &mut Vec<String>) {
         match node.kind() {
             "function_definition" | "decorated_definition" | "class_definition" | "lambda" => {
                 return;
@@ -1086,8 +1095,9 @@ impl<'a> PythonExtractor<'a> {
             // list, tuple or set runs through the loop; an unknown name resolves
             // to nothing.
             "identifier"
-                if node
-                    .parent()
+                if self
+                    .anc
+                    .parent(node)
                     .is_some_and(|p| matches!(p.kind(), "list" | "tuple" | "set")) =>
             {
                 calls.push(self.text(node).to_string());
@@ -1116,11 +1126,11 @@ impl<'a> PythonExtractor<'a> {
     /// The text of `node` outside its string literals and comments: a mark is looked for
     /// in what the code spells, so a fixture name, a parameter value or a reason that
     /// contains `skip` is not one.
-    fn code_text(&self, node: Node) -> String {
+    fn code_text(&self, node: Node<'a>) -> String {
         super::text_without(node, self.src, PYTHON_NOT_CODE)
     }
 
-    fn is_skip_decorator(&self, dec: Node) -> bool {
+    fn is_skip_decorator(&self, dec: Node<'a>) -> bool {
         let text = self.code_text(dec);
         let text = text.trim();
         text.contains("pytest.mark.skip")
@@ -1134,12 +1144,12 @@ impl<'a> PythonExtractor<'a> {
             || text.starts_with("@pytest.mark.xfail")
     }
 
-    fn is_non_test_decorator(&self, dec: Node) -> bool {
+    fn is_non_test_decorator(&self, dec: Node<'a>) -> bool {
         let text = self.text(dec).trim();
         text.contains("staticmethod") || text.contains("classmethod") || text.contains("property")
     }
 
-    fn scan_test_body(&self, body: Node, test: &mut TestFn, mode: BodyMode) {
+    fn scan_test_body(&self, body: Node<'a>, test: &mut TestFn, mode: BodyMode) {
         let mut cursor = body.walk();
         for child in body.children(&mut cursor) {
             self.visit_body_node(child, test, mode);
@@ -1147,13 +1157,13 @@ impl<'a> PythonExtractor<'a> {
     }
 
     /// Records where the tautologies counted under `node` are (`TestFn::mark_tautologies`).
-    fn visit_body_node(&self, node: Node, test: &mut TestFn, mode: BodyMode) {
+    fn visit_body_node(&self, node: Node<'a>, test: &mut TestFn, mode: BodyMode) {
         let mark = test.tautology_mark();
         self.visit_body_node_unmarked(node, test, mode);
         test.mark_tautologies(mark, node);
     }
 
-    fn visit_body_node_unmarked(&self, node: Node, test: &mut TestFn, mode: BodyMode) {
+    fn visit_body_node_unmarked(&self, node: Node<'a>, test: &mut TestFn, mode: BodyMode) {
         if super::reach::is_dead(&self.dead, node.start_byte()) {
             return;
         }
@@ -1239,11 +1249,12 @@ impl<'a> PythonExtractor<'a> {
                         || func_name == "pytest.xfail"
                         || func_name == "self.skipTest"
                     {
-                        let legacy = enclosing_python_if_condition(node, self.src);
+                        let legacy = enclosing_python_if_condition(node, self.anc, self.src);
                         let constant = matches!(legacy.as_deref(), Some("True" | "1"));
                         let site = super::ci_condition::site(
                             super::ci_condition::Lang::Python,
                             node,
+                            self.anc,
                             self.src,
                         );
                         match super::ci_condition::conditional(legacy, site) {
@@ -1278,7 +1289,7 @@ impl<'a> PythonExtractor<'a> {
         }
     }
 
-    fn is_strong_assertion(&self, cond: Node) -> bool {
+    fn is_strong_assertion(&self, cond: Node<'a>) -> bool {
         match cond.kind() {
             "comparison_operator" => {
                 // Check operator: ==, !=, in, not in, is, is not
@@ -1325,14 +1336,20 @@ impl<'a> PythonExtractor<'a> {
         )
     }
 
-    fn is_tautological(&self, cond: Node, test: &mut TestFn) -> bool {
+    fn is_tautological(&self, cond: Node<'a>, test: &mut TestFn) -> bool {
         let text = self.text(cond).trim();
         if text == "True" || text == "1" || text == "\"\"" || text == "''" {
             return true;
         }
         // `assert x == x` / `assert x is x`: the whole condition is one comparison.
         if let Some((left, right)) = super::self_comparison::equality_sides(cond, self.src) {
-            if super::self_comparison::note(&mut test.equality_operands, left, right, self.src) {
+            if super::self_comparison::note(
+                &mut test.equality_operands,
+                left,
+                right,
+                self.anc,
+                self.src,
+            ) {
                 return true;
             }
         }
@@ -1351,7 +1368,7 @@ impl<'a> PythonExtractor<'a> {
         false
     }
 
-    fn is_tautological_call(&self, call: Node, func_name: &str, test: &mut TestFn) -> bool {
+    fn is_tautological_call(&self, call: Node<'a>, func_name: &str, test: &mut TestFn) -> bool {
         if let Some(args) = call.child_by_field_name("arguments") {
             let mut cursor = args.walk();
             let arg_nodes: Vec<_> = args
@@ -1375,6 +1392,7 @@ impl<'a> PythonExtractor<'a> {
                     &mut test.equality_operands,
                     arg_nodes[0],
                     arg_nodes[1],
+                    self.anc,
                     self.src,
                 )
             {
@@ -1436,9 +1454,13 @@ fn python_block_calls_skip(consequence: Node, src: &[u8]) -> bool {
     false
 }
 
-fn enclosing_python_if_condition(node: Node, src: &[u8]) -> Option<String> {
+fn enclosing_python_if_condition<'t>(
+    node: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &[u8],
+) -> Option<String> {
     let mut cur = node;
-    while let Some(p) = cur.parent() {
+    while let Some(p) = anc.parent(cur) {
         match p.kind() {
             "function_definition" | "lambda" => return None,
             "if_statement" => {
@@ -1459,9 +1481,9 @@ fn enclosing_python_if_condition(node: Node, src: &[u8]) -> Option<String> {
 
 /// Abstract methods, overload signatures, Protocol members and `.pyi` stubs are
 /// declarations, not bodies to judge.
-fn python_fn_skip(node: tree_sitter::Node, src: &str) -> bool {
+fn python_fn_skip<'t>(node: tree_sitter::Node<'t>, anc: &Ancestry<'t>, src: &str) -> bool {
     let t = |n: tree_sitter::Node| n.utf8_text(src.as_bytes()).unwrap_or("");
-    if let Some(parent) = node.parent() {
+    if let Some(parent) = anc.parent(node) {
         if parent.kind() == "decorated_definition" {
             let mut cursor = parent.walk();
             for child in parent.children(&mut cursor) {
@@ -1482,41 +1504,39 @@ fn python_fn_skip(node: tree_sitter::Node, src: &str) -> bool {
         .map(t)
         .unwrap_or("")
         .to_string();
-    let mut cur = node.parent();
-    while let Some(p) = cur {
-        if p.kind() == "class_definition" {
-            if let Some(sup) = p.child_by_field_name("superclasses") {
-                let s = t(sup);
-                if s.contains("Protocol")
-                    || s.contains("TypedDict")
-                    || s.contains("NamedTuple")
-                    || s.contains("ABC")
-                {
-                    return true;
-                }
-            }
-            // A base class whose method a same-file subclass overrides: the stub is the
-            // abstract contract, not an unimplemented function.
-            let class_name = p.child_by_field_name("name").map(t).unwrap_or("");
-            if !class_name.is_empty() && overridden_in_subclass(p, class_name, &fn_name, src) {
+    let mut below = node;
+    while let Some((p, _)) = anc.nearest(below, Above::PythonClass, |above, _| {
+        above.kind() == "class_definition"
+    }) {
+        if let Some(sup) = p.child_by_field_name("superclasses") {
+            let s = t(sup);
+            if s.contains("Protocol")
+                || s.contains("TypedDict")
+                || s.contains("NamedTuple")
+                || s.contains("ABC")
+            {
                 return true;
             }
         }
-        cur = p.parent();
+        // A base class whose method a same-file subclass overrides: the stub is the
+        // abstract contract, not an unimplemented function.
+        let class_name = p.child_by_field_name("name").map(t).unwrap_or("");
+        if !class_name.is_empty() && overridden_in_subclass(p, anc, class_name, &fn_name, src) {
+            return true;
+        }
+        below = p;
     }
     false
 }
 
-fn overridden_in_subclass(
-    class: tree_sitter::Node,
+fn overridden_in_subclass<'t>(
+    class: tree_sitter::Node<'t>,
+    anc: &Ancestry<'t>,
     class_name: &str,
     method: &str,
     src: &str,
 ) -> bool {
-    let mut root = class;
-    while let Some(p) = root.parent() {
-        root = p;
-    }
+    let root = anc.root();
     let t = |n: tree_sitter::Node| n.utf8_text(src.as_bytes()).unwrap_or("");
     let mut stack = vec![root];
     while let Some(n) = stack.pop() {
@@ -1553,7 +1573,12 @@ fn overridden_in_subclass(
     false
 }
 
-fn python_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
+fn python_fn_is_test<'t>(
+    node: tree_sitter::Node<'t>,
+    _: &Ancestry<'t>,
+    src: &str,
+    path: &str,
+) -> bool {
     if path.ends_with(".pyi") {
         return true;
     }

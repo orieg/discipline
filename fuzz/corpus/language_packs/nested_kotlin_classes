@@ -1,0 +1,600 @@
+.class C0 { @Test fun t0() { assertEquals(1, a()) }
+class C1 { @Test fun t1() { assertEquals(1, a()) }
+class C2 { @Test fun t2() { assertEquals(1, a()) }
+class C3 { @Test fun t3() { assertEquals(1, a()) }
+class C4 { @Test fun t4() { assertEquals(1, a()) }
+class C5 { @Test fun t5() { assertEquals(1, a()) }
+class C6 { @Test fun t6() { assertEquals(1, a()) }
+class C7 { @Test fun t7() { assertEquals(1, a()) }
+class C8 { @Test fun t8() { assertEquals(1, a()) }
+class C9 { @Test fun t9() { assertEquals(1, a()) }
+class C10 { @Test fun t10() { assertEquals(1, a()) }
+class C11 { @Test fun t11() { assertEquals(1, a()) }
+class C12 { @Test fun t12() { assertEquals(1, a()) }
+class C13 { @Test fun t13() { assertEquals(1, a()) }
+class C14 { @Test fun t14() { assertEquals(1, a()) }
+class C15 { @Test fun t15() { assertEquals(1, a()) }
+class C16 { @Test fun t16() { assertEquals(1, a()) }
+class C17 { @Test fun t17() { assertEquals(1, a()) }
+class C18 { @Test fun t18() { assertEquals(1, a()) }
+class C19 { @Test fun t19() { assertEquals(1, a()) }
+class C20 { @Test fun t20() { assertEquals(1, a()) }
+class C21 { @Test fun t21() { assertEquals(1, a()) }
+class C22 { @Test fun t22() { assertEquals(1, a()) }
+class C23 { @Test fun t23() { assertEquals(1, a()) }
+class C24 { @Test fun t24() { assertEquals(1, a()) }
+class C25 { @Test fun t25() { assertEquals(1, a()) }
+class C26 { @Test fun t26() { assertEquals(1, a()) }
+class C27 { @Test fun t27() { assertEquals(1, a()) }
+class C28 { @Test fun t28() { assertEquals(1, a()) }
+class C29 { @Test fun t29() { assertEquals(1, a()) }
+class C30 { @Test fun t30() { assertEquals(1, a()) }
+class C31 { @Test fun t31() { assertEquals(1, a()) }
+class C32 { @Test fun t32() { assertEquals(1, a()) }
+class C33 { @Test fun t33() { assertEquals(1, a()) }
+class C34 { @Test fun t34() { assertEquals(1, a()) }
+class C35 { @Test fun t35() { assertEquals(1, a()) }
+class C36 { @Test fun t36() { assertEquals(1, a()) }
+class C37 { @Test fun t37() { assertEquals(1, a()) }
+class C38 { @Test fun t38() { assertEquals(1, a()) }
+class C39 { @Test fun t39() { assertEquals(1, a()) }
+class C40 { @Test fun t40() { assertEquals(1, a()) }
+class C41 { @Test fun t41() { assertEquals(1, a()) }
+class C42 { @Test fun t42() { assertEquals(1, a()) }
+class C43 { @Test fun t43() { assertEquals(1, a()) }
+class C44 { @Test fun t44() { assertEquals(1, a()) }
+class C45 { @Test fun t45() { assertEquals(1, a()) }
+class C46 { @Test fun t46() { assertEquals(1, a()) }
+class C47 { @Test fun t47() { assertEquals(1, a()) }
+class C48 { @Test fun t48() { assertEquals(1, a()) }
+class C49 { @Test fun t49() { assertEquals(1, a()) }
+class C50 { @Test fun t50() { assertEquals(1, a()) }
+class C51 { @Test fun t51() { assertEquals(1, a()) }
+class C52 { @Test fun t52() { assertEquals(1, a()) }
+class C53 { @Test fun t53() { assertEquals(1, a()) }
+class C54 { @Test fun t54() { assertEquals(1, a()) }
+class C55 { @Test fun t55() { assertEquals(1, a()) }
+class C56 { @Test fun t56() { assertEquals(1, a()) }
+class C57 { @Test fun t57() { assertEquals(1, a()) }
+class C58 { @Test fun t58() { assertEquals(1, a()) }
+class C59 { @Test fun t59() { assertEquals(1, a()) }
+class C60 { @Test fun t60() { assertEquals(1, a()) }
+class C61 { @Test fun t61() { assertEquals(1, a()) }
+class C62 { @Test fun t62() { assertEquals(1, a()) }
+class C63 { @Test fun t63() { assertEquals(1, a()) }
+class C64 { @Test fun t64() { assertEquals(1, a()) }
+class C65 { @Test fun t65() { assertEquals(1, a()) }
+class C66 { @Test fun t66() { assertEquals(1, a()) }
+class C67 { @Test fun t67() { assertEquals(1, a()) }
+class C68 { @Test fun t68() { assertEquals(1, a()) }
+class C69 { @Test fun t69() { assertEquals(1, a()) }
+class C70 { @Test fun t70() { assertEquals(1, a()) }
+class C71 { @Test fun t71() { assertEquals(1, a()) }
+class C72 { @Test fun t72() { assertEquals(1, a()) }
+class C73 { @Test fun t73() { assertEquals(1, a()) }
+class C74 { @Test fun t74() { assertEquals(1, a()) }
+class C75 { @Test fun t75() { assertEquals(1, a()) }
+class C76 { @Test fun t76() { assertEquals(1, a()) }
+class C77 { @Test fun t77() { assertEquals(1, a()) }
+class C78 { @Test fun t78() { assertEquals(1, a()) }
+class C79 { @Test fun t79() { assertEquals(1, a()) }
+class C80 { @Test fun t80() { assertEquals(1, a()) }
+class C81 { @Test fun t81() { assertEquals(1, a()) }
+class C82 { @Test fun t82() { assertEquals(1, a()) }
+class C83 { @Test fun t83() { assertEquals(1, a()) }
+class C84 { @Test fun t84() { assertEquals(1, a()) }
+class C85 { @Test fun t85() { assertEquals(1, a()) }
+class C86 { @Test fun t86() { assertEquals(1, a()) }
+class C87 { @Test fun t87() { assertEquals(1, a()) }
+class C88 { @Test fun t88() { assertEquals(1, a()) }
+class C89 { @Test fun t89() { assertEquals(1, a()) }
+class C90 { @Test fun t90() { assertEquals(1, a()) }
+class C91 { @Test fun t91() { assertEquals(1, a()) }
+class C92 { @Test fun t92() { assertEquals(1, a()) }
+class C93 { @Test fun t93() { assertEquals(1, a()) }
+class C94 { @Test fun t94() { assertEquals(1, a()) }
+class C95 { @Test fun t95() { assertEquals(1, a()) }
+class C96 { @Test fun t96() { assertEquals(1, a()) }
+class C97 { @Test fun t97() { assertEquals(1, a()) }
+class C98 { @Test fun t98() { assertEquals(1, a()) }
+class C99 { @Test fun t99() { assertEquals(1, a()) }
+class C100 { @Test fun t100() { assertEquals(1, a()) }
+class C101 { @Test fun t101() { assertEquals(1, a()) }
+class C102 { @Test fun t102() { assertEquals(1, a()) }
+class C103 { @Test fun t103() { assertEquals(1, a()) }
+class C104 { @Test fun t104() { assertEquals(1, a()) }
+class C105 { @Test fun t105() { assertEquals(1, a()) }
+class C106 { @Test fun t106() { assertEquals(1, a()) }
+class C107 { @Test fun t107() { assertEquals(1, a()) }
+class C108 { @Test fun t108() { assertEquals(1, a()) }
+class C109 { @Test fun t109() { assertEquals(1, a()) }
+class C110 { @Test fun t110() { assertEquals(1, a()) }
+class C111 { @Test fun t111() { assertEquals(1, a()) }
+class C112 { @Test fun t112() { assertEquals(1, a()) }
+class C113 { @Test fun t113() { assertEquals(1, a()) }
+class C114 { @Test fun t114() { assertEquals(1, a()) }
+class C115 { @Test fun t115() { assertEquals(1, a()) }
+class C116 { @Test fun t116() { assertEquals(1, a()) }
+class C117 { @Test fun t117() { assertEquals(1, a()) }
+class C118 { @Test fun t118() { assertEquals(1, a()) }
+class C119 { @Test fun t119() { assertEquals(1, a()) }
+class C120 { @Test fun t120() { assertEquals(1, a()) }
+class C121 { @Test fun t121() { assertEquals(1, a()) }
+class C122 { @Test fun t122() { assertEquals(1, a()) }
+class C123 { @Test fun t123() { assertEquals(1, a()) }
+class C124 { @Test fun t124() { assertEquals(1, a()) }
+class C125 { @Test fun t125() { assertEquals(1, a()) }
+class C126 { @Test fun t126() { assertEquals(1, a()) }
+class C127 { @Test fun t127() { assertEquals(1, a()) }
+class C128 { @Test fun t128() { assertEquals(1, a()) }
+class C129 { @Test fun t129() { assertEquals(1, a()) }
+class C130 { @Test fun t130() { assertEquals(1, a()) }
+class C131 { @Test fun t131() { assertEquals(1, a()) }
+class C132 { @Test fun t132() { assertEquals(1, a()) }
+class C133 { @Test fun t133() { assertEquals(1, a()) }
+class C134 { @Test fun t134() { assertEquals(1, a()) }
+class C135 { @Test fun t135() { assertEquals(1, a()) }
+class C136 { @Test fun t136() { assertEquals(1, a()) }
+class C137 { @Test fun t137() { assertEquals(1, a()) }
+class C138 { @Test fun t138() { assertEquals(1, a()) }
+class C139 { @Test fun t139() { assertEquals(1, a()) }
+class C140 { @Test fun t140() { assertEquals(1, a()) }
+class C141 { @Test fun t141() { assertEquals(1, a()) }
+class C142 { @Test fun t142() { assertEquals(1, a()) }
+class C143 { @Test fun t143() { assertEquals(1, a()) }
+class C144 { @Test fun t144() { assertEquals(1, a()) }
+class C145 { @Test fun t145() { assertEquals(1, a()) }
+class C146 { @Test fun t146() { assertEquals(1, a()) }
+class C147 { @Test fun t147() { assertEquals(1, a()) }
+class C148 { @Test fun t148() { assertEquals(1, a()) }
+class C149 { @Test fun t149() { assertEquals(1, a()) }
+class C150 { @Test fun t150() { assertEquals(1, a()) }
+class C151 { @Test fun t151() { assertEquals(1, a()) }
+class C152 { @Test fun t152() { assertEquals(1, a()) }
+class C153 { @Test fun t153() { assertEquals(1, a()) }
+class C154 { @Test fun t154() { assertEquals(1, a()) }
+class C155 { @Test fun t155() { assertEquals(1, a()) }
+class C156 { @Test fun t156() { assertEquals(1, a()) }
+class C157 { @Test fun t157() { assertEquals(1, a()) }
+class C158 { @Test fun t158() { assertEquals(1, a()) }
+class C159 { @Test fun t159() { assertEquals(1, a()) }
+class C160 { @Test fun t160() { assertEquals(1, a()) }
+class C161 { @Test fun t161() { assertEquals(1, a()) }
+class C162 { @Test fun t162() { assertEquals(1, a()) }
+class C163 { @Test fun t163() { assertEquals(1, a()) }
+class C164 { @Test fun t164() { assertEquals(1, a()) }
+class C165 { @Test fun t165() { assertEquals(1, a()) }
+class C166 { @Test fun t166() { assertEquals(1, a()) }
+class C167 { @Test fun t167() { assertEquals(1, a()) }
+class C168 { @Test fun t168() { assertEquals(1, a()) }
+class C169 { @Test fun t169() { assertEquals(1, a()) }
+class C170 { @Test fun t170() { assertEquals(1, a()) }
+class C171 { @Test fun t171() { assertEquals(1, a()) }
+class C172 { @Test fun t172() { assertEquals(1, a()) }
+class C173 { @Test fun t173() { assertEquals(1, a()) }
+class C174 { @Test fun t174() { assertEquals(1, a()) }
+class C175 { @Test fun t175() { assertEquals(1, a()) }
+class C176 { @Test fun t176() { assertEquals(1, a()) }
+class C177 { @Test fun t177() { assertEquals(1, a()) }
+class C178 { @Test fun t178() { assertEquals(1, a()) }
+class C179 { @Test fun t179() { assertEquals(1, a()) }
+class C180 { @Test fun t180() { assertEquals(1, a()) }
+class C181 { @Test fun t181() { assertEquals(1, a()) }
+class C182 { @Test fun t182() { assertEquals(1, a()) }
+class C183 { @Test fun t183() { assertEquals(1, a()) }
+class C184 { @Test fun t184() { assertEquals(1, a()) }
+class C185 { @Test fun t185() { assertEquals(1, a()) }
+class C186 { @Test fun t186() { assertEquals(1, a()) }
+class C187 { @Test fun t187() { assertEquals(1, a()) }
+class C188 { @Test fun t188() { assertEquals(1, a()) }
+class C189 { @Test fun t189() { assertEquals(1, a()) }
+class C190 { @Test fun t190() { assertEquals(1, a()) }
+class C191 { @Test fun t191() { assertEquals(1, a()) }
+class C192 { @Test fun t192() { assertEquals(1, a()) }
+class C193 { @Test fun t193() { assertEquals(1, a()) }
+class C194 { @Test fun t194() { assertEquals(1, a()) }
+class C195 { @Test fun t195() { assertEquals(1, a()) }
+class C196 { @Test fun t196() { assertEquals(1, a()) }
+class C197 { @Test fun t197() { assertEquals(1, a()) }
+class C198 { @Test fun t198() { assertEquals(1, a()) }
+class C199 { @Test fun t199() { assertEquals(1, a()) }
+class C200 { @Test fun t200() { assertEquals(1, a()) }
+class C201 { @Test fun t201() { assertEquals(1, a()) }
+class C202 { @Test fun t202() { assertEquals(1, a()) }
+class C203 { @Test fun t203() { assertEquals(1, a()) }
+class C204 { @Test fun t204() { assertEquals(1, a()) }
+class C205 { @Test fun t205() { assertEquals(1, a()) }
+class C206 { @Test fun t206() { assertEquals(1, a()) }
+class C207 { @Test fun t207() { assertEquals(1, a()) }
+class C208 { @Test fun t208() { assertEquals(1, a()) }
+class C209 { @Test fun t209() { assertEquals(1, a()) }
+class C210 { @Test fun t210() { assertEquals(1, a()) }
+class C211 { @Test fun t211() { assertEquals(1, a()) }
+class C212 { @Test fun t212() { assertEquals(1, a()) }
+class C213 { @Test fun t213() { assertEquals(1, a()) }
+class C214 { @Test fun t214() { assertEquals(1, a()) }
+class C215 { @Test fun t215() { assertEquals(1, a()) }
+class C216 { @Test fun t216() { assertEquals(1, a()) }
+class C217 { @Test fun t217() { assertEquals(1, a()) }
+class C218 { @Test fun t218() { assertEquals(1, a()) }
+class C219 { @Test fun t219() { assertEquals(1, a()) }
+class C220 { @Test fun t220() { assertEquals(1, a()) }
+class C221 { @Test fun t221() { assertEquals(1, a()) }
+class C222 { @Test fun t222() { assertEquals(1, a()) }
+class C223 { @Test fun t223() { assertEquals(1, a()) }
+class C224 { @Test fun t224() { assertEquals(1, a()) }
+class C225 { @Test fun t225() { assertEquals(1, a()) }
+class C226 { @Test fun t226() { assertEquals(1, a()) }
+class C227 { @Test fun t227() { assertEquals(1, a()) }
+class C228 { @Test fun t228() { assertEquals(1, a()) }
+class C229 { @Test fun t229() { assertEquals(1, a()) }
+class C230 { @Test fun t230() { assertEquals(1, a()) }
+class C231 { @Test fun t231() { assertEquals(1, a()) }
+class C232 { @Test fun t232() { assertEquals(1, a()) }
+class C233 { @Test fun t233() { assertEquals(1, a()) }
+class C234 { @Test fun t234() { assertEquals(1, a()) }
+class C235 { @Test fun t235() { assertEquals(1, a()) }
+class C236 { @Test fun t236() { assertEquals(1, a()) }
+class C237 { @Test fun t237() { assertEquals(1, a()) }
+class C238 { @Test fun t238() { assertEquals(1, a()) }
+class C239 { @Test fun t239() { assertEquals(1, a()) }
+class C240 { @Test fun t240() { assertEquals(1, a()) }
+class C241 { @Test fun t241() { assertEquals(1, a()) }
+class C242 { @Test fun t242() { assertEquals(1, a()) }
+class C243 { @Test fun t243() { assertEquals(1, a()) }
+class C244 { @Test fun t244() { assertEquals(1, a()) }
+class C245 { @Test fun t245() { assertEquals(1, a()) }
+class C246 { @Test fun t246() { assertEquals(1, a()) }
+class C247 { @Test fun t247() { assertEquals(1, a()) }
+class C248 { @Test fun t248() { assertEquals(1, a()) }
+class C249 { @Test fun t249() { assertEquals(1, a()) }
+class C250 { @Test fun t250() { assertEquals(1, a()) }
+class C251 { @Test fun t251() { assertEquals(1, a()) }
+class C252 { @Test fun t252() { assertEquals(1, a()) }
+class C253 { @Test fun t253() { assertEquals(1, a()) }
+class C254 { @Test fun t254() { assertEquals(1, a()) }
+class C255 { @Test fun t255() { assertEquals(1, a()) }
+class C256 { @Test fun t256() { assertEquals(1, a()) }
+class C257 { @Test fun t257() { assertEquals(1, a()) }
+class C258 { @Test fun t258() { assertEquals(1, a()) }
+class C259 { @Test fun t259() { assertEquals(1, a()) }
+class C260 { @Test fun t260() { assertEquals(1, a()) }
+class C261 { @Test fun t261() { assertEquals(1, a()) }
+class C262 { @Test fun t262() { assertEquals(1, a()) }
+class C263 { @Test fun t263() { assertEquals(1, a()) }
+class C264 { @Test fun t264() { assertEquals(1, a()) }
+class C265 { @Test fun t265() { assertEquals(1, a()) }
+class C266 { @Test fun t266() { assertEquals(1, a()) }
+class C267 { @Test fun t267() { assertEquals(1, a()) }
+class C268 { @Test fun t268() { assertEquals(1, a()) }
+class C269 { @Test fun t269() { assertEquals(1, a()) }
+class C270 { @Test fun t270() { assertEquals(1, a()) }
+class C271 { @Test fun t271() { assertEquals(1, a()) }
+class C272 { @Test fun t272() { assertEquals(1, a()) }
+class C273 { @Test fun t273() { assertEquals(1, a()) }
+class C274 { @Test fun t274() { assertEquals(1, a()) }
+class C275 { @Test fun t275() { assertEquals(1, a()) }
+class C276 { @Test fun t276() { assertEquals(1, a()) }
+class C277 { @Test fun t277() { assertEquals(1, a()) }
+class C278 { @Test fun t278() { assertEquals(1, a()) }
+class C279 { @Test fun t279() { assertEquals(1, a()) }
+class C280 { @Test fun t280() { assertEquals(1, a()) }
+class C281 { @Test fun t281() { assertEquals(1, a()) }
+class C282 { @Test fun t282() { assertEquals(1, a()) }
+class C283 { @Test fun t283() { assertEquals(1, a()) }
+class C284 { @Test fun t284() { assertEquals(1, a()) }
+class C285 { @Test fun t285() { assertEquals(1, a()) }
+class C286 { @Test fun t286() { assertEquals(1, a()) }
+class C287 { @Test fun t287() { assertEquals(1, a()) }
+class C288 { @Test fun t288() { assertEquals(1, a()) }
+class C289 { @Test fun t289() { assertEquals(1, a()) }
+class C290 { @Test fun t290() { assertEquals(1, a()) }
+class C291 { @Test fun t291() { assertEquals(1, a()) }
+class C292 { @Test fun t292() { assertEquals(1, a()) }
+class C293 { @Test fun t293() { assertEquals(1, a()) }
+class C294 { @Test fun t294() { assertEquals(1, a()) }
+class C295 { @Test fun t295() { assertEquals(1, a()) }
+class C296 { @Test fun t296() { assertEquals(1, a()) }
+class C297 { @Test fun t297() { assertEquals(1, a()) }
+class C298 { @Test fun t298() { assertEquals(1, a()) }
+class C299 { @Test fun t299() { assertEquals(1, a()) }
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}

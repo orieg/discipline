@@ -9,6 +9,7 @@
 //! skeleton, kind, exception type, and matcher. `assertion-reduction` pairs the base and
 //! head expectations of one test ([`widened`]) and reports the ones that accept more.
 
+use super::ancestry::Ancestry;
 use super::bounds::{text, walk};
 use super::exception_tables::{self as tables, Hierarchy};
 use super::TestFn;
@@ -1168,7 +1169,7 @@ fn parse_rust_matcher(text: &str) -> Option<String> {
 /// Python: `pytest.raises(...)` (in a `with` statement or as a call), `raises(...)` when
 /// the file imports it from pytest, and `self.assertRaises(...)` / `assertRaisesRegex` /
 /// `assertWarns` / `assertWarnsRegex`.
-pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
+pub fn python<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
     }
@@ -1198,7 +1199,7 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
             "call" => {
                 // Standalone calls like self.assertRaises(ValueError, f, -1). The context
                 // manager of a `with` item, bound with `as` or not, is read above.
-                if !is_python_with_item_value(node) {
+                if !is_python_with_item_value(node, anc) {
                     inspect_python_standalone_call(node, src, bare, tests);
                 }
                 true
@@ -1252,14 +1253,14 @@ fn python_bare(root: Node, src: &str, wanted: &str) -> Vec<String> {
 
 /// Whether `call` is the context manager of a `with` item: its value, or the value an
 /// `as` binding wraps (`with f() as e:` parses as `with_item > as_pattern > call`).
-fn is_python_with_item_value(call: Node) -> bool {
-    let Some(parent) = call.parent() else {
+fn is_python_with_item_value<'t>(call: Node<'t>, anc: &Ancestry<'t>) -> bool {
+    let Some(parent) = anc.parent(call) else {
         return false;
     };
     match parent.kind() {
         "with_item" => true,
         "as_pattern" => {
-            parent.parent().is_some_and(|g| g.kind() == "with_item")
+            anc.parent(parent).is_some_and(|g| g.kind() == "with_item")
                 && parent.named_child(0).is_some_and(|c| c.id() == call.id())
         }
         _ => false,
@@ -1579,11 +1580,11 @@ fn js_name_is_class(name: &str) -> bool {
 /// JavaScript / TypeScript: `expect(...).toThrow(...)` and `.toThrowError(...)` with their
 /// `.not` forms, Chai's `expect(...).to.throw(...)`, and `assert.throws(...)` /
 /// `assert.rejects(...)` / `assert.doesNotThrow(...)` of Node's `assert` and of Chai.
-pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
+pub fn javascript<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
     }
-    let modules = js_bindings(root, src);
+    let modules = js_bindings(root, anc, src);
     walk(root, &mut |node| {
         if node.kind() != "call_expression" {
             return true;
@@ -1635,7 +1636,11 @@ pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
 
 /// The module each name of the file is bound to by an `import` or a `require`:
 /// `(local name, module)`.
-pub(super) fn js_bindings(root: Node, src: &str) -> Vec<(String, String)> {
+pub(super) fn js_bindings<'t>(
+    root: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     walk(root, &mut |node| match node.kind() {
         "import_statement" => {
@@ -1646,7 +1651,7 @@ pub(super) fn js_bindings(root: Node, src: &str) -> Vec<(String, String)> {
                 walk(node, &mut |n| match n.kind() {
                     // `import x from`, `import * as x from`: the bound identifier.
                     "identifier"
-                        if n.parent().is_some_and(|p| {
+                        if anc.parent(n).is_some_and(|p| {
                             matches!(p.kind(), "import_clause" | "namespace_import")
                         }) =>
                     {
@@ -2009,7 +2014,7 @@ fn inspect_js_assert(node: Node, method: &str, library: JsAssert, src: &str, tes
 /// Java: `assertThrows(...)`, `assertThrowsExactly(...)`, `@Test(expected = ...)`, and
 /// AssertJ's `assertThatThrownBy(..)`, `assertThatExceptionOfType(..)` and
 /// `assertThatCode(..)` chains.
-pub fn java(root: Node, src: &str, tests: &mut [TestFn]) {
+pub fn java<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
     }
@@ -2042,11 +2047,11 @@ pub fn java(root: Node, src: &str, tests: &mut [TestFn]) {
                     "assertThatThrownBy" | "assertThatExceptionOfType" | "assertThatCode"
                 ) || assertj_typed_entry(name_text).is_some()
                 {
-                    inspect_java_assertj(node, name_text, src, tests);
+                    inspect_java_assertj(node, anc, name_text, src, tests);
                     return true;
                 }
                 if matches!(name_text, "catchThrowable" | "catchThrowableOfType") {
-                    inspect_java_catch_throwable(node, src, tests);
+                    inspect_java_catch_throwable(node, anc, src, tests);
                     return true;
                 }
                 if name_text != "assertThrows" && name_text != "assertThrowsExactly" {
@@ -2097,10 +2102,14 @@ pub fn java(root: Node, src: &str, tests: &mut [TestFn]) {
 
 /// The calls chained on `root`, innermost first: each is `(method name, arguments)` of a
 /// `method_invocation` whose object is the call before it.
-fn java_chain<'t>(root: Node<'t>, src: &'t str) -> Vec<(&'t str, Option<Node<'t>>)> {
+fn java_chain<'t, 's>(
+    root: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &'s str,
+) -> Vec<(&'s str, Option<Node<'t>>)> {
     let mut links = Vec::new();
     let mut link = root;
-    while let Some(outer) = link.parent().filter(|p| {
+    while let Some(outer) = anc.parent(link).filter(|p| {
         p.kind() == "method_invocation"
             && p.child_by_field_name("object")
                 .is_some_and(|o| o.id() == link.id())
@@ -2147,7 +2156,13 @@ fn assertj_typed_entry(name: &str) -> Option<&'static str> {
 /// `.withMessageContaining(..)`, also from a typed entry point ([`assertj_typed_entry`]);
 /// and `assertThatCode(code).doesNotThrowAnyException()`, which states that nothing is
 /// thrown.
-fn inspect_java_assertj(root: Node, entry: &str, src: &str, tests: &mut [TestFn]) {
+fn inspect_java_assertj<'t>(
+    root: Node<'t>,
+    anc: &Ancestry<'t>,
+    entry: &str,
+    src: &str,
+    tests: &mut [TestFn],
+) {
     let typed = assertj_typed_entry(entry);
     let entry = if typed.is_some() {
         "assertThatExceptionOfType"
@@ -2155,7 +2170,7 @@ fn inspect_java_assertj(root: Node, entry: &str, src: &str, tests: &mut [TestFn]
         entry
     };
     let args = root.child_by_field_name("arguments");
-    let links = java_chain(root, src);
+    let links = java_chain(root, anc, src);
     let mut constraint = AssertjConstraint::default();
     let mut code = args.map_or("", |a| text(a, src)).to_string();
     if entry == "assertThatExceptionOfType" {
@@ -2261,8 +2276,13 @@ impl AssertjConstraint {
 /// `assertThat(thrown).isInstanceOf(X.class).hasMessage("..")`. The call alone returns
 /// `null` when nothing is thrown, so it is an expectation only beside an `assertThat` on
 /// the value it is bound to.
-fn inspect_java_catch_throwable(call: Node, src: &str, tests: &mut [TestFn]) {
-    let bound = call.parent().and_then(|p| match p.kind() {
+fn inspect_java_catch_throwable<'t>(
+    call: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    tests: &mut [TestFn],
+) {
+    let bound = anc.parent(call).and_then(|p| match p.kind() {
         "variable_declarator" => p.child_by_field_name("name"),
         "assignment_expression" => p.child_by_field_name("left"),
         _ => None,
@@ -2286,7 +2306,7 @@ fn inspect_java_catch_throwable(call: Node, src: &str, tests: &mut [TestFn]) {
         ..Default::default()
     };
     let mut method = call;
-    while let Some(parent) = method.parent() {
+    while let Some(parent) = anc.parent(method) {
         method = parent;
         if method.kind() == "method_declaration" {
             break;
@@ -2306,7 +2326,7 @@ fn inspect_java_catch_throwable(call: Node, src: &str, tests: &mut [TestFn]) {
             });
         if on_value {
             asserted = true;
-            for (name, link_args) in java_chain(node, src) {
+            for (name, link_args) in java_chain(node, anc, src) {
                 constraint.read(name, link_args, src);
             }
         }
@@ -2422,7 +2442,7 @@ fn csharp_framework(root: Node, src: &str) -> Option<CsharpFramework> {
 /// exact, `typeof` and MSTest spellings, and FluentAssertions' `.Should().Throw<...>()`.
 /// A call is an expected exception only as a member of an assertion class or of a
 /// `Should()` chain: `mock.Setup(..).Throws(..)` configures a double and asserts nothing.
-pub fn csharp(root: Node, src: &str, tests: &mut [TestFn]) {
+pub fn csharp<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
     }
@@ -2468,7 +2488,7 @@ pub fn csharp(root: Node, src: &str, tests: &mut [TestFn]) {
         };
         let (method, type_args) = csharp_member(name);
         if let Some(subject) = csharp_should_subject(receiver, src) {
-            inspect_csharp_fluent(node, subject, text(method, src), type_args, src, tests);
+            inspect_csharp_fluent(node, anc, subject, text(method, src), type_args, src, tests);
             return true;
         }
         if !is_csharp_assert_class(receiver, src) {
@@ -2715,8 +2735,9 @@ fn csharp_should_subject<'t>(receiver: Node<'t>, src: &str) -> Option<Node<'t>> 
 
 /// `act.Should().Throw<T>()` and `.ThrowExactly<T>()`, with the `.WithMessage(..)` that
 /// follows in the same chain.
-fn inspect_csharp_fluent(
-    call: Node,
+fn inspect_csharp_fluent<'t>(
+    call: Node<'t>,
+    anc: &Ancestry<'t>,
     subject: Node,
     method: &str,
     type_args: Option<Node>,
@@ -2737,20 +2758,20 @@ fn inspect_csharp_fluent(
     loop {
         // `(await act.Should().ThrowAsync<T>()).WithMessage(..)`: the chain goes on
         // around the awaited call.
-        while let Some(wrapper) = link
-            .parent()
+        while let Some(wrapper) = anc
+            .parent(link)
             .filter(|p| matches!(p.kind(), "await_expression" | "parenthesized_expression"))
         {
             link = wrapper;
         }
-        let Some(access) = link
-            .parent()
+        let Some(access) = anc
+            .parent(link)
             .filter(|p| p.kind() == "member_access_expression")
         else {
             break;
         };
-        let Some(outer) = access
-            .parent()
+        let Some(outer) = anc
+            .parent(access)
             .filter(|p| p.kind() == "invocation_expression")
         else {
             break;
@@ -2922,7 +2943,7 @@ fn kotlin_form(name: &str) -> Option<(&'static str, bool)> {
 /// `assertFailsWith(T::class) { }` / `assertFails { }`, Kotest `shouldThrow<T> { }` /
 /// `shouldThrowExactly<T> { }` / `shouldThrowAny { }`, and the forms that state nothing
 /// is thrown. They are kept under Java's kinds, and name the same classes.
-pub fn kotlin(root: Node, src: &str, tests: &mut [TestFn]) {
+pub fn kotlin<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
     }
@@ -2991,7 +3012,7 @@ pub fn kotlin(root: Node, src: &str, tests: &mut [TestFn]) {
             return true;
         };
         let message = (kind != "doesNotThrow")
-            .then(|| kotlin_message(node, src))
+            .then(|| kotlin_message(node, anc, src))
             .flatten();
         attribute(
             tests,
@@ -3018,15 +3039,15 @@ pub fn kotlin(root: Node, src: &str, tests: &mut [TestFn]) {
 /// `should..` matcher on the message (kept as written), each also as a call
 /// (`e.message.shouldBe("..")`). `e` is the name `site` is bound to in its function
 /// (`val e = shouldThrow<T> { }`), or `site` itself (`shouldThrow<T> { }.message ..`).
-fn kotlin_message(site: Node, src: &str) -> Option<(String, bool)> {
-    let bound = site
-        .parent()
+fn kotlin_message<'t>(site: Node<'t>, anc: &Ancestry<'t>, src: &str) -> Option<(String, bool)> {
+    let bound = anc
+        .parent(site)
         .filter(|p| p.kind() == "property_declaration")
         .and_then(|p| child_of_kind(p, &["variable_declaration"]))
         .and_then(|v| v.named_child(0))
         .map(|name| text(name, src));
     let mut scope = site;
-    while let Some(parent) = scope.parent() {
+    while let Some(parent) = anc.parent(scope) {
         scope = parent;
         if scope.kind() == "function_declaration" {
             break;
@@ -3474,7 +3495,7 @@ fn go_pattern(node: Node, src: &str, out: &mut ExpectedException) {
 
 /// What `errors.As(err, target)` names: the type `target` is declared with in the
 /// enclosing function (`var pe *fs.PathError`, then `&pe`), else the target as written.
-fn go_as_target(target: Node, src: &str) -> String {
+fn go_as_target<'t>(target: Node<'t>, anc: &Ancestry<'t>, src: &str) -> String {
     let written = text(target, src).to_string();
     let Some(name) = (target.kind() == "unary_expression")
         .then(|| target.child_by_field_name("operand"))
@@ -3484,7 +3505,7 @@ fn go_as_target(target: Node, src: &str) -> String {
         return written;
     };
     let mut function = target;
-    while let Some(parent) = function.parent() {
+    while let Some(parent) = anc.parent(function) {
         function = parent;
         if matches!(
             function.kind(),
@@ -3511,7 +3532,12 @@ fn go_as_target(target: Node, src: &str) -> String {
 
 /// `errors.Is(err, target)` / `errors.As(err, &target)` of a package the file imports
 /// as an errors package: the error and the sentinel or type it must be.
-fn go_errors_call(call: Node, src: &str, imports: &GoImports) -> Option<(String, String)> {
+fn go_errors_call<'t>(
+    call: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    imports: &GoImports,
+) -> Option<(String, String)> {
     if call.kind() != "call_expression" {
         return None;
     }
@@ -3532,7 +3558,7 @@ fn go_errors_call(call: Node, src: &str, imports: &GoImports) -> Option<(String,
     let (err, target) = (named.first()?, named.get(1)?);
     let class = match text(callee.child_by_field_name("field")?, src) {
         "Is" => text(*target, src).to_string(),
-        "As" => go_as_target(*target, src),
+        "As" => go_as_target(*target, anc, src),
         _ => return None,
     };
     Some((text(*err, src).to_string(), class))
@@ -3552,10 +3578,11 @@ fn go_error_expectation(call: Node, err: &str, kind: &str) -> ExpectedException 
 /// message), `EqualError` (the whole message), `Error`, `NoError`, `True(errors.Is(..))`,
 /// `Panics`, `PanicsWithValue` / `PanicsWithError` (the value or the whole message) and
 /// `NotPanics`, each also with a trailing `f`.
-pub(super) fn go_testify(
+pub(super) fn go_testify<'t>(
     method: &str,
-    values: &[Node],
-    call: Node,
+    values: &[Node<'t>],
+    call: Node<'t>,
+    anc: &Ancestry<'t>,
     src: &str,
     imports: &GoImports,
 ) -> Option<ExpectedException> {
@@ -3592,7 +3619,7 @@ pub(super) fn go_testify(
             ..error("go.Error")
         },
         "ErrorAs" => ExpectedException {
-            exception_type: Some(go_as_target(*values.get(1)?, src)),
+            exception_type: Some(go_as_target(*values.get(1)?, anc, src)),
             ..error("go.Error")
         },
         "ErrorContains" | "EqualError" => ExpectedException {
@@ -3601,7 +3628,7 @@ pub(super) fn go_testify(
             ..error("go.Error")
         },
         "True" => {
-            let (err, class) = go_errors_call(*first, src, imports)?;
+            let (err, class) = go_errors_call(*first, anc, src, imports)?;
             ExpectedException {
                 exception_type: Some(class),
                 ..go_error_expectation(call, &err, "go.Error")
@@ -3652,10 +3679,27 @@ pub(super) fn go_gocheck(
 }
 
 /// Whether a block calls a method that fails the test (`t.Fatal`, `t.Errorf`, ..).
-fn go_block_fails(block: Node, src: &str) -> bool {
+fn go_block_fails(block: Node, src: &str, known: &mut GoBlocks) -> bool {
+    if let Some(fails) = known.get(&block.id()) {
+        return *fails;
+    }
     let mut fails = false;
     walk(block, &mut |n| {
-        if n.kind() == "func_literal" {
+        if fails || n.kind() == "func_literal" {
+            return false;
+        }
+        // The body of an `if` inside this block is a block `go` asks about too: it is
+        // read once, for itself, and its answer is this block's when it fails.
+        if n.kind() == "if_statement" {
+            if let Some(inner) = n.child_by_field_name("consequence") {
+                if go_block_fails(inner, src, known) {
+                    fails = true;
+                    return false;
+                }
+            }
+        }
+        if known.contains_key(&n.id()) {
+            // An `if` body already read, and it does not fail.
             return false;
         }
         if n.kind() == "call_expression" {
@@ -3671,13 +3715,18 @@ fn go_block_fails(block: Node, src: &str) -> bool {
         }
         !fails
     });
+    known.insert(block.id(), fails);
     fails
 }
 
+/// Whether each block [`go_block_fails`] has read fails the test, by the id of its node.
+type GoBlocks = std::collections::HashMap<usize, bool>;
+
 /// The `errors.Is` / `errors.As` calls whose failure makes `condition` hold: `!call`
 /// itself, or a side of an `||` (`err == nil || !errors.Is(err, ErrGone)`).
-fn go_required_errors(
-    condition: Node,
+fn go_required_errors<'t>(
+    condition: Node<'t>,
+    anc: &Ancestry<'t>,
     src: &str,
     imports: &GoImports,
     out: &mut Vec<(String, String)>,
@@ -3685,7 +3734,7 @@ fn go_required_errors(
     match condition.kind() {
         "parenthesized_expression" => {
             if let Some(inner) = condition.named_child(0) {
-                go_required_errors(inner, src, imports, out);
+                go_required_errors(inner, anc, src, imports, out);
             }
         }
         "binary_expression" => {
@@ -3695,7 +3744,7 @@ fn go_required_errors(
             if or {
                 for side in ["left", "right"] {
                     if let Some(side) = condition.child_by_field_name(side) {
-                        go_required_errors(side, src, imports, out);
+                        go_required_errors(side, anc, src, imports, out);
                     }
                 }
             }
@@ -3708,7 +3757,7 @@ fn go_required_errors(
             while let Some(inner) = call.filter(|c| c.kind() == "parenthesized_expression") {
                 call = inner.named_child(0);
             }
-            out.extend(call.and_then(|c| go_errors_call(c, src, imports)));
+            out.extend(call.and_then(|c| go_errors_call(c, anc, src, imports)));
         }
         _ => {}
     }
@@ -3718,22 +3767,30 @@ fn go_required_errors(
 /// a test (`if !errors.Is(err, ErrGone) { t.Fatal(..) }`). The testify and gocheck forms
 /// are read where the pack counts them ([`go_testify`], [`go_gocheck`]), since whose
 /// assertion a call is depends on the function it stands in.
-pub(super) fn go(root: Node, src: &str, tests: &mut [TestFn], imports: &GoImports) {
+pub(super) fn go<'t>(
+    root: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    tests: &mut [TestFn],
+    imports: &GoImports,
+) {
     if tests.is_empty() {
         return;
     }
+    // Each `if` body is read once: a body nested in another is part of it.
+    let mut known = GoBlocks::new();
     walk(root, &mut |node| {
         if node.kind() != "if_statement" {
             return true;
         }
         let fails = node
             .child_by_field_name("consequence")
-            .is_some_and(|c| go_block_fails(c, src));
+            .is_some_and(|c| go_block_fails(c, src, &mut known));
         let Some(condition) = node.child_by_field_name("condition").filter(|_| fails) else {
             return true;
         };
         let mut required = Vec::new();
-        go_required_errors(condition, src, imports, &mut required);
+        go_required_errors(condition, anc, src, imports, &mut required);
         for (err, class) in required {
             attribute(
                 tests,
@@ -3851,7 +3908,7 @@ fn swift_closure_type(closure: Node, src: &str) -> Option<String> {
 /// `XCTest`; Swift Testing `#expect(throws: E.self) { }` / `#require(throws:)` (a type,
 /// or an error value such as `E.negative`) and `throws: Never.self`, which states that
 /// nothing is thrown, in a file that imports `Testing`.
-pub fn swift(root: Node, src: &str, tests: &mut [TestFn]) {
+pub fn swift<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
     }
@@ -3895,7 +3952,7 @@ pub fn swift(root: Node, src: &str, tests: &mut [TestFn]) {
                 };
                 // `let error = #expect(throws: E.self) { .. }`: the closure follows the
                 // macro in the call the grammar wraps it in.
-                let wrapping = node.parent().filter(|p| p.kind() == "call_expression");
+                let wrapping = anc.parent(node).filter(|p| p.kind() == "call_expression");
                 closure = closure.or_else(|| wrapping.and_then(|p| swift_arguments(p, src).1));
                 let code = closure
                     .or_else(|| {
@@ -3979,7 +4036,7 @@ fn scala_pattern(arg: Node, src: &str) -> String {
 /// `a [T] should be thrownBy { }` / `an [T] ..`, and `noException should be thrownBy
 /// { }`; specs2 `code must throwA[T]` / `throwAn[T]`, with a message pattern or an
 /// exception value. They are kept under Java's kinds, and name the same classes.
-pub fn scala(root: Node, src: &str, tests: &mut [TestFn]) {
+pub fn scala<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
     }
@@ -4021,15 +4078,15 @@ pub fn scala(root: Node, src: &str, tests: &mut [TestFn]) {
                     Some(("the", class)) if subject == left => {
                         expected.exception_type = Some(text(class, src).to_string());
                         // `.. should have message "m"`.
-                        let message = node
-                            .parent()
+                        let message = anc
+                            .parent(node)
                             .and_then(|p| scala_infix(p, src))
                             .filter(|(l, op, have)| {
                                 *l == node
                                     && matches!(*op, "should" | "must")
                                     && text(*have, src) == "have"
                             })
-                            .and_then(|_| node.parent()?.parent())
+                            .and_then(|_| anc.parent(anc.parent(node)?))
                             .and_then(|g| scala_infix(g, src))
                             .filter(|(_, op, _)| *op == "message")
                             .map(|(_, _, value)| value);
@@ -4065,8 +4122,8 @@ pub fn scala(root: Node, src: &str, tests: &mut [TestFn]) {
                     .and_then(|t| t.named_child(0))
                     .map(|c| text(c, src).to_string());
                 // `.. throwA[T]("negative")`: the call that wraps it.
-                expected.matcher = node
-                    .parent()
+                expected.matcher = anc
+                    .parent(node)
                     .filter(|p| {
                         p.kind() == "call_expression"
                             && p.child_by_field_name("function") == Some(node)

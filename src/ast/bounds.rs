@@ -111,7 +111,7 @@ fn comparison<'a>(
     }
 }
 
-pub(super) fn walk(root: Node, f: &mut dyn FnMut(Node) -> bool) {
+pub(super) fn walk<'t>(root: Node<'t>, f: &mut dyn FnMut(Node<'t>) -> bool) {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
         if !f(node) {

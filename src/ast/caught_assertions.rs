@@ -36,6 +36,7 @@
 //! `recover()` does not stop. So a deferred `recover()` catches only a check that panics:
 //! a `panic(..)` in the test, or a call to a function of the file that panics.
 
+use super::ancestry::Ancestry;
 use super::bounds::{text, walk};
 use super::{helper_call_matches, AssertVocabulary, TestFn};
 use tree_sitter::Node;
@@ -208,14 +209,20 @@ fn within(inner: Node, outer: Node) -> bool {
 /// The text of the last identifier-like leaf of a type or name node: `IOException` of
 /// `java.io.IOException`, `XunitException` of `Xunit.Sdk.XunitException`.
 fn simple_name<'a>(node: Node, src: &'a str) -> &'a str {
-    let mut last = "";
-    walk(node, &mut |n| {
-        if n.child_count() == 0 && n.is_named() {
-            last = text(n, src);
+    // The last named leaf: the first one a walk from the end of the node meets. A walk
+    // from its start reads the whole of a chain of calls for each call of the chain.
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.child_count() == 0 {
+            if n.is_named() {
+                return text(n, src);
+            }
+            continue;
         }
-        true
-    });
-    last
+        let mut cursor = n.walk();
+        stack.extend(n.children(&mut cursor));
+    }
+    ""
 }
 
 /// Whether an assertion failure reaches a handler, judged by the type the handler names.
@@ -574,8 +581,9 @@ fn py_mentions(node: Node, name: &str, src: &str) -> bool {
 /// Soft assertions: the handler keeps the caught error (`errors.append(e)`, `last = e`)
 /// and a statement after the `try` that names what it was kept in raises, asserts or
 /// fails the test.
-fn py_error_kept_and_checked(
-    try_stmt: Node,
+fn py_error_kept_and_checked<'t>(
+    try_stmt: Node<'t>,
+    anc: &Ancestry<'t>,
     clause: Node,
     src: &str,
     vocab: &AssertVocabulary,
@@ -629,7 +637,7 @@ fn py_error_kept_and_checked(
         return false;
     }
     let mut scope = try_stmt;
-    while let Some(p) = scope.parent() {
+    while let Some(p) = anc.parent(scope) {
         if matches!(scope.kind(), "function_definition" | "lambda") {
             break;
         }
@@ -669,9 +677,14 @@ fn py_always_fails(stmt: Node, src: &str) -> bool {
 /// `return` in the `try` body or its `else`), and the test fails once the loop runs out:
 /// the loop's `else` raises or fails, or, when success returns, a statement after the
 /// loop always fails.
-fn py_retry_fails_after_last_attempt(try_stmt: Node, src: &str, vocab: &AssertVocabulary) -> bool {
+fn py_retry_fails_after_last_attempt<'t>(
+    try_stmt: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    vocab: &AssertVocabulary,
+) -> bool {
     let mut enclosing_loop = None;
-    let mut cur = try_stmt.parent();
+    let mut cur = anc.parent(try_stmt);
     while let Some(p) = cur {
         match p.kind() {
             "for_statement" | "while_statement" => {
@@ -681,7 +694,7 @@ fn py_retry_fails_after_last_attempt(try_stmt: Node, src: &str, vocab: &AssertVo
             "function_definition" | "class_definition" | "lambda" => break,
             _ => {}
         }
-        cur = p.parent();
+        cur = anc.parent(p);
     }
     let Some(lp) = enclosing_loop else {
         return false;
@@ -713,12 +726,12 @@ fn py_retry_fails_after_last_attempt(try_stmt: Node, src: &str, vocab: &AssertVo
         return true;
     }
     if returns && !breaks {
-        let mut sibling = lp.next_named_sibling();
+        let mut sibling = anc.next_named_sibling(lp);
         while let Some(s) = sibling {
             if py_always_fails(s, src) {
                 return true;
             }
-            sibling = s.next_named_sibling();
+            sibling = anc.next_named_sibling(s);
         }
     }
     false
@@ -770,7 +783,13 @@ fn py_with_suppress_reach(with_stmt: Node, src: &str, classes: &PyClasses) -> Re
     suppresses
 }
 
-pub fn python(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabulary) {
+pub fn python<'t>(
+    root: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    tests: &mut [TestFn],
+    vocab: &AssertVocabulary,
+) {
     if tests.is_empty() {
         return;
     }
@@ -795,7 +814,7 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabul
         }
 
         // Walk up to the nearest enclosing handler that swallows the failure.
-        let mut cur = node.parent();
+        let mut cur = anc.parent(node);
         while let Some(p) = cur {
             if matches!(p.kind(), "function_definition" | "class_definition") {
                 break;
@@ -858,8 +877,8 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabul
                                 // A class that may be an assertion failure: reported
                                 // only when the handler plainly does nothing with it.
                                 Reach::Maybe => py_except_body_only_swallows(c, src),
-                            } && !py_error_kept_and_checked(p, c, src, vocab)
-                                && !py_retry_fails_after_last_attempt(p, src, vocab);
+                            } && !py_error_kept_and_checked(p, anc, c, src, vocab)
+                                && !py_retry_fails_after_last_attempt(p, anc, src, vocab);
                             (c, reach, swallows)
                         })
                         .collect();
@@ -886,7 +905,7 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabul
                     }
                 }
             }
-            cur = p.parent();
+            cur = anc.parent(p);
         }
         true
     });
@@ -1103,9 +1122,9 @@ fn rs_match_checks(match_expr: Node, src: &str) -> bool {
 }
 
 /// Whether a later use of the binding `name` looks at the outcome it holds.
-fn rs_binding_is_checked(binding: Node, name: &str, src: &str) -> bool {
+fn rs_binding_is_checked<'t>(binding: Node<'t>, anc: &Ancestry<'t>, name: &str, src: &str) -> bool {
     let mut scope = binding;
-    while let Some(p) = scope.parent() {
+    while let Some(p) = anc.parent(scope) {
         if scope.kind() == "function_item" {
             break;
         }
@@ -1118,7 +1137,7 @@ fn rs_binding_is_checked(binding: Node, name: &str, src: &str) -> bool {
         }
         if n.kind() == "identifier" && n.start_byte() >= binding.end_byte() && text(n, src) == name
         {
-            checked = !rs_value_is_discarded(n, src);
+            checked = !rs_value_is_discarded(n, anc, src);
         }
         !checked
     });
@@ -1137,9 +1156,9 @@ fn rs_binding_is_checked(binding: Node, name: &str, src: &str) -> bool {
 /// `Ok`: there the test fails when the assertion held and passes when it did not. A shape
 /// not listed is followed further out, so a value this does not understand is reported,
 /// not passed.
-fn rs_value_is_discarded(value: Node, src: &str) -> bool {
+fn rs_value_is_discarded<'t>(value: Node<'t>, anc: &Ancestry<'t>, src: &str) -> bool {
     let mut cur = value;
-    while let Some(p) = cur.parent() {
+    while let Some(p) = anc.parent(cur) {
         match p.kind() {
             "expression_statement" => return true,
             "try_expression" | "return_expression" => return false,
@@ -1149,7 +1168,7 @@ fn rs_value_is_discarded(value: Node, src: &str) -> bool {
                 // A use inside a macro: its arguments are tokens, so the macro decides.
                 let mut m = p;
                 while m.kind() == "token_tree" {
-                    match m.parent() {
+                    match anc.parent(m) {
                         Some(up) => m = up,
                         None => return true,
                     }
@@ -1165,8 +1184,8 @@ fn rs_value_is_discarded(value: Node, src: &str) -> bool {
                 }
             }
             "arguments" => {
-                let callee = p
-                    .parent()
+                let callee = anc
+                    .parent(p)
                     .and_then(|call| call.child_by_field_name("function"))
                     .map_or("", |f| text(f, src));
                 if matches!(callee, "drop" | "mem::drop" | "std::mem::drop") {
@@ -1178,14 +1197,14 @@ fn rs_value_is_discarded(value: Node, src: &str) -> bool {
                     return true;
                 };
                 return pattern.kind() != "identifier"
-                    || !rs_binding_is_checked(p, text(pattern, src), src);
+                    || !rs_binding_is_checked(p, anc, text(pattern, src), src);
             }
             "assignment_expression" => {
                 let Some(left) = p.child_by_field_name("left") else {
                     return true;
                 };
                 return left.kind() != "identifier"
-                    || !rs_binding_is_checked(p, text(left, src), src);
+                    || !rs_binding_is_checked(p, anc, text(left, src), src);
             }
             "match_expression" => {
                 if p.child_by_field_name("value") == Some(cur) {
@@ -1200,7 +1219,7 @@ fn rs_value_is_discarded(value: Node, src: &str) -> bool {
             "let_condition" | "let_chain" => {
                 let mut branch = p;
                 while branch.kind() != "if_expression" && branch.kind() != "while_expression" {
-                    match branch.parent() {
+                    match anc.parent(branch) {
                         Some(up)
                             if matches!(
                                 up.kind(),
@@ -1220,7 +1239,7 @@ fn rs_value_is_discarded(value: Node, src: &str) -> bool {
                     .flatten()
                     .and_then(|pattern| rs_pattern_is_err(pattern, src));
                 return match side {
-                    Some(err) if p.parent() == Some(branch) => {
+                    Some(err) if anc.parent(p) == Some(branch) => {
                         !rs_if_fails_on_err(branch, err, src)
                     }
                     _ => !rs_fails(branch, src),
@@ -1233,7 +1252,13 @@ fn rs_value_is_discarded(value: Node, src: &str) -> bool {
     true
 }
 
-pub fn rust(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabulary) {
+pub fn rust<'t>(
+    root: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    tests: &mut [TestFn],
+    vocab: &AssertVocabulary,
+) {
     if tests.is_empty() {
         return;
     }
@@ -1263,7 +1288,7 @@ pub fn rust(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabular
             return true;
         }
 
-        if rs_value_is_discarded(node, src) {
+        if rs_value_is_discarded(node, anc, src) {
             let handler_line = node.start_position().row + 1;
             for (line, span) in inner_asserts {
                 attribute(
@@ -1299,10 +1324,10 @@ fn js_callee<'a>(call: Node, src: &'a str) -> &'a str {
 
 /// Whether `func` is passed to a method known to run it before returning
 /// (`SYNC_CALLBACKS`): `items.forEach((v) => ..)`.
-fn js_is_sync_callback(func: Node, src: &str) -> bool {
-    func.parent()
+fn js_is_sync_callback<'t>(func: Node<'t>, anc: &Ancestry<'t>, src: &str) -> bool {
+    anc.parent(func)
         .filter(|args| args.kind() == "arguments")
-        .and_then(|args| args.parent())
+        .and_then(|args| anc.parent(args))
         .filter(|call| call.kind() == "call_expression")
         .and_then(|call| call.child_by_field_name("function"))
         .filter(|callee| callee.kind() == "member_expression")
@@ -1479,7 +1504,13 @@ fn js_promise_catch(
     });
 }
 
-pub fn javascript(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabulary) {
+pub fn javascript<'t>(
+    root: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    tests: &mut [TestFn],
+    vocab: &AssertVocabulary,
+) {
     if tests.is_empty() {
         return;
     }
@@ -1508,7 +1539,7 @@ pub fn javascript(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVoc
         let handler_line = handler.start_position().row + 1;
         walk(body, &mut |n| {
             if n.kind() == "try_statement"
-                || (JS_FUNCTIONS.contains(&n.kind()) && !js_is_sync_callback(n, src))
+                || (JS_FUNCTIONS.contains(&n.kind()) && !js_is_sync_callback(n, anc, src))
             {
                 return false;
             }
@@ -1659,11 +1690,10 @@ fn java_catch_body_swallows(clause: Node, src: &str, vocab: &AssertVocabulary) -
 
 /// Whether `lambda` is passed to a method known to run it before returning
 /// (`SYNC_CALLBACKS`): `items.forEach(v -> ..)`.
-fn java_is_sync_callback(lambda: Node, src: &str) -> bool {
-    lambda
-        .parent()
+fn java_is_sync_callback<'t>(lambda: Node<'t>, anc: &Ancestry<'t>, src: &str) -> bool {
+    anc.parent(lambda)
         .filter(|args| args.kind() == "argument_list")
-        .and_then(|args| args.parent())
+        .and_then(|args| anc.parent(args))
         .filter(|call| call.kind() == "method_invocation")
         .and_then(|call| call.child_by_field_name("name"))
         .is_some_and(|name| sync_callbacks("Java").contains(&text(name, src)))
@@ -1677,7 +1707,13 @@ fn java_finally_returns(try_stmt: Node) -> Option<Node> {
     find_child_by_kind(block, "return_statement").map(|_| finally)
 }
 
-pub fn java(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabulary) {
+pub fn java<'t>(
+    root: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    tests: &mut [TestFn],
+    vocab: &AssertVocabulary,
+) {
     if tests.is_empty() {
         return;
     }
@@ -1718,7 +1754,7 @@ pub fn java(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabular
                     | "method_declaration"
                     | "try_statement"
                     | "try_with_resources_statement"
-            ) || (n.kind() == "lambda_expression" && !java_is_sync_callback(n, src))
+            ) || (n.kind() == "lambda_expression" && !java_is_sync_callback(n, anc, src))
             {
                 return false;
             }
@@ -1804,13 +1840,13 @@ fn kt_fails(node: Node, src: &str, vocab: &AssertVocabulary) -> bool {
 
 /// Whether `lambda` is passed to a function known to run it before returning
 /// (`SYNC_CALLBACKS`): `x.let { .. }`, `items.forEach { .. }`, `with(x) { .. }`.
-fn kt_is_sync_callback(lambda: Node, src: &str) -> bool {
+fn kt_is_sync_callback<'t>(lambda: Node<'t>, anc: &Ancestry<'t>, src: &str) -> bool {
     if lambda.kind() != "lambda_literal" {
         return false;
     }
     let mut cur = lambda;
     let call = loop {
-        match cur.parent() {
+        match anc.parent(cur) {
             Some(p) if p.kind() == "call_expression" => break p,
             Some(p)
                 if matches!(
@@ -1833,11 +1869,16 @@ fn kt_is_sync_callback(lambda: Node, src: &str) -> bool {
 
 /// Lines of the assertions directly in `body`: not in a nested `try`, and not in a lambda
 /// unless it is passed to a function that runs it before returning.
-fn kt_assertions(body: Node, src: &str, vocab: &AssertVocabulary) -> Vec<Site> {
+fn kt_assertions<'t>(
+    body: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    vocab: &AssertVocabulary,
+) -> Vec<Site> {
     let mut lines = Vec::new();
     walk(body, &mut |n| {
         if n != body
-            && ((KT_SCOPES.contains(&n.kind()) && !kt_is_sync_callback(n, src))
+            && ((KT_SCOPES.contains(&n.kind()) && !kt_is_sync_callback(n, anc, src))
                 || n.kind() == "try_expression")
         {
             return false;
@@ -1879,9 +1920,14 @@ fn kt_finally_returns<'a>(try_expr: Node<'a>, src: &str) -> Option<Node<'a>> {
 /// `getOrThrow()` is called on it, when a callback chained on it (`onFailure { }`,
 /// `fold`, `recover`, `getOrElse`) throws or fails, when it is bound to a name used
 /// later, and when it is passed on (an argument, a `return`, an expression body).
-fn kt_result_is_unused(call: Node, src: &str, vocab: &AssertVocabulary) -> bool {
+fn kt_result_is_unused<'t>(
+    call: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    vocab: &AssertVocabulary,
+) -> bool {
     let mut cur = call;
-    while let Some(p) = cur.parent() {
+    while let Some(p) = anc.parent(cur) {
         match p.kind() {
             "navigation_expression" => {
                 if simple_name(p, src) == "getOrThrow" {
@@ -1904,7 +1950,7 @@ fn kt_result_is_unused(call: Node, src: &str, vocab: &AssertVocabulary) -> bool 
                 let name = find_child_by_kind(p, "variable_declaration")
                     .map_or("", |v| simple_name(v, src));
                 let mut scope = p;
-                while let Some(up) = scope.parent() {
+                while let Some(up) = anc.parent(scope) {
                     if scope.kind() == "function_declaration" || scope.kind() == "lambda_literal" {
                         break;
                     }
@@ -1929,7 +1975,13 @@ fn kt_result_is_unused(call: Node, src: &str, vocab: &AssertVocabulary) -> bool 
     true
 }
 
-pub fn kotlin(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabulary) {
+pub fn kotlin<'t>(
+    root: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    tests: &mut [TestFn],
+    vocab: &AssertVocabulary,
+) {
     if tests.is_empty() {
         return;
     }
@@ -1955,7 +2007,7 @@ pub fn kotlin(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabul
             };
             if let Some((handler, detail)) = caught {
                 let handler_line = handler.start_position().row + 1;
-                for (line, span) in kt_assertions(body, src, vocab) {
+                for (line, span) in kt_assertions(body, anc, src, vocab) {
                     attribute(
                         tests,
                         CaughtAssertion {
@@ -1972,9 +2024,9 @@ pub fn kotlin(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabul
             let lambda = find_child_by_kind(node, "annotated_lambda")
                 .and_then(|a| find_child_by_kind(a, "lambda_literal"));
             if let Some(lambda) = lambda {
-                if kt_result_is_unused(node, src, vocab) {
+                if kt_result_is_unused(node, anc, src, vocab) {
                     let handler_line = node.start_position().row + 1;
-                    for (line, span) in kt_assertions(lambda, src, vocab) {
+                    for (line, span) in kt_assertions(lambda, anc, src, vocab) {
                         attribute(
                             tests,
                             CaughtAssertion {
@@ -2097,10 +2149,10 @@ fn csharp_is_configured(invocation: Node, src: &str, vocab: &AssertVocabulary) -
 
 /// Whether `lambda` is passed to a method known to run it before returning
 /// (`SYNC_CALLBACKS`): `items.ForEach(v => ..)`.
-fn csharp_is_sync_callback(lambda: Node, src: &str) -> bool {
+fn csharp_is_sync_callback<'t>(lambda: Node<'t>, anc: &Ancestry<'t>, src: &str) -> bool {
     let mut cur = lambda;
     let call = loop {
-        match cur.parent() {
+        match anc.parent(cur) {
             Some(p) if p.kind() == "invocation_expression" => break p,
             Some(p) if matches!(p.kind(), "argument" | "argument_list") => cur = p,
             _ => return false,
@@ -2137,7 +2189,13 @@ fn csharp_catch_body_swallows(clause: Node, src: &str, vocab: &AssertVocabulary)
     !fails
 }
 
-pub fn csharp(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabulary) {
+pub fn csharp<'t>(
+    root: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    tests: &mut [TestFn],
+    vocab: &AssertVocabulary,
+) {
     if tests.is_empty() {
         return;
     }
@@ -2170,7 +2228,7 @@ pub fn csharp(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabul
             if matches!(
                 n.kind(),
                 "class_declaration" | "method_declaration" | "try_statement"
-            ) || (n.kind() == "lambda_expression" && !csharp_is_sync_callback(n, src))
+            ) || (n.kind() == "lambda_expression" && !csharp_is_sync_callback(n, anc, src))
             {
                 return false;
             }
