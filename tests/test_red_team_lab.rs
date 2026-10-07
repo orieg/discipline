@@ -4,8 +4,8 @@
 //! sources `lab-guard.sh` before its first command, and the guard refuses anywhere but a
 //! container started by `tests/red_team/lab/run.sh`.
 
+mod common;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const GUARD_LINE: &str = ". /work/lab-guard.sh || exit 99";
 
@@ -80,7 +80,7 @@ fn the_guard_refuses_a_host_shell_even_with_the_lab_variables_set() {
         vec![("DISCIPLINE_RT_IN_CONTAINER", "1")],
         vec![("DISCIPLINE_RT_IN_CONTAINER", "1"), ("HOME", "/tmp")],
     ] {
-        let out = Command::new("bash")
+        let out = common::script_command("bash")
             .args(["-c", &script])
             .env_remove("DISCIPLINE_RT_IN_CONTAINER")
             .envs(env.iter().copied())

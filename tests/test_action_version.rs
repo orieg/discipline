@@ -1,7 +1,7 @@
 //! The binary version `action.yml` resolves from its inputs and its own ref: the lines
 //! between its `version-resolution` markers, run under bash as the action runs them.
 
-use std::process::Command;
+mod common;
 
 fn resolution_block() -> String {
     let action = std::fs::read_to_string("action.yml").unwrap();
@@ -12,7 +12,7 @@ fn resolution_block() -> String {
 
 fn resolve(input_version: &str, action_ref: &str, action_path: Option<&str>) -> String {
     let script = format!("{}\nprintf '%s' \"${{version}}\"\n", resolution_block());
-    let mut cmd = Command::new("bash");
+    let mut cmd = common::script_command("bash");
     cmd.arg("-c")
         .arg(script)
         .env("INPUT_VERSION", input_version)
@@ -85,7 +85,7 @@ fn provenance(
         &action[begin..end]
     );
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
-    let out = Command::new("bash")
+    let out = common::script_command("bash")
         .arg("-c")
         .arg(script)
         .env("PATH", path)
@@ -190,7 +190,7 @@ fn install_tool_script_invokes_correct_version_command() {
         ("scorecard", "version"),
         ("cargo-cyclonedx", "cyclonedx --version"),
     ] {
-        let out = Command::new("bash")
+        let out = common::script_command("bash")
             .arg("tests/action/install-tool.sh")
             .arg(tool)
             .env("PATH", &path)
@@ -213,21 +213,27 @@ fn install_tool_script_invokes_correct_version_command() {
 }
 
 /// The Forgejo self-test workflow is a rename of the Gitea one: comments and
-/// `name:` fields name the forge, but the `jobs` structure (steps, `uses`,
-/// `run`, `env`, `with`) must stay identical so both forges prove the same
-/// action has no host-only dependency. `ci.yml` runs the Gitea copy under act.
-/// Killed mutant: any step edited in only one copy.
+/// `name:` fields name the forge, and everything else (the triggers under `on:`,
+/// `permissions:`, and each job's steps, `uses`, `run`, `env`, `with`) must stay
+/// identical so both forges prove the same action has no host-only dependency.
+/// `ci.yml` runs the Gitea copy under act.
+/// Killed mutant: any step edited in only one copy. The controls below show a
+/// differing trigger or permission is a difference and a differing name is not.
 #[test]
 fn forgejo_and_gitea_selftest_workflows_run_the_same_jobs() {
-    fn jobs(path: &str) -> serde_yaml::Value {
+    fn modulo_names(what: &str, text: &str) -> serde_yaml::Value {
+        let mut doc: serde_yaml::Value =
+            serde_yaml::from_str(text).unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert!(doc.get("jobs").is_some(), "{what} has no jobs");
+        strip_names(&mut doc);
+        doc
+    }
+
+    fn workflow(path: &str) -> serde_yaml::Value {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let text =
             std::fs::read_to_string(root.join(path)).unwrap_or_else(|e| panic!("{path}: {e}"));
-        let doc: serde_yaml::Value =
-            serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("{path}: {e}"));
-        doc.get("jobs")
-            .unwrap_or_else(|| panic!("{path} has no jobs"))
-            .clone()
+        modulo_names(path, &text)
     }
 
     fn strip_names(value: &mut serde_yaml::Value) {
@@ -247,12 +253,22 @@ fn forgejo_and_gitea_selftest_workflows_run_the_same_jobs() {
         }
     }
 
-    let mut gitea = jobs(".gitea/workflows/action-selftest.yml");
-    let mut forgejo = jobs(".forgejo/workflows/action-selftest.yml");
-    strip_names(&mut gitea);
-    strip_names(&mut forgejo);
+    let sample = |name: &str, trigger: &str, permission: &str| {
+        modulo_names(
+            "sample",
+            &format!(
+                "name: {name}\non:\n  {trigger}:\npermissions:\n  contents: {permission}\njobs:\n  a:\n    steps:\n      - name: {name}\n        run: echo\n"
+            ),
+        )
+    };
+    let reference = sample("one", "push", "read");
+    assert_eq!(sample("two", "push", "read"), reference);
+    assert_ne!(sample("one", "pull_request", "read"), reference);
+    assert_ne!(sample("one", "push", "write"), reference);
+
     assert_eq!(
-        forgejo, gitea,
-        "Forgejo and Gitea self-test workflows drifted apart: mirror the step change to both"
+        workflow(".forgejo/workflows/action-selftest.yml"),
+        workflow(".gitea/workflows/action-selftest.yml"),
+        "Forgejo and Gitea self-test workflows drifted apart: mirror the change to both"
     );
 }

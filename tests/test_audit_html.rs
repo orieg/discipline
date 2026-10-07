@@ -26,7 +26,7 @@ fn change(ord: usize, pr: Option<u64>, subject: &str) -> ChangeInfoRef {
     }
 }
 
-const CFG: &str = "[meta]\nversion = 1\nname = \"t\"\n";
+const CFG: &str = common::CONFIG_HEAD;
 
 /// Newest first: a guard-gate loosening waived in the same change (#6), a hidden waiver
 /// with an author-written subject that needs escaping (#5), a pii exemption pushed with no

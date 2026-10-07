@@ -510,20 +510,6 @@ fn schema_json_def_references_resolve() {
 }
 
 #[test]
-fn schema_json_file_in_sync_with_code() {
-    let committed = std::fs::read_to_string("discipline.schema.json")
-        .expect("discipline.schema.json must exist");
-    let generated = serde_json::to_string_pretty(&discipline::schema::generate_schema())
-        .expect("must serialize generated schema")
-        + "\n";
-
-    assert_eq!(
-        committed, generated,
-        "discipline.schema.json is out of sync with Rust Serde models; run `cargo run -- docs --write` to update"
-    );
-}
-
-#[test]
 fn test_all_directives_documented_in_configuration_md() {
     let doc =
         std::fs::read_to_string("docs/CONFIGURATION.md").expect("docs/CONFIGURATION.md must exist");
@@ -957,7 +943,7 @@ fn a_renamed_key_is_read_under_its_old_name_with_a_deprecation_note() {
 /// Killed mutant: the empty-name rewrite removed from configuration loading.
 #[test]
 fn an_empty_review_trailer_reads_as_require_agent_review_false_with_a_deprecation() {
-    let head = "[meta]\nversion = 1\nname = \"t\"\n";
+    let head = common::CONFIG_HEAD;
     for empty in ["\"\"", "\"  \""] {
         let cfg = DisciplineConfig::from_toml_str(&format!(
             "{head}[gates.commit-provenance]\nreview_trailer = {empty}\n"

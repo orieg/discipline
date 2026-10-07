@@ -5,7 +5,7 @@
 mod common;
 use common::Repo;
 
-const HEAD: &str = "[meta]\nversion = 1\nname = \"t\"\n";
+const HEAD: &str = common::CONFIG_HEAD;
 /// Parses as TOML, fails the schema: the shape an older or newer binary's key has.
 const UNLOADABLE: &str =
     "[meta]\nversion = 1\nname = \"t\"\n[gates.pii]\na_key_this_binary_rejects = 1\n";
