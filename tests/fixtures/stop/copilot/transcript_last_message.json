@@ -1,0 +1,7 @@
+{
+  "data": {
+    "content": "Now let me run the tests.",
+    "toolRequests": []
+  },
+  "type": "assistant.message"
+}

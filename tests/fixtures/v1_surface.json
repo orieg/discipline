@@ -837,6 +837,12 @@
       "gates.version-lockstep.exempt_paths.reset",
       "gates.version-lockstep.groups",
       "gates.version-lockstep.severity",
+      "hooks",
+      "hooks.premature-stop",
+      "hooks.premature-stop.enabled",
+      "hooks.premature-stop.max_per_session",
+      "hooks.premature-stop.mode",
+      "hooks.premature-stop.tool_call_as_text",
       "languages",
       "languages.c",
       "languages.c.function_macros",
@@ -1389,6 +1395,10 @@
       "policy/hidden-directive-refused",
       "policy/max-inline-overrides-exceeded",
       "policy/max-overrides-exceeded"
+    ],
+    "turn_checks": [
+      "turn/announced-action-not-taken",
+      "turn/tool-call-written-as-text"
     ]
   }
 }

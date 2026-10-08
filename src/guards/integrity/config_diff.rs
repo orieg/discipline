@@ -5,7 +5,7 @@ use super::{
     direction_of, Direction, ABSENT_IS_NONE, ABSENT_IS_UNLIMITED, ADDED_IS_ANOTHER_BASIS,
     ENTRY_SHAPES,
 };
-use crate::config::{DisciplineConfig, RunMode};
+use crate::config::{DisciplineConfig, RunMode, StopMode};
 use anyhow::Result;
 use toml::Value;
 
@@ -365,6 +365,24 @@ pub fn diff_configs_under(
         if gained > 0 {
             found.push(Weakening::new("languages", key, Change::Gained).count(gained));
         }
+    }
+
+    // [hooks.premature-stop]: the end-of-turn check switched off or made quieter.
+    let (b, h) = (&base.hooks.premature_stop, &head.hooks.premature_stop);
+    let stop = |key: &str, change: Change| Weakening::new("hooks.premature-stop", key, change);
+    if b.enabled && !h.enabled {
+        found.push(stop("enabled", Change::Changed).values(true, false));
+    }
+    if b.mode == StopMode::Refuse && h.mode == StopMode::Observe {
+        found.push(stop("mode", Change::Changed).values("refuse", "observe"));
+    }
+    if h.max_per_session < b.max_per_session {
+        found.push(
+            stop("max_per_session", Change::Decreased).values(b.max_per_session, h.max_per_session),
+        );
+    }
+    if b.tool_call_as_text && !h.tool_call_as_text {
+        found.push(stop("tool_call_as_text", Change::Changed).values(true, false));
     }
 
     // [meta]: advisory mode exits 0 whatever the gates found.
@@ -1311,6 +1329,49 @@ mod tests {
             ["snapshot_ignore"]
         );
         assert!(keys(with, "snapshot = \"api.txt\"\n").is_empty());
+    }
+
+    #[test]
+    fn every_hooks_option_is_judged_and_each_loosening_is_reported() {
+        // `diff_configs` reads [hooks.premature-stop] field by field; a new option must
+        // be added there and here.
+        const JUDGED: &[&str] = &["enabled", "mode", "max_per_session", "tool_call_as_text"];
+        let schema = crate::schema::generate_schema();
+        let hooks = schema["properties"]["hooks"]["properties"]
+            .as_object()
+            .unwrap();
+        assert_eq!(hooks.keys().collect::<Vec<_>>(), ["premature-stop"]);
+        let props = hooks["premature-stop"]["properties"].as_object().unwrap();
+        let unjudged: Vec<_> = props
+            .keys()
+            .filter(|k| !JUDGED.contains(&k.as_str()))
+            .collect();
+        assert!(
+            unjudged.is_empty(),
+            "judge these in diff_configs: {unjudged:?}"
+        );
+        assert_eq!(props.len(), JUDGED.len());
+
+        let cfg = |body: &str| {
+            DisciplineConfig::from_toml_str(&format!(
+                "[meta]\nversion = 1\nname = \"t\"\n[hooks.premature-stop]\n{body}"
+            ))
+            .unwrap()
+        };
+        let strict = cfg("enabled = true\nmode = \"refuse\"\nmax_per_session = 3\n");
+        let loose = cfg(
+            "enabled = false\nmode = \"observe\"\nmax_per_session = 1\ntool_call_as_text = false\n",
+        );
+        let keys = |base: &DisciplineConfig, head: &DisciplineConfig| -> Vec<String> {
+            diff_configs(base, head)
+                .unwrap()
+                .iter()
+                .map(|w| w.key().to_string())
+                .collect()
+        };
+        assert_eq!(keys(&strict, &loose), JUDGED);
+        // The other direction tightens: nothing is reported.
+        assert!(keys(&loose, &strict).is_empty());
     }
 
     #[test]

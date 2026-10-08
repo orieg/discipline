@@ -1,0 +1,49 @@
+[
+  {
+    "data": {
+      "assistantMessageID": "00000000-0000-0000-0000-000000000000",
+      "executed": false,
+      "id": "00000000-0000-0000-0000-000000000000",
+      "input": {
+        "command": "cat a.txt"
+      },
+      "sessionID": "00000000-0000-0000-0000-000000000000"
+    },
+    "type": "session.tool.called"
+  },
+  {
+    "data": {
+      "assistantMessageID": "00000000-0000-0000-0000-000000000000",
+      "finish": "tool-calls",
+      "rawFinish": "tool_calls",
+      "sessionID": "00000000-0000-0000-0000-000000000000",
+      "snapshot": "00000000-0000-0000-0000-000000000000"
+    },
+    "type": "session.step.ended"
+  },
+  {
+    "data": {
+      "assistantMessageID": "00000000-0000-0000-0000-000000000000",
+      "ordinal": 0,
+      "sessionID": "00000000-0000-0000-0000-000000000000",
+      "text": "Now let me run the tests."
+    },
+    "type": "session.text.ended"
+  },
+  {
+    "data": {
+      "assistantMessageID": "00000000-0000-0000-0000-000000000000",
+      "finish": "stop",
+      "rawFinish": "stop",
+      "sessionID": "00000000-0000-0000-0000-000000000000",
+      "snapshot": "00000000-0000-0000-0000-000000000000"
+    },
+    "type": "session.step.ended"
+  },
+  {
+    "data": {
+      "sessionID": "00000000-0000-0000-0000-000000000000"
+    },
+    "type": "session.execution.succeeded"
+  }
+]
