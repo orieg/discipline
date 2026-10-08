@@ -82,25 +82,35 @@ pub fn mark(root: Node, src: &str, tests: &mut [TestFn], spec: &RetrySpec) {
     // A marker inside a test's span (an options object, `this.retries`) belongs to that
     // test; any other marker decorates the test whose definition starts within four
     // lines below it.
-    let contained = |start: usize| {
-        tests
-            .iter()
-            .any(|t| t.line <= start && start <= t.end_line.max(t.line))
-    };
+    //
+    // Each question is answered without reading the tests for each marker or the markers
+    // for each test: whether a test holds a line from a table of lines, the first marker
+    // inside a test from the markers in the order of the source, and the first marker
+    // that ends on a line from a table of those lines.
+    let holding = super::innermost_tests_by_line(tests, root.end_position().row + 1);
+    let contained = |start: usize| holding.get(start).copied().flatten().is_some();
     let (inside, above): (Vec<_>, Vec<_>) =
         per_test.iter().partition(|(start, _, _)| contained(*start));
+    let mut first_ending: std::collections::HashMap<usize, usize> = Default::default();
+    for (at, (_, end, _)) in above.iter().enumerate() {
+        first_ending.entry(*end).or_insert(at);
+    }
+    super::ancestry::count(per_test.len() + tests.len());
     for t in tests.iter_mut() {
         if let Some(m) = &file_level {
             t.retries = Some(m.clone());
             continue;
         }
+        // The markers stand in the order of the source: the first that starts at or
+        // after the test's first line is the first one inside it, when it is inside.
         let found = inside
-            .iter()
-            .find(|(start, _, _)| t.line <= *start && *start <= t.end_line.max(t.line))
+            .get(inside.partition_point(|(start, _, _)| *start < t.line))
+            .filter(|(start, _, _)| *start <= t.end_line.max(t.line))
             .or_else(|| {
-                above
-                    .iter()
-                    .find(|(_, end, _)| *end < t.line && t.line - *end <= 4)
+                (1..=4)
+                    .filter_map(|lines| first_ending.get(&t.line.checked_sub(lines)?))
+                    .min()
+                    .map(|at| &above[*at])
             });
         if let Some((_, _, m)) = found {
             t.retries = Some(m.clone());

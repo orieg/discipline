@@ -64,6 +64,7 @@ impl LanguagePack for JavaScriptPack {
             suite_cases: Vec::new(),
             suite_skips: Vec::new(),
             runner_names: runner_names(root, &anc, src),
+            callee_heads: super::CodeHeads::new(CALLEE_NOT_NAMES),
             deno_global: !binds_name(root, &anc, src, "Deno"),
             std_asserts: std_assert_names(root, &anc, src),
         };
@@ -177,6 +178,25 @@ fn is_expect_chain_node(mut node: Node, src: &[u8]) -> bool {
     false
 }
 
+/// The node kinds under a callee that are not the names of its chain.
+const CALLEE_NOT_NAMES: &[&str] = &["arguments", "template_string", "string", "comment"];
+
+/// The callees `JsExtractor::classify_call` reads as a test or a suite when they are the
+/// whole of the callee.
+const RUNNER_CALLEES: &[&str] = &[
+    "it",
+    "test",
+    "xit",
+    "xtest",
+    "describe",
+    "context",
+    "xdescribe",
+    "xcontext",
+];
+
+/// How a callee begins when it is a test or a suite with modifiers.
+const RUNNER_CHAINS: &[&str] = &["describe.", "it.", "test."];
+
 struct JsExtractor<'a> {
     /// Byte ranges no execution reaches (`super::reach`).
     dead: super::reach::DeadRanges,
@@ -196,6 +216,8 @@ struct JsExtractor<'a> {
     /// The runner function names this file binds to something else
     /// ([`runner_names`]): `.each` on one is not a case source.
     runner_names: super::test_cases::RunnerNames,
+    /// How the callee of each call begins (`super::CodeHeads`), for `classify_call`.
+    callee_heads: super::CodeHeads,
     /// `Deno` is the runtime's global here: the file binds nothing else to the name.
     deno_global: bool,
     /// The names the file imports from Deno's standard assertion module, each with the
@@ -905,12 +927,22 @@ impl<'a> JsExtractor<'a> {
 
     fn classify_call(&self, func: Node<'a>) -> (bool, bool, bool, bool) {
         // (is_test, is_suite, is_ignored, is_todo)
+        // How the callee begins says that it is none of them, for all but the calls of
+        // a runner: the whole of it is read only for those.
+        let head = self.callee_heads.of(func, self.src);
+        if let Some(begins) = head.bytes() {
+            let named =
+                head.is_whole() && RUNNER_CALLEES.iter().any(|name| name.as_bytes() == begins);
+            let chained = RUNNER_CHAINS
+                .iter()
+                .any(|name| begins.starts_with(name.as_bytes()));
+            if !named && !chained {
+                return (false, false, false, false);
+            }
+        }
         // The names of the chain only: `test.each([".skip"])` is `test.each`, not a skip.
-        let text = super::text_without(
-            func,
-            self.src,
-            &["arguments", "template_string", "string", "comment"],
-        );
+        let text = super::text_without(func, self.src, CALLEE_NOT_NAMES);
+        super::ancestry::count(text.len());
         let text: String = text.chars().filter(|c| !c.is_whitespace()).collect();
         match text.as_str() {
             "it" | "test" => (true, false, false, false),
@@ -1647,6 +1679,211 @@ test('wrapper cycle', () => { ping(1); });
             crate::ast::thin_wrapper_counts(&JavaScriptPack, "test/wrap.test.js", src),
             crate::ast::ONE_LEVEL_WRAPPER_COUNTS
         );
+    }
+
+    /// The tests of `src` as `(name, ignored)`, in the order of the source.
+    fn tests_read(src: &str) -> Vec<(String, bool)> {
+        JavaScriptPack
+            .extract("tests/m.test.js", src, &AssertVocabulary::default())
+            .unwrap()
+            .tests
+            .iter()
+            .map(|t| (t.name.clone(), t.ignored))
+            .collect()
+    }
+
+    /// A call is a test or a suite by the names of its callee, wherever white space, a
+    /// comment, a string or an argument list stands among them.
+    #[test]
+    fn a_call_is_sorted_by_the_names_of_its_callee() {
+        let read = |call: &str| tests_read(&format!("{call}\n"));
+        let one = |name: &str, ignored: bool| vec![(name.to_string(), ignored)];
+        for (call, want) in [
+            ("it('a', () => {});", one("a", false)),
+            ("test('a', () => {});", one("a", false)),
+            ("xit('a', () => {});", one("a", true)),
+            ("xtest('a', () => {});", one("a", true)),
+            ("it.skip('a', () => {});", one("a", true)),
+            ("it.only('a', () => {});", one("a", true)),
+            ("test.todo('a', () => {});", one("a", true)),
+            ("test.concurrent('a', () => {});", one("a", false)),
+            ("it /* c */ .skip('a', () => {});", one("a", true)),
+            ("it\n  .skip('a', () => {});", one("a", true)),
+            ("it\u{b}.skip('a', () => {});", one("a", true)),
+            ("test.each([1])('a', () => {});", one("a", false)),
+            ("test.each(['.skip'])('a', () => {});", one("a", false)),
+            ("test.skip.each([1])('a', () => {});", one("a", true)),
+            (
+                "test.concurrent.only.each([1])('a', () => {});",
+                one("a", true),
+            ),
+            (
+                "describe('s', () => { it('a', () => {}); });",
+                one("s > a", false),
+            ),
+            (
+                "context('s', () => { it('a', () => {}); });",
+                one("s > a", false),
+            ),
+            (
+                "xdescribe('s', () => { it('a', () => {}); });",
+                one("s > a", true),
+            ),
+            (
+                "xcontext('s', () => { it('a', () => {}); });",
+                one("s > a", true),
+            ),
+            (
+                "describe.skip('s', () => { it('a', () => {}); });",
+                one("s > a", true),
+            ),
+            (
+                "describe.each([1])('s', () => { it('a', () => {}); });",
+                one("s > a", false),
+            ),
+            // Not a runner: a longer name, another object, a call or a string first.
+            ("its('a', () => {});", vec![]),
+            (
+                "xdescribes('s', () => { it('a', () => {}); });",
+                one("a", false),
+            ),
+            (
+                "describes.skip('s', () => { it('a', () => {}); });",
+                one("a", false),
+            ),
+            ("suite.it('a', () => {});", vec![]),
+            ("my.test.skip('a', () => {});", vec![]),
+            ("f().it('a', () => {});", vec![]),
+            ("'it'.skip('a', () => {});", vec![]),
+            ("it2('a', () => {});", vec![]),
+            ("ït('a', () => {});", vec![]),
+            ("it.ï('a', () => {});", one("a", false)),
+            ("it\u{a0}.skip('a', () => {});", one("a", true)),
+            // A test in the callback of a call that is none of them is read.
+            (
+                "x.a().b(() => { it('a', () => {}); }).c();",
+                one("a", false),
+            ),
+            (
+                "x.a().b().c(() => { describe.skip('s', () => { it('a', () => {}); }); });",
+                one("s > a", true),
+            ),
+        ] {
+            assert_eq!(read(call), want, "{call}");
+        }
+    }
+
+    /// The head kept for a node is how `text_without` of the node begins, for every node
+    /// of trees with strings, comments, bytes outside ASCII and errors, asked from the
+    /// root down and from the leaves up.
+    #[test]
+    fn the_head_of_a_node_is_how_its_text_begins() {
+        let sources = [
+            "it.skip('a', () => { expect(a /* c */ . b).toBe(`x${y}`); });\n",
+            "describe /* c */ . each ( [1] ) ( 's' , () => { x.a().b().c().d(); } ) ;\n",
+            "'it'.skip(1); f(1)(2)(3).g; ït('a'); it.ï('b'); it\u{a0}.skip('c'); it\u{b}.only('d');\n",
+            "a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p(1).q(2);\nxdescribe ('s', function () {});\n",
+            "test('a', () => { expect(a).toBe(1) ; }) ; x . y ( ( ) => ( { } ) ) ;\n",
+            "it('a', () => { expect(a.toBe(1); });\ndescribe.each`\n  a | b\n`('s', () => {});\n",
+        ];
+        let (mut heads_read, mut whole, mut cut, mut not_ascii) = (0, 0, 0, 0);
+        for src in sources {
+            let mut parser = tree_sitter::Parser::new();
+            parser
+                .set_language(&tree_sitter_javascript::LANGUAGE.into())
+                .unwrap();
+            let tree = crate::ast::source_text::parse(&mut parser, src).unwrap();
+            let mut nodes = Vec::new();
+            let mut stack = vec![tree.root_node()];
+            while let Some(n) = stack.pop() {
+                nodes.push(n);
+                let mut cursor = n.walk();
+                stack.extend(n.children(&mut cursor));
+            }
+            let mut up = nodes.clone();
+            up.reverse();
+            for order in [nodes, up] {
+                let heads = crate::ast::CodeHeads::new(CALLEE_NOT_NAMES);
+                for n in order {
+                    let text: String =
+                        crate::ast::text_without(n, src.as_bytes(), CALLEE_NOT_NAMES)
+                            .chars()
+                            .filter(|c| !c.is_whitespace())
+                            .collect();
+                    let head = heads.of(n, src.as_bytes());
+                    heads_read += 1;
+                    match head.bytes() {
+                        Some(begins) => {
+                            let kept = begins.len();
+                            assert_eq!(
+                                Some(begins),
+                                text.as_bytes().get(..kept),
+                                "{:?} of {src:?}",
+                                n.kind()
+                            );
+                            assert_eq!(head.is_whole(), kept == text.len(), "{text:?}");
+                            assert!(head.is_whole() || kept == 12, "{text:?}");
+                            if head.is_whole() {
+                                whole += 1;
+                            } else {
+                                cut += 1;
+                            }
+                        }
+                        None => {
+                            assert!(!head.is_whole());
+                            let raw = n.utf8_text(src.as_bytes()).unwrap();
+                            assert!(!raw.is_ascii(), "{raw:?}");
+                            not_ascii += 1;
+                        }
+                    }
+                }
+            }
+        }
+        // Each kind of answer was compared many times.
+        assert!(heads_read > 600, "{heads_read}");
+        assert!(
+            whole > 300 && cut > 60 && not_ascii > 8,
+            "{whole} {cut} {not_ascii}"
+        );
+    }
+
+    /// A chain of calls in a file costs steps in proportion to its links. Before #672
+    /// the callee of each link was read whole to sort the call, and the callee of a link
+    /// holds every link before it, so four times the links cost about sixteen times the
+    /// steps.
+    #[test]
+    fn a_chain_of_calls_costs_steps_in_proportion_to_its_links() {
+        // A chain is as deep a tree as it has links: read on the stack the binary uses.
+        let steps_of = |path: &str, src: &str| -> u64 {
+            crate::deep_stack::on_deep_stack(|| {
+                let (facts, counted) = crate::ast::ancestry::steps(|| {
+                    JavaScriptPack.extract(path, src, &AssertVocabulary::default())
+                });
+                facts.unwrap();
+                counted
+            })
+            .unwrap()
+        };
+        let chain = |n: usize| format!("function run() {{\n  x{};\n}}\n", ".a()".repeat(n));
+        let (few, many) = (
+            steps_of("src/m.js", &chain(50)),
+            steps_of("src/m.js", &chain(200)),
+        );
+        assert!(many < 5 * few, "{few} steps for 50 links, {many} for 200");
+        // The same chain with a test in the callback of its last link.
+        let holding = |n: usize| {
+            format!(
+                "x{}.b(() => {{ it('a', () => {{ expect(1).toBe(1); }}); }});\n",
+                ".a()".repeat(n)
+            )
+        };
+        let read = crate::deep_stack::on_deep_stack(|| tests_read(&holding(200))).unwrap();
+        assert_eq!(read, vec![("a".to_string(), false)]);
+        let (few, many) = (
+            steps_of("tests/m.test.js", &holding(50)),
+            steps_of("tests/m.test.js", &holding(200)),
+        );
+        assert!(many < 5 * few, "{few} steps for 50 links, {many} for 200");
     }
 
     #[test]

@@ -1529,6 +1529,107 @@ fn python_fn_skip<'t>(node: tree_sitter::Node<'t>, anc: &Ancestry<'t>, src: &str
     false
 }
 
+/// The methods the classes of one Python file define, by the names each class derives
+/// from, for [`overridden_in_subclass`].
+///
+/// Whether a method of a class is overridden is asked for every method of every class.
+/// Reading the file for each one cost the file for each: a class of 1000 methods, in a
+/// file of 48 kB, cost 1.0e11 instructions. The classes are listed once, and the methods
+/// of the classes that derive from a name are gathered once for that name.
+struct PyOverrides {
+    /// Each class that names bases: its id, and the names of the functions its body
+    /// defines.
+    classes: Vec<(usize, Vec<String>)>,
+    /// For a word of the bases of a class, the places in `classes` of the classes whose
+    /// bases hold it.
+    deriving: std::collections::HashMap<String, Vec<usize>>,
+    /// For a class name: the methods the classes deriving from it define, each with the
+    /// first such class, by its id, and whether a second one defines it too.
+    defined_below: std::cell::RefCell<std::collections::HashMap<String, std::rc::Rc<PyDefined>>>,
+}
+
+/// The methods some classes define: each with the first such class, by its id, and
+/// whether a second one defines it too.
+type PyDefined = std::collections::HashMap<String, (usize, bool)>;
+
+impl PyOverrides {
+    fn read(root: tree_sitter::Node, src: &str) -> Self {
+        let t = |n: tree_sitter::Node| n.utf8_text(src.as_bytes()).unwrap_or("");
+        let mut classes = Vec::new();
+        let mut deriving: std::collections::HashMap<String, Vec<usize>> = Default::default();
+        let mut stack = vec![root];
+        while let Some(n) = stack.pop() {
+            super::ancestry::count(1);
+            if n.kind() == "class_definition" {
+                if let Some(bases) = n.child_by_field_name("superclasses") {
+                    for word in t(bases).split(|c: char| !c.is_alphanumeric() && c != '_') {
+                        let of_word = deriving.entry(word.to_string()).or_default();
+                        if of_word.last() != Some(&classes.len()) {
+                            of_word.push(classes.len());
+                        }
+                    }
+                    let mut methods = Vec::new();
+                    if let Some(body) = n.child_by_field_name("body") {
+                        let mut c = body.walk();
+                        for m in body.children(&mut c) {
+                            let def = if m.kind() == "decorated_definition" {
+                                m.child_by_field_name("definition").unwrap_or(m)
+                            } else {
+                                m
+                            };
+                            if def.kind() == "function_definition" {
+                                if let Some(name) = def.child_by_field_name("name") {
+                                    methods.push(t(name).to_string());
+                                }
+                            }
+                        }
+                    }
+                    classes.push((n.id(), methods));
+                }
+            }
+            let mut c = n.walk();
+            let kids: Vec<_> = n.children(&mut c).collect();
+            stack.extend(kids);
+        }
+        Self {
+            classes,
+            deriving,
+            defined_below: Default::default(),
+        }
+    }
+
+    /// Whether a class other than `class` (by its id) derives from `class_name` and
+    /// defines `method`.
+    fn overridden(&self, class: usize, class_name: &str, method: &str) -> bool {
+        super::ancestry::count(1);
+        let known = self.defined_below.borrow().get(class_name).cloned();
+        let below = known.unwrap_or_else(|| {
+            let mut defined = PyDefined::new();
+            for at in self.deriving.get(class_name).map_or(&[][..], Vec::as_slice) {
+                super::ancestry::count(1);
+                let (id, methods) = &self.classes[*at];
+                for name in methods {
+                    super::ancestry::count(1);
+                    match defined.get_mut(name) {
+                        Some((first, more)) => *more = *more || first != id,
+                        None => {
+                            defined.insert(name.clone(), (*id, false));
+                        }
+                    }
+                }
+            }
+            let below = std::rc::Rc::new(defined);
+            self.defined_below
+                .borrow_mut()
+                .insert(class_name.to_string(), below.clone());
+            below
+        });
+        below
+            .get(method)
+            .is_some_and(|(first, more)| *more || *first != class)
+    }
+}
+
 fn overridden_in_subclass<'t>(
     class: tree_sitter::Node<'t>,
     anc: &Ancestry<'t>,
@@ -1536,41 +1637,8 @@ fn overridden_in_subclass<'t>(
     method: &str,
     src: &str,
 ) -> bool {
-    let root = anc.root();
-    let t = |n: tree_sitter::Node| n.utf8_text(src.as_bytes()).unwrap_or("");
-    let mut stack = vec![root];
-    while let Some(n) = stack.pop() {
-        if n.kind() == "class_definition" && n != class {
-            let derives = n
-                .child_by_field_name("superclasses")
-                .map(t)
-                .is_some_and(|s| {
-                    s.split(|c: char| !c.is_alphanumeric() && c != '_')
-                        .any(|x| x == class_name)
-                });
-            if derives {
-                if let Some(body) = n.child_by_field_name("body") {
-                    let mut c = body.walk();
-                    let has = body.children(&mut c).any(|m| {
-                        let def = if m.kind() == "decorated_definition" {
-                            m.child_by_field_name("definition").unwrap_or(m)
-                        } else {
-                            m
-                        };
-                        def.kind() == "function_definition"
-                            && def.child_by_field_name("name").map(t) == Some(method)
-                    });
-                    if has {
-                        return true;
-                    }
-                }
-            }
-        }
-        let mut c = n.walk();
-        let kids: Vec<_> = n.children(&mut c).collect();
-        stack.extend(kids);
-    }
-    false
+    anc.kept(|| PyOverrides::read(anc.root(), src))
+        .overridden(class.id(), class_name, method)
 }
 
 fn python_fn_is_test<'t>(

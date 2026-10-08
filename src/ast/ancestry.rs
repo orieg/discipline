@@ -77,6 +77,8 @@ pub struct Ancestry<'t> {
     /// entry below it: the id of that entry below, and one more than the place of the
     /// nearest entry at or above the asked one that said yes (0 when none did).
     answers: RefCell<Vec<Vec<(usize, u32)>>>,
+    /// What readers keep for this tree ([`Ancestry::kept`]), by the type of what is kept.
+    kept: RefCell<std::collections::HashMap<std::any::TypeId, std::rc::Rc<dyn std::any::Any>>>,
 }
 
 /// A question a walker asks of every ancestor of a node, for [`Ancestry::nearest`]. The
@@ -117,7 +119,30 @@ impl<'t> Ancestry<'t> {
             hint: Cell::new(0),
             family: RefCell::new((0, Vec::new())),
             answers: RefCell::new(Vec::new()),
+            kept: RefCell::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// What a reader keeps for this tree: `make()` the first time a `T` is asked for,
+    /// and that same value each time after. A predicate that is handed a node and this
+    /// ancestry and nothing else reads the file once here, and not once for each node
+    /// it is asked about. What is kept is for the tree of this ancestry alone: another
+    /// tree has another ancestry, and nothing of this one.
+    pub fn kept<T: 'static>(&self, make: impl FnOnce() -> T) -> std::rc::Rc<T> {
+        count(1);
+        let key = std::any::TypeId::of::<T>();
+        let known = self.kept.borrow().get(&key).cloned();
+        let value = match known {
+            Some(value) => value,
+            None => {
+                // `make` may itself ask for something kept: nothing is borrowed here.
+                let made: std::rc::Rc<dyn std::any::Any> = std::rc::Rc::new(make());
+                self.kept.borrow_mut().entry(key).or_insert(made).clone()
+            }
+        };
+        value
+            .downcast::<T>()
+            .unwrap_or_else(|_| unreachable!("a value is kept under its own type"))
     }
 
     /// The root of the tree.
@@ -822,6 +847,44 @@ mod tests {
             ancestry.prev_named_sibling(node),
             ancestry.next_named_sibling(node),
         ]
+    }
+
+    /// What is kept for a tree is made once, is kept by its type, and is not what
+    /// another tree keeps.
+    #[test]
+    fn what_is_kept_is_kept_once_by_type_and_by_tree() {
+        struct Words(Vec<String>);
+        struct Count(usize);
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_python::LANGUAGE.into())
+            .unwrap();
+        let (one, two) = (
+            crate::ast::source_text::parse(&mut parser, "a\n").unwrap(),
+            crate::ast::source_text::parse(&mut parser, "b\nc\n").unwrap(),
+        );
+        let (first, second) = (
+            Ancestry::new(one.root_node()),
+            Ancestry::new(two.root_node()),
+        );
+        let made = Cell::new(0);
+        let words = |anc: &Ancestry, word: &str| {
+            anc.kept(|| {
+                made.set(made.get() + 1);
+                Words(vec![word.to_string()])
+            })
+        };
+        assert_eq!(words(&first, "one").0, ["one"]);
+        // Asked again, what was made is handed back and nothing is made.
+        assert_eq!(words(&first, "other").0, ["one"]);
+        assert_eq!(made.get(), 1);
+        // Another type in the same tree, and the same type in another tree.
+        assert_eq!(first.kept(|| Count(1)).0, 1);
+        assert_eq!(words(&first, "other").0, ["one"]);
+        assert_eq!(words(&second, "two").0, ["two"]);
+        assert_eq!(second.kept(|| Count(2)).0, 2);
+        assert_eq!(first.kept(|| Count(3)).0, 1);
+        assert_eq!(made.get(), 2);
     }
 
     /// A parent and the four siblings are what the library answers, for every node of

@@ -2071,6 +2071,7 @@ pub fn java<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [Test
     if tests.is_empty() {
         return;
     }
+    let asserted = JavaAsserted::new(root);
     walk(root, &mut |node| {
         match node.kind() {
             "method_declaration" => {
@@ -2104,7 +2105,7 @@ pub fn java<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [Test
                     return true;
                 }
                 if matches!(name_text, "catchThrowable" | "catchThrowableOfType") {
-                    inspect_java_catch_throwable(node, anc, src, tests);
+                    inspect_java_catch_throwable(node, anc, src, tests, &asserted);
                     return true;
                 }
                 if name_text != "assertThrows" && name_text != "assertThrowsExactly" {
@@ -2261,7 +2262,7 @@ fn inspect_java_assertj<'t>(
 }
 
 /// What the calls chained on an AssertJ assertion of a thrown exception require of it.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct AssertjConstraint {
     exact: bool,
     exception_type: Option<String>,
@@ -2329,11 +2330,12 @@ impl AssertjConstraint {
 /// `assertThat(thrown).isInstanceOf(X.class).hasMessage("..")`. The call alone returns
 /// `null` when nothing is thrown, so it is an expectation only beside an `assertThat` on
 /// the value it is bound to.
-fn inspect_java_catch_throwable<'t>(
+fn inspect_java_catch_throwable<'t, 's>(
     call: Node<'t>,
     anc: &Ancestry<'t>,
-    src: &str,
+    src: &'s str,
     tests: &mut [TestFn],
+    asserted: &JavaAsserted<'t, 's>,
 ) {
     let bound = anc.parent(call).and_then(|p| match p.kind() {
         "variable_declarator" => p.child_by_field_name("name"),
@@ -2351,13 +2353,10 @@ fn inspect_java_catch_throwable<'t>(
     let Some(code) = named.iter().find(|a| a.kind() != "class_literal") else {
         return;
     };
-    let mut constraint = AssertjConstraint {
-        exception_type: named
-            .iter()
-            .find(|a| a.kind() == "class_literal")
-            .map(|c| text(*c, src).trim_end_matches(".class").trim().to_string()),
-        ..Default::default()
-    };
+    let exception_type = named
+        .iter()
+        .find(|a| a.kind() == "class_literal")
+        .map(|c| text(*c, src).trim_end_matches(".class").trim().to_string());
     let mut method = call;
     while let Some(parent) = anc.parent(method) {
         method = parent;
@@ -2365,29 +2364,165 @@ fn inspect_java_catch_throwable<'t>(
             break;
         }
     }
-    let mut asserted = false;
-    walk(method, &mut |node| {
-        let on_value = node.kind() == "method_invocation"
-            && node
-                .child_by_field_name("name")
-                .is_some_and(|n| text(n, src) == "assertThat")
-            && node.child_by_field_name("arguments").is_some_and(|a| {
-                a.named_child_count() == 1
-                    && a.named_child(0).is_some_and(|v| {
-                        v.kind() == "identifier" && text(v, src) == text(bound, src)
-                    })
-            });
-        if on_value {
-            asserted = true;
-            for (name, link_args) in java_chain(node, anc, src) {
-                constraint.read(name, link_args, src);
+    let constraint = match asserted.on(method, text(bound, src), exception_type.is_some(), anc, src)
+    {
+        Some(Some(mut constraint)) => {
+            // A class the call names is kept whatever the assertions say of the type.
+            if exception_type.is_some() {
+                constraint.exception_type = exception_type;
             }
+            constraint
         }
-        true
-    });
-    if asserted {
-        let code = format!("({})", text(*code, src));
-        attribute(tests, constraint.expectation(call, &code));
+        Some(None) => return,
+        // A method the list has no run for: read as before the list was kept.
+        None => {
+            let mut constraint = AssertjConstraint {
+                exception_type,
+                ..Default::default()
+            };
+            let mut found = false;
+            walk(method, &mut |node| {
+                if java_assert_that_value(node, src) == Some(text(bound, src)) {
+                    found = true;
+                    for (name, link_args) in java_chain(node, anc, src) {
+                        constraint.read(name, link_args, src);
+                    }
+                }
+                true
+            });
+            if !found {
+                return;
+            }
+            constraint
+        }
+    };
+    let code = format!("({})", text(*code, src));
+    attribute(tests, constraint.expectation(call, &code));
+}
+
+/// The name `assertThat(<name>)` is called on, when `node` is such a call of one
+/// argument that is a name.
+fn java_assert_that_value<'s>(node: Node, src: &'s str) -> Option<&'s str> {
+    if node.kind() != "method_invocation"
+        || node
+            .child_by_field_name("name")
+            .is_none_or(|n| text(n, src) != "assertThat")
+    {
+        return None;
+    }
+    let args = node.child_by_field_name("arguments")?;
+    if args.named_child_count() != 1 {
+        return None;
+    }
+    args.named_child(0)
+        .filter(|v| v.kind() == "identifier")
+        .map(|v| text(v, src))
+}
+
+/// The `assertThat(<name>)` calls of one Java tree, by the name and in the order of the
+/// source, for [`inspect_java_catch_throwable`].
+///
+/// What a caught value is required to be is read from every `assertThat` on its name in
+/// the method that holds the call. Walking that method for each call costs the method
+/// for each: 400 `catchThrowable` in one method, in a file of 36 kB, cost 3.9e10
+/// instructions. The assertions are listed once, and what the ones on a name in a method
+/// require is read once for the name and the method.
+struct JavaAsserted<'t, 's> {
+    root: Node<'t>,
+    listed: std::cell::OnceCell<JavaAssertions<'t, 's>>,
+    /// For a method, by its id, a name, and whether the call names the class itself:
+    /// what the assertions on the name in the method require, or `None` when the method
+    /// makes none on it.
+    required: std::cell::RefCell<HashMap<JavaAskedOf<'s>, Option<AssertjConstraint>>>,
+}
+
+/// A method, by its id, a name, and whether the call names the class itself.
+type JavaAskedOf<'s> = (usize, &'s str, bool);
+
+struct JavaAssertions<'t, 's> {
+    /// The `assertThat` calls on a given name, each with its place among all of them.
+    by_name: HashMap<&'s str, Vec<(usize, Node<'t>)>>,
+    /// For the root and each method, by its id, the places of the calls in it.
+    runs: HashMap<usize, (usize, usize)>,
+}
+
+impl<'t, 's> JavaAsserted<'t, 's> {
+    fn new(root: Node<'t>) -> Self {
+        Self {
+            root,
+            listed: std::cell::OnceCell::new(),
+            required: Default::default(),
+        }
+    }
+
+    fn listed(&self, src: &'s str) -> &JavaAssertions<'t, 's> {
+        self.listed.get_or_init(|| {
+            let mut by_name: HashMap<&str, Vec<(usize, Node)>> = HashMap::new();
+            let mut runs = HashMap::new();
+            let mut seen = 0usize;
+            // A node, and for one already entered the place its run began at.
+            let mut stack: Vec<(Node, Option<usize>)> = vec![(self.root, None)];
+            while let Some((n, begun)) = stack.pop() {
+                super::ancestry::count(1);
+                if let Some(from) = begun {
+                    runs.insert(n.id(), (from, seen));
+                    continue;
+                }
+                if n.kind() == "method_declaration" || n.id() == self.root.id() {
+                    stack.push((n, Some(seen)));
+                }
+                if let Some(name) = java_assert_that_value(n, src) {
+                    by_name.entry(name).or_default().push((seen, n));
+                    seen += 1;
+                }
+                let mut cursor = n.walk();
+                let children: Vec<Node> = n.children(&mut cursor).collect();
+                stack.extend(children.into_iter().rev().map(|c| (c, None)));
+            }
+            JavaAssertions { by_name, runs }
+        })
+    }
+
+    /// What the `assertThat` calls on `name` in `method` require of the value, read from
+    /// a value whose class the call names (`typed`) or does not: `Some(None)` when the
+    /// method makes no such call, `None` for a method the list has no run for.
+    ///
+    /// A class the call names is never replaced by what an assertion says, and what an
+    /// assertion says of the message does not depend on the class: one answer stands
+    /// for every class a call names. Its `exception_type` is not the caller's.
+    fn on(
+        &self,
+        method: Node<'t>,
+        name: &'s str,
+        typed: bool,
+        anc: &Ancestry<'t>,
+        src: &'s str,
+    ) -> Option<Option<AssertjConstraint>> {
+        let listed = self.listed(src);
+        let (from, to) = listed.runs.get(&method.id()).copied()?;
+        super::ancestry::count(1);
+        let key = (method.id(), name, typed);
+        if let Some(known) = self.required.borrow().get(&key) {
+            return Some(known.clone());
+        }
+        let named = listed.by_name.get(name).map_or(&[][..], Vec::as_slice);
+        let in_method = &named[named.partition_point(|(at, _)| *at < from)
+            ..named.partition_point(|(at, _)| *at < to)];
+        let required = (!in_method.is_empty()).then(|| {
+            let mut constraint = AssertjConstraint {
+                exception_type: typed.then(String::new),
+                ..Default::default()
+            };
+            for (_, node) in in_method {
+                super::ancestry::count(1);
+                for (link, link_args) in java_chain(*node, anc, src) {
+                    constraint.read(link, link_args, src);
+                }
+            }
+            constraint
+        });
+        self.required.borrow_mut().insert(key, required.clone());
+        Some(required)
     }
 }
 
@@ -7964,6 +8099,135 @@ mod tests {
             )),
             vec![some("read")]
         );
+    }
+
+    /// The assertions on a caught value are the ones on its name in the method that
+    /// holds the call: a name in another method is another one, and a class the call
+    /// names is kept whatever the assertions say.
+    #[test]
+    fn java_catch_throwable_is_read_by_the_assertions_of_its_own_method_and_name() {
+        let all = |src: &str| -> Vec<(usize, Option<String>, Option<String>, bool)> {
+            JavaPack
+                .extract(
+                    "src/test/java/SutTest.java",
+                    src,
+                    &crate::ast::AssertVocabulary::default(),
+                )
+                .unwrap()
+                .tests
+                .iter()
+                .flat_map(|t| t.expected_exceptions.iter())
+                .map(|e| {
+                    (
+                        e.line,
+                        e.exception_type.clone(),
+                        e.matcher.clone(),
+                        e.whole_message,
+                    )
+                })
+                .collect()
+        };
+        let some = |s: &str| Some(s.to_string());
+        // One name in two methods: the assertion of the second is not on the first.
+        assert_eq!(
+            all("class SutTest {\n    @Test\n    void t() {\n        Throwable thrown = catchThrowable(() -> f(1));\n    }\n    @Test\n    void u() {\n        Throwable thrown = catchThrowable(() -> f(2));\n        assertThat(thrown).isInstanceOf(IllegalStateException.class);\n    }\n}\n"),
+            vec![(8, some("IllegalStateException"), None, false)]
+        );
+        assert_eq!(
+            all("class SutTest {\n    @Test\n    void t() {\n        Throwable thrown = catchThrowable(() -> f(1));\n        assertThat(thrown).hasMessage(\"first\");\n    }\n    @Test\n    void u() {\n        Throwable thrown = catchThrowable(() -> f(2));\n        assertThat(thrown).hasMessageContaining(\"second\");\n    }\n}\n"),
+            vec![
+                (4, None, some("first"), true),
+                (9, None, some("second"), false)
+            ]
+        );
+        // Two names in one method: each is read by its own assertions.
+        assert_eq!(
+            all("class SutTest {\n    @Test\n    void t() {\n        Throwable a = catchThrowable(() -> f(1));\n        Throwable b = catchThrowable(() -> f(2));\n        assertThat(b).isInstanceOf(IllegalStateException.class);\n        assertThat(a).hasMessage(\"first\");\n    }\n}\n"),
+            vec![
+                (4, None, some("first"), true),
+                (5, some("IllegalStateException"), None, false)
+            ]
+        );
+        // One name bound twice in one method: both calls are read by every assertion on
+        // the name, and the call that names a class keeps it.
+        assert_eq!(
+            all("class SutTest {\n    @Test\n    void t() {\n        Throwable e = catchThrowable(() -> f(1));\n        assertThat(e).isExactlyInstanceOf(IllegalStateException.class);\n        e = catchThrowableOfType(() -> f(2), ArithmeticException.class);\n        assertThat(e).hasMessage(\"second\");\n        e = catchThrowableOfType(() -> f(3), NullPointerException.class);\n    }\n}\n"),
+            vec![
+                (4, some("IllegalStateException"), some("second"), true),
+                (6, some("ArithmeticException"), some("second"), true),
+                (8, some("NullPointerException"), some("second"), true)
+            ]
+        );
+        // The class the assertion names is exact for the call that names none: a call
+        // that names its own is not read by it.
+        let kinds: Vec<String> = JavaPack
+            .extract(
+                "src/test/java/SutTest.java",
+                "class SutTest {\n    @Test\n    void t() {\n        Throwable e = catchThrowable(() -> f(1));\n        assertThat(e).isExactlyInstanceOf(IllegalStateException.class);\n        e = catchThrowableOfType(() -> f(2), ArithmeticException.class);\n    }\n}\n",
+                &crate::ast::AssertVocabulary::default(),
+            )
+            .unwrap()
+            .tests
+            .iter()
+            .flat_map(|t| t.expected_exceptions.iter())
+            .map(|e| e.kind.clone())
+            .collect();
+        assert_eq!(kinds, vec!["assertThrowsExactly", "assertThrows"]);
+        // An assertion in a class declared in the method is in the method.
+        assert_eq!(
+            all("class SutTest {\n    @Test\n    void t() {\n        Throwable e = catchThrowable(() -> f(1));\n        new Runnable() {\n            public void run() {\n                assertThat(e).hasMessage(\"inner\");\n            }\n        };\n    }\n}\n"),
+            vec![(4, None, some("inner"), true)]
+        );
+        // A call in a method of such a class is read by that method alone.
+        assert_eq!(
+            all("class SutTest {\n    @Test\n    void t() {\n        new Runnable() {\n            public void run() {\n                Throwable e = catchThrowable(() -> f(1));\n            }\n        };\n        assertThat(e).hasMessage(\"outer\");\n    }\n}\n"),
+            vec![]
+        );
+    }
+
+    /// `catchThrowable` calls in one Java method cost steps in proportion to their
+    /// number. Before #672 the method was walked for each call, so four times the calls
+    /// cost about sixteen times the steps; and with every call bound to one name, each
+    /// read every assertion on that name.
+    #[test]
+    fn java_catch_throwable_calls_cost_steps_in_proportion_to_their_number() {
+        let steps_of = |n: usize, one_name: bool| -> u64 {
+            let body: String = (0..n)
+                .map(|i| {
+                    let (bind, name) = if one_name {
+                        (if i == 0 { "Throwable t" } else { "t" }.to_string(), "t".to_string())
+                    } else {
+                        (format!("Throwable t{i}"), format!("t{i}"))
+                    };
+                    format!(
+                        "        {bind} = catchThrowable(() -> f({i}));\n        assertThat({name}).isInstanceOf(E.class);\n"
+                    )
+                })
+                .collect();
+            let src = format!("class MTest {{\n    @Test\n    void t() {{\n{body}    }}\n}}\n");
+            let (facts, counted) = crate::ast::ancestry::steps(|| {
+                JavaPack.extract(
+                    "src/test/java/MTest.java",
+                    &src,
+                    &crate::ast::AssertVocabulary::default(),
+                )
+            });
+            let held: usize = facts
+                .unwrap()
+                .tests
+                .iter()
+                .map(|t| t.expected_exceptions.len())
+                .sum();
+            assert_eq!(held, n);
+            counted
+        };
+        for one_name in [false, true] {
+            let (few, many) = (steps_of(40, one_name), steps_of(160, one_name));
+            assert!(
+                many < 5 * few,
+                "{few} steps for 40, {many} for 160 (one name: {one_name})"
+            );
+        }
     }
 
     /// Expectations in one Kotlin function cost steps in proportion to their number.

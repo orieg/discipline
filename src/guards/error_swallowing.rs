@@ -171,20 +171,21 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
         };
         out.examined += head.len();
         let new = new_sites(&base, &head);
+        // The lines of the head side, listed once: looking a line up from the start of
+        // the file for each finding read the file for each of them.
+        let head_lines: Vec<&str> = head_src.lines().collect();
+        let line_of = |site: &SwallowSite| -> &str {
+            head_lines
+                .get(site.line.saturating_sub(1))
+                .copied()
+                .unwrap_or("")
+        };
         if lifted_reclassification {
             // The override line of a report shows the directive and the path, and one
             // `allow-swallow` on a path lifts the move and every handler in the file.
             let handlers = new
                 .iter()
-                .filter(|site| {
-                    !super::line_allows(
-                        head_src
-                            .lines()
-                            .nth(site.line.saturating_sub(1))
-                            .unwrap_or(""),
-                        GATE,
-                    )
-                })
+                .filter(|site| !super::line_allows(line_of(site), GATE))
                 .count();
             out.notes.push(format!(
                 "`allow-swallow` lifted `{}` for `{}` (renamed from `{}` into test scope); a lift by path also covers the handlers of the file, each with its own override record: {handlers} handler finding(s) here; `allow-swallow: {}:<line>` lifts one handler and not the move",
@@ -195,10 +196,7 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
             ));
         }
         for site in new {
-            let line_text = head_src
-                .lines()
-                .nth(site.line.saturating_sub(1))
-                .unwrap_or("");
+            let line_text = line_of(&site);
             if super::line_allows(line_text, GATE) {
                 out.inline_exemptions += 1;
                 continue;
