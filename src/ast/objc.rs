@@ -16,6 +16,7 @@ use tree_sitter::Node;
 
 use super::ci_condition::{read_skip, Grammar};
 use super::functions::{self, FunctionSpec};
+use super::suppressions::{CommentRule, Reports, Suppressions};
 use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
 /// Objective-C language pack implementing [`LanguagePack`].
@@ -94,7 +95,7 @@ impl LanguagePack for ObjcPack {
             test_calls: Vec::new(),
         };
 
-        extractor.collect_escape_hatches(root);
+        OBJC_SUPPRESSIONS.collect(root, extractor.src, &mut extractor.facts.escape_hatches);
         extractor.collect_xctest_classes(root);
         extractor.visit_node(root, "");
         extractor.resolve_same_file_helpers();
@@ -144,10 +145,28 @@ struct ObjcExtractor<'a> {
 }
 
 /// The comments that suppress an Objective-C linter; a `#pragma` is read from its own node.
-const OBJC_SUPPRESSIONS: super::CommentSuppressions = super::CommentSuppressions {
-    hash_comments: false,
-    markers: &["NOLINT"],
+const OBJC_SUPPRESSIONS: Suppressions = Suppressions {
+    rules: &[CommentRule::opens(&["NOLINT"], Reports::Body)],
+    other: Some(pragma_suppression),
+    ..Suppressions::SLASH_COMMENTS
 };
+
+/// `#pragma clang diagnostic ignored "-W..."`, pushed to `sites`.
+fn pragma_suppression(node: Node, src: &[u8], sites: &mut Vec<EscapeHatchSite>) -> bool {
+    if node.kind() != "preproc_call" {
+        return true;
+    }
+    let text = node.utf8_text(src).unwrap_or("");
+    if text.contains("diagnostic ignored") {
+        let rule = text.split('"').nth(1).unwrap_or("all").to_string();
+        sites.push(EscapeHatchSite::LinterDisable {
+            line: node.start_position().row + 1,
+            rule,
+            snippet: text.trim().to_string(),
+        });
+    }
+    false
+}
 
 impl<'a> ObjcExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
@@ -162,32 +181,6 @@ impl<'a> ObjcExtractor<'a> {
             .map(|c| self.text(c))
             .unwrap_or("");
         found
-    }
-
-    /// `#pragma clang diagnostic ignored "-W..."` and `// NOLINT...`.
-    fn collect_escape_hatches(&mut self, node: Node<'a>) {
-        let src = self.src;
-        super::collect_comment_suppressions(
-            node,
-            src,
-            &OBJC_SUPPRESSIONS,
-            &mut |node, sites| {
-                if node.kind() != "preproc_call" {
-                    return true;
-                }
-                let text = node.utf8_text(src).unwrap_or("");
-                if text.contains("diagnostic ignored") {
-                    let rule = text.split('"').nth(1).unwrap_or("all").to_string();
-                    sites.push(EscapeHatchSite::LinterDisable {
-                        line: node.start_position().row + 1,
-                        rule,
-                        snippet: text.trim().to_string(),
-                    });
-                }
-                false
-            },
-            &mut self.facts.escape_hatches,
-        );
     }
 
     fn collect_xctest_classes(&mut self, node: Node<'a>) {

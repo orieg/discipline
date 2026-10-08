@@ -8,9 +8,9 @@ use std::collections::{HashMap, HashSet};
 
 use super::ci_condition::{CiVerdict, SkipCondition};
 use super::functions::{self, FunctionSpec};
+use super::suppressions::{CommentRule, Reports, RuleText, Suppressions};
 use super::{
-    AssertVocabulary, EscapeHatchSite, Fact, HelperFacts, LanguagePack, ParsedFileFacts, TestFn,
-    TestHelperFacts,
+    AssertVocabulary, Fact, HelperFacts, LanguagePack, ParsedFileFacts, TestFn, TestHelperFacts,
 };
 
 /// Python language pack implementing [`LanguagePack`].
@@ -85,7 +85,7 @@ impl LanguagePack for PythonPack {
 
         extractor.collect_class_bases(root);
         extractor.compute_collected_classes();
-        extractor.collect_comments_and_escape_hatches(root);
+        PY_SUPPRESSIONS.collect(root, extractor.src, &mut extractor.facts.escape_hatches);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
         PYTHON_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
@@ -268,6 +268,35 @@ fn is_assertion_context_manager(text: &str) -> bool {
         || text.contains("assertNoLogs")
 }
 
+/// The comments that suppress mypy, flake8 or ruff, coverage.py and pylint.
+const PY_SUPPRESSIONS: Suppressions = Suppressions {
+    open: &["#"],
+    close: &[],
+    rules: &[
+        CommentRule::opens(&["type: ignore"], Reports::TypeIgnore("mypy")),
+        CommentRule::opens(
+            &["noqa", "ruff: noqa"],
+            Reports::Rest(RuleText {
+                after: &["noqa:", "ruff: noqa:"],
+                then: &[],
+                first_word: false,
+                empty_is_all: false,
+            }),
+        ),
+        CommentRule::opens(&["pragma: no cover"], Reports::Rule("coverage")),
+        CommentRule::opens(
+            &["pylint: disable="],
+            Reports::Rest(RuleText {
+                after: &["pylint: disable="],
+                then: &[],
+                first_word: false,
+                empty_is_all: false,
+            }),
+        ),
+    ],
+    ..Suppressions::SLASH_COMMENTS
+};
+
 impl<'a> PythonExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
         node.utf8_text(self.src).unwrap_or("")
@@ -384,64 +413,6 @@ impl<'a> PythonExtractor<'a> {
                 base.starts_with("Test") || base.ends_with("TestCase")
             }
         })
-    }
-
-    fn collect_comments_and_escape_hatches(&mut self, node: Node<'a>) {
-        if node.kind() == "comment" {
-            let text = self.text(node);
-            let line = node.start_position().row + 1;
-            let trimmed = text.trim_start_matches('#').trim();
-
-            if trimmed.starts_with("type: ignore") {
-                self.facts.escape_hatches.push(EscapeHatchSite::TypeIgnore {
-                    line,
-                    tool: "mypy".to_string(),
-                    snippet: text.to_string(),
-                });
-            } else if trimmed.starts_with("noqa") || trimmed.starts_with("ruff: noqa") {
-                let rule = if let Some(rest) = trimmed.strip_prefix("noqa:") {
-                    rest.trim().to_string()
-                } else if let Some(rest) = trimmed.strip_prefix("ruff: noqa:") {
-                    rest.trim().to_string()
-                } else {
-                    "all".to_string()
-                };
-                self.facts
-                    .escape_hatches
-                    .push(EscapeHatchSite::LinterDisable {
-                        line,
-                        rule,
-                        snippet: text.to_string(),
-                    });
-            } else if trimmed.starts_with("pragma: no cover") {
-                self.facts
-                    .escape_hatches
-                    .push(EscapeHatchSite::LinterDisable {
-                        line,
-                        rule: "coverage".to_string(),
-                        snippet: text.to_string(),
-                    });
-            } else if trimmed.starts_with("pylint: disable=") {
-                let rule = trimmed
-                    .strip_prefix("pylint: disable=")
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-                self.facts
-                    .escape_hatches
-                    .push(EscapeHatchSite::LinterDisable {
-                        line,
-                        rule,
-                        snippet: text.to_string(),
-                    });
-            }
-            return;
-        }
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.collect_comments_and_escape_hatches(child);
-        }
     }
 
     fn visit_root(&mut self, root: Node<'a>) {
@@ -1745,6 +1716,7 @@ pub const PY_WRAPPER: super::WrapperSpec = super::WrapperSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::EscapeHatchSite;
 
     /// The whole-file handler rule is the shared-or-own superset: an empty handler is
     /// silent in a file only the shared rule recognises (`benches/`) and in one only

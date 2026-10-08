@@ -6,6 +6,7 @@ use tree_sitter::Node;
 
 use super::ci_condition::{read_skip, CiVerdict, Grammar};
 use super::functions::{self, FunctionSpec};
+use super::suppressions::{CommentRule, Reports, Suppressions};
 use super::{AssertVocabulary, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
 /// PHP language pack implementing [`LanguagePack`].
@@ -60,7 +61,7 @@ impl LanguagePack for PhpPack {
             helpers: std::collections::HashMap::new(),
         };
 
-        extractor.collect_comments_and_escape_hatches(root);
+        PHP_SUPPRESSIONS.collect(root, extractor.src, &mut extractor.facts.escape_hatches);
         extractor.visit_root(root);
         PHP_PACK.facts_to_method_checks(root, &anc, src, path, vocab, &mut extractor.facts);
         super::expected_exceptions::php_declared(root, src, &mut extractor.facts.tests);
@@ -234,30 +235,24 @@ const PHP_CLOSURE_KINDS: &[&str] = &[
 ];
 
 /// The comments that suppress a PHP analyser; a comment may open with `#`.
-const PHP_SUPPRESSIONS: super::CommentSuppressions = super::CommentSuppressions {
-    hash_comments: true,
-    markers: &[
-        "@psalm-suppress",
-        "@phpstan-ignore",
-        "phpstan-ignore",
-        "phpcs:ignore",
-        "psalm-suppress",
-    ],
+const PHP_SUPPRESSIONS: Suppressions = Suppressions {
+    open: &["//", "#", "/*"],
+    rules: &[CommentRule::opens(
+        &[
+            "@psalm-suppress",
+            "@phpstan-ignore",
+            "phpstan-ignore",
+            "phpcs:ignore",
+            "psalm-suppress",
+        ],
+        Reports::Body,
+    )],
+    ..Suppressions::SLASH_COMMENTS
 };
 
 impl<'a> PhpExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
         node.utf8_text(self.src).unwrap_or("")
-    }
-
-    fn collect_comments_and_escape_hatches(&mut self, node: Node<'a>) {
-        super::collect_comment_suppressions(
-            node,
-            self.src,
-            &PHP_SUPPRESSIONS,
-            &mut |_, _| true,
-            &mut self.facts.escape_hatches,
-        );
     }
 
     fn visit_root(&mut self, root: Node<'a>) {
