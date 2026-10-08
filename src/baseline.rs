@@ -238,6 +238,22 @@ where
     Some((own.to_string(), above + 1))
 }
 
+/// What [`line_and_occurrence`] answers for a finding on each line of `content`, the
+/// entry of a line at its number less one.
+fn lines_and_occurrences(content: &str) -> Vec<(String, usize)> {
+    let mut seen: HashMap<&str, usize> = HashMap::new();
+    content
+        .lines()
+        .map(|line| {
+            crate::ast::ancestry::count(1);
+            let own = line.trim();
+            let occurrence = seen.entry(own).or_insert(0);
+            *occurrence += 1;
+            (own.to_string(), *occurrence)
+        })
+        .collect()
+}
+
 /// What tells a finding on the `occurrence`-th of several identical lines from the one
 /// on the first: nothing for the first, so a finding on a line that does not repeat, or
 /// on the first of those that do, keeps the fingerprint it always had. A finding with an
@@ -365,8 +381,18 @@ where
 {
     let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
     let mut occurrences = Vec::with_capacity(violations.len());
+    // The lines of each file a finding is in, read once: reading the file and counting
+    // the lines above for each finding read a file once for each finding in it.
+    let mut lines_of: HashMap<String, Option<Vec<(String, usize)>>> = HashMap::new();
     for (i, v) in violations.iter_mut().enumerate() {
-        let located = line_and_occurrence(v, &read_file);
+        let located = match (v.file.as_deref(), v.line.filter(|l| *l > 0)) {
+            (Some(file), Some(line)) => lines_of
+                .entry(file.to_string())
+                .or_insert_with(|| read_file(file).map(|content| lines_and_occurrences(&content)))
+                .as_ref()
+                .and_then(|lines| lines.get(line - 1).cloned()),
+            _ => None,
+        };
         v.fingerprint = fingerprint_of(
             v,
             located.as_ref().map(|(l, n)| (l.as_str(), *n)),
@@ -1073,6 +1099,94 @@ mod tests {
         let distinct: std::collections::HashSet<&String> = both.iter().collect();
         assert_eq!(distinct.len(), 4, "{both:?}");
         assert_eq!(both[..2], prints("a, b\nother\n", &[1])[..]);
+    }
+
+    /// The findings of one run, in files of lines that repeat, of lines that do not, with
+    /// a line past the end of its file and a file that cannot be read.
+    fn findings_in(files: usize, lines: usize) -> Vec<Violation> {
+        let mut found = Vec::new();
+        for file in 0..files {
+            for line in 1..=lines + 1 {
+                found.push(Violation {
+                    file: Some(format!("src/f{file}.rs")),
+                    line: Some(line),
+                    ..finding("t", "c/x")
+                });
+            }
+        }
+        found.push(Violation {
+            file: Some("src/gone.rs".to_string()),
+            line: Some(3),
+            ..finding("t", "c/x")
+        });
+        found
+    }
+
+    /// The content of `src/f<n>.rs`: every third line is one text, the others differ by
+    /// their number and by the file.
+    fn content_of(path: &str, lines: usize) -> Option<String> {
+        let file = path.strip_prefix("src/f")?.strip_suffix(".rs")?;
+        Some(
+            (0..lines)
+                .map(|i| {
+                    if i % 3 == 0 {
+                        "    same();\n".to_string()
+                    } else {
+                        format!("  line {i} of {file}\n")
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    /// The fingerprint a run gives each finding is the one the finding has read alone:
+    /// the file read once for the run answers as the file read for the finding does.
+    #[test]
+    fn the_findings_of_a_run_have_the_fingerprints_they_have_alone() {
+        let mut found = findings_in(3, 30);
+        let reads = std::cell::Cell::new(0);
+        fill_fingerprints(&mut found.iter_mut().collect::<Vec<_>>(), |path| {
+            reads.set(reads.get() + 1);
+            content_of(path, 30)
+        });
+        for v in &found {
+            assert_eq!(
+                v.fingerprint,
+                compute_violation_fingerprint_with_content(v, |path| content_of(path, 30)),
+                "{:?} line {:?}",
+                v.file,
+                v.line
+            );
+        }
+        // The lines that repeat are told apart, so every finding has its own.
+        let distinct: std::collections::HashSet<&String> =
+            found.iter().map(|v| &v.fingerprint).collect();
+        assert_eq!(distinct.len(), found.len());
+    }
+
+    /// The findings of one file cost steps in proportion to their number, and the file
+    /// is read once. Before #672 the file was read for each finding, and its lines
+    /// above the finding counted again for each.
+    #[test]
+    fn the_findings_of_one_file_cost_steps_in_proportion_to_their_number() {
+        let steps_of = |lines: usize| -> (u64, usize) {
+            let mut found = findings_in(1, lines);
+            let reads = std::cell::Cell::new(0);
+            let ((), counted) = crate::ast::ancestry::steps(|| {
+                fill_fingerprints(&mut found.iter_mut().collect::<Vec<_>>(), |path| {
+                    reads.set(reads.get() + 1);
+                    content_of(path, lines)
+                })
+            });
+            (counted, reads.get())
+        };
+        let ((few, read_few), (many, read_many)) = (steps_of(40), steps_of(160));
+        assert!(
+            few > 0 && many < 5 * few,
+            "{few} steps for 40, {many} for 160"
+        );
+        // The file of the findings, and the one that cannot be read.
+        assert_eq!((read_few, read_many), (2, 2));
     }
 
     #[test]

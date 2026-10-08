@@ -402,16 +402,6 @@ fn guarded_by_equality<'t>(
     condition.is_some_and(|c| c.id() != child.id() && compares_for_equality(c, src, spec))
 }
 
-/// The innermost of `spans` (first and last line) that holds `line`.
-fn innermost(spans: &[(usize, usize)], line: usize) -> Option<usize> {
-    spans
-        .iter()
-        .enumerate()
-        .filter(|(_, (first, last))| *first <= line && line <= (*last).max(*first))
-        .min_by_key(|(_, (first, last))| last.saturating_sub(*first))
-        .map(|(at, _)| at)
-}
-
 /// Counts each test's looped helper calls into `HelperReach::looped`, and the
 /// equality-guarded failure exits of the helpers it calls into
 /// `HelperReach::equality_exits`. Run after the pack
@@ -434,6 +424,13 @@ pub fn count<'t>(
         .iter()
         .map(|h| (h.line, h.end_line))
         .collect();
+    // The innermost test and the innermost helper of each line, by table: reading every
+    // span for each call cost the tests and the helpers for each call of the file.
+    let last_line = root.end_position().row + 1;
+    let test_at = super::innermost_by_line(&tests, last_line);
+    let helper_at = super::innermost_by_line(&helpers, last_line);
+    let innermost =
+        |table: &[Option<usize>], line: usize| -> Option<usize> { table.get(line).copied()? };
     let mut helper_loops = vec![false; helpers.len()];
     let mut equality_exits = vec![0usize; helpers.len()];
     // Calls made in a loop of a test: the test and the name the callee ends in.
@@ -444,7 +441,7 @@ pub fn count<'t>(
         let called = callee(node, spec);
         if called.is_some() || spec.exits.contains(&node.kind()) {
             let line = node.start_position().row + 1;
-            if let Some(at) = innermost(&helpers, line) {
+            if let Some(at) = innermost(&helper_at, line) {
                 if !helper_loops[at] && in_loop(node, anc, helpers[at].0, src, spec) {
                     helper_loops[at] = true;
                 }
@@ -454,7 +451,7 @@ pub fn count<'t>(
                     equality_exits[at] += 1;
                 }
             }
-            if let (Some(called), Some(at)) = (called, innermost(&tests, line)) {
+            if let (Some(called), Some(at)) = (called, innermost(&test_at, line)) {
                 if in_loop(node, anc, tests[at].0, src, spec) {
                     looped_sites.push((at, last_leaf(called, src)));
                 }

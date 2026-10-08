@@ -128,8 +128,29 @@ fn text<'a>(node: Node, src: &'a str) -> &'a str {
 /// Whether `t` is one of the pack's trivial statements. Runs of whitespace are folded to
 /// one space, so `return  []` and `return\n[]` match the `return []` entry.
 fn is_trivial(spec: &HandlerSpec, t: &str) -> bool {
-    let folded = t.split_whitespace().collect::<Vec<_>>().join(" ");
-    spec.trivial.contains(&folded.as_str())
+    spec.trivial.iter().any(|entry| folds_to(t, entry))
+}
+
+/// Whether `t`, with each run of white space folded to one space and none at either
+/// end, is `entry`. The words of `t` are compared as they are read, so a statement that
+/// is not `entry` is left at its first word that differs: folding the whole of it first
+/// read a handler that holds handlers once for each of them.
+fn folds_to(t: &str, entry: &str) -> bool {
+    let mut rest = entry;
+    for (at, word) in t.split_whitespace().enumerate() {
+        super::ancestry::count(1);
+        if at > 0 {
+            match rest.strip_prefix(' ') {
+                Some(after) => rest = after,
+                None => return false,
+            }
+        }
+        match rest.strip_prefix(word) {
+            Some(after) => rest = after,
+            None => return false,
+        }
+    }
+    rest.is_empty()
 }
 
 fn first_line(t: &str) -> String {
@@ -1355,6 +1376,62 @@ pub fn go_discards(t: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// A text folds to an entry when its words, joined by one space, are the entry: as
+    /// folding the whole text first answered, for texts and entries of every spacing.
+    #[test]
+    fn a_text_folds_to_an_entry_as_its_folded_whole_is_the_entry() {
+        let texts = [
+            "",
+            " ",
+            "pass",
+            " pass ",
+            "pass pass",
+            "return []",
+            "return  []",
+            "return\n[]",
+            "\treturn\t[] ",
+            "return [ ]",
+            "return",
+            "return None",
+            "returnNone",
+            "return Non",
+            "return None x",
+            "x return None",
+            "a b c",
+            "a  b\n\nc",
+            "\u{a0}pass",
+            "pass\u{a0}",
+        ];
+        let entries = [
+            "",
+            " ",
+            "pass",
+            "return []",
+            "return  []",
+            "return",
+            "return None",
+            "a b c",
+            " pass",
+            "pass ",
+            "a b",
+            "b c",
+            "return\t[]",
+        ];
+        let mut folded_to = 0;
+        for t in texts {
+            for entry in entries {
+                let whole = t.split_whitespace().collect::<Vec<_>>().join(" ");
+                assert_eq!(
+                    super::folds_to(t, entry),
+                    whole == entry,
+                    "{t:?} to {entry:?}"
+                );
+                folded_to += usize::from(whole == entry);
+            }
+        }
+        assert!(folded_to > 12, "{folded_to}");
+    }
     use super::*;
 
     #[test]

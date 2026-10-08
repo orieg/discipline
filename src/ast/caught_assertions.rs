@@ -69,23 +69,122 @@ fn site(node: Node) -> Site {
     )
 }
 
-fn attribute(tests: &mut [TestFn], mut c: CaughtAssertion) {
-    let line = c.line;
-    if let Some(t) = super::innermost_test(tests, line) {
-        if !t
-            .caught_assertions
-            .iter()
-            // One assertion is neutralized once, whatever number of handlers enclose it.
-            // The assertion is its node, so two on one line are two; a node inside
-            // another (`expect(x)` in `expect(x).toBe(1)`) is the same assertion.
-            .any(|existing| existing.span.0 < c.span.1 && c.span.0 < existing.span.1)
-        {
-            c.tautology = c.tautology
-                || t.tautology_spans
-                    .iter()
-                    .any(|t| t.0 < c.span.1 && c.span.0 < t.1);
-            t.caught_assertions.push(c);
+/// The tests of one source, and the assertions a reader has recorded in them as caught.
+///
+/// An assertion goes to the innermost test that holds its line, once: one that overlaps
+/// an assertion the test holds is not added. Reading every test for the first and every
+/// assertion of the test for the second cost the tests and the assertions for each
+/// assertion. The test is answered from a table of lines, and the overlap from the
+/// assertions kept in the order of their bytes.
+struct Caught<'a> {
+    tests: &'a mut [TestFn],
+    /// The last line of the source.
+    last_line: usize,
+    /// The innermost test of each line (`innermost_tests_by_line`), made when the first
+    /// assertion is placed.
+    innermost: Option<Vec<Option<usize>>>,
+    /// For a test, by its index: what it holds.
+    held: std::collections::HashMap<usize, Held>,
+}
+
+/// The byte ranges one test holds.
+struct Held {
+    /// The assertions recorded as caught, in the order of their bytes. No two of them
+    /// overlap, so the one that starts last before a given byte is also the one that
+    /// ends last. `None` for a test that held assertions before this reader ran: those
+    /// are compared one by one, as they were.
+    caught: Option<std::collections::BTreeSet<(usize, usize)>>,
+    /// The tautologies, by the byte each starts at, and for each the furthest byte that
+    /// one or one before it ends at.
+    tautologies: Vec<(usize, usize)>,
+}
+
+/// Whether two byte ranges overlap. A range of no width overlaps a range it is strictly
+/// inside, and no other: not itself.
+fn overlap(a: (usize, usize), b: (usize, usize)) -> bool {
+    a.0 < b.1 && b.0 < a.1
+}
+
+impl Held {
+    fn of(test: &TestFn) -> Self {
+        let mut tautologies = test.tautology_spans.clone();
+        tautologies.sort_unstable();
+        let mut furthest = 0;
+        for span in &mut tautologies {
+            furthest = furthest.max(span.1);
+            span.1 = furthest;
         }
+        super::ancestry::count(tautologies.len());
+        Self {
+            caught: test
+                .caught_assertions
+                .is_empty()
+                .then(std::collections::BTreeSet::new),
+            tautologies,
+        }
+    }
+
+    /// Whether an assertion the test holds overlaps `span`.
+    fn holds(&self, test: &TestFn, span: (usize, usize)) -> bool {
+        match &self.caught {
+            // The last one that starts before `span` ends, which ends last of them.
+            Some(caught) => caught
+                .range(..(span.1, 0))
+                .next_back()
+                .is_some_and(|last| span.0 < last.1),
+            None => {
+                super::ancestry::count(test.caught_assertions.len());
+                test.caught_assertions
+                    .iter()
+                    .any(|existing| overlap(existing.span, span))
+            }
+        }
+    }
+
+    /// Whether a tautology of the test overlaps `span`.
+    fn is_tautology(&self, span: (usize, usize)) -> bool {
+        // Of the tautologies that start before `span` ends, the one that ends last.
+        let before = self.tautologies.partition_point(|t| t.0 < span.1);
+        before
+            .checked_sub(1)
+            .is_some_and(|last| span.0 < self.tautologies[last].1)
+    }
+}
+
+impl<'a> Caught<'a> {
+    /// The caught assertions of `tests`, which are the tests of the tree of `root`.
+    fn new(tests: &'a mut [TestFn], root: Node) -> Self {
+        Self {
+            tests,
+            last_line: root.end_position().row + 1,
+            innermost: None,
+            held: Default::default(),
+        }
+    }
+
+    fn attribute(&mut self, mut c: CaughtAssertion) {
+        super::ancestry::count(1);
+        let innermost = self
+            .innermost
+            .get_or_insert_with(|| super::innermost_tests_by_line(self.tests, self.last_line));
+        let Some(&Some(at)) = innermost.get(c.line) else {
+            return;
+        };
+        let t = &mut self.tests[at];
+        let held = self.held.entry(at).or_insert_with(|| Held::of(t));
+        // The assertions read to answer: as many as halving their number takes.
+        super::ancestry::count((usize::BITS - t.caught_assertions.len().leading_zeros()) as usize);
+        // One assertion is neutralized once, whatever number of handlers enclose it.
+        // The assertion is its node, so two on one line are two; a node inside
+        // another (`expect(x)` in `expect(x).toBe(1)`) is the same assertion.
+        if held.holds(t, c.span) {
+            return;
+        }
+        c.tautology = c.tautology || held.is_tautology(c.span);
+        if let Some(caught) = &mut held.caught {
+            caught.insert(c.span);
+        }
+        t.caught_assertions.push(c);
     }
 }
 
@@ -797,6 +896,7 @@ pub fn python<'t>(
     if tests.is_empty() {
         return;
     }
+    let mut caught = Caught::new(tests, root);
     let classes = py_classes(root, src);
     // For a `try`, by its id: each handler, whether it is reached, whether it swallows.
     let mut handlers_of: std::collections::HashMap<usize, Vec<(Node, Reach, bool)>> =
@@ -836,21 +936,18 @@ pub fn python<'t>(
                     Reach::Never
                 };
                 if reach != Reach::Never {
-                    attribute(
-                        tests,
-                        CaughtAssertion {
-                            line: node.start_position().row + 1,
-                            span: site(node).1,
-                            tautology: false,
-                            handler_line: p.start_position().row + 1,
-                            detail: if reach == Reach::Always {
-                                "contextlib.suppress discards the AssertionError"
-                            } else {
-                                "contextlib.suppress of a class that may be an assertion failure"
-                            }
-                            .to_string(),
-                        },
-                    );
+                    caught.attribute(CaughtAssertion {
+                        line: node.start_position().row + 1,
+                        span: site(node).1,
+                        tautology: false,
+                        handler_line: p.start_position().row + 1,
+                        detail: if reach == Reach::Always {
+                            "contextlib.suppress discards the AssertionError"
+                        } else {
+                            "contextlib.suppress of a class that may be an assertion failure"
+                        }
+                        .to_string(),
+                    });
                     break;
                 }
             }
@@ -860,16 +957,13 @@ pub fn python<'t>(
                     .is_some_and(|b| within(node, b));
                 if inside_try_body {
                     if let Some(finally) = py_finally_returns(p) {
-                        attribute(
-                            tests,
-                            CaughtAssertion {
-                                line: node.start_position().row + 1,
-                                span: site(node).1,
-                                tautology: false,
-                                handler_line: finally.start_position().row + 1,
-                                detail: FINALLY_RETURNS.to_string(),
-                            },
-                        );
+                        caught.attribute(CaughtAssertion {
+                            line: node.start_position().row + 1,
+                            span: site(node).1,
+                            tautology: false,
+                            handler_line: finally.start_position().row + 1,
+                            detail: FINALLY_RETURNS.to_string(),
+                        });
                         break;
                     }
                     // What the handlers of a `try` do is the same for every assertion
@@ -897,21 +991,18 @@ pub fn python<'t>(
                         let always = handlers
                             .iter()
                             .any(|(c, reach, _)| *c == clause && *reach == Reach::Always);
-                        attribute(
-                            tests,
-                            CaughtAssertion {
-                                line: node.start_position().row + 1,
-                                span: site(node).1,
-                                tautology: false,
-                                handler_line: clause.start_position().row + 1,
-                                detail: if always {
-                                    "AssertionError caught without re-raise or test failure"
-                                } else {
-                                    "a class that may be an assertion failure caught and discarded"
-                                }
-                                .to_string(),
-                            },
-                        );
+                        caught.attribute(CaughtAssertion {
+                            line: node.start_position().row + 1,
+                            span: site(node).1,
+                            tautology: false,
+                            handler_line: clause.start_position().row + 1,
+                            detail: if always {
+                                "AssertionError caught without re-raise or test failure"
+                            } else {
+                                "a class that may be an assertion failure caught and discarded"
+                            }
+                            .to_string(),
+                        });
                         break;
                     }
                 }
@@ -949,34 +1040,142 @@ fn rs_macro_name<'a>(invocation: Node, src: &'a str) -> &'a str {
     name.rsplit("::").next().unwrap_or(name)
 }
 
+/// Whether `n` is what the Rust reader counts as an assertion in a closure
+/// `catch_unwind` runs: an asserting macro, `unwrap` / `expect`, or a helper the
+/// configuration lists.
+fn rs_is_assertion(n: Node, src: &str, vocab: &AssertVocabulary) -> bool {
+    if n.kind() == "macro_invocation" {
+        let name = rs_macro_name(n, src);
+        return RS_ASSERT_MACROS.contains(&name) || vocab.extra_macros.iter().any(|m| m == name);
+    }
+    if n.kind() != "call_expression" {
+        return false;
+    }
+    let Some(f) = n.child_by_field_name("function") else {
+        return false;
+    };
+    if f.kind() == "field_expression" {
+        f.child_by_field_name("field").is_some_and(|field| {
+            let method = text(field, src);
+            method == "unwrap" || method == "expect" || configured(method, vocab)
+        })
+    } else {
+        configured(text(f, src), vocab)
+    }
+}
+
+/// The assertions under `closure`, outside any function declared in it.
 fn rs_closure_contains_assert(closure: Node, src: &str, vocab: &AssertVocabulary) -> Vec<Site> {
     let mut asserts = Vec::new();
     walk(closure, &mut |n| {
         if n.kind() == "function_item" {
             return false;
         }
-        if n.kind() == "macro_invocation" {
-            let name = rs_macro_name(n, src);
-            if RS_ASSERT_MACROS.contains(&name) || vocab.extra_macros.iter().any(|m| m == name) {
-                asserts.push(site(n));
-            }
-        } else if n.kind() == "call_expression" {
-            if let Some(f) = n.child_by_field_name("function") {
-                if f.kind() == "field_expression" {
-                    if let Some(field) = f.child_by_field_name("field") {
-                        let method = text(field, src);
-                        if method == "unwrap" || method == "expect" || configured(method, vocab) {
-                            asserts.push(site(n));
-                        }
-                    }
-                } else if configured(text(f, src), vocab) {
-                    asserts.push(site(n));
-                }
-            }
+        if rs_is_assertion(n, src, vocab) {
+            asserts.push(site(n));
         }
         true
     });
     asserts
+}
+
+/// The assertions of one Rust tree, by the function each is written in, for the
+/// closures `catch_unwind` runs.
+///
+/// The assertions of a closure are the ones under it, outside any function declared in
+/// it. Walking the closure for each `catch_unwind` costs the closure for each, and a
+/// closure that holds another `catch_unwind` is walked again for that one: 640 of them
+/// one inside another, in a file of 44 kB, cost 6.5e10 instructions. The assertions are
+/// listed once, each under the function that holds it, and a closure asks for the run of
+/// them between where it begins and where it ends.
+struct RsAsserts<'t> {
+    root: Node<'t>,
+    listed: std::cell::OnceCell<RsAssertsListed>,
+}
+
+struct RsAssertsListed {
+    /// For the root and each function, by its id: the assertions written in it and in no
+    /// function inside it, each with its place among all the assertions of the tree.
+    held: std::collections::HashMap<usize, Vec<(usize, Site)>>,
+    /// For each closure, by its id: the function that holds it, and the places of the
+    /// assertions of the tree that are under it.
+    closures: std::collections::HashMap<usize, RsRun>,
+}
+
+/// The function that holds a closure, by its id, and the places of the assertions of
+/// the tree that are under the closure: the first, and one past the last.
+type RsRun = (usize, usize, usize);
+
+impl<'t> RsAsserts<'t> {
+    fn new(root: Node<'t>) -> Self {
+        Self {
+            root,
+            listed: std::cell::OnceCell::new(),
+        }
+    }
+
+    fn listed(&self, src: &str, vocab: &AssertVocabulary) -> &RsAssertsListed {
+        self.listed.get_or_init(|| {
+            let mut held: std::collections::HashMap<usize, Vec<(usize, Site)>> = Default::default();
+            let mut closures: std::collections::HashMap<usize, RsRun> = Default::default();
+            // The functions around the node being read, the root first.
+            let mut holders = vec![self.root.id()];
+            let mut seen = 0usize;
+            // A node, and whether it was entered already and is now left.
+            let mut stack: Vec<(Node, bool)> = vec![(self.root, false)];
+            while let Some((n, left)) = stack.pop() {
+                super::ancestry::count(1);
+                if left {
+                    if n.kind() == "function_item" {
+                        holders.pop();
+                    } else if let Some(run) = closures.get_mut(&n.id()) {
+                        run.2 = seen;
+                    }
+                    continue;
+                }
+                let holder = holders.last().copied().unwrap_or(self.root.id());
+                if rs_is_assertion(n, src, vocab) {
+                    held.entry(holder).or_default().push((seen, site(n)));
+                    seen += 1;
+                }
+                match n.kind() {
+                    "function_item" => {
+                        stack.push((n, true));
+                        holders.push(n.id());
+                    }
+                    "closure_expression" => {
+                        closures.insert(n.id(), (holder, seen, seen));
+                        stack.push((n, true));
+                    }
+                    _ => {}
+                }
+                let mut cursor = n.walk();
+                let children: Vec<Node> = n.children(&mut cursor).collect();
+                stack.extend(children.into_iter().rev().map(|c| (c, false)));
+            }
+            RsAssertsListed { held, closures }
+        })
+    }
+
+    /// The run of `closure` and its assertions, in the order of the source. `None` for a
+    /// closure the list does not hold.
+    fn of(
+        &self,
+        closure: Node<'t>,
+        src: &str,
+        vocab: &AssertVocabulary,
+    ) -> Option<(RsRun, &[(usize, Site)])> {
+        let listed = self.listed(src, vocab);
+        let run = listed.closures.get(&closure.id()).copied()?;
+        let (holder, from, to) = run;
+        let held = listed.held.get(&holder).map_or(&[][..], Vec::as_slice);
+        super::ancestry::count(1);
+        Some((
+            run,
+            &held[held.partition_point(|(at, _)| *at < from)
+                ..held.partition_point(|(at, _)| *at < to)],
+        ))
+    }
 }
 
 /// The closure `catch_unwind` runs: its argument, or the argument of the
@@ -1383,7 +1582,11 @@ pub fn rust<'t>(
     if tests.is_empty() {
         return;
     }
+    let mut caught = Caught::new(tests, root);
     let uses = RsUses::new(root);
+    let asserts = RsAsserts::new(root);
+    // The run of the last closure whose assertions were all handed to `attribute`.
+    let mut handed: Option<RsRun> = None;
     walk(root, &mut |node| {
         if node.kind() != "call_expression" {
             return true;
@@ -1405,24 +1608,51 @@ pub fn rust<'t>(
             return true;
         };
 
-        let inner_asserts = rs_closure_contains_assert(closure, src, vocab);
+        let walked;
+        let (run, inner_asserts): (Option<RsRun>, &[(usize, Site)]) =
+            match asserts.of(closure, src, vocab) {
+                Some((run, held)) => (Some(run), held),
+                // A closure the list does not hold: read as before the list was kept.
+                None => {
+                    walked = rs_closure_contains_assert(closure, src, vocab)
+                        .into_iter()
+                        .map(|site| (0, site))
+                        .collect::<Vec<_>>();
+                    (None, &walked)
+                }
+            };
         if inner_asserts.is_empty() {
             return true;
+        }
+        // A closure inside one whose assertions were handed over holds some of the same
+        // assertions, when the same function holds both: each was recorded then, or was
+        // turned away for a reason that still stands, so handing them over again changes
+        // nothing.
+        if let (Some((holder, from, to)), Some((handed_holder, handed_from, handed_to))) =
+            (run, handed)
+        {
+            if holder == handed_holder && handed_from <= from && to <= handed_to {
+                return true;
+            }
         }
 
         if rs_value_is_discarded(node, anc, src, &uses) {
             let handler_line = node.start_position().row + 1;
-            for (line, span) in inner_asserts {
-                attribute(
-                    tests,
-                    CaughtAssertion {
-                        line,
-                        span,
-                        tautology: false,
-                        handler_line,
-                        detail: "std::panic::catch_unwind with discarded result".to_string(),
-                    },
-                );
+            // An assertion of no width does not overlap itself: it would be recorded
+            // again, so a run that holds one is not kept as handed over.
+            let mut every_one_has_width = true;
+            for &(_, (line, span)) in inner_asserts {
+                every_one_has_width &= span.0 < span.1;
+                caught.attribute(CaughtAssertion {
+                    line,
+                    span,
+                    tautology: false,
+                    handler_line,
+                    detail: "std::panic::catch_unwind with discarded result".to_string(),
+                });
+            }
+            if every_one_has_width {
+                handed = run.or(handed);
             }
         }
         true
@@ -1576,9 +1806,10 @@ fn js_promise_catch<'t, 's>(
     root: Node<'t>,
     call: Node<'t>,
     src: &'s str,
-    tests: &mut [TestFn],
+    caught: &mut Caught,
     vocab: &AssertVocabulary,
     declared: &mut JsDeclared<'t, 's>,
+    handed: &mut Option<(usize, usize)>,
 ) {
     let Some(function) = call.child_by_field_name("function") else {
         return;
@@ -1589,6 +1820,21 @@ fn js_promise_catch<'t, 's>(
             .is_none_or(|p| text(p, src) != "catch")
     {
         return;
+    }
+    // A chain inside one whose assertions were all handed to `attribute` holds some of
+    // the same assertions: each was recorded then, or was turned away for a reason that
+    // still stands, so handing them over again changes nothing. A chain of `.catch()`
+    // calls was walked once for each of them: 400 links, in a file of 21 kB, cost
+    // 2.7e10 instructions.
+    if let (Some(chain), Some((from, to))) = (function.child_by_field_name("object"), *handed) {
+        super::ancestry::count(1);
+        // A node of no width at either end of those bytes is not inside the chain.
+        if chain.start_byte() < chain.end_byte()
+            && from <= chain.start_byte()
+            && chain.end_byte() <= to
+        {
+            return;
+        }
     }
     let handler = call
         .child_by_field_name("arguments")
@@ -1620,21 +1866,25 @@ fn js_promise_catch<'t, 's>(
         return;
     };
     let handler_line = property.start_position().row + 1;
+    // An assertion of no width does not overlap itself: it would be recorded again, so
+    // a chain that holds one is not kept as handed over.
+    let mut every_one_has_width = true;
     walk(chain, &mut |n| {
         if n.kind() == "call_expression" && js_is_assertion(n, src, vocab) {
-            attribute(
-                tests,
-                CaughtAssertion {
-                    line: n.start_position().row + 1,
-                    span: site(n).1,
-                    tautology: false,
-                    handler_line,
-                    detail: "promise .catch() swallows assertion error".to_string(),
-                },
-            );
+            every_one_has_width &= n.start_byte() < n.end_byte();
+            caught.attribute(CaughtAssertion {
+                line: n.start_position().row + 1,
+                span: site(n).1,
+                tautology: false,
+                handler_line,
+                detail: "promise .catch() swallows assertion error".to_string(),
+            });
         }
         true
     });
+    if every_one_has_width {
+        *handed = Some((chain.start_byte(), chain.end_byte()));
+    }
 }
 
 pub fn javascript<'t>(
@@ -1647,10 +1897,21 @@ pub fn javascript<'t>(
     if tests.is_empty() {
         return;
     }
+    let mut caught = Caught::new(tests, root);
     let mut declared = JsDeclared::new();
+    // The bytes of the last promise chain whose assertions were all handed over.
+    let mut handed = None;
     walk(root, &mut |node| {
         if node.kind() == "call_expression" {
-            js_promise_catch(root, node, src, tests, vocab, &mut declared);
+            js_promise_catch(
+                root,
+                node,
+                src,
+                &mut caught,
+                vocab,
+                &mut declared,
+                &mut handed,
+            );
             return true;
         }
         if node.kind() != "try_statement" {
@@ -1678,16 +1939,13 @@ pub fn javascript<'t>(
                 return false;
             }
             if n.kind() == "call_expression" && js_is_assertion(n, src, vocab) {
-                attribute(
-                    tests,
-                    CaughtAssertion {
-                        line: n.start_position().row + 1,
-                        span: site(n).1,
-                        tautology: false,
-                        handler_line,
-                        detail: detail.to_string(),
-                    },
-                );
+                caught.attribute(CaughtAssertion {
+                    line: n.start_position().row + 1,
+                    span: site(n).1,
+                    tautology: false,
+                    handler_line,
+                    detail: detail.to_string(),
+                });
             }
             true
         });
@@ -1791,10 +2049,15 @@ fn java_catch_body_swallows(clause: Node, src: &str, vocab: &AssertVocabulary) -
     let mut has_assert = false;
 
     walk(body, &mut |n| {
-        if matches!(
-            n.kind(),
-            "class_declaration" | "method_declaration" | "lambda_expression"
-        ) {
+        // One is enough: the rest of the body, and the handlers inside it, say no more.
+        if has_throw
+            || has_fail
+            || has_assert
+            || matches!(
+                n.kind(),
+                "class_declaration" | "method_declaration" | "lambda_expression"
+            )
+        {
             return false;
         }
         if n.kind() == "throw_statement" {
@@ -1851,6 +2114,7 @@ pub fn java<'t>(
     if tests.is_empty() {
         return;
     }
+    let mut caught = Caught::new(tests, root);
     walk(root, &mut |node| {
         if !matches!(
             node.kind(),
@@ -1902,16 +2166,13 @@ pub fn java<'t>(
                 _ => false,
             };
             if is_assertion {
-                attribute(
-                    tests,
-                    CaughtAssertion {
-                        line: n.start_position().row + 1,
-                        span: site(n).1,
-                        tautology: false,
-                        handler_line,
-                        detail: detail.to_string(),
-                    },
-                );
+                caught.attribute(CaughtAssertion {
+                    line: n.start_position().row + 1,
+                    span: site(n).1,
+                    tautology: false,
+                    handler_line,
+                    detail: detail.to_string(),
+                });
             }
             true
         });
@@ -2050,15 +2311,97 @@ fn kt_finally_returns<'a>(try_expr: Node<'a>, src: &str) -> Option<Node<'a>> {
     returns.then_some(finally)
 }
 
+/// The identifiers of one Kotlin tree, by their text and in the order of the source, for
+/// [`kt_result_is_unused`].
+///
+/// A `runCatching` result bound to a name is looked at when the name is used after the
+/// binding, in the function or lambda that holds it. Walking that function for each
+/// binding costs the function for each: 400 bindings in one test, in a file of 21 kB,
+/// cost 2.6e10 instructions. The identifiers are listed once, and a binding asks whether
+/// the last one of its name in its function stands after it.
+struct KtNames<'t, 's> {
+    root: Node<'t>,
+    listed: std::cell::OnceCell<KtIdentifiers<'s>>,
+}
+
+struct KtIdentifiers<'s> {
+    /// The identifiers with a given text: for each, its place among all of them and the
+    /// byte it starts at.
+    by_name: std::collections::HashMap<&'s str, Vec<(usize, usize)>>,
+    /// For the root, each function and each lambda, by its id, the places of the
+    /// identifiers in it.
+    runs: std::collections::HashMap<usize, (usize, usize)>,
+}
+
+impl<'t, 's> KtNames<'t, 's> {
+    fn new(root: Node<'t>) -> Self {
+        Self {
+            root,
+            listed: std::cell::OnceCell::new(),
+        }
+    }
+
+    fn listed(&self, src: &'s str) -> &KtIdentifiers<'s> {
+        self.listed.get_or_init(|| {
+            let mut by_name: std::collections::HashMap<&str, Vec<(usize, usize)>> =
+                Default::default();
+            let mut runs = std::collections::HashMap::new();
+            let mut seen = 0usize;
+            // A node, and for one already entered the place its run began at.
+            let mut stack: Vec<(Node, Option<usize>)> = vec![(self.root, None)];
+            while let Some((n, begun)) = stack.pop() {
+                super::ancestry::count(1);
+                if let Some(from) = begun {
+                    runs.insert(n.id(), (from, seen));
+                    continue;
+                }
+                if matches!(n.kind(), "function_declaration" | "lambda_literal")
+                    || n.id() == self.root.id()
+                {
+                    stack.push((n, Some(seen)));
+                }
+                if n.kind() == "identifier" {
+                    by_name
+                        .entry(text(n, src))
+                        .or_default()
+                        .push((seen, n.start_byte()));
+                    seen += 1;
+                }
+                let mut cursor = n.walk();
+                let children: Vec<Node> = n.children(&mut cursor).collect();
+                stack.extend(children.into_iter().rev().map(|c| (c, None)));
+            }
+            KtIdentifiers { by_name, runs }
+        })
+    }
+
+    /// Whether an identifier `name` stands in `scope` at or after the byte `after`.
+    /// `None` for a scope the list has no run for.
+    fn used_after(&self, scope: Node<'t>, name: &str, after: usize, src: &'s str) -> Option<bool> {
+        let listed = self.listed(src);
+        let (from, to) = listed.runs.get(&scope.id()).copied()?;
+        super::ancestry::count(1);
+        let Some(named) = listed.by_name.get(name) else {
+            return Some(false);
+        };
+        // The identifiers are in the order of the source: the last of the run is the
+        // one that starts furthest on.
+        let in_scope = &named[named.partition_point(|(at, _)| *at < from)
+            ..named.partition_point(|(at, _)| *at < to)];
+        Some(in_scope.last().is_some_and(|(_, start)| *start >= after))
+    }
+}
+
 /// Whether nothing looks at the result of a `runCatching { }` call. It is looked at when
 /// `getOrThrow()` is called on it, when a callback chained on it (`onFailure { }`,
 /// `fold`, `recover`, `getOrElse`) throws or fails, when it is bound to a name used
 /// later, and when it is passed on (an argument, a `return`, an expression body).
-fn kt_result_is_unused<'t>(
+fn kt_result_is_unused<'t, 's>(
     call: Node<'t>,
     anc: &Ancestry<'t>,
-    src: &str,
+    src: &'s str,
     vocab: &AssertVocabulary,
+    names: &KtNames<'t, 's>,
 ) -> bool {
     let mut cur = call;
     while let Some(p) = anc.parent(cur) {
@@ -2090,6 +2433,10 @@ fn kt_result_is_unused<'t>(
                     }
                     scope = up;
                 }
+                if let Some(used) = names.used_after(scope, name, p.end_byte(), src) {
+                    return !used;
+                }
+                // A scope the list has no run for: read as before the list was kept.
                 let mut used = false;
                 walk(scope, &mut |n| {
                     if n.kind() == "identifier"
@@ -2119,6 +2466,8 @@ pub fn kotlin<'t>(
     if tests.is_empty() {
         return;
     }
+    let mut caught = Caught::new(tests, root);
+    let names = KtNames::new(root);
     walk(root, &mut |node| {
         if node.kind() == "try_expression" {
             let Some(body) = find_child_by_kind(node, "block") else {
@@ -2134,43 +2483,37 @@ pub fn kotlin<'t>(
                     (c, kt_catch_reach(c, src), swallows)
                 })
                 .collect();
-            let caught = match (kt_finally_returns(node, src), swallowing_handler(&handlers)) {
+            let catching = match (kt_finally_returns(node, src), swallowing_handler(&handlers)) {
                 (Some(finally), _) => Some((finally, FINALLY_RETURNS)),
                 (None, Some(clause)) => Some((clause, "AssertionError caught by catch clause")),
                 (None, None) => None,
             };
-            if let Some((handler, detail)) = caught {
+            if let Some((handler, detail)) = catching {
                 let handler_line = handler.start_position().row + 1;
                 for (line, span) in kt_assertions(body, anc, src, vocab) {
-                    attribute(
-                        tests,
-                        CaughtAssertion {
-                            line,
-                            span,
-                            tautology: false,
-                            handler_line,
-                            detail: detail.to_string(),
-                        },
-                    );
+                    caught.attribute(CaughtAssertion {
+                        line,
+                        span,
+                        tautology: false,
+                        handler_line,
+                        detail: detail.to_string(),
+                    });
                 }
             }
         } else if node.kind() == "call_expression" && kt_callee(node, src) == "runCatching" {
             let lambda = find_child_by_kind(node, "annotated_lambda")
                 .and_then(|a| find_child_by_kind(a, "lambda_literal"));
             if let Some(lambda) = lambda {
-                if kt_result_is_unused(node, anc, src, vocab) {
+                if kt_result_is_unused(node, anc, src, vocab, &names) {
                     let handler_line = node.start_position().row + 1;
                     for (line, span) in kt_assertions(lambda, anc, src, vocab) {
-                        attribute(
-                            tests,
-                            CaughtAssertion {
-                                line,
-                                span,
-                                tautology: false,
-                                handler_line,
-                                detail: "runCatching with the result unused".to_string(),
-                            },
-                        );
+                        caught.attribute(CaughtAssertion {
+                            line,
+                            span,
+                            tautology: false,
+                            handler_line,
+                            detail: "runCatching with the result unused".to_string(),
+                        });
                     }
                 }
             }
@@ -2333,6 +2676,7 @@ pub fn csharp<'t>(
     if tests.is_empty() {
         return;
     }
+    let mut caught = Caught::new(tests, root);
     walk(root, &mut |node| {
         if node.kind() != "try_statement" {
             return true;
@@ -2370,16 +2714,13 @@ pub fn csharp<'t>(
                 && (csharp_assert_method(n, src).is_some_and(|m| !m.starts_with("Throws"))
                     || csharp_is_configured(n, src, vocab))
             {
-                attribute(
-                    tests,
-                    CaughtAssertion {
-                        line: n.start_position().row + 1,
-                        span: site(n).1,
-                        tautology: false,
-                        handler_line,
-                        detail: "Assertion caught by catch clause".to_string(),
-                    },
-                );
+                caught.attribute(CaughtAssertion {
+                    line: n.start_position().row + 1,
+                    span: site(n).1,
+                    tautology: false,
+                    handler_line,
+                    detail: "Assertion caught by catch clause".to_string(),
+                });
             }
             true
         });
@@ -2510,6 +2851,7 @@ pub fn go(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabulary)
     if tests.is_empty() {
         return;
     }
+    let mut caught = Caught::new(tests, root);
     // The functions the file declares, by name: a deferred function, or a check that
     // panics, may be one of them.
     let mut declared = std::collections::HashMap::new();
@@ -2576,16 +2918,13 @@ pub fn go(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabulary)
             } else {
                 return;
             };
-            attribute(
-                tests,
-                CaughtAssertion {
-                    line: n.start_position().row + 1,
-                    span: site(n).1,
-                    tautology: !counted,
-                    handler_line,
-                    detail: "recover() swallows the panic of a check".to_string(),
-                },
-            );
+            caught.attribute(CaughtAssertion {
+                line: n.start_position().row + 1,
+                span: site(n).1,
+                tautology: !counted,
+                handler_line,
+                detail: "recover() swallows the panic of a check".to_string(),
+            });
         });
         true
     });
@@ -3065,6 +3404,213 @@ mod tests {
             caught_lines(&crate::ast::javascript::JavaScriptPack, "a.test.js", src),
             vec![(4, 4), (6, 6)]
         );
+    }
+
+    /// A closure `catch_unwind` runs inside another one holds some of the assertions of
+    /// the other: each is caught once, by the outermost call whose result nothing looks
+    /// at, and a function declared in a closure keeps its own.
+    #[test]
+    fn rust_closures_one_inside_another_are_each_read_by_their_own_assertions() {
+        // Both results thrown away: the inner assertion is the outer call's too.
+        assert_eq!(
+            rs("    let _ = std::panic::catch_unwind(|| {\n        assert!(a());\n        let _ = std::panic::catch_unwind(|| {\n            assert!(b());\n        });\n    });\n"),
+            vec![(4, 3), (6, 3)]
+        );
+        // The outer result is looked at, the inner one is not.
+        assert_eq!(
+            rs("    let r = std::panic::catch_unwind(|| {\n        assert!(a());\n        let _ = std::panic::catch_unwind(|| {\n            assert!(b());\n        });\n    });\n    r.unwrap();\n"),
+            vec![(6, 5)]
+        );
+        // The inner result is looked at, the outer one is not: both are the outer's.
+        assert_eq!(
+            rs("    let _ = std::panic::catch_unwind(|| {\n        assert!(a());\n        let r = std::panic::catch_unwind(|| {\n            assert!(b());\n        });\n        r.unwrap();\n    });\n"),
+            vec![(4, 3), (6, 3), (8, 3)]
+        );
+        // A function declared in the closure is not run by it: the assertion of the
+        // call in that function is caught by that call, and by no other.
+        assert_eq!(
+            rs("    let _ = std::panic::catch_unwind(|| {\n        assert!(a());\n        fn inner() {\n            let _ = std::panic::catch_unwind(|| {\n                assert!(b());\n            });\n        }\n        assert!(c());\n    });\n"),
+            vec![(4, 3), (10, 3), (7, 6)]
+        );
+        // Two calls side by side, and a third after a closure that held one.
+        assert_eq!(
+            rs("    let _ = std::panic::catch_unwind(|| {\n        let _ = std::panic::catch_unwind(|| assert!(a()));\n    });\n    let _ = std::panic::catch_unwind(|| assert!(b()));\n    let _ = std::panic::catch_unwind(|| assert!(c()));\n"),
+            vec![(4, 3), (6, 6), (7, 7)]
+        );
+        // A closure with no assertion of its own around one that has some.
+        assert_eq!(
+            rs("    let r = std::panic::catch_unwind(|| {\n        fn inner() {\n            assert!(a());\n        }\n    });\n"),
+            NONE
+        );
+    }
+
+    /// Closures `catch_unwind` runs, one inside another, cost steps in proportion to
+    /// their number. Before #672 each closure was walked for its own call and again for
+    /// every call around it, so four times the depth cost about sixteen times the steps.
+    #[test]
+    fn rust_unwind_closures_one_inside_another_cost_steps_in_proportion_to_their_number() {
+        let nested = |n: usize| -> String {
+            let open: String = (0..n)
+                .map(|i| {
+                    format!("let r{i} = std::panic::catch_unwind(|| {{ assert_eq!(f({i}), {i});\n")
+                })
+                .collect();
+            format!("{open}{}", "});\n".repeat(n))
+        };
+        let (few, many) = (rs_steps(&nested(40)), rs_steps(&nested(160)));
+        assert_eq!(rs(&nested(40)).len(), 40);
+        assert!(many < 5 * few, "{few} steps for 40 deep, {many} for 160");
+    }
+
+    /// A Kotlin `runCatching` result bound to a name is looked at when the name is used
+    /// after the binding in the function or lambda that holds it, and nowhere else.
+    #[test]
+    fn kotlin_run_catching_bound_to_a_name_is_judged_by_the_uses_in_its_own_function() {
+        let caught = |src: &str| caught_lines(&crate::ast::kotlin::KotlinPack, "ATest.kt", src);
+        let bind = "val r = runCatching { assertEquals(4, add(2, 2)) }\n";
+        // Used after the binding.
+        assert_eq!(kotlin(&format!("        {bind}        check(r)\n")), NONE);
+        // Never used, and used only before the binding.
+        assert_eq!(kotlin(&format!("        {bind}")), vec![(4, 4)]);
+        assert_eq!(
+            kotlin(&format!("        check(r)\n        {bind}")),
+            vec![(5, 5)]
+        );
+        // Another name used after it.
+        assert_eq!(
+            kotlin(&format!("        {bind}        check(other)\n")),
+            vec![(4, 4)]
+        );
+        // Two bindings of one name: the first is followed by the second's name, the
+        // second by nothing.
+        assert_eq!(
+            kotlin(&format!("        {bind}        {bind}")),
+            vec![(5, 5)]
+        );
+        // The same name in two functions: a use in one is not a use in the other.
+        assert_eq!(
+            caught(&format!(
+                "class ATest {{\n    @Test\n    fun t() {{\n        {bind}    }}\n    @Test\n    fun u() {{\n        {bind}        check(r)\n    }}\n}}\n"
+            )),
+            vec![(4, 4)]
+        );
+        assert_eq!(
+            caught(&format!(
+                "class ATest {{\n    @Test\n    fun t() {{\n        {bind}        check(r)\n    }}\n    @Test\n    fun u() {{\n        {bind}    }}\n}}\n"
+            )),
+            vec![(9, 9)]
+        );
+        // A binding in a lambda is judged by the uses in the lambda: one after the
+        // lambda is of another name.
+        assert_eq!(
+            kotlin(&format!(
+                "        items.forEach {{\n            {bind}        }}\n        check(r)\n"
+            )),
+            vec![(5, 5)]
+        );
+        assert_eq!(
+            kotlin(&format!(
+                "        items.forEach {{\n            {bind}            check(r)\n        }}\n"
+            )),
+            NONE
+        );
+    }
+
+    /// `runCatching` results bound and not used cost steps in proportion to their
+    /// number. Before #672 the function was walked for each binding, so four times the
+    /// bindings cost about sixteen times the steps.
+    #[test]
+    fn kotlin_run_catching_results_cost_steps_in_proportion_to_their_number() {
+        let source = |n: usize| -> String {
+            let body: String = (0..n)
+                .map(|i| format!("        val r{i} = runCatching {{ assertEquals(1, f({i})) }}\n"))
+                .collect();
+            format!("class MTest {{\n    @Test\n    fun t() {{\n{body}    }}\n}}\n")
+        };
+        let path = "src/test/kotlin/MTest.kt";
+        let ((few, held), (many, more)) = (
+            steps_and_caught(path, &source(40)),
+            steps_and_caught(path, &source(160)),
+        );
+        assert_eq!((held, more), (40, 160));
+        assert!(many < 5 * few, "{few} steps for 40, {many} for 160");
+    }
+
+    /// A chain of promise calls holds a `.catch()` for each link: an assertion is caught
+    /// by the outermost `.catch()` around it that swallows, and a chain that was read is
+    /// not what the next one is read by.
+    #[test]
+    fn javascript_catch_calls_of_one_chain_each_catch_the_assertions_before_them() {
+        let then = |i: usize| format!(".then(() => {{ expect(a).toBe({i}); }})");
+        let (quiet, loud) = (".catch(() => {})", ".catch((e) => { throw e; })");
+        // Both swallow: both assertions are the outer one's.
+        assert_eq!(
+            js(&format!(
+                "  p\n    {}\n    {quiet}\n    {}\n    {quiet};\n",
+                then(1),
+                then(2)
+            )),
+            vec![(3, 6), (5, 6)]
+        );
+        // The outer one rethrows: the inner one catches what stands before it.
+        assert_eq!(
+            js(&format!(
+                "  p\n    {}\n    {quiet}\n    {}\n    {loud};\n",
+                then(1),
+                then(2)
+            )),
+            vec![(3, 4)]
+        );
+        // The inner one rethrows: the outer one catches both.
+        assert_eq!(
+            js(&format!(
+                "  p\n    {}\n    {loud}\n    {}\n    {quiet};\n",
+                then(1),
+                then(2)
+            )),
+            vec![(3, 6), (5, 6)]
+        );
+        // Two chains, and a third: each is read by its own `.catch()`.
+        assert_eq!(
+            js(&format!(
+                "  p{}{quiet}{}{quiet};\n  q{}{quiet};\n  r{}{loud};\n  s{}{quiet};\n",
+                then(1),
+                then(2),
+                then(3),
+                then(4),
+                then(5)
+            )),
+            vec![(2, 2), (2, 2), (3, 3), (5, 5)]
+        );
+        // A chain in the handler of another is outside the chain that was read.
+        assert_eq!(
+            js(&format!(
+                "  p{}.catch(() => {{\n    q{}{quiet};\n  }});\n",
+                then(1),
+                then(2)
+            )),
+            vec![(2, 2), (3, 3)]
+        );
+    }
+
+    /// A chain of `.then().catch()` links costs steps in proportion to their number.
+    /// Before #672 the chain was walked once for each `.catch()` of it, so four times
+    /// the links cost about sixteen times the steps.
+    #[test]
+    fn javascript_promise_chains_cost_steps_in_proportion_to_their_links() {
+        let source = |n: usize| -> String {
+            let links: String = (0..n)
+                .map(|i| format!(".then(() => {{ expect(a).toBe({i}); }}).catch(() => {{}})"))
+                .collect();
+            format!("test('t', () => {{\n  p{links};\n}});\n")
+        };
+        let path = "tests/m.test.js";
+        let ((few, held), (many, more)) = (
+            steps_and_caught(path, &source(40)),
+            steps_and_caught(path, &source(160)),
+        );
+        assert_eq!((held, more), (40, 160));
+        assert!(many < 5 * few, "{few} steps for 40, {many} for 160");
     }
 
     #[test]
