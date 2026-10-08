@@ -1078,12 +1078,15 @@ pub const OPENCODE_OBSERVE_NEVER_BLOCKS: &str =
 /// call through. The plugin writes nothing to the observation log, which the binary owns.
 ///
 /// The `export default` block is for OpenCode 2.x (RUN with 2.0.22: `setup` is called,
-/// the named export is not). Its session lease reads the event stream, in a loop
-/// detached from `setup` whose errors go nowhere in either mode: the lease never blocks
-/// a session. Its
-/// registrations are optional calls, so an API without `tool.hook` registers nothing;
-/// enforcing, `setup` then says so on stderr (it does not throw: the API it would be
-/// refusing to load on is one this template was not verified against).
+/// the named export is not; `execute.before` and `execute.after` fired for `shell`,
+/// `write` and `edit`, each call as recorded in
+/// `tests/fixtures/pretool/opencode/calls_v2.json`). Its session lease reads the event
+/// stream, in a loop detached from `setup` whose errors go nowhere in either mode: the
+/// lease never blocks a session. Its commands are each given their stdin, the check an
+/// empty one: `hook run` reads stdin to its end, and a 2.x server's own stdin does not
+/// end. Its registrations are optional calls, so an API without `tool.hook` registers
+/// nothing; enforcing, `setup` then says so on stderr (it does not throw: the API it
+/// would be refusing to load on is one this template was not verified against).
 fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
     // A handler body, as written when enforcing; in observe mode, inside `try`/`catch`.
     let guard = |indent: usize, body: String| -> String {
@@ -1163,7 +1166,7 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
         6,
         format!(
             "      const toolName = call.tool ?? call.input?.tool
-      if (!EDIT_TOOLS.includes(toolName) && toolName !== \"bash\") return
+      if (!EDIT_TOOLS.includes(toolName) && !SHELL_TOOLS.includes(toolName)) return
       const payload = new Response(JSON.stringify({{
         input: {{ tool: toolName, sessionID: call.sessionID }},
         output: {{ args: call.input ?? {{}} }},
@@ -1178,7 +1181,8 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
         format!(
             "      const toolName = call.tool ?? call.input?.tool
       if (!EDIT_TOOLS.includes(toolName)) return
-      const r = await $`{cmd}`.cwd(directory).nothrow().quiet()
+      const none = new Response(\"\")
+      const r = await $`{cmd} < ${{none}}`.cwd(directory).nothrow().quiet()
       if (r.exitCode !== 0) {{
         if (call.result) {{
           call.result.output = (call.result.output ?? \"\") + \"\\n\\n\" + r.stdout.toString() + r.stderr.toString()
@@ -1206,6 +1210,8 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
 {mode}import {{ $ }} from \"bun\"
 
 const EDIT_TOOLS = [\"edit\", \"write\", \"apply_patch\"]
+// OpenCode 2.x names its shell tool `shell`; 1.x named it `bash`.
+const SHELL_TOOLS = [\"bash\", \"shell\"]
 
 export const Discipline = async ({{ $, directory }}) => ({{
   // A new session takes this worktree's lease; it never blocks the session.
@@ -4073,13 +4079,19 @@ mod tests {
                 "$`discipline hook run --agent opencode --event session-start < ${start}`"
                     .to_string(),
                 format!("$`discipline hook run --agent opencode --event pre-tool{flag} < ${{"),
-                format!("$`discipline hook run --agent opencode{flag}`"),
             ] {
                 assert_eq!(
                     text.matches(&run).count(),
                     2,
                     "observe={observe}: {run:?} runs in both blocks\n{text}"
                 );
+            }
+            // The check: the 1.x block runs it as it is, the 2.x block on an empty stdin.
+            for run in [
+                format!("$`discipline hook run --agent opencode{flag}`"),
+                format!("$`discipline hook run --agent opencode{flag} < ${{none}}`"),
+            ] {
+                assert_eq!(text.matches(&run).count(), 1, "observe={observe}: {run:?}");
             }
         }
     }

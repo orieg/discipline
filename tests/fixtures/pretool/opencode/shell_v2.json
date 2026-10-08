@@ -1,0 +1,11 @@
+{
+  "input": {
+    "sessionID": "00000000-0000-0000-0000-000000000000",
+    "tool": "shell"
+  },
+  "output": {
+    "args": {
+      "command": "git -C wt2 status"
+    }
+  }
+}

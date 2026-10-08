@@ -36,7 +36,7 @@ pub struct ToolCall {
     pub session: Option<String>,
     pub cwd: Option<PathBuf>,
     /// The command a shell tool runs (Claude Code `Bash`, Copilot `bash`, agy
-    /// `run_command`, OpenCode `bash`).
+    /// `run_command`, OpenCode `bash`, `shell` on 2.x).
     pub command: Option<String>,
 }
 
@@ -154,7 +154,8 @@ pub fn parse(agent: Agent, raw: &str) -> Option<ToolCall> {
             }
             call.session = s(&v, "/input/sessionID");
             call.cwd = s(&v, "/cwd").map(PathBuf::from);
-            if call.tool == "bash" {
+            // OpenCode 2.x names its shell tool `shell`; 1.x named it `bash`.
+            if matches!(call.tool.as_str(), "bash" | "shell") {
                 call.command = s(&v, "/output/args/command");
             }
         }
@@ -1303,6 +1304,7 @@ mod tests {
     fn shell_payloads_carry_their_command() {
         let bash = parse(Agent::ClaudeCode, &fixture("claude-code/bash.json")).unwrap();
         assert!(bash.command.is_some());
+        let shell_v2 = fixture("opencode/shell_v2.json");
         let cases = [
             (
                 Agent::Copilot,
@@ -1316,6 +1318,8 @@ mod tests {
                 Agent::Opencode,
                 r#"{"input":{"tool":"bash","sessionID":"s"},"output":{"args":{"command":"git -C wt2 status"}},"cwd":"/r"}"#,
             ),
+            // OpenCode 2.x names its shell tool `shell` (recorded: opencode/shell_v2.json).
+            (Agent::Opencode, shell_v2.as_str()),
         ];
         for (agent, raw) in cases {
             let c = parse(agent, raw).unwrap();
