@@ -6,6 +6,7 @@ use tree_sitter::Node;
 
 use super::ci_condition::{read_skip, Grammar};
 use super::functions::{self, FunctionSpec};
+use super::suppressions::{CommentRule, Reports, Suppressions};
 use super::{
     collect_error_nodes_info, AssertVocabulary, EscapeHatchSite, Fact, LanguagePack,
     ParsedFileFacts, TestFn,
@@ -111,7 +112,7 @@ impl CPack {
             },
         };
 
-        extractor.collect_comments_and_escape_hatches(root);
+        C_SUPPRESSIONS.collect(root, extractor.src, &mut extractor.facts.escape_hatches);
         extractor.visit_root(root);
         shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
         Ok(extractor.facts)
@@ -179,7 +180,7 @@ impl LanguagePack for CppPack {
             },
         };
 
-        extractor.collect_comments_and_escape_hatches(root);
+        C_SUPPRESSIONS.collect(root, extractor.src, &mut extractor.facts.escape_hatches);
         extractor.visit_root(root);
         shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
         super::expected_exceptions::cpp(root, src, &mut extractor.facts.tests);
@@ -438,39 +439,32 @@ struct CCppExtractor<'a> {
 }
 
 /// The comments that suppress a C or C++ linter; a `#pragma` is read from its own node.
-const C_SUPPRESSIONS: super::CommentSuppressions = super::CommentSuppressions {
-    hash_comments: false,
-    markers: &["NOLINT"],
+const C_SUPPRESSIONS: Suppressions = Suppressions {
+    rules: &[CommentRule::opens(&["NOLINT"], Reports::Body)],
+    other: Some(pragma_suppression),
+    ..Suppressions::SLASH_COMMENTS
 };
+
+/// The suppression a `#pragma` node is, pushed to `sites`. A `#pragma` directive is its
+/// own node, so the same words in a comment or a string literal never reach here. The
+/// node has no children worth walking.
+fn pragma_suppression(node: Node, src: &[u8], sites: &mut Vec<EscapeHatchSite>) -> bool {
+    if node.kind() != "preproc_call" {
+        return true;
+    }
+    if let Some(rule) = pragma_suppression_rule(node, src) {
+        sites.push(EscapeHatchSite::LinterDisable {
+            line: node.start_position().row + 1,
+            rule,
+            snippet: node.utf8_text(src).unwrap_or("").trim().to_string(),
+        });
+    }
+    false
+}
 
 impl<'a> CCppExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
         node.utf8_text(self.src).unwrap_or("")
-    }
-
-    fn collect_comments_and_escape_hatches(&mut self, node: Node<'a>) {
-        let src = self.src;
-        super::collect_comment_suppressions(
-            node,
-            src,
-            &C_SUPPRESSIONS,
-            &mut |node, sites| {
-                if node.kind() != "preproc_call" {
-                    return true;
-                }
-                // A `#pragma` directive is its own node, so the same words in a comment or a
-                // string literal never reach here. The node has no children worth walking.
-                if let Some(rule) = pragma_suppression_rule(node, src) {
-                    sites.push(EscapeHatchSite::LinterDisable {
-                        line: node.start_position().row + 1,
-                        rule,
-                        snippet: node.utf8_text(src).unwrap_or("").trim().to_string(),
-                    });
-                }
-                false
-            },
-            &mut self.facts.escape_hatches,
-        );
     }
 
     fn visit_root(&mut self, root: Node<'a>) {
