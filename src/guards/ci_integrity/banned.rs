@@ -34,6 +34,7 @@ pub(crate) fn banned_entry_for<'a>(
 /// lifted by a directive or an inline allow; `examined` grows by the references compared.
 pub(super) fn check_banned(
     ctx: &Context,
+    docs: &super::YamlDocs,
     filter: &crate::guards::PathFilter,
     workflow_globs: &crate::guards::PathFilter,
     out: &mut GateOutcome,
@@ -50,7 +51,7 @@ pub(super) fn check_banned(
         let Some(content) = ctx.git.head_content(&path)? else {
             continue;
         };
-        let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(&content) else {
+        let Ok(doc) = docs.load(&path, "head", &content) else {
             out.notes.push(format!(
                 "{path}: does not parse as YAML; its references were not compared with banned_actions"
             ));

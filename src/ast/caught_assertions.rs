@@ -181,6 +181,7 @@ fn sync_callbacks(language: &str) -> &'static [&'static str] {
 fn walk_tree<'a>(root: Node<'a>, f: &mut dyn FnMut(Node<'a>) -> bool) {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
+        super::ancestry::count(1);
         if !f(node) {
             continue;
         }
@@ -636,6 +637,9 @@ fn py_error_kept_and_checked<'t>(
     if kept_in.is_empty() {
         return false;
     }
+    // A name the error is kept in twice is asked about once.
+    kept_in.sort_unstable();
+    kept_in.dedup();
     let mut scope = try_stmt;
     while let Some(p) = anc.parent(scope) {
         if matches!(scope.kind(), "function_definition" | "lambda") {
@@ -794,6 +798,9 @@ pub fn python<'t>(
         return;
     }
     let classes = py_classes(root, src);
+    // For a `try`, by its id: each handler, whether it is reached, whether it swallows.
+    let mut handlers_of: std::collections::HashMap<usize, Vec<(Node, Reach, bool)>> =
+        std::collections::HashMap::new();
     walk(root, &mut |node| {
         let is_assertion = match node.kind() {
             "assert_statement" => true,
@@ -865,24 +872,28 @@ pub fn python<'t>(
                         );
                         break;
                     }
-                    let mut cursor = p.walk();
-                    let handlers: Vec<(Node, Reach, bool)> = p
-                        .children(&mut cursor)
-                        .filter(|c| c.kind() == "except_clause")
-                        .map(|c| {
-                            let reach = py_except_reach(c, src, &classes);
-                            let swallows = match reach {
-                                Reach::Never => false,
-                                Reach::Always => py_except_body_swallows(c, src, vocab),
-                                // A class that may be an assertion failure: reported
-                                // only when the handler plainly does nothing with it.
-                                Reach::Maybe => py_except_body_only_swallows(c, src),
-                            } && !py_error_kept_and_checked(p, anc, c, src, vocab)
-                                && !py_retry_fails_after_last_attempt(p, anc, src, vocab);
-                            (c, reach, swallows)
-                        })
-                        .collect();
-                    if let Some(clause) = swallowing_handler(&handlers) {
+                    // What the handlers of a `try` do is the same for every assertion
+                    // in its body: it is read once for the `try`.
+                    let handlers = handlers_of.entry(p.id()).or_insert_with(|| {
+                        let mut cursor = p.walk();
+                        p.children(&mut cursor)
+                            .filter(|c| c.kind() == "except_clause")
+                            .map(|c| {
+                                let reach = py_except_reach(c, src, &classes);
+                                let swallows =
+                                    match reach {
+                                        Reach::Never => false,
+                                        Reach::Always => py_except_body_swallows(c, src, vocab),
+                                        // A class that may be an assertion failure: reported
+                                        // only when the handler plainly does nothing with it.
+                                        Reach::Maybe => py_except_body_only_swallows(c, src),
+                                    } && !py_error_kept_and_checked(p, anc, c, src, vocab)
+                                        && !py_retry_fails_after_last_attempt(p, anc, src, vocab);
+                                (c, reach, swallows)
+                            })
+                            .collect()
+                    });
+                    if let Some(clause) = swallowing_handler(handlers) {
                         let always = handlers
                             .iter()
                             .any(|(c, reach, _)| *c == clause && *reach == Reach::Always);
@@ -1121,8 +1132,79 @@ fn rs_match_checks(match_expr: Node, src: &str) -> bool {
     }
 }
 
-/// Whether a later use of the binding `name` looks at the outcome it holds.
-fn rs_binding_is_checked<'t>(binding: Node<'t>, anc: &Ancestry<'t>, name: &str, src: &str) -> bool {
+/// The identifiers of one Rust tree, by their text and in the order of the source, for
+/// [`rs_binding_is_checked`].
+///
+/// A binding that holds an unwind result is judged by the uses of its name after it in
+/// its function. Walking the function for each binding costs the function for each, and
+/// a later `let` of the same name is itself a use, judged by the uses after it: with no
+/// use that looks at the outcome, each binding asked every later one again, so 18
+/// bindings of one name cost 1.0e12 instructions and each one more doubled it. The
+/// identifiers are listed once, and what the uses from a given one on answer is kept, so
+/// each use is judged once.
+struct RsUses<'t, 's> {
+    root: Node<'t>,
+    listed: std::cell::OnceCell<RsIdentifiers<'t, 's>>,
+    /// For a scope and a use in it, by their ids: whether that use or a later one of the
+    /// same name in the scope looks at the outcome.
+    from_here_on: std::cell::RefCell<std::collections::HashMap<(usize, usize), bool>>,
+}
+
+struct RsIdentifiers<'t, 's> {
+    /// The identifiers with a given text, each with its place among all of them.
+    by_name: std::collections::HashMap<&'s str, Vec<(usize, Node<'t>)>>,
+    /// For the root and each function, by its id, the places of the identifiers in it.
+    runs: std::collections::HashMap<usize, (usize, usize)>,
+}
+
+impl<'t, 's> RsUses<'t, 's> {
+    fn new(root: Node<'t>) -> Self {
+        Self {
+            root,
+            listed: std::cell::OnceCell::new(),
+            from_here_on: Default::default(),
+        }
+    }
+
+    fn listed(&self, src: &'s str) -> &RsIdentifiers<'t, 's> {
+        self.listed.get_or_init(|| {
+            let mut by_name: std::collections::HashMap<&str, Vec<(usize, Node)>> =
+                Default::default();
+            let mut runs = std::collections::HashMap::new();
+            let mut seen = 0usize;
+            // A node, and for one already entered the place its run began at.
+            let mut stack: Vec<(Node, Option<usize>)> = vec![(self.root, None)];
+            while let Some((n, begun)) = stack.pop() {
+                super::ancestry::count(1);
+                if let Some(from) = begun {
+                    runs.insert(n.id(), (from, seen));
+                    continue;
+                }
+                if n.kind() == "function_item" || n.id() == self.root.id() {
+                    stack.push((n, Some(seen)));
+                }
+                if n.kind() == "identifier" {
+                    by_name.entry(text(n, src)).or_default().push((seen, n));
+                    seen += 1;
+                }
+                let mut cursor = n.walk();
+                let children: Vec<Node> = n.children(&mut cursor).collect();
+                stack.extend(children.into_iter().rev().map(|c| (c, None)));
+            }
+            RsIdentifiers { by_name, runs }
+        })
+    }
+}
+
+/// Whether a later use of the binding `name` looks at the outcome it holds: a use in the
+/// function that holds `binding` (the file, outside any), after `binding`.
+fn rs_binding_is_checked<'t, 's>(
+    binding: Node<'t>,
+    anc: &Ancestry<'t>,
+    name: &str,
+    src: &'s str,
+    uses: &RsUses<'t, 's>,
+) -> bool {
     let mut scope = binding;
     while let Some(p) = anc.parent(scope) {
         if scope.kind() == "function_item" {
@@ -1130,17 +1212,51 @@ fn rs_binding_is_checked<'t>(binding: Node<'t>, anc: &Ancestry<'t>, name: &str, 
         }
         scope = p;
     }
+    let listed = uses.listed(src);
+    let Some((from, to)) = listed.runs.get(&scope.id()).copied() else {
+        // A scope the list has no run for: read as before the list was kept.
+        let mut checked = false;
+        walk(scope, &mut |n| {
+            if checked {
+                return false;
+            }
+            if n.kind() == "identifier"
+                && n.start_byte() >= binding.end_byte()
+                && text(n, src) == name
+            {
+                checked = !rs_value_is_discarded(n, anc, src, uses);
+            }
+            !checked
+        });
+        return checked;
+    };
+    let Some(named) = listed.by_name.get(name) else {
+        return false;
+    };
+    let in_scope = &named
+        [named.partition_point(|(at, _)| *at < from)..named.partition_point(|(at, _)| *at < to)];
+    let later = &in_scope[in_scope.partition_point(|(_, n)| n.start_byte() < binding.end_byte())..];
+    let mut judged = Vec::new();
     let mut checked = false;
-    walk(scope, &mut |n| {
-        if checked {
-            return false;
+    for (_, n) in later {
+        super::ancestry::count(1);
+        let key = (scope.id(), n.id());
+        if let Some(known) = uses.from_here_on.borrow().get(&key).copied() {
+            checked = known;
+            break;
         }
-        if n.kind() == "identifier" && n.start_byte() >= binding.end_byte() && text(n, src) == name
-        {
-            checked = !rs_value_is_discarded(n, anc, src);
+        judged.push(key);
+        if !rs_value_is_discarded(*n, anc, src, uses) {
+            checked = true;
+            break;
         }
-        !checked
-    });
+    }
+    // Each use judged here was thrown away, up to the one that was not: from any of them
+    // on, the answer is this one.
+    let mut from_here_on = uses.from_here_on.borrow_mut();
+    for key in judged {
+        from_here_on.insert(key, checked);
+    }
     checked
 }
 
@@ -1156,7 +1272,12 @@ fn rs_binding_is_checked<'t>(binding: Node<'t>, anc: &Ancestry<'t>, name: &str, 
 /// `Ok`: there the test fails when the assertion held and passes when it did not. A shape
 /// not listed is followed further out, so a value this does not understand is reported,
 /// not passed.
-fn rs_value_is_discarded<'t>(value: Node<'t>, anc: &Ancestry<'t>, src: &str) -> bool {
+fn rs_value_is_discarded<'t, 's>(
+    value: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &'s str,
+    uses: &RsUses<'t, 's>,
+) -> bool {
     let mut cur = value;
     while let Some(p) = anc.parent(cur) {
         match p.kind() {
@@ -1197,14 +1318,14 @@ fn rs_value_is_discarded<'t>(value: Node<'t>, anc: &Ancestry<'t>, src: &str) -> 
                     return true;
                 };
                 return pattern.kind() != "identifier"
-                    || !rs_binding_is_checked(p, anc, text(pattern, src), src);
+                    || !rs_binding_is_checked(p, anc, text(pattern, src), src, uses);
             }
             "assignment_expression" => {
                 let Some(left) = p.child_by_field_name("left") else {
                     return true;
                 };
                 return left.kind() != "identifier"
-                    || !rs_binding_is_checked(p, anc, text(left, src), src);
+                    || !rs_binding_is_checked(p, anc, text(left, src), src, uses);
             }
             "match_expression" => {
                 if p.child_by_field_name("value") == Some(cur) {
@@ -1262,6 +1383,7 @@ pub fn rust<'t>(
     if tests.is_empty() {
         return;
     }
+    let uses = RsUses::new(root);
     walk(root, &mut |node| {
         if node.kind() != "call_expression" {
             return true;
@@ -1288,7 +1410,7 @@ pub fn rust<'t>(
             return true;
         }
 
-        if rs_value_is_discarded(node, anc, src) {
+        if rs_value_is_discarded(node, anc, src, &uses) {
             let handler_line = node.start_position().row + 1;
             for (line, span) in inner_asserts {
                 attribute(
@@ -1445,12 +1567,18 @@ fn js_catch_body_swallows(catch_clause: Node, src: &str, vocab: &AssertVocabular
 
 /// `<promise>.catch(<function that swallows>)`: the assertions in the chain before it.
 /// The function is one written in place, or one the file declares under the name given.
-fn js_promise_catch(
-    root: Node,
-    call: Node,
-    src: &str,
+/// The body of the one function a file declares under each name asked about
+/// ([`js_declared_function_body`]), kept so the file is read once for a name and not
+/// once for each `.catch(name)`.
+type JsDeclared<'t, 's> = std::collections::HashMap<&'s str, Option<Node<'t>>>;
+
+fn js_promise_catch<'t, 's>(
+    root: Node<'t>,
+    call: Node<'t>,
+    src: &'s str,
     tests: &mut [TestFn],
     vocab: &AssertVocabulary,
+    declared: &mut JsDeclared<'t, 's>,
 ) {
     let Some(function) = call.child_by_field_name("function") else {
         return;
@@ -1469,7 +1597,12 @@ fn js_promise_catch(
         Some(h) if matches!(h.kind(), "arrow_function" | "function_expression") => {
             h.child_by_field_name("body")
         }
-        Some(h) if h.kind() == "identifier" => js_declared_function_body(root, text(h, src), src),
+        Some(h) if h.kind() == "identifier" => {
+            let name = text(h, src);
+            *declared
+                .entry(name)
+                .or_insert_with(|| js_declared_function_body(root, name, src))
+        }
         _ => None,
     };
     let Some(body) = body else {
@@ -1514,9 +1647,10 @@ pub fn javascript<'t>(
     if tests.is_empty() {
         return;
     }
+    let mut declared = JsDeclared::new();
     walk(root, &mut |node| {
         if node.kind() == "call_expression" {
-            js_promise_catch(root, node, src, tests, vocab);
+            js_promise_catch(root, node, src, tests, vocab, &mut declared);
             return true;
         }
         if node.kind() != "try_statement" {
@@ -2759,6 +2893,178 @@ mod tests {
         ] {
             assert_eq!(rs(&format!("{UNWIND}{dropped}")), vec![(3, 3)], "{dropped}");
         }
+    }
+
+    /// A later `let` of the same name is a use of the name: the earlier binding is
+    /// looked at when the later one is. Each binding is judged by the uses after it.
+    #[test]
+    fn rust_bindings_of_one_name_are_each_judged_by_the_uses_after_them() {
+        // Neither is looked at: both assertions are caught.
+        assert_eq!(rs(&format!("{UNWIND}{UNWIND}")), vec![(3, 3), (4, 4)]);
+        // The second is looked at, and the first is read as handed on to it.
+        assert_eq!(
+            rs(&format!("{UNWIND}{UNWIND}    assert!(r.is_ok());\n")),
+            NONE
+        );
+        // The first is looked at before the second is bound, the second never.
+        assert_eq!(
+            rs(&format!("{UNWIND}    assert!(r.is_ok());\n{UNWIND}")),
+            vec![(5, 5)]
+        );
+        // Another name in between is judged by its own uses.
+        let other = "    let s = std::panic::catch_unwind(|| assert!(f()));\n";
+        assert_eq!(
+            rs(&format!("{UNWIND}{other}{UNWIND}    drop(s);\n")),
+            vec![(3, 3), (4, 4), (5, 5)]
+        );
+        // A use in a function inside the test is a use in the test's function.
+        assert_eq!(
+            rs(&format!(
+                "{UNWIND}    fn inner() {{\n        let r = 1;\n        assert!(r == 1);\n    }}\n"
+            )),
+            NONE
+        );
+        // A binding in a function inside the test is judged by the uses in that
+        // function: one after it in the test is of another `r`.
+        assert_eq!(
+            rs(&format!(
+                "    fn inner() {{\n    {UNWIND}    }}\n    let r = 1;\n    assert!(r == 1);\n"
+            )),
+            vec![(4, 4)]
+        );
+        // Twelve bindings of one name with nothing looking at any: twelve are caught.
+        let twelve: Vec<(usize, usize)> = (3..15).map(|line| (line, line)).collect();
+        assert_eq!(rs(&UNWIND.repeat(12)), twelve);
+    }
+
+    /// The steps one extraction of a Rust test with `body` counts.
+    fn rs_steps(body: &str) -> u64 {
+        let src = format!("#[test]\nfn t() {{\n{body}}}\n");
+        let (facts, counted) = crate::ast::ancestry::steps(|| {
+            crate::ast::rust::RustPack.extract("tests/t.rs", &src, &AssertVocabulary::default())
+        });
+        facts.unwrap();
+        counted
+    }
+
+    /// Unwind results bound and not looked at cost steps in proportion to their number.
+    /// Before #672 the function was walked for each binding, so four times the bindings
+    /// cost sixteen times the steps; and a later binding of the same name was asked
+    /// again by every earlier one, so each binding more of one name doubled the steps:
+    /// fourteen cost nineteen times what ten did.
+    #[test]
+    fn rust_unwind_results_cost_steps_in_proportion_to_their_number() {
+        let named = |n: usize| -> String {
+            (0..n)
+                .map(|i| format!("    let r{i} = std::panic::catch_unwind(|| assert!(f({i})));\n"))
+                .collect()
+        };
+        let (few, many) = (rs_steps(&named(40)), rs_steps(&named(160)));
+        assert!(many < 5 * few, "{few} steps for 40 names, {many} for 160");
+        let (ten, fourteen) = (rs_steps(&UNWIND.repeat(10)), rs_steps(&UNWIND.repeat(14)));
+        assert!(
+            fourteen < 2 * ten,
+            "{ten} steps for 10 bindings of one name, {fourteen} for 14"
+        );
+    }
+
+    /// The steps one extraction of `src` under `path` counts, and how many assertions
+    /// it read as caught.
+    fn steps_and_caught(path: &str, src: &str) -> (u64, usize) {
+        let registry = crate::ast::default_registry();
+        let pack = registry.find_pack(path).expect("a pack for the path");
+        let (facts, counted) =
+            crate::ast::ancestry::steps(|| pack.extract(path, src, &AssertVocabulary::default()));
+        let caught = facts
+            .unwrap()
+            .tests
+            .iter()
+            .map(|t| t.caught_assertions.len())
+            .sum();
+        (counted, caught)
+    }
+
+    /// A handler is read once for the assertions it catches. Before #672 a Python `try`
+    /// had its handlers read again for each assertion in its body, and each reading
+    /// walked the handler, the body of a retried `try`, and the statements after a
+    /// `try` that keeps its error, once for each line that kept it: four times the lines
+    /// cost 13 to 60 times the steps. A JavaScript `.catch(name)` read the whole file
+    /// for the function `name` each time.
+    #[test]
+    fn handlers_cost_steps_in_proportion_to_the_assertions_they_hold() {
+        type Source = (&'static str, &'static str, fn(usize) -> String);
+        let sources: [Source; 4] = [
+            (
+                "a Python handler that keeps its error",
+                "tests/test_m.py",
+                |n| {
+                    let lines =
+                        |line: fn(usize) -> String| -> String { (0..n).map(line).collect() };
+                    format!(
+                        "def test_x():\n    errs = []\n    try:\n{}    except AssertionError as e:\n{}{}",
+                        lines(|i| format!("        assert a == {i}\n")),
+                        lines(|_| "        errs.append(e)\n".to_string()),
+                        lines(|i| format!("    x{i} = {i}\n"))
+                    )
+                },
+            ),
+            (
+                "a Python handler of many statements",
+                "tests/test_m.py",
+                |n| {
+                    let lines =
+                        |line: fn(usize) -> String| -> String { (0..n).map(line).collect() };
+                    format!(
+                        "def test_x():\n    try:\n{}    except AssertionError:\n{}",
+                        lines(|i| format!("        assert a == {i}\n")),
+                        lines(|i| format!("        print({i})\n"))
+                    )
+                },
+            ),
+            ("a Python try in a loop", "tests/test_m.py", |n| {
+                let asserts: String = (0..n)
+                    .map(|i| format!("            assert a == {i}\n"))
+                    .collect();
+                format!(
+                        "def test_x():\n    for i in range(3):\n        try:\n{asserts}        except AssertionError:\n            pass\n"
+                    )
+            }),
+            (
+                "JavaScript handlers passed by name",
+                "tests/m.test.js",
+                |n| {
+                    let chains: String = (0..n)
+                        .map(|i| {
+                            format!("  p{i}.then(() => {{ expect(a).toBe({i}); }}).catch(quiet);\n")
+                        })
+                        .collect();
+                    format!("function quiet() {{}}\ntest('t', () => {{\n{chains}}});\n")
+                },
+            ),
+        ];
+        for (name, path, source) in sources {
+            let ((few, held), (many, more)) = (
+                steps_and_caught(path, &source(40)),
+                steps_and_caught(path, &source(160)),
+            );
+            assert_eq!((held, more), (40, 160), "{name}");
+            assert!(many < 5 * few, "{name}: {few} steps for 40, {many} for 160");
+        }
+    }
+
+    /// Each Python `try` is read by its own handlers, and each JavaScript `.catch(name)`
+    /// by the function of its own name.
+    #[test]
+    fn a_handler_read_once_is_read_for_its_own_try_and_its_own_name() {
+        assert_eq!(
+            py("    try:\n        assert a\n    except AssertionError:\n        pass\n    try:\n        assert b\n    except AssertionError:\n        raise\n    try:\n        assert c\n    except AssertionError:\n        pass\n"),
+            vec![(3, 4), (11, 12)]
+        );
+        let src = "function quiet() {}\nfunction loud(e) { throw e; }\ntest('a', () => {\n  p.then(() => { expect(a).toBe(1); }).catch(quiet);\n  q.then(() => { expect(a).toBe(2); }).catch(loud);\n  r.then(() => { expect(a).toBe(3); }).catch(quiet);\n});\n";
+        assert_eq!(
+            caught_lines(&crate::ast::javascript::JavaScriptPack, "a.test.js", src),
+            vec![(4, 4), (6, 6)]
+        );
     }
 
     #[test]

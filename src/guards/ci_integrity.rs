@@ -53,7 +53,9 @@ use super::{capture_pattern, ci_gitlab};
 use crate::guards::{exempt_filter, line_allows, Context, GateOutcome, PathFilter, Severity};
 use crate::tokens;
 use anyhow::Result;
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 pub const GATE: &str = "ci-integrity";
 
@@ -68,11 +70,12 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
     let filter = exempt_filter(settings)?;
 
     let workflow_filter = PathFilter::new(&settings.workflows)?;
+    let docs = YamlDocs::default();
 
     // Banned references are judged across the whole tree, whatever `diff_only` says: a
     // reference is banned whether or not this change added it.
     if !settings.banned_actions.is_empty() {
-        check_banned(ctx, &filter, &workflow_filter, &mut out)?;
+        check_banned(ctx, &docs, &filter, &workflow_filter, &mut out)?;
     }
 
     let Some(workflow_files) = workflow_files_to_examine(ctx, &filter, &workflow_filter, &mut out)?
@@ -83,6 +86,7 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
     let mut added_steps = AddedSteps {
         workflow_filter: &workflow_filter,
         filter: &filter,
+        docs: &docs,
         steps: None,
     };
     // Whether a workflow examined here has the rollup job the documented count is
@@ -98,7 +102,7 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
         // A composite action's metadata file carries steps, not jobs: only its nested
         // `uses:` are checked, never the rollup and job rules.
         if is_action_metadata_path(path) {
-            evaluate_action_file(ctx, path, &mut out)?;
+            evaluate_action_file(ctx, path, &docs, &mut out)?;
             continue;
         }
         if evaluate_workflow_file(ctx, path, &mut added_steps, &mut out)? {
@@ -181,6 +185,7 @@ fn workflow_files_to_examine(
 struct AddedSteps<'a> {
     workflow_filter: &'a PathFilter,
     filter: &'a PathFilter,
+    docs: &'a YamlDocs,
     steps: Option<Vec<serde_yaml::Value>>,
 }
 
@@ -192,6 +197,7 @@ impl AddedSteps<'_> {
                 ctx,
                 self.workflow_filter,
                 self.filter,
+                self.docs,
                 notes,
             )?);
         }
@@ -250,8 +256,9 @@ fn evaluate_workflow_file(
     };
 
     let base_content = ctx.git.base_content(path)?;
-    let head_val = parse_yaml_side(out, path, "head", Some(&head_content));
-    let base_val = parse_yaml_side(out, path, "base", base_content.as_deref());
+    let docs = added_steps.docs;
+    let head_val = docs.noted(out, path, "head", Some(&head_content));
+    let base_val = docs.noted(out, path, "base", base_content.as_deref());
     if head_val.is_some() {
         out.examined += 1;
     } else if base_content.is_some() {
@@ -274,8 +281,8 @@ fn evaluate_workflow_file(
         path,
         head_content: &head_content,
         base_content: base_content.as_deref(),
-        head: head_val.as_ref(),
-        base: base_val.as_ref(),
+        head: head_val.as_deref(),
+        base: base_val.as_deref(),
     };
 
     check_discipline_pin(ctx, &wf, out);
@@ -395,6 +402,7 @@ fn added_job_steps(
     ctx: &Context,
     globs: &crate::guards::PathFilter,
     filter: &crate::guards::PathFilter,
+    docs: &YamlDocs,
     notes: &mut Vec<String>,
 ) -> Result<Vec<serde_yaml::Value>> {
     let unparsed = |path: &str, side: &str| {
@@ -413,13 +421,13 @@ fn added_job_steps(
         let Some(head) = ctx.git.head_content(p)? else {
             continue;
         };
-        let Ok(head) = serde_yaml::from_str::<serde_yaml::Value>(&head) else {
+        let Ok(head) = docs.load(p, "head", &head) else {
             notes.push(unparsed(p, "head"));
             continue;
         };
         let base = match ctx.git.base_content(p)? {
             None => None,
-            Some(b) => match serde_yaml::from_str::<serde_yaml::Value>(&b) {
+            Some(b) => match docs.load(p, "base", &b) {
                 Ok(b) => Some(b),
                 // Every job of the file would read as added.
                 Err(_) => {
@@ -429,6 +437,7 @@ fn added_job_steps(
             },
         };
         let base_jobs: HashSet<String> = base
+            .as_deref()
             .and_then(|b| {
                 b.get("jobs").and_then(|j| j.as_mapping()).map(|m| {
                     m.keys()
@@ -701,6 +710,27 @@ pub(crate) fn is_action_metadata_path(path: &str) -> bool {
             .any(|dir| path.starts_with(&format!("{dir}/")))
 }
 
+/// The one place this gate loads the YAML of a GitHub workflow or action file. `Err` is
+/// where the parser stopped, as ` (line L, column C)`, or empty when it gave no place.
+/// Location only: the parser's message can quote the text near the error.
+pub(crate) fn load_yaml(text: &str) -> std::result::Result<serde_yaml::Value, String> {
+    #[cfg(test)]
+    test_support::record_load(text);
+    serde_yaml::from_str::<serde_yaml::Value>(text).map_err(|e| {
+        e.location()
+            .map(|l| format!(" (line {}, column {})", l.line(), l.column()))
+            .unwrap_or_default()
+    })
+}
+
+/// The note for a side of a CI file that does not parse; `at` is what [`load_yaml`]
+/// returned for it.
+fn unparsed_side_note(path: &str, side: &str, at: &str) -> String {
+    format!(
+        "{path}: the {side} side does not parse as YAML{at}; the pin, exposure and rollup checks that read it were skipped"
+    )
+}
+
 /// Parses one side of a CI file. `None` for an absent side (nothing to say) and, with a
 /// note naming the file and the side, for a side that does not parse: the checks that
 /// compare that side are skipped, which is reported, never silent.
@@ -710,32 +740,75 @@ pub(crate) fn parse_yaml_side(
     side: &str,
     text: Option<&str>,
 ) -> Option<serde_yaml::Value> {
-    let text = text?;
-    match serde_yaml::from_str::<serde_yaml::Value>(text) {
+    match load_yaml(text?) {
         Ok(v) => Some(v),
-        Err(e) => {
-            // Location only: the parser's message can quote the text near the error.
-            let at = e
-                .location()
-                .map(|l| format!(" (line {}, column {})", l.line(), l.column()))
-                .unwrap_or_default();
-            out.notes.push(format!(
-                "{path}: the {side} side does not parse as YAML{at}; the pin, exposure and rollup checks that read it were skipped"
-            ));
+        Err(at) => {
+            out.notes.push(unparsed_side_note(path, side, &at));
             None
+        }
+    }
+}
+
+/// One side of a file as [`YamlDocs`] keeps it: the document, or where the parser stopped.
+type LoadedSide = std::result::Result<Rc<serde_yaml::Value>, String>;
+
+/// The GitHub workflow and action files this run has loaded, by path and side (`head` or
+/// `base`), so that each side of each file is parsed once however many checks read it:
+/// the banned-reference scan, the file's own comparison, and the search for the jobs a
+/// removed job's steps moved to. Neither side of the change moves while the gate runs,
+/// so the text of a path and side is the same on every read.
+#[derive(Default)]
+pub(crate) struct YamlDocs {
+    sides: RefCell<HashMap<(String, &'static str), LoadedSide>>,
+}
+
+impl YamlDocs {
+    /// The document of `side` of `path`, parsed from `text` on the first call and kept.
+    /// A side that does not parse is kept too. Says nothing: each caller words its own
+    /// note for a side it could not read.
+    pub(crate) fn load(&self, path: &str, side: &'static str, text: &str) -> LoadedSide {
+        let key = (path.to_string(), side);
+        if let Some(kept) = self.sides.borrow().get(&key) {
+            return kept.clone();
+        }
+        let loaded = load_yaml(text).map(Rc::new);
+        self.sides.borrow_mut().insert(key, loaded.clone());
+        loaded
+    }
+
+    /// [`parse_yaml_side`] over the kept documents: `None` for an absent side and, with
+    /// the same note, for a side that does not parse.
+    pub(crate) fn noted(
+        &self,
+        out: &mut GateOutcome,
+        path: &str,
+        side: &'static str,
+        text: Option<&str>,
+    ) -> Option<Rc<serde_yaml::Value>> {
+        match self.load(path, side, text?) {
+            Ok(v) => Some(v),
+            Err(at) => {
+                out.notes.push(unparsed_side_note(path, side, &at));
+                None
+            }
         }
     }
 }
 
 /// `ci-integrity` for a composite action's metadata file: pinning of its nested
 /// `uses:` only.
-fn evaluate_action_file(ctx: &Context, path: &str, out: &mut GateOutcome) -> Result<()> {
+fn evaluate_action_file(
+    ctx: &Context,
+    path: &str,
+    docs: &YamlDocs,
+    out: &mut GateOutcome,
+) -> Result<()> {
     let settings = &ctx.config.gates.ci_integrity;
     let Some(head) = ctx.git.head_content(path)? else {
         return Ok(());
     };
     let base = ctx.git.base_content(path)?;
-    let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(&head) else {
+    let Ok(doc) = docs.load(path, "head", &head) else {
         out.notes.push(format!(
             "{path}: action metadata does not parse as YAML; its nested `uses:` and `run:` steps were not checked"
         ));
@@ -757,18 +830,18 @@ fn evaluate_action_file(ctx: &Context, path: &str, out: &mut GateOutcome) -> Res
         return Ok(());
     };
     out.examined += 1;
-    let base_doc = parse_yaml_side(out, path, "base", base.as_deref());
+    let base_doc = docs.noted(out, path, "base", base.as_deref());
     if settings.pin_actions {
         let base_refs = base_pin_set(
             base_doc
-                .as_ref()
+                .as_deref()
                 .map(|d| action_pin_refs(d, base.as_deref().unwrap_or_default())),
         );
         let refs = action_pin_refs(&doc, &head);
         check_pins(ctx, path, &head, &refs, &base_refs, out);
     }
     let base_x = base_doc
-        .as_ref()
+        .as_deref()
         .map(|d| super::ci_exposure::action_exposures(d, base.as_deref().unwrap_or_default()))
         .unwrap_or_default();
     let head_x = super::ci_exposure::action_exposures(&doc, &head);
@@ -914,5 +987,78 @@ mod tests {
         assert_eq!(out.notes.len(), 1, "{:?}", out.notes);
         assert!(out.notes[0].starts_with(".github/workflows/ci.yml: the head side does not parse"));
         assert!(out.notes[0].contains("were skipped"), "{:?}", out.notes);
+    }
+
+    #[test]
+    fn a_kept_side_is_parsed_once_and_noted_on_every_read_that_notes() {
+        let docs = YamlDocs::default();
+        let broken = "jobs:\n\tbuild: [";
+        let mut out = GateOutcome::new(GATE);
+        let (loads, ()) = loads_of(broken, || {
+            assert!(docs.load("w.yml", "head", broken).is_err());
+            assert!(docs
+                .noted(&mut out, "w.yml", "head", Some(broken))
+                .is_none());
+            assert!(docs
+                .noted(&mut out, "w.yml", "head", Some(broken))
+                .is_none());
+        });
+        assert_eq!(loads, 1, "a side that does not parse is kept as well");
+        // `load` says nothing; each `noted` read says the same as `parse_yaml_side`.
+        let mut plain = GateOutcome::new(GATE);
+        assert!(parse_yaml_side(&mut plain, "w.yml", "head", Some(broken)).is_none());
+        assert_eq!(out.notes, [plain.notes[0].clone(), plain.notes[0].clone()]);
+
+        // The two sides of one path, and one side of two paths, are different documents.
+        let (head, base) = ("jobs: {a: {}}\n", "jobs: {b: {}}\n");
+        let head_doc = docs.load("x.yml", "head", head).unwrap();
+        let base_doc = docs.load("x.yml", "base", base).unwrap();
+        let other = docs.load("y.yml", "head", base).unwrap();
+        assert!(head_doc.get("jobs").unwrap().get("a").is_some());
+        assert!(base_doc.get("jobs").unwrap().get("b").is_some());
+        assert!(other.get("jobs").unwrap().get("b").is_some());
+        assert!(docs.noted(&mut out, "x.yml", "base", None).is_none());
+        assert_eq!(out.notes.len(), 2, "an absent side has nothing to say");
+    }
+
+    /// The findings of the gate over one workflow changed from `base` to `head`, with how
+    /// many times each side's text was loaded as YAML.
+    fn evaluate_counting_loads(base: &str, head: &str) -> (usize, usize, GateOutcome) {
+        let config = crate::config::DisciplineConfig::from_toml_str(
+            "[meta]\nversion = 1\nname = \"t\"\n[gates.ci-integrity]\nenabled = true\nrollup_job = \"ci-gate\"\nbanned_actions = [\"evil/action\"]\n",
+        )
+        .unwrap();
+        let (_dir, git) = crate::gitctx::test_support::repo_with_changed_file(
+            ".github/workflows/ci.yml",
+            base,
+            head,
+        );
+        let ctx = crate::guards::test_support::context(&config, &git);
+        let (head_loads, out) = loads_of(head, || evaluate_ci_integrity(&ctx).unwrap());
+        let (base_loads, _) = loads_of(base, || evaluate_ci_integrity(&ctx).unwrap());
+        (head_loads, base_loads, out)
+    }
+
+    #[test]
+    fn each_side_of_a_workflow_is_loaded_once_by_every_check_that_reads_it() {
+        // One run that reaches every reader of the file: the banned-reference scan, the
+        // file's own comparison, the rollup job's dependencies on both sides, and (a
+        // verification job was removed) the search for where its steps moved.
+        let base = "on: push\njobs:\n  lint:\n    runs-on: ubuntu-latest\n    steps:\n      - run: cargo clippy\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: cargo test\n  ci-gate:\n    needs: [lint, test]\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n";
+        let head = "on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: cargo test\n  ci-gate:\n    needs: lint\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n";
+        let (head_loads, base_loads, out) = evaluate_counting_loads(base, head);
+        assert_eq!((head_loads, base_loads), (1, 1));
+        let mut codes: Vec<&str> = out.violations.iter().map(|v| v.code.as_str()).collect();
+        codes.sort_unstable();
+        assert_eq!(
+            codes,
+            [
+                "ci-integrity/rollup-needs-incomplete",
+                "ci-integrity/rollup-needs-removed",
+                "ci-integrity/verification-job-removed",
+            ],
+            "{:?}",
+            out.violations
+        );
     }
 }

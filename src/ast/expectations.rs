@@ -12,8 +12,11 @@
 //! and a value built from a variable or a constant is not read. The assertion message
 //! (`assert_eq!(a, 4, "msg")`) is not an operand.
 
-use super::bounds::{skeleton, text, walk};
+use super::ancestry::count;
+use super::bounds::{skeleton, text, walk, GoFailures, Record, Records};
 use super::TestFn;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tree_sitter::Node;
 
 /// One expected value of one assertion.
@@ -27,39 +30,145 @@ pub struct Expectation {
     /// The calls the assertion makes, each as `expected_exceptions::call_text` writes it.
     /// `assertion-reduction` reads them when an expected exception is dropped: the call
     /// that had to fail may now be asserted to return a value.
-    pub calls: Vec<String>,
+    pub calls: Calls,
 }
 
-fn attribute(tests: &mut [TestFn], e: Expectation) {
-    let line = e.line;
-    if let Some(t) = super::innermost_test(tests, line) {
-        if !t.expectations.contains(&e) {
-            t.expectations.push(e);
+/// The calls one assertion makes, in the order of the source: a list of texts.
+///
+/// The expected values of one assertion all hold the same calls, and an assertion
+/// inside another holds a run of the outer one's. The list is therefore kept once and
+/// each holder reads its run of it; before, an assertion of many literals held as many
+/// copies of the list, each the text of every call nested in it.
+#[derive(Clone)]
+pub struct Calls {
+    all: Arc<[String]>,
+    from: usize,
+    to: usize,
+}
+
+impl std::ops::Deref for Calls {
+    type Target = [String];
+    fn deref(&self) -> &[String] {
+        &self.all[self.from..self.to]
+    }
+}
+
+impl Default for Calls {
+    fn default() -> Self {
+        Vec::new().into()
+    }
+}
+
+impl From<Vec<String>> for Calls {
+    fn from(calls: Vec<String>) -> Self {
+        let to = calls.len();
+        Self {
+            all: calls.into(),
+            from: 0,
+            to,
         }
     }
 }
 
-fn record(tests: &mut [TestFn], whole: Node, lit: Node, src: &str) {
-    attribute(
-        tests,
-        Expectation {
+impl std::fmt::Debug for Calls {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&**self, f)
+    }
+}
+
+impl PartialEq for Calls {
+    fn eq(&self, other: &Self) -> bool {
+        let same_run =
+            Arc::ptr_eq(&self.all, &other.all) && (self.from, self.to) == (other.from, other.to);
+        same_run || **self == **other
+    }
+}
+
+impl Eq for Calls {}
+
+impl IntoIterator for Calls {
+    type Item = String;
+    type IntoIter = std::vec::IntoIter<String>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter().cloned().collect::<Vec<_>>().into_iter()
+    }
+}
+
+impl Record for Expectation {
+    fn line(&self) -> usize {
+        self.line
+    }
+    fn written(&self) -> (&str, &str) {
+        (&self.skeleton, &self.literal)
+    }
+    fn of(test: &mut TestFn) -> &mut Vec<Self> {
+        &mut test.expectations
+    }
+}
+
+/// What one reader records, and the calls of the assertion it last listed them for.
+struct Reader<'a> {
+    records: Records<'a, Expectation>,
+    /// The calls of the outermost assertion last read.
+    calls: Arc<[String]>,
+    /// For each node inside that assertion, by its id, its run of `calls`.
+    runs: HashMap<usize, (usize, usize)>,
+}
+
+impl<'a> Reader<'a> {
+    fn new(tests: &'a mut [TestFn], src: &str) -> Self {
+        Self {
+            records: Records::new(tests, src),
+            calls: Vec::new().into(),
+            runs: HashMap::new(),
+        }
+    }
+
+    /// The calls inside `whole`. They are listed when `whole` is not inside the
+    /// assertion last listed, and are a run of that list when it is.
+    fn calls_of(&mut self, whole: Node, src: &str) -> Calls {
+        count(1);
+        if !self.runs.contains_key(&whole.id()) {
+            let (calls, runs) = super::expected_exceptions::calls_in(whole, src);
+            self.calls = calls.into();
+            self.runs = runs;
+        }
+        let (from, to) = self.runs[&whole.id()];
+        Calls {
+            all: Arc::clone(&self.calls),
+            from,
+            to,
+        }
+    }
+
+    fn record(&mut self, whole: Node, lit: Node, src: &str) {
+        let calls = self.calls_of(whole, src);
+        self.records.add(Expectation {
             line: lit.start_position().row + 1,
             skeleton: skeleton(whole, lit, src),
             literal: text(lit, src).to_string(),
-            calls: super::expected_exceptions::calls_in(whole, src),
-        },
-    );
+            calls,
+        });
+    }
 }
 
 /// Lines of `head` expectations whose literal differs from the base expectation with the
 /// same skeleton. A skeleton that is not exactly once on each side is ambiguous and skipped.
 pub fn changed(base: &[Expectation], head: &[Expectation]) -> Vec<usize> {
-    let once = |set: &[Expectation], s: &str| set.iter().filter(|x| x.skeleton == s).count() == 1;
+    // For a skeleton: how many expectations have it, and the first.
+    fn tally(set: &[Expectation]) -> HashMap<&str, (usize, usize)> {
+        let mut out = HashMap::new();
+        for (at, x) in set.iter().enumerate() {
+            out.entry(x.skeleton.as_str()).or_insert((0, at)).0 += 1;
+        }
+        out
+    }
+    let (in_base, in_head) = (tally(base), tally(head));
     head.iter()
-        .filter(|h| once(head, &h.skeleton) && once(base, &h.skeleton))
-        .filter_map(|h| {
-            let b = base.iter().find(|b| b.skeleton == h.skeleton)?;
-            (b.literal != h.literal).then_some(h.line)
+        .filter(|h| in_head.get(h.skeleton.as_str()).map(|(n, _)| *n) == Some(1))
+        .filter_map(|h| match in_base.get(h.skeleton.as_str()) {
+            Some((1, at)) => (base[*at].literal != h.literal).then_some(h.line),
+            _ => None,
         })
         .collect()
 }
@@ -94,6 +203,7 @@ pub fn rust(root: Node, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
     }
+    let reader = &mut Reader::new(tests, src);
     walk(root, &mut |node| {
         if node.kind() != "macro_invocation" {
             return true;
@@ -122,15 +232,15 @@ pub fn rust(root: Node, src: &str, tests: &mut [TestFn]) {
         if RS_EQ.contains(&name) {
             for arg in toks.split(|t| text(*t, src) == ",").take(2) {
                 match arg {
-                    [l] if rs_lit(*l) => record(tests, node, *l, src),
-                    [m, l] if text(*m, src) == "-" && rs_lit(*l) => record(tests, node, *l, src),
+                    [l] if rs_lit(*l) => reader.record(node, *l, src),
+                    [m, l] if text(*m, src) == "-" && rs_lit(*l) => reader.record(node, *l, src),
                     _ => {}
                 }
             }
         } else if name.contains("snapshot") {
             for w in toks.windows(2) {
                 if text(w[0], src) == "@" && rs_lit(w[1]) {
-                    record(tests, node, w[1], src);
+                    reader.record(node, w[1], src);
                 }
             }
         } else {
@@ -144,7 +254,7 @@ pub fn rust(root: Node, src: &str, tests: &mut [TestFn]) {
                 let after = toks.get(i + 1).map_or("", |n| text(*n, src));
                 let eq = |o: &str| matches!(o, "==" | "!=");
                 if (eq(before) && closes(after)) || (eq(after) && opens(before)) {
-                    record(tests, node, *t, src);
+                    reader.record(node, *t, src);
                 }
             }
         }
@@ -202,6 +312,7 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
     }
+    let reader = &mut Reader::new(tests, src);
     walk(root, &mut |node| match node.kind() {
         "assert_statement" => {
             let Some(cmp) = node
@@ -221,7 +332,7 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
             if named.len() == 2 && matches!(op.as_str(), "==" | "!=" | "is" | "is not") {
                 for side in named {
                     if let Some(lit) = py_operand(side, src) {
-                        record(tests, node, lit, src);
+                        reader.record(node, lit, src);
                     }
                 }
             }
@@ -248,7 +359,7 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
                     .collect();
                 for a in pos.into_iter().take(2) {
                     if py_lit(a) {
-                        record(tests, node, a, src);
+                        reader.record(node, a, src);
                     }
                 }
             }
@@ -304,6 +415,7 @@ pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
     }
+    let reader = &mut Reader::new(tests, src);
     walk(root, &mut |node| {
         if node.kind() != "expression_statement" {
             return true;
@@ -347,7 +459,7 @@ pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
                             Vec::new()
                         };
                     for a in picked.into_iter().filter(|a| js_lit(*a, src)) {
-                        record(tests, node, a, src);
+                        reader.record(node, a, src);
                     }
                 }
                 "binary_expression" => {
@@ -358,7 +470,7 @@ pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
                         for side in ["left", "right"] {
                             if let Some(s) = n.child_by_field_name(side).filter(|s| js_lit(*s, src))
                             {
-                                record(tests, node, s, src);
+                                reader.record(node, s, src);
                             }
                         }
                     }
@@ -403,14 +515,13 @@ pub fn go(root: Node, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
     }
+    let reader = &mut Reader::new(tests, src);
+    let failures = GoFailures::of(src);
     walk(root, &mut |node| match node.kind() {
         "if_statement" => {
-            let fails = node.child_by_field_name("consequence").is_some_and(|c| {
-                let t = text(c, src);
-                [".Fatal", ".Error", ".FailNow", ".Fail("]
-                    .iter()
-                    .any(|m| t.contains(m))
-            });
+            let fails = node
+                .child_by_field_name("consequence")
+                .is_some_and(|c| failures.inside(c));
             if let Some(cond) = node
                 .child_by_field_name("condition")
                 .filter(|c| fails && c.kind() == "binary_expression")
@@ -421,7 +532,7 @@ pub fn go(root: Node, src: &str, tests: &mut [TestFn]) {
                 if matches!(op, "==" | "!=") {
                     for side in ["left", "right"] {
                         if let Some(s) = cond.child_by_field_name(side).filter(|s| go_lit(*s)) {
-                            record(tests, cond, s, src);
+                            reader.record(cond, s, src);
                         }
                     }
                 }
@@ -449,7 +560,7 @@ pub fn go(root: Node, src: &str, tests: &mut [TestFn]) {
             let skip = usize::from(args.first().is_some_and(|a| a.kind() == "identifier"));
             for p in positions.iter() {
                 if let Some(a) = args.get(p + skip).filter(|a| go_lit(**a)) {
-                    record(tests, node, *a, src);
+                    reader.record(node, *a, src);
                 }
             }
             true
@@ -515,13 +626,457 @@ mod tests {
         );
     }
 
+    /// `open` written `n` times, `core`, then `close` written `n` times.
+    fn nest(n: usize, open: impl Fn(usize) -> String, core: &str, close: &str) -> String {
+        let mut out: String = (0..n).map(open).collect();
+        out.push_str(core);
+        out.push_str(&close.repeat(n));
+        out
+    }
+
+    /// `item` written for each of `0..n`, joined by `between`.
+    fn row(n: usize, item: impl Fn(usize) -> String, between: &str) -> String {
+        (0..n).map(item).collect::<Vec<_>>().join(between)
+    }
+
+    /// One statement that holds `n` expected values or bounds, for each reader of this
+    /// file and of `bounds`: a name, the path it is read under, and the source.
+    type Source = (&'static str, &'static str, fn(usize) -> String);
+
+    /// Sources whose one assertion holds every literal, so each literal's skeleton is
+    /// the text of the whole statement and the facts are the square of the source.
+    fn statements_of_many_literals() -> Vec<Source> {
+        vec![
+            ("TypeScript suites inside an expect", "tests/m.ts", |n| {
+                format!(
+                    "it('t', () => {{ expect({}).toBe(0); }});\n",
+                    nest(
+                        n,
+                        |i| {
+                            format!(
+                            "describe('d{i}', () => {{ it('t{i}', () => {{ expect(a()).toBe({i}); }}); "
+                        )
+                        },
+                        "",
+                        "})"
+                    )
+                )
+            }),
+            // What a fuzzing run found: nested suites with one matcher name cut short
+            // and the text up to a later quote gone, so one `expect` statement holds
+            // the suites after it.
+            (
+                "TypeScript suites cut inside a matcher",
+                "tests/m.ts",
+                |n| {
+                    let suite = |i: usize| {
+                        format!("describe('d{i}', () => {{ it('t{i}', () => {{ expect(a()).toBe(1); }}); ")
+                    };
+                    format!(
+                    "{}describe('d', () => {{ it('t', () => {{ expect(a()).to9', () => {{ it('t9', () => {{ expect(a()).toBe(1); }}); {}{}",
+                    row(n / 4, suite, ""),
+                    row(n, suite, ""),
+                    "});\n".repeat(n + n / 4)
+                )
+                },
+            ),
+            ("JavaScript chained matchers", "tests/m.test.js", |n| {
+                format!(
+                    "test('t', () => {{ expect(a){}; }});\n",
+                    row(n, |i| format!(".toBe({i})"), "")
+                )
+            }),
+            ("JavaScript matchers in one call", "tests/m.test.js", |n| {
+                format!(
+                    "test('t', () => {{ expect([{}]); }});\n",
+                    row(n, |i| format!("a.toBe({i})"), ", ")
+                )
+            }),
+            ("JavaScript bounds in one call", "tests/m.test.js", |n| {
+                format!(
+                    "test('t', () => {{ expect([{}]); }});\n",
+                    row(n, |i| format!("a.toBeLessThan({i})"), ", ")
+                )
+            }),
+            (
+                "JavaScript comparisons in one assert",
+                "tests/m.test.js",
+                |n| {
+                    format!(
+                        "test('t', () => {{ assert({}); }});\n",
+                        row(n, |i| format!("a === {i}"), " && ")
+                    )
+                },
+            ),
+            ("Rust comparisons in one assert", "tests/t.rs", |n| {
+                format!(
+                    "#[test]\nfn t() {{ assert!({}); }}\n",
+                    row(n, |i| format!("a == {i}"), " && ")
+                )
+            }),
+            ("Rust bounds in one assert", "tests/t.rs", |n| {
+                format!(
+                    "#[test]\nfn t() {{ assert!({}); }}\n",
+                    row(n, |i| format!("a < {i}"), " && ")
+                )
+            }),
+            ("Python bounds in one assert", "tests/test_m.py", |n| {
+                format!(
+                    "def test_t():\n    assert {}\n",
+                    row(n, |i| format!("a < {i}"), " and ")
+                )
+            }),
+            (
+                "Python calls nested in one assert",
+                "tests/test_m.py",
+                |n| {
+                    format!(
+                        "def test_t():\n    assert {} == 1\n",
+                        nest(n, |_| "f(".to_string(), "1", ")")
+                    )
+                },
+            ),
+            ("Go nested testify equalities", "m_test.go", |n| {
+                format!(
+                    "package p\n\nfunc TestT(t *testing.T) {{\n\t{}\n}}\n",
+                    nest(n, |i| format!("assert.Equal(t, {i}, "), "x", ")")
+                )
+            }),
+            ("Go nested testify bounds", "m_test.go", |n| {
+                format!(
+                    "package p\n\nfunc TestT(t *testing.T) {{\n\t{}x{}\n}}\n",
+                    "assert.Less(t, ".repeat(n),
+                    row(n, |i| format!(", {i})"), "")
+                )
+            }),
+        ]
+    }
+
+    /// Sources whose assertions each hold one literal: the facts grow with the source.
+    fn statements_of_one_literal() -> Vec<Source> {
+        vec![
+            ("TypeScript nested suites", "tests/m.ts", |n| {
+                nest(
+                    n,
+                    |i| {
+                        format!("describe('d{i}', () => {{ it('t{i}', () => {{ expect(a()).toBe(1); }});\n")
+                    },
+                    "",
+                    "});\n",
+                )
+            }),
+            ("JavaScript assertions in a row", "tests/m.test.js", |n| {
+                format!(
+                    "test('t', () => {{\n{}}});\n",
+                    row(n, |i| format!("  expect(a({i})).toBe({i});\n"), "")
+                )
+            }),
+            ("Rust assertions in a row", "tests/t.rs", |n| {
+                format!(
+                    "#[test]\nfn t() {{\n{}}}\n",
+                    row(n, |i| format!("    assert_eq!(f({i}), {i});\n"), "")
+                )
+            }),
+            ("Python assertions in a row", "tests/test_m.py", |n| {
+                format!(
+                    "def test_t():\n{}",
+                    row(n, |i| format!("    assert f({i}) == {i}\n"), "")
+                )
+            }),
+            ("Go assertions in a row", "m_test.go", |n| {
+                format!(
+                    "package p\n\nfunc TestT(t *testing.T) {{\n{}}}\n",
+                    row(n, |i| format!("\tassert.Equal(t, {i}, f({i}))\n"), "")
+                )
+            }),
+            ("Go nested failure conditions", "m_test.go", |n| {
+                format!(
+                    "package p\n\nfunc TestT(t *testing.T) {{\n{}}}\n",
+                    nest(n, |i| format!("if x == {i} {{\nt.Fatal()\n"), "", "}\n")
+                )
+            }),
+        ]
+    }
+
+    /// The steps one extraction of `src` under `path` counts, and how many expected
+    /// values and bounds it recorded.
+    fn steps_of(path: &str, src: &str) -> (u64, usize) {
+        let registry = crate::ast::default_registry();
+        let pack = registry.find_pack(path).expect("a pack for the path");
+        let (facts, counted) =
+            crate::ast::ancestry::steps(|| pack.extract(path, src, &AssertVocabulary::default()));
+        let facts = facts.unwrap_or_else(|e| panic!("{path} is read: {e:#}"));
+        let recorded = facts
+            .tests
+            .iter()
+            .map(|t| t.expectations.len() + t.bounds.len())
+            .sum();
+        (counted, recorded)
+    }
+
+    /// A statement that holds four times the literals costs under twenty times the
+    /// steps. Each literal is recorded with the text of its whole statement, and the
+    /// calls of a statement are listed each as its whole text, so what is recorded is
+    /// the square of the source, sixteen times as much; the work to record it is held to
+    /// that. Before #672 the calls of the statement were listed again for each literal
+    /// and each new record was compared with every one before it, and the same sources
+    /// cost 26 to 59 times as much at four times the size.
+    ///
+    /// What is counted, with what `ancestry` counts: every node a walk of `bounds`
+    /// visits, every byte of a skeleton and of a call's text, every byte hashed or
+    /// compared to tell a record from the ones before it, and every byte and line read
+    /// to place a record in its test.
+    #[test]
+    fn a_statement_of_many_literals_costs_steps_in_proportion_to_what_is_recorded() {
+        crate::deep_stack::on_deep_stack(|| {
+            for (name, path, source) in statements_of_many_literals() {
+                let ((shallow, few), (deep, many)) =
+                    (steps_of(path, &source(40)), steps_of(path, &source(160)));
+                assert!(few > 0 && many >= few, "{name}: {few} and {many} recorded");
+                assert!(
+                    deep < 20 * shallow,
+                    "{name}: {shallow} steps for 40, {deep} for 160"
+                );
+            }
+        })
+        .unwrap();
+    }
+
+    /// Where each assertion holds one literal, four times the assertions cost under
+    /// five times the steps: what is recorded grows with the source, and so does the
+    /// work. Before #672 nested suites and nested failure conditions cost 12 and 13
+    /// times as much: the text of each statement was checked as UTF-8 for each statement
+    /// around it, and the body of each Go `if` was searched for each `if` around it.
+    #[test]
+    fn assertions_of_one_literal_cost_steps_in_proportion_to_the_source() {
+        crate::deep_stack::on_deep_stack(|| {
+            for (name, path, source) in statements_of_one_literal() {
+                let ((shallow, few), (deep, many)) =
+                    (steps_of(path, &source(40)), steps_of(path, &source(160)));
+                assert!(few >= 40, "{name}: {few} recorded for 40");
+                assert!(many >= 160, "{name}: {many} recorded for 160");
+                assert!(
+                    deep < 5 * shallow,
+                    "{name}: {shallow} steps for 40, {deep} for 160"
+                );
+            }
+        })
+        .unwrap();
+    }
+
+    /// The bytes of what `tests` hold as expected values and bounds: each skeleton and
+    /// literal, and each list of calls once however many expected values read it.
+    fn bytes_recorded(tests: &[TestFn]) -> usize {
+        let mut lists = std::collections::HashSet::new();
+        let mut bytes = 0;
+        for t in tests {
+            for b in &t.bounds {
+                bytes += b.skeleton.len() + b.literal.len();
+            }
+            for e in &t.expectations {
+                bytes += e.skeleton.len() + e.literal.len();
+                if lists.insert(Arc::as_ptr(&e.calls.all).cast::<u8>()) {
+                    bytes += e.calls.all.iter().map(String::len).sum::<usize>();
+                }
+            }
+        }
+        bytes
+    }
+
+    /// The source a fuzzing run found (`fuzz/corpus/language_packs/
+    /// nested_ts_suites_cut_inside_a_matcher`): 333 nested suites with one matcher name
+    /// cut short, so that one `expect` statement of 19 kB holds 262 expected values. It
+    /// is read in at most [`STEPS_PER_BYTE`] steps for each byte of the source and of
+    /// what is recorded for it, and the 262 expected values share one list of calls.
+    #[test]
+    fn the_source_a_fuzzing_run_found_is_read_in_steps_bounded_by_what_is_recorded() {
+        /// Under four times what it takes: 1.6 for each byte.
+        const STEPS_PER_BYTE: u64 = 6;
+        crate::deep_stack::on_deep_stack(|| {
+            let seed = std::fs::read(format!(
+                "{}/fuzz/corpus/language_packs/nested_ts_suites_cut_inside_a_matcher",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap();
+            // The selector of `tests/m.ts` (`fuzz/fuzz_targets/language_packs.rs`).
+            assert_eq!(seed[0], 0x23);
+            let src = String::from_utf8(seed[1..].to_vec()).unwrap();
+            let registry = crate::ast::default_registry();
+            let pack = registry.find_pack("tests/m.ts").unwrap();
+            let (facts, counted) = crate::ast::ancestry::steps(|| {
+                pack.extract("tests/m.ts", &src, &AssertVocabulary::default())
+            });
+            let facts = facts.unwrap();
+            let held: Vec<&Expectation> = facts
+                .tests
+                .iter()
+                .flat_map(|t| t.expectations.iter())
+                .collect();
+            assert_eq!(held.len(), 262);
+            let longest = held.iter().map(|e| e.skeleton.len()).max().unwrap();
+            assert!(longest > 18_000, "the longest skeleton is {longest} bytes");
+            let lists: std::collections::HashSet<_> =
+                held.iter().map(|e| Arc::as_ptr(&e.calls.all)).collect();
+            // One list for the statement that holds the suites, one for the two that
+            // stand before it.
+            assert!(lists.len() <= 3, "{} lists of calls", lists.len());
+            let bytes = (src.len() + bytes_recorded(&facts.tests)) as u64;
+            assert!(
+                counted <= STEPS_PER_BYTE * bytes,
+                "{counted} steps for {bytes} bytes read and recorded"
+            );
+        })
+        .unwrap();
+    }
+
+    fn expectations(pack: &dyn LanguagePack, path: &str, src: &str) -> Vec<Expectation> {
+        let facts = pack
+            .extract(path, src, &AssertVocabulary::default())
+            .unwrap();
+        facts
+            .tests
+            .into_iter()
+            .flat_map(|t| t.expectations)
+            .collect()
+    }
+
+    /// An expected value written the same on the same line as another is recorded once;
+    /// on another line, or with another literal, it is another record.
+    #[test]
+    fn an_expected_value_equal_to_one_recorded_is_not_recorded_again() {
+        let js = |body: &str| {
+            expectations(
+                &crate::ast::javascript::JavaScriptPack,
+                "src/x.test.js",
+                &format!("test('t', () => {{\n{body}}});\n"),
+            )
+            .into_iter()
+            .map(|e| (e.line, e.literal))
+            .collect::<Vec<_>>()
+        };
+        let one = |n: &str| n.to_string();
+        assert_eq!(
+            js("  expect(a).toBe(1); expect(a).toBe(1);\n"),
+            vec![(2, one("1"))]
+        );
+        assert_eq!(
+            js("  expect(a).toBe(1); expect(a).toBe(2);\n"),
+            vec![(2, one("1")), (2, one("2"))]
+        );
+        assert_eq!(
+            js("  expect(a).toBe(1);\n  expect(a).toBe(1);\n"),
+            vec![(2, one("1")), (3, one("1"))]
+        );
+        // Bounds are told apart the same way.
+        let bounds = crate::ast::javascript::JavaScriptPack
+            .extract(
+                "src/x.test.js",
+                "test('t', () => {\n  expect(a).toBeLessThan(1); expect(a).toBeLessThan(1); expect(a).toBeLessThan(2);\n});\n",
+                &AssertVocabulary::default(),
+            )
+            .unwrap()
+            .tests
+            .remove(0)
+            .bounds;
+        assert_eq!(
+            bounds
+                .iter()
+                .map(|b| b.literal.as_str())
+                .collect::<Vec<_>>(),
+            vec!["1", "2"]
+        );
+    }
+
+    /// The calls of an assertion are the calls inside it: an assertion inside another
+    /// holds its own, and the outer one holds both.
+    #[test]
+    fn an_assertion_inside_another_holds_the_calls_inside_it() {
+        let held = expectations(
+            &crate::ast::go::GoPack,
+            "p_test.go",
+            "package p\n\nimport \"testing\"\n\nfunc TestT(t *testing.T) {\n\tassert.Equal(t, 1, assert.Equal(t, 2, g()), h())\n}\n",
+        );
+        let calls: Vec<(&str, Vec<&str>)> = held
+            .iter()
+            .map(|e| {
+                (
+                    e.literal.as_str(),
+                    e.calls.iter().map(String::as_str).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            calls,
+            vec![
+                (
+                    "1",
+                    vec![
+                        "assert . Equal ( t , 1 , assert . Equal ( t , 2 , g ( ) ) , h ( ) )",
+                        "assert . Equal ( t , 2 , g ( ) )",
+                        "g ( )",
+                        "h ( )"
+                    ]
+                ),
+                ("2", vec!["assert . Equal ( t , 2 , g ( ) )", "g ( )"]),
+            ]
+        );
+        // Equal lists are equal whether or not they are one list.
+        assert_eq!(held[1].calls, Calls::from(held[1].calls.to_vec()));
+        assert_ne!(held[0].calls, held[1].calls);
+        // A call under a comment node is not a token of the call around it.
+        let js = expectations(
+            &crate::ast::javascript::JavaScriptPack,
+            "src/x.test.js",
+            "test('t', () => {\n  expect(f(/* g(1) */ 2)).toBe(3);\n});\n",
+        );
+        assert_eq!(
+            js[0].calls.to_vec(),
+            vec![
+                "expect ( f ( 2 ) ) . toBe ( 3 )",
+                "expect ( f ( 2 ) )",
+                "f ( 2 )"
+            ]
+        );
+    }
+
     fn e(skeleton: &str, literal: &str, line: usize) -> Expectation {
         Expectation {
             line,
             skeleton: skeleton.to_string(),
             literal: literal.to_string(),
-            calls: Vec::new(),
+            calls: Calls::default(),
         }
+    }
+
+    /// A skeleton twice at head is as ambiguous as one twice at base, for an expected
+    /// value and for a bound; the records around it are still paired.
+    #[test]
+    fn a_skeleton_twice_at_head_is_not_paired() {
+        let base = [
+            e("assert_eq!(x, #);", "1", 3),
+            e("assert_eq!(y, #);", "1", 4),
+        ];
+        let head = [
+            e("assert_eq!(x, #);", "8", 3),
+            e("assert_eq!(x, #);", "9", 4),
+            e("assert_eq!(y, #);", "7", 5),
+        ];
+        assert_eq!(changed(&base, &head), vec![5]);
+        let bound = |skeleton: &str, literal: &str, line: usize| crate::ast::bounds::Bound {
+            line,
+            skeleton: skeleton.to_string(),
+            literal: literal.to_string(),
+            looser_when_larger: true,
+        };
+        let loosened = crate::ast::bounds::loosened(
+            &[bound("assert a < #", "1", 3), bound("assert b < #", "1", 4)],
+            &[
+                bound("assert a < #", "8", 3),
+                bound("assert a < #", "9", 4),
+                bound("assert b < #", "7", 5),
+            ],
+        );
+        assert_eq!(loosened.iter().map(|l| l.line).collect::<Vec<_>>(), vec![5]);
     }
 
     #[test]
