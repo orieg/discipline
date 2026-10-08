@@ -2793,7 +2793,10 @@ impl RustCollectionRules {
                 pkg.has_binary = Some(binaries.contains(dir));
             }
         }
-        let dirs: Vec<String> = self.packages.keys().cloned().collect();
+        // In path order: the files of a package are read as it is reached, and a caller
+        // that keeps the first read errors names the same ones on every run.
+        let mut dirs: Vec<String> = self.packages.keys().cloned().collect();
+        dirs.sort_unstable();
         for dir in dirs {
             let test_roots = roots.remove(&dir).unwrap_or_default();
             let modules = follow_rust_modules(test_roots, &rust_files, reader, false);
@@ -6751,5 +6754,50 @@ path = "tests/custom/entry.rs"
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// Twelve packages whose test target cannot be read. The packages are read in path
+    /// order, so the read errors a recorder keeps, and the text it gives, are the same on
+    /// every run: the first [`ReadRecorder::MAX_KEPT`] packages in path order.
+    #[test]
+    fn packages_are_read_in_path_order_so_the_kept_read_errors_do_not_vary() {
+        use crate::gitctx::ReadRecorder;
+        let packages: Vec<String> = (0..12).map(|i| format!("crates/p{i:02}")).collect();
+        let mut tracked = Vec::new();
+        // Listed in an order that is not the sorted one.
+        for dir in packages.iter().rev() {
+            tracked.push(format!("{dir}/Cargo.toml"));
+            tracked.push(format!("{dir}/tests/it.rs"));
+        }
+        let reads = ReadRecorder::new();
+        let mut read_in_order: Vec<String> = Vec::new();
+        RunnerCollectionRules::from_tree(
+            |path: &str| {
+                if path.ends_with("/Cargo.toml") {
+                    return reads.keep(Ok(Some(
+                        "[package]\nname = \"p\"\nversion = \"0.0.0\"\n".to_string(),
+                    )));
+                }
+                if path.ends_with(".rs") {
+                    read_in_order.push(path.to_string());
+                    return reads.keep(Err(anyhow::anyhow!("could not read `{path}`")));
+                }
+                None
+            },
+            &tracked,
+        );
+        let expected: Vec<String> = packages
+            .iter()
+            .map(|d| format!("{d}/tests/it.rs"))
+            .collect();
+        assert_eq!(read_in_order, expected);
+        let shown = format!("{:#}", reads.finish().unwrap_err());
+        assert_eq!(
+            shown,
+            "12 reads failed; the others: could not read `crates/p01/tests/it.rs`; \
+             could not read `crates/p02/tests/it.rs`; could not read `crates/p03/tests/it.rs`; \
+             could not read `crates/p04/tests/it.rs`, and 7 more not listed; the first: \
+             could not read `crates/p00/tests/it.rs`"
+        );
     }
 }
