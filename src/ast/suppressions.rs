@@ -3,9 +3,9 @@
 //! [`Suppressions`] table and [`Suppressions::collect`] reads every pack's file with the
 //! same walk.
 //!
-//! The tables record what each pack read before it had a table, so two packs that
-//! differ in how they take a rule out of a comment or an annotation still differ here,
-//! by a field of the table.
+//! Two packs that differ in how they take a rule out of a comment or an annotation
+//! differ here by a field of the table. A spelling is in a table when its tool honours
+//! it; the table says where that rule of the tool was read.
 
 use super::EscapeHatchSite;
 use tree_sitter::Node;
@@ -28,6 +28,10 @@ pub(crate) struct Suppressions {
     pub annotations: Option<&'static AnnotationSuppressions>,
     /// What the pack reads from a node that is neither.
     pub other: Option<OtherNode>,
+    /// What opens a piece of a comment (each `#` in `# note # noqa`), for the rules that
+    /// are `later`; empty when the pack reads no pieces. A piece runs from one of these
+    /// to the end of the comment.
+    pub piece: &'static str,
 }
 
 /// A pack's own reading of a node that is neither a comment nor an annotation: it
@@ -44,6 +48,7 @@ impl Suppressions {
         trimmed_snippet: false,
         annotations: None,
         other: None,
+        piece: "",
     };
 }
 
@@ -53,6 +58,16 @@ pub(crate) struct CommentRule {
     pub markers: &'static [&'static str],
     /// Whether a marker counts anywhere in the body and not only where it opens.
     pub anywhere: bool,
+    /// Whether the ASCII letters of a marker match in either case.
+    pub any_case: bool,
+    /// Whether a space in a marker stands for any run of spaces and tabs, none included.
+    pub loose_spaces: bool,
+    /// Whether the rule is also read from the pieces of the comment (see
+    /// [`Suppressions::piece`]) when the comment is not reported under this rule: the
+    /// first piece that matches is one more site, whose snippet is the piece.
+    pub later: bool,
+    /// The comment node kinds the rule is read from; every kind when empty.
+    pub kinds: &'static [&'static str],
     pub reports: Reports,
 }
 
@@ -62,7 +77,55 @@ impl CommentRule {
         Self {
             markers,
             anywhere: false,
+            any_case: false,
+            loose_spaces: false,
+            later: false,
+            kinds: &[],
             reports,
+        }
+    }
+
+    /// What is left of `body` after one of the markers, when one opens it.
+    fn opened<'t>(&self, body: &'t str) -> Option<&'t str> {
+        self.markers
+            .iter()
+            .find_map(|marker| self.after(body, marker))
+    }
+
+    /// What is left of `text` after `marker`, when `marker` opens it under this rule's
+    /// letter-case and spacing.
+    fn after<'t>(&self, text: &'t str, marker: &str) -> Option<&'t str> {
+        let bytes = text.as_bytes();
+        let mut at = 0;
+        for expected in marker.bytes() {
+            if self.loose_spaces && expected == b' ' {
+                while matches!(bytes.get(at), Some(b' ' | b'\t')) {
+                    at += 1;
+                }
+                continue;
+            }
+            let found = *bytes.get(at)?;
+            let same = if self.any_case {
+                found.eq_ignore_ascii_case(&expected)
+            } else {
+                found == expected
+            };
+            if !same {
+                return None;
+            }
+            at += 1;
+        }
+        text.get(at..)
+    }
+
+    fn matches(&self, kind: &str, body: &str) -> bool {
+        if !self.kinds.is_empty() && !self.kinds.contains(&kind) {
+            return false;
+        }
+        if self.anywhere {
+            self.markers.iter().any(|marker| body.contains(marker))
+        } else {
+            self.opened(body).is_some()
         }
     }
 }
@@ -94,16 +157,19 @@ pub(crate) struct RuleText {
 }
 
 impl RuleText {
-    fn read(&self, body: &str) -> String {
+    /// The rule of `body`, with each marker matched as `rule` matches its own.
+    fn read(&self, rule: &CommentRule, body: &str) -> String {
         let mut rest = body;
         if !self.after.is_empty() {
-            match self.after.iter().find_map(|p| rest.strip_prefix(p)) {
+            match self.after.iter().find_map(|p| rule.after(rest, p)) {
                 Some(stripped) => rest = stripped,
                 None => return "all".to_string(),
             }
         }
         for prefix in self.then {
-            rest = rest.trim_start_matches(prefix);
+            while let Some(stripped) = rule.after(rest, prefix).filter(|s| s.len() < rest.len()) {
+                rest = stripped;
+            }
         }
         let rule = if self.first_word {
             rest.split_whitespace().next().unwrap_or("all")
@@ -129,10 +195,14 @@ pub(crate) struct AnnotationSuppressions {
 
 /// Where an annotation's name is read from.
 pub(crate) enum AnnotationName {
-    /// The node's `name` field, whole: a qualified name is not one of the names.
-    Field,
-    /// The first `identifier` under the node, in source order.
-    FirstIdentifier,
+    /// The last segment of the node's `name` field: `SuppressWarnings` in
+    /// `@java.lang.SuppressWarnings`. The package is not read, so an annotation of
+    /// another package with one of the names is read as a suppression.
+    LastSegment,
+    /// The last `identifier` of the first `user_type` under the node, in source order:
+    /// `Suppress` in `@kotlin.Suppress` and in `@file:Suppress`. The package is not
+    /// read here either.
+    UserTypeLast,
 }
 
 /// How the rule is read from a suppressing annotation. In each, an annotation with no
@@ -149,24 +219,55 @@ pub(crate) enum AnnotationRule {
 
 /// The first `identifier` under `node`, in source order; empty when there is none.
 pub(crate) fn first_identifier<'s>(node: Node, src: &'s [u8]) -> &'s str {
+    first_of_kind(node, "identifier").map_or("", |n| n.utf8_text(src).unwrap_or(""))
+}
+
+/// The first node of `kind` at or under `node`, in source order.
+fn first_of_kind<'t>(node: Node<'t>, kind: &str) -> Option<Node<'t>> {
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
-        if n.kind() == "identifier" {
-            return n.utf8_text(src).unwrap_or("");
+        if n.kind() == kind {
+            return Some(n);
         }
         let mut cursor = n.walk();
         let children: Vec<Node> = n.named_children(&mut cursor).collect();
         stack.extend(children.into_iter().rev());
     }
-    ""
+    None
+}
+
+/// The last segment of a name: the node itself, or the last named child of a qualified
+/// name, followed down to a node with none.
+fn last_segment(name: Node) -> Node {
+    let mut node = name;
+    while let Some(child) = node
+        .named_child_count()
+        .checked_sub(1)
+        .and_then(|last| node.named_child(last))
+    {
+        node = child;
+    }
+    node
 }
 
 impl AnnotationSuppressions {
     fn site(&self, node: Node, src: &[u8]) -> Option<EscapeHatchSite> {
         let text_of = |n: Node| n.utf8_text(src).unwrap_or("");
         let name = match self.name {
-            AnnotationName::Field => node.child_by_field_name("name").map_or("", text_of),
-            AnnotationName::FirstIdentifier => first_identifier(node, src),
+            AnnotationName::LastSegment => node
+                .child_by_field_name("name")
+                .map(last_segment)
+                .map_or("", text_of),
+            AnnotationName::UserTypeLast => first_of_kind(node, "user_type")
+                .and_then(|user_type| {
+                    let mut cursor = user_type.walk();
+                    let last = user_type
+                        .named_children(&mut cursor)
+                        .filter(|child| child.kind() == "identifier")
+                        .last();
+                    last
+                })
+                .map_or("", text_of),
         };
         if !self.names.contains(&name) {
             return None;
@@ -199,8 +300,8 @@ impl AnnotationSuppressions {
 }
 
 impl Suppressions {
-    fn comment_site(&self, node: Node, src: &[u8]) -> Option<EscapeHatchSite> {
-        let text = node.utf8_text(src).unwrap_or("");
+    /// The comment's text without what opens and closes a comment, trimmed.
+    fn body<'t>(&self, text: &'t str) -> &'t str {
         let mut body = text;
         for marker in self.open {
             body = body.trim_start_matches(marker);
@@ -208,17 +309,11 @@ impl Suppressions {
         for marker in self.close {
             body = body.trim_end_matches(marker);
         }
-        let body = body.trim();
-        let rule = self.rules.iter().find(|rule| {
-            rule.markers.iter().any(|marker| {
-                if rule.anywhere {
-                    body.contains(marker)
-                } else {
-                    body.starts_with(marker)
-                }
-            })
-        })?;
-        let line = node.start_position().row + 1;
+        body.trim()
+    }
+
+    /// The site `rule` reports for a comment or a piece of one.
+    fn site(&self, rule: &CommentRule, line: usize, text: &str, body: &str) -> EscapeHatchSite {
         let snippet = if self.trimmed_snippet {
             text.trim()
         } else {
@@ -227,21 +322,49 @@ impl Suppressions {
         .to_string();
         let rule = match &rule.reports {
             Reports::TypeIgnore(tool) => {
-                return Some(EscapeHatchSite::TypeIgnore {
+                return EscapeHatchSite::TypeIgnore {
                     line,
                     tool: tool.to_string(),
                     snippet,
-                })
+                }
             }
             Reports::Rule(rule) => rule.to_string(),
             Reports::Body => body.to_string(),
-            Reports::Rest(text) => text.read(body),
+            Reports::Rest(text) => text.read(rule, body),
         };
-        Some(EscapeHatchSite::LinterDisable {
+        EscapeHatchSite::LinterDisable {
             line,
             rule,
             snippet,
-        })
+        }
+    }
+
+    /// The sites of one comment: the first rule its body matches, then each other
+    /// `later` rule at the first piece that matches it.
+    fn comment_sites(&self, node: Node, src: &[u8], sites: &mut Vec<EscapeHatchSite>) {
+        let text = node.utf8_text(src).unwrap_or("");
+        let kind = node.kind();
+        let line = node.start_position().row + 1;
+        let body = self.body(text);
+        let first = self.rules.iter().position(|rule| rule.matches(kind, body));
+        if let Some(rule) = first.and_then(|at| self.rules.get(at)) {
+            sites.push(self.site(rule, line, text, body));
+        }
+        if self.piece.is_empty() {
+            return;
+        }
+        for (at, rule) in self.rules.iter().enumerate() {
+            if !rule.later || first == Some(at) {
+                continue;
+            }
+            let piece = text
+                .match_indices(self.piece)
+                .filter_map(|(offset, _)| text.get(offset..))
+                .find(|piece| rule.matches(kind, self.body(piece)));
+            if let Some(piece) = piece {
+                sites.push(self.site(rule, line, piece, self.body(piece)));
+            }
+        }
     }
 }
 
@@ -253,7 +376,7 @@ impl Suppressions {
         super::bounds::walk(root, &mut |node| {
             let kind = node.kind();
             if self.comments.contains(&kind) {
-                sites.extend(self.comment_site(node, src));
+                self.comment_sites(node, src, sites);
                 return false;
             }
             if let Some(annotations) = self.annotations.filter(|a| a.kinds.contains(&kind)) {

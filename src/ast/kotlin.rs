@@ -17,7 +17,8 @@ use tree_sitter::Node;
 use super::ci_condition::{CiVerdict, Lang, SkipCondition};
 use super::functions::{self, FunctionSpec};
 use super::suppressions::{
-    self, AnnotationName, AnnotationRule, AnnotationSuppressions, Suppressions,
+    self, AnnotationName, AnnotationRule, AnnotationSuppressions, CommentRule, Reports,
+    Suppressions,
 };
 use super::{AssertVocabulary, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
@@ -163,12 +164,20 @@ struct KotlinExtractor<'a> {
 }
 
 /// `@Suppress`, `@SuppressWarnings` and `@SuppressLint`, with the rule the annotation's
-/// text holds after its first parenthesis. No comment is read.
+/// text holds after its first parenthesis: under any qualifier (`@kotlin.Suppress`),
+/// with a use-site target (`@get:Suppress`), and as a file annotation
+/// (`@file:Suppress`, which is a node kind of its own). One comment is read.
 const KOTLIN_SUPPRESSIONS: Suppressions = Suppressions {
-    comments: &[],
+    comments: &["line_comment", "block_comment"],
+    // SonarKotlin (`isNosonarComment` in its `MetricVisitor`, read from its source): a
+    // comment whose content, trimmed, opens with `NOSONAR` in any letter-case.
+    rules: &[CommentRule {
+        any_case: true,
+        ..CommentRule::opens(&["NOSONAR"], Reports::Rule("NOSONAR"))
+    }],
     annotations: Some(&AnnotationSuppressions {
-        kinds: &["annotation"],
-        name: AnnotationName::FirstIdentifier,
+        kinds: &["annotation", "file_annotation"],
+        name: AnnotationName::UserTypeLast,
         names: &["Suppress", "SuppressWarnings", "SuppressLint"],
         rule: AnnotationRule::AfterParen,
     }),

@@ -418,9 +418,8 @@ const JS_SUPPRESSIONS: Suppressions = Suppressions {
             }),
         ),
         CommentRule {
-            markers: &["istanbul ignore", "c8 ignore"],
             anywhere: true,
-            reports: Reports::Rule("coverage"),
+            ..CommentRule::opens(&["istanbul ignore", "c8 ignore"], Reports::Rule("coverage"))
         },
     ],
     ..Suppressions::SLASH_COMMENTS
