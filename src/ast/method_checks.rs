@@ -179,6 +179,9 @@ pub fn count<'t>(
     }
     let mut credits: Vec<(usize, usize)> = Vec::new();
     let mut sites: Vec<(usize, &str)> = Vec::new();
+    // The innermost test of each line, by table: reading every test for each call cost
+    // the tests for each call of the file.
+    let test_at = super::innermost_tests_by_line(&facts.tests, root.end_position().row + 1);
     let mut stack = vec![(root, 0usize, root.id())];
     while let Some((node, depth, above)) = stack.pop() {
         anc.stand_at(depth, above, node);
@@ -192,12 +195,12 @@ pub fn count<'t>(
             }
         }
         for (method, line) in called {
-            let test = facts
-                .tests
-                .iter()
-                .enumerate()
-                .filter(|(_, t)| t.line <= line && line <= t.end_line.max(t.line))
-                .min_by_key(|(_, t)| t.end_line.saturating_sub(t.line));
+            super::ancestry::count(1);
+            let test = test_at
+                .get(line)
+                .copied()
+                .flatten()
+                .map(|at| (at, &facts.tests[at]));
             if let Some((at, test)) = test {
                 sites.push((at, method));
                 let counted = test

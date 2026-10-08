@@ -31,6 +31,15 @@ pub mod golden;
 pub mod handlers;
 pub mod harness;
 pub mod helper_loops;
+#[cfg(all(
+    test,
+    feature = "lang-rust",
+    feature = "lang-python",
+    feature = "lang-javascript",
+    feature = "lang-go",
+    feature = "lang-java"
+))]
+mod in_number;
 #[cfg(feature = "lang-java")]
 pub mod java;
 #[cfg(feature = "lang-javascript")]
@@ -397,28 +406,36 @@ pub(crate) fn innermost_test(tests: &mut [TestFn], line: usize) -> Option<&mut T
 /// reads every test for each answer. The table is made in one pass over the lines with
 /// the tests that have begun kept in a heap, shortest first.
 pub(crate) fn innermost_tests_by_line(tests: &[TestFn], last_line: usize) -> Vec<Option<usize>> {
+    let spans: Vec<(usize, usize)> = tests.iter().map(|t| (t.line, t.end_line)).collect();
+    innermost_by_line(&spans, last_line)
+}
+
+/// [`innermost_tests_by_line`] for any spans, each a first and a last line: for each
+/// line, the index of the shortest span that holds it, and of two as short the first. A
+/// span whose last line is before its first holds its first line alone.
+pub(crate) fn innermost_by_line(spans: &[(usize, usize)], last_line: usize) -> Vec<Option<usize>> {
     use std::cmp::Reverse;
-    let mut by_start: Vec<usize> = (0..tests.len()).collect();
-    by_start.sort_by_key(|&i| tests[i].line);
+    let mut by_start: Vec<usize> = (0..spans.len()).collect();
+    by_start.sort_by_key(|&i| spans[i].0);
     let mut begun = by_start.into_iter().peekable();
-    // The shortest span first, and of two as short the first in `tests`.
+    // The shortest span first, and of two as short the first in `spans`.
     let mut open = std::collections::BinaryHeap::new();
     let mut out = Vec::with_capacity(last_line.saturating_add(1));
     for line in 0..=last_line {
-        while let Some(i) = begun.next_if(|&i| tests[i].line <= line) {
-            let t = &tests[i];
-            open.push(Reverse((t.end_line.saturating_sub(t.line), i)));
+        while let Some(i) = begun.next_if(|&i| spans[i].0 <= line) {
+            let (first, last) = spans[i];
+            open.push(Reverse((last.saturating_sub(first), i)));
         }
-        // A test that ended above this line holds no later one either.
+        // A span that ended above this line holds no later one either.
         while open.peek().is_some_and(|Reverse((_, i))| {
-            let t: &TestFn = &tests[*i];
-            t.end_line.max(t.line) < line
+            let (first, last) = spans[*i];
+            last.max(first) < line
         }) {
             open.pop();
         }
         out.push(open.peek().map(|Reverse((_, i))| *i));
     }
-    ancestry::count(tests.len() + out.len());
+    ancestry::count(spans.len() + out.len());
     out
 }
 
@@ -921,6 +938,122 @@ fn code_parts(node: tree_sitter::Node, src: &[u8], left_out: &[&str], kept: &[&s
     }
     out.extend_from_slice(src.get(at..node.end_byte()).unwrap_or_default());
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// How many bytes of a node's text [`CodeHeads`] keeps.
+const HEAD_BYTES: usize = 12;
+
+/// How the text of a node begins, as [`text_without`] reads it: its first bytes that are
+/// not white space, with each descendant of a left-out kind read as one space.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct CodeHead {
+    bytes: [u8; HEAD_BYTES],
+    len: u8,
+    /// Bytes that are not white space follow the ones kept.
+    more: bool,
+    /// A byte outside ASCII stood among the first: what `bytes` holds is not the head.
+    not_ascii: bool,
+}
+
+impl CodeHead {
+    /// The first bytes of the text, white space left out: all of them when
+    /// [`Self::is_whole`], and `None` when a byte outside ASCII stands among them, since
+    /// such a byte may be white space the text leaves out.
+    pub(crate) fn bytes(&self) -> Option<&[u8]> {
+        (!self.not_ascii).then(|| &self.bytes[..self.len as usize])
+    }
+
+    /// Whether the bytes kept are the whole of the text, white space left out.
+    pub(crate) fn is_whole(&self) -> bool {
+        !self.more && !self.not_ascii
+    }
+
+    fn is_full(&self) -> bool {
+        self.more || self.not_ascii
+    }
+
+    fn push(&mut self, byte: u8) {
+        // What `char::is_whitespace` holds of ASCII.
+        if matches!(byte, b'\t'..=b'\r' | b' ') || self.is_full() {
+            return;
+        }
+        if !byte.is_ascii() {
+            self.not_ascii = true;
+        } else if (self.len as usize) < HEAD_BYTES {
+            self.bytes[self.len as usize] = byte;
+            self.len += 1;
+        } else {
+            self.more = true;
+        }
+    }
+}
+
+/// How the nodes of one tree begin ([`CodeHead`]), each read once.
+///
+/// A reader that sorts a call by how its callee begins (`describe.`, `it.`) asked
+/// [`text_without`] for the whole callee. The callee of a call chained on another holds
+/// that other call, so a chain of calls was read once for each of its links: 400 links,
+/// in a file of 1.6 kB, cost 2.7e9 instructions. The head of a node is made of the heads
+/// of its first children, and each is kept, so a chain is read once.
+pub(crate) struct CodeHeads {
+    left_out: &'static [&'static str],
+    /// The head of a node, by its id.
+    known: std::cell::RefCell<std::collections::HashMap<usize, CodeHead>>,
+}
+
+impl CodeHeads {
+    /// The heads of the nodes of one tree, with the descendants of a kind in `left_out`
+    /// read as one space each.
+    pub(crate) fn new(left_out: &'static [&'static str]) -> Self {
+        Self {
+            left_out,
+            known: Default::default(),
+        }
+    }
+
+    /// How `text_without(node, src, left_out)` begins.
+    pub(crate) fn of(&self, node: tree_sitter::Node, src: &[u8]) -> CodeHead {
+        ancestry::count(1);
+        if let Some(known) = self.known.borrow().get(&node.id()) {
+            return *known;
+        }
+        let mut head = CodeHead::default();
+        if !self.left_out.contains(&node.kind()) {
+            let mut at = node.start_byte();
+            let gap = |head: &mut CodeHead, from: usize, to: usize| {
+                for byte in src.get(from..to).unwrap_or_default() {
+                    if head.is_full() {
+                        break;
+                    }
+                    ancestry::count(1);
+                    head.push(*byte);
+                }
+            };
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if head.is_full() {
+                    break;
+                }
+                // A child that begins before the last one ended is inside what was read.
+                if child.start_byte() < at {
+                    continue;
+                }
+                gap(&mut head, at, child.start_byte());
+                let below = self.of(child, src);
+                for byte in &below.bytes[..below.len as usize] {
+                    head.push(*byte);
+                }
+                if !head.is_full() {
+                    head.more = below.more;
+                    head.not_ascii = below.not_ascii;
+                }
+                at = child.end_byte();
+            }
+            gap(&mut head, at, node.end_byte());
+        }
+        self.known.borrow_mut().insert(node.id(), head);
+        head
+    }
 }
 
 /// Whether one of `bound` (names a test binds to an environment read) is a word of the
