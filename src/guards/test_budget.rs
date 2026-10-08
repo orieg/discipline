@@ -20,7 +20,7 @@ use crate::guards::{Context, GateOutcome, PathFilter, Violation};
 use crate::tokens;
 use anyhow::Result;
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
 pub const GATE: &str = "test-budget";
@@ -168,16 +168,42 @@ pub fn extract_script_and_workflow_budgets(content: &str, path: &str) -> Vec<Bud
     metrics
 }
 
-/// Extracts fuzz target names from `fuzz/Cargo.toml` or similar manifests.
+/// Extracts fuzz target names from `fuzz/Cargo.toml` or similar manifests. A manifest
+/// that does not parse gives none: a caller that must tell the two apart uses
+/// [`read_fuzz_manifest_targets`].
 pub fn extract_fuzz_manifest_targets(content: &str) -> HashSet<String> {
-    let mut targets = HashSet::new();
-    let re_bin = Regex::new(r#"\[\[bin\]\]\s*name\s*=\s*"([^"]+)""#).unwrap();
-    for caps in re_bin.captures_iter(content) {
-        if let Some(m) = caps.get(1) {
-            targets.insert(m.as_str().to_string());
-        }
-    }
-    targets
+    read_fuzz_manifest_targets(content, "")
+        .map(|targets| targets.into_iter().collect())
+        .unwrap_or_default()
+}
+
+/// The fuzz targets a fuzz manifest lists, in name order: the `name` of every entry of
+/// its `bin` array, read from the parsed TOML. `[[bin]]` tables and an inline
+/// `bin = [{ name = ".." }]` array are the same value, the key may stand anywhere in its
+/// entry, and text that spells an entry in a comment or inside a string is not one.
+///
+/// An error is why the targets could not be read: the manifest is not TOML. It names the
+/// path and the line, never the file's text.
+pub fn read_fuzz_manifest_targets(content: &str, path: &str) -> Result<BTreeSet<String>> {
+    let manifest: toml::Value = toml::from_str(content).map_err(|e| {
+        let at = e
+            .span()
+            .map(|s| {
+                let before = &content.as_bytes()[..s.start.min(content.len())];
+                let line = before.iter().filter(|b| **b == b'\n').count() + 1;
+                format!(" (line {line})")
+            })
+            .unwrap_or_default();
+        anyhow::anyhow!("`{path}` does not parse as TOML{at}")
+    })?;
+    Ok(manifest
+        .get("bin")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|bin| bin.get("name").and_then(toml::Value::as_str))
+        .map(str::to_string)
+        .collect())
 }
 
 /// Whether `path` is a fuzz crate's manifest: the root crate's `fuzz/Cargo.toml`, or a
@@ -239,9 +265,9 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
     let changed = ctx.git.changed_files()?;
     let mut examined_count = 0usize;
 
-    // Track corpus files by directory to detect corpus shrink
-    let mut base_corpus_counts: HashMap<String, usize> = HashMap::new();
-    let mut head_corpus_counts: HashMap<String, usize> = HashMap::new();
+    // Deleted seed files by corpus directory. Every deleted seed counts: seeds the change
+    // adds to the same directory do not offset it.
+    let mut deleted_seeds: BTreeMap<String, usize> = BTreeMap::new();
 
     for f in &changed {
         if exempt.matches(&f.path) {
@@ -251,23 +277,14 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
         examined_count += 1;
 
         // Check if this file is in a seed corpus directory
-        if corpus.matches(&f.path) || corpus.matches(&f.old_path) {
-            let parent = Path::new(&f.path)
-                .parent()
-                .and_then(|p| p.to_str())
-                .unwrap_or("")
-                .to_string();
+        if f.kind == ChangeKind::Deleted && (corpus.matches(&f.path) || corpus.matches(&f.old_path))
+        {
             let old_parent = Path::new(&f.old_path)
                 .parent()
                 .and_then(|p| p.to_str())
                 .unwrap_or("")
                 .to_string();
-
-            if f.kind == ChangeKind::Deleted {
-                *base_corpus_counts.entry(old_parent.clone()).or_insert(0) += 1;
-            } else if f.kind == ChangeKind::Added {
-                *head_corpus_counts.entry(parent.clone()).or_insert(0) += 1;
-            }
+            *deleted_seeds.entry(old_parent).or_insert(0) += 1;
         }
 
         // Check fuzz target manifest deletion (e.g. fuzz/Cargo.toml)
@@ -276,12 +293,25 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
         if is_fuzz_manifest {
             let base_content = ctx.git.base_content(&f.old_path)?.unwrap_or_default();
             let head_content = ctx.git.head_content(&f.path)?.unwrap_or_default();
-            let base_targets = extract_fuzz_manifest_targets(&base_content);
-            let head_targets = extract_fuzz_manifest_targets(&head_content);
+            // A head manifest that does not parse is not one that lists no target, or
+            // every target: what the change leaves cannot be read, so the gate cannot
+            // answer.
+            let head_targets = read_fuzz_manifest_targets(&head_content, &f.path)
+                .map_err(|e| anyhow::anyhow!("{e}; its fuzz targets could not be read"))?;
+            // A base manifest that does not parse gives nothing to compare with. The
+            // change may be the one that repairs it: said, not stopped.
+            let base_targets = match read_fuzz_manifest_targets(&base_content, &f.old_path) {
+                Ok(targets) => targets,
+                Err(e) => {
+                    outcome.notes.push(format!(
+                        "{e} on the base side, so removed fuzz targets were not looked for"
+                    ));
+                    BTreeSet::new()
+                }
+            };
 
             // In name order, so the findings come in the same order on every run.
-            let mut base_in_order: Vec<&String> = base_targets.iter().collect();
-            base_in_order.sort_unstable();
+            let base_in_order = &base_targets;
             for target in base_in_order {
                 if !head_targets.contains(target) {
                     // Fuzz target removed from harness list
@@ -485,9 +515,7 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
 
     // Check seed corpus deletions
     // In path order, so the findings come in the same order on every run.
-    let mut base_corpus_counts: Vec<(String, usize)> = base_corpus_counts.into_iter().collect();
-    base_corpus_counts.sort_unstable();
-    for (dir, deleted_count) in base_corpus_counts {
+    for (dir, deleted_count) in deleted_seeds {
         if deleted_count > 0 {
             let dir_subject = format!("corpus {dir}");
             let dir_stem = Path::new(&dir)
@@ -697,6 +725,53 @@ mod tests {
         assert!(targets.contains("parse_target"));
         assert!(targets.contains("encode_target"));
     }
+    #[test]
+    fn fuzz_targets_come_from_the_parsed_manifest() {
+        let read = |text: &str| -> Vec<String> {
+            read_fuzz_manifest_targets(text, "fuzz/Cargo.toml")
+                .unwrap()
+                .into_iter()
+                .collect()
+        };
+        // The key anywhere in its entry, a header with a comment, a literal string.
+        assert_eq!(
+            read("[[bin]] # first\npath = \"a.rs\"\nname = \"a\"\n\n[[bin]]\nname = 'b'\n"),
+            ["a", "b"]
+        );
+        // An inline array is the same value.
+        assert_eq!(
+            read("bin = [{ name = \"a\" }, { path = \"b.rs\", name = \"b\" }]\n"),
+            ["a", "b"]
+        );
+        // Text that spells an entry is not one: a comment, a string, another table's key.
+        assert_eq!(
+            read("# [[bin]] name = \"c\"\n[package]\nname = \"p\"\ndescription = \"\"\"\n[[bin]]\nname = \"d\"\n\"\"\"\n\n[[example]]\nname = \"e\"\n"),
+            [] as [&str; 0]
+        );
+        // An entry with no name, or a name that is not a string, names no target.
+        assert_eq!(
+            read("[[bin]]\npath = \"a.rs\"\n\n[[bin]]\nname = 3\n"),
+            [] as [&str; 0]
+        );
+        assert_eq!(read(""), [] as [&str; 0]);
+    }
+
+    #[test]
+    fn a_manifest_that_does_not_parse_is_an_error_that_names_the_line_only() {
+        let text = "[[bin]]\nname = \"a\"\n\n[features]\nsecret-word = [\n";
+        let shown = format!(
+            "{:#}",
+            read_fuzz_manifest_targets(text, "fuzz/Cargo.toml").unwrap_err()
+        );
+        assert!(
+            shown.starts_with("`fuzz/Cargo.toml` does not parse as TOML (line "),
+            "{shown}"
+        );
+        assert!(!shown.contains("secret-word"), "{shown}");
+        // The form that returns a set gives none for such a file.
+        assert!(extract_fuzz_manifest_targets(text).is_empty());
+    }
+
     /// What the gate matched before `fuzz_targets` was read: the root manifest, and a
     /// Rust file anywhere under `fuzz/`.
     fn literal_manifest(path: &str) -> bool {

@@ -4585,6 +4585,36 @@ allow-git = [
         },
     ),
     (
+        "test-budget: fuzz targets are read from the parsed manifest, and one that does not parse is not an empty one",
+        || {
+            use crate::guards::test_budget::read_fuzz_manifest_targets;
+            let read = |text: &str| -> Option<Vec<String>> {
+                read_fuzz_manifest_targets(text, "fuzz/Cargo.toml")
+                    .ok()
+                    .map(|targets| targets.into_iter().collect())
+            };
+            let names = |list: &[&str]| Some(list.iter().map(|n| n.to_string()).collect::<Vec<_>>());
+
+            // The name is not the first key, the header carries a comment, the string is
+            // a literal one, and the array is written inline.
+            let tables = read("[[bin]] # first\npath = \"a.rs\"\nname = \"a\"\n\n[[bin]]\nname = 'b'\n");
+            let inline = read("bin = [{ path = \"a.rs\", name = \"a\" }, { name = \"b\" }]\n");
+            // A comment and a multi-line string that spell an entry.
+            let spelled = read("# [[bin]] name = \"c\"\n[package]\ndescription = \"\"\"\n[[bin]]\nname = \"d\"\n\"\"\"\n");
+            // Not TOML: an error that names the path and the line.
+            let broken = read_fuzz_manifest_targets("[[bin]]\nname = \"a\"\n[features]\ndefault = [\n", "fuzz/Cargo.toml");
+            let named = broken
+                .as_ref()
+                .err()
+                .is_some_and(|e| format!("{e:#}").starts_with("`fuzz/Cargo.toml` does not parse as TOML (line "));
+
+            Ok(tables == names(&["a", "b"])
+                && inline == names(&["a", "b"])
+                && spelled == names(&[])
+                && named)
+        },
+    ),
+    (
         "presets: turnkey preset resolution merges defaults and explicit overrides",
         || {
             use crate::config::DisciplineConfig;
