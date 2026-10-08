@@ -313,7 +313,7 @@ pub fn render_step_summary_to_writer(
     fail_on_warnings: bool,
     fail_on_overrides: bool,
 ) -> Result<()> {
-    let cell = text::markdown_cell;
+    let cell = crate::escape::markdown_cell;
 
     let heading = if summary.is_success(fail_on_warnings, fail_on_overrides) {
         "### Discipline gate: passed"

@@ -364,11 +364,7 @@ fn ssh_config_line(line: &str) -> (String, Vec<String>) {
 /// every host); `Host` patterns take `*`, `?` and `!` negation; `%h` is the alias.
 /// `Match` sections are not evaluated and never apply.
 pub fn ssh_hostname(config: &str, alias: &str) -> Option<String> {
-    let pattern_matches = |pat: &str| {
-        globset::Glob::new(pat)
-            .map(|g| g.compile_matcher().is_match(alias))
-            .unwrap_or(false)
-    };
+    let pattern_matches = |pat: &str| crate::doctor_settings::glob_matches(pat, alias, false);
     let mut applies = true;
     for line in config.lines() {
         let (key, args) = ssh_config_line(line);

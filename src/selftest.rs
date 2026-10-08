@@ -1923,8 +1923,8 @@ const CASES: &[Case] = &[
     (
         "comment: change text cannot mention, inject HTML, break the table or forge the marker",
         || {
-            use crate::comment::{cell, MARKER};
-            let c = cell("@team <!-- discipline:report --> a|b\nallow-assertion-drop: x y");
+            use crate::comment::MARKER;
+            let c = crate::escape::comment_markdown_cell("@team <!-- discipline:report --> a|b\nallow-assertion-drop: x y");
             Ok(!c.contains('@')
                 && !c.contains(MARKER)
                 && !c.contains('<')
