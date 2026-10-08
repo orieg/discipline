@@ -1,9 +1,9 @@
 //! Verification workflows, jobs and steps the change removes.
 
 use super::{
-    find_line_number, is_verification_job, is_verification_step, pair_steps, parse_workflow_jobs,
-    parse_yaml_side, record_or_excuse, step_body_similarity, step_label, verifying_body_markers,
-    AddedSteps, StepMatch, WorkflowFile, STEP_RENAME_SIMILARITY,
+    find_line_number, is_verification_job, is_verification_step, job_needs, pair_steps,
+    record_or_excuse, step_body_similarity, step_label, verifying_body_markers, AddedSteps,
+    StepMatch, WorkflowFile, STEP_RENAME_SIMILARITY,
 };
 use crate::guards::{Context, GateOutcome};
 use anyhow::Result;
@@ -18,8 +18,9 @@ pub(super) fn report_deleted_workflow(
 ) -> Result<()> {
     let settings = &ctx.config.gates.ci_integrity;
     if let Some(base_src) = ctx.git.base_content(path)? {
-        if let Some(base_val) = parse_yaml_side(out, path, "base", Some(&base_src)) {
-            let (base_jobs, _) = parse_workflow_jobs(&base_src, settings.rollup_job.as_deref());
+        let docs = added_steps.docs;
+        if let Some(base_val) = docs.noted(out, path, "base", Some(&base_src)) {
+            let base_jobs: Vec<String> = job_needs(&base_val).into_keys().collect();
             let mut verification: Vec<(&String, &serde_yaml::Value)> = base_jobs
                 .iter()
                 .filter_map(|j| {
