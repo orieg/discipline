@@ -1795,7 +1795,7 @@ fn rust_block_returns_early(consequence: Node) -> bool {
 }
 
 /// Macros that run none of their arguments: they read them as tokens or names.
-const NON_EVALUATING_MACROS: &[&str] = &[
+pub(crate) const NON_EVALUATING_MACROS: &[&str] = &[
     "stringify",
     "concat",
     "concat_idents",

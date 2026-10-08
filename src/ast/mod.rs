@@ -54,6 +54,8 @@ pub mod runner_collection;
 pub mod runner_config;
 #[cfg(feature = "lang-rust")]
 pub mod rust;
+#[cfg(feature = "lang-rust")]
+pub mod rust_modules;
 #[cfg(feature = "lang-scala")]
 pub mod scala;
 #[cfg(any(feature = "lang-ruby", feature = "lang-python"))]
@@ -338,8 +340,10 @@ pub struct HelperReach {
     /// Effective, strong and fatal checks the pack counted into the test for each entry
     /// of `counted_helper_calls`.
     pub counted: Vec<(usize, usize, usize)>,
-    /// The calls, direct or on a receiver, that name a helper of the test's own file. A
-    /// helper of the same name in another file gives such a call no credit.
+    /// The calls, direct or on a receiver, that name a helper of the test's own file, and
+    /// the calls that resolved to a helper of another file of the test's crate
+    /// (`crate_helpers`). A helper of the same name in another file gives such a call no
+    /// credit.
     pub own_file_calls: Vec<String>,
     /// Checks of the same-file helpers the test calls that the pack did not count into
     /// it: those of a method called on a receiver, and those a helper reaches more calls
@@ -357,6 +361,24 @@ pub struct HelperReach {
     /// same-file helpers the test calls and the pack counted (`helper_loops`): equality
     /// checks written by hand, which the pack counts as checks and not as equality ones.
     pub equality_exits: usize,
+    /// Checks of the helpers the test calls in other files of its crate, each call
+    /// resolved through the crate's modules (Rust; `guards::agent_diff::crate_helpers`).
+    /// Filled on both sides of a pair: what the head holds beyond the base is what the
+    /// change moved there, and what it holds less is taken from what other helpers
+    /// account for.
+    pub crate_helpers: CrateHelperChecks,
+}
+
+/// The checks of the crate helpers a test calls ([`HelperReach::crate_helpers`]), one
+/// helper's counted once per call.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CrateHelperChecks {
+    pub total: usize,
+    pub strong: usize,
+    pub fatal: usize,
+    pub equality_exits: usize,
+    /// The helpers those checks are in, each with its file.
+    pub names: Vec<String>,
 }
 
 /// The innermost test whose lines hold `line`: the shortest such span, and the first of
