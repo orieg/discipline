@@ -146,6 +146,11 @@ fn registries(out: &mut BTreeMap<&'static str, BTreeSet<String>>) {
             .or_default()
             .insert(r.rule_id());
     }
+    for k in discipline::turn::TurnKind::ALL {
+        out.entry("turn_checks")
+            .or_default()
+            .insert(k.code().to_string());
+    }
     for r in discipline::could_not_check::Reason::ALL {
         out.entry("could_not_check_reasons")
             .or_default()

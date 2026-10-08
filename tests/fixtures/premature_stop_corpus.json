@@ -1,0 +1,818 @@
+[
+  {
+    "id": "ps-001",
+    "text": "Now let me run the fail-then-pass test and check the Miri issue.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-002",
+    "text": "Reproduced: before=74640, after=72440, diff=2200. Now let me diagnose the cause by examining the code paths.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-003",
+    "text": "Let me check how the total is computed and what the fix should look like.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-004",
+    "text": "Let me find the iterator implementation and understand how it yields deleted records.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-005",
+    "text": "Let me check the current state and proceed properly.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-006",
+    "text": "Let me stop this loop and actually look at the error log more carefully, then check what the listing command prints for this bucket.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-007",
+    "text": "Let me build and verify the whole chain resolves.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-008",
+    "text": "The test fails as expected. Now I'll apply the fix.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-009",
+    "text": "Good, the file exists. Let's look at the parser next.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-010",
+    "text": "OK. Now let me update the configuration file:",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-011",
+    "text": "I found the bug in `parse_header`. I'm going to fix it now.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-012",
+    "text": "Tests pass locally.\n\nNext, I'll run clippy and the formatter.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-013",
+    "text": "The build is green. Time to write the regression test.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-014",
+    "text": "That confirms the off-by-one. Now to fix the loop bound.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-015",
+    "text": "**Now let me run the full suite.**",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-016",
+    "text": "I have the three call sites:\n\n- `src/a.rs:10`\n- `src/b.rs:22`\n- `src/c.rs:5`\n\nLet me update each of them.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-017",
+    "text": "So the cache is never invalidated. Let me now trace where the key is built.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-018",
+    "text": "Alright, I'll start by reading the existing tests.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-019",
+    "text": "The first two files are done. Moving on to the third.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-020",
+    "text": "I'll now run the migration against the fixture database.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-021",
+    "text": "The error is in the lockfile.\n\n```text\nerror: checksum mismatch\n```\n\nLet me regenerate it.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-022",
+    "text": "First, let me look at how the hook parses its payload.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-023",
+    "text": "Right. I need to check the remaining callers before changing the signature.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-024",
+    "text": "Proceeding to add the missing assertions.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "en"
+  },
+  {
+    "id": "ps-025",
+    "text": "Maintenant, je vais lancer les tests.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "fr"
+  },
+  {
+    "id": "ps-026",
+    "text": "Laissez-moi vérifier le fichier de configuration.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "fr"
+  },
+  {
+    "id": "ps-027",
+    "text": "Ahora voy a ejecutar las pruebas.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "es"
+  },
+  {
+    "id": "ps-028",
+    "text": "Déjame revisar el archivo de configuración.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "es"
+  },
+  {
+    "id": "ps-029",
+    "text": "Jetzt führe ich die Tests aus.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "de"
+  },
+  {
+    "id": "ps-030",
+    "text": "Agora vou executar os testes.",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "pt"
+  },
+  {
+    "id": "ps-031",
+    "text": "现在让我运行测试。",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "zh"
+  },
+  {
+    "id": "ps-032",
+    "text": "接下来我来检查配置文件。",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "zh"
+  },
+  {
+    "id": "ps-033",
+    "text": "では、テストを実行します。",
+    "is_premature_stop": true,
+    "kind": "announced_action",
+    "category": "announce_then_stop",
+    "lang": "ja"
+  },
+  {
+    "id": "ps-034",
+    "text": "I have a syntax error in the header format string. Let me fix it.\n</parameter>\n<parameter=timeout>\n300000\n</parameter>\n</function>\n</tool_call>",
+    "is_premature_stop": true,
+    "kind": "tool_call_as_text",
+    "category": "tool_call_as_text",
+    "lang": "en"
+  },
+  {
+    "id": "ps-035",
+    "text": "Let me examine how entries are read.\n<tool_call>\n<function=bash>\n<parameter=command>\ncat src/a.rs\n</parameter>\n</function>\n</tool_call>",
+    "is_premature_stop": true,
+    "kind": "tool_call_as_text",
+    "category": "tool_call_as_text",
+    "lang": "en"
+  },
+  {
+    "id": "ps-036",
+    "text": "I need to add tests for malformed bodies.\n</parameter>\n</function>\n</tool_call>",
+    "is_premature_stop": true,
+    "kind": "tool_call_as_text",
+    "category": "tool_call_as_text",
+    "lang": "en"
+  },
+  {
+    "id": "ok-037",
+    "text": "Let me know if you'd like me to open the pull request.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "let_me_know",
+    "lang": "en"
+  },
+  {
+    "id": "ok-038",
+    "text": "Let me know which direction you'd like to pursue, and I can help implement it.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "let_me_know",
+    "lang": "en"
+  },
+  {
+    "id": "ok-039",
+    "text": "That's the whole change. Let me know if anything looks off.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "let_me_know",
+    "lang": "en"
+  },
+  {
+    "id": "ok-040",
+    "text": "Please let me know if you would like me to proceed with Task 1.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "let_me_know",
+    "lang": "en"
+  },
+  {
+    "id": "ok-041",
+    "text": "If you'd rather scope it to one project, let me know and I'll move it.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "let_me_know",
+    "lang": "en"
+  },
+  {
+    "id": "ok-042",
+    "text": "Should I go ahead?",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "question",
+    "lang": "en"
+  },
+  {
+    "id": "ok-043",
+    "text": "Want me to implement it now, or leave it for later?",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "question",
+    "lang": "en"
+  },
+  {
+    "id": "ok-044",
+    "text": "Shall I merge the two pull requests now?",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "question",
+    "lang": "en"
+  },
+  {
+    "id": "ok-045",
+    "text": "Would you like me to commit these changes and open a pull request?",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "question",
+    "lang": "en"
+  },
+  {
+    "id": "ok-046",
+    "text": "Which issue would you like to tackle next?",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "question",
+    "lang": "en"
+  },
+  {
+    "id": "ok-047",
+    "text": "Let me check one thing with you first: should the default stay off?",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "question",
+    "lang": "en"
+  },
+  {
+    "id": "ok-048",
+    "text": "Now, do you want me to run the full suite as well?",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "question",
+    "lang": "en"
+  },
+  {
+    "id": "ok-049",
+    "text": "Ready to start the first batch?",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "question",
+    "lang": "en"
+  },
+  {
+    "id": "ok-050",
+    "text": "Say the word and I'll start step 2, branched from main this time.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "conditional_or_waiting",
+    "lang": "en"
+  },
+  {
+    "id": "ok-051",
+    "text": "Once the first pull request is merged I'll start the next increment on a new branch.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "conditional_or_waiting",
+    "lang": "en"
+  },
+  {
+    "id": "ok-052",
+    "text": "When it finishes I'll check every record it writes, then post the summary.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "conditional_or_waiting",
+    "lang": "en"
+  },
+  {
+    "id": "ok-053",
+    "text": "If you accept it, I'll start with item 1.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "conditional_or_waiting",
+    "lang": "en"
+  },
+  {
+    "id": "ok-054",
+    "text": "That's an outward-facing publish action, so I'll wait for your go-ahead before tagging.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "conditional_or_waiting",
+    "lang": "en"
+  },
+  {
+    "id": "ok-055",
+    "text": "I'll merge it after the other one lands.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "conditional_or_waiting",
+    "lang": "en"
+  },
+  {
+    "id": "ok-056",
+    "text": "Switch agents and I'll apply all four fixes, run the test suite, and commit.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "conditional_or_waiting",
+    "lang": "en"
+  },
+  {
+    "id": "ok-057",
+    "text": "Tagging is yours to do; then I'll update the changelog.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "conditional_or_waiting",
+    "lang": "en"
+  },
+  {
+    "id": "ok-058",
+    "text": "Let me pick this up again once CI reports.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "conditional_or_waiting",
+    "lang": "en"
+  },
+  {
+    "id": "ok-059",
+    "text": "Now I'll wait for the build to finish before touching anything else.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "conditional_or_waiting",
+    "lang": "en"
+  },
+  {
+    "id": "ok-060",
+    "text": "I'll report each pull request as it comes in.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "promise_with_background_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-061",
+    "text": "I'll tell you when the run lands or if CI stops it.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "promise_with_background_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-062",
+    "text": "I'll ping you when all four are in.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "promise_with_background_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-063",
+    "text": "I'll come back to you before tagging.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "promise_with_background_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-064",
+    "text": "I'll act on the next monitor event.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "promise_with_background_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-065",
+    "text": "I will report each of these as it finishes.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "promise_with_background_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-066",
+    "text": "Nothing for you to do; I'll report when the subagent starts and when it reports back.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "promise_with_background_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-067",
+    "text": "I'll ask you rather than decide.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "promise_with_background_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-068",
+    "text": "All 344 tests pass and clippy is clean.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "completed_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-069",
+    "text": "Committed and pushed to the branch.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "completed_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-070",
+    "text": "The fix is in `src/a.rs:42`; the regression test fails without it and passes with it.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "completed_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-071",
+    "text": "Done. The three call sites are updated and the suite is green.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "completed_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-072",
+    "text": "No changes were made to the tree; this is a report only.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "completed_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-073",
+    "text": "Earlier I wrote \"Now let me run the tests\" and then did: 12 passed, 0 failed.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "completed_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-074",
+    "text": "CI is green and the pull request has no unresolved threads.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "completed_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-075",
+    "text": "Nothing more to submit.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "completed_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-076",
+    "text": "I could not reproduce it: the command exits 0 on this machine.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "completed_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-077",
+    "text": "Now the hook lets a continued stop through, as the test shows.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "completed_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-078",
+    "text": "Follow-ups I did not do: the Windows path, and a benchmark for the new index.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "summary_mentions_future_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-079",
+    "text": "Next steps for a later change: move the parser behind the trait, then delete the shim.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "summary_mentions_future_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-080",
+    "text": "Remaining: item 8 and item 9, both waiting on the paired sweep.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "summary_mentions_future_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-081",
+    "text": "The refactor is finished. A natural follow-up is to let the second caller share the helper.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "summary_mentions_future_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-082",
+    "text": "This is a long-term maintenance improvement; it does not need to block the current change.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "summary_mentions_future_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-083",
+    "text": "Still owed: the benchmark on the reference host.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "summary_mentions_future_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-084",
+    "text": "Next: Step 2 (leases), then Step 1 (the guard).",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "summary_mentions_future_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-085",
+    "text": "Future work could let the cache warm itself at startup.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "summary_mentions_future_work",
+    "lang": "en"
+  },
+  {
+    "id": "ok-086",
+    "text": "To start, switch to the build agent.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "advice_or_instruction_to_person",
+    "lang": "en"
+  },
+  {
+    "id": "ok-087",
+    "text": "Run `cargo test` to see it fail, then apply the patch.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "advice_or_instruction_to_person",
+    "lang": "en"
+  },
+  {
+    "id": "ok-088",
+    "text": "Let the data tell you where the bottlenecks are.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "advice_or_instruction_to_person",
+    "lang": "en"
+  },
+  {
+    "id": "ok-089",
+    "text": "Fix that first; everything else is polish by comparison.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "advice_or_instruction_to_person",
+    "lang": "en"
+  },
+  {
+    "id": "ok-090",
+    "text": "Now run the installer and restart the editor.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "advice_or_instruction_to_person",
+    "lang": "en"
+  },
+  {
+    "id": "ok-091",
+    "text": "Let's discuss the trade-off when you have read the table.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "advice_or_instruction_to_person",
+    "lang": "en"
+  },
+  {
+    "id": "ok-092",
+    "text": "Let me be direct: I would not merge this as it stands.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "advice_or_instruction_to_person",
+    "lang": "en"
+  },
+  {
+    "id": "ok-093",
+    "text": "Let me summarise: two bugs fixed, one left open with its reason.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "advice_or_instruction_to_person",
+    "lang": "en"
+  },
+  {
+    "id": "ok-094",
+    "text": "The model wrote:\n\n```text\nNow let me run the tests.\n```\n\nand the hook refused the stop, as intended.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "quotes_an_announcement",
+    "lang": "en"
+  },
+  {
+    "id": "ok-095",
+    "text": "The fixture's last line is `Let me check the file.`, which the matcher flags.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "quotes_an_announcement",
+    "lang": "en"
+  },
+  {
+    "id": "ok-096",
+    "text": "Tous les tests passent.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "non_english_ending",
+    "lang": "fr"
+  },
+  {
+    "id": "ok-097",
+    "text": "Voulez-vous que je lance les tests ?",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "non_english_ending",
+    "lang": "fr"
+  },
+  {
+    "id": "ok-098",
+    "text": "Todas las pruebas pasan.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "non_english_ending",
+    "lang": "es"
+  },
+  {
+    "id": "ok-099",
+    "text": "Die Änderung ist fertig und getestet.",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "non_english_ending",
+    "lang": "de"
+  },
+  {
+    "id": "ok-100",
+    "text": "所有测试均已通过。",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "non_english_ending",
+    "lang": "zh"
+  },
+  {
+    "id": "ok-101",
+    "text": "需要我现在运行测试吗？",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "non_english_ending",
+    "lang": "zh"
+  },
+  {
+    "id": "ok-102",
+    "text": "テストはすべて成功しました。",
+    "is_premature_stop": false,
+    "kind": null,
+    "category": "non_english_ending",
+    "lang": "ja"
+  }
+]

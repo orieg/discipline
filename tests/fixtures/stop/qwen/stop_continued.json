@@ -1,0 +1,16 @@
+{
+  "background_tasks": [],
+  "context_limit": 1048576,
+  "context_usage": 0,
+  "crons": [],
+  "cwd": "/work/repo",
+  "hook_event_name": "Stop",
+  "input_tokens": 0,
+  "last_assistant_message": "PINEAPPLE",
+  "permission_mode": "yolo",
+  "prompt_id": "00000000-0000-0000-0000-000000000000",
+  "session_id": "00000000-0000-0000-0000-000000000000",
+  "stop_hook_active": true,
+  "timestamp": "1970-01-01T00:00:00.000Z",
+  "transcript_path": "/home/user/.agent/transcript"
+}

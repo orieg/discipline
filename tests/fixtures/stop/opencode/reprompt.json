@@ -1,0 +1,15 @@
+{
+  "call": {
+    "sessionID": "00000000-0000-0000-0000-000000000000",
+    "text": "PROBE-7731: you announced an action and stopped. Reply with the single word PINEAPPLE and then stop."
+  },
+  "result": {
+    "delivery": "steer",
+    "id": "00000000-0000-0000-0000-000000000000",
+    "payload": {
+      "text": "PROBE-7731: you announced an action and stopped. Reply with the single word PINEAPPLE and then stop."
+    },
+    "sessionID": "00000000-0000-0000-0000-000000000000",
+    "type": "user"
+  }
+}
