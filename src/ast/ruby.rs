@@ -213,19 +213,27 @@ struct RubyExtractor<'a> {
 }
 
 /// `# rubocop:disable` and `# rubocop:todo` comments. The comment is read whole, its
-/// `#` and the one space after it included, and the snippet is the comment trimmed.
+/// `#` included, and the snippet is the comment trimmed.
+///
+/// RuboCop (`DirectiveComment::DIRECTIVE_COMMENT_REGEXP`, read from its source) builds
+/// its pattern from `# rubocop : <mode>` with every space standing for any run of
+/// blanks, none included: `#rubocop:disable A` and `#  rubocop : disable A` are
+/// directives like `# rubocop:disable A`.
 const RUBY_SUPPRESSIONS: Suppressions = Suppressions {
     open: &[],
     close: &[],
-    rules: &[CommentRule::opens(
-        &["# rubocop:disable", "# rubocop:todo"],
-        Reports::Rest(RuleText {
-            after: &[],
-            then: &["# rubocop:disable", "# rubocop:todo"],
-            first_word: false,
-            empty_is_all: false,
-        }),
-    )],
+    rules: &[CommentRule {
+        loose_spaces: true,
+        ..CommentRule::opens(
+            &["# rubocop : disable", "# rubocop : todo"],
+            Reports::Rest(RuleText {
+                after: &[],
+                then: &["# rubocop : disable", "# rubocop : todo"],
+                first_word: false,
+                empty_is_all: false,
+            }),
+        )
+    }],
     trimmed_snippet: true,
     ..Suppressions::SLASH_COMMENTS
 };
