@@ -57,6 +57,7 @@ impl LanguagePack for GoPack {
             },
             helpers: std::collections::HashMap::new(),
             test_calls: Vec::new(),
+            package_level: Default::default(),
             suites: suite_types(root, src),
             suite_receiver: None,
             suite_package: suite_package(root, src),
@@ -135,6 +136,8 @@ pub fn resolve_package_cases(
         .iter()
         .map(|(tree, src)| GoSibling::new(src, tree.root_node()))
         .collect();
+    // What the file declares at package level, read once for all its tests.
+    let level = super::test_cases::GoPackageLevel::default();
     let mut cursor = root.walk();
     for decl in root.children(&mut cursor) {
         if !matches!(decl.kind(), "function_declaration" | "method_declaration") {
@@ -152,7 +155,8 @@ pub fn resolve_package_cases(
             .find(|t| t.line == line && t.end_line == end_line && !t.name.contains('/'));
         if let Some(test) = test {
             let (cases, non_literal_cases, case_rows) =
-                extract_go_cases_in_package(body, &anc, src.as_bytes(), &siblings).into_parts();
+                extract_go_cases_in_package(body, &anc, src.as_bytes(), &siblings, &level)
+                    .into_parts();
             test.cases = cases;
             test.non_literal_cases = non_literal_cases;
             test.case_rows = case_rows;
@@ -206,6 +210,8 @@ struct GoExtractor<'a> {
     facts: ParsedFileFacts,
     helpers: std::collections::HashMap<String, super::HelperFacts>,
     test_calls: Vec<Vec<String>>,
+    /// What the file declares at package level, read once for all its tests.
+    package_level: super::test_cases::GoPackageLevel<'a>,
     /// The types of this file read as testify suites ([`suite_types`]).
     suites: std::collections::HashSet<String>,
     /// The receiver of the suite method being read (`s` of `func (s *Suite) TestAdd()`):
@@ -624,7 +630,14 @@ impl<'a> GoExtractor<'a> {
         self.enter_function(node);
         if let Some(body) = node.child_by_field_name("body") {
             let (cases, non_literal_cases, case_rows) =
-                super::test_cases::extract_go_cases(body, self.anc, self.src).into_parts();
+                super::test_cases::extract_go_cases_in_package(
+                    body,
+                    self.anc,
+                    self.src,
+                    &[],
+                    &self.package_level,
+                )
+                .into_parts();
             test_fn.cases = cases;
             test_fn.non_literal_cases = non_literal_cases;
             test_fn.case_rows = case_rows;

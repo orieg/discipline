@@ -202,8 +202,9 @@ pub struct PytestNames {
     marks: Vec<String>,
     /// Names bound to `pytest.mark.parametrize`.
     parametrize: Vec<String>,
-    /// Names the file binds to something else.
-    other: Vec<String>,
+    /// Names the file binds to something else. A file binds a name for each function
+    /// it defines, and each is looked up among them: they are kept as a set.
+    other: std::collections::HashSet<String>,
 }
 
 impl PytestNames {
@@ -225,9 +226,11 @@ impl PytestNames {
                 list.push(name.to_string());
             }
         }
-        self.other.retain(|n| n != name);
+        super::ancestry::count(1);
         if to.is_none() {
-            self.other.push(name.to_string());
+            self.other.insert(name.to_string());
+        } else {
+            self.other.remove(name);
         }
     }
 
@@ -236,8 +239,7 @@ impl PytestNames {
     fn resolve(&self, dotted: &str) -> Option<usize> {
         let parts: Vec<&str> = dotted.split('.').map(str::trim).collect();
         let module = |p: &str| {
-            self.modules.iter().any(|m| m == p)
-                || (p == "pytest" && !self.other.iter().any(|o| o == p))
+            self.modules.iter().any(|m| m == p) || (p == "pytest" && !self.other.contains(p))
         };
         let mark = |m: &str| self.marks.iter().any(|n| n == m);
         match parts.as_slice() {
@@ -731,14 +733,45 @@ struct GoFile<'a, 'tree> {
     src: &'a [u8],
     /// The ancestors of the nodes of this file's tree.
     anc: &'a Ancestry<'tree>,
-    /// Types declared at package level as a struct with fields.
-    struct_types: Vec<String>,
+    /// Types declared at package level as a struct with fields, in this file and in
+    /// the other files of its package.
+    struct_types: &'a [String],
     /// Identifiers the test body ranges over (`for _, c := range cases`).
     ranged: Vec<String>,
     /// Every identifier in the test body.
     used: Vec<String>,
+    /// What this file declares at package level.
+    declared: &'a GoDeclared<'tree>,
+}
+
+/// What one Go file declares at package level, for the tests of the file.
+///
+/// Every test of a file reads the struct types and the `var` specifications of its
+/// package. Reading the declarations of the file again for each test cost the file for
+/// each: 1000 tests, in a file of 87 kB, cost 1.5e10 instructions. They are read once,
+/// when the first test asks, and a test finds the tables it names by their names.
+#[derive(Default)]
+pub struct GoPackageLevel<'tree> {
+    declared: std::cell::OnceCell<GoDeclared<'tree>>,
+    /// The struct types of the file, then those of the other files of its package.
+    package_types: std::cell::OnceCell<Vec<String>>,
+}
+
+#[derive(Default)]
+struct GoDeclared<'tree> {
+    /// Types declared at package level as a struct with fields.
+    struct_types: Vec<String>,
     /// Package-level `var` specifications.
     package_vars: Vec<Node<'tree>>,
+    /// For a name, the places in `package_vars` of the specifications that declare it.
+    declaring: std::collections::HashMap<String, Vec<usize>>,
+}
+
+impl<'tree> GoPackageLevel<'tree> {
+    /// What the file whose tree has the root `root` declares at package level.
+    fn declared(&self, root: Node<'tree>, src: &[u8]) -> &GoDeclared<'tree> {
+        self.declared.get_or_init(|| GoDeclared::read(root, src))
+    }
 }
 
 /// Another file of a test's package: its source and the root of its tree.
@@ -747,6 +780,8 @@ pub struct GoSibling<'s, 'tree> {
     pub root: Node<'tree>,
     /// The ancestors of the nodes of the sibling's own tree.
     pub(crate) anc: Ancestry<'tree>,
+    /// What the sibling declares at package level.
+    level: GoPackageLevel<'tree>,
 }
 
 impl<'s, 'tree> GoSibling<'s, 'tree> {
@@ -756,6 +791,7 @@ impl<'s, 'tree> GoSibling<'s, 'tree> {
             src,
             root,
             anc: Ancestry::new(root),
+            level: GoPackageLevel::default(),
         }
     }
 }
@@ -771,30 +807,12 @@ pub fn go_package_name<'s>(root: Node, src: &'s [u8]) -> Option<&'s str> {
         .map(|name| text(name, src))
 }
 
-impl<'a, 'tree> GoFile<'a, 'tree> {
-    fn new(body: Node<'tree>, anc: &'a Ancestry<'tree>, src: &'a [u8]) -> Self {
-        let mut file = Self {
-            src,
-            anc,
-            struct_types: Vec::new(),
-            ranged: Vec::new(),
-            used: Vec::new(),
-            package_vars: Vec::new(),
-        };
-        let root = anc.root();
-        // The body itself is the root when a caller hands in a detached block.
-        if root.id() != body.id() {
-            file.read_package_level(root);
-        }
-        file.collect_names(body);
-        file
-    }
-
-    /// Records the struct types and `var` specifications `root` declares at package
-    /// level.
-    fn read_package_level(&mut self, root: Node<'tree>) {
-        let src = self.src;
+impl<'tree> GoDeclared<'tree> {
+    /// The struct types and `var` specifications `root` declares at package level.
+    fn read(root: Node<'tree>, src: &[u8]) -> Self {
+        let mut declared = Self::default();
         for decl in elements(root) {
+            super::ancestry::count(1);
             match decl.kind() {
                 "type_declaration" => {
                     for spec in elements(decl) {
@@ -808,15 +826,15 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
                             && ty.kind() == "struct_type"
                             && go_struct_has_fields(ty)
                         {
-                            self.struct_types.push(text(name, src).to_string());
+                            declared.struct_types.push(text(name, src).to_string());
                         }
                     }
                 }
                 "var_declaration" => {
                     for spec in elements(decl) {
                         match spec.kind() {
-                            "var_spec" => self.package_vars.push(spec),
-                            "var_spec_list" => self.package_vars.extend(
+                            "var_spec" => declared.package_vars.push(spec),
+                            "var_spec_list" => declared.package_vars.extend(
                                 elements(spec)
                                     .into_iter()
                                     .filter(|s| s.kind() == "var_spec"),
@@ -828,21 +846,39 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
                 _ => {}
             }
         }
-    }
-
-    /// Adds to `total` the rows of the package-level tables of this file that `named`
-    /// holds the name of.
-    fn count_named_package_tables(&self, named: &[String], total: &mut Option<Vec<String>>) {
-        for spec in &self.package_vars {
+        for (at, spec) in declared.package_vars.iter().enumerate() {
             let mut cursor = spec.walk();
-            let named_in_body = spec
-                .children_by_field_name("name", &mut cursor)
-                .any(|name| named.iter().any(|n| n == text(name, self.src)));
-            if named_in_body {
-                // A call ranged over inside a package-level initialiser is not this test's.
-                let mut ignored = false;
-                self.count_tables(*spec, total, &mut ignored);
+            for name in spec.children_by_field_name("name", &mut cursor) {
+                let places = declared
+                    .declaring
+                    .entry(text(name, src).to_string())
+                    .or_default();
+                if places.last() != Some(&at) {
+                    places.push(at);
+                }
             }
+        }
+        declared
+    }
+}
+
+impl<'a, 'tree> GoFile<'a, 'tree> {
+    /// Adds to `total` the rows of the package-level tables of this file that `named`
+    /// holds the name of, in the order the file declares them.
+    fn count_named_package_tables(&self, named: &[String], total: &mut Option<Vec<String>>) {
+        let mut named_in_body: Vec<usize> = named
+            .iter()
+            .filter_map(|name| self.declared.declaring.get(name))
+            .flatten()
+            .copied()
+            .collect();
+        super::ancestry::count(named.len() + named_in_body.len());
+        named_in_body.sort_unstable();
+        named_in_body.dedup();
+        for at in named_in_body {
+            // A call ranged over inside a package-level initialiser is not this test's.
+            let mut ignored = false;
+            self.count_tables(self.declared.package_vars[at], total, &mut ignored);
         }
     }
 
@@ -998,45 +1034,71 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
 /// counted, and neither is a set (`map[string]struct{}`).
 /// If a `range` loop in the test iterates over a non-literal (function call or external slice),
 /// sets `non_literal = true`.
+#[cfg(test)]
 pub fn extract_go_cases<'t>(body_node: Node<'t>, anc: &Ancestry<'t>, src: &[u8]) -> CaseList {
-    extract_go_cases_in_package(body_node, anc, src, &[])
+    extract_go_cases_in_package(body_node, anc, src, &[], &GoPackageLevel::default())
 }
 
 /// [`extract_go_cases`] with the other files of the test's package read too: a struct
 /// type one of them declares is a row type as one of the test's own file is, and a
 /// package-level `var` one of them holds counts toward every test whose body names it.
 /// A table or row type moved to another file of the package therefore keeps its rows.
+///
+/// `level` is what the test's own file declares at package level: one value for every
+/// test of the file with these `siblings`, so the file and its siblings are read once.
 pub fn extract_go_cases_in_package<'t>(
     body_node: Node<'t>,
     anc: &Ancestry<'t>,
     src: &[u8],
-    siblings: &[GoSibling],
+    siblings: &[GoSibling<'_, 't>],
+    level: &GoPackageLevel<'t>,
 ) -> CaseList {
-    let mut file = GoFile::new(body_node, anc, src);
-    let mut others: Vec<GoFile> = siblings
+    let root = anc.root();
+    // The body itself is the root when a caller hands in a detached block: such a
+    // block has no package level, and what is kept for a file is not asked.
+    let detached = root.id() == body_node.id();
+    let nothing = GoDeclared::default();
+    let declared = if detached {
+        &nothing
+    } else {
+        level.declared(root, src)
+    };
+    // Every file of the package sees the struct types of all of them.
+    let all_types = || {
+        let mut struct_types = declared.struct_types.clone();
+        for sibling in siblings {
+            let other = sibling.level.declared(sibling.root, sibling.src);
+            struct_types.extend(other.struct_types.iter().cloned());
+        }
+        struct_types
+    };
+    let of_detached;
+    let struct_types: &[String] = if detached {
+        of_detached = all_types();
+        &of_detached
+    } else {
+        level.package_types.get_or_init(all_types)
+    };
+    let mut file = GoFile {
+        src,
+        anc,
+        struct_types,
+        ranged: Vec::new(),
+        used: Vec::new(),
+        declared,
+    };
+    file.collect_names(body_node);
+    let others: Vec<GoFile> = siblings
         .iter()
-        .map(|sibling| {
-            let mut other = GoFile {
-                src: sibling.src,
-                anc: &sibling.anc,
-                struct_types: Vec::new(),
-                ranged: file.ranged.clone(),
-                used: Vec::new(),
-                package_vars: Vec::new(),
-            };
-            other.read_package_level(sibling.root);
-            other
+        .map(|sibling| GoFile {
+            src: sibling.src,
+            anc: &sibling.anc,
+            struct_types,
+            ranged: file.ranged.clone(),
+            used: Vec::new(),
+            declared: sibling.level.declared(sibling.root, sibling.src),
         })
         .collect();
-    // Every file of the package sees the struct types of all of them.
-    let mut struct_types = file.struct_types.clone();
-    for other in &others {
-        struct_types.extend(other.struct_types.iter().cloned());
-    }
-    file.struct_types = struct_types.clone();
-    for other in &mut others {
-        other.struct_types = struct_types.clone();
-    }
     let mut table_cases: Option<Vec<String>> = None;
     let mut has_non_literal = false;
 
