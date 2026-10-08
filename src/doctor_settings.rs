@@ -2255,6 +2255,68 @@ mod tests {
     }
 
     use super::*;
+
+    /// `glob_matches` without `slash_literal` is what the call sites wrote inline before
+    /// they called it: a default `globset::Glob`, and no match for an invalid pattern.
+    #[test]
+    fn glob_matches_without_slash_literal_is_a_default_glob() {
+        let inline = |pattern: &str, name: &str| {
+            globset::Glob::new(pattern)
+                .map(|g| g.compile_matcher().is_match(name))
+                .unwrap_or(false)
+        };
+        let patterns = [
+            "*",
+            "*.rs",
+            "tests/*",
+            "tests/**",
+            "**/t_*.py",
+            "a?c",
+            "[ab]c",
+            "{a,b}/x",
+            "",
+            " * ",
+            "[",
+            "{a",
+            "a/**b",
+            "\\",
+            "git.*",
+            "!git.*",
+            "TESTS/*",
+        ];
+        let names = [
+            "",
+            "a",
+            "abc",
+            "bc",
+            "x.rs",
+            "tests/x.rs",
+            "tests/a/x.rs",
+            "a/x",
+            "b/t_1.py",
+            "git.corp",
+            "[",
+            "{a",
+            " x ",
+            "\\",
+        ];
+        let mut matched = 0;
+        for p in patterns {
+            for n in names {
+                assert_eq!(glob_matches(p, n, false), inline(p, n), "{p:?} on {n:?}");
+                matched += usize::from(inline(p, n));
+            }
+        }
+        assert!(matched > 10, "the table has matches: {matched}");
+        for invalid in ["[", "{a", "[z-a]"] {
+            assert!(globset::Glob::new(invalid).is_err(), "{invalid:?}");
+            assert!(!glob_matches(invalid, invalid, false), "{invalid:?}");
+        }
+        // With `slash_literal` a `*` stops at a `/`: the option the inline sites did
+        // not set.
+        assert!(glob_matches("tests/*", "tests/a/x.rs", false));
+        assert!(!glob_matches("tests/*", "tests/a/x.rs", true));
+    }
     use crate::forge::CannedApi;
     use serde_json::json;
 

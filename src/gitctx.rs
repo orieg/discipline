@@ -28,6 +28,22 @@ pub struct CommitDetail {
     pub parent_count: usize,
 }
 
+impl CommitDetail {
+    /// The authorship and message of `commit`, the message read by [`commit_message`].
+    pub fn of(commit: &git2::Commit) -> Self {
+        let author = commit.author();
+        let committer = commit.committer();
+        CommitDetail {
+            sha: commit.id().to_string(),
+            author_name: author.name().unwrap_or("").to_string(),
+            author_email: author.email().unwrap_or("").to_string(),
+            committer_email: committer.email().unwrap_or("").to_string(),
+            message: commit_message(commit),
+            parent_count: commit.parent_count(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ChangedFile {
     pub path: String,
@@ -67,6 +83,23 @@ pub const REPLAY_BASE_MESSAGE: &str = "replay base";
 /// read as empty because it is not UTF-8.
 pub fn commit_message(commit: &git2::Commit) -> String {
     String::from_utf8_lossy(commit.message_bytes()).into_owned()
+}
+
+/// The commit a history command (`audit`, `replay`) starts from, with the name it was
+/// resolved from: the one `reference` names, or without one the default base branch, or
+/// `HEAD` when there is none.
+pub fn history_tip(repo: &Repository, reference: Option<&str>) -> Result<(String, git2::Oid)> {
+    let reference = match reference {
+        Some(r) => r.to_string(),
+        None => crate::hook::default_base(repo).unwrap_or_else(|| "HEAD".to_string()),
+    };
+    let tip = repo
+        .revparse_single(&reference)
+        .with_context(|| format!("`{reference}` does not resolve"))?
+        .peel_to_commit()
+        .map_err(|e| anyhow!("`{reference}` is not a commit: {e}"))?
+        .id();
+    Ok((reference, tip))
 }
 
 /// A commit's subject, read the same way as [`commit_message`].
@@ -1325,17 +1358,7 @@ impl GitCtx {
         let mut out = Vec::new();
         for oid in walk {
             let oid = oid?;
-            let commit = self.repo.find_commit(oid)?;
-            let author = commit.author();
-            let committer = commit.committer();
-            out.push(CommitDetail {
-                sha: format!("{oid}"),
-                author_name: author.name().unwrap_or("").to_string(),
-                author_email: author.email().unwrap_or("").to_string(),
-                committer_email: committer.email().unwrap_or("").to_string(),
-                message: String::from_utf8_lossy(commit.message_bytes()).into_owned(),
-                parent_count: commit.parent_count(),
-            });
+            out.push(CommitDetail::of(&self.repo.find_commit(oid)?));
         }
         Ok(out)
     }
@@ -2741,5 +2764,111 @@ mod tests {
         git.repo.blob(two.as_bytes()).unwrap();
         assert_eq!(git.lookup_commit(&prefix).unwrap(), CommitLookup::Ambiguous);
         assert!(!git.is_shallow());
+    }
+
+    /// The commit `audit` and `replay` start from, and the messages they give for a
+    /// name that resolves to nothing and for one that resolves to something else.
+    #[test]
+    fn history_tip_names_the_reference_and_says_why_it_is_not_a_tip() {
+        let (_dir, git, blob) = repo_with_base_file();
+        let head = git.base.unwrap();
+        let (name, tip) = history_tip(&git.repo, Some("HEAD")).unwrap();
+        assert_eq!((name.as_str(), tip), ("HEAD", head));
+        // Without a name: the default base branch, or `HEAD`; one commit either way.
+        assert_eq!(history_tip(&git.repo, None).unwrap().1, head);
+
+        let missing = history_tip(&git.repo, Some("no-such-ref")).unwrap_err();
+        assert_eq!(missing.to_string(), "`no-such-ref` does not resolve");
+        let not_commit = history_tip(&git.repo, Some(&blob.to_string())).unwrap_err();
+        let text = not_commit.to_string();
+        assert!(
+            text.starts_with(&format!("`{blob}` is not a commit: ")),
+            "{text}"
+        );
+
+        // On a branch ahead of `main`, no name means `main`, not the commit checked out.
+        let base = git.repo.find_commit(head).unwrap();
+        if git
+            .repo
+            .find_branch("main", git2::BranchType::Local)
+            .is_err()
+        {
+            git.repo.branch("main", &base, false).unwrap();
+        }
+        git.repo.branch("work", &base, false).unwrap();
+        git.repo.set_head("refs/heads/work").unwrap();
+        let sig = git2::Signature::now("t", "t@example.invalid").unwrap();
+        let ahead = git
+            .repo
+            .commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                "ahead",
+                &base.tree().unwrap(),
+                &[&base],
+            )
+            .unwrap();
+        assert_ne!(ahead, head);
+        // `DISCIPLINE_BASE_REF` turns the default branch lookup off.
+        if std::env::var_os("DISCIPLINE_BASE_REF").is_none() {
+            let (name, tip) = history_tip(&git.repo, None).unwrap();
+            assert_eq!((name.as_str(), tip), ("main", head));
+        }
+    }
+
+    /// Each field of a `CommitDetail` comes from the part of the commit it is named for.
+    #[test]
+    fn commit_detail_reads_author_committer_message_and_parents() {
+        let (_dir, git, _) = repo_with_base_file();
+        let base = git.repo.find_commit(git.base.unwrap()).unwrap();
+        let author = git2::Signature::now("An Author", "author@example.invalid").unwrap();
+        let committer = git2::Signature::now("A Committer", "committer@example.invalid").unwrap();
+        let tree = base.tree().unwrap();
+        let oid = git
+            .repo
+            .commit_create_buffer(
+                &author,
+                &committer,
+                "subject\n\nbody: \u{e9}\n",
+                &tree,
+                &[&base, &base],
+            )
+            .map(|buf| {
+                git.repo
+                    .odb()
+                    .unwrap()
+                    .write(git2::ObjectType::Commit, &buf)
+                    .unwrap()
+            })
+            .unwrap();
+        let detail = CommitDetail::of(&git.repo.find_commit(oid).unwrap());
+        assert_eq!(
+            detail,
+            CommitDetail {
+                sha: oid.to_string(),
+                author_name: "An Author".to_string(),
+                author_email: "author@example.invalid".to_string(),
+                committer_email: "committer@example.invalid".to_string(),
+                message: "subject\n\nbody: \u{e9}\n".to_string(),
+                parent_count: 2,
+            }
+        );
+        // A message that is not UTF-8 is read with U+FFFD, never as empty.
+        let raw = format!(
+            "tree {}\nauthor a <a@example.invalid> 0 +0000\ncommitter c <c@example.invalid> 0 +0000\n\n",
+            tree.id()
+        );
+        let mut bytes = raw.into_bytes();
+        bytes.extend_from_slice(b"caf\xe9 subject\n");
+        let odd = git
+            .repo
+            .odb()
+            .unwrap()
+            .write(git2::ObjectType::Commit, &bytes)
+            .unwrap();
+        let detail = CommitDetail::of(&git.repo.find_commit(odd).unwrap());
+        assert_eq!(detail.message, "caf\u{fffd} subject\n");
+        assert_eq!((detail.parent_count, detail.author_name.as_str()), (0, "a"));
     }
 }

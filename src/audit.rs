@@ -1289,16 +1289,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
         bail!("--last must be at least 1");
     }
     let repo = crate::gitctx::discover_repository(".")?;
-    let reference = match &opts.reference {
-        Some(r) => r.clone(),
-        None => crate::hook::default_base(&repo).unwrap_or_else(|| "HEAD".to_string()),
-    };
-    let tip: Oid = repo
-        .revparse_single(&reference)
-        .with_context(|| format!("`{reference}` does not resolve"))?
-        .peel_to_commit()
-        .map_err(|e| anyhow!("`{reference}` is not a commit: {e}"))?
-        .id();
+    let (reference, tip) = crate::gitctx::history_tip(&repo, opts.reference.as_deref())?;
     let commits = crate::replay::commits_to_replay(&repo, tip, opts.last)?;
     let mut records = Vec::new();
     let mut tightenings = Vec::new();
@@ -1308,14 +1299,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
         .unwrap_or_else(|| DisciplineConfig::default_for_repo("audit"));
     let mut marked = std::collections::BTreeSet::new();
     for (ord, c) in commits.iter().enumerate() {
-        let detail = crate::gitctx::CommitDetail {
-            sha: c.id().to_string(),
-            author_name: c.author().name().unwrap_or("").to_string(),
-            author_email: c.author().email().unwrap_or("").to_string(),
-            committer_email: c.committer().email().unwrap_or("").to_string(),
-            message: crate::gitctx::commit_message(c),
-            parent_count: c.parent_count(),
-        };
+        let detail = crate::gitctx::CommitDetail::of(c);
         if crate::guards::commit_provenance::is_agent_commit(
             &detail,
             &crate::guards::commit_provenance::trailers(&detail.message),

@@ -579,16 +579,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
         .workdir()
         .ok_or_else(|| anyhow!("bare repositories are not supported"))?
         .to_path_buf();
-    let reference = match &opts.reference {
-        Some(r) => r.clone(),
-        None => crate::hook::default_base(&src).unwrap_or_else(|| "HEAD".to_string()),
-    };
-    let tip = src
-        .revparse_single(&reference)
-        .with_context(|| format!("`{reference}` does not resolve"))?
-        .peel_to_commit()
-        .map_err(|e| anyhow!("`{reference}` is not a commit: {e}"))?
-        .id();
+    let (_, tip) = crate::gitctx::history_tip(&src, opts.reference.as_deref())?;
     let config_bytes: Option<Vec<u8>> = match &opts.config {
         Some(p) => Some(std::fs::read(p).with_context(|| format!("cannot read {}", p.display()))?),
         None => std::fs::read(workdir.join(CONFIG_NAME)).ok(),
