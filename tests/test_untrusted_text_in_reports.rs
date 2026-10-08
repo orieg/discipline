@@ -15,7 +15,7 @@
 //! `DISCIPLINE_NO_NETWORK=1`, so nothing else can be reached.
 
 mod common;
-use common::{FakeForge, Repo, Run};
+use common::{FakeForge, Repo, Run, CONFIG_HEAD};
 
 // ---------------------------------------------------------------------------------------
 // Hostile text. Kept out of the test bodies: it reads like code and like report lines.
@@ -333,7 +333,7 @@ fn a_forge_refusal_cannot_drive_the_terminal_from_an_error_message() {
     let (repo, _) = plain_change();
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[directives]\ndegrade_offline = false\n",
+        &format!("{CONFIG_HEAD}[directives]\ndegrade_offline = false\n"),
     );
     repo.commit("chore: require the record");
     let api = FakeForge::start();
@@ -872,7 +872,9 @@ fn tool_output_quoted_in_a_finding_cannot_add_a_line_to_the_text_report() {
     repo.write("run.sh", "exit 0\n");
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\npreset = \"base-tests\"\ncommand = \"sh run.sh\"\n",
+        &format!(
+            "{CONFIG_HEAD}\n[gates.command]\npreset = \"base-tests\"\ncommand = \"sh run.sh\"\n"
+        ),
     );
     repo.commit("ci: run the base tests");
     repo.git(&["checkout", "-q", "-B", "work"]);
@@ -1090,7 +1092,7 @@ fn a_commit_lookup_that_fails_stops_a_run_that_requires_the_record() {
     let (repo, _) = plain_change();
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[directives]\ndegrade_offline = false\n",
+        &format!("{CONFIG_HEAD}[directives]\ndegrade_offline = false\n"),
     );
     repo.commit("chore: require the record");
     let commits = [head(&repo), repo.git_output(&["rev-parse", "HEAD~1"])];

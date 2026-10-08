@@ -7,7 +7,7 @@
 
 mod common;
 
-use common::Repo;
+use common::{Repo, CONFIG_HEAD};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -712,7 +712,7 @@ fn sec_inline_override_budget_enforced() {
     let repo = Repo::new();
     repo.commit_base(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[directives]\nmax_inline_overrides = 1\n",
+        &format!("{CONFIG_HEAD}[directives]\nmax_inline_overrides = 1\n"),
         "chore: configure max_inline_overrides",
     );
     repo.write(
@@ -747,7 +747,7 @@ fn sec_ci_step_continue_on_error_detected() {
         &[
             (
                 "discipline.toml",
-                "[meta]\nversion = 1\nname = \"t\"\n[gates.ci-integrity]\nenabled = true\nseverity = \"error\"\n",
+                &format!("{CONFIG_HEAD}[gates.ci-integrity]\nenabled = true\nseverity = \"error\"\n"),
             ),
             (
                 ".github/workflows/ci.yml",
@@ -786,7 +786,7 @@ fn sec_ci_rollup_rename_bypass_detected() {
         &[
             (
                 "discipline.toml",
-                "[meta]\nversion = 1\nname = \"t\"\n[gates.ci-integrity]\nenabled = true\nseverity = \"error\"\nrollup_job = \"ci-gate\"\n",
+                &format!("{CONFIG_HEAD}[gates.ci-integrity]\nenabled = true\nseverity = \"error\"\nrollup_job = \"ci-gate\"\n"),
             ),
             (
                 ".github/workflows/ci.yml",

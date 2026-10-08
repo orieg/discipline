@@ -9,7 +9,7 @@
 
 mod common;
 
-use common::{FakeForge, Repo};
+use common::{FakeForge, Repo, CONFIG_HEAD};
 use discipline::output_schema::{audit_schema, mcp_check_schema, replay_schema, report_schema};
 use serde_json::Value;
 
@@ -641,7 +641,7 @@ fn check_output_conforms_to_the_report_schema() {
     // Exit 2: stdout and `--json-out` get the same report, with no outcomes and the reason.
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[gates.no-such-gate]\nenabled = true\n",
+        &format!("{CONFIG_HEAD}[gates.no-such-gate]\nenabled = true\n"),
     );
     let out = repo.file("fatal.json");
     let fatal = repo.run(
@@ -711,7 +711,7 @@ fn replay_output_conforms_to_the_replay_schema() {
     let cfg = repo.file("candidate.toml");
     std::fs::write(
         &cfg,
-        "[meta]\nversion = 1\nname = \"t\"\n[directives]\nfail_on_overrides = true\nallowed_override_actors = [\"lead\"]\n",
+        format!("{CONFIG_HEAD}[directives]\nfail_on_overrides = true\nallowed_override_actors = [\"lead\"]\n"),
     )
     .unwrap();
     let url = api.url();
@@ -762,13 +762,13 @@ fn audit_output_conforms_to_the_audit_schema() {
     repo.git(&["checkout", "-q", "main"]);
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[directives]\nmax_overrides = 1\n",
+        &format!("{CONFIG_HEAD}[directives]\nmax_overrides = 1\n"),
     );
     repo.commit("chore: adopt (#1)");
     // Every optional field is populated by one record or another.
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[directives]\nmax_overrides = 3\n",
+        &format!("{CONFIG_HEAD}[directives]\nmax_overrides = 3\n"),
     );
     repo.write("src/b.rs", "// discipline:allow(pii): fixture host\n");
     repo.write(
@@ -780,7 +780,7 @@ fn audit_output_conforms_to_the_audit_schema() {
     );
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\nnot_a_table = 1\n",
+        &format!("{CONFIG_HEAD}not_a_table = 1\n"),
     );
     repo.commit("chore: break it");
     let run = repo.run(

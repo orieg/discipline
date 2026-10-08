@@ -1807,7 +1807,7 @@ fn a_change_cannot_switch_its_own_run_to_advisory() {
     let repo = repo_with_base_config(CONFIG_HEAD);
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\nmode = \"advisory\"\n",
+        &format!("{CONFIG_HEAD}mode = \"advisory\"\n"),
     );
     repo.commit("chore: tune");
     let run = repo.check(&[]);
@@ -1833,7 +1833,7 @@ fn a_change_cannot_switch_its_own_run_to_advisory() {
     assert_eq!(lifted.code, 0);
 
     // Once advisory is on the base side it is simply the repository's mode.
-    let settled = repo_with_base_config("[meta]\nversion = 1\nname = \"t\"\nmode = \"advisory\"\n");
+    let settled = repo_with_base_config(&format!("{CONFIG_HEAD}mode = \"advisory\"\n"));
     settled.write("tests/a.rs", "#[test]\nfn adds() {}\n");
     settled.commit("test: add");
     let run = settled.check(&[]);
@@ -5273,7 +5273,7 @@ fn commit_provenance_require_agent_review_false_keeps_only_the_required_trailers
         repo.git(&["checkout", "-q", "main"]);
         repo.write(
             "discipline.toml",
-            &format!("[meta]\nversion = 1\nname = \"t\"\n[gates.commit-provenance]\nenabled = true\nrequired_trailers = [\"Signed-off-by\"]\n{cfg}"),
+            &format!("{CONFIG_HEAD}[gates.commit-provenance]\nenabled = true\nrequired_trailers = [\"Signed-off-by\"]\n{cfg}"),
         );
         repo.commit("chore: policy\n\nSigned-off-by: Owner <owner@example.test>");
         repo.git(&["checkout", "-q", "-B", "work"]);
@@ -6499,7 +6499,7 @@ fn a_push_run_reads_the_merged_pull_requests_body() {
     // (exit 2), naming the commit.
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[directives]\ndegrade_offline = false\n",
+        &format!("{CONFIG_HEAD}[directives]\ndegrade_offline = false\n"),
     );
     repo.commit("chore: require the record");
     let sha = head(&repo);
@@ -7963,7 +7963,7 @@ fn override_record_audit_trail_and_step_outputs() {
     let repo = Repo::new();
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[gates.test-floor]\nenabled = false\n",
+        &format!("{CONFIG_HEAD}[gates.test-floor]\nenabled = false\n"),
     );
     repo.write(
         "tests/a.rs",
@@ -8211,7 +8211,7 @@ fn hidden_directives_rejected_by_default_and_accepted_when_configured() {
     let repo = Repo::new();
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[gates.test-floor]\nenabled = false\n",
+        &format!("{CONFIG_HEAD}[gates.test-floor]\nenabled = false\n"),
     );
     repo.write(
         "tests/a.rs",
@@ -8251,7 +8251,9 @@ fn hidden_directives_rejected_by_default_and_accepted_when_configured() {
     // Now configure allow_hidden = true in discipline.toml
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[directives]\nallow_hidden = true\n[gates.test-floor]\nenabled = false\n",
+        &format!(
+            "{CONFIG_HEAD}[directives]\nallow_hidden = true\n[gates.test-floor]\nenabled = false\n"
+        ),
     );
     repo.commit("chore: allow hidden directives");
     let run_allowed = repo.check(&[]);
@@ -8271,7 +8273,7 @@ fn directive_sources_policy_restricts_sources() {
     let repo = Repo::new();
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[directives]\nsources = [\"pr-body\"]\n[gates.test-floor]\nenabled = false\n",
+        &format!("{CONFIG_HEAD}[directives]\nsources = [\"pr-body\"]\n[gates.test-floor]\nenabled = false\n"),
     );
     repo.write(
         "tests/a.rs",
@@ -8330,7 +8332,7 @@ fn config_override_sources_reset_narrows_directive_sources() {
     let repo = Repo::new();
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[gates.test-floor]\nenabled = false\n",
+        &format!("{CONFIG_HEAD}[gates.test-floor]\nenabled = false\n"),
     );
     repo.write(
         "tests/a.rs",
@@ -12143,7 +12145,7 @@ fn pii_tells_a_tools_config_location_from_personal_content() {
 
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[gates.pii]\nagent_config_standard_paths = false\n",
+        &format!("{CONFIG_HEAD}[gates.pii]\nagent_config_standard_paths = false\n"),
     );
     repo.commit("chore: strict agent-config references");
     let strict = repo.check(&["--base", "HEAD~2"]);
@@ -16112,7 +16114,7 @@ fn pr_checklist_repo() -> Repo {
     let repo = Repo::new();
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n\n[gates.pr-checklist]\nenabled = true\n",
+        &format!("{CONFIG_HEAD}\n[gates.pr-checklist]\nenabled = true\n"),
     );
     repo.write(
         "src/lib.rs",
@@ -16295,7 +16297,7 @@ fn allow_pattern_repo() -> Repo {
     repo.git(&["checkout", "-q", "main"]);
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n\n[gates.time-estimates]\nallow_patterns = [\"one-minute load average\"]\n",
+        &format!("{CONFIG_HEAD}\n[gates.time-estimates]\nallow_patterns = [\"one-minute load average\"]\n"),
     );
     repo.commit("chore: config");
     repo.git(&["checkout", "-q", "-B", "work"]);

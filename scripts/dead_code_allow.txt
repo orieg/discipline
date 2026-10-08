@@ -9,6 +9,7 @@ src/hook.rs config_for_mode | generated hook files compared by tests/test_agent_
 src/tokens.rs KNOWN_DIRECTIVES | the directive list walked by tests/test_directive_scoping.rs
 src/tokens.rs WORKFLOW_MARKERS | the workflow markers frozen by tests/test_stability_contract.rs
 src/tokens.rs WorkflowJobOrStep | subject kind matched by tests/test_directive_scoping.rs; no directive declares it
+src/turn.rs ALL | turn findings list frozen by tests/test_stability_contract.rs
 
 # Reached only when a language pack is compiled out.
 src/guards/build_flags.rs GrammarAbsent | constructed under cfg(not(feature = "lang-python")) and cfg(not(feature = "lang-rust"))
@@ -22,3 +23,4 @@ src/forge.rs was_called | CannedApi request log, read by the unit tests of the f
 src/guards/perf/bounds.rs with_ci | builds the estimates of the interval-comparison unit tests; production sets `ci` directly
 src/guards/perf/bounds.rs regressed | exact-counter threshold; the gate compares `delta_pct` itself
 src/guards/perf/bounds.rs wilson_score_interval | reference-pinned bound with no caller yet
+src/turn.rs NAMESPACE | turn codes prefix asserted by unit tests

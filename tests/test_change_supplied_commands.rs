@@ -5,7 +5,7 @@
 //! case fails when the command ran, whatever the report says.
 
 mod common;
-use common::Repo;
+use common::{Repo, CONFIG_HEAD};
 
 const MARKER: &str = "RAN_BY_CHANGE";
 const COMMAND_FINDING: &str = "command/untrusted-command-modification";
@@ -22,7 +22,7 @@ fn marking_test_command() -> String {
 }
 
 fn config(gates: &str) -> String {
-    format!("[meta]\nversion = 1\nname = \"t\"\n\n{gates}")
+    format!("{CONFIG_HEAD}\n{gates}")
 }
 
 /// `base` committed on `main`, then `head` committed on `work`.

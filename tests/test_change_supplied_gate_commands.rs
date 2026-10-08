@@ -9,7 +9,7 @@
 //! real toolchain is started.
 
 mod common;
-use common::{Repo, Run};
+use common::{Repo, Run, CONFIG_HEAD};
 
 const MARKER: &str = "RAN_BY_CHANGE";
 const BASE_MARKER: &str = "RAN_BASE_COMMAND";
@@ -74,7 +74,7 @@ const SANITIZERS_THREAD_WITH_CANARY: &[&str] = &[
 ];
 
 fn config(gates: &str) -> String {
-    format!("[meta]\nversion = 1\nname = \"t\"\n\n{gates}")
+    format!("{CONFIG_HEAD}\n{gates}")
 }
 
 /// `base` committed on `main`, then `head` committed on `work`.

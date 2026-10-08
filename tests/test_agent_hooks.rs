@@ -240,7 +240,7 @@ fn explain_names_the_rule_the_state_here_and_the_directive() {
 
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[gates.assertion-reduction]\nenabled = false\n",
+        &format!("{CONFIG_HEAD}[gates.assertion-reduction]\nenabled = false\n"),
     );
     let off = repo.run(
         &["explain", "error [assertion-reduction] Assertion Reduction"],
@@ -277,7 +277,7 @@ fn an_agent_cannot_silence_its_own_hook() {
     weakened(&repo);
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[gates.assertion-reduction]\nenabled = false\n",
+        &format!("{CONFIG_HEAD}[gates.assertion-reduction]\nenabled = false\n"),
     );
     let run = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
     assert_eq!(
@@ -1406,6 +1406,80 @@ fn a_hook_does_not_report_the_unchanged_hook_files_its_own_branch_adds() {
             && blocked.stderr.contains(".agents/hooks.json"),
         "{}",
         blocked.stderr
+    );
+}
+
+/// Qwen Code stamps `"$version": <its settings version>` into `.qwen/settings.json` each
+/// time it starts (recorded live with Qwen Code 0.25.0 on 2026-10-08: appended after the
+/// last key of a file that has none, rewritten in place in one that has another). A hook's
+/// own check does not report that as an edit of its file, `--upgrade` leaves it, and a
+/// changed hook command in the same file is still reported.
+#[test]
+fn a_hook_does_not_report_the_version_qwen_code_stamps_into_its_settings() {
+    let qwen = ".qwen/settings.json";
+    let stop = r#"{"hook_event_name":"Stop"}"#;
+    let repo = Repo::new();
+    let run = repo.run(&["hook", "install", "--agent", "qwen"], &[]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let path = repo.file(qwen);
+    let written = std::fs::read_to_string(&path).unwrap();
+    // What Qwen Code 0.25.0 does not rewrite.
+    assert!(written.starts_with("{\n  \"$version\": 4,\n"), "{written}");
+    repo.git(&["add", "-A"]);
+    repo.commit("chore(hooks): discipline hook for Qwen Code");
+    let clean = hook(&repo, &["hook", "run", "--agent", "qwen"], stop);
+    assert_eq!(clean.code, 0, "{}", clean.stderr);
+
+    // An earlier release's file had no version: Qwen Code appends its own.
+    let bare = written.replacen("  \"$version\": 4,\n", "", 1);
+    let appended = bare.replacen("\n  }\n}\n", "\n  },\n  \"$version\": 4\n}\n", 1);
+    // A Qwen Code release with another settings version rewrites the value.
+    let other = written.replacen("\"$version\": 4,", "\"$version\": 5,", 1);
+    for stamped in [&appended, &other] {
+        assert_ne!(*stamped, written);
+        assert_ne!(*stamped, bare);
+        std::fs::write(&path, stamped).unwrap();
+        let run = hook(&repo, &["hook", "run", "--agent", "qwen"], stop);
+        assert_eq!(run.code, 0, "{stamped}\n{}", run.stderr);
+        // Nothing to upgrade, and Qwen Code's value is not written over.
+        let up = repo.run(&["hook", "install", "--agent", "qwen", "--upgrade"], &[]);
+        assert_eq!(up.code, 0, "{}", up.stderr);
+        assert!(
+            up.stdout.contains("already runs discipline"),
+            "{}",
+            up.stdout
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), **stamped);
+
+        // Control: the same stamp with a hook command changed is reported.
+        let edited = stamped.replace(
+            "hook run --agent qwen --event pre-tool",
+            "hook run --agent qwen --event pre-tool --observe",
+        );
+        assert_ne!(edited, **stamped);
+        std::fs::write(&path, edited).unwrap();
+        let blocked = hook(&repo, &["hook", "run", "--agent", "qwen"], stop);
+        assert_eq!(blocked.code, 2, "{}", blocked.stderr);
+        assert!(
+            blocked
+                .stderr
+                .contains("instruction-smuggling/agent-instructions-changed")
+                && blocked.stderr.contains(qwen),
+            "{}",
+            blocked.stderr
+        );
+    }
+
+    // Control: CI (a plain check) reports the stamp like any change to the file.
+    std::fs::write(&path, &other).unwrap();
+    let ci = repo.check(&[]);
+    assert_eq!(ci.code, 1);
+    assert!(
+        ci.violations("instruction-smuggling")
+            .iter()
+            .any(|v| v["file"] == qwen),
+        "{}",
+        ci.stdout
     );
 }
 

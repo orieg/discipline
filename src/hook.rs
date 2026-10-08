@@ -988,21 +988,69 @@ pub fn config_for_opts(
         // tests/fixtures/pretool/qwen/); its tools are `write_file`, `edit`
         // and `run_shell_command`.
         Agent::Qwen => (
-            ".qwen/settings.json",
-            claude_shaped(
+            QWEN_SETTINGS,
+            qwen_versioned(&claude_shaped(
                 serde_json::json!({ "hooks": [hook_entry(&start, Some(30))] }),
                 (
                     "^(write_file|edit|replace|run_shell_command)$",
                     hook_entry(&pre, Some(30)),
                 ),
                 ("^(write_file|edit)$", hook_entry(&cmd, Some(secs))),
-            ),
+            )),
         ),
         Agent::Opencode => (
             ".opencode/plugins/discipline.js",
             opencode_plugin(&cmd, &pre, &start, observe),
         ),
     }
+}
+
+/// Qwen Code's project settings file, which holds its hooks.
+const QWEN_SETTINGS: &str = ".qwen/settings.json";
+
+/// The key under which Qwen Code records the version of a settings file's layout.
+const QWEN_VERSION_KEY: &str = "$version";
+
+/// The settings version of Qwen Code 0.25.0. Each time it starts, Qwen Code writes its
+/// own version into a settings file that has none or another one (run live on
+/// 2026-10-08), so a generated file without it shows as changed after the first session.
+const QWEN_SETTINGS_VERSION: u32 = 4;
+
+/// `shaped`, a JSON hook file, with the settings version Qwen Code would add to it.
+fn qwen_versioned(shaped: &str) -> String {
+    let mut settings: serde_json::Value = serde_json::from_str(shaped).unwrap_or_default();
+    settings[QWEN_VERSION_KEY] = QWEN_SETTINGS_VERSION.into();
+    serde_json::to_string_pretty(&settings).unwrap_or_default() + "\n"
+}
+
+/// `"$version": <whole number above zero>` as the first key of a settings file: where
+/// this release writes it, and where Qwen Code rewrites the number in place.
+static QWEN_VERSION_FIRST: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r#"\A\{\n  "\$version": [1-9][0-9]*,\n"#).unwrap()
+});
+
+/// The same key after the last one: where Qwen Code adds it to a file that has none.
+static QWEN_VERSION_LAST: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r#"\n  \},\n  "\$version": [1-9][0-9]*\n\}\n\z"#).unwrap()
+});
+
+/// `content`, a Qwen Code settings file, with the version Qwen Code stamps into it read
+/// as the one this release writes: the key where this release puts it with another whole
+/// number, or added after the last key of a file that had none (the two things Qwen Code
+/// 0.25.0 does, run live). The key says which layout the file is in and instructs
+/// nothing, so a file that differs from the generated one only there is still that file.
+/// Every other byte is left for the caller to compare; a file with the key in both
+/// places, or with any other value, comes back unequal to what this release writes.
+fn qwen_version_as_written(content: &str) -> std::borrow::Cow<'_, str> {
+    let first = format!("{{\n  \"{QWEN_VERSION_KEY}\": {QWEN_SETTINGS_VERSION},\n");
+    if QWEN_VERSION_FIRST.is_match(content) {
+        return QWEN_VERSION_FIRST.replace(content, regex::NoExpand(&first));
+    }
+    if QWEN_VERSION_LAST.is_match(content) && content.starts_with("{\n") {
+        let bare = QWEN_VERSION_LAST.replace(content, regex::NoExpand("\n  }\n}\n"));
+        return bare.replacen("{\n", &first, 1).into();
+    }
+    content.into()
 }
 
 /// One command handler of a Claude-shaped hook file, with its timeout in seconds when the
@@ -1399,6 +1447,13 @@ pub fn is_generated_hook_file(path: &str, content: &str) -> bool {
             || pinned_digests(content)
                 .is_some_and(|d| content == claude_bootstrap_script_with(Some(&d)));
     }
+    // The version Qwen Code stamps into its settings file is not an edit of it.
+    let read = if path == QWEN_SETTINGS {
+        qwen_version_as_written(content)
+    } else {
+        content.into()
+    };
+    let content: &str = &read;
     // A longer timeout is what `hook install --timeout` writes; a shorter one can kill the
     // hook before it answers, so only the default or more is recognised.
     let timeouts: Vec<u32> = TIMEOUT_VALUE
@@ -1720,6 +1775,10 @@ fn generated_json_against(
             }
             // `version`: what this release writes.
             other if other == value => {}
+            // Qwen Code writes its own settings version over this release's.
+            _ if agent == Agent::Qwen
+                && key == QWEN_VERSION_KEY
+                && value.as_u64().is_some_and(|v| v > 0) => {}
             _ => return None,
         }
     }
@@ -1877,6 +1936,13 @@ fn refresh_json(
         generated_json_hooks(agent, existing)
     };
     if let Some(was) = was {
+        // Qwen Code's own version in the file is nothing to upgrade or to write over.
+        let read = if agent == Agent::Qwen {
+            qwen_version_as_written(existing)
+        } else {
+            existing.into()
+        };
+        let existing: &str = &read;
         let default = default_timeout(agent);
         let short =
             timeout.is_none() && was.timeout.is_some_and(|t| default.is_some_and(|d| t < d));
@@ -3888,6 +3954,85 @@ mod tests {
         let (_, copilot) = config_for_opts(Agent::Copilot, false, None);
         let commented = copilot.replacen("{", "{ // ours\n", 1);
         assert_eq!(generated_json_hooks(Agent::Copilot, &commented), None);
+    }
+
+    /// `text`, a Qwen Code settings file, as Qwen Code leaves it when the file had no
+    /// `$version` (recorded live with Qwen Code 0.25.0 on 2026-10-08: the key is appended
+    /// after the last one and nothing else changes).
+    fn stamped_by_qwen(text: &str, version: &str) -> String {
+        let mut v = json(text);
+        v.as_object_mut().unwrap().remove("$version");
+        let bare = pretty(&v);
+        let stamped = bare.replacen(
+            "\n  }\n}\n",
+            &format!("\n  }},\n  \"$version\": {version}\n}}\n"),
+            1,
+        );
+        assert_ne!(stamped, bare);
+        stamped
+    }
+
+    /// Qwen Code writes `"$version": <its settings version>` into a settings file that has
+    /// none, or another one, each time it starts. That is its mark, not an edit: the file
+    /// `hook install` writes carries it already, and one that differs only there is still
+    /// the generated file.
+    #[test]
+    fn a_qwen_settings_version_is_not_an_edit_of_the_generated_file() {
+        let path = ".qwen/settings.json";
+        for observe in [false, true] {
+            let want = Some(GeneratedJson {
+                observe,
+                timeout: default_timeout(Agent::Qwen),
+            });
+            let (rel, now) = config_for_opts(Agent::Qwen, observe, None);
+            assert_eq!(rel, path);
+            // What Qwen Code 0.25.0 leaves alone: its version, as the first key.
+            assert!(
+                now.starts_with("{\n  \"$version\": 4,\n  \"hooks\": {"),
+                "{now}"
+            );
+            assert!(is_generated_hook_file(path, &now));
+            let shapes = [
+                stamped_by_qwen(&now, "4"),
+                stamped_by_qwen(&now, "5"),
+                now.replacen("\"$version\": 4,", "\"$version\": 5,", 1),
+            ];
+            for text in &shapes {
+                assert_ne!(*text, now);
+                assert!(is_generated_hook_file(path, text), "{text}");
+                assert!(is_generated_hook_change(path, Some(&now), text), "{text}");
+                assert_eq!(generated_json_hooks(Agent::Qwen, text), want, "{text}");
+                // Control: the same file with a hook command changed is an edit.
+                let edited =
+                    text.replace("hook run --agent qwen", "hook run --agent qwen --base x");
+                assert_ne!(edited, *text);
+                assert!(!is_generated_hook_file(path, &edited), "{edited}");
+                assert_eq!(generated_json_hooks(Agent::Qwen, &edited), None, "{edited}");
+            }
+            // Controls: not a version Qwen Code writes, the key twice, another key
+            // beside it, and the file without the key (an earlier release's).
+            for other in [
+                now.replacen("\"$version\": 4,", "\"$version\": \"4\",", 1),
+                now.replacen("\"$version\": 4,", "\"$version\": 0,", 1),
+                now.replacen("\"$version\": 4,", "\"$version\": 4.5,", 1),
+                stamped_by_qwen(&now, "4").replacen("{\n", "{\n  \"$version\": 4,\n", 1),
+                stamped_by_qwen(&now, "4").replacen(
+                    "\"$version\": 4\n",
+                    "\"$version\": 4,\n  \"model\": {}\n",
+                    1,
+                ),
+                now.replacen("  \"$version\": 4,\n", "", 1),
+            ] {
+                assert_ne!(other, now);
+                assert!(!is_generated_hook_file(path, &other), "{other}");
+            }
+        }
+        // Control: the key is Qwen Code's. In another agent's file it is content.
+        let (rel, claude) = config_for_opts(Agent::ClaudeCode, false, None);
+        let marked = claude.replacen("{\n", "{\n  \"$version\": 4,\n", 1);
+        assert_ne!(marked, claude);
+        assert!(!is_generated_hook_file(rel, &marked), "{marked}");
+        assert_eq!(generated_json_hooks(Agent::ClaudeCode, &marked), None);
     }
 
     #[test]
