@@ -14,7 +14,11 @@ use tree_sitter::Node;
 
 use super::ci_condition::{read_skip, Grammar};
 use super::functions::{self, FunctionSpec};
-use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
+use super::suppressions::{
+    AnnotationName, AnnotationRule, AnnotationSuppressions, CommentRule, Reports, RuleText,
+    Suppressions,
+};
+use super::{AssertVocabulary, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
 /// Scala language pack implementing [`LanguagePack`].
 pub struct ScalaPack;
@@ -66,7 +70,7 @@ impl LanguagePack for ScalaPack {
             test_calls: Vec::new(),
         };
 
-        extractor.collect_escape_hatches(root);
+        SCALA_SUPPRESSIONS.collect(root, extractor.src, &mut extractor.facts.escape_hatches);
         extractor.visit_node(root, &mut Vec::new(), false);
         extractor.resolve_same_file_helpers();
         SCALA_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
@@ -115,6 +119,31 @@ struct ScalaExtractor<'a> {
     test_calls: Vec<Vec<String>>,
 }
 
+/// `@nowarn`, `@SuppressWarnings` and `@unchecked`, and the comments that turn
+/// scalastyle or scalafix off; the rule of a comment is the first word after the marker.
+const SCALA_SUPPRESSIONS: Suppressions = Suppressions {
+    comments: &["comment", "block_comment"],
+    rules: &[CommentRule::opens(
+        &["scalastyle:off", "scalafix:off", "scalafix:ok"],
+        Reports::Rest(RuleText {
+            after: &["scalastyle:off", "scalafix:off", "scalafix:ok"],
+            then: &[],
+            first_word: true,
+            empty_is_all: false,
+        }),
+    )],
+    annotations: Some(&AnnotationSuppressions {
+        kinds: &["annotation"],
+        name: AnnotationName::Field,
+        names: &["nowarn", "SuppressWarnings", "unchecked"],
+        rule: AnnotationRule::Arguments {
+            trimmed: false,
+            empty_is_all: true,
+        },
+    }),
+    ..Suppressions::SLASH_COMMENTS
+};
+
 impl<'a> ScalaExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
         node.utf8_text(self.src).unwrap_or("")
@@ -122,64 +151,6 @@ impl<'a> ScalaExtractor<'a> {
 
     fn unquote(t: &str) -> String {
         t.trim().trim_matches('"').to_string()
-    }
-
-    fn collect_escape_hatches(&mut self, node: Node<'a>) {
-        match node.kind() {
-            "annotation" => {
-                let name = node
-                    .child_by_field_name("name")
-                    .map(|n| self.text(n))
-                    .unwrap_or("");
-                if matches!(name, "nowarn" | "SuppressWarnings" | "unchecked") {
-                    let text = self.text(node);
-                    let rule = node
-                        .child_by_field_name("arguments")
-                        .map(|a| {
-                            self.text(a)
-                                .trim_matches(|c| c == '(' || c == ')')
-                                .trim_matches('"')
-                                .to_string()
-                        })
-                        .filter(|r| !r.is_empty())
-                        .unwrap_or_else(|| "all".to_string());
-                    self.facts
-                        .escape_hatches
-                        .push(EscapeHatchSite::LinterDisable {
-                            line: node.start_position().row + 1,
-                            rule,
-                            snippet: text.to_string(),
-                        });
-                }
-                return;
-            }
-            "comment" | "block_comment" => {
-                let text = self.text(node);
-                let body = text
-                    .trim_start_matches("//")
-                    .trim_start_matches("/*")
-                    .trim_end_matches("*/")
-                    .trim();
-                for tool in ["scalastyle:off", "scalafix:off", "scalafix:ok"] {
-                    if let Some(rest) = body.strip_prefix(tool) {
-                        let rule = rest.split_whitespace().next().unwrap_or("all").to_string();
-                        self.facts
-                            .escape_hatches
-                            .push(EscapeHatchSite::LinterDisable {
-                                line: node.start_position().row + 1,
-                                rule,
-                                snippet: text.to_string(),
-                            });
-                    }
-                }
-                return;
-            }
-            _ => {}
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.collect_escape_hatches(child);
-        }
     }
 
     fn visit_node(&mut self, node: Node<'a>, scope: &mut Vec<String>, ignored: bool) {

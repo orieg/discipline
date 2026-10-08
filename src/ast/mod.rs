@@ -60,6 +60,7 @@ pub mod scala;
 pub(crate) mod scanner_limits;
 pub mod self_comparison;
 pub(crate) mod source_text;
+pub(crate) mod suppressions;
 #[cfg(feature = "lang-swift")]
 pub mod swift;
 pub mod test_cases;
@@ -1609,46 +1610,6 @@ impl PackSpec {
             },
         );
     }
-}
-
-/// How a pack's comments suppress a linter: by what the comment opens with.
-pub(crate) struct CommentSuppressions {
-    /// Whether `#` opens a comment as `//` does.
-    pub hash_comments: bool,
-    /// What a suppressing comment opens with, inside its `//` or `/* */`.
-    pub markers: &'static [&'static str],
-}
-
-/// The suppressions under `root`, in source order, pushed to `sites`: each `comment`
-/// node whose text inside its markers opens with one of `spec.markers` (the rule is that
-/// text, the snippet the whole comment), and what `other` pushes for a node that is not
-/// a comment. `other` says whether the node's children are walked; a comment's are not.
-pub(crate) fn collect_comment_suppressions(
-    root: tree_sitter::Node,
-    src: &[u8],
-    spec: &CommentSuppressions,
-    other: &mut dyn FnMut(tree_sitter::Node, &mut Vec<EscapeHatchSite>) -> bool,
-    sites: &mut Vec<EscapeHatchSite>,
-) {
-    bounds::walk(root, &mut |node| {
-        if node.kind() != "comment" {
-            return other(node, sites);
-        }
-        let text = node.utf8_text(src).unwrap_or("");
-        let mut body = text.trim_start_matches("//");
-        if spec.hash_comments {
-            body = body.trim_start_matches('#');
-        }
-        let body = body.trim_start_matches("/*").trim_end_matches("*/").trim();
-        if spec.markers.iter().any(|m| body.starts_with(m)) {
-            sites.push(EscapeHatchSite::LinterDisable {
-                line: node.start_position().row + 1,
-                rule: body.to_string(),
-                snippet: text.to_string(),
-            });
-        }
-        false
-    });
 }
 
 #[derive(Debug, Clone)]
