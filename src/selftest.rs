@@ -5050,6 +5050,43 @@ command = "cargo test"
                 && change(&untested, 3, 0)? == reduced)
         },
     ),
+    #[cfg(feature = "lang-rust")]
+    (
+        "assertion-reduction: a Rust helper of a test-only module that a test's call resolves to is reported when it loses a check; one no test calls, one of the same name elsewhere and one that moved are not",
+        || {
+            let check = |n: usize| {
+                let asserts: String = (0..n).map(|i| format!("    assert_eq!(r.f{i}, {i});\n")).collect();
+                format!("pub(crate) fn check(r: &R) {{\n    let _ = r;\n{asserts}}}\n")
+            };
+            let lib = |declared: &str, imports: &str, call: &str| {
+                format!("{declared}#[cfg(test)]\nmod tests {{\n    use super::*;\n    {imports}\n    #[test]\n    fn create() {{\n        let r = &make();\n        {call}\n        assert_eq!(r.f0 + r.f1, 1);\n    }}\n}}\n")
+            };
+            let declared = "#[cfg(test)]\nmod other;\n#[cfg(test)]\nmod test_support;\n";
+            let import = "use super::test_support::*;";
+            let calling = lib(declared, import, "check(r);");
+            let not_calling = lib(declared, import, "let _ = r;");
+            let untested = lib("mod other;\nmod test_support;\n", import, "check(r);");
+            let elsewhere = lib(declared, "use super::other::*;", "check(r);");
+            let (support, other) = ("src/test_support.rs", "src/other.rs");
+            let (three, two) = (check(3), check(2));
+            let weakened = vec!["assertion-reduction/test-helper-weakened".to_string()];
+            let edit = (support, &three[..], &two[..]);
+            let beside = |lib: &str| helper_change_beside(&[edit], &[("src/lib.rs", lib), (other, &three)], "");
+            // The tests are untouched and their call resolves to the helper.
+            Ok(beside(&calling)? == weakened
+                // No test calls it; it is built outside tests too; the call resolves to
+                // the function of that name in another module.
+                && beside(&not_calling)?.is_empty()
+                && beside(&untested)?.is_empty()
+                && beside(&elsewhere)?.is_empty()
+                // Strengthened; moved whole to the module the tests now import.
+                && helper_change_beside(&[(support, &two[..], &three[..])], &[("src/lib.rs", &calling)], "")?.is_empty()
+                && helper_change(&[("src/lib.rs", &calling, &elsewhere), (support, &three, ""), (other, "", &three)], "")?.is_empty()
+                && helper_change(&[("src/lib.rs", &calling, &elsewhere), (support, &three, ""), (other, "", &two)], "")? == weakened
+                // The directive names the helper.
+                && helper_change_beside(&[edit], &[("src/lib.rs", &calling), (other, &three)], "allow-assertion-drop: check the field is checked by the caller\n")?.is_empty())
+        },
+    ),
     #[cfg(feature = "lang-go")]
     (
         "assertion-reduction: gocheck suite methods are tests, and a local bound to a testify assertion object carries assertions",
@@ -9193,7 +9230,8 @@ fn helper_change_beside(
     use crate::gitctx::{ChangeKind, ChangedFile};
     use crate::guards::agent_diff::{
         credit_crate_helpers, evaluate_assertion_reduction, extract_facts, match_tests,
-        pair_helpers_in_tree, FileFacts, OutsideFile,
+        pair_helpers_in_tree, report_weakened_crate_helpers, weakened_crate_helpers, FileFacts,
+        OutsideFile,
     };
     let registry = crate::ast::default_registry();
     let vocab = AssertVocabulary::default();
@@ -9252,16 +9290,29 @@ fn helper_change_beside(
         [&base_tree, &head_tree],
         [&vocab, &vocab],
     )?;
+    let weakened = weakened_crate_helpers(
+        &facts,
+        &registry,
+        [&base_tree, &head_tree],
+        [&vocab, &vocab],
+    )?;
     let (pairs, _, added) = match_tests(&facts);
     let helpers = pair_helpers_in_tree(&facts, &pairs, &outside);
     let directives = crate::tokens::parse_directives(body, crate::tokens::OverrideSource::PrBody);
-    let out = evaluate_assertion_reduction(
+    let settings = crate::config::AssertionGate::default();
+    let mut out =
+        evaluate_assertion_reduction(&pairs, &added, &helpers, &settings, &directives, false)?;
+    report_weakened_crate_helpers(
+        &weakened,
         &pairs,
-        &added,
+        &facts,
         &helpers,
-        &crate::config::AssertionGate::default(),
-        &directives,
-        false,
+        &crate::guards::agent_diff::ReductionInputs {
+            settings: &settings,
+            directives: &directives,
+            is_staged: false,
+        },
+        &mut out,
     )?;
     Ok(out.violations.iter().map(|v| v.code.to_string()).collect())
 }

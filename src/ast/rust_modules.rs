@@ -182,6 +182,87 @@ impl<'a> CrateModules<'a> {
         Ok(sites)
     }
 
+    /// The functions declared in the modules of `path`, the file's own and its inline
+    /// ones, each with whether it is built for tests only. Methods and associated
+    /// functions are not listed. Empty when the file is not in the tree or has no tree
+    /// without errors.
+    pub fn module_fns(&mut self, path: &str) -> Result<Vec<CrateFn>> {
+        let Some(scopes) = self.scopes(path)? else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        for scope in scopes.iter() {
+            let module = Module {
+                file: path.to_string(),
+                inline: scope.inline.clone(),
+            };
+            let module_test_only = scope.cfg_test || self.test_only(&module, 0)?;
+            for f in &scope.fns {
+                out.push(CrateFn {
+                    file: path.to_string(),
+                    name: f.name.clone(),
+                    line: f.line,
+                    test_only: f.cfg_test || module_test_only,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Whether the code on `line` of `path` is built for tests only: the module around
+    /// it is, or a function declared on that line carries `#[cfg(test)]`. A method of a
+    /// test-only module is test-only by its module. `false` when the file has no tree
+    /// without errors.
+    pub fn test_only_line(&mut self, path: &str, line: usize) -> Result<bool> {
+        let (Some(text), Some(tree)) = (self.text(path)?, self.tree(path)?) else {
+            return Ok(false);
+        };
+        let Some(scopes) = self.scopes(path)? else {
+            return Ok(false);
+        };
+        let src = text.as_bytes();
+        let mut inline: Vec<String> = Vec::new();
+        let mut body = tree.root_node();
+        loop {
+            let mut cursor = body.walk();
+            let inner = body.children(&mut cursor).find_map(|item| {
+                let holds = item.start_position().row < line && line <= item.end_position().row + 1;
+                let name = item.child_by_field_name("name")?;
+                let inner = item.child_by_field_name("body")?;
+                (item.kind() == "mod_item" && holds)
+                    .then(|| (text_of(name, src).to_string(), inner))
+            });
+            match inner {
+                Some((name, inner)) => {
+                    inline.push(name);
+                    body = inner;
+                }
+                None => break,
+            }
+        }
+        let own = scopes.iter().find(|s| s.inline == inline);
+        if own.is_some_and(|s| s.fns.iter().any(|f| f.line == line && f.cfg_test)) {
+            return Ok(true);
+        }
+        let module = Module {
+            file: path.to_string(),
+            inline,
+        };
+        self.test_only(&module, 0)
+    }
+
+    /// The text of `path` as the tree holds it; `None` when it holds no such text file.
+    pub fn file_text(&mut self, path: &str) -> Result<Option<Rc<str>>> {
+        self.text(path)
+    }
+
+    /// The Rust files of the tree, sorted.
+    pub fn files(&self) -> Vec<String> {
+        let mut files: Vec<String> = self.paths.iter().cloned().collect();
+        files.sort();
+        files
+    }
+
     /// The function `segments` names from a test of `module` whose body holds `local`
     /// `use` items.
     fn resolve_call(
@@ -1426,5 +1507,60 @@ mod tests {
             test_only("#[cfg(feature = \"test\")]\nmod support;", public),
             Some(false)
         );
+    }
+
+    /// The functions of a file's modules are listed with the same reading: test-only by
+    /// the function's attribute, an inline module, or the declaration of the file's
+    /// module. A method is not listed, and a file no module declares is not test-only.
+    #[test]
+    fn the_functions_of_a_file_are_listed_with_whether_they_are_test_only() {
+        let support = "pub fn plain() {}\n\n#[cfg(test)]\npub fn gated() {}\n\n#[cfg(test)]\nmod inner {\n    pub fn inside() {}\n}\n\nstruct S;\n\nimpl S {\n    fn method(&self) {}\n}\n";
+        let listed = |declared: &str| {
+            let files = [("src/lib.rs", declared), ("src/support.rs", support)];
+            let paths: Vec<String> = files.iter().map(|(p, _)| p.to_string()).collect();
+            let mut modules = CrateModules::new(paths, |wanted: &str| {
+                Ok(files
+                    .iter()
+                    .find(|(p, _)| *p == wanted)
+                    .map(|(_, text)| text.to_string()))
+            });
+            let fns = modules.module_fns("src/support.rs").unwrap();
+            fns.into_iter()
+                .map(|f| (f.name, f.line, f.test_only))
+                .collect::<Vec<_>>()
+        };
+        let fns = |plain: bool| {
+            vec![
+                ("plain".to_string(), 1, plain),
+                ("gated".to_string(), 4, true),
+                ("inside".to_string(), 8, true),
+            ]
+        };
+        assert_eq!(listed("mod support;\n"), fns(false));
+        assert_eq!(listed("#[cfg(test)]\nmod support;\n"), fns(true));
+        assert_eq!(listed("pub fn unrelated() {}\n"), fns(false));
+    }
+
+    /// A line is test-only by the module around it, a method by its module, and a
+    /// function outside such a module by its own attribute.
+    #[test]
+    fn a_line_is_test_only_by_the_module_around_it() {
+        let lib = "pub fn plain() {}\n\n#[cfg(test)]\nfn gated() {}\n\nstruct S;\n\nimpl S {\n    fn outside(&self) {}\n}\n\n#[cfg(test)]\nmod tests {\n    struct T;\n\n    impl T {\n        fn method(&self) {}\n    }\n\n    mod deeper {\n        fn inside() {}\n    }\n}\n";
+        let files = [("src/lib.rs", lib)];
+        let mut modules = CrateModules::new(vec!["src/lib.rs".to_string()], |wanted: &str| {
+            Ok(files
+                .iter()
+                .find(|(p, _)| *p == wanted)
+                .map(|(_, text)| text.to_string()))
+        });
+        let mut at = |needle: &str| {
+            let line = 1 + lib.lines().position(|l| l.contains(needle)).unwrap();
+            modules.test_only_line("src/lib.rs", line).unwrap()
+        };
+        assert!(!at("fn plain"));
+        assert!(at("fn gated"));
+        assert!(!at("fn outside"));
+        assert!(at("fn method"));
+        assert!(at("fn inside"));
     }
 }

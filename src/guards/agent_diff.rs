@@ -119,6 +119,16 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
     } else {
         Vec::new()
     };
+    let weakened_crate = if gates.assertion_reduction.enabled {
+        weakened_crate_helpers(
+            &analyzed_files,
+            &registry,
+            [&GitTree { ctx, head: false }, &GitTree { ctx, head: true }],
+            [&base_vocab, &head_vocab],
+        )?
+    } else {
+        Vec::new()
+    };
     let (pairs, removed, added) = match_tests(&analyzed_files);
     let outside = read_outside_files(ctx, &registry, &analyzed_files, &pairs, &head_vocab)?;
     let helpers = pair_helpers_in_tree(&analyzed_files, &pairs, &outside);
@@ -144,6 +154,18 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
         evaluate_unsafe_safety_comment(&analyzed_files, &gates.unsafe_safety_comment)?,
     ];
 
+    report_weakened_crate_helpers(
+        &weakened_crate,
+        &pairs,
+        &analyzed_files,
+        &helpers,
+        &ReductionInputs {
+            settings: &gates.assertion_reduction,
+            directives: &ctx.directives,
+            is_staged,
+        },
+        &mut ast_gates[0],
+    )?;
     ast_gates[0].notes.extend(crate_helper_notes);
 
     let first_enabled = [

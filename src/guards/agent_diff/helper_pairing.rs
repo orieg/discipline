@@ -35,7 +35,7 @@ pub fn pair_helpers_in_tree<'a>(
     let mut helpers = match_helpers(files);
     leave_unreferenced_functions(&mut helpers, files, outside);
     helpers.extend(outside_helpers(pairs, outside));
-    leave_helpers_shown_by_tests(&mut helpers, pairs, files);
+    leave_helpers_shown_by_tests(&mut helpers, pairs, files, None);
     helpers
 }
 
@@ -50,7 +50,7 @@ pub struct OutsideFile {
 }
 
 /// Whether `text`, a file that could not be parsed, holds `name` as a whole word.
-fn text_names(text: &str, name: &str) -> bool {
+pub(super) fn text_names(text: &str, name: &str) -> bool {
     let word = |c: char| c.is_alphanumeric() || c == '_';
     text.match_indices(name).any(|(at, _)| {
         !text[..at].chars().next_back().is_some_and(word)
@@ -223,8 +223,101 @@ fn helper_counts(h: &crate::ast::TestHelperFacts) -> (usize, usize, usize, usize
     )
 }
 
-fn helper_has_checks(h: &crate::ast::TestHelperFacts) -> bool {
+pub(super) fn helper_has_checks(h: &crate::ast::TestHelperFacts) -> bool {
     h.effective_asserts() > 0 || h.strong_asserts > 0 || h.fatal_asserts > 0
+}
+
+/// Pairs the helpers of one file across the change, steps (1) and (2) of
+/// [`match_helpers`]: `(base, head)` positions of each pair, and the base helpers left
+/// unpaired. `head_taken` marks the head helpers paired.
+fn match_in_file(
+    base: &HelperSide,
+    head: &HelperSide,
+    head_taken: &mut [bool],
+) -> (Vec<(usize, usize)>, Vec<usize>) {
+    let mut matched: Vec<(usize, usize)> = Vec::new();
+    let mut base_left: Vec<usize> = (0..base.tracked.len()).collect();
+    // (1) Same name: unchanged checks first, then in the order they are declared.
+    for unchanged_only in [true, false] {
+        base_left.retain(|&bi| {
+            let b = &base.tracked[bi];
+            let found = (0..head.tracked.len()).find(|&hi| {
+                let h = &head.tracked[hi];
+                !head_taken[hi]
+                    && h.name == b.name
+                    && (!unchanged_only || helper_counts(h) == helper_counts(b))
+            });
+            match found {
+                Some(hi) => {
+                    head_taken[hi] = true;
+                    matched.push((bi, hi));
+                    false
+                }
+                None => true,
+            }
+        });
+    }
+    // (2) Renamed in place: the most similar name first.
+    let mut renames: Vec<(usize, usize, f64)> = Vec::new();
+    for &bi in &base_left {
+        let b = &base.tracked[bi];
+        for hi in (0..head.tracked.len()).filter(|&hi| !head_taken[hi]) {
+            let h = &head.tracked[hi];
+            let sim = name_similarity(
+                crate::ast::helper_leaf(&b.name),
+                crate::ast::helper_leaf(&h.name),
+            );
+            let same_body = helper_has_checks(b)
+                && helper_counts(b) == helper_counts(h)
+                && b.end_line.saturating_sub(b.line) == h.end_line.saturating_sub(h.line)
+                && base.calls_of(bi) == head.calls_of(hi);
+            if sim >= RENAME_NAME_SIMILARITY_THRESHOLD || same_body {
+                renames.push((bi, hi, if same_body { sim + 1.0 } else { sim }));
+            }
+        }
+    }
+    renames.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)).then(a.1.cmp(&b.1)));
+    for (bi, hi, _) in renames {
+        if base_left.contains(&bi) && !head_taken[hi] {
+            head_taken[hi] = true;
+            base_left.retain(|&left| left != bi);
+            matched.push((bi, hi));
+        }
+    }
+    (matched, base_left)
+}
+
+/// Whether what the pair `(bi, hi)` lost is what a helper it calls lost: its own body
+/// and its calls are as they were. That helper is paired and reported on its own.
+fn inherited_loss(base: &HelperSide, head: &HelperSide, bi: usize, hi: usize) -> bool {
+    helper_counts(&base.tracked[bi]) != helper_counts(&head.tracked[hi])
+        && base.own.get(bi).map(helper_counts) == head.own.get(hi).map(helper_counts)
+        && base.calls_of(bi) == head.calls_of(hi)
+}
+
+/// One file's helpers paired across a change, for a caller that reads the facts itself
+/// ([`super::crate_helpers`]): each pair as `(base, head)` positions in the helpers of
+/// each side, and the base helpers with no head.
+pub(super) struct FileHelperPairs {
+    pub matched: Vec<(usize, usize)>,
+    pub left: Vec<usize>,
+}
+
+/// Pairs the helpers of one file as [`match_helpers`] pairs them within a file.
+pub(super) fn pair_file_helpers(
+    base: Option<&ParsedFileFacts>,
+    head: Option<&ParsedFileFacts>,
+) -> FileHelperPairs {
+    let (base, head) = (HelperSide::of(base), HelperSide::of(head));
+    let mut head_taken = vec![false; head.tracked.len()];
+    let (mut matched, left) = match_in_file(&base, &head, &mut head_taken);
+    matched.sort_unstable();
+    FileHelperPairs { matched, left }
+}
+
+/// The helpers of a file, each with the checks of the helpers it calls counted in.
+pub(super) fn tracked_helpers_of(facts: &ParsedFileFacts) -> &[crate::ast::TestHelperFacts] {
+    HelperSide::of(Some(facts)).tracked
 }
 
 /// Pairs each helper of the changed test-support files ([`test_support_path`]) across the
@@ -264,55 +357,7 @@ pub fn match_helpers<'a>(files: &'a [FileFacts]) -> Vec<HelperPair<'a>> {
 
     for (fi, ff) in files.iter().enumerate() {
         let (base, head) = (&sides[fi].0, &sides[fi].1);
-        let mut matched: Vec<(usize, usize)> = Vec::new();
-        let mut base_left: Vec<usize> = (0..base.tracked.len()).collect();
-        // (1) Same name: unchanged checks first, then in the order they are declared.
-        for unchanged_only in [true, false] {
-            base_left.retain(|&bi| {
-                let b = &base.tracked[bi];
-                let found = (0..head.tracked.len()).find(|&hi| {
-                    let h = &head.tracked[hi];
-                    !head_taken[fi][hi]
-                        && h.name == b.name
-                        && (!unchanged_only || helper_counts(h) == helper_counts(b))
-                });
-                match found {
-                    Some(hi) => {
-                        head_taken[fi][hi] = true;
-                        matched.push((bi, hi));
-                        false
-                    }
-                    None => true,
-                }
-            });
-        }
-        // (2) Renamed in place: the most similar name first.
-        let mut renames: Vec<(usize, usize, f64)> = Vec::new();
-        for &bi in &base_left {
-            let b = &base.tracked[bi];
-            for hi in (0..head.tracked.len()).filter(|&hi| !head_taken[fi][hi]) {
-                let h = &head.tracked[hi];
-                let sim = name_similarity(
-                    crate::ast::helper_leaf(&b.name),
-                    crate::ast::helper_leaf(&h.name),
-                );
-                let same_body = helper_has_checks(b)
-                    && helper_counts(b) == helper_counts(h)
-                    && b.end_line.saturating_sub(b.line) == h.end_line.saturating_sub(h.line)
-                    && base.calls_of(bi) == head.calls_of(hi);
-                if sim >= RENAME_NAME_SIMILARITY_THRESHOLD || same_body {
-                    renames.push((bi, hi, if same_body { sim + 1.0 } else { sim }));
-                }
-            }
-        }
-        renames.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)).then(a.1.cmp(&b.1)));
-        for (bi, hi, _) in renames {
-            if base_left.contains(&bi) && !head_taken[fi][hi] {
-                head_taken[fi][hi] = true;
-                base_left.retain(|&left| left != bi);
-                matched.push((bi, hi));
-            }
-        }
+        let (mut matched, base_left) = match_in_file(base, head, &mut head_taken[fi]);
         if !tracked_file(ff) {
             continue;
         }
@@ -321,9 +366,7 @@ pub fn match_helpers<'a>(files: &'a [FileFacts]) -> Vec<HelperPair<'a>> {
             let (b, h) = (&base.tracked[bi], &head.tracked[hi]);
             // Its own body and its calls are as they were: what it lost, a helper it
             // calls lost, and that helper is paired and reported on its own.
-            let inherited = helper_counts(b) != helper_counts(h)
-                && base.own.get(bi).map(helper_counts) == head.own.get(hi).map(helper_counts)
-                && base.calls_of(bi) == head.calls_of(hi);
+            let inherited = inherited_loss(base, head, bi, hi);
             pairs.push(HelperPair {
                 path: &ff.file.path,
                 base: if inherited { h } else { b },
@@ -394,10 +437,15 @@ pub fn match_helpers<'a>(files: &'a [FileFacts]) -> Vec<HelperPair<'a>> {
 /// and does not count here: one that calls more same-file helpers that check in a loop
 /// than before ([`moved_into_looping_helpers`]), and one that a helper gives checks to
 /// ([`helper_call_gain`]). The helper is then reported itself.
-fn leave_helpers_shown_by_tests<'a>(
+///
+/// `credited` are the pairs whose helpers give checks to a test, when they are not
+/// `helpers` themselves: the helpers of a crate's test-only modules are judged apart
+/// from the pairs that credit a test (`report_weakened_crate_helpers`).
+pub(super) fn leave_helpers_shown_by_tests<'a>(
     helpers: &mut Vec<HelperPair<'a>>,
     pairs: &[TestPair<'a>],
     files: &'a [FileFacts],
+    credited: Option<&[HelperPair<'a>]>,
 ) {
     let lost = helper_lost;
     for ff in files {
@@ -412,7 +460,7 @@ fn leave_helpers_shown_by_tests<'a>(
                 || h.strong_asserts < b.strong_asserts
                 || h.fatal_asserts < b.fatal_asserts;
             // Nor does a test whose drop a helper of another file accounts for.
-            let moved = helper_call_gain(b, h, path, helpers, &[]);
+            let moved = helper_call_gain(b, h, path, credited.unwrap_or(helpers), &[]);
             // Nor one whose only shortfall is equality checks now written by hand.
             let by_hand = h.effective_asserts() >= b.effective_asserts()
                 && h.fatal_asserts >= b.fatal_asserts
