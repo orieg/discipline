@@ -77,8 +77,11 @@ pub(super) fn check_rollup_job(
     let settings = &ctx.config.gates.ci_integrity;
     let path = wf.path;
     let head_content = wf.head_content;
-    let (jobs, rollup_needs) = parse_workflow_jobs(head_content, settings.rollup_job.as_deref());
-    let head_all_needs = parse_all_job_needs(head_content);
+    // Each side is read from the document the file was parsed into; a side that did
+    // not parse has no jobs, as before it was parsed here a second time.
+    let head_all_needs = wf.head.map(job_needs).unwrap_or_default();
+    let (jobs, rollup_needs) =
+        jobs_and_rollup_needs(&head_all_needs, settings.rollup_job.as_deref());
     check_rollup_needs_kept(ctx, wf, &jobs, &head_all_needs, out);
 
     let mut rollup_seen = false;
@@ -129,8 +132,9 @@ fn check_rollup_needs_kept(
     let settings = &ctx.config.gates.ci_integrity;
     let path = wf.path;
     let head_content = wf.head_content;
-    if let Some(base_src) = wf.base_content {
-        let base_all_needs = parse_all_job_needs(base_src);
+    // A base side that did not parse has no jobs to have dropped a dependency of.
+    if let Some(base_doc) = wf.base {
+        let base_all_needs = job_needs(base_doc);
         // Jobs and their dropped dependencies in name order, so the findings come in
         // the same order on every run.
         let mut base_jobs: Vec<_> = base_all_needs.iter().collect();
@@ -224,31 +228,54 @@ fn check_documented_job_count(
     Ok(())
 }
 
-/// Parses all job IDs and their needed job IDs from GitHub Actions workflow YAML.
-pub fn parse_all_job_needs(content: &str) -> HashMap<String, HashSet<String>> {
+/// The job ids of a workflow document, each with the job ids it `needs`: a list of names,
+/// or one name written as a string. A job without `needs` has an empty set; a job id or
+/// a needed entry that is not a string is left out; a document without a `jobs` mapping
+/// has no jobs.
+pub fn job_needs(doc: &serde_yaml::Value) -> HashMap<String, HashSet<String>> {
     let mut map = HashMap::new();
-    if let Ok(val) = serde_yaml::from_str::<serde_yaml::Value>(content) {
-        if let Some(jobs_map) = val.get("jobs").and_then(|j| j.as_mapping()) {
-            for (k, v) in jobs_map {
-                if let Some(job_name) = k.as_str() {
-                    let mut needs = HashSet::new();
-                    if let Some(needs_val) = v.get("needs") {
-                        if let Some(seq) = needs_val.as_sequence() {
-                            for item in seq {
-                                if let Some(s) = item.as_str() {
-                                    needs.insert(s.to_string());
-                                }
+    if let Some(jobs_map) = doc.get("jobs").and_then(|j| j.as_mapping()) {
+        for (k, v) in jobs_map {
+            if let Some(job_name) = k.as_str() {
+                let mut needs = HashSet::new();
+                if let Some(needs_val) = v.get("needs") {
+                    if let Some(seq) = needs_val.as_sequence() {
+                        for item in seq {
+                            if let Some(s) = item.as_str() {
+                                needs.insert(s.to_string());
                             }
-                        } else if let Some(s) = needs_val.as_str() {
-                            needs.insert(s.to_string());
                         }
+                    } else if let Some(s) = needs_val.as_str() {
+                        needs.insert(s.to_string());
                     }
-                    map.insert(job_name.to_string(), needs);
                 }
+                map.insert(job_name.to_string(), needs);
             }
         }
     }
     map
+}
+
+/// The job ids of `all_needs` and what the job named `rollup_name` needs: empty without
+/// a name, and when no job has it.
+fn jobs_and_rollup_needs(
+    all_needs: &HashMap<String, HashSet<String>>,
+    rollup_name: Option<&str>,
+) -> (HashSet<String>, HashSet<String>) {
+    let jobs = all_needs.keys().cloned().collect();
+    let rollup_needs = rollup_name
+        .and_then(|name| all_needs.get(name))
+        .cloned()
+        .unwrap_or_default();
+    (jobs, rollup_needs)
+}
+
+/// Parses all job IDs and their needed job IDs from GitHub Actions workflow YAML. Text
+/// that does not parse has no jobs.
+pub fn parse_all_job_needs(content: &str) -> HashMap<String, HashSet<String>> {
+    super::load_yaml(content)
+        .map(|doc| job_needs(&doc))
+        .unwrap_or_default()
 }
 
 /// Parses job IDs and the rollup job's needed job IDs from GitHub Actions workflow YAML.
@@ -256,33 +283,7 @@ pub fn parse_workflow_jobs(
     content: &str,
     rollup_name: Option<&str>,
 ) -> (HashSet<String>, HashSet<String>) {
-    let mut jobs = HashSet::new();
-    let mut rollup_needs = HashSet::new();
-
-    if let Ok(val) = serde_yaml::from_str::<serde_yaml::Value>(content) {
-        if let Some(jobs_map) = val.get("jobs").and_then(|j| j.as_mapping()) {
-            for (k, v) in jobs_map {
-                if let Some(job_name) = k.as_str() {
-                    jobs.insert(job_name.to_string());
-                    if rollup_name == Some(job_name) {
-                        if let Some(needs_val) = v.get("needs") {
-                            if let Some(seq) = needs_val.as_sequence() {
-                                for item in seq {
-                                    if let Some(s) = item.as_str() {
-                                        rollup_needs.insert(s.to_string());
-                                    }
-                                }
-                            } else if let Some(s) = needs_val.as_str() {
-                                rollup_needs.insert(s.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    (jobs, rollup_needs)
+    jobs_and_rollup_needs(&parse_all_job_needs(content), rollup_name)
 }
 
 #[cfg(test)]
@@ -340,5 +341,59 @@ jobs:
         assert!(!needs.is_empty());
         assert!(!jobs.contains("deploy"));
         assert!(!needs.contains("deploy"));
+    }
+    /// The jobs and needs of `yml` as a sorted list, one `job: need,need` per job.
+    fn needs_of(yml: &str) -> Vec<String> {
+        let mut jobs: Vec<String> = parse_all_job_needs(yml)
+            .into_iter()
+            .map(|(job, needs)| {
+                let mut needs: Vec<String> = needs.into_iter().collect();
+                needs.sort_unstable();
+                format!("{job}: {}", needs.join(","))
+            })
+            .collect();
+        jobs.sort_unstable();
+        jobs
+    }
+
+    #[test]
+    fn needs_are_read_as_a_list_or_as_one_name_and_a_job_without_any_is_still_a_job() {
+        let yml = "jobs:\n  a: {}\n  b:\n    needs: a\n  c:\n    needs: [a, b]\n  d:\n    needs: [a, 7, [b], {x: y}, null]\n  e:\n    needs: {a: b}\n  7:\n    needs: a\n";
+        assert_eq!(needs_of(yml), ["a: ", "b: a", "c: a,b", "d: a", "e: "]);
+        // A job id or a needed name that is not a string is left out, never rendered.
+        let (jobs, rollup_needs) = parse_workflow_jobs(yml, Some("b"));
+        assert_eq!(jobs.len(), 5);
+        assert_eq!(rollup_needs, HashSet::from(["a".to_string()]));
+    }
+
+    #[test]
+    fn the_rollup_needs_are_those_of_the_named_job_alone() {
+        let yml = "jobs:\n  a: {}\n  b:\n    needs: a\n  c:\n    needs: [a, b]\n";
+        let named = |name| {
+            let mut needs: Vec<String> = parse_workflow_jobs(yml, name).1.into_iter().collect();
+            needs.sort_unstable();
+            needs
+        };
+        assert_eq!(named(Some("c")), ["a", "b"]);
+        assert_eq!(named(Some("b")), ["a"]);
+        assert!(named(Some("a")).is_empty());
+        assert!(named(Some("absent")).is_empty());
+        assert!(named(None).is_empty());
+        assert_eq!(parse_workflow_jobs(yml, None).0.len(), 3);
+    }
+
+    #[test]
+    fn text_without_a_jobs_mapping_or_that_does_not_parse_has_no_jobs() {
+        for yml in [
+            "",
+            "on: push\n",
+            "jobs: [a, b]\n",
+            "jobs: a\n",
+            "jobs:\n\tbuild: [",
+        ] {
+            assert!(parse_all_job_needs(yml).is_empty(), "{yml:?}");
+            let (jobs, needs) = parse_workflow_jobs(yml, Some("a"));
+            assert!(jobs.is_empty() && needs.is_empty(), "{yml:?}");
+        }
     }
 }
