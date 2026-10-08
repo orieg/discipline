@@ -13,6 +13,7 @@ use super::ancestry::Ancestry;
 use super::bounds::{text, walk};
 use super::exception_tables::{self as tables, Hierarchy};
 use super::TestFn;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tree_sitter::Node;
 
@@ -165,19 +166,71 @@ pub(super) fn call_text(call: Node, src: &str) -> String {
         }
         true
     });
-    tokens.join(" ")
+    let joined = tokens.join(" ");
+    super::ancestry::count(joined.len());
+    joined
 }
 
-/// Every call inside `node`, as [`call_text`] writes it.
-pub(super) fn calls_in(node: Node, src: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    walk(node, &mut |n| {
-        if CALL_KINDS.contains(&n.kind()) {
-            out.push(call_text(n, src));
+/// Every call inside `node`, as [`call_text`] writes it, in the order of the source, and
+/// for each node inside `node`, by its id, where the calls inside it stand in that list.
+/// The calls inside a node are one run of the list, so a reader that wants the calls of
+/// a node inside `node` takes that run and does not list them again.
+///
+/// The tokens under `node` are read once: the text of a call is the tokens between the
+/// first and the last of its own, so a call nested in another is not walked again for
+/// each call that holds it. The list is still the text of every call, and a call nested
+/// in `n` others is written `n + 1` times.
+pub(super) fn calls_in(node: Node, src: &str) -> (Vec<String>, HashMap<usize, (usize, usize)>) {
+    /// A node yet to be read, or one whose children have been.
+    enum Visit<'t> {
+        Enter(Node<'t>, bool),
+        /// The node, where its run of calls began, and for a call outside a comment its
+        /// place in the list and its first token.
+        Leave(Node<'t>, usize, Option<(usize, usize)>),
+    }
+    let mut out: Vec<String> = Vec::new();
+    let mut runs = HashMap::new();
+    // The tokens outside comments, as `call_text` reads them.
+    let mut tokens: Vec<&str> = Vec::new();
+    let mut stack = vec![Visit::Enter(node, false)];
+    while let Some(visit) = stack.pop() {
+        super::ancestry::count(1);
+        let (n, in_comment) = match visit {
+            Visit::Enter(n, in_comment) => (n, in_comment),
+            Visit::Leave(n, from, call) => {
+                if let Some((at, first)) = call {
+                    out[at] = tokens[first..].join(" ");
+                    super::ancestry::count(out[at].len());
+                }
+                runs.insert(n.id(), (from, out.len()));
+                continue;
+            }
+        };
+        let comment = n.kind().contains("comment");
+        let is_call = CALL_KINDS.contains(&n.kind());
+        let call = (is_call && !in_comment && !comment).then_some((out.len(), tokens.len()));
+        stack.push(Visit::Leave(n, out.len(), call));
+        if is_call {
+            // A call under a comment node is not among the tokens: it is read alone.
+            out.push(match call {
+                Some(_) => String::new(),
+                None => call_text(n, src),
+            });
         }
-        true
-    });
-    out
+        let in_comment = in_comment || comment;
+        if n.child_count() == 0 && !in_comment {
+            tokens.push(text(n, src));
+        }
+        let mut cursor = n.walk();
+        let children: Vec<Node> = n.children(&mut cursor).collect();
+        stack.extend(
+            children
+                .into_iter()
+                .rev()
+                .map(|c| Visit::Enter(c, in_comment)),
+        );
+    }
+    (out, runs)
 }
 
 /// The call that is all `node` does: `node` itself, or the one statement of a block, the
@@ -2947,6 +3000,7 @@ pub fn kotlin<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [Te
     if tests.is_empty() {
         return;
     }
+    let messages = KotlinMessages::new(root);
     walk(root, &mut |node| {
         let (name, class, lambda) = match node.kind() {
             // `name<T> { .. }` with no parentheses is read by the grammar as two
@@ -3012,7 +3066,7 @@ pub fn kotlin<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [Te
             return true;
         };
         let message = (kind != "doesNotThrow")
-            .then(|| kotlin_message(node, anc, src))
+            .then(|| kotlin_message(node, anc, src, &messages))
             .flatten();
         attribute(
             tests,
@@ -3033,13 +3087,144 @@ pub fn kotlin<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [Te
     attach_declared(root, src, tests, &KOTLIN_CLASSES);
 }
 
+/// One assertion a Kotlin source makes on a message: `<subject> <matcher> <value>`, or
+/// `<subject>.<matcher>(<value>)`.
+type KotlinMatch<'t> = (Node<'t>, Node<'t>, Node<'t>);
+
+/// The node or the name a message assertion is made on: the expectation itself, by its
+/// id, or the name it is bound to.
+#[derive(PartialEq, Eq, Hash)]
+enum KotlinValue<'s> {
+    Node(usize),
+    Name(&'s str),
+}
+
+/// The message assertions of one Kotlin tree, in the order of the source, for
+/// [`kotlin_message`].
+///
+/// The assertion on an expectation's message is looked for in the function that holds
+/// the expectation. Walking that function for each expectation costs the function for
+/// each: 800 `assertThrows` in one test cost 7.6e10 instructions. The assertions are
+/// listed once, with what each is made on, and an expectation asks for the first one
+/// made on it inside its function.
+struct KotlinMessages<'t, 's> {
+    root: Node<'t>,
+    listed: std::cell::OnceCell<KotlinListed<'t, 's>>,
+}
+
+struct KotlinListed<'t, 's> {
+    /// Every node read as `subject matcher value`, in the order of the source.
+    matches: Vec<KotlinMatch<'t>>,
+    /// For what an assertion is made on, the places in `matches` of the assertions
+    /// that are an answer for it, in order.
+    made_on: HashMap<KotlinValue<'s>, Vec<usize>>,
+    /// For the root and each function, by its id, its run of `matches`.
+    runs: HashMap<usize, (usize, usize)>,
+}
+
+/// `subject matcher value` of an infix expression or of a call of a matcher.
+fn kotlin_match(n: Node) -> Option<KotlinMatch> {
+    let (subject, matcher, value) = match n.kind() {
+        "infix_expression" if n.named_child_count() == 3 => {
+            (n.named_child(0), n.named_child(1), n.named_child(2))
+        }
+        // `<subject>.matcher(value)`
+        "call_expression" => {
+            let callee = n
+                .named_child(0)
+                .filter(|c| c.kind() == "navigation_expression" && c.named_child_count() == 2);
+            let value = child_of_kind(n, &["value_arguments"])
+                .and_then(|a| a.named_child(0))
+                .and_then(|a| a.named_child(0));
+            (
+                callee.and_then(|c| c.named_child(0)),
+                callee.and_then(|c| c.named_child(1)),
+                value,
+            )
+        }
+        _ => return None,
+    };
+    Some((subject?, matcher?, value?))
+}
+
+impl<'t, 's> KotlinMessages<'t, 's> {
+    fn new(root: Node<'t>) -> Self {
+        Self {
+            root,
+            listed: std::cell::OnceCell::new(),
+        }
+    }
+
+    fn listed(&self, src: &'s str) -> &KotlinListed<'t, 's> {
+        self.listed.get_or_init(|| {
+            let mut matches: Vec<KotlinMatch> = Vec::new();
+            let mut made_on: HashMap<KotlinValue, Vec<usize>> = HashMap::new();
+            let mut runs = HashMap::new();
+            let value_of = |n: Node<'t>| {
+                let name = (n.kind() == "identifier").then(|| KotlinValue::Name(text(n, src)));
+                std::iter::once(KotlinValue::Node(n.id())).chain(name)
+            };
+            // A node, and for one already entered the place its run began at.
+            let mut stack: Vec<(Node, Option<usize>)> = vec![(self.root, None)];
+            while let Some((n, begun)) = stack.pop() {
+                super::ancestry::count(1);
+                if let Some(from) = begun {
+                    runs.insert(n.id(), (from, matches.len()));
+                    continue;
+                }
+                if n.kind() == "function_declaration" || n.id() == self.root.id() {
+                    stack.push((n, Some(matches.len())));
+                }
+                if let Some((subject, matcher, value)) = kotlin_match(n) {
+                    let matcher_name = text(matcher, src);
+                    // `<value> shouldHaveMessage ..`
+                    if matcher_name == "shouldHaveMessage" {
+                        for on in value_of(subject) {
+                            made_on.entry(on).or_default().push(matches.len());
+                        }
+                    }
+                    // `<value>.message should.. ..`
+                    let of_message = subject.kind() == "navigation_expression"
+                        && subject.named_child_count() == 2
+                        && subject
+                            .named_child(1)
+                            .is_some_and(|m| text(m, src) == "message");
+                    if let Some(held) = subject
+                        .named_child(0)
+                        .filter(|_| of_message && matcher_name.starts_with("should"))
+                    {
+                        for on in value_of(held) {
+                            made_on.entry(on).or_default().push(matches.len());
+                        }
+                    }
+                    matches.push((subject, matcher, value));
+                }
+                let mut cursor = n.walk();
+                let children: Vec<Node> = n.children(&mut cursor).collect();
+                stack.extend(children.into_iter().rev().map(|c| (c, None)));
+            }
+            KotlinListed {
+                matches,
+                made_on,
+                runs,
+            }
+        })
+    }
+}
+
 /// The Kotest assertion made on the message of the exception the expectation `site`
 /// returns, and whether it is on the whole message: `e.message shouldBe ".."` and
 /// `e shouldHaveMessage ".."` (whole), `e.message shouldContain ".."` (a part), any other
 /// `should..` matcher on the message (kept as written), each also as a call
 /// (`e.message.shouldBe("..")`). `e` is the name `site` is bound to in its function
 /// (`val e = shouldThrow<T> { }`), or `site` itself (`shouldThrow<T> { }.message ..`).
-fn kotlin_message<'t>(site: Node<'t>, anc: &Ancestry<'t>, src: &str) -> Option<(String, bool)> {
+/// The first such assertion in the function that holds `site` (the file, outside any).
+fn kotlin_message<'t, 's>(
+    site: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &'s str,
+    messages: &KotlinMessages<'t, 's>,
+) -> Option<(String, bool)> {
     let bound = anc
         .parent(site)
         .filter(|p| p.kind() == "property_declaration")
@@ -3062,36 +3247,9 @@ fn kotlin_message<'t>(site: Node<'t>, anc: &Ancestry<'t>, src: &str) -> Option<(
             && n.named_child(0).is_some_and(is_value)
             && n.named_child(1).is_some_and(|m| text(m, src) == "message")
     };
-    let mut found = None;
-    walk(scope, &mut |n| {
-        if found.is_some() {
-            return false;
-        }
-        let (subject, matcher, value) = match n.kind() {
-            "infix_expression" if n.named_child_count() == 3 => {
-                (n.named_child(0), n.named_child(1), n.named_child(2))
-            }
-            // `<subject>.matcher(value)`
-            "call_expression" => {
-                let callee = n
-                    .named_child(0)
-                    .filter(|c| c.kind() == "navigation_expression" && c.named_child_count() == 2);
-                let value = child_of_kind(n, &["value_arguments"])
-                    .and_then(|a| a.named_child(0))
-                    .and_then(|a| a.named_child(0));
-                (
-                    callee.and_then(|c| c.named_child(0)),
-                    callee.and_then(|c| c.named_child(1)),
-                    value,
-                )
-            }
-            _ => return true,
-        };
-        let (Some(subject), Some(matcher), Some(value)) = (subject, matcher, value) else {
-            return true;
-        };
+    let answer = |(subject, matcher, value): KotlinMatch| {
         let matcher = text(matcher, src);
-        found = match matcher {
+        match matcher {
             "shouldHaveMessage" if is_value(subject) => Some((matcher_value(value, src), true)),
             "shouldBe" if is_message(subject) => Some((matcher_value(value, src), true)),
             "shouldContain" if is_message(subject) => Some((matcher_value(value, src), false)),
@@ -3099,10 +3257,35 @@ fn kotlin_message<'t>(site: Node<'t>, anc: &Ancestry<'t>, src: &str) -> Option<(
                 Some((format!("{OPAQUE}{matcher}({})", text(value, src)), false))
             }
             _ => None,
-        };
-        true
-    });
-    found
+        }
+    };
+    let listed = messages.listed(src);
+    let Some((from, to)) = listed.runs.get(&scope.id()).copied() else {
+        // A scope the list has no run for: read as before the list was kept.
+        let mut found = None;
+        walk(scope, &mut |n| {
+            if found.is_none() {
+                found = kotlin_match(n).and_then(answer);
+            }
+            found.is_none()
+        });
+        return found;
+    };
+    // The first assertion in the function made on the expectation or on its name. One
+    // listed under either is an answer; it is read again here as it always was.
+    let first = |on: KotlinValue| {
+        super::ancestry::count(1);
+        let places = listed.made_on.get(&on)?;
+        places
+            .get(places.partition_point(|at| *at < from))
+            .copied()
+            .filter(|at| *at < to)
+    };
+    let by_node = first(KotlinValue::Node(site.id()));
+    let by_name = bound.and_then(|name| first(KotlinValue::Name(name)));
+    let mut places: Vec<usize> = by_node.into_iter().chain(by_name).collect();
+    places.sort_unstable();
+    places.into_iter().find_map(|at| answer(listed.matches[at]))
 }
 
 /// `class A(..) : B(..), I`: the class each delegation specifier names.
@@ -7711,6 +7894,106 @@ mod tests {
             ),
             0
         );
+    }
+
+    /// The assertion on a message is the first one made on the expectation, or on the
+    /// name it is bound to, in the function that holds the expectation.
+    #[test]
+    fn kotlin_reads_the_first_message_assertion_in_the_function_of_the_expectation() {
+        let matchers = |body: &str| -> Vec<Option<String>> {
+            kotlin_test(body).into_iter().map(|e| e.matcher).collect()
+        };
+        let site = |name: &str, arg: i32| {
+            format!("val {name} = shouldThrow<IllegalArgumentException> {{ f({arg}) }}\n        ")
+        };
+        let some = |m: &str| Some(m.to_string());
+        // Two expectations and an assertion for each: each reads its own.
+        assert_eq!(
+            matchers(&format!(
+                "{}{}b.message shouldBe \"second\"\n        a.message shouldContain \"first\"",
+                site("a", 1),
+                site("b", 2)
+            )),
+            vec![some("first"), some("second")]
+        );
+        // Two assertions on one name: the first one is read, whichever form it has.
+        assert_eq!(
+            matchers(&format!(
+                "{}a shouldHaveMessage \"whole\"\n        a.message shouldContain \"part\"",
+                site("a", 1)
+            )),
+            vec![some("whole")]
+        );
+        assert_eq!(
+            matchers(&format!(
+                "{}a.message shouldEndWith \"part\"\n        a shouldHaveMessage \"whole\"",
+                site("a", 1)
+            )),
+            vec![some("\u{1}shouldEndWith(\"part\")")]
+        );
+        // An assertion written before the expectation is in its function all the same.
+        assert_eq!(
+            matchers(&format!(
+                "a.message shouldBe \"before\"\n        {}",
+                site("a", 1)
+            )),
+            vec![some("before")]
+        );
+        // An assertion in another function is not: the name there is another one.
+        let two_functions = KotlinPack
+            .extract(
+                "src/test/kotlin/SutTest.kt",
+                "class SutTest {\n    @Test\n    fun t() {\n        val a = shouldThrow<IllegalArgumentException> { f(1) }\n    }\n    @Test\n    fun u() {\n        val a = shouldThrow<IllegalArgumentException> { f(2) }\n        a.message shouldBe \"second\"\n    }\n}\n",
+                &crate::ast::AssertVocabulary::default(),
+            )
+            .unwrap();
+        assert_eq!(
+            two_functions
+                .tests
+                .iter()
+                .flat_map(|t| t.expected_exceptions.iter())
+                .map(|e| e.matcher.clone())
+                .collect::<Vec<_>>(),
+            vec![None, some("second")]
+        );
+        // A matcher that is not on a message, on the same name, is passed over.
+        assert_eq!(
+            matchers(&format!(
+                "{}a shouldBe other\n        a.message shouldBe \"read\"",
+                site("a", 1)
+            )),
+            vec![some("read")]
+        );
+    }
+
+    /// Expectations in one Kotlin function cost steps in proportion to their number.
+    /// Before #672 the function was walked for each expectation with no assertion on its
+    /// message, so four times the expectations cost sixteen times the steps.
+    #[test]
+    fn kotlin_expectations_cost_steps_in_proportion_to_their_number() {
+        let steps_of = |n: usize| -> u64 {
+            let body: String = (0..n)
+                .map(|i| format!("        assertThrows<E> {{ f({i}) }}\n"))
+                .collect();
+            let src = format!("class SutTest {{\n    @Test\n    fun t() {{\n{body}    }}\n}}\n");
+            let (facts, counted) = crate::ast::ancestry::steps(|| {
+                KotlinPack.extract(
+                    "src/test/kotlin/SutTest.kt",
+                    &src,
+                    &crate::ast::AssertVocabulary::default(),
+                )
+            });
+            let held: usize = facts
+                .unwrap()
+                .tests
+                .iter()
+                .map(|t| t.expected_exceptions.len())
+                .sum();
+            assert_eq!(held, n);
+            counted
+        };
+        let (few, many) = (steps_of(40), steps_of(160));
+        assert!(many < 5 * few, "{few} steps for 40, {many} for 160");
     }
 
     #[test]

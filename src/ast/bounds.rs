@@ -10,8 +10,17 @@
 //! Only literals in an assertion's own comparison or tolerance are read: a bound built
 //! from a variable or a constant is not, and neither is a literal nested inside a call
 //! (`Duration::from_millis(1500)`), except Go's `N*time.Unit`.
+//!
+//! A skeleton is the text of the whole assertion, so an assertion that holds many
+//! literals is recorded as many times its own text: what is recorded can be the square
+//! of the source. The work to record it is held to that ([`Records`]): a record is
+//! placed in its test by a table of lines, and compared with the records before it only
+//! where a hash of both is the same.
 
+use super::ancestry::count;
 use super::TestFn;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use tree_sitter::Node;
 
 /// One numeric bound of one assertion.
@@ -36,8 +45,10 @@ pub struct Loosened {
     pub to: String,
 }
 
+/// The text of `node`, or `""` where its bytes are not text of `src`. The text is cut
+/// from `src` and not checked again as UTF-8, which costs its length for each call.
 pub(super) fn text<'a>(node: Node, src: &'a str) -> &'a str {
-    node.utf8_text(src.as_bytes()).unwrap_or("")
+    src.get(node.start_byte()..node.end_byte()).unwrap_or("")
 }
 
 /// The value of a numeric literal as written (`1_500`, `1e-6`, `0.5f64`, `-2`), or `None`.
@@ -61,32 +72,173 @@ pub fn numeric(literal: &str) -> Option<f64> {
 pub(super) fn skeleton(whole: Node, lit: Node, src: &str) -> String {
     let (s, e) = (whole.start_byte(), whole.end_byte());
     let (ls, le) = (lit.start_byte(), lit.end_byte());
+    count(e.saturating_sub(s));
     let raw = format!("{}#{}", &src[s..ls], &src[le..e]);
-    raw.split_whitespace().collect::<Vec<_>>().join(" ")
+    let mut out = String::with_capacity(raw.len());
+    for word in raw.split_whitespace() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(word);
+    }
+    out
 }
 
-fn attribute(tests: &mut [TestFn], bound: Bound) {
-    let line = bound.line;
-    if let Some(t) = super::innermost_test(tests, line) {
-        if !t.bounds.contains(&bound) {
-            t.bounds.push(bound);
-        }
+/// What a reader records in a test: a [`Bound`], or an expected value.
+pub(super) trait Record: PartialEq + Sized {
+    /// The line the record is placed by.
+    fn line(&self) -> usize;
+    /// The text two equal records share: the skeleton and the literal.
+    fn written(&self) -> (&str, &str);
+    /// The records of this kind a test holds.
+    fn of(test: &mut TestFn) -> &mut Vec<Self>;
+}
+
+impl Record for Bound {
+    fn line(&self) -> usize {
+        self.line
+    }
+    fn written(&self) -> (&str, &str) {
+        (&self.skeleton, &self.literal)
+    }
+    fn of(test: &mut TestFn) -> &mut Vec<Self> {
+        &mut test.bounds
     }
 }
 
-fn record(tests: &mut [TestFn], whole: Node, lit: Node, src: &str, looser_when_larger: bool) {
+fn hash_of<R: Record>(record: &R) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (record.line(), record.written()).hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The tests of one source, and what a reader has recorded in them.
+///
+/// A record goes to the innermost test that holds its line, once: a record equal to one
+/// the test holds is not added. Both are answered without reading the tests or the
+/// records again for each one: the test from a table of lines, and the equal record from
+/// a hash of the line, the skeleton and the literal, with the records compared in full
+/// only where the hash is the same.
+pub(super) struct Records<'a, R: Record> {
+    tests: &'a mut [TestFn],
+    /// The innermost test of each line (`innermost_tests_by_line`).
+    innermost: Vec<Option<usize>>,
+    /// For a test and a hash, where the records with that hash stand in the test's list.
+    seen: HashMap<(usize, u64), Vec<usize>>,
+    kind: std::marker::PhantomData<R>,
+}
+
+impl<'a, R: Record> Records<'a, R> {
+    /// The records of `tests`, which are the tests of `src`.
+    pub(super) fn new(tests: &'a mut [TestFn], src: &str) -> Self {
+        let last_line = src.bytes().filter(|b| *b == b'\n').count() + 1;
+        count(src.len());
+        let innermost = super::innermost_tests_by_line(tests, last_line);
+        let mut seen: HashMap<(usize, u64), Vec<usize>> = HashMap::new();
+        for (i, test) in tests.iter_mut().enumerate() {
+            for (at, held) in R::of(test).iter().enumerate() {
+                seen.entry((i, hash_of(held))).or_default().push(at);
+            }
+        }
+        Self {
+            tests,
+            innermost,
+            seen,
+            kind: std::marker::PhantomData,
+        }
+    }
+
+    /// Adds `record` to the innermost test that holds its line, unless that test holds
+    /// an equal one.
+    pub(super) fn add(&mut self, record: R) {
+        let Some(&Some(i)) = self.innermost.get(record.line()) else {
+            return;
+        };
+        let (skeleton, literal) = record.written();
+        count(1 + skeleton.len() + literal.len());
+        let held = R::of(&mut self.tests[i]);
+        let same_hash = self.seen.entry((i, hash_of(&record))).or_default();
+        for at in same_hash.iter() {
+            count(skeleton.len());
+            if held[*at] == record {
+                return;
+            }
+        }
+        same_hash.push(held.len());
+        held.push(record);
+    }
+}
+
+/// Adds to `held` each of `more` that it does not hold, in order, as [`Records::add`]
+/// tells an equal record: by a hash first.
+pub(super) fn add_new<R: Record>(held: &mut Vec<R>, more: impl IntoIterator<Item = R>) {
+    let mut seen: HashMap<u64, Vec<usize>> = HashMap::new();
+    for (at, record) in held.iter().enumerate() {
+        seen.entry(hash_of(record)).or_default().push(at);
+    }
+    for record in more {
+        let same_hash = seen.entry(hash_of(&record)).or_default();
+        count(1 + record.written().0.len());
+        if same_hash.iter().any(|at| held[*at] == record) {
+            continue;
+        }
+        same_hash.push(held.len());
+        held.push(record);
+    }
+}
+
+fn record(
+    records: &mut Records<Bound>,
+    whole: Node,
+    lit: Node,
+    src: &str,
+    looser_when_larger: bool,
+) {
     if numeric(text(lit, src)).is_none() {
         return;
     }
-    attribute(
-        tests,
-        Bound {
-            line: lit.start_position().row + 1,
-            skeleton: skeleton(whole, lit, src),
-            literal: text(lit, src).to_string(),
-            looser_when_larger,
-        },
-    );
+    records.add(Bound {
+        line: lit.start_position().row + 1,
+        skeleton: skeleton(whole, lit, src),
+        literal: text(lit, src).to_string(),
+        looser_when_larger,
+    });
+}
+
+/// Where a Go source names a call that fails a test: `.Fatal`, `.Error`, `.FailNow`,
+/// `.Fail(`. Found once for the source, so a nested `if` is not read again for each
+/// `if` that holds it.
+pub(super) struct GoFailures {
+    /// For each name, its length and the byte offsets it starts at, in order.
+    named: Vec<(usize, Vec<usize>)>,
+}
+
+impl GoFailures {
+    pub(super) fn of(src: &str) -> Self {
+        count(src.len());
+        Self {
+            named: [".Fatal", ".Error", ".FailNow", ".Fail("]
+                .iter()
+                .map(|name| {
+                    (
+                        name.len(),
+                        src.match_indices(name).map(|(at, _)| at).collect(),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    /// Whether the text of `node` holds one of the names.
+    pub(super) fn inside(&self, node: Node) -> bool {
+        let (from, to) = (node.start_byte(), node.end_byte());
+        count(1);
+        self.named.iter().any(|(len, starts)| {
+            starts
+                .get(starts.partition_point(|at| *at < from))
+                .is_some_and(|at| at + len <= to)
+        })
+    }
 }
 
 /// For `left op right` where one side is a numeric literal, the literal and whether a
@@ -114,6 +266,7 @@ fn comparison<'a>(
 pub(super) fn walk<'t>(root: Node<'t>, f: &mut dyn FnMut(Node<'t>) -> bool) {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
+        count(1);
         if !f(node) {
             continue;
         }
@@ -150,6 +303,7 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
     }
+    let records = &mut Records::new(tests, src);
     walk(root, &mut |node| {
         let stmt_is_assert_call = node.kind() == "expression_statement"
             && node.named_child(0).is_some_and(|c| {
@@ -176,7 +330,7 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
                                 || (x.kind() == "unary_operator"
                                     && x.named_child(0).is_some_and(py_num))
                         }) {
-                            record(tests, node, lit, src, up);
+                            record(records, node, lit, src, up);
                         }
                     }
                 }
@@ -184,9 +338,9 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
                     let name = n.child_by_field_name("name").map_or("", |x| text(x, src));
                     if let Some(v) = n.child_by_field_name("value").filter(|v| py_num(*v)) {
                         if WIDER_WHEN_LARGER.contains(&name) {
-                            record(tests, node, v, src, true);
+                            record(records, node, v, src, true);
                         } else if WIDER_WHEN_SMALLER.contains(&name) {
-                            record(tests, node, v, src, false);
+                            record(records, node, v, src, false);
                         }
                     }
                 }
@@ -211,7 +365,7 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
                         _ => return true,
                     };
                     if let Some(v) = pos.get(idx).filter(|v| py_num(**v)) {
-                        record(tests, node, *v, src, up);
+                        record(records, node, *v, src, up);
                     }
                 }
                 _ => {}
@@ -233,6 +387,7 @@ pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
     }
+    let records = &mut Records::new(tests, src);
     walk(root, &mut |node| {
         if node.kind() != "expression_statement" {
             return true;
@@ -276,7 +431,7 @@ pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
                         _ => return true,
                     };
                     if let Some(v) = args.get(idx).filter(|v| js_num(**v)) {
-                        record(tests, node, *v, src, up);
+                        record(records, node, *v, src, up);
                     }
                 }
                 "binary_expression" => {
@@ -288,7 +443,7 @@ pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
                         n.child_by_field_name("right"),
                     ) {
                         if let Some((lit, up)) = comparison(l, op, r, &js_num) {
-                            record(tests, node, lit, src, up);
+                            record(records, node, lit, src, up);
                         }
                     }
                 }
@@ -311,6 +466,7 @@ pub fn rust(root: Node, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
     }
+    let records = &mut Records::new(tests, src);
     walk(root, &mut |node| {
         if node.kind() != "macro_invocation" {
             return true;
@@ -364,7 +520,7 @@ pub fn rust(root: Node, src: &str, tests: &mut [TestFn]) {
                 _ => None,
             };
             if let Some(up) = up {
-                record(tests, node, *t, src, up);
+                record(records, node, *t, src, up);
             }
         }
         false
@@ -382,6 +538,7 @@ pub fn go(root: Node, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
     }
+    let records = &mut Records::new(tests, src);
     // `1500*time.Millisecond` bounds by its literal.
     fn operand<'t>(n: Node<'t>, src: &str) -> Option<Node<'t>> {
         if go_num(n) {
@@ -401,15 +558,13 @@ pub fn go(root: Node, src: &str, tests: &mut [TestFn]) {
         }
         None
     }
+    let failures = GoFailures::of(src);
     walk(root, &mut |node| {
         match node.kind() {
             "if_statement" => {
-                let fails = node.child_by_field_name("consequence").is_some_and(|c| {
-                    let t = text(c, src);
-                    [".Fatal", ".Error", ".FailNow", ".Fail("]
-                        .iter()
-                        .any(|m| t.contains(m))
-                });
+                let fails = node
+                    .child_by_field_name("consequence")
+                    .is_some_and(|c| failures.inside(c));
                 let Some(cond) = node.child_by_field_name("condition").filter(|_| fails) else {
                     return true;
                 };
@@ -430,7 +585,7 @@ pub fn go(root: Node, src: &str, tests: &mut [TestFn]) {
                         if let Some((lit, up)) =
                             lit.filter(|_| matches!(op, "<" | "<=" | ">" | ">="))
                         {
-                            record(tests, cond, lit, src, up);
+                            record(records, cond, lit, src, up);
                         }
                     }
                 }
@@ -455,7 +610,7 @@ pub fn go(root: Node, src: &str, tests: &mut [TestFn]) {
                     })
                     .unwrap_or_default();
                 if let Some(v) = args.get(idx).and_then(|a| operand(*a, src)) {
-                    record(tests, node, v, src, up);
+                    record(records, node, v, src, up);
                 }
                 true
             }
@@ -467,23 +622,28 @@ pub fn go(root: Node, src: &str, tests: &mut [TestFn]) {
 /// Bounds whose value moved the loose way from `base` to `head`. A skeleton that is not
 /// exactly once on each side is ambiguous and skipped.
 pub fn loosened(base: &[Bound], head: &[Bound]) -> Vec<Loosened> {
-    let once = |set: &[Bound], b: &Bound| {
-        set.iter()
-            .filter(|x| x.skeleton == b.skeleton && x.looser_when_larger == b.looser_when_larger)
-            .count()
-            == 1
-    };
+    // For a skeleton and its direction: how many bounds have them, and the first.
+    type Tally<'b> = HashMap<(&'b str, bool), (usize, usize)>;
+    fn tally(set: &[Bound]) -> Tally<'_> {
+        let mut out = Tally::new();
+        for (at, b) in set.iter().enumerate() {
+            out.entry((b.skeleton.as_str(), b.looser_when_larger))
+                .or_insert((0, at))
+                .0 += 1;
+        }
+        out
+    }
+    let (in_base, in_head) = (tally(base), tally(head));
     let mut out = Vec::new();
-    for h in head.iter().filter(|h| once(head, h)) {
-        let Some(b) = base
-            .iter()
-            .find(|b| b.skeleton == h.skeleton && b.looser_when_larger == h.looser_when_larger)
-        else {
-            continue;
-        };
-        if !once(base, b) {
+    for h in head {
+        let key = (h.skeleton.as_str(), h.looser_when_larger);
+        if in_head.get(&key).map(|(n, _)| *n) != Some(1) {
             continue;
         }
+        let Some((1, at)) = in_base.get(&key).copied() else {
+            continue;
+        };
+        let b = &base[at];
         let (Some(bv), Some(hv)) = (numeric(&b.literal), numeric(&h.literal)) else {
             continue;
         };

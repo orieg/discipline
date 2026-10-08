@@ -1152,18 +1152,20 @@ impl<'a> Extractor<'a> {
         super::caught_assertions::rust(root, &part, &fake_fn, &mut read, self.vocab);
         let [read] = read;
         let file_byte = |byte: usize| body_node.start_byte() + byte.saturating_sub(PREFIX.len());
-        for mut bound in read.bounds {
-            bound.line += first_row;
-            if !test.bounds.contains(&bound) {
-                test.bounds.push(bound);
-            }
-        }
-        for mut expectation in read.expectations {
-            expectation.line += first_row;
-            if !test.expectations.contains(&expectation) {
-                test.expectations.push(expectation);
-            }
-        }
+        super::bounds::add_new(
+            &mut test.bounds,
+            read.bounds.into_iter().map(|mut bound| {
+                bound.line += first_row;
+                bound
+            }),
+        );
+        super::bounds::add_new(
+            &mut test.expectations,
+            read.expectations.into_iter().map(|mut expectation| {
+                expectation.line += first_row;
+                expectation
+            }),
+        );
         for mut caught in read.caught_assertions {
             caught.line += first_row;
             caught.handler_line += first_row;
