@@ -919,7 +919,10 @@ pub const OPENCODE_OBSERVE_NEVER_BLOCKS: &str =
 /// `discipline`, a release that does not know the arguments and any other error let the
 /// call through. The plugin writes nothing to the observation log, which the binary owns.
 ///
-/// The `export default` block is for OpenCode 2.x and was never seen firing. Its
+/// The `export default` block is for OpenCode 2.x (RUN with 2.0.22: `setup` is called,
+/// the named export is not). Its session lease reads the event stream, in a loop
+/// detached from `setup` whose errors go nowhere in either mode: the lease never blocks
+/// a session. Its
 /// registrations are optional calls, so an API without `tool.hook` registers nothing;
 /// enforcing, `setup` then says so on stderr (it does not throw: the API it would be
 /// refusing to load on is one this template was not verified against).
@@ -982,17 +985,21 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
 "
         ),
     );
-    let v2_session = guard(
-        6,
-        format!(
-            "      if (e?.type !== \"session.created\") return
-      const start = new Response(JSON.stringify({{
-        input: {{ sessionID: e.properties?.sessionID }},
-        cwd: e.properties?.info?.directory ?? directory
-      }}))
-      await $`{start} < ${{start}}`.nothrow().quiet()
+    // Not through `guard`: the loop that awaits this is detached from `setup`, so in
+    // either mode an error here has no caller to reach and must not end the loop.
+    let v2_session = format!(
+        "          try {{
+            if (e?.type !== \"session.created\" && e?.type !== \"session.execution.started\") continue
+            const sessionID = e.data?.sessionID
+            if (typeof sessionID !== \"string\" || leased.has(sessionID)) continue
+            leased.add(sessionID)
+            const start = new Response(JSON.stringify({{
+              input: {{ sessionID }},
+              cwd: e.location?.directory ?? directory
+            }}))
+            await $`{start} < ${{start}}`.nothrow().quiet()
+          }} catch {{}}
 "
-        ),
     );
     let v2_before = guard(
         6,
@@ -1057,8 +1064,18 @@ export default {{
   setup({{ tool, event, location }}) {{
     const directory = location?.directory ?? process.cwd()
 
-    event?.subscribe?.(async (e) => {{
-{v2_session}    }})
+    // OpenCode 2.x registers no event callback: `event.subscribe()` returns the events
+    // as an async iterable. A session new to this plugin takes the lease on the first of
+    // `session.created` (not delivered to a plugin loaded after the session was made,
+    // as under `opencode run --standalone`) and `session.execution.started`.
+    const events = event?.subscribe?.()
+    if (typeof events?.[Symbol.asyncIterator] === \"function\") {{
+      const leased = new Set()
+      ;(async () => {{
+        for await (const e of events) {{
+{v2_session}        }}
+      }})().catch(() => {{}})
+    }}
 
     tool?.hook?.(\"execute.before\", async (call) => {{
 {v2_before}    }})
@@ -3842,7 +3859,8 @@ mod tests {
         "export default {\n",
         "  id: \"discipline\",\n",
         "  setup({ tool, event, location }) {\n",
-        "    event?.subscribe?.(async (e) => {\n",
+        "    const events = event?.subscribe?.()\n",
+        "        for await (const e of events) {\n",
         "    tool?.hook?.(\"execute.before\", async (call) => {\n",
         "    tool?.hook?.(\"execute.after\", async (call) => {\n",
     ];
@@ -3924,8 +3942,16 @@ mod tests {
 ";
         assert_eq!(enforcing.matches(v1).count(), 1, "{enforcing}");
         assert_eq!(enforcing.matches(v2).count(), 1, "{enforcing}");
-        assert!(!enforcing.contains("try {"), "{enforcing}");
-        assert!(!enforcing.contains("catch"), "{enforcing}");
+        // The one `try` and the two `catch` are the 2.x session lease's, whose loop is
+        // detached from `setup`: nothing around a pre-tool or post-edit command.
+        let lease = &enforcing[enforcing.find("    const events = ").unwrap()
+            ..enforcing
+                .find("    tool?.hook?.(\"execute.before\"")
+                .unwrap()];
+        assert_eq!(lease.matches("try {").count(), 1, "{lease}");
+        assert_eq!(lease.matches("catch").count(), 2, "{lease}");
+        assert_eq!(enforcing.matches("try {").count(), 1, "{enforcing}");
+        assert_eq!(enforcing.matches("catch").count(), 2, "{enforcing}");
         assert!(!enforcing.contains(OPENCODE_OBSERVE_NEVER_BLOCKS));
         let notice = "    if (typeof tool?.hook !== \"function\") {
       console.error(\"discipline: this OpenCode offered the plugin no tool.hook; the pre-tool check was not registered and no tool call will be checked\")

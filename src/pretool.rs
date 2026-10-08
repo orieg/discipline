@@ -892,7 +892,8 @@ fn judge_push(args: &[tree_sitter::Node], cmd: &str, scene: &Scene) -> Option<Ve
 
 /// The session a session-start payload names, and the directory it starts in (the
 /// shapes recorded live: `tests/fixtures/pretool/*/session_start.json`). OpenCode's plugin
-/// sends `{"input": {"sessionID": ...}, "cwd": ...}` from its `session.created` event.
+/// sends `{"input": {"sessionID": ...}, "cwd": ...}` from its `session.created` event (on
+/// 2.x, from that or `session.execution.started`, whichever names the session first).
 pub fn parse_session_start(agent: Agent, raw: &str) -> Option<(String, Option<PathBuf>)> {
     let v: serde_json::Value = serde_json::from_str(raw).ok()?;
     let (session, cwd) = match agent {
