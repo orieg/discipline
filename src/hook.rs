@@ -216,6 +216,14 @@ pub struct Payload {
     pub stop: bool,
     /// agy's conversation, for its loop guard.
     pub conversation: Option<String>,
+    /// The turn's final assistant message, when the stop payload carries it
+    /// (`last_assistant_message`: Claude Code, Codex, Qwen Code).
+    pub last_assistant_message: Option<String>,
+    /// The session the payload names (`session_id`).
+    pub session: Option<String>,
+    /// The payload lists work still running for the session (`background_tasks`,
+    /// `session_crons`, `crons`): a turn that ends there has handed over, not stopped.
+    pub background_work: bool,
 }
 
 pub fn parse_payload(raw: &str) -> Payload {
@@ -250,6 +258,22 @@ pub fn parse_payload(raw: &str) -> Payload {
             .get("conversationId")
             .and_then(|c| c.as_str())
             .map(str::to_string),
+        last_assistant_message: v
+            .get("last_assistant_message")
+            .and_then(|m| m.as_str())
+            .map(str::to_string),
+        session: v
+            .get("session_id")
+            .and_then(|s| s.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        background_work: ["background_tasks", "session_crons", "crons"]
+            .iter()
+            .any(|k| {
+                v.get(k)
+                    .and_then(|l| l.as_array())
+                    .is_some_and(|l| !l.is_empty())
+            }),
     }
 }
 
@@ -432,6 +456,13 @@ pub fn run_with(
     };
     let run = run_check(&dir, &base)?;
     let reason = could_not_check_reason(&run);
+    // A change that passed, at the end of a turn: the turn itself is judged, when the
+    // base ref's configuration asks for it. A change with findings is already an answer.
+    if run.code == 0 && event == Event::Stop {
+        if let Some(out) = premature_stop(agent, &dir, &base, &payload, observe) {
+            return Ok(out);
+        }
+    }
     if observe {
         return Ok(observed(agent, event, &dir, &run, reason.as_deref()));
     }
@@ -459,6 +490,146 @@ pub fn run_with(
         &detail,
         reason.as_deref(),
     ))
+}
+
+/// The agents whose stop payload carries the turn's final message, so the end of a turn
+/// can be judged without reading a transcript.
+fn stop_payload_carries_the_message(agent: Agent) -> bool {
+    matches!(agent, Agent::ClaudeCode | Agent::Codex | Agent::Qwen)
+}
+
+/// `[hooks.premature-stop]` of the configuration on the base side of the change: the
+/// merge base of `HEAD` with the base the check measures against. `None` when that
+/// cannot be established (no base, no `discipline.toml` there, one that does not load):
+/// the check is opt-in, so what cannot be shown to be switched on is off.
+fn base_premature_stop(dir: &Path, side: &CheckSide) -> Option<crate::config::PrematureStopConfig> {
+    let repo = crate::gitctx::discover_repository(dir).ok()?;
+    let head = repo.head().ok()?.peel_to_commit().ok()?.id();
+    let named = match side {
+        CheckSide::Base(b) => b.clone(),
+        CheckSide::Default if crate::gitctx::environment_names_base() => {
+            crate::gitctx::detect_base_ref(None, None, None)
+        }
+        CheckSide::Default => change_base(&repo).unwrap_or_else(|| "origin/main".to_string()),
+    };
+    let other = match named.strip_prefix("origin/") {
+        Some(local) => local.to_string(),
+        None => format!("origin/{named}"),
+    };
+    let merge_base = [named, other].iter().find_map(|name| {
+        let commit = repo.revparse_single(name).ok()?.peel_to_commit().ok()?;
+        repo.merge_base(commit.id(), head).ok()
+    })?;
+    let tree = repo.find_commit(merge_base).ok()?.tree().ok()?;
+    let entry = tree.get_path(Path::new("discipline.toml")).ok()?;
+    let blob = repo.find_blob(entry.id()).ok()?;
+    let content = String::from_utf8(blob.content().to_vec()).ok()?;
+    let label = PathBuf::from("discipline.toml (base ref)");
+    crate::config::DisciplineConfig::resolve_source(
+        Some((&label, content)),
+        &crate::config::Overrides::default(),
+    )
+    .ok()
+    .map(|c| c.hooks.premature_stop)
+}
+
+/// Appends one line to `<git dir>/discipline/hook-observe.log` and returns its path.
+fn append_observation(dir: &Path, entry: &serde_json::Value) -> Option<PathBuf> {
+    use std::io::Write as _;
+    let path = crate::gitctx::discover_repository(dir)
+        .ok()?
+        .path()
+        .join("discipline")
+        .join("hook-observe.log");
+    std::fs::create_dir_all(path.parent()?).ok()?;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .ok()?;
+    writeln!(f, "{entry}").ok()?;
+    Some(path)
+}
+
+/// The end-of-turn check (`crate::turn`): `Some` when this stop is answered here, `None`
+/// when the turn is not judged or nothing was found, and the change check's answer stands.
+///
+/// The final message is judged only when the payload carries it, the base ref's
+/// `[hooks.premature-stop]` is enabled, and the payload lists no background work. In
+/// observe mode (`--observe`, or `mode = "observe"`) a match is logged and said on
+/// stderr, and the stop is let through. In refuse mode the stop is refused once: a stop
+/// this hook already continued (`stop_hook_active`) and a session at its cap are let
+/// through with the match said on stderr. Neither the log nor stderr holds the message.
+fn premature_stop(
+    agent: Agent,
+    dir: &Path,
+    side: &CheckSide,
+    payload: &Payload,
+    observe: bool,
+) -> Option<HookOutput> {
+    if !stop_payload_carries_the_message(agent) || payload.background_work {
+        return None;
+    }
+    let message = payload.last_assistant_message.as_deref()?;
+    let config = base_premature_stop(dir, side).filter(|c| c.enabled)?;
+    let verdict = crate::turn::judge(message, config.tool_call_as_text)?;
+    let code = verdict.kind.code();
+    let mut out = translate_event(agent, Event::Stop, 0, "", "");
+    if observe || config.mode == crate::config::StopMode::Observe {
+        let logged = append_observation(
+            dir,
+            &serde_json::json!({
+                "time": std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+                "agent": agent.id(),
+                "event": "stop",
+                "verdict": "premature-stop",
+                "reason": serde_json::Value::Null,
+                "codes": [code],
+            }),
+        );
+        out.stderr = format!(
+            "discipline (observe mode, not enforced): this stop would be refused: {code}.{}\n",
+            logged
+                .map(|p| format!(" Logged to {}.", p.display()))
+                .unwrap_or_default()
+        );
+        return Some(out);
+    }
+    let counter = payload.session.as_deref().and_then(|s| {
+        let repo = crate::gitctx::discover_repository(dir).ok()?;
+        crate::turn::counter_path(repo.path(), s)
+    });
+    let so_far = counter
+        .as_deref()
+        .map(crate::turn::refused_so_far)
+        .unwrap_or(0);
+    let let_through = if payload.stop_hook_active {
+        Some("the agent's loop guard")
+    } else if so_far >= config.max_per_session {
+        Some("this session's cap (hooks.premature-stop.max_per_session)")
+    } else if counter
+        .as_deref()
+        .is_some_and(|p| crate::turn::record_refusal(p, so_far).is_err())
+    {
+        // Without a counter there is no cap: let this stop through rather than loop.
+        Some("a cap that could not be recorded")
+    } else {
+        None
+    };
+    if let Some(why) = let_through {
+        out.stderr = format!(
+            "discipline: this stop was let through at {why}, but the turn ended on {code}.\n"
+        );
+        return Some(out);
+    }
+    Some(HookOutput {
+        stdout: String::new(),
+        stderr: verdict.refusal(),
+        code: 2,
+    })
 }
 
 /// `reason, gate <gate>` from a run that could not check, as the text an agent reads
@@ -522,20 +693,7 @@ fn observed(
         "reason": reason,
         "codes": codes,
     });
-    let logged = crate::gitctx::discover_repository(dir)
-        .ok()
-        .map(|r| r.path().join("discipline").join("hook-observe.log"))
-        .and_then(|path| {
-            use std::io::Write as _;
-            std::fs::create_dir_all(path.parent()?).ok()?;
-            let mut f = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)
-                .ok()?;
-            writeln!(f, "{entry}").ok()?;
-            Some(path)
-        });
+    let logged = append_observation(dir, &entry);
     out.stderr = format!(
         "discipline (observe mode, not enforced): this change would be blocked: {}.{}\n",
         match verdict {
@@ -3293,6 +3451,33 @@ mod tests {
             r#"{"cwd":"/w","sessionId":"s","stopReason":"end_turn","stop_hook_active":true,"timestamp":1,"transcriptPath":"/t"}"#,
         );
         assert!(copilot.stop && copilot.stop_hook_active, "{copilot:?}");
+    }
+
+    #[test]
+    fn payload_reads_the_final_message_the_session_and_background_work() {
+        for agent in ["claude-code", "qwen"] {
+            let raw = std::fs::read_to_string(format!(
+                "{}/tests/fixtures/stop/{agent}/stop.json",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap();
+            let p = parse_payload(&raw);
+            assert!(p.stop && !p.stop_hook_active && !p.background_work, "{p:?}");
+            assert_eq!(
+                p.last_assistant_message.as_deref(),
+                Some("Now let me run the tests.")
+            );
+            assert_eq!(
+                p.session.as_deref(),
+                Some("00000000-0000-0000-0000-000000000000")
+            );
+        }
+        for key in ["background_tasks", "session_crons", "crons"] {
+            let listed = parse_payload(&format!(r#"{{"hook_event_name":"Stop","{key}":[{{}}]}}"#));
+            assert!(listed.background_work, "{key}");
+            let empty = parse_payload(&format!(r#"{{"hook_event_name":"Stop","{key}":[]}}"#));
+            assert!(!empty.background_work, "{key}");
+        }
     }
 
     #[test]
