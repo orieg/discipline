@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{FakeForge, Repo};
+use common::{FakeForge, Repo, CONFIG_HEAD};
 use serde_json::Value;
 
 const WEAKENED: &str = "#[test]\nfn adds() {\n    let x = 1;\n    let _ = x + 1;\n}\n\n#[test]\nfn orders() {\n    let x = 1;\n    assert!(x < 2);\n}\n";
@@ -96,7 +96,7 @@ fn replay_reports_what_the_configuration_would_have_blocked() {
     let cfg = repo.file("candidate.toml");
     std::fs::write(
         &cfg,
-        "[meta]\nversion = 1\nname = \"t\"\n[gates.assertion-reduction]\nenabled = false\n",
+        format!("{CONFIG_HEAD}[gates.assertion-reduction]\nenabled = false\n"),
     )
     .unwrap();
     let lenient = replay(&repo, &["--config", cfg.to_str().unwrap()], &[]);
@@ -194,7 +194,7 @@ fn an_override_is_judged_against_the_pull_request_author_not_the_replaying_shell
     let cfg = repo.file("candidate.toml");
     std::fs::write(
         &cfg,
-        "[meta]\nversion = 1\nname = \"t\"\n[directives]\nfail_on_overrides = true\nallowed_override_actors = [\"dev\"]\n",
+        format!("{CONFIG_HEAD}[directives]\nfail_on_overrides = true\nallowed_override_actors = [\"dev\"]\n"),
     )
     .unwrap();
     let run = |author: &str, shell_actor: &str| {
@@ -387,13 +387,13 @@ fn a_blocked_change_the_forge_does_not_have_is_not_checked() {
 fn a_file_the_configuration_names_before_it_existed_skips_its_group_in_replay_only() {
     let repo = Repo::new();
     repo.git(&["checkout", "-q", "main"]);
-    let cfg = "[meta]\nversion = 1\nname = \"t\"\n[gates.version-lockstep]\nenabled = true\ngroups = [{ name = \"v\", sources = [\n  { path = \"pyproject.toml\", regex = 'version = \"([^\"]+)\"' },\n  { path = \"server.json\", regex = '\"version\": \"([^\"]+)\"' },\n]}]\n";
+    let cfg = format!("{CONFIG_HEAD}[gates.version-lockstep]\nenabled = true\ngroups = [{{ name = \"v\", sources = [\n  {{ path = \"pyproject.toml\", regex = 'version = \"([^\"]+)\"' }},\n  {{ path = \"server.json\", regex = '\"version\": \"([^\"]+)\"' }},\n]}}]\n");
     repo.write("pyproject.toml", "version = \"1.0\"\n");
     repo.commit("build: project (#2)");
     repo.write("server.json", "{\"version\": \"1.0\"}\n");
     repo.commit("build: server manifest (#3)");
     let candidate = repo.file("candidate.toml");
-    std::fs::write(&candidate, cfg).unwrap();
+    std::fs::write(&candidate, &cfg).unwrap();
     let s = replay(&repo, &["--config", candidate.to_str().unwrap()], &[]);
     assert_eq!(
         verdicts(&s),
@@ -403,7 +403,7 @@ fn a_file_the_configuration_names_before_it_existed_skips_its_group_in_replay_on
 
     // Outside replay the same missing file is a configuration error.
     repo.git(&["checkout", "-q", "-B", "old", "HEAD~1"]);
-    repo.write("discipline.toml", cfg);
+    repo.write("discipline.toml", &cfg);
     repo.commit("chore: configuration");
     let live = repo.check(&[]);
     assert_eq!(live.code, 2, "{}\n{}", live.stdout, live.stderr);
@@ -431,14 +431,14 @@ fn a_file_the_configuration_names_before_it_existed_skips_its_group_in_replay_on
 fn a_group_skipped_because_the_configuration_is_newer_is_in_the_summary() {
     let repo = Repo::new();
     repo.git(&["checkout", "-q", "main"]);
-    let cfg = "[meta]\nversion = 1\nname = \"t\"\n[gates.version-lockstep]\nenabled = true\ngroups = [{ name = \"v\", sources = [\n  { path = \"pyproject.toml\", regex = 'version = \"([^\"]+)\"' },\n  { path = \"server.json\", regex = '\"version\": \"([^\"]+)\"' },\n]}]\n";
+    let cfg = format!("{CONFIG_HEAD}[gates.version-lockstep]\nenabled = true\ngroups = [{{ name = \"v\", sources = [\n  {{ path = \"pyproject.toml\", regex = 'version = \"([^\"]+)\"' }},\n  {{ path = \"server.json\", regex = '\"version\": \"([^\"]+)\"' }},\n]}}]\n");
     // #2 predates `server.json`; #3 adds it.
     repo.write("pyproject.toml", "version = \"1.0\"\n");
     repo.commit("build: project (#2)");
     repo.write("server.json", "{\"version\": \"1.0\"}\n");
     repo.commit("build: server manifest (#3)");
     let candidate = repo.file("candidate.toml");
-    std::fs::write(&candidate, cfg).unwrap();
+    std::fs::write(&candidate, &cfg).unwrap();
     let config = candidate.to_str().unwrap();
 
     let s = replay(&repo, &["--config", config], &[]);

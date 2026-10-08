@@ -14,7 +14,7 @@
 //! `DISCIPLINE_NO_NETWORK=1`, so nothing else can be reached.
 
 mod common;
-use common::{FakeForge, Repo, Run};
+use common::{FakeForge, Repo, Run, CONFIG_HEAD};
 
 const PULLS_DOC: &str =
     "https://docs.github.com/rest/commits/commits#list-pull-requests-associated-with-a-commit";
@@ -163,7 +163,7 @@ fn on_github_a_404_stops_a_run_that_requires_the_record() {
     let (repo, _) = plain_change();
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[directives]\ndegrade_offline = false\n",
+        &format!("{CONFIG_HEAD}[directives]\ndegrade_offline = false\n"),
     );
     repo.commit("chore: require the record");
     let commits = [
