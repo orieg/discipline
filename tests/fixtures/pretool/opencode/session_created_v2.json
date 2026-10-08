@@ -1,0 +1,27 @@
+{
+  "created": 1791484338611,
+  "data": {
+    "location": {
+      "directory": "/work/repo"
+    },
+    "model": {
+      "id": "model",
+      "providerID": "provider"
+    },
+    "projectID": "00000000-0000-0000-0000-000000000000",
+    "sessionID": "00000000-0000-0000-0000-000000000000",
+    "slug": "probe",
+    "subpath": "",
+    "version": "2.0.22"
+  },
+  "durable": {
+    "aggregateID": "00000000-0000-0000-0000-000000000000",
+    "seq": 0,
+    "version": 1
+  },
+  "id": "00000000-0000-0000-0000-000000000000",
+  "location": {
+    "directory": "/work/repo"
+  },
+  "type": "session.created"
+}
