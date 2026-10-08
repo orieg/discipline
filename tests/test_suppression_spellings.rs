@@ -156,10 +156,7 @@ fn python_reads_no_suppression_from_a_string_or_another_comment() {
         "src/m.py",
         "\
 # pylint: enable=x
-# pylint: disable-next=x
 # pragma: no branch
-# type:ignore
-# NOQA
 # x noqa
 #/* noqa */
 #// noqa
@@ -190,8 +187,6 @@ fn ruby_reads_no_suppression_from_a_string_or_another_comment() {
         "src/m.rb",
         "\
 # rubocop:enable A
-#rubocop:disable A
-#  rubocop:disable A
 ## rubocop:disable A
 // rubocop:disable A
 s = \"# rubocop:disable A\"
@@ -233,8 +228,8 @@ class A {
     );
 }
 
-/// A comment is never a suppression in Java, and an annotation inside another's
-/// arguments is not read.
+/// A comment that only quotes an annotation is not a suppression in Java, and an
+/// annotation inside another's arguments is not read.
 #[test]
 fn java_reads_no_suppression_from_a_comment_a_string_or_another_annotation() {
     check(
@@ -246,7 +241,6 @@ fn java_reads_no_suppression_from_a_comment_a_string_or_another_annotation() {
 // NOLINT
 @Deprecated
 @Override
-@java.lang.SuppressWarnings(\"x\")
 @Outer(@SuppressWarnings(\"inner\"))
 class A {
   String s = \"@SuppressWarnings\";
@@ -403,6 +397,337 @@ fn swift_reads_no_suppression_from_a_string_or_another_comment() {
 class A {
   let s = \"// swiftlint:disable x\"
 }
+",
+        &[],
+    );
+}
+
+// The spellings below are ones a tool honours that no pack read before (#685).
+
+/// The annotation is read by the last segment of its name, so the qualified form is a
+/// site. The package is not resolved: `SuppressWarnings` of another package is read too.
+#[test]
+fn java_reads_a_qualified_suppress_warnings_annotation() {
+    check(
+        "src/M.java",
+        "\
+package p;
+@java.lang.SuppressWarnings(\"unchecked\")
+class A {
+  @java.lang.SuppressWarnings({\"a\", \"b\"})
+  int field;
+  @java.lang.SuppressWarnings
+  void f(@my.pkg.SuppressWarnings( \"p\" ) int p) {
+    @java.lang.SuppressWarnings(\"x\")
+    int x = 1;
+  }
+}
+",
+        &[
+            r#"2 lint "unchecked" "@java.lang.SuppressWarnings(\"unchecked\")""#,
+            r#"4 lint "{\"a\", \"b\"}" "@java.lang.SuppressWarnings({\"a\", \"b\"})""#,
+            r#"6 lint "all" "@java.lang.SuppressWarnings""#,
+            r#"7 lint "p" "@my.pkg.SuppressWarnings( \"p\" )""#,
+            r#"8 lint "x" "@java.lang.SuppressWarnings(\"x\")""#,
+        ],
+    );
+}
+
+#[test]
+fn java_reads_no_suppression_from_an_annotation_whose_last_segment_is_another_name() {
+    check(
+        "src/M.java",
+        "\
+@my.NotSuppressWarnings(\"x\")
+@Suppressed
+@java.lang.Deprecated
+@SuppressWarnings.Inner(\"x\")
+@suppresswarnings(\"x\")
+class A {
+  String s = \"@java.lang.SuppressWarnings\";
+}
+",
+        &[],
+    );
+}
+
+#[test]
+fn java_reads_nosonar_and_noinspection_comments() {
+    check(
+        "src/M.java",
+        "// NOSONAR\npackage p;\nclass A { // NOSONAR\n  int field = 1; // why NOSONAR here\n  //noinspection unchecked\n  void f() {\n    // noinspection A, B\n    int x = 1; /* NOSONAR */\n    //noinspection\tTabbed\n    /*\n     * NOSONAR\n     */\n  }\n}\n",
+        &[
+            r#"1 lint "NOSONAR" "// NOSONAR""#,
+            r#"3 lint "NOSONAR" "// NOSONAR""#,
+            r#"4 lint "NOSONAR" "// why NOSONAR here""#,
+            r#"5 lint "unchecked" "//noinspection unchecked""#,
+            r#"7 lint "A, B" "// noinspection A, B""#,
+            r#"8 lint "NOSONAR" "/* NOSONAR */""#,
+            r#"9 lint "Tabbed" "//noinspection\tTabbed""#,
+            r#"10 lint "NOSONAR" "/*\n     * NOSONAR\n     */""#,
+        ],
+    );
+}
+
+#[test]
+fn java_reads_no_suppression_from_a_near_miss_comment_or_a_string() {
+    check(
+        "src/M.java",
+        "\
+// nosonar
+// NO SONAR
+//noinspection
+// noinspectionX
+// x noinspection Y
+/* noinspection X */
+class A {
+  String s = \"// NOSONAR\";
+  String t = \"//noinspection X\";
+}
+",
+        &[],
+    );
+}
+
+/// A file annotation is a node kind of its own, and a qualified name's first identifier
+/// is its package: both are read by the last segment of the annotation's type.
+#[test]
+fn kotlin_reads_qualified_and_file_level_suppress_annotations() {
+    check(
+        "src/m.kt",
+        "\
+@file:Suppress(\"FILE\")
+@file:kotlin.Suppress(\"Q\")
+package p
+@kotlin.Suppress(\"UNCHECKED_CAST\")
+class A {
+  @kotlin.Suppress
+  val field = 1
+  @my.pkg.Suppress(\"other\")
+  fun f() {
+    @kotlin.Suppress(\"A\", \"B\")
+    val x = 1
+  }
+  @get:kotlin.Suppress(\"G\")
+  val p = 1
+  @android.annotation.SuppressLint(\"NewApi\")
+  fun g() {}
+}
+",
+        &[
+            r#"1 lint "FILE" "@file:Suppress(\"FILE\")""#,
+            r#"2 lint "Q" "@file:kotlin.Suppress(\"Q\")""#,
+            r#"4 lint "UNCHECKED_CAST" "@kotlin.Suppress(\"UNCHECKED_CAST\")""#,
+            r#"6 lint "all" "@kotlin.Suppress""#,
+            r#"8 lint "other" "@my.pkg.Suppress(\"other\")""#,
+            r#"10 lint "A\", \"B" "@kotlin.Suppress(\"A\", \"B\")""#,
+            r#"13 lint "G" "@get:kotlin.Suppress(\"G\")""#,
+            r#"15 lint "NewApi" "@android.annotation.SuppressLint(\"NewApi\")""#,
+        ],
+    );
+}
+
+#[test]
+fn kotlin_reads_no_suppression_from_an_annotation_whose_last_segment_is_another_name() {
+    check(
+        "src/m.kt",
+        "\
+@file:JvmName(\"n\")
+@file:my.NotSuppress(\"x\")
+package p
+@my.NotSuppress(\"x\")
+@Suppressed
+@kotlin.Deprecated(\"x\")
+@Suppress.Inner(\"x\")
+class A {
+  val s = \"@file:Suppress\"
+  @Outer(kotlin.Suppress(\"inner\"))
+  fun f() {}
+}
+",
+        &[],
+    );
+}
+
+#[test]
+fn kotlin_reads_nosonar_comments() {
+    check(
+        "src/m.kt",
+        "\
+// NOSONAR
+package p
+class A { // NOSONAR
+  val field = 1 //NOSONAR reason
+  fun f() {
+    val x = 1 /* NOSONAR */
+    val y = 2 // nosonar
+  }
+}
+",
+        &[
+            r#"1 lint "NOSONAR" "// NOSONAR""#,
+            r#"3 lint "NOSONAR" "// NOSONAR""#,
+            r#"4 lint "NOSONAR" "//NOSONAR reason""#,
+            r#"6 lint "NOSONAR" "/* NOSONAR */""#,
+            r#"7 lint "NOSONAR" "// nosonar""#,
+        ],
+    );
+}
+
+#[test]
+fn kotlin_reads_no_suppression_from_a_near_miss_comment_or_a_string() {
+    check(
+        "src/m.kt",
+        "\
+// see NOSONAR
+// NO SONAR
+// NOSONA
+//noinspection X
+// ktlint-disable
+class A {
+  val s = \"// NOSONAR\"
+}
+",
+        &[],
+    );
+}
+
+#[test]
+fn scala_reads_qualified_annotations() {
+    check(
+        "src/m.scala",
+        "\
+@scala.annotation.nowarn
+class A {
+  @scala.annotation.nowarn(\"cat=deprecation\")
+  val field = 1
+  @annotation.nowarn(\"msg=x\")
+  def f(p: Int): Unit = {
+    @scala.annotation.nowarn val z = p
+  }
+  @my.pkg.nowarn def g(): Unit = ()
+  @java.lang.SuppressWarnings(Array(\"x\")) def h(): Unit = ()
+}
+",
+        &[
+            r#"1 lint "all" "@scala.annotation.nowarn""#,
+            r#"3 lint "cat=deprecation" "@scala.annotation.nowarn(\"cat=deprecation\")""#,
+            r#"5 lint "msg=x" "@annotation.nowarn(\"msg=x\")""#,
+            r#"7 lint "all" "@scala.annotation.nowarn""#,
+            r#"9 lint "all" "@my.pkg.nowarn""#,
+            r#"10 lint "Array(\"x" "@java.lang.SuppressWarnings(Array(\"x\"))""#,
+        ],
+    );
+}
+
+#[test]
+fn scala_reads_no_suppression_from_an_annotation_whose_last_segment_is_another_name() {
+    check(
+        "src/m.scala",
+        "\
+@my.notnowarn
+@nowarned
+@scala.deprecated
+@nowarn.Inner
+class A {
+  val s = \"@scala.annotation.nowarn\"
+}
+",
+        &[],
+    );
+}
+
+/// RuboCop reads each space of `# rubocop : <mode>` as any run of blanks.
+#[test]
+fn ruby_reads_rubocop_comments_spaced_as_rubocop_accepts() {
+    check(
+        "src/m.rb",
+        "#rubocop:disable Metrics/AbcSize\nclass A\n  #  rubocop:disable Style/X\n  def f\n    x = 1 #rubocop:todo A, B  \n    # rubocop : disable C\n    #\trubocop: disable D\n  end\nend\n",
+        &[
+            r##"1 lint "Metrics/AbcSize" "#rubocop:disable Metrics/AbcSize""##,
+            r##"3 lint "Style/X" "#  rubocop:disable Style/X""##,
+            r##"5 lint "A, B" "#rubocop:todo A, B""##,
+            r##"6 lint "C" "# rubocop : disable C""##,
+            r##"7 lint "D" "#\trubocop: disable D""##,
+        ],
+    );
+}
+
+#[test]
+fn ruby_reads_no_suppression_from_a_near_miss_comment_or_a_string() {
+    check(
+        "src/m.rb",
+        "\
+#rubocop:enable A
+# rubo cop:disable A
+# rubocopdisable A
+# rubocop;disable A
+## rubocop:disable A
+# note # rubocop:disable A
+s = \"#rubocop:disable A\"
+=begin
+#rubocop:disable A
+=end
+",
+        &[],
+    );
+}
+
+/// `# type:ignore` as the tokenizer reads it, `noqa` in any letter-case and after other
+/// comment text, and `disable-next`. A comment that carries two tools' suppressions is
+/// one site for each.
+#[test]
+fn python_reads_the_spellings_its_tools_accept() {
+    check(
+        "src/m.py",
+        "\
+# NOQA
+# pylint: disable-next=unused-import
+import os  # NoQA: F401
+class A:
+    # type:ignore
+    def test_f(self):  # note # noqa
+        x = os.sep  # type:ignore[attr-defined]
+        y = x  # type: ignore # noqa: E501
+        z = y  #type:  ignore
+        assert z  # pylint: disable=a # NOQA
+        w = 1  # note #noqa:E1 # more
+        v = 2  # noqa # noqa: E2
+",
+        &[
+            r##"1 lint "all" "# NOQA""##,
+            r##"2 lint "unused-import" "# pylint: disable-next=unused-import""##,
+            r##"3 lint "F401" "# NoQA: F401""##,
+            r##"5 type "mypy" "# type:ignore""##,
+            r##"6 lint "all" "# noqa""##,
+            r##"7 type "mypy" "# type:ignore[attr-defined]""##,
+            r##"8 type "mypy" "# type: ignore # noqa: E501""##,
+            r##"8 lint "E501" "# noqa: E501""##,
+            r##"9 type "mypy" "#type:  ignore""##,
+            r##"10 lint "a # NOQA" "# pylint: disable=a # NOQA""##,
+            r##"10 lint "all" "# NOQA""##,
+            r##"11 lint "E1 # more" "#noqa:E1 # more""##,
+            r##"12 lint "all" "# noqa # noqa: E2""##,
+        ],
+    );
+}
+
+#[test]
+fn python_reads_no_suppression_from_a_near_miss_comment_or_a_string() {
+    check(
+        "src/m.py",
+        "\
+# note noqa
+# note # no qa
+# typ:ignore
+# type;ignore
+# note # type: ignore
+# pylint: disable-nxt=x
+# pylint: enable-next=x
+# RUFF: NOQA
+s = \"# note # noqa\"
+t = '''# type:ignore'''
+u = \"# NOQA\"
 ",
         &[],
     );

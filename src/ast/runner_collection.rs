@@ -29,21 +29,27 @@ use super::runner_config::{
 use std::collections::{BTreeMap, HashMap, HashSet};
 use tree_sitter::Node;
 
-/// Matches pattern against text using globset with literal_separator disabled.
-pub fn glob_match(pattern: &str, candidate: &str) -> bool {
+/// Whether the glob `pattern` matches `candidate` (globset, `*` crossing `/`). `None` for
+/// a pattern that does not compile as a glob: it is never matched as plain text, since
+/// text found inside a name says nothing about what the runner that reads the pattern
+/// does with it.
+pub fn glob_match(pattern: &str, candidate: &str) -> Option<bool> {
     let pat = pattern.trim();
     if pat.is_empty() {
-        return false;
+        return Some(false);
     }
-    if let Ok(glob) = globset::GlobBuilder::new(pat)
+    globset::GlobBuilder::new(pat)
         .literal_separator(false)
         .build()
-    {
-        glob.compile_matcher().is_match(candidate)
-    } else {
-        candidate.contains(pat)
-    }
+        .ok()
+        .map(|glob| glob.compile_matcher().is_match(candidate))
 }
+
+/// Why a Python file's collection is not known when a `python_files` entry of the pytest
+/// configuration does not compile as a glob and no other entry matches the file. The
+/// entry is not quoted.
+pub const PYTHON_FILES_UNREAD: &str =
+    "a `python_files` entry of the pytest configuration is not a glob that can be read";
 
 /// Pytest test collection configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,17 +125,25 @@ impl Default for PytestCollectionRules {
 }
 
 impl PytestCollectionRules {
+    /// Whether `python_files` and `testpaths` are known to collect `path`.
     pub fn is_collected(&self, path: &str) -> bool {
+        self.collection(path) == Some(true)
+    }
+
+    /// Whether `python_files` and `testpaths` collect `path`. `None` when that is not
+    /// known: the file is under `testpaths`, no `python_files` entry that compiles
+    /// matches it, and an entry does not compile ([`glob_match`]).
+    pub fn collection(&self, path: &str) -> Option<bool> {
         let norm = path.replace('\\', "/");
         if !norm.ends_with(".py") {
-            return false;
+            return Some(false);
         }
 
         // If testpaths is configured, path must fall under one of them
         if !self.testpaths.is_empty() {
             let in_testpath = self.testpaths.iter().any(|tp| testpath_holds(tp, &norm));
             if !in_testpath {
-                return false;
+                return Some(false);
             }
         }
 
@@ -140,7 +154,17 @@ impl PytestCollectionRules {
             self.python_files.iter().map(String::as_str).collect()
         };
 
-        patterns.iter().any(|pat| glob_match(pat, filename))
+        let verdicts: Vec<Option<bool>> = patterns
+            .iter()
+            .map(|pat| glob_match(pat, filename))
+            .collect();
+        if verdicts.contains(&Some(true)) {
+            Some(true)
+        } else if verdicts.contains(&None) {
+            None
+        } else {
+            Some(false)
+        }
     }
 
     pub fn parse_pyproject_toml(content: &str) -> Self {
@@ -4083,8 +4107,10 @@ pub fn check_runner_collected(
 
     if lower.ends_with(".py") {
         let pytest = &vocab.runner_rules.pytest;
-        match (pytest.is_collected(&norm), pytest.configured) {
-            (true, true) => match pytest.directories(&norm) {
+        match (pytest.collection(&norm), pytest.configured) {
+            // An entry that is not a glob decides nothing, in either direction.
+            (None, _) => RunnerCollectionStatus::Unknown(PYTHON_FILES_UNREAD.to_string()),
+            (Some(true), true) => match pytest.directories(&norm) {
                 PytestDirectories::Clear => RunnerCollectionStatus::Collected,
                 PytestDirectories::Excluded => RunnerCollectionStatus::NotCollected,
                 PytestDirectories::Unknown(reason) => {
@@ -4093,10 +4119,10 @@ pub fn check_runner_collected(
             },
             // The directory rules are pytest's: without its configuration they are not
             // known to apply.
-            (true, false) => RunnerCollectionStatus::Collected,
-            (false, true) => RunnerCollectionStatus::NotCollected,
+            (Some(true), false) => RunnerCollectionStatus::Collected,
+            (Some(false), true) => RunnerCollectionStatus::NotCollected,
             // The runner may be unittest or Django, which collect by other rules.
-            (false, false) => {
+            (Some(false), false) => {
                 RunnerCollectionStatus::Unknown("no pytest configuration found".to_string())
             }
         }
