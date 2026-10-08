@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::config::{GateInfo, Suite, GATES};
+use crate::escape::{docs_markdown_cell, html_content};
 use crate::schema::generate_schema;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,13 +167,13 @@ pub fn render_action_inputs_html(spec: &ActionSpec) -> String {
         let def = if inp.default.is_empty() {
             "<em>(none)</em>".to_string()
         } else {
-            format!("<code>{}</code>", html_escape(&inp.default))
+            format!("<code>{}</code>", html_content(&inp.default))
         };
         out.push_str(&format!(
             "    <tr>\n      <td class=\"gate-id\">{}</td>\n      <td>{}</td>\n      <td>{}</td>\n    </tr>\n",
-            html_escape(&inp.name),
+            html_content(&inp.name),
             def,
-            html_escape(&inp.description)
+            html_content(&inp.description)
         ));
     }
     out.push_str("  </tbody>\n</table>");
@@ -185,8 +186,8 @@ pub fn render_action_outputs_html(spec: &ActionSpec) -> String {
     for outp in &spec.outputs {
         out.push_str(&format!(
             "    <tr>\n      <td class=\"gate-id\">{}</td>\n      <td>{}</td>\n    </tr>\n",
-            html_escape(&outp.name),
-            html_escape(&outp.description)
+            html_content(&outp.name),
+            html_content(&outp.description)
         ));
     }
     out.push_str("  </tbody>\n</table>");
@@ -289,7 +290,7 @@ pub fn render_gates_html(gates: &[GateInfo]) -> String {
             suite_name,
             badge,
             lang_badge,
-            html_escape(g.summary)
+            html_content(g.summary)
         ));
     }
     out.trim_end().to_string()
@@ -441,7 +442,7 @@ fn describe(root: &serde_json::Value, key: &str, prop: &serde_json::Value) -> St
             _ => String::new(),
         },
     };
-    table_cell(&text)
+    docs_markdown_cell(&text)
 }
 
 /// Keys whose default is another key's value, which the default configuration does not
@@ -485,14 +486,7 @@ fn format_default(
 
 fn code_cell(s: &str) -> String {
     let fence = if s.contains('`') { "``" } else { "`" };
-    table_cell(&format!("{fence}{s}{fence}"))
-}
-
-fn table_cell(s: &str) -> String {
-    s.replace('|', "\\|")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('\n', " ")
+    docs_markdown_cell(&format!("{fence}{s}{fence}"))
 }
 
 /// Render configuration schema Markdown table.
@@ -564,7 +558,7 @@ pub fn render_cli_options_markdown() -> String {
                     let help = a.get_help().map(|h| h.to_string()).unwrap_or_default();
                     out.push_str(&format!(
                         "| {name} | {env} | {default} | {} |\n",
-                        table_cell(&help)
+                        docs_markdown_cell(&help)
                     ));
                 }
             }
@@ -575,13 +569,6 @@ pub fn render_cli_options_markdown() -> String {
     let mut out = String::new();
     walk(&cmd, "discipline", &mut out);
     out
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
 }
 
 /// Every registered finding (`crate::findings`), one row per code, grouped by gate.

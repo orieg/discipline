@@ -33,7 +33,7 @@
 //!
 //! The machine formats (JSON, SARIF, GitLab code quality) carry the text as it is,
 //! encoded by their serialiser; JUnit XML drops what XML 1.0 forbids (`junit.rs`), and
-//! the audit page escapes for HTML (`audit_html::esc`).
+//! the audit page escapes for HTML (`escape::html`).
 //!
 //! A message with none of the characters named here is written byte for byte.
 
