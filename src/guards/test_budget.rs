@@ -279,7 +279,10 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
             let base_targets = extract_fuzz_manifest_targets(&base_content);
             let head_targets = extract_fuzz_manifest_targets(&head_content);
 
-            for target in &base_targets {
+            // In name order, so the findings come in the same order on every run.
+            let mut base_in_order: Vec<&String> = base_targets.iter().collect();
+            base_in_order.sort_unstable();
+            for target in base_in_order {
                 if !head_targets.contains(target) {
                     // Fuzz target removed from harness list
                     let subject = format!("fuzz target {target}");
@@ -481,6 +484,9 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
     }
 
     // Check seed corpus deletions
+    // In path order, so the findings come in the same order on every run.
+    let mut base_corpus_counts: Vec<(String, usize)> = base_corpus_counts.into_iter().collect();
+    base_corpus_counts.sort_unstable();
     for (dir, deleted_count) in base_corpus_counts {
         if deleted_count > 0 {
             let dir_subject = format!("corpus {dir}");

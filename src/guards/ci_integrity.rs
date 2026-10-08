@@ -351,13 +351,16 @@ fn report_deleted_workflow(
     if let Some(base_src) = ctx.git.base_content(path)? {
         if let Some(base_val) = parse_yaml_side(out, path, "base", Some(&base_src)) {
             let (base_jobs, _) = parse_workflow_jobs(&base_src, settings.rollup_job.as_deref());
-            let verification: Vec<(&String, &serde_yaml::Value)> = base_jobs
+            let mut verification: Vec<(&String, &serde_yaml::Value)> = base_jobs
                 .iter()
                 .filter_map(|j| {
                     let job_val = base_val.get("jobs").and_then(|m| m.get(j))?;
                     is_verification_job(j, job_val).then_some((j, job_val))
                 })
                 .collect();
+            // In name order: the note below lists the jobs, and a hash set's order
+            // differs from one process to the next.
+            verification.sort_unstable_by_key(|(name, _)| name.as_str());
             if !verification.is_empty() {
                 added_steps.load(ctx, &mut out.notes)?;
             }
@@ -485,7 +488,10 @@ fn check_rollup_job(ctx: &Context, wf: &WorkflowFile, out: &mut GateOutcome) -> 
                 .filter(|j| *j != rollup && !settings.excluded_jobs.contains(j))
                 .cloned()
                 .collect();
-            let missing: Vec<String> = expected.difference(&rollup_needs).cloned().collect();
+            // Sorted: a hash set's order differs from one process to the next, and the
+            // names go into the message.
+            let mut missing: Vec<String> = expected.difference(&rollup_needs).cloned().collect();
+            missing.sort_unstable();
 
             if !missing.is_empty() {
                 record_or_excuse(
@@ -523,14 +529,19 @@ fn check_rollup_needs_kept(
     let head_content = wf.head_content;
     if let Some(base_src) = wf.base_content {
         let base_all_needs = parse_all_job_needs(base_src);
-        for (job_name, base_needs) in &base_all_needs {
+        // Jobs and their dropped dependencies in name order, so the findings come in
+        // the same order on every run.
+        let mut base_jobs: Vec<_> = base_all_needs.iter().collect();
+        base_jobs.sort_unstable_by_key(|(name, _)| name.as_str());
+        for (job_name, base_needs) in base_jobs {
             let is_gate_or_rollup = settings.rollup_job.as_deref() == Some(job_name.as_str())
                 || job_name.contains("gate")
                 || job_name.contains("rollup");
             if is_gate_or_rollup && jobs.contains(job_name) {
                 let head_needs = head_all_needs.get(job_name).cloned().unwrap_or_default();
-                let dropped_needs: Vec<String> =
+                let mut dropped_needs: Vec<String> =
                     base_needs.difference(&head_needs).cloned().collect();
+                dropped_needs.sort_unstable();
                 for dropped in dropped_needs {
                     if jobs.contains(&dropped) {
                         record_or_excuse(

@@ -2737,7 +2737,12 @@ impl RustCollectionRules {
         // entry names, and those `autotests = false` leaves undiscovered.
         let mut targets_off: std::collections::HashMap<String, Vec<String>> = Default::default();
         let mut undiscovered: std::collections::HashMap<String, Vec<String>> = Default::default();
-        for file in &rust_files {
+        // In path order: the roots of a package are followed in the order they are
+        // listed here, and the first to reach a file is recorded as its parent
+        // (`parent_of`), which a finding names.
+        let mut in_order: Vec<&str> = rust_files.iter().copied().collect();
+        in_order.sort_unstable();
+        for file in &in_order {
             let Some((dir, pkg)) = self.owning_package(file) else {
                 continue;
             };
@@ -3995,7 +4000,9 @@ impl ConfiguredHarness {
                     .map(|rel| join_dir(dir, rel))
                     .find(|path| known.contains(path.as_str()))
                 {
-                    harness.rust_targets.insert(root, !target.harness);
+                    // A file two packages name as a target keeps `harness = false`
+                    // from either, whatever order the packages are read in.
+                    *harness.rust_targets.entry(root).or_insert(false) |= !target.harness;
                 }
             }
         }
