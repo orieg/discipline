@@ -729,7 +729,7 @@
       "category": "gates",
       "claim": "assertion count / strength must not drop in an existing test",
       "source": "docs/GATES.md:assertion-reduction",
-      "code": "src/guards/agent_diff.rs:evaluate_assertion_reduction",
+      "code": "src/guards/agent_diff/assertion_reduction.rs:evaluate_assertion_reduction",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::assertion_reduction_fires_on_weakening_and_on_removal"
       ],
@@ -752,7 +752,7 @@
       "category": "gates",
       "claim": "new tests must carry a non-tautological assertion",
       "source": "docs/GATES.md:vacuous-tests",
-      "code": "src/guards/agent_diff.rs:evaluate_vacuous_tests",
+      "code": "src/guards/agent_diff/vacuous_tests.rs:evaluate_vacuous_tests",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::vacuous_tests_fire_on_empty_and_tautological_tests_only"
       ],
@@ -763,7 +763,7 @@
       "category": "gates",
       "claim": "tests must not be newly #[ignore]d or skipped without directive",
       "source": "docs/GATES.md:ignored-tests",
-      "code": "src/guards/agent_diff.rs:evaluate_ignored_tests",
+      "code": "src/guards/agent_diff/ignored_tests.rs:evaluate_ignored_tests",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::ignored_tests_fire_and_accept_a_scoped_override"
       ],
@@ -774,7 +774,7 @@
       "category": "gates",
       "claim": "unsafe blocks / impls carry a // SAFETY: comment",
       "source": "docs/GATES.md:unsafe-safety-comment",
-      "code": "src/guards/agent_diff.rs:evaluate_unsafe_safety_comment",
+      "code": "src/guards/agent_diff/unsafe_safety_comment.rs:evaluate_unsafe_safety_comment",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::unsafe_gate_fires_on_undocumented_block_not_on_documented_one"
       ],
@@ -785,7 +785,7 @@
       "category": "gates",
       "claim": "deleted files and removed tests need a scoped removes: rationale",
       "source": "docs/GATES.md:deletion-rationale",
-      "code": "src/guards/agent_diff.rs:evaluate_deletion_rationale",
+      "code": "src/guards/agent_diff/deletion_rationale.rs:evaluate_deletion_rationale",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::deletion_needs_a_scoped_line_anchored_rationale"
       ],
