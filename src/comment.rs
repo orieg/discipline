@@ -10,6 +10,7 @@
 //! Text from the change (file names, messages) is escaped: no `@` mention, no HTML,
 //! no table break, and no way to forge the marker.
 
+use crate::escape::comment_markdown_cell;
 use crate::forge::{Forge, ForgeApi, ForgeKind, ForgeWrite, WriteError, WriteMethod};
 use crate::guards::CheckSummary;
 
@@ -21,16 +22,6 @@ const MAX_ROWS: usize = 50;
 
 /// Pages of comments read when looking for the marker.
 const MAX_PAGES: usize = 20;
-
-/// Text from the change, safe inside a markdown table cell: what
-/// [`crate::report::text::markdown_cell`] neutralises (HTML, a mention, a link, emphasis,
-/// a pipe, a line break, control characters; a word a renderer would link by itself
-/// becomes a code span), and a backtick becomes an apostrophe, so the cell has no code
-/// span for the text to open or close.
-pub fn cell(text: &str) -> String {
-    let escaped = crate::report::text::markdown_cell(&text.replace('`', "'"));
-    crate::report::scrub_override_directives(&escaped)
-}
 
 /// Text from the change as one code span of a table cell or a list item: a ref name, a
 /// directive's subject. The span is fenced so the text cannot close it
@@ -59,7 +50,10 @@ pub fn render(summary: &CheckSummary, success: bool) -> String {
         summary.total_overrides()
     ));
     for f in &summary.policy_failures {
-        out.push_str(&format!("- **Refused:** {}\n", cell(&f.text)));
+        out.push_str(&format!(
+            "- **Refused:** {}\n",
+            comment_markdown_cell(&f.text)
+        ));
     }
     if !summary.policy_failures.is_empty() {
         out.push('\n');
@@ -76,10 +70,10 @@ pub fn render(summary: &CheckSummary, success: bool) -> String {
                 "| {} | `{}` | {} | {}: {} | {} |\n",
                 v.severity,
                 v.gate,
-                cell(&loc),
-                cell(&v.title),
-                cell(&v.message),
-                cell(&crate::report::repair_action_for_violation(v)),
+                comment_markdown_cell(&loc),
+                comment_markdown_cell(&v.title),
+                comment_markdown_cell(&v.message),
+                comment_markdown_cell(&crate::report::repair_action_for_violation(v)),
             ));
         }
         if violations.len() > MAX_ROWS {
@@ -98,7 +92,7 @@ pub fn render(summary: &CheckSummary, success: bool) -> String {
                 "- `{}` on {}: {}\n",
                 o.gate,
                 span(&o.subject),
-                cell(&o.reason)
+                comment_markdown_cell(&o.reason)
             ));
         }
         out.push('\n');

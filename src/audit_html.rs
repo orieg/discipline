@@ -8,26 +8,11 @@
 //! Author-written text (subjects, file names, directive names) is escaped.
 
 use crate::audit::{Record, Signal, Summary, GUARD_GATES};
+use crate::escape::html as esc;
 use std::collections::{BTreeMap, BTreeSet};
 
 const STYLE: &str = include_str!("audit_html/style.css");
 const SCRIPT: &str = include_str!("audit_html/app.js");
-
-/// Escape text for HTML content and attribute values.
-pub fn esc(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            _ => out.push(c),
-        }
-    }
-    out
-}
 
 /// `YYYY-MM-DD` (UTC) for seconds since the Unix epoch.
 pub fn date(secs: i64) -> String {

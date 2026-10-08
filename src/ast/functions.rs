@@ -515,11 +515,9 @@ pub fn skip_none<'t>(_: Node<'t>, _: &Ancestry<'t>, _: &str) -> bool {
 
 /// Whether `path` matches one of the repository's declared test-scope globs.
 pub fn declared_test_path(path: &str, globs: &[String]) -> bool {
-    globs.iter().any(|g| {
-        globset::Glob::new(g)
-            .map(|g| g.compile_matcher().is_match(path))
-            .unwrap_or(false)
-    })
+    globs
+        .iter()
+        .any(|g| crate::doctor_settings::glob_matches(g, path, false))
 }
 
 /// The shared test-path rule or a pack's own naming convention: true when `path`

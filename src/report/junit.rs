@@ -1,6 +1,7 @@
 //! JUnit XML formatter for test result collectors (Argo, Jenkins, GitLab, Azure DevOps).
 
 use crate::config::Severity;
+use crate::escape::xml;
 use crate::guards::CheckSummary;
 
 /// Format CheckSummary as standard JUnit XML.
@@ -74,7 +75,7 @@ pub fn format_junit(summary: &CheckSummary, fail_on_warnings: bool) -> String {
                     "      <property name=\"{}:override:{}\" value=\"{}\"/>\n",
                     o.gate,
                     idx + 1,
-                    escape_xml(&format!("[{}] {}", ov.source, ov.reason))
+                    xml(&format!("[{}] {}", ov.source, ov.reason))
                 ));
             }
         }
@@ -118,7 +119,7 @@ pub fn format_junit(summary: &CheckSummary, fail_on_warnings: bool) -> String {
                 for v in &o.violations {
                     let is_failure = fails(v.severity);
                     let sev_type = v.severity;
-                    let title = escape_xml(&v.title);
+                    let title = xml(&v.title);
                     let mut details = String::new();
                     if let Some(file) = &v.file {
                         if let Some(line) = v.line {
@@ -135,12 +136,12 @@ pub fn format_junit(summary: &CheckSummary, fail_on_warnings: bool) -> String {
                     if is_failure {
                         out.push_str(&format!(
                             "      <failure message=\"{title}\" type=\"{sev_type}\">{}</failure>\n",
-                            escape_xml(&details)
+                            xml(&details)
                         ));
                     } else {
                         out.push_str(&format!(
                             "      <system-err>[{sev_type}] {title}: {}</system-err>\n",
-                            escape_xml(&details)
+                            xml(&details)
                         ));
                     }
                 }
@@ -170,9 +171,9 @@ fn refusal_suite(refusals: &[crate::refusals::Projection], failures: usize) -> S
         refusals.len()
     );
     for r in refusals {
-        let place = escape_xml(&r.place());
-        let title = escape_xml(r.info.title);
-        let message = escape_xml(r.info.message);
+        let place = xml(&r.place());
+        let title = xml(r.info.title);
+        let message = xml(r.info.message);
         out.push_str(&format!(
             "    <testcase name=\"{} [{place}]\" classname=\"discipline.{suite}\" time=\"0.0\">\n",
             r.info.code
@@ -189,27 +190,6 @@ fn refusal_suite(refusals: &[crate::refusals::Projection], failures: usize) -> S
         out.push_str("    </testcase>\n");
     }
     out.push_str("  </testsuite>\n");
-    out
-}
-
-fn escape_xml(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            c if (c as u32) < 0x20 && c != '\t' && c != '\n' && c != '\r' => {
-                // Strip non-printable ASCII control characters forbidden in XML 1.0
-            }
-            // The two noncharacters XML 1.0 excludes from `Char` as well: a parser
-            // refuses the document that carries one.
-            '\u{FFFE}' | '\u{FFFF}' => {}
-            _ => out.push(c),
-        }
-    }
     out
 }
 
@@ -322,7 +302,7 @@ mod tests {
     #[test]
     fn test_escape_xml_strips_forbidden_control_characters() {
         let input = "clean\ttext\nwith\rvalid and \x00null \x07bell \x1Bescape";
-        let escaped = escape_xml(input);
+        let escaped = xml(input);
         assert_eq!(escaped, "clean\ttext\nwith\rvalid and null bell escape");
     }
 
@@ -336,7 +316,7 @@ mod tests {
         // Every character XML 1.0 forbids, then markup, an attribute break, a CDATA end.
         let mut hostile: String = (0u32..0x20).filter_map(char::from_u32).collect();
         hostile.push_str("\u{FFFE}\u{FFFF}</failure><testcase name=\"x\" y='z'>]]>&amp;\u{1b}[31m");
-        let escaped = escape_xml(&hostile);
+        let escaped = xml(&hostile);
         assert!(escaped.chars().all(xml_char), "{escaped:?}");
         assert!(!escaped.contains(['<', '>', '"', '\'']), "{escaped:?}");
         assert!(
@@ -344,7 +324,7 @@ mod tests {
             "{escaped:?}"
         );
         // C1 controls and the bidirectional controls are XML characters: carried as they are.
-        assert_eq!(escape_xml("a\u{9b}b\u{202e}c"), "a\u{9b}b\u{202e}c");
+        assert_eq!(xml("a\u{9b}b\u{202e}c"), "a\u{9b}b\u{202e}c");
     }
 
     #[test]

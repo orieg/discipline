@@ -13,6 +13,7 @@ pub mod docs;
 pub mod doctor;
 pub mod doctor_pins;
 pub mod doctor_settings;
+pub mod escape;
 pub mod explain;
 pub mod findings;
 pub mod forge;
