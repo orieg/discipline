@@ -1475,8 +1475,8 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Reductions in Python `hypothesis` (`max_examples`, `deadline`).
   - Reductions in JS/TS `fast-check` (`numRuns`).
   - Lowered fuzzing or test effort in workflows and shell scripts (`PROPTEST_CASES`, `-max_total_time`, `-runs`, Go fuzz `-fuzztime`).
-  - Removal of fuzz targets from `fuzz/Cargo.toml` (`[[bin]] name = "..."`) or deletion of a Rust file under `fuzz/`. The root `fuzz/` crate is always watched. `fuzz_targets` globs name fuzz crates elsewhere: a `Cargo.toml` outside `fuzz/` that a glob matches is read as a fuzz manifest, and a deleted `.rs` file a glob matches is a deleted fuzz target (`fuzz_targets = ["crates/*/fuzz/Cargo.toml", "crates/*/fuzz/fuzz_targets/**"]`). The globs are compiled before any gate runs; one that does not compile stops the run (exit 2).
-  - Shrunken seed corpus directories or deleted seed files (`corpus_dirs`, default `fuzz/corpus/**`, `corpus/**`, `**/tests/corpus/**`).
+  - Removal of fuzz targets from `fuzz/Cargo.toml` or deletion of a Rust file under `fuzz/`. The targets of a manifest are the `name` of each entry of its `bin` array, read from the parsed TOML: `[[bin]]` tables and an inline `bin = [{ name = "..." }]` array alike, with the key anywhere in its entry. Text that spells an entry in a comment or inside a string is not a target. A head manifest that does not parse as TOML stops the run (exit 2, `could_not_check` with gate `test-budget`; the message names the file and the line): its targets cannot be read, which is not the same as listing none. A base manifest that does not parse gives nothing to compare with, and the notes say that removed targets were not looked for. The root `fuzz/` crate is always watched. `fuzz_targets` globs name fuzz crates elsewhere: a `Cargo.toml` outside `fuzz/` that a glob matches is read as a fuzz manifest, and a deleted `.rs` file a glob matches is a deleted fuzz target (`fuzz_targets = ["crates/*/fuzz/Cargo.toml", "crates/*/fuzz/fuzz_targets/**"]`). The globs are compiled before any gate runs; one that does not compile stops the run (exit 2).
+  - Deleted seed files, counted by corpus directory (`corpus_dirs`, default `fuzz/corpus/**`, `corpus/**`, `**/tests/corpus/**`). Every deleted seed counts: seeds the change adds to the same directory do not offset it.
 - **Failing diff example (rejected):**
   ```diff
   // tests/prop.rs
@@ -1490,6 +1490,8 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it does NOT catch:**
   - A budget the pack cannot place: a value computed at runtime, read from an environment variable, or held in a `const` (`cases: CASES`); only integer literals in a configuration position count.
   - Increases or additions of property-testing iterations or new fuzz targets (ratchet permits tightening).
+  - A `[[bin]]` entry with no `name` key: it names no target, so its removal is not reported from the manifest (the deleted target file under `fuzz/` still is).
+  - A seed file that is renamed or moved to another directory: only a deleted seed counts.
   - Reductions explicitly excused by scoped directive `allow-test-shrink: <target/metric> <reason>`.
 - **Baseline:** a fuzz target removed from a harness list has no line. Its fingerprint is anchored on the target (`fuzz-target:<name>`), so an entry for one target does not match another target of the same harness.
 - **Lifting directive:** `allow-test-shrink: <target-or-metric> <reason>`.

@@ -261,8 +261,15 @@ impl Store {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
             Err(e) => return Err(e).with_context(|| format!("cannot read {}", self.dir.display())),
         };
+        // In name order: the directory lists its files in an order of its own, and the
+        // lease an error names is the first that could not be read.
+        let mut paths = Vec::new();
         for entry in entries {
-            let path = entry?.path();
+            let entry = entry.with_context(|| format!("cannot read {}", self.dir.display()))?;
+            paths.push(entry.path());
+        }
+        paths.sort_unstable();
+        for path in paths {
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
@@ -613,6 +620,24 @@ mod tests {
             dir: d.path().join("leases"),
         };
         (d, s)
+    }
+
+    /// Several lease files that do not parse: the error names the first in name order,
+    /// whatever order the directory lists them in. The files are created in an order
+    /// that is neither ascending nor descending, so a listing in creation order, in
+    /// reverse creation order or in hash order does not begin with that one.
+    #[test]
+    fn the_invalid_lease_named_is_the_first_in_name_order() {
+        let (_d, s) = store();
+        std::fs::create_dir_all(&s.dir).unwrap();
+        for i in [7, 3, 11, 0, 9, 1, 5, 10, 2, 8, 4, 6] {
+            std::fs::write(s.dir.join(format!("wt-{i:02}.json")), "not json\n").unwrap();
+        }
+        let err = format!("{:#}", s.list().unwrap_err());
+        assert!(
+            err.contains("wt-00.json is not valid"),
+            "the error names another lease: {err}"
+        );
     }
 
     #[test]
