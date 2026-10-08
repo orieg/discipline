@@ -927,6 +927,7 @@ fn accepts_more(b: &ExpectedException, h: &ExpectedException) -> Option<String> 
 
 /// Returns whether `h` is a widening of `b`.
 pub fn is_widened(b: &ExpectedException, h: &ExpectedException) -> Option<String> {
+    super::ancestry::count(1);
     match (is_negated(&b.kind), is_negated(&h.kind)) {
         (false, false) => accepts_more(b, h),
         // "Does not throw X" passes on any other failure, so it is the bare form that
@@ -967,139 +968,8 @@ fn reasserted(call: &str, base: &TestFn, head: &TestFn) -> bool {
     asserting(head) > asserting(base)
 }
 
-/// Pairs the `base` and `head` expectations of one test and returns the base expectations
-/// that head checks less strictly, or no longer checks.
-///
-/// 1. An expectation written the same on both sides (skeleton, kind, type and matcher)
-///    is unchanged, however many times it occurs and in whatever order.
-/// 2. Of the rest, a skeleton left exactly once on each side is the same assertion edited
-///    in place: the two are compared.
-/// 3. What remains was rewritten beyond its skeleton (an edited block, a renamed binding,
-///    a site replaced by another). Each base expectation needs a head expectation of its
-///    own that accepts no more than it did; the assignment that satisfies the most base
-///    expectations is taken. One left without is reported against a remaining head
-///    expectation, or as dropped when head has none left.
-pub fn widened(base: &[ExpectedException], head: &[ExpectedException]) -> Vec<Widened> {
-    let same = |b: &ExpectedException, h: &ExpectedException| {
-        b.skeleton == h.skeleton
-            && b.kind == h.kind
-            && b.exception_type == h.exception_type
-            && b.matcher == h.matcher
-            && b.whole_message == h.whole_message
-            && b.form == h.form
-    };
-    let mut out = Vec::new();
-    let mut head_left: Vec<&ExpectedException> = head.iter().collect();
-    let mut base_left: Vec<&ExpectedException> = Vec::new();
-    for b in base {
-        match head_left.iter().position(|h| same(b, h)) {
-            Some(i) => {
-                head_left.remove(i);
-            }
-            None => base_left.push(b),
-        }
-    }
-
-    let once =
-        |set: &[&ExpectedException], s: &str| set.iter().filter(|x| x.skeleton == s).count() == 1;
-    let in_place: Vec<(&ExpectedException, &ExpectedException)> = base_left
-        .iter()
-        .filter(|b| once(&base_left, &b.skeleton) && once(&head_left, &b.skeleton))
-        .filter_map(|b| {
-            let h = head_left.iter().find(|h| h.skeleton == b.skeleton)?;
-            Some((*b, *h))
-        })
-        .collect();
-    for (b, h) in &in_place {
-        base_left.retain(|x| !std::ptr::eq(*x, *b));
-        head_left.retain(|x| !std::ptr::eq(*x, *h));
-        if let Some(detail) = is_widened(b, h) {
-            out.push(Widened {
-                line: h.line,
-                skeleton: h.skeleton.clone(),
-                detail,
-                dropped: false,
-                guarded_call: None,
-            });
-        }
-    }
-
-    // `owner[j]` is the base expectation that head expectation `j` stands for.
-    let covers = |b: &ExpectedException, h: &ExpectedException| {
-        interchangeable(&b.kind, &h.kind) && is_widened(b, h).is_none()
-    };
-    let mut owner: Vec<Option<usize>> = vec![None; head_left.len()];
-    for i in 0..base_left.len() {
-        let mut seen = vec![false; head_left.len()];
-        assign(i, &base_left, &head_left, &covers, &mut owner, &mut seen);
-    }
-    for (i, b) in base_left.iter().enumerate() {
-        if owner.contains(&Some(i)) {
-            continue;
-        }
-        let spare = (0..head_left.len())
-            .find(|&j| owner[j].is_none() && interchangeable(&b.kind, &head_left[j].kind));
-        match spare {
-            Some(j) => {
-                owner[j] = Some(i);
-                let h = head_left[j];
-                out.push(Widened {
-                    line: h.line,
-                    skeleton: h.skeleton.clone(),
-                    detail: is_widened(b, h).unwrap_or_else(|| {
-                        "replaced by an expectation that accepts more".to_string()
-                    }),
-                    dropped: false,
-                    guarded_call: None,
-                });
-            }
-            None if !is_attribute(&b.kind) => out.push(Widened {
-                line: 0,
-                skeleton: b.skeleton.clone(),
-                detail: match (type_names(b).first(), effective_matcher(b)) {
-                    (Some(t), _) => format!("expected exception `{}` is no longer checked", t.name),
-                    (None, Some(m)) => format!(
-                        "expected message `{}` is no longer checked",
-                        m.trim_start_matches(OPAQUE)
-                    ),
-                    (None, None) => "expected failure is no longer checked".to_string(),
-                },
-                dropped: true,
-                guarded_call: b.guarded_call.clone(),
-            }),
-            None => {}
-        }
-    }
-    out.sort_by_key(|w| (w.dropped, w.line));
-    out
-}
-
-/// One augmenting step of a bipartite matching: gives base expectation `i` a head
-/// expectation that covers it, moving an earlier assignment aside when it has another.
-fn assign(
-    i: usize,
-    base: &[&ExpectedException],
-    head: &[&ExpectedException],
-    covers: &dyn Fn(&ExpectedException, &ExpectedException) -> bool,
-    owner: &mut [Option<usize>],
-    seen: &mut [bool],
-) -> bool {
-    for j in 0..head.len() {
-        if seen[j] || !covers(base[i], head[j]) {
-            continue;
-        }
-        seen[j] = true;
-        let free = match owner[j] {
-            None => true,
-            Some(other) => assign(other, base, head, covers, owner, seen),
-        };
-        if free {
-            owner[j] = Some(i);
-            return true;
-        }
-    }
-    false
-}
+mod pairing;
+pub use pairing::widened;
 
 fn attribute(tests: &mut [TestFn], exp: ExpectedException) {
     let line = exp.line;

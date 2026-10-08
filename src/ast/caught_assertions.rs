@@ -367,6 +367,126 @@ fn swallowing_handler<'a>(handlers: &[(Node<'a>, Reach, bool)]) -> Option<Node<'
     None
 }
 
+/// What a reader of handlers looks for in the body of one: the kinds of the nodes that
+/// begin another function or class, the kind of a handler's body, and whether a node
+/// fails the test when it runs.
+struct FailsIn {
+    /// A node of one of these kinds is not read: what fails in it fails when it is
+    /// called, and not in the handler it is written in.
+    scopes: &'static [&'static str],
+    /// The kind of the body of a handler.
+    block: &'static str,
+    /// Whether a body that is itself of one of `scopes` is read: the function a handler
+    /// is, where a handler can be one.
+    own_scope: bool,
+    fails: fn(Node, &str, &AssertVocabulary) -> bool,
+}
+
+impl FailsIn {
+    /// Whether a node under `body` fails the test, outside the scopes inside it: the
+    /// body walked, as it was before the nodes that fail were listed ([`Failing`]).
+    fn walked(&self, body: Node, src: &str, vocab: &AssertVocabulary) -> bool {
+        let mut fails = false;
+        walk(body, &mut |n| {
+            if fails || (!(self.own_scope && n == body) && self.scopes.contains(&n.kind())) {
+                return false;
+            }
+            fails = (self.fails)(n, src, vocab);
+            !fails
+        });
+        fails
+    }
+}
+
+/// The nodes of one tree that fail the test when they run, by the scope each is written
+/// in, for the handlers that are asked whether their body fails.
+///
+/// A handler swallows a failure when nothing in its body fails the test, outside the
+/// functions and classes declared in it. Walking the body for each handler costs the
+/// body for each, and a handler whose body holds another `try` is walked again for that
+/// one: 320 of them one inside another, with nothing failing in any, cost 8.0e9 to
+/// 9.0e9 instructions, and 3.2 to 3.6 times that for twice as many. The nodes that fail
+/// are listed once, each under the scope that holds it, and a body asks whether one of
+/// them stands between where it begins and where it ends.
+struct Failing<'t> {
+    root: Node<'t>,
+    of: FailsIn,
+    listed: std::cell::OnceCell<FailingListed>,
+}
+
+struct FailingListed {
+    /// For the root and each scope, by its id: the nodes that fail written in it and in
+    /// no scope inside it, each by its place among all the nodes of the tree that fail.
+    held: std::collections::HashMap<usize, Vec<usize>>,
+    /// For each body, by its id: the scope that holds it, and the places of the nodes of
+    /// the tree that fail under it: the first, and one past the last.
+    bodies: std::collections::HashMap<usize, (usize, usize, usize)>,
+}
+
+impl<'t> Failing<'t> {
+    fn new(root: Node<'t>, of: FailsIn) -> Self {
+        Self {
+            root,
+            of,
+            listed: std::cell::OnceCell::new(),
+        }
+    }
+
+    fn listed(&self, src: &str, vocab: &AssertVocabulary) -> &FailingListed {
+        self.listed.get_or_init(|| {
+            let mut held: std::collections::HashMap<usize, Vec<usize>> = Default::default();
+            let mut bodies: std::collections::HashMap<usize, (usize, usize, usize)> =
+                Default::default();
+            // The scopes around the node being read, the root first.
+            let mut holders = vec![self.root.id()];
+            let mut seen = 0usize;
+            // A node, and whether it was entered already and is now left.
+            let mut stack: Vec<(Node, bool)> = vec![(self.root, false)];
+            while let Some((n, left)) = stack.pop() {
+                super::ancestry::count(1);
+                if left {
+                    if self.of.scopes.contains(&n.kind()) {
+                        holders.pop();
+                    } else if let Some(run) = bodies.get_mut(&n.id()) {
+                        run.2 = seen;
+                    }
+                    continue;
+                }
+                let holder = holders.last().copied().unwrap_or(self.root.id());
+                if self.of.scopes.contains(&n.kind()) {
+                    stack.push((n, true));
+                    holders.push(n.id());
+                } else {
+                    if (self.of.fails)(n, src, vocab) {
+                        held.entry(holder).or_default().push(seen);
+                        seen += 1;
+                    }
+                    if n.kind() == self.of.block {
+                        bodies.insert(n.id(), (holder, seen, seen));
+                        stack.push((n, true));
+                    }
+                }
+                let mut cursor = n.walk();
+                let children: Vec<Node> = n.children(&mut cursor).collect();
+                stack.extend(children.into_iter().rev().map(|c| (c, false)));
+            }
+            FailingListed { held, bodies }
+        })
+    }
+
+    /// Whether a node under `body` fails the test, outside the scopes inside it.
+    fn under(&self, body: Node<'t>, src: &str, vocab: &AssertVocabulary) -> bool {
+        let listed = self.listed(src, vocab);
+        let Some((holder, from, to)) = listed.bodies.get(&body.id()).copied() else {
+            // A body the list does not hold: read as before the list was kept.
+            return self.of.walked(body, src, vocab);
+        };
+        super::ancestry::count(1);
+        let held = listed.held.get(&holder).map_or(&[][..], Vec::as_slice);
+        held.partition_point(|at| *at < from) < held.partition_point(|at| *at < to)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Python
 // ---------------------------------------------------------------------------
@@ -1753,46 +1873,65 @@ fn js_is_assertion(call: Node, src: &str, vocab: &AssertVocabulary) -> bool {
     is_assert || is_expect_chain
 }
 
-/// Whether a handler body (a block, or the expression an arrow function returns) neither
-/// rethrows, nor asserts, nor fails the test. `done(err)` and `reject(..)` fail it: the
-/// runner's callback with an argument, and the promise the test returns.
-fn js_handler_swallows(body: Node, src: &str, vocab: &AssertVocabulary) -> bool {
-    let mut fails = false;
-    walk(body, &mut |n| {
-        if fails || (n != body && JS_FUNCTIONS.contains(&n.kind())) {
-            return false;
-        }
-        if n.kind() == "throw_statement" {
-            fails = true;
-        } else if n.kind() == "call_expression" {
-            let callee = js_callee(n, src);
-            let has_argument = n
-                .child_by_field_name("arguments")
-                .is_some_and(|a| a.named_child_count() > 0);
-            fails = callee == "expect"
-                || callee.starts_with("expect(")
-                || callee == "assert"
-                || callee.starts_with("assert.")
-                || callee == "fail"
-                || callee == "done.fail"
-                || callee.ends_with(".fail")
-                || callee == "reject"
-                || (callee == "done" && has_argument)
-                || configured(callee, vocab);
-        }
-        !fails
-    });
-    !fails
+/// Whether a node in a handler rethrows, asserts or fails the test. `done(err)` and
+/// `reject(..)` fail it: the runner's callback with an argument, and the promise the
+/// test returns.
+fn js_fails(n: Node, src: &str, vocab: &AssertVocabulary) -> bool {
+    if n.kind() == "throw_statement" {
+        return true;
+    }
+    if n.kind() != "call_expression" {
+        return false;
+    }
+    let callee = js_callee(n, src);
+    let has_argument = n
+        .child_by_field_name("arguments")
+        .is_some_and(|a| a.named_child_count() > 0);
+    callee == "expect"
+        || callee.starts_with("expect(")
+        || callee == "assert"
+        || callee.starts_with("assert.")
+        || callee == "fail"
+        || callee == "done.fail"
+        || callee.ends_with(".fail")
+        || callee == "reject"
+        || (callee == "done" && has_argument)
+        || configured(callee, vocab)
 }
 
-fn js_catch_body_swallows(catch_clause: Node, src: &str, vocab: &AssertVocabulary) -> bool {
+/// A handler body is a block, or the expression an arrow function returns, which may be
+/// a function itself.
+const JS_FAILS: FailsIn = FailsIn {
+    scopes: JS_FUNCTIONS,
+    block: "statement_block",
+    own_scope: true,
+    fails: js_fails,
+};
+
+/// Whether a handler body neither rethrows, nor asserts, nor fails the test
+/// ([`js_fails`]), outside the functions written in it.
+fn js_handler_swallows<'t>(
+    body: Node<'t>,
+    src: &str,
+    vocab: &AssertVocabulary,
+    failing: &Failing<'t>,
+) -> bool {
+    !failing.under(body, src, vocab)
+}
+
+fn js_catch_body_swallows<'t>(
+    catch_clause: Node<'t>,
+    src: &str,
+    vocab: &AssertVocabulary,
+    failing: &Failing<'t>,
+) -> bool {
     let Some(body) = catch_clause
         .child_by_field_name("body")
         .or_else(|| find_child_by_kind(catch_clause, "statement_block"))
     else {
         return true;
     };
-    js_handler_swallows(body, src, vocab)
+    js_handler_swallows(body, src, vocab, failing)
 }
 
 /// `<promise>.catch(<function that swallows>)`: the assertions in the chain before it.
@@ -1803,13 +1942,13 @@ fn js_catch_body_swallows(catch_clause: Node, src: &str, vocab: &AssertVocabular
 type JsDeclared<'t, 's> = std::collections::HashMap<&'s str, Option<Node<'t>>>;
 
 fn js_promise_catch<'t, 's>(
-    root: Node<'t>,
     call: Node<'t>,
     src: &'s str,
     caught: &mut Caught,
     vocab: &AssertVocabulary,
     declared: &mut JsDeclared<'t, 's>,
     handed: &mut Option<(usize, usize)>,
+    failing: &Failing<'t>,
 ) {
     let Some(function) = call.child_by_field_name("function") else {
         return;
@@ -1847,7 +1986,7 @@ fn js_promise_catch<'t, 's>(
             let name = text(h, src);
             *declared
                 .entry(name)
-                .or_insert_with(|| js_declared_function_body(root, name, src))
+                .or_insert_with(|| js_declared_function_body(failing.root, name, src))
         }
         _ => None,
     };
@@ -1856,7 +1995,7 @@ fn js_promise_catch<'t, 's>(
         // not read.
         return;
     };
-    if !js_handler_swallows(body, src, vocab) {
+    if !js_handler_swallows(body, src, vocab, failing) {
         return;
     }
     let (Some(chain), Some(property)) = (
@@ -1899,18 +2038,19 @@ pub fn javascript<'t>(
     }
     let mut caught = Caught::new(tests, root);
     let mut declared = JsDeclared::new();
+    let failing = Failing::new(root, JS_FAILS);
     // The bytes of the last promise chain whose assertions were all handed over.
     let mut handed = None;
     walk(root, &mut |node| {
         if node.kind() == "call_expression" {
             js_promise_catch(
-                root,
                 node,
                 src,
                 &mut caught,
                 vocab,
                 &mut declared,
                 &mut handed,
+                &failing,
             );
             return true;
         }
@@ -1924,7 +2064,7 @@ pub fn javascript<'t>(
         let catch_clause = node
             .child_by_field_name("handler")
             .or_else(|| find_child_by_kind(node, "catch_clause"))
-            .filter(|clause| js_catch_body_swallows(*clause, src, vocab));
+            .filter(|clause| js_catch_body_swallows(*clause, src, vocab, &failing));
         let (handler, detail) = match (finally, catch_clause) {
             (Some(finally), _) => (finally, FINALLY_RETURNS),
             (None, Some(clause)) => (clause, "try/catch swallows assertion error"),
@@ -2036,53 +2176,47 @@ fn java_catch_reach(clause: Node, src: &str) -> Reach {
     reach(&names, JVM_ASSERTION_ANCESTORS, JVM_UNRELATED)
 }
 
-fn java_catch_body_swallows(clause: Node, src: &str, vocab: &AssertVocabulary) -> bool {
+/// Whether a node in a handler rethrows, asserts or fails the test.
+fn java_fails(n: Node, src: &str, vocab: &AssertVocabulary) -> bool {
+    match n.kind() {
+        "throw_statement" | "assert_statement" => true,
+        "method_invocation" => {
+            let name = n.child_by_field_name("name").map_or("", |m| text(m, src));
+            name.starts_with("assert")
+                || configured(name, vocab)
+                || name == "fail"
+                || name.ends_with(".fail")
+        }
+        _ => false,
+    }
+}
+
+const JAVA_FAILS: FailsIn = FailsIn {
+    scopes: &[
+        "class_declaration",
+        "method_declaration",
+        "lambda_expression",
+    ],
+    block: "block",
+    own_scope: false,
+    fails: java_fails,
+};
+
+fn java_catch_body_swallows<'t>(
+    clause: Node<'t>,
+    src: &str,
+    vocab: &AssertVocabulary,
+    failing: &Failing<'t>,
+) -> bool {
     let Some(body) = clause
         .child_by_field_name("body")
         .or_else(|| find_child_by_kind(clause, "block"))
     else {
         return true;
     };
-
-    let mut has_throw = false;
-    let mut has_fail = false;
-    let mut has_assert = false;
-
-    walk(body, &mut |n| {
-        // One is enough: the rest of the body, and the handlers inside it, say no more.
-        if has_throw
-            || has_fail
-            || has_assert
-            || matches!(
-                n.kind(),
-                "class_declaration" | "method_declaration" | "lambda_expression"
-            )
-        {
-            return false;
-        }
-        if n.kind() == "throw_statement" {
-            has_throw = true;
-            return false;
-        }
-        if n.kind() == "assert_statement" {
-            has_assert = true;
-            return false;
-        }
-        if n.kind() == "method_invocation" {
-            let name = n.child_by_field_name("name").map_or("", |m| text(m, src));
-            if name.starts_with("assert") || configured(name, vocab) {
-                has_assert = true;
-                return false;
-            }
-            if name == "fail" || name.ends_with(".fail") {
-                has_fail = true;
-                return false;
-            }
-        }
-        true
-    });
-
-    !has_throw && !has_fail && !has_assert
+    // One node that fails is enough: the rest of the body, and the handlers inside it,
+    // say no more.
+    !failing.under(body, src, vocab)
 }
 
 /// Whether `lambda` is passed to a method known to run it before returning
@@ -2115,6 +2249,7 @@ pub fn java<'t>(
         return;
     }
     let mut caught = Caught::new(tests, root);
+    let failing = Failing::new(root, JAVA_FAILS);
     walk(root, &mut |node| {
         if !matches!(
             node.kind(),
@@ -2134,7 +2269,7 @@ pub fn java<'t>(
                 (
                     c,
                     java_catch_reach(c, src),
-                    java_catch_body_swallows(c, src, vocab),
+                    java_catch_body_swallows(c, src, vocab, &failing),
                 )
             })
             .collect();
@@ -2218,19 +2353,24 @@ fn kt_is_assertion(node: Node, src: &str, vocab: &AssertVocabulary) -> bool {
         && !name.starts_with("shouldNotThrow")
 }
 
+/// Whether a node throws, asserts or calls a function that fails the test.
+fn kt_node_fails(n: Node, src: &str, vocab: &AssertVocabulary) -> bool {
+    n.kind() == "throw_expression"
+        || kt_is_assertion(n, src, vocab)
+        || (n.kind() == "call_expression" && matches!(kt_callee(n, src), "fail" | "error"))
+}
+
+/// A callback chained on a result is a lambda, which is read though it is a scope.
+const KT_FAILS: FailsIn = FailsIn {
+    scopes: KT_SCOPES,
+    block: "block",
+    own_scope: true,
+    fails: kt_node_fails,
+};
+
 /// Whether the subtree throws, asserts or calls a function that fails the test.
 fn kt_fails(node: Node, src: &str, vocab: &AssertVocabulary) -> bool {
-    let mut fails = false;
-    walk(node, &mut |n| {
-        if fails || (n != node && KT_SCOPES.contains(&n.kind())) {
-            return false;
-        }
-        fails = n.kind() == "throw_expression"
-            || kt_is_assertion(n, src, vocab)
-            || (n.kind() == "call_expression" && matches!(kt_callee(n, src), "fail" | "error"));
-        !fails
-    });
-    fails
+    KT_FAILS.walked(node, src, vocab)
 }
 
 /// Whether `lambda` is passed to a function known to run it before returning
@@ -2468,6 +2608,7 @@ pub fn kotlin<'t>(
     }
     let mut caught = Caught::new(tests, root);
     let names = KtNames::new(root);
+    let failing = Failing::new(root, KT_FAILS);
     walk(root, &mut |node| {
         if node.kind() == "try_expression" {
             let Some(body) = find_child_by_kind(node, "block") else {
@@ -2478,8 +2619,8 @@ pub fn kotlin<'t>(
                 .children(&mut cursor)
                 .filter(|c| c.kind() == "catch_block")
                 .map(|c| {
-                    let swallows =
-                        find_child_by_kind(c, "block").is_none_or(|b| !kt_fails(b, src, vocab));
+                    let swallows = find_child_by_kind(c, "block")
+                        .is_none_or(|b| !failing.under(b, src, vocab));
                     (c, kt_catch_reach(c, src), swallows)
                 })
                 .collect();
@@ -2641,29 +2782,36 @@ fn csharp_is_sync_callback<'t>(lambda: Node<'t>, anc: &Ancestry<'t>, src: &str) 
         .is_some_and(|name| sync_callbacks("C#").contains(&text(name, src)))
 }
 
-fn csharp_catch_body_swallows(clause: Node, src: &str, vocab: &AssertVocabulary) -> bool {
+/// Whether a node in a handler fails the test: a rethrow, `Assert.Fail`, or an assertion
+/// on the caught error.
+fn csharp_fails(n: Node, src: &str, vocab: &AssertVocabulary) -> bool {
+    n.kind() == "throw_statement"
+        || (n.kind() == "invocation_expression"
+            && (csharp_assert_method(n, src).is_some_and(|m| !CS_NOT_A_FAILURE.contains(&m))
+                || csharp_is_configured(n, src, vocab)))
+}
+
+const CS_FAILS: FailsIn = FailsIn {
+    scopes: &[
+        "class_declaration",
+        "method_declaration",
+        "lambda_expression",
+    ],
+    block: "block",
+    own_scope: false,
+    fails: csharp_fails,
+};
+
+fn csharp_catch_body_swallows<'t>(
+    clause: Node<'t>,
+    src: &str,
+    vocab: &AssertVocabulary,
+    failing: &Failing<'t>,
+) -> bool {
     let Some(body) = find_child_by_kind(clause, "block") else {
         return true;
     };
-
-    let mut fails = false;
-    walk(body, &mut |n| {
-        if fails
-            || matches!(
-                n.kind(),
-                "class_declaration" | "method_declaration" | "lambda_expression"
-            )
-        {
-            return false;
-        }
-        // A rethrow, `Assert.Fail`, or an assertion on the caught error.
-        fails = n.kind() == "throw_statement"
-            || (n.kind() == "invocation_expression"
-                && (csharp_assert_method(n, src).is_some_and(|m| !CS_NOT_A_FAILURE.contains(&m))
-                    || csharp_is_configured(n, src, vocab)));
-        !fails
-    });
-    !fails
+    !failing.under(body, src, vocab)
 }
 
 pub fn csharp<'t>(
@@ -2677,6 +2825,7 @@ pub fn csharp<'t>(
         return;
     }
     let mut caught = Caught::new(tests, root);
+    let failing = Failing::new(root, CS_FAILS);
     walk(root, &mut |node| {
         if node.kind() != "try_statement" {
             return true;
@@ -2693,7 +2842,7 @@ pub fn csharp<'t>(
                 (
                     c,
                     csharp_catch_reach(c, src),
-                    csharp_catch_body_swallows(c, src, vocab),
+                    csharp_catch_body_swallows(c, src, vocab, &failing),
                 )
             })
             .collect();
@@ -3389,6 +3538,240 @@ mod tests {
             assert_eq!((held, more), (40, 160), "{name}");
             assert!(many < 5 * few, "{name}: {few} steps for 40, {many} for 160");
         }
+    }
+
+    /// A test with handlers, in one of the languages whose handlers are asked whether
+    /// their body fails: what stands before and after the lines of the test, a `try`
+    /// that holds an assertion up to where its handler begins, one that holds none, the
+    /// end of a handler, a call that fails nothing, a rethrow, and a rethrow written in
+    /// a function.
+    struct Handlers {
+        path: &'static str,
+        before: &'static str,
+        after: &'static str,
+        asserting: &'static str,
+        calling: &'static str,
+        end: &'static str,
+        call: &'static str,
+        rethrow: &'static str,
+        in_function: &'static str,
+    }
+
+    const HANDLERS: [Handlers; 4] = [
+        Handlers {
+            path: "tests/m.test.js",
+            before: "test('t', () => {\n",
+            after: "});\n",
+            asserting: "try { expect(f(0)).toBe(0); } catch (e) {\n",
+            calling: "try { g(); } catch (e) {\n",
+            end: "}\n",
+            call: "g(1);\n",
+            rethrow: "throw e;\n",
+            in_function: "const h = () => { throw e; };\n",
+        },
+        Handlers {
+            path: "src/test/java/MTest.java",
+            before: "class MTest {\n @Test void t() {\n",
+            after: " }\n}\n",
+            asserting: "try { assertEquals(0, f(0)); } catch (AssertionError e) {\n",
+            calling: "try { g(); } catch (AssertionError e) {\n",
+            end: "}\n",
+            call: "g(1);\n",
+            rethrow: "throw e;\n",
+            in_function: "Runnable h = () -> { throw e; };\n",
+        },
+        Handlers {
+            path: "src/test/kotlin/MTest.kt",
+            before: "class MTest {\n @Test fun t() {\n",
+            after: " }\n}\n",
+            asserting: "try { assertEquals(0, f(0)) } catch (e: AssertionError) {\n",
+            calling: "try { g() } catch (e: AssertionError) {\n",
+            end: "}\n",
+            call: "g(1)\n",
+            rethrow: "throw e\n",
+            in_function: "val h = { throw e }\n",
+        },
+        Handlers {
+            path: "tests/MTests.cs",
+            before: "class MTests {\n [Fact] public void T() {\n",
+            after: " }\n}\n",
+            asserting: "try { Assert.Equal(0, F(0)); } catch (Exception e) {\n",
+            calling: "try { G(); } catch (Exception e) {\n",
+            end: "}\n",
+            call: "G(1);\n",
+            rethrow: "throw;\n",
+            in_function: "Action h = () => { throw e; };\n",
+        },
+    ];
+
+    impl Handlers {
+        /// The source of a test of `lines`, and the line the first of them stands on.
+        fn source(&self, lines: &[&str]) -> (String, usize) {
+            (
+                format!("{}{}{}", self.before, lines.concat(), self.after),
+                self.before.lines().count() + 1,
+            )
+        }
+
+        /// The assertions of a test of `lines` read as caught, each by its place among
+        /// the lines, from 0.
+        fn caught(&self, lines: &[&str]) -> Vec<usize> {
+            let (src, first) = self.source(lines);
+            let registry = crate::ast::default_registry();
+            let pack = registry.find_pack(self.path).expect("a pack for the path");
+            let facts = pack
+                .extract(self.path, &src, &AssertVocabulary::default())
+                .unwrap();
+            facts
+                .tests
+                .iter()
+                .flat_map(|t| t.caught_assertions.iter())
+                .map(|c| {
+                    assert_eq!(c.line, c.handler_line, "{}", self.path);
+                    c.line - first
+                })
+                .collect()
+        }
+    }
+
+    /// A handler swallows a failure when nothing in its body fails the test: a rethrow
+    /// written in it, or in a handler inside it, fails it, and one written in a function
+    /// inside it does not. Each handler is judged by its own body, whatever stands in the
+    /// handlers around it and beside it.
+    #[test]
+    fn a_handler_fails_by_what_is_written_in_its_own_body_outside_any_function() {
+        const NONE: Vec<usize> = Vec::new();
+        for of in &HANDLERS {
+            let Handlers {
+                asserting,
+                calling,
+                end,
+                call,
+                rethrow,
+                in_function,
+                ..
+            } = *of;
+            let path = of.path;
+            assert_eq!(of.caught(&[asserting, call, end]), vec![0], "{path}");
+            assert_eq!(of.caught(&[asserting, end]), vec![0], "{path}");
+            assert_eq!(of.caught(&[asserting, rethrow, end]), NONE, "{path}");
+            assert_eq!(of.caught(&[asserting, in_function, end]), vec![0], "{path}");
+            // A handler inside the handler: what it rethrows fails the one around it.
+            assert_eq!(
+                of.caught(&[asserting, calling, rethrow, end, end]),
+                NONE,
+                "{path}"
+            );
+            assert_eq!(
+                of.caught(&[asserting, calling, call, end, end]),
+                vec![0],
+                "{path}"
+            );
+            assert_eq!(
+                of.caught(&[asserting, calling, in_function, end, call, end]),
+                vec![0],
+                "{path}"
+            );
+            // A rethrow after the handler inside, and one before it.
+            assert_eq!(
+                of.caught(&[asserting, calling, call, end, rethrow, end]),
+                NONE,
+                "{path}"
+            );
+            assert_eq!(
+                of.caught(&[asserting, rethrow, calling, call, end, end]),
+                NONE,
+                "{path}"
+            );
+            // Three deep: the innermost rethrows, in a function or not.
+            assert_eq!(
+                of.caught(&[asserting, calling, calling, rethrow, end, end, end]),
+                NONE,
+                "{path}"
+            );
+            assert_eq!(
+                of.caught(&[asserting, calling, calling, in_function, end, end, end]),
+                vec![0],
+                "{path}"
+            );
+            // Side by side: each is judged by its own body, in either order.
+            assert_eq!(
+                of.caught(&[asserting, rethrow, end, asserting, call, end]),
+                vec![3],
+                "{path}"
+            );
+            assert_eq!(
+                of.caught(&[asserting, call, end, asserting, rethrow, end]),
+                vec![0],
+                "{path}"
+            );
+            assert_eq!(
+                of.caught(&[
+                    asserting,
+                    call,
+                    end,
+                    asserting,
+                    in_function,
+                    end,
+                    asserting,
+                    rethrow,
+                    end
+                ]),
+                vec![0, 3],
+                "{path}"
+            );
+            // Two on one line: each is still judged by its own body.
+            let on_one_line = |first: &str, second: &str| {
+                let try_with = |inside: &str| [asserting, inside, end].concat().replace('\n', " ");
+                format!("{}; {}\n", try_with(first), try_with(second))
+            };
+            assert_eq!(of.caught(&[&on_one_line(call, rethrow)]), vec![0], "{path}");
+            assert_eq!(of.caught(&[&on_one_line(rethrow, call)]), vec![0], "{path}");
+            assert_eq!(
+                of.caught(&[&on_one_line(call, in_function)]),
+                vec![0, 0],
+                "{path}"
+            );
+            // A `try` in the body of another: its handler is no part of the handler
+            // of the one around it, and its assertion is its own.
+            let handler = &calling[calling.find("} catch").expect("a handler")..];
+            assert_eq!(
+                of.caught(&["try {\n", asserting, rethrow, end, handler, call, end]),
+                NONE,
+                "{path}"
+            );
+            assert_eq!(
+                of.caught(&["try {\n", asserting, call, end, handler, rethrow, end]),
+                vec![1],
+                "{path}"
+            );
+        }
+    }
+
+    /// Handlers one inside another, with nothing that fails in any, cost steps in
+    /// proportion to their number. Before #672 the body of each was walked for its own
+    /// `try` and again for every handler around it: four times the depth cost 10 to 12
+    /// times the steps.
+    #[test]
+    fn handlers_that_fail_nothing_one_inside_another_cost_steps_in_proportion_to_their_number() {
+        let mut out_of_proportion = Vec::new();
+        for of in &HANDLERS {
+            let steps = |depth: usize| -> (u64, usize) {
+                let mut lines = vec![of.asserting];
+                lines.extend(std::iter::repeat_n(of.calling, depth - 1));
+                lines.extend(std::iter::repeat_n(of.end, depth));
+                steps_and_caught(of.path, &of.source(&lines).0)
+            };
+            let ((few, held), (many, more)) = (steps(40), steps(160));
+            assert_eq!((held, more), (1, 1), "{}", of.path);
+            if many >= 5 * few {
+                out_of_proportion.push(format!(
+                    "{}: {few} steps at depth 40, {many} at depth 160",
+                    of.path
+                ));
+            }
+        }
+        assert!(out_of_proportion.is_empty(), "{out_of_proportion:#?}");
     }
 
     /// Each Python `try` is read by its own handlers, and each JavaScript `.catch(name)`
