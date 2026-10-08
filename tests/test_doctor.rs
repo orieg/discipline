@@ -1593,7 +1593,13 @@ fn doctor_reports_mutation_preset_finding() {
 #[test]
 fn doctor_reports_hook_mode_truthfully() {
     let repo = Repo::new();
-    repo.commit_base(".github/workflows/ci.yml", WORKFLOW, "base");
+    repo.commit_base_files(
+        &[
+            (".github/workflows/ci.yml", WORKFLOW),
+            (".github/CODEOWNERS", CODEOWNERS),
+        ],
+        "base",
+    );
 
     let agents = [
         ("claude-code", ".claude/settings.json"),
@@ -1644,6 +1650,13 @@ fn doctor_reports_hook_mode_truthfully() {
             pretool["summary"].as_str().unwrap().contains("logs"),
             "{agent} observe pretool text must say logs: {}",
             pretool["summary"]
+        );
+
+        let strict = repo.run(&["doctor", "--local-only", "--strict"], &[]);
+        assert_eq!(
+            strict.code, 0,
+            "doctor --strict must not fail on observe mode hook: {}",
+            strict.stdout
         );
 
         std::fs::remove_file(repo.path().join(rel)).unwrap();
