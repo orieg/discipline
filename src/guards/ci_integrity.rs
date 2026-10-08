@@ -116,6 +116,63 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
         check_banned(ctx, &filter, &workflow_filter, &mut out)?;
     }
 
+    let Some(workflow_files) = workflow_files_to_examine(ctx, &filter, &workflow_filter, &mut out)?
+    else {
+        return Ok(out);
+    };
+
+    let mut added_steps = AddedSteps {
+        workflow_filter: &workflow_filter,
+        filter: &filter,
+        steps: None,
+    };
+    // Whether a workflow examined here has the rollup job the documented count is
+    // compared under.
+    let mut rollup_seen = false;
+
+    for path in &workflow_files {
+        // GitLab pipelines are a different document shape; they have their own diff.
+        if super::ci_gitlab::is_gitlab_ci_path(path) {
+            evaluate_gitlab_file(ctx, path, &mut out)?;
+            continue;
+        }
+        // A composite action's metadata file carries steps, not jobs: only its nested
+        // `uses:` are checked, never the rollup and job rules.
+        if is_action_metadata_path(path) {
+            evaluate_action_file(ctx, path, &mut out)?;
+            continue;
+        }
+        if evaluate_workflow_file(ctx, path, &mut added_steps, &mut out)? {
+            rollup_seen = true;
+        }
+    }
+
+    if !rollup_seen
+        && settings.documented_job_count_path.is_some()
+        && settings.documented_job_count_pattern.is_some()
+    {
+        // The count is compared under the rollup job only; say so when there was none.
+        let why = match &settings.rollup_job {
+            Some(rollup) => {
+                format!("no workflow examined in this run has the `rollup_job` (`{rollup}`)")
+            }
+            None => "`rollup_job` is not set".to_string(),
+        };
+        out.notes.push(format!("{why}; {NOT_COMPARED}"));
+    }
+    Ok(out)
+}
+
+/// The workflow files this run examines: with `diff_only`, the ones the change touches
+/// (a GitLab pipeline also when a file it includes changed), else every tracked one.
+/// `None` when `diff_only` leaves none, which is noted.
+fn workflow_files_to_examine(
+    ctx: &Context,
+    filter: &PathFilter,
+    workflow_filter: &PathFilter,
+    out: &mut GateOutcome,
+) -> Result<Option<Vec<String>>> {
+    let settings = &ctx.config.gates.ci_integrity;
     let workflow_files = if settings.diff_only {
         let changed = ctx.git.changed_files()?;
         let mut files = Vec::new();
@@ -146,7 +203,7 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
         if files.is_empty() {
             out.notes
                 .push("no workflow files modified in this diff".to_string());
-            return Ok(out);
+            return Ok(None);
         }
         files
     } else {
@@ -157,1113 +214,1384 @@ pub fn evaluate_ci_integrity(ctx: &Context) -> Result<GateOutcome> {
             .collect();
         files
     };
+    Ok(Some(workflow_files))
+}
 
-    // Steps of the jobs this change added, read once and only when a job or workflow
-    // was removed.
-    let mut added_steps: Option<Vec<serde_yaml::Value>> = None;
-    // Whether a workflow examined here has the rollup job the documented count is
-    // compared under.
-    let mut rollup_seen = false;
+/// Steps of the jobs this change added, read once and only when a job or workflow
+/// was removed.
+struct AddedSteps<'a> {
+    workflow_filter: &'a PathFilter,
+    filter: &'a PathFilter,
+    steps: Option<Vec<serde_yaml::Value>>,
+}
 
-    for path in &workflow_files {
-        // GitLab pipelines are a different document shape; they have their own diff.
-        if super::ci_gitlab::is_gitlab_ci_path(path) {
-            evaluate_gitlab_file(ctx, path, &mut out)?;
-            continue;
+impl AddedSteps<'_> {
+    /// Reads the steps unless they were read already.
+    fn load(&mut self, ctx: &Context, notes: &mut Vec<String>) -> Result<()> {
+        if self.steps.is_none() {
+            self.steps = Some(added_job_steps(
+                ctx,
+                self.workflow_filter,
+                self.filter,
+                notes,
+            )?);
         }
-        // A composite action's metadata file carries steps, not jobs: only its nested
-        // `uses:` are checked, never the rollup and job rules.
-        if is_action_metadata_path(path) {
-            evaluate_action_file(ctx, path, &mut out)?;
-            continue;
+        Ok(())
+    }
+
+    /// The steps read so far: none before the first `load`.
+    fn loaded(&self) -> &[serde_yaml::Value] {
+        self.steps.as_deref().unwrap_or(&[])
+    }
+}
+
+/// One GitHub workflow file under comparison: its head text, its base text when the base
+/// side has the file, and each side's document when it parses.
+struct WorkflowFile<'a> {
+    path: &'a str,
+    head_content: &'a str,
+    base_content: Option<&'a str>,
+    head: Option<&'a serde_yaml::Value>,
+    base: Option<&'a serde_yaml::Value>,
+}
+
+/// One job of the head workflow, with the base side's job of the same id.
+struct JobSite<'a> {
+    id: &'a str,
+    value: &'a serde_yaml::Value,
+    base_job: Option<&'a serde_yaml::Value>,
+    line: Option<usize>,
+}
+
+/// One step of a head job, with the base step it is compared against and the line it is
+/// reported at.
+struct StepSite<'a> {
+    job: &'a JobSite<'a>,
+    step: &'a serde_yaml::Value,
+    base_step: Option<&'a serde_yaml::Value>,
+    approx_line: Option<usize>,
+}
+
+/// Evaluates one GitHub workflow file against its base side. Returns whether the file
+/// has the rollup job.
+fn evaluate_workflow_file(
+    ctx: &Context,
+    path: &str,
+    added_steps: &mut AddedSteps,
+    out: &mut GateOutcome,
+) -> Result<bool> {
+    let settings = &ctx.config.gates.ci_integrity;
+    let head_content = match ctx.git.head_content(path)? {
+        Some(c) => c,
+        None => {
+            // Workflow file deleted in head
+            report_deleted_workflow(ctx, path, added_steps, out)?;
+            return Ok(false);
         }
-        let head_content = match ctx.git.head_content(path)? {
-            Some(c) => c,
-            None => {
-                // Workflow file deleted in head
-                if let Some(base_src) = ctx.git.base_content(path)? {
-                    if let Some(base_val) = parse_yaml_side(&mut out, path, "base", Some(&base_src))
-                    {
-                        let (base_jobs, _) =
-                            parse_workflow_jobs(&base_src, settings.rollup_job.as_deref());
-                        let verification: Vec<(&String, &serde_yaml::Value)> = base_jobs
-                            .iter()
-                            .filter_map(|j| {
-                                let job_val = base_val.get("jobs").and_then(|m| m.get(j))?;
-                                is_verification_job(j, job_val).then_some((j, job_val))
-                            })
-                            .collect();
-                        if added_steps.is_none() && !verification.is_empty() {
-                            added_steps = Some(added_job_steps(
-                                ctx,
-                                &workflow_filter,
-                                &filter,
-                                &mut out.notes,
-                            )?);
-                        }
-                        let added = added_steps.as_deref().unwrap_or(&[]);
-                        if !verification.is_empty()
-                            && verification.iter().all(|(_, job)| job_moved(job, added))
-                        {
-                            out.notes.push(format!(
-                                "{path}: workflow deleted; the verification steps of its jobs ({}) are in jobs this change added, so it is treated as a move",
-                                verification
-                                    .iter()
-                                    .map(|(j, _)| j.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            ));
-                        } else if !verification.is_empty() {
-                            record_or_excuse(
-                                ctx,
-                                None,
-                                &mut out,
-                                settings.severity,
-                                &crate::findings::VERIFICATION_WORKFLOW_DELETED,
-                                Some(path.clone()),
-                                None,
-                                format!("Workflow '{path}' containing verification jobs was deleted."),
-                                "Restore the deleted workflow or provide an allow-gate-weakening: ci-integrity <reason> directive.",
-                                path,
-                            );
-                        }
-                    }
-                }
-                continue;
-            }
-        };
+    };
 
-        let base_content = ctx.git.base_content(path)?;
-        let head_val = parse_yaml_side(&mut out, path, "head", Some(&head_content));
-        let base_val = parse_yaml_side(&mut out, path, "base", base_content.as_deref());
-        if head_val.is_some() {
-            out.examined += 1;
-        } else if base_content.is_some() {
-            // A workflow that does not parse runs none of the jobs its base side had, and
-            // cannot be shown to be unweakened: a finding, as for a GitLab pipeline. A new
-            // file has nothing to be weakened against and keeps the note alone.
-            out.push(
-                settings.severity,
-                &crate::findings::PIPELINE_FILE_UNREADABLE,
-                Some(path),
-                None,
-                format!(
-                    "`{path}` does not parse as YAML on the head side, so its jobs could not be compared with its base side."
-                ),
-                "Fix the YAML so the workflow can be checked.",
-            );
-        }
+    let base_content = ctx.git.base_content(path)?;
+    let head_val = parse_yaml_side(out, path, "head", Some(&head_content));
+    let base_val = parse_yaml_side(out, path, "base", base_content.as_deref());
+    if head_val.is_some() {
+        out.examined += 1;
+    } else if base_content.is_some() {
+        // A workflow that does not parse runs none of the jobs its base side had, and
+        // cannot be shown to be unweakened: a finding, as for a GitLab pipeline. A new
+        // file has nothing to be weakened against and keeps the note alone.
+        out.push(
+            settings.severity,
+            &crate::findings::PIPELINE_FILE_UNREADABLE,
+            Some(path),
+            None,
+            format!(
+                "`{path}` does not parse as YAML on the head side, so its jobs could not be compared with its base side."
+            ),
+            "Fix the YAML so the workflow can be checked.",
+        );
+    }
 
-        if let (Some(b), Some(h)) = (&base_val, &head_val) {
-            let mut head_pins = discipline_pins(h);
-            locate_pins(&mut head_pins, &head_content);
-            let (blocking, notes) = discipline_pin_changes(&discipline_pins(b), &head_pins);
-            for n in notes {
-                out.notes.push(format!("`{path}`: discipline pin {n}"));
-            }
-            if !blocking.is_empty() {
-                let line = blocking.iter().filter_map(|(_, l)| *l).min();
-                record_or_excuse(
-                    ctx,
-                    Some(&head_content),
-                    &mut out,
-                    settings.severity,
-                    &crate::findings::DISCIPLINE_VERSION_CHANGED,
-                    Some(path.clone()),
-                    line,
-                    format!(
-                        "The discipline that judges this change is chosen by the change: {}.",
-                        describe_blocking(&blocking)
-                    ),
-                    "Keep the discipline pin, or move it to a newer immutable release; excuse with allow-gate-weakening: ci-integrity <reason>.",
-                    "discipline-version",
-                );
-            }
-        }
+    let wf = WorkflowFile {
+        path,
+        head_content: &head_content,
+        base_content: base_content.as_deref(),
+        head: head_val.as_ref(),
+        base: base_val.as_ref(),
+    };
 
-        // Pinning: every remote reference the workflow pulls in (step and job-level
-        // `uses:`, `container:`, `services.*.image`, `docker://`), compared against the
-        // base side's references.
-        if settings.pin_actions {
-            if let Some(head_doc) = &head_val {
-                let head_refs = workflow_pin_refs(head_doc, &head_content);
-                let base_refs =
-                    base_pin_set(base_val.as_ref().map(|b| {
-                        workflow_pin_refs(b, base_content.as_deref().unwrap_or_default())
-                    }));
-                check_pins(ctx, path, &head_content, &head_refs, &base_refs, &mut out);
-            }
-        }
+    check_discipline_pin(ctx, &wf, out);
+    check_workflow_pins(ctx, &wf, out);
+    check_workflow_exposures(ctx, &wf, out);
 
-        // Exposure: secrets or a write token handed to code the workflow does not
-        // control (template injection, `secrets: inherit`, persisted credentials, a
-        // third-party action beside secrets, a scheduled workflow reading secrets).
-        if let Some(head_doc) = &head_val {
-            let fp = &settings.first_party_action_prefixes;
-            let head_x = super::ci_exposure::workflow_exposures(head_doc, &head_content, fp);
-            let base_x = base_val
-                .as_ref()
-                .map(|b| {
-                    super::ci_exposure::workflow_exposures(
-                        b,
-                        base_content.as_deref().unwrap_or_default(),
-                        fp,
-                    )
-                })
-                .unwrap_or_default();
-            report_exposures(ctx, path, &head_content, head_x, &base_x, &mut out);
-        }
+    // 1. Rollup job checks
+    let rollup_seen = check_rollup_job(ctx, &wf, out)?;
 
-        // 1. Rollup job checks
-        let (jobs, rollup_needs) =
-            parse_workflow_jobs(&head_content, settings.rollup_job.as_deref());
-        let head_all_needs = parse_all_job_needs(&head_content);
-        if let Some(ref base_src) = base_content {
-            let base_all_needs = parse_all_job_needs(base_src);
-            for (job_name, base_needs) in &base_all_needs {
-                let is_gate_or_rollup = settings.rollup_job.as_deref() == Some(job_name.as_str())
-                    || job_name.contains("gate")
-                    || job_name.contains("rollup");
-                if is_gate_or_rollup && jobs.contains(job_name) {
-                    let head_needs = head_all_needs.get(job_name).cloned().unwrap_or_default();
-                    let dropped_needs: Vec<String> =
-                        base_needs.difference(&head_needs).cloned().collect();
-                    for dropped in dropped_needs {
-                        if jobs.contains(&dropped) {
-                            record_or_excuse(
-                                ctx,
-                                Some(&head_content),
-                                &mut out,
-                                settings.severity,
-                                &crate::findings::ROLLUP_NEEDS_REMOVED,
-                                Some(path.clone()),
-                                find_line_number(&head_content, job_name),
-                                format!("Rollup job '{job_name}' dropped dependency on '{dropped}' present in base."),
-                                format!("Restore '{dropped}' to '{job_name}' needs, or excuse with allow-gate-weakening: ci-integrity <reason>."),
-                                &dropped,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some(ref rollup) = settings.rollup_job {
-            if jobs.contains(rollup) {
-                rollup_seen = true;
-                let expected: HashSet<String> = jobs
-                    .iter()
-                    .filter(|j| *j != rollup && !settings.excluded_jobs.contains(j))
-                    .cloned()
-                    .collect();
-                let missing: Vec<String> = expected.difference(&rollup_needs).cloned().collect();
-
-                if !missing.is_empty() {
-                    record_or_excuse(
-                        ctx,
-                        Some(&head_content),
-                        &mut out,
-                        settings.severity,
-                        &crate::findings::ROLLUP_NEEDS_INCOMPLETE,
-                        Some(path.clone()),
-                        find_line_number(&head_content, rollup),
-                        format!("Rollup job '{rollup}' is missing dependencies on: {missing:?}"),
-                        format!("Add the missing jobs to '{rollup}' needs: {missing:?}, or excuse with allow-gate-weakening: ci-integrity <reason>."),
-                        rollup.as_str(),
-                    );
-                }
-
-                // 2. Documented job count check if configured
-                if let (Some(doc_path), Some(doc_pattern)) = (
-                    &settings.documented_job_count_path,
-                    &settings.documented_job_count_pattern,
-                ) {
-                    match documented_job_count(ctx, doc_path, doc_pattern)? {
-                        None => out.violations.push(Violation {
-                            gate: GATE,
-                            severity: ctx.overridable(settings.severity),
-                            code: crate::findings::full_code(
-                                GATE,
-                                &crate::findings::JOB_COUNT_FILE_MISSING,
-                            ),
-                            fingerprint: String::new(),
-                            anchor: None,
-                            legacy_title: None,
-                            title: crate::findings::JOB_COUNT_FILE_MISSING.title.to_string(),
-                            file: Some(doc_path.clone()),
-                            line: None,
-                            message: format!(
-                                "Documented job count file '{doc_path}' does not exist."
-                            ),
-                            remediation: Some(
-                                "Restore the documentation catalog or update configuration."
-                                    .to_string(),
-                            ),
-                        }),
-                        Some(Ok(doc_count)) if doc_count != jobs.len() => {
-                            out.violations.push(Violation {
-                                gate: GATE,
-                                severity: ctx.overridable(settings.severity),
-                                code: crate::findings::full_code(
-                                    GATE,
-                                    &crate::findings::JOB_COUNT_MISMATCH,
-                                ),
-                                fingerprint: String::new(),
-                                title: crate::findings::JOB_COUNT_MISMATCH.title.to_string(),
-                                anchor: None,
-                                legacy_title: crate::findings::JOB_COUNT_MISMATCH.was_title(),
-                                file: Some(doc_path.clone()),
-                                line: None,
-                                message: format!(
-                                    "Documented job count in '{doc_path}' ({doc_count}) does not match workflow jobs count ({}).",
-                                    jobs.len()
-                                ),
-                                remediation: Some(format!(
-                                    "Update the documented count in '{doc_path}' to {} jobs.",
-                                    jobs.len()
-                                )),
-                            });
-                        }
-                        Some(Ok(_)) => {}
-                        Some(Err(note)) => out.notes.push(note),
-                    }
-                }
-            }
-        }
-
+    if let Some(head_doc) = wf.head {
         // 3. Workflow-level trigger and permission AST checks
-        if let Some(head_doc) = &head_val {
-            // Check pull_request_target
-            let head_has_pr_target = workflow_has_trigger(head_doc, "pull_request_target");
-            let base_has_pr_target = base_val
-                .as_ref()
-                .map(|b| workflow_has_trigger(b, "pull_request_target"))
-                .unwrap_or(false);
+        check_triggers_and_permissions(ctx, &wf, head_doc, out);
 
-            if head_has_pr_target && !base_has_pr_target {
-                let line_no = find_line_number(&head_content, "pull_request_target");
-                record_or_excuse(
-                    ctx,
-                    Some(&head_content),
-                    &mut out,
-                    settings.severity,
-                    &crate::findings::PULL_REQUEST_TARGET_TRIGGER,
-                    Some(path.clone()),
-                    line_no,
-                    "Workflow introduces 'pull_request_target' trigger, which executes with repository write access and secrets.".to_string(),
-                    "Use 'pull_request' instead, or excuse with allow-gate-weakening: ci-integrity <reason>.",
-                    "pull_request_target",
-                );
-            }
-
-            // Check permissions widening
-            if let Some(base_doc) = &base_val {
-                let head_perm_level = workflow_permission_level(head_doc);
-                let base_perm_level = workflow_permission_level(base_doc);
-                if head_perm_level > base_perm_level {
-                    let line_no = find_line_number(&head_content, "permissions:");
-                    record_or_excuse(
-                        ctx,
-                        Some(&head_content),
-                        &mut out,
-                        settings.severity,
-                        &crate::findings::WORKFLOW_PERMISSIONS_WIDENED,
-                        Some(path.clone()),
-                        line_no,
-                        "Workflow permissions were widened from base ref (e.g. gained write privileges).".to_string(),
-                        "Keep permissions minimal (e.g. read-all or specific read scopes), or excuse with allow-gate-weakening: ci-integrity <reason>.",
-                        "permissions",
-                    );
-                }
-            }
-
-            // Check workflow-level timeout-minutes
-            if let Some(base_doc) = &base_val {
-                if base_doc.get("timeout-minutes").is_some()
-                    && head_doc.get("timeout-minutes").is_none()
-                {
-                    record_or_excuse(
-                        ctx,
-                        Some(&head_content),
-                        &mut out,
-                        settings.severity,
-                        &crate::findings::WORKFLOW_TIMEOUT_REMOVED,
-                        Some(path.clone()),
-                        None,
-                        "Workflow-level 'timeout-minutes' was removed.".to_string(),
-                        "Restore timeout-minutes or excuse with allow-gate-weakening: ci-integrity <reason>.",
-                        "timeout-minutes",
-                    );
-                }
-            }
-
-            // 4. Job and step comparisons against base
-            if let Some(base_doc) = &base_val {
-                if let (Some(base_jobs_map), Some(head_jobs_map)) = (
-                    base_doc.get("jobs").and_then(|j| j.as_mapping()),
-                    head_doc.get("jobs").and_then(|j| j.as_mapping()),
-                ) {
-                    // Check for deleted verification jobs
-                    for (job_k, job_v) in base_jobs_map {
-                        let job_id = job_k.as_str().unwrap_or("");
-                        let is_rollup = settings.rollup_job.as_deref() == Some(job_id);
-                        if !head_jobs_map.contains_key(job_k)
-                            && (is_verification_job(job_id, job_v) || is_rollup)
-                        {
-                            if !is_rollup {
-                                if added_steps.is_none() {
-                                    added_steps = Some(added_job_steps(
-                                        ctx,
-                                        &workflow_filter,
-                                        &filter,
-                                        &mut out.notes,
-                                    )?);
-                                }
-                                if job_moved(job_v, added_steps.as_deref().unwrap_or(&[])) {
-                                    out.notes.push(format!(
-                                        "{path}: job '{job_id}' was removed; its verification steps are in jobs this change added, so it is treated as a rename or split"
-                                    ));
-                                    continue;
-                                }
-                            }
-                            let before = out.violations.len();
-                            record_or_excuse(
-                                ctx,
-                                Some(&head_content),
-                                &mut out,
-                                settings.severity,
-                                &crate::findings::VERIFICATION_JOB_REMOVED,
-                                Some(path.clone()),
-                                None,
-                                format!("Verification job '{job_id}' present in base was deleted."),
-                                format!("Restore job '{job_id}' or excuse with allow-gate-weakening: ci-integrity <reason>."),
-                                job_id,
-                            );
-                            // Several jobs can leave one workflow: the job tells them apart.
-                            if out.violations.len() > before {
-                                out.anchor_last(format!("job:{job_id}"));
-                            }
-                        }
-                    }
-
-                    // Compare surviving jobs
-                    for (job_k, head_job_v) in head_jobs_map {
-                        let job_id = job_k.as_str().unwrap_or("");
-                        if let Some(base_job_v) = base_jobs_map.get(job_k) {
-                            // Check job-level timeout-minutes
-                            if base_job_v.get("timeout-minutes").is_some()
-                                && head_job_v.get("timeout-minutes").is_none()
-                            {
-                                record_or_excuse(
-                                    ctx,
-                                    Some(&head_content),
-                                    &mut out,
-                                    settings.severity,
-                                    &crate::findings::JOB_TIMEOUT_REMOVED,
-                                    Some(path.clone()),
-                                    find_line_number(&head_content, job_id),
-                                    format!("Job '{job_id}' timeout-minutes was removed."),
-                                    format!("Restore timeout-minutes to job '{job_id}' or excuse with allow-gate-weakening: ci-integrity <reason>."),
-                                    job_id,
-                                );
-                            }
-
-                            // Check deleted verification steps in this job
-                            let base_steps = base_job_v
-                                .get("steps")
-                                .and_then(|s| s.as_sequence())
-                                .cloned()
-                                .unwrap_or_default();
-                            let head_steps = head_job_v
-                                .get("steps")
-                                .and_then(|s| s.as_sequence())
-                                .cloned()
-                                .unwrap_or_default();
-
-                            let pairs = pair_steps(&base_steps, &head_steps);
-                            for (b_step, pair) in base_steps.iter().zip(&pairs) {
-                                if !is_verification_step(b_step) {
-                                    continue;
-                                }
-                                let step_name = step_label(b_step, "unnamed verification step");
-                                match pair {
-                                    Some(StepMatch::Same(_)) => {}
-                                    Some(StepMatch::Renamed { head, similarity }) => {
-                                        let new_name =
-                                            step_label(&head_steps[*head], "unnamed step");
-                                        out.notes.push(format!(
-                                            "{path}: verification step '{step_name}' in job '{job_id}' was renamed to '{new_name}' (run body similarity {similarity:.2} >= rename threshold {STEP_RENAME_SIMILARITY:.2}); treated as a rename, not a deletion"
-                                        ));
-                                    }
-                                    None => {
-                                        let why = deletion_reason(b_step, &head_steps, &pairs);
-                                        record_or_excuse(
-                                            ctx,
-                                            Some(&head_content),
-                                            &mut out,
-                                            settings.severity,
-                                            &crate::findings::VERIFICATION_STEP_REMOVED,
-                                            Some(path.clone()),
-                                            find_line_number(&head_content, job_id),
-                                            format!("Verification step '{step_name}' in job '{job_id}' was deleted: no step in head matches it by id, name, or run body ({why})."),
-                                            format!("Restore step '{step_name}' or excuse with allow-gate-weakening: ci-integrity <reason>."),
-                                            step_name,
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // 4. Job and step comparisons against base
+        compare_jobs_with_base(ctx, &wf, head_doc, added_steps, out)?;
 
         // 5. AST Step-by-Step and Job-level inspection
-        if let Some(head_doc) = &head_val {
-            if let Some(jobs_map) = head_doc.get("jobs").and_then(|j| j.as_mapping()) {
-                let base_jobs_map = base_val
-                    .as_ref()
-                    .and_then(|b| b.get("jobs"))
-                    .and_then(|j| j.as_mapping());
+        inspect_jobs(ctx, &wf, head_doc, out);
+    }
+    Ok(rollup_seen)
+}
 
-                for (job_k, job_v) in jobs_map {
-                    let job_id = job_k.as_str().unwrap_or("");
-                    let job_line = find_line_number(&head_content, &format!("{job_id}:"))
-                        .or_else(|| find_line_number(&head_content, job_id));
+/// A workflow file the head side no longer has: reported when it held verification jobs,
+/// unless their steps are in jobs this change added.
+fn report_deleted_workflow(
+    ctx: &Context,
+    path: &str,
+    added_steps: &mut AddedSteps,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    let settings = &ctx.config.gates.ci_integrity;
+    if let Some(base_src) = ctx.git.base_content(path)? {
+        if let Some(base_val) = parse_yaml_side(out, path, "base", Some(&base_src)) {
+            let (base_jobs, _) = parse_workflow_jobs(&base_src, settings.rollup_job.as_deref());
+            let verification: Vec<(&String, &serde_yaml::Value)> = base_jobs
+                .iter()
+                .filter_map(|j| {
+                    let job_val = base_val.get("jobs").and_then(|m| m.get(j))?;
+                    is_verification_job(j, job_val).then_some((j, job_val))
+                })
+                .collect();
+            if !verification.is_empty() {
+                added_steps.load(ctx, &mut out.notes)?;
+            }
+            let added = added_steps.loaded();
+            if !verification.is_empty() && verification.iter().all(|(_, job)| job_moved(job, added))
+            {
+                out.notes.push(format!(
+                    "{path}: workflow deleted; the verification steps of its jobs ({}) are in jobs this change added, so it is treated as a move",
+                    verification
+                        .iter()
+                        .map(|(j, _)| j.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            } else if !verification.is_empty() {
+                record_or_excuse(
+                    ctx,
+                    None,
+                    out,
+                    settings.severity,
+                    &crate::findings::VERIFICATION_WORKFLOW_DELETED,
+                    Some(path.to_string()),
+                    None,
+                    format!("Workflow '{path}' containing verification jobs was deleted."),
+                    "Restore the deleted workflow or provide an allow-gate-weakening: ci-integrity <reason> directive.",
+                    path,
+                );
+            }
+        }
+    }
+    Ok(())
+}
 
-                    // Job-level continue-on-error
-                    if settings.forbid_continue_on_error
-                        && job_v.get("continue-on-error").and_then(|c| c.as_bool()) == Some(true)
-                    {
-                        let base_had_it = base_jobs_map
-                            .and_then(|m| m.get(job_k))
-                            .and_then(|b| b.get("continue-on-error"))
-                            .and_then(|c| c.as_bool())
-                            == Some(true);
-                        if !base_had_it {
-                            let coe_line = find_line_after(
-                                &head_content,
-                                "continue-on-error",
-                                job_line.unwrap_or(1),
-                            )
-                            .or(job_line);
-                            record_or_excuse(
-                                ctx,
-                                Some(&head_content),
-                                &mut out,
-                                if is_verification_job(job_id, job_v) { settings.severity } else { Severity::Warning },
-                                &crate::findings::JOB_FAILURE_MASKED_CONTINUE_ON_ERROR,
-                                Some(path.clone()),
-                                coe_line,
-                                format!("Job '{job_id}' carries 'continue-on-error: true', which masks failures in CI."),
-                                "Remove continue-on-error or provide an allow-gate-weakening: ci-integrity <reason> directive.",
-                                job_id,
-                            );
-                        }
-                    }
+/// Reports a change of the discipline release the workflow pins: the binary that judges
+/// the change is then chosen by the change.
+fn check_discipline_pin(ctx: &Context, wf: &WorkflowFile, out: &mut GateOutcome) {
+    let settings = &ctx.config.gates.ci_integrity;
+    let path = wf.path;
+    let head_content = wf.head_content;
+    if let (Some(b), Some(h)) = (wf.base, wf.head) {
+        let mut head_pins = discipline_pins(h);
+        locate_pins(&mut head_pins, head_content);
+        let (blocking, notes) = discipline_pin_changes(&discipline_pins(b), &head_pins);
+        for n in notes {
+            out.notes.push(format!("`{path}`: discipline pin {n}"));
+        }
+        if !blocking.is_empty() {
+            let line = blocking.iter().filter_map(|(_, l)| *l).min();
+            record_or_excuse(
+                ctx,
+                Some(head_content),
+                out,
+                settings.severity,
+                &crate::findings::DISCIPLINE_VERSION_CHANGED,
+                Some(path.to_string()),
+                line,
+                format!(
+                    "The discipline that judges this change is chosen by the change: {}.",
+                    describe_blocking(&blocking)
+                ),
+                "Keep the discipline pin, or move it to a newer immutable release; excuse with allow-gate-weakening: ci-integrity <reason>.",
+                "discipline-version",
+            );
+        }
+    }
+}
 
-                    // Job-level if: always() on verification jobs
-                    if is_verification_job(job_id, job_v) {
-                        if let Some(if_val) = job_v.get("if") {
-                            let if_cond = match if_val {
-                                serde_yaml::Value::String(s) => s.as_str(),
-                                serde_yaml::Value::Bool(b) => {
-                                    if *b {
-                                        "true"
-                                    } else {
-                                        "false"
-                                    }
-                                }
-                                _ => "",
-                            };
-                            if (if_cond.contains("always()") || if_cond.contains("cancelled()"))
-                                && !crate::doctor::rollup_enforces(job_v)
-                            {
-                                let base_had_always = base_jobs_map
-                                    .and_then(|m| m.get(job_k))
-                                    .and_then(|b| b.get("if"))
-                                    .map(|b| {
-                                        let b_s = match b {
-                                            serde_yaml::Value::String(s) => s.as_str(),
-                                            serde_yaml::Value::Bool(bv) => {
-                                                if *bv {
-                                                    "true"
-                                                } else {
-                                                    "false"
-                                                }
-                                            }
-                                            _ => "",
-                                        };
-                                        b_s.contains("always()") || b_s.contains("cancelled()")
-                                    })
-                                    .unwrap_or(false);
-                                if !base_had_always {
-                                    let if_line = find_line_after(
-                                        &head_content,
-                                        "if:",
-                                        job_line.unwrap_or(1),
-                                    )
-                                    .or(job_line);
-                                    record_or_excuse(
-                                        ctx,
-                                        Some(&head_content),
-                                        &mut out,
-                                        settings.severity,
-                                        &crate::findings::VERIFICATION_JOB_MASKED_BY_CONDITION,
-                                        Some(path.clone()),
-                                        if_line,
-                                        format!("Verification job '{job_id}' carries 'if: {if_cond}', masking earlier pipeline failures."),
-                                        "Remove conditional masking or excuse with allow-gate-weakening: ci-integrity <reason>.",
-                                        "if-always",
-                                    );
-                                }
-                            }
-                        }
-                    }
+/// Checks that the remote references the workflow pulls in are pinned.
+fn check_workflow_pins(ctx: &Context, wf: &WorkflowFile, out: &mut GateOutcome) {
+    let settings = &ctx.config.gates.ci_integrity;
+    let path = wf.path;
+    let head_content = wf.head_content;
+    let (base_content, base_val) = (wf.base_content, wf.base);
+    // Pinning: every remote reference the workflow pulls in (step and job-level
+    // `uses:`, `container:`, `services.*.image`, `docker://`), compared against the
+    // base side's references.
+    if settings.pin_actions {
+        if let Some(head_doc) = wf.head {
+            let head_refs = workflow_pin_refs(head_doc, head_content);
+            let base_refs = base_pin_set(
+                base_val.map(|b| workflow_pin_refs(b, base_content.unwrap_or_default())),
+            );
+            check_pins(ctx, path, head_content, &head_refs, &base_refs, out);
+        }
+    }
+}
 
-                    let base_job_steps = base_jobs_map
-                        .and_then(|m| m.get(job_k))
-                        .and_then(|j| j.get("steps"))
-                        .and_then(|s| s.as_sequence());
+/// Reports secrets or a write token the workflow newly exposes.
+fn check_workflow_exposures(ctx: &Context, wf: &WorkflowFile, out: &mut GateOutcome) {
+    let settings = &ctx.config.gates.ci_integrity;
+    let path = wf.path;
+    let head_content = wf.head_content;
+    let (base_content, base_val) = (wf.base_content, wf.base);
+    // Exposure: secrets or a write token handed to code the workflow does not
+    // control (template injection, `secrets: inherit`, persisted credentials, a
+    // third-party action beside secrets, a scheduled workflow reading secrets).
+    if let Some(head_doc) = wf.head {
+        let fp = &settings.first_party_action_prefixes;
+        let head_x = super::ci_exposure::workflow_exposures(head_doc, head_content, fp);
+        let base_x = base_val
+            .map(|b| {
+                super::ci_exposure::workflow_exposures(b, base_content.unwrap_or_default(), fp)
+            })
+            .unwrap_or_default();
+        report_exposures(ctx, path, head_content, head_x, &base_x, out);
+    }
+}
 
-                    if let Some(steps) = job_v.get("steps").and_then(|s| s.as_sequence()) {
-                        // Head step index -> the base step it was renamed from, so a
-                        // renamed step is still compared against its base form.
-                        let mut renamed_from: HashMap<usize, &serde_yaml::Value> = HashMap::new();
-                        if let Some(b_steps) = base_job_steps {
-                            for (bi, pair) in pair_steps(b_steps, steps).into_iter().enumerate() {
-                                if let Some(StepMatch::Renamed { head, .. }) = pair {
-                                    renamed_from.insert(head, &b_steps[bi]);
-                                }
-                            }
-                        }
-                        for (step_idx, step) in steps.iter().enumerate() {
-                            let step_name = step.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                            let step_id = step.get("id").and_then(|i| i.as_str()).unwrap_or("");
-                            let uses_str = step.get("uses").and_then(|u| u.as_str());
-                            let run_str = step.get("run").and_then(|r| r.as_str());
+/// Checks the rollup job: the dependencies it kept, the jobs it must depend on, and the
+/// documented job count. Returns whether the workflow has the rollup job.
+fn check_rollup_job(ctx: &Context, wf: &WorkflowFile, out: &mut GateOutcome) -> Result<bool> {
+    let settings = &ctx.config.gates.ci_integrity;
+    let path = wf.path;
+    let head_content = wf.head_content;
+    let (jobs, rollup_needs) = parse_workflow_jobs(head_content, settings.rollup_job.as_deref());
+    let head_all_needs = parse_all_job_needs(head_content);
+    check_rollup_needs_kept(ctx, wf, &jobs, &head_all_needs, out);
 
-                            // Find matching base step
-                            let base_step = base_job_steps
-                                .and_then(|b_steps| {
-                                    b_steps.iter().find(|b| steps_match_identity(b, step))
-                                })
-                                .or_else(|| renamed_from.get(&step_idx).copied());
+    let mut rollup_seen = false;
+    if let Some(ref rollup) = settings.rollup_job {
+        if jobs.contains(rollup) {
+            rollup_seen = true;
+            let expected: HashSet<String> = jobs
+                .iter()
+                .filter(|j| *j != rollup && !settings.excluded_jobs.contains(j))
+                .cloned()
+                .collect();
+            let missing: Vec<String> = expected.difference(&rollup_needs).cloned().collect();
 
-                            let approx_line = find_step_line(
-                                &head_content,
-                                step_name,
-                                step_id,
-                                uses_str,
-                                run_str,
-                            );
+            if !missing.is_empty() {
+                record_or_excuse(
+                    ctx,
+                    Some(head_content),
+                    out,
+                    settings.severity,
+                    &crate::findings::ROLLUP_NEEDS_INCOMPLETE,
+                    Some(path.to_string()),
+                    find_line_number(head_content, rollup),
+                    format!("Rollup job '{rollup}' is missing dependencies on: {missing:?}"),
+                    format!("Add the missing jobs to '{rollup}' needs: {missing:?}, or excuse with allow-gate-weakening: ci-integrity <reason>."),
+                    rollup.as_str(),
+                );
+            }
 
-                            if let Some(b) = base_step {
-                                if b == step {
-                                    continue;
-                                }
-                            }
+            // 2. Documented job count check if configured
+            check_documented_job_count(ctx, jobs.len(), out)?;
+        }
+    }
+    Ok(rollup_seen)
+}
 
-                            if let Some(line_no) = approx_line {
-                                if let Some(line) = head_content.lines().nth(line_no - 1) {
-                                    if line_allows(line, GATE) {
-                                        out.inline_exemptions += 1;
-                                        continue;
-                                    }
-                                }
-                            }
-
-                            // 5a. Action pinning is checked for the whole file above
-                            // (`check_pins`).
-
-                            // 5b. Check orieg/discipline action inputs
-                            if let Some(uses) = uses_str {
-                                if uses.contains("orieg/discipline")
-                                    || uses.contains("discipline")
-                                    || uses == "./action.yml"
-                                {
-                                    // policy_from moved off `base` (or the whole `with:` block dropped): the change
-                                    // is judged by its own configuration again
-                                    let policy_from = |w: Option<&serde_yaml::Value>| {
-                                        w.and_then(|w| w.get("policy_from"))
-                                            .and_then(|p| p.as_str())
-                                            .map(|p| p.trim().to_ascii_lowercase())
-                                    };
-                                    if policy_from(base_step.and_then(|b| b.get("with"))).as_deref()
-                                        == Some("base")
-                                        && policy_from(step.get("with")).as_deref() != Some("base")
-                                    {
-                                        record_or_excuse(
-                                            ctx,
-                                            Some(&head_content),
-                                            &mut out,
-                                            settings.severity,
-                                            &crate::findings::DISCIPLINE_ACTION_POLICY_FROM,
-                                            Some(path.clone()),
-                                            approx_line,
-                                            "The discipline step no longer sets 'policy_from: base'; the change would be judged by its own discipline.toml.".to_string(),
-                                            "Restore 'policy_from: base' or excuse with allow-gate-weakening: ci-integrity <reason>.",
-                                            "policy_from",
-                                        );
-                                    }
-
-                                    if let Some(with_val) = step.get("with") {
-                                        let base_with_val = base_step.and_then(|b| b.get("with"));
-
-                                        // disable input added or expanded
-                                        if let Some(disable_val) = with_val.get("disable") {
-                                            let base_disable =
-                                                base_with_val.and_then(|b| b.get("disable"));
-                                            let is_new_or_expanded =
-                                                match (base_disable, disable_val) {
-                                                    (None, _) => true,
-                                                    (Some(bv), hv) => bv != hv,
-                                                };
-                                            if is_new_or_expanded {
-                                                record_or_excuse(
-                                                    ctx,
-                                                    Some(&head_content),
-                                                    &mut out,
-                                                    settings.severity,
-                                                    &crate::findings::DISCIPLINE_ACTION_DISABLE_INPUT,
-                                                    Some(path.clone()),
-                                                    approx_line,
-                                                    "The 'disable' input on the discipline step was added or widened, bypassing verification gates.".to_string(),
-                                                    "Remove 'disable' or excuse with allow-gate-weakening: ci-integrity <reason>.",
-                                                    "disable",
-                                                );
-                                            }
-                                        }
-
-                                        // advisory switched on: the step reports and exits 0
-                                        if advisory_input_on(Some(with_val))
-                                            && !advisory_input_on(base_with_val)
-                                        {
-                                            record_or_excuse(
-                                                ctx,
-                                                Some(&head_content),
-                                                &mut out,
-                                                settings.severity,
-                                                &crate::findings::DISCIPLINE_ACTION_ADVISORY,
-                                                Some(path.clone()),
-                                                approx_line,
-                                                "The 'advisory' input on the discipline step was switched on; the step exits 0 whatever the gates report.".to_string(),
-                                                "Remove 'advisory' or excuse with allow-gate-weakening: ci-integrity <reason>.",
-                                                "advisory",
-                                            );
-                                        }
-
-                                        // fail_on_warnings set to false
-                                        if let Some(fow) = with_val.get("fail_on_warnings") {
-                                            if fow.as_bool() == Some(false) {
-                                                let base_fow = base_with_val
-                                                    .and_then(|b| b.get("fail_on_warnings"))
-                                                    .and_then(|b| b.as_bool())
-                                                    .unwrap_or(true);
-                                                if base_fow {
-                                                    record_or_excuse(
-                                                        ctx,
-                                                        Some(&head_content),
-                                                        &mut out,
-                                                        settings.severity,
-                                                        &crate::findings::DISCIPLINE_ACTION_FAIL_ON_WARNINGS_OFF,
-                                                        Some(path.clone()),
-                                                        approx_line,
-                                                        "fail_on_warnings was set to false, suppressing warning-severity gate failures.".to_string(),
-                                                        "Restore fail_on_warnings: true or excuse with allow-gate-weakening: ci-integrity <reason>.",
-                                                        "fail_on_warnings",
-                                                    );
-                                                }
-                                            }
-                                        }
-
-                                        // config_override pointing to non-existent or weakened files
-                                        if let Some(cfg_ov) =
-                                            with_val.get("config_override").and_then(|c| c.as_str())
-                                        {
-                                            let ov_file = Path::new(ctx.git.root()).join(cfg_ov);
-                                            if !ov_file.is_file() {
-                                                record_or_excuse(
-                                                    ctx,
-                                                    Some(&head_content),
-                                                    &mut out,
-                                                    settings.severity,
-                                                    &crate::findings::DISCIPLINE_ACTION_CONFIG_OVERRIDE_INVALID,
-                                                    Some(path.clone()),
-                                                    approx_line,
-                                                    format!("config_override points to non-existent file '{cfg_ov}'."),
-                                                    "Provide a valid configuration file path.",
-                                                    "config_override",
-                                                );
-                                            }
-                                        }
-
-                                        // suite narrowed
-                                        if let Some(suite_val) =
-                                            with_val.get("suite").and_then(|s| s.as_str())
-                                        {
-                                            let base_suite = base_with_val
-                                                .and_then(|b| b.get("suite"))
-                                                .and_then(|s| s.as_str());
-                                            if let Some(bs) = base_suite {
-                                                if bs != suite_val {
-                                                    record_or_excuse(
-                                                        ctx,
-                                                        Some(&head_content),
-                                                        &mut out,
-                                                        settings.severity,
-                                                        &crate::findings::DISCIPLINE_ACTION_SUITE_CHANGED,
-                                                        Some(path.clone()),
-                                                        approx_line,
-                                                        format!("discipline suite changed from '{bs}' to '{suite_val}'."),
-                                                        "Restore original suite or excuse with allow-gate-weakening: ci-integrity <reason>.",
-                                                        "suite",
-                                                    );
-                                                }
-                                            }
-                                        }
-
-                                        // directive_sources widened
-                                        if let Some(ds_val) = with_val.get("directive_sources") {
-                                            let base_ds = base_with_val
-                                                .and_then(|b| b.get("directive_sources"));
-                                            if base_ds.is_none() || base_ds != Some(ds_val) {
-                                                let ds_str = serde_yaml::to_string(ds_val)
-                                                    .unwrap_or_default();
-                                                if ds_str.contains("commits") {
-                                                    record_or_excuse(
-                                                        ctx,
-                                                        Some(&head_content),
-                                                        &mut out,
-                                                        settings.severity,
-                                                        &crate::findings::DISCIPLINE_ACTION_DIRECTIVE_SOURCES_WIDENED,
-                                                        Some(path.clone()),
-                                                        approx_line,
-                                                        "directive_sources was widened to accept directives from commit messages.".to_string(),
-                                                        "Keep directive sources restricted, or excuse with allow-gate-weakening: ci-integrity <reason>.",
-                                                        "directive_sources",
-                                                    );
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // 5b'. `discipline check --advisory` in a run command
-                            if let Some(head_run) = run_str {
-                                let base_run = base_step
-                                    .and_then(|b| b.get("run"))
-                                    .and_then(|r| r.as_str())
-                                    .unwrap_or("");
-                                if run_is_advisory(head_run) && !run_is_advisory(base_run) {
-                                    record_or_excuse(
-                                        ctx,
-                                        Some(&head_content),
-                                        &mut out,
-                                        settings.severity,
-                                        &crate::findings::DISCIPLINE_RUN_ADVISORY,
-                                        Some(path.clone()),
-                                        approx_line,
-                                        "A discipline command gained '--advisory'; it exits 0 whatever the gates report.".to_string(),
-                                        "Remove '--advisory' or excuse with allow-gate-weakening: ci-integrity <reason>.",
-                                        "--advisory",
-                                    );
-                                }
-                            }
-
-                            // 5c. Dropping build/clippy flags from run commands
-                            if let Some(head_run) = run_str {
-                                if let Some(base_run) = base_step
-                                    .and_then(|b| b.get("run"))
-                                    .and_then(|r| r.as_str())
-                                {
-                                    if base_run.contains("-D warnings")
-                                        && !head_run.contains("-D warnings")
-                                    {
-                                        record_or_excuse(
-                                            ctx,
-                                            Some(&head_content),
-                                            &mut out,
-                                            settings.severity,
-                                            &crate::findings::COMPILER_DENY_WARNINGS_REMOVED,
-                                            Some(path.clone()),
-                                            approx_line,
-                                            "Step dropped '-D warnings' from command, allowing compiler/linter warnings to pass.".to_string(),
-                                            "Restore '-D warnings' or excuse with allow-gate-weakening: ci-integrity <reason>.",
-                                            "-D warnings",
-                                        );
-                                    }
-                                    if base_run.contains("--locked")
-                                        && !head_run.contains("--locked")
-                                    {
-                                        record_or_excuse(
-                                            ctx,
-                                            Some(&head_content),
-                                            &mut out,
-                                            settings.severity,
-                                            &crate::findings::CARGO_LOCKED_REMOVED,
-                                            Some(path.clone()),
-                                            approx_line,
-                                            "Step dropped '--locked' from cargo command, permitting unverified dependency updates.".to_string(),
-                                            "Restore '--locked' or excuse with allow-gate-weakening: ci-integrity <reason>.",
-                                            "--locked",
-                                        );
-                                    }
-                                    // Frozen-install flags of other package managers, and the
-                                    // `npm ci` -> `npm install` swap: each lets an install
-                                    // resolve past the lockfile.
-                                    for flag in FROZEN_INSTALL_FLAGS {
-                                        if base_run.contains(flag) && !head_run.contains(flag) {
-                                            record_or_excuse(
-                                                ctx,
-                                                Some(&head_content),
-                                                &mut out,
-                                                settings.severity,
-                                                &crate::findings::FROZEN_INSTALL_FLAG_REMOVED,
-                                                Some(path.clone()),
-                                                approx_line,
-                                                format!("Step dropped '{flag}' from an install command, permitting an install that resolves past the lockfile."),
-                                                format!("Restore '{flag}' or excuse with allow-gate-weakening: ci-integrity <reason>."),
-                                                flag,
-                                            );
-                                        }
-                                    }
-                                    if base_run.contains("npm ci")
-                                        && !head_run.contains("npm ci")
-                                        && head_run.contains("npm install")
-                                    {
-                                        record_or_excuse(
-                                            ctx,
-                                            Some(&head_content),
-                                            &mut out,
-                                            settings.severity,
-                                            &crate::findings::INSTALL_COMMAND_WEAKENED,
-                                            Some(path.clone()),
-                                            approx_line,
-                                            "Step replaced 'npm ci' with 'npm install': the install may rewrite the lockfile instead of honouring it.".to_string(),
-                                            "Restore 'npm ci' or excuse with allow-gate-weakening: ci-integrity <reason>.",
-                                            "npm ci",
-                                        );
-                                    }
-                                    if base_run.contains("--all-targets")
-                                        && !head_run.contains("--all-targets")
-                                    {
-                                        record_or_excuse(
-                                            ctx,
-                                            Some(&head_content),
-                                            &mut out,
-                                            settings.severity,
-                                            &crate::findings::CLIPPY_ALL_TARGETS_REMOVED,
-                                            Some(path.clone()),
-                                            approx_line,
-                                            "Step dropped '--all-targets' from clippy command, skipping linting on tests/benchmarks.".to_string(),
-                                            "Restore '--all-targets' or excuse with allow-gate-weakening: ci-integrity <reason>.",
-                                            "--all-targets",
-                                        );
-                                    }
-                                }
-                            }
-
-                            // 5d. An existing verification step that now runs only after a
-                            // failure (`if: failure()` without `always()`): it no longer runs
-                            // on a passing build, so what it checked goes unchecked. A new
-                            // step that runs on failure (a diagnostic) replaces nothing, and
-                            // `always()` makes a step run more often, not less.
-                            if is_verification_step(step) && base_step.is_some() {
-                                if let Some(if_cond) = step.get("if").and_then(|i| i.as_str()) {
-                                    let failure_only = |c: &str| {
-                                        let l = c.to_ascii_lowercase();
-                                        l.contains("failure()") && !l.contains("always()")
-                                    };
-                                    if failure_only(if_cond) {
-                                        let base_had_it = base_step
-                                            .and_then(|b| b.get("if"))
-                                            .and_then(|i| i.as_str())
-                                            .is_some_and(failure_only);
-                                        if !base_had_it {
-                                            let if_line = find_line_after(
-                                                &head_content,
-                                                "if:",
-                                                approx_line.unwrap_or(1),
-                                            )
-                                            .or(approx_line);
-                                            record_or_excuse(
-                                                ctx,
-                                                Some(&head_content),
-                                                &mut out,
-                                                settings.severity,
-                                                &crate::findings::VERIFICATION_STEP_MASKED_BY_CONDITION,
-                                                Some(path.clone()),
-                                                if_line,
-                                                format!("Verification step now carries 'if: {if_cond}': it runs only after an earlier failure, so a passing build no longer runs it."),
-                                                "Remove conditional masking or excuse with allow-gate-weakening: ci-integrity <reason>.",
-                                                "if-always",
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-
-                            // 5d'. A verification step that newly runs on fewer events or
-                            // conditions: a step-level `if:` added, or changed. The always() /
-                            // failure() forms are 5d's; a plain narrowing is a weakening of
-                            // the same kind as continue-on-error, reported at warning.
-                            if is_verification_step(step) {
-                                let head_if = step.get("if").map(if_text);
-                                let base_if = base_step.and_then(|b| b.get("if")).map(if_text);
-                                // 5d's failure-only form, or a condition that only widens
-                                // when the step runs; `always() && <narrowing>` is checked.
-                                let masking = |t: &str| {
-                                    let l = t.to_ascii_lowercase();
-                                    let bare = l
-                                        .trim()
-                                        .trim_start_matches("${{")
-                                        .trim_end_matches("}}")
-                                        .trim()
-                                        .to_string();
-                                    matches!(bare.as_str(), "always()" | "!cancelled()")
-                                        || (l.contains("failure()") && !l.contains("always()"))
-                                };
-                                if let Some(h) = head_if.as_deref().filter(|h| !masking(h)) {
-                                    if base_if.as_deref() != Some(h) {
-                                        let if_line = find_line_after(
-                                            &head_content,
-                                            "if:",
-                                            approx_line.unwrap_or(1),
-                                        )
-                                        .or(approx_line);
-                                        let what = match &base_if {
-                                            None => format!("gains 'if: {h}'"),
-                                            Some(b) => format!("changes 'if: {b}' to 'if: {h}'"),
-                                        };
-                                        record_or_excuse(
-                                            ctx,
-                                            Some(&head_content),
-                                            &mut out,
-                                            Severity::Warning,
-                                            &crate::findings::VERIFICATION_STEP_NARROWED,
-                                            Some(path.clone()),
-                                            if_line,
-                                            format!("Verification step '{}' in job '{job_id}' {what}: it no longer runs on every event or condition it ran on before.", step_label(step, "unnamed step")),
-                                            "Run the step unconditionally, or record the narrowing with allow-gate-weakening: ci-integrity <reason>. A discipline step restricted to pull_request stops gating pushes to the default branch; the `merged-pr-body` directive source is the alternative when PR-body waivers are the reason.",
-                                            "if-narrowed",
-                                        );
-                                    }
-                                }
-                            }
-
-                            // 5e. continue-on-error. In a job that verifies nothing (a summary,
-                            // a report) no check is masked: a warning.
-                            let verifies = is_verification_job(job_id, job_v);
-                            let coe_severity = if verifies {
-                                settings.severity
-                            } else {
-                                Severity::Warning
-                            };
-                            if settings.forbid_continue_on_error
-                                && step.get("continue-on-error").and_then(|c| c.as_bool())
-                                    == Some(true)
-                            {
-                                let base_had_it = base_step
-                                    .and_then(|b| b.get("continue-on-error"))
-                                    .and_then(|c| c.as_bool())
-                                    == Some(true);
-                                if !base_had_it {
-                                    let coe_line = find_line_after(
-                                        &head_content,
-                                        "continue-on-error",
-                                        approx_line.unwrap_or(1),
-                                    )
-                                    .or(approx_line);
-                                    let step_subject = step
-                                        .get("name")
-                                        .and_then(|n| n.as_str())
-                                        .or_else(|| step.get("id").and_then(|i| i.as_str()))
-                                        .unwrap_or("continue-on-error");
-                                    record_or_excuse(
-                                        ctx,
-                                        Some(&head_content),
-                                        &mut out,
-                                        coe_severity,
-                                        &crate::findings::STEP_FAILURE_MASKED_CONTINUE_ON_ERROR,
-                                        Some(path.clone()),
-                                        coe_line,
-                                        if verifies {
-                                            "Step carries 'continue-on-error: true', which masks failures in CI.".to_string()
-                                        } else {
-                                            format!("Step carries 'continue-on-error: true' in job '{job_id}', which verifies nothing (a warning: no check is masked).")
-                                        },
-                                        "Remove continue-on-error or provide an allow-gate-weakening: ci-integrity <reason> directive.",
-                                        step_subject,
-                                    );
-                                }
-                            }
-
-                            // 5f. Error suppression: || true / set +e
-                            if settings.forbid_or_true {
-                                if let Some(run_cmd) = run_str {
-                                    if masks_exit_code(run_cmd) {
-                                        let base_had_mask = base_step
-                                            .and_then(|b| b.get("run"))
-                                            .and_then(|r| r.as_str())
-                                            .is_some_and(masks_exit_code);
-                                        if !base_had_mask {
-                                            let mask_line = find_line_after(
-                                                &head_content,
-                                                "|| true",
-                                                approx_line.unwrap_or(1),
-                                            )
-                                            .or_else(|| {
-                                                find_line_after(
-                                                    &head_content,
-                                                    "set +e",
-                                                    approx_line.unwrap_or(1),
-                                                )
-                                            })
-                                            .or(approx_line);
-                                            let step_subject = step
-                                                .get("name")
-                                                .and_then(|n| n.as_str())
-                                                .or_else(|| step.get("id").and_then(|i| i.as_str()))
-                                                .unwrap_or("or-true");
-                                            record_or_excuse(
-                                                ctx,
-                                                Some(&head_content),
-                                                &mut out,
-                                                settings.severity,
-                                                &crate::findings::EXIT_CODE_MASKED,
-                                                Some(path.clone()),
-                                                mask_line,
-                                                "Command uses '|| true' or 'set +e' to mask command failure.".to_string(),
-                                                "Remove '|| true' or provide an allow-gate-weakening: ci-integrity <reason> directive.",
-                                                step_subject,
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
+/// Reports a gate or rollup job that dropped a dependency its base side had on a job the
+/// workflow still has.
+fn check_rollup_needs_kept(
+    ctx: &Context,
+    wf: &WorkflowFile,
+    jobs: &HashSet<String>,
+    head_all_needs: &HashMap<String, HashSet<String>>,
+    out: &mut GateOutcome,
+) {
+    let settings = &ctx.config.gates.ci_integrity;
+    let path = wf.path;
+    let head_content = wf.head_content;
+    if let Some(base_src) = wf.base_content {
+        let base_all_needs = parse_all_job_needs(base_src);
+        for (job_name, base_needs) in &base_all_needs {
+            let is_gate_or_rollup = settings.rollup_job.as_deref() == Some(job_name.as_str())
+                || job_name.contains("gate")
+                || job_name.contains("rollup");
+            if is_gate_or_rollup && jobs.contains(job_name) {
+                let head_needs = head_all_needs.get(job_name).cloned().unwrap_or_default();
+                let dropped_needs: Vec<String> =
+                    base_needs.difference(&head_needs).cloned().collect();
+                for dropped in dropped_needs {
+                    if jobs.contains(&dropped) {
+                        record_or_excuse(
+                            ctx,
+                            Some(head_content),
+                            out,
+                            settings.severity,
+                            &crate::findings::ROLLUP_NEEDS_REMOVED,
+                            Some(path.to_string()),
+                            find_line_number(head_content, job_name),
+                            format!("Rollup job '{job_name}' dropped dependency on '{dropped}' present in base."),
+                            format!("Restore '{dropped}' to '{job_name}' needs, or excuse with allow-gate-weakening: ci-integrity <reason>."),
+                            &dropped,
+                        );
                     }
                 }
             }
         }
     }
+}
 
-    if !rollup_seen
-        && settings.documented_job_count_path.is_some()
-        && settings.documented_job_count_pattern.is_some()
-    {
-        // The count is compared under the rollup job only; say so when there was none.
-        let why = match &settings.rollup_job {
-            Some(rollup) => {
-                format!("no workflow examined in this run has the `rollup_job` (`{rollup}`)")
+/// Compares the documented job count, when one is configured, with the number of jobs
+/// in the workflow that has the rollup job.
+fn check_documented_job_count(
+    ctx: &Context,
+    job_count: usize,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    let settings = &ctx.config.gates.ci_integrity;
+    if let (Some(doc_path), Some(doc_pattern)) = (
+        &settings.documented_job_count_path,
+        &settings.documented_job_count_pattern,
+    ) {
+        match documented_job_count(ctx, doc_path, doc_pattern)? {
+            None => out.violations.push(Violation {
+                gate: GATE,
+                severity: ctx.overridable(settings.severity),
+                code: crate::findings::full_code(GATE, &crate::findings::JOB_COUNT_FILE_MISSING),
+                fingerprint: String::new(),
+                anchor: None,
+                legacy_title: None,
+                title: crate::findings::JOB_COUNT_FILE_MISSING.title.to_string(),
+                file: Some(doc_path.to_string()),
+                line: None,
+                message: format!("Documented job count file '{doc_path}' does not exist."),
+                remediation: Some(
+                    "Restore the documentation catalog or update configuration.".to_string(),
+                ),
+            }),
+            Some(Ok(doc_count)) if doc_count != job_count => {
+                out.violations.push(Violation {
+                    gate: GATE,
+                    severity: ctx.overridable(settings.severity),
+                    code: crate::findings::full_code(
+                        GATE,
+                        &crate::findings::JOB_COUNT_MISMATCH,
+                    ),
+                    fingerprint: String::new(),
+                    title: crate::findings::JOB_COUNT_MISMATCH.title.to_string(),
+                    anchor: None,
+                    legacy_title: crate::findings::JOB_COUNT_MISMATCH.was_title(),
+                    file: Some(doc_path.to_string()),
+                    line: None,
+                    message: format!(
+                        "Documented job count in '{doc_path}' ({doc_count}) does not match workflow jobs count ({}).",
+                        job_count
+                    ),
+                    remediation: Some(format!(
+                        "Update the documented count in '{doc_path}' to {} jobs.",
+                        job_count
+                    )),
+                });
             }
-            None => "`rollup_job` is not set".to_string(),
-        };
-        out.notes.push(format!("{why}; {NOT_COMPARED}"));
+            Some(Ok(_)) => {}
+            Some(Err(note)) => out.notes.push(note),
+        }
     }
-    Ok(out)
+    Ok(())
+}
+
+/// Workflow-level checks: a `pull_request_target` trigger introduced, permissions
+/// widened, `timeout-minutes` removed.
+fn check_triggers_and_permissions(
+    ctx: &Context,
+    wf: &WorkflowFile,
+    head_doc: &serde_yaml::Value,
+    out: &mut GateOutcome,
+) {
+    let settings = &ctx.config.gates.ci_integrity;
+    let path = wf.path;
+    let head_content = wf.head_content;
+    let base_val = wf.base;
+    // Check pull_request_target
+    let head_has_pr_target = workflow_has_trigger(head_doc, "pull_request_target");
+    let base_has_pr_target = base_val
+        .map(|b| workflow_has_trigger(b, "pull_request_target"))
+        .unwrap_or(false);
+
+    if head_has_pr_target && !base_has_pr_target {
+        let line_no = find_line_number(head_content, "pull_request_target");
+        record_or_excuse(
+            ctx,
+            Some(head_content),
+            out,
+            settings.severity,
+            &crate::findings::PULL_REQUEST_TARGET_TRIGGER,
+            Some(path.to_string()),
+            line_no,
+            "Workflow introduces 'pull_request_target' trigger, which executes with repository write access and secrets.".to_string(),
+            "Use 'pull_request' instead, or excuse with allow-gate-weakening: ci-integrity <reason>.",
+            "pull_request_target",
+        );
+    }
+
+    // Check permissions widening
+    if let Some(base_doc) = base_val {
+        let head_perm_level = workflow_permission_level(head_doc);
+        let base_perm_level = workflow_permission_level(base_doc);
+        if head_perm_level > base_perm_level {
+            let line_no = find_line_number(head_content, "permissions:");
+            record_or_excuse(
+                ctx,
+                Some(head_content),
+                out,
+                settings.severity,
+                &crate::findings::WORKFLOW_PERMISSIONS_WIDENED,
+                Some(path.to_string()),
+                line_no,
+                "Workflow permissions were widened from base ref (e.g. gained write privileges).".to_string(),
+                "Keep permissions minimal (e.g. read-all or specific read scopes), or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                "permissions",
+            );
+        }
+    }
+
+    // Check workflow-level timeout-minutes
+    if let Some(base_doc) = base_val {
+        if base_doc.get("timeout-minutes").is_some() && head_doc.get("timeout-minutes").is_none() {
+            record_or_excuse(
+                ctx,
+                Some(head_content),
+                out,
+                settings.severity,
+                &crate::findings::WORKFLOW_TIMEOUT_REMOVED,
+                Some(path.to_string()),
+                None,
+                "Workflow-level 'timeout-minutes' was removed.".to_string(),
+                "Restore timeout-minutes or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                "timeout-minutes",
+            );
+        }
+    }
+}
+
+/// Compares the jobs of the head side with the jobs of the base side: verification jobs
+/// removed, and what the surviving jobs lost.
+fn compare_jobs_with_base(
+    ctx: &Context,
+    wf: &WorkflowFile,
+    head_doc: &serde_yaml::Value,
+    added_steps: &mut AddedSteps,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    if let Some(base_doc) = wf.base {
+        if let (Some(base_jobs_map), Some(head_jobs_map)) = (
+            base_doc.get("jobs").and_then(|j| j.as_mapping()),
+            head_doc.get("jobs").and_then(|j| j.as_mapping()),
+        ) {
+            report_removed_jobs(ctx, wf, base_jobs_map, head_jobs_map, added_steps, out)?;
+            compare_surviving_jobs(ctx, wf, base_jobs_map, head_jobs_map, out);
+        }
+    }
+    Ok(())
+}
+
+/// Reports each verification or rollup job of the base side that the head side no longer
+/// has, unless its verification steps are in jobs this change added.
+fn report_removed_jobs(
+    ctx: &Context,
+    wf: &WorkflowFile,
+    base_jobs_map: &serde_yaml::Mapping,
+    head_jobs_map: &serde_yaml::Mapping,
+    added_steps: &mut AddedSteps,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    let settings = &ctx.config.gates.ci_integrity;
+    let path = wf.path;
+    let head_content = wf.head_content;
+    // Check for deleted verification jobs
+    for (job_k, job_v) in base_jobs_map {
+        let job_id = job_k.as_str().unwrap_or("");
+        let is_rollup = settings.rollup_job.as_deref() == Some(job_id);
+        if !head_jobs_map.contains_key(job_k) && (is_verification_job(job_id, job_v) || is_rollup) {
+            if !is_rollup {
+                added_steps.load(ctx, &mut out.notes)?;
+                if job_moved(job_v, added_steps.loaded()) {
+                    out.notes.push(format!(
+                        "{path}: job '{job_id}' was removed; its verification steps are in jobs this change added, so it is treated as a rename or split"
+                    ));
+                    continue;
+                }
+            }
+            let before = out.violations.len();
+            record_or_excuse(
+                ctx,
+                Some(head_content),
+                out,
+                settings.severity,
+                &crate::findings::VERIFICATION_JOB_REMOVED,
+                Some(path.to_string()),
+                None,
+                format!("Verification job '{job_id}' present in base was deleted."),
+                format!("Restore job '{job_id}' or excuse with allow-gate-weakening: ci-integrity <reason>."),
+                job_id,
+            );
+            // Several jobs can leave one workflow: the job tells them apart.
+            if out.violations.len() > before {
+                out.anchor_last(format!("job:{job_id}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Compares each job both sides have: its `timeout-minutes` and its verification steps.
+fn compare_surviving_jobs(
+    ctx: &Context,
+    wf: &WorkflowFile,
+    base_jobs_map: &serde_yaml::Mapping,
+    head_jobs_map: &serde_yaml::Mapping,
+    out: &mut GateOutcome,
+) {
+    let settings = &ctx.config.gates.ci_integrity;
+    let path = wf.path;
+    let head_content = wf.head_content;
+    // Compare surviving jobs
+    for (job_k, head_job_v) in head_jobs_map {
+        let job_id = job_k.as_str().unwrap_or("");
+        if let Some(base_job_v) = base_jobs_map.get(job_k) {
+            // Check job-level timeout-minutes
+            if base_job_v.get("timeout-minutes").is_some()
+                && head_job_v.get("timeout-minutes").is_none()
+            {
+                record_or_excuse(
+                    ctx,
+                    Some(head_content),
+                    out,
+                    settings.severity,
+                    &crate::findings::JOB_TIMEOUT_REMOVED,
+                    Some(path.to_string()),
+                    find_line_number(head_content, job_id),
+                    format!("Job '{job_id}' timeout-minutes was removed."),
+                    format!("Restore timeout-minutes to job '{job_id}' or excuse with allow-gate-weakening: ci-integrity <reason>."),
+                    job_id,
+                );
+            }
+
+            report_removed_steps(ctx, wf, job_id, base_job_v, head_job_v, out);
+        }
+    }
+}
+
+/// Reports each verification step of a base job that no step of the head job matches. A
+/// step renamed with a similar run body is noted, not reported.
+fn report_removed_steps(
+    ctx: &Context,
+    wf: &WorkflowFile,
+    job_id: &str,
+    base_job_v: &serde_yaml::Value,
+    head_job_v: &serde_yaml::Value,
+    out: &mut GateOutcome,
+) {
+    let settings = &ctx.config.gates.ci_integrity;
+    let path = wf.path;
+    let head_content = wf.head_content;
+    // Check deleted verification steps in this job
+    let base_steps = base_job_v
+        .get("steps")
+        .and_then(|s| s.as_sequence())
+        .cloned()
+        .unwrap_or_default();
+    let head_steps = head_job_v
+        .get("steps")
+        .and_then(|s| s.as_sequence())
+        .cloned()
+        .unwrap_or_default();
+
+    let pairs = pair_steps(&base_steps, &head_steps);
+    for (b_step, pair) in base_steps.iter().zip(&pairs) {
+        if !is_verification_step(b_step) {
+            continue;
+        }
+        let step_name = step_label(b_step, "unnamed verification step");
+        match pair {
+            Some(StepMatch::Same(_)) => {}
+            Some(StepMatch::Renamed { head, similarity }) => {
+                let new_name = step_label(&head_steps[*head], "unnamed step");
+                out.notes.push(format!(
+                    "{path}: verification step '{step_name}' in job '{job_id}' was renamed to '{new_name}' (run body similarity {similarity:.2} >= rename threshold {STEP_RENAME_SIMILARITY:.2}); treated as a rename, not a deletion"
+                ));
+            }
+            None => {
+                let why = deletion_reason(b_step, &head_steps, &pairs);
+                record_or_excuse(
+                    ctx,
+                    Some(head_content),
+                    out,
+                    settings.severity,
+                    &crate::findings::VERIFICATION_STEP_REMOVED,
+                    Some(path.to_string()),
+                    find_line_number(head_content, job_id),
+                    format!("Verification step '{step_name}' in job '{job_id}' was deleted: no step in head matches it by id, name, or run body ({why})."),
+                    format!("Restore step '{step_name}' or excuse with allow-gate-weakening: ci-integrity <reason>."),
+                    step_name,
+                );
+            }
+        }
+    }
+}
+
+/// Inspects each job of the head side, and each of its steps, for what it newly weakens.
+fn inspect_jobs(
+    ctx: &Context,
+    wf: &WorkflowFile,
+    head_doc: &serde_yaml::Value,
+    out: &mut GateOutcome,
+) {
+    let head_content = wf.head_content;
+    let base_val = wf.base;
+    if let Some(jobs_map) = head_doc.get("jobs").and_then(|j| j.as_mapping()) {
+        let base_jobs_map = base_val
+            .and_then(|b| b.get("jobs"))
+            .and_then(|j| j.as_mapping());
+
+        for (job_k, job_v) in jobs_map {
+            let job_id = job_k.as_str().unwrap_or("");
+            let job_line = find_line_number(head_content, &format!("{job_id}:"))
+                .or_else(|| find_line_number(head_content, job_id));
+            let job = JobSite {
+                id: job_id,
+                value: job_v,
+                base_job: base_jobs_map.and_then(|m| m.get(job_k)),
+                line: job_line,
+            };
+            check_job_continue_on_error(ctx, wf, &job, out);
+            check_job_condition(ctx, wf, &job, out);
+            inspect_job_steps(ctx, wf, &job, out);
+        }
+    }
+}
+
+/// Reports a job that newly carries `continue-on-error: true`.
+fn check_job_continue_on_error(
+    ctx: &Context,
+    wf: &WorkflowFile,
+    job: &JobSite,
+    out: &mut GateOutcome,
+) {
+    let settings = &ctx.config.gates.ci_integrity;
+    let path = wf.path;
+    let head_content = wf.head_content;
+    let (job_id, job_v, job_line) = (job.id, job.value, job.line);
+    // Job-level continue-on-error
+    if settings.forbid_continue_on_error
+        && job_v.get("continue-on-error").and_then(|c| c.as_bool()) == Some(true)
+    {
+        let base_had_it = job
+            .base_job
+            .and_then(|b| b.get("continue-on-error"))
+            .and_then(|c| c.as_bool())
+            == Some(true);
+        if !base_had_it {
+            let coe_line =
+                find_line_after(head_content, "continue-on-error", job_line.unwrap_or(1))
+                    .or(job_line);
+            record_or_excuse(
+                ctx,
+                Some(head_content),
+                out,
+                if is_verification_job(job_id, job_v) { settings.severity } else { Severity::Warning },
+                &crate::findings::JOB_FAILURE_MASKED_CONTINUE_ON_ERROR,
+                Some(path.to_string()),
+                coe_line,
+                format!("Job '{job_id}' carries 'continue-on-error: true', which masks failures in CI."),
+                "Remove continue-on-error or provide an allow-gate-weakening: ci-integrity <reason> directive.",
+                job_id,
+            );
+        }
+    }
+}
+
+/// Reports a verification job that newly runs under `always()` or `cancelled()` without
+/// enforcing the results of the jobs it needs.
+fn check_job_condition(ctx: &Context, wf: &WorkflowFile, job: &JobSite, out: &mut GateOutcome) {
+    let settings = &ctx.config.gates.ci_integrity;
+    let path = wf.path;
+    let head_content = wf.head_content;
+    let (job_id, job_v, job_line) = (job.id, job.value, job.line);
+    // Job-level if: always() on verification jobs
+    if is_verification_job(job_id, job_v) {
+        if let Some(if_val) = job_v.get("if") {
+            let if_cond = match if_val {
+                serde_yaml::Value::String(s) => s.as_str(),
+                serde_yaml::Value::Bool(b) => {
+                    if *b {
+                        "true"
+                    } else {
+                        "false"
+                    }
+                }
+                _ => "",
+            };
+            if (if_cond.contains("always()") || if_cond.contains("cancelled()"))
+                && !crate::doctor::rollup_enforces(job_v)
+            {
+                let base_had_always = job
+                    .base_job
+                    .and_then(|b| b.get("if"))
+                    .map(|b| {
+                        let b_s = match b {
+                            serde_yaml::Value::String(s) => s.as_str(),
+                            serde_yaml::Value::Bool(bv) => {
+                                if *bv {
+                                    "true"
+                                } else {
+                                    "false"
+                                }
+                            }
+                            _ => "",
+                        };
+                        b_s.contains("always()") || b_s.contains("cancelled()")
+                    })
+                    .unwrap_or(false);
+                if !base_had_always {
+                    let if_line =
+                        find_line_after(head_content, "if:", job_line.unwrap_or(1)).or(job_line);
+                    record_or_excuse(
+                        ctx,
+                        Some(head_content),
+                        out,
+                        settings.severity,
+                        &crate::findings::VERIFICATION_JOB_MASKED_BY_CONDITION,
+                        Some(path.to_string()),
+                        if_line,
+                        format!("Verification job '{job_id}' carries 'if: {if_cond}', masking earlier pipeline failures."),
+                        "Remove conditional masking or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                        "if-always",
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Inspects each step of a head job that differs from its base form and carries no
+/// inline exemption.
+fn inspect_job_steps(ctx: &Context, wf: &WorkflowFile, job: &JobSite, out: &mut GateOutcome) {
+    let head_content = wf.head_content;
+    let job_v = job.value;
+    let base_job_steps = job
+        .base_job
+        .and_then(|j| j.get("steps"))
+        .and_then(|s| s.as_sequence());
+
+    if let Some(steps) = job_v.get("steps").and_then(|s| s.as_sequence()) {
+        // Head step index -> the base step it was renamed from, so a
+        // renamed step is still compared against its base form.
+        let mut renamed_from: HashMap<usize, &serde_yaml::Value> = HashMap::new();
+        if let Some(b_steps) = base_job_steps {
+            for (bi, pair) in pair_steps(b_steps, steps).into_iter().enumerate() {
+                if let Some(StepMatch::Renamed { head, .. }) = pair {
+                    renamed_from.insert(head, &b_steps[bi]);
+                }
+            }
+        }
+        for (step_idx, step) in steps.iter().enumerate() {
+            let step_name = step.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            let step_id = step.get("id").and_then(|i| i.as_str()).unwrap_or("");
+            let uses_str = step.get("uses").and_then(|u| u.as_str());
+            let run_str = step.get("run").and_then(|r| r.as_str());
+
+            // Find matching base step
+            let base_step = base_job_steps
+                .and_then(|b_steps| b_steps.iter().find(|b| steps_match_identity(b, step)))
+                .or_else(|| renamed_from.get(&step_idx).copied());
+
+            let approx_line = find_step_line(head_content, step_name, step_id, uses_str, run_str);
+
+            if let Some(b) = base_step {
+                if b == step {
+                    continue;
+                }
+            }
+
+            if let Some(line_no) = approx_line {
+                if let Some(line) = head_content.lines().nth(line_no - 1) {
+                    if line_allows(line, GATE) {
+                        out.inline_exemptions += 1;
+                        continue;
+                    }
+                }
+            }
+
+            let site = StepSite {
+                job,
+                step,
+                base_step,
+                approx_line,
+            };
+            check_discipline_action_inputs(ctx, wf, &site, out);
+            check_run_advisory(ctx, wf, &site, out);
+            check_dropped_flags(ctx, wf, &site, out);
+            check_step_runs_only_on_failure(ctx, wf, &site, out);
+            check_step_narrowed(ctx, wf, &site, out);
+            check_step_continue_on_error(ctx, wf, &site, out);
+            check_step_exit_code_masked(ctx, wf, &site, out);
+        }
+    }
+}
+
+/// Checks the inputs of a step that runs the discipline action against its base form.
+fn check_discipline_action_inputs(
+    ctx: &Context,
+    wf: &WorkflowFile,
+    site: &StepSite,
+    out: &mut GateOutcome,
+) {
+    let settings = &ctx.config.gates.ci_integrity;
+    let path = wf.path;
+    let head_content = wf.head_content;
+    let (step, base_step, approx_line) = (site.step, site.base_step, site.approx_line);
+    let uses_str = step.get("uses").and_then(|u| u.as_str());
+    // 5a. Action pinning is checked for the whole file above
+    // (`check_pins`).
+
+    // 5b. Check orieg/discipline action inputs
+    if let Some(uses) = uses_str {
+        if uses.contains("orieg/discipline")
+            || uses.contains("discipline")
+            || uses == "./action.yml"
+        {
+            // policy_from moved off `base` (or the whole `with:` block dropped): the change
+            // is judged by its own configuration again
+            let policy_from = |w: Option<&serde_yaml::Value>| {
+                w.and_then(|w| w.get("policy_from"))
+                    .and_then(|p| p.as_str())
+                    .map(|p| p.trim().to_ascii_lowercase())
+            };
+            if policy_from(base_step.and_then(|b| b.get("with"))).as_deref() == Some("base")
+                && policy_from(step.get("with")).as_deref() != Some("base")
+            {
+                record_or_excuse(
+                    ctx,
+                    Some(head_content),
+                    out,
+                    settings.severity,
+                    &crate::findings::DISCIPLINE_ACTION_POLICY_FROM,
+                    Some(path.to_string()),
+                    approx_line,
+                    "The discipline step no longer sets 'policy_from: base'; the change would be judged by its own discipline.toml.".to_string(),
+                    "Restore 'policy_from: base' or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                    "policy_from",
+                );
+            }
+
+            if let Some(with_val) = step.get("with") {
+                let base_with_val = base_step.and_then(|b| b.get("with"));
+                check_discipline_enforcement_inputs(ctx, wf, site, with_val, base_with_val, out);
+                check_discipline_scope_inputs(ctx, wf, site, with_val, base_with_val, out);
+            }
+        }
+    }
+}
+
+/// The discipline action inputs that stop a finding from failing the step: `disable`,
+/// `advisory`, `fail_on_warnings`.
+fn check_discipline_enforcement_inputs(
+    ctx: &Context,
+    wf: &WorkflowFile,
+    site: &StepSite,
+    with_val: &serde_yaml::Value,
+    base_with_val: Option<&serde_yaml::Value>,
+    out: &mut GateOutcome,
+) {
+    let settings = &ctx.config.gates.ci_integrity;
+    let path = wf.path;
+    let head_content = wf.head_content;
+    let approx_line = site.approx_line;
+    // disable input added or expanded
+    if let Some(disable_val) = with_val.get("disable") {
+        let base_disable = base_with_val.and_then(|b| b.get("disable"));
+        let is_new_or_expanded = match (base_disable, disable_val) {
+            (None, _) => true,
+            (Some(bv), hv) => bv != hv,
+        };
+        if is_new_or_expanded {
+            record_or_excuse(
+                ctx,
+                Some(head_content),
+                out,
+                settings.severity,
+                &crate::findings::DISCIPLINE_ACTION_DISABLE_INPUT,
+                Some(path.to_string()),
+                approx_line,
+                "The 'disable' input on the discipline step was added or widened, bypassing verification gates.".to_string(),
+                "Remove 'disable' or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                "disable",
+            );
+        }
+    }
+
+    // advisory switched on: the step reports and exits 0
+    if advisory_input_on(Some(with_val)) && !advisory_input_on(base_with_val) {
+        record_or_excuse(
+            ctx,
+            Some(head_content),
+            out,
+            settings.severity,
+            &crate::findings::DISCIPLINE_ACTION_ADVISORY,
+            Some(path.to_string()),
+            approx_line,
+            "The 'advisory' input on the discipline step was switched on; the step exits 0 whatever the gates report.".to_string(),
+            "Remove 'advisory' or excuse with allow-gate-weakening: ci-integrity <reason>.",
+            "advisory",
+        );
+    }
+
+    // fail_on_warnings set to false
+    if let Some(fow) = with_val.get("fail_on_warnings") {
+        if fow.as_bool() == Some(false) {
+            let base_fow = base_with_val
+                .and_then(|b| b.get("fail_on_warnings"))
+                .and_then(|b| b.as_bool())
+                .unwrap_or(true);
+            if base_fow {
+                record_or_excuse(
+                    ctx,
+                    Some(head_content),
+                    out,
+                    settings.severity,
+                    &crate::findings::DISCIPLINE_ACTION_FAIL_ON_WARNINGS_OFF,
+                    Some(path.to_string()),
+                    approx_line,
+                    "fail_on_warnings was set to false, suppressing warning-severity gate failures.".to_string(),
+                    "Restore fail_on_warnings: true or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                    "fail_on_warnings",
+                );
+            }
+        }
+    }
+}
+
+/// The discipline action inputs that choose what is checked and what lifts a finding:
+/// `config_override`, `suite`, `directive_sources`.
+fn check_discipline_scope_inputs(
+    ctx: &Context,
+    wf: &WorkflowFile,
+    site: &StepSite,
+    with_val: &serde_yaml::Value,
+    base_with_val: Option<&serde_yaml::Value>,
+    out: &mut GateOutcome,
+) {
+    let settings = &ctx.config.gates.ci_integrity;
+    let path = wf.path;
+    let head_content = wf.head_content;
+    let approx_line = site.approx_line;
+    // config_override pointing to non-existent or weakened files
+    if let Some(cfg_ov) = with_val.get("config_override").and_then(|c| c.as_str()) {
+        let ov_file = Path::new(ctx.git.root()).join(cfg_ov);
+        if !ov_file.is_file() {
+            record_or_excuse(
+                ctx,
+                Some(head_content),
+                out,
+                settings.severity,
+                &crate::findings::DISCIPLINE_ACTION_CONFIG_OVERRIDE_INVALID,
+                Some(path.to_string()),
+                approx_line,
+                format!("config_override points to non-existent file '{cfg_ov}'."),
+                "Provide a valid configuration file path.",
+                "config_override",
+            );
+        }
+    }
+
+    // suite narrowed
+    if let Some(suite_val) = with_val.get("suite").and_then(|s| s.as_str()) {
+        let base_suite = base_with_val
+            .and_then(|b| b.get("suite"))
+            .and_then(|s| s.as_str());
+        if let Some(bs) = base_suite {
+            if bs != suite_val {
+                record_or_excuse(
+                    ctx,
+                    Some(head_content),
+                    out,
+                    settings.severity,
+                    &crate::findings::DISCIPLINE_ACTION_SUITE_CHANGED,
+                    Some(path.to_string()),
+                    approx_line,
+                    format!("discipline suite changed from '{bs}' to '{suite_val}'."),
+                    "Restore original suite or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                    "suite",
+                );
+            }
+        }
+    }
+
+    // directive_sources widened
+    if let Some(ds_val) = with_val.get("directive_sources") {
+        let base_ds = base_with_val.and_then(|b| b.get("directive_sources"));
+        if base_ds.is_none() || base_ds != Some(ds_val) {
+            let ds_str = serde_yaml::to_string(ds_val).unwrap_or_default();
+            if ds_str.contains("commits") {
+                record_or_excuse(
+                    ctx,
+                    Some(head_content),
+                    out,
+                    settings.severity,
+                    &crate::findings::DISCIPLINE_ACTION_DIRECTIVE_SOURCES_WIDENED,
+                    Some(path.to_string()),
+                    approx_line,
+                    "directive_sources was widened to accept directives from commit messages.".to_string(),
+                    "Keep directive sources restricted, or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                    "directive_sources",
+                );
+            }
+        }
+    }
+}
+
+/// Reports a `run:` command that newly passes `--advisory` to discipline.
+fn check_run_advisory(ctx: &Context, wf: &WorkflowFile, site: &StepSite, out: &mut GateOutcome) {
+    let settings = &ctx.config.gates.ci_integrity;
+    let path = wf.path;
+    let head_content = wf.head_content;
+    let (base_step, approx_line) = (site.base_step, site.approx_line);
+    let run_str = site.step.get("run").and_then(|r| r.as_str());
+    // 5b'. `discipline check --advisory` in a run command
+    if let Some(head_run) = run_str {
+        let base_run = base_step
+            .and_then(|b| b.get("run"))
+            .and_then(|r| r.as_str())
+            .unwrap_or("");
+        if run_is_advisory(head_run) && !run_is_advisory(base_run) {
+            record_or_excuse(
+                ctx,
+                Some(head_content),
+                out,
+                settings.severity,
+                &crate::findings::DISCIPLINE_RUN_ADVISORY,
+                Some(path.to_string()),
+                approx_line,
+                "A discipline command gained '--advisory'; it exits 0 whatever the gates report."
+                    .to_string(),
+                "Remove '--advisory' or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                "--advisory",
+            );
+        }
+    }
+}
+
+/// Reports build, lint and install flags a `run:` command dropped.
+fn check_dropped_flags(ctx: &Context, wf: &WorkflowFile, site: &StepSite, out: &mut GateOutcome) {
+    let settings = &ctx.config.gates.ci_integrity;
+    let path = wf.path;
+    let head_content = wf.head_content;
+    let (base_step, approx_line) = (site.base_step, site.approx_line);
+    let run_str = site.step.get("run").and_then(|r| r.as_str());
+    // 5c. Dropping build/clippy flags from run commands
+    if let Some(head_run) = run_str {
+        if let Some(base_run) = base_step
+            .and_then(|b| b.get("run"))
+            .and_then(|r| r.as_str())
+        {
+            if base_run.contains("-D warnings") && !head_run.contains("-D warnings") {
+                record_or_excuse(
+                    ctx,
+                    Some(head_content),
+                    out,
+                    settings.severity,
+                    &crate::findings::COMPILER_DENY_WARNINGS_REMOVED,
+                    Some(path.to_string()),
+                    approx_line,
+                    "Step dropped '-D warnings' from command, allowing compiler/linter warnings to pass.".to_string(),
+                    "Restore '-D warnings' or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                    "-D warnings",
+                );
+            }
+            if base_run.contains("--locked") && !head_run.contains("--locked") {
+                record_or_excuse(
+                    ctx,
+                    Some(head_content),
+                    out,
+                    settings.severity,
+                    &crate::findings::CARGO_LOCKED_REMOVED,
+                    Some(path.to_string()),
+                    approx_line,
+                    "Step dropped '--locked' from cargo command, permitting unverified dependency updates.".to_string(),
+                    "Restore '--locked' or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                    "--locked",
+                );
+            }
+            // Frozen-install flags of other package managers, and the
+            // `npm ci` -> `npm install` swap: each lets an install
+            // resolve past the lockfile.
+            for flag in FROZEN_INSTALL_FLAGS {
+                if base_run.contains(flag) && !head_run.contains(flag) {
+                    record_or_excuse(
+                        ctx,
+                        Some(head_content),
+                        out,
+                        settings.severity,
+                        &crate::findings::FROZEN_INSTALL_FLAG_REMOVED,
+                        Some(path.to_string()),
+                        approx_line,
+                        format!("Step dropped '{flag}' from an install command, permitting an install that resolves past the lockfile."),
+                        format!("Restore '{flag}' or excuse with allow-gate-weakening: ci-integrity <reason>."),
+                        flag,
+                    );
+                }
+            }
+            if base_run.contains("npm ci")
+                && !head_run.contains("npm ci")
+                && head_run.contains("npm install")
+            {
+                record_or_excuse(
+                    ctx,
+                    Some(head_content),
+                    out,
+                    settings.severity,
+                    &crate::findings::INSTALL_COMMAND_WEAKENED,
+                    Some(path.to_string()),
+                    approx_line,
+                    "Step replaced 'npm ci' with 'npm install': the install may rewrite the lockfile instead of honouring it.".to_string(),
+                    "Restore 'npm ci' or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                    "npm ci",
+                );
+            }
+            if base_run.contains("--all-targets") && !head_run.contains("--all-targets") {
+                record_or_excuse(
+                    ctx,
+                    Some(head_content),
+                    out,
+                    settings.severity,
+                    &crate::findings::CLIPPY_ALL_TARGETS_REMOVED,
+                    Some(path.to_string()),
+                    approx_line,
+                    "Step dropped '--all-targets' from clippy command, skipping linting on tests/benchmarks.".to_string(),
+                    "Restore '--all-targets' or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                    "--all-targets",
+                );
+            }
+        }
+    }
+}
+
+/// Reports an existing verification step that now runs only after a failure.
+fn check_step_runs_only_on_failure(
+    ctx: &Context,
+    wf: &WorkflowFile,
+    site: &StepSite,
+    out: &mut GateOutcome,
+) {
+    let settings = &ctx.config.gates.ci_integrity;
+    let path = wf.path;
+    let head_content = wf.head_content;
+    let (step, base_step, approx_line) = (site.step, site.base_step, site.approx_line);
+    // 5d. An existing verification step that now runs only after a
+    // failure (`if: failure()` without `always()`): it no longer runs
+    // on a passing build, so what it checked goes unchecked. A new
+    // step that runs on failure (a diagnostic) replaces nothing, and
+    // `always()` makes a step run more often, not less.
+    if is_verification_step(step) && base_step.is_some() {
+        if let Some(if_cond) = step.get("if").and_then(|i| i.as_str()) {
+            let failure_only = |c: &str| {
+                let l = c.to_ascii_lowercase();
+                l.contains("failure()") && !l.contains("always()")
+            };
+            if failure_only(if_cond) {
+                let base_had_it = base_step
+                    .and_then(|b| b.get("if"))
+                    .and_then(|i| i.as_str())
+                    .is_some_and(failure_only);
+                if !base_had_it {
+                    let if_line = find_line_after(head_content, "if:", approx_line.unwrap_or(1))
+                        .or(approx_line);
+                    record_or_excuse(
+                        ctx,
+                        Some(head_content),
+                        out,
+                        settings.severity,
+                        &crate::findings::VERIFICATION_STEP_MASKED_BY_CONDITION,
+                        Some(path.to_string()),
+                        if_line,
+                        format!("Verification step now carries 'if: {if_cond}': it runs only after an earlier failure, so a passing build no longer runs it."),
+                        "Remove conditional masking or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                        "if-always",
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Reports a verification step whose `if:` was added or changed so that it runs on fewer
+/// events or conditions.
+fn check_step_narrowed(ctx: &Context, wf: &WorkflowFile, site: &StepSite, out: &mut GateOutcome) {
+    let path = wf.path;
+    let head_content = wf.head_content;
+    let (step, base_step, approx_line) = (site.step, site.base_step, site.approx_line);
+    let job_id = site.job.id;
+    // 5d'. A verification step that newly runs on fewer events or
+    // conditions: a step-level `if:` added, or changed. The always() /
+    // failure() forms are 5d's; a plain narrowing is a weakening of
+    // the same kind as continue-on-error, reported at warning.
+    if is_verification_step(step) {
+        let head_if = step.get("if").map(if_text);
+        let base_if = base_step.and_then(|b| b.get("if")).map(if_text);
+        // 5d's failure-only form, or a condition that only widens
+        // when the step runs; `always() && <narrowing>` is checked.
+        let masking = |t: &str| {
+            let l = t.to_ascii_lowercase();
+            let bare = l
+                .trim()
+                .trim_start_matches("${{")
+                .trim_end_matches("}}")
+                .trim()
+                .to_string();
+            matches!(bare.as_str(), "always()" | "!cancelled()")
+                || (l.contains("failure()") && !l.contains("always()"))
+        };
+        if let Some(h) = head_if.as_deref().filter(|h| !masking(h)) {
+            if base_if.as_deref() != Some(h) {
+                let if_line =
+                    find_line_after(head_content, "if:", approx_line.unwrap_or(1)).or(approx_line);
+                let what = match &base_if {
+                    None => format!("gains 'if: {h}'"),
+                    Some(b) => format!("changes 'if: {b}' to 'if: {h}'"),
+                };
+                record_or_excuse(
+                    ctx,
+                    Some(head_content),
+                    out,
+                    Severity::Warning,
+                    &crate::findings::VERIFICATION_STEP_NARROWED,
+                    Some(path.to_string()),
+                    if_line,
+                    format!("Verification step '{}' in job '{job_id}' {what}: it no longer runs on every event or condition it ran on before.", step_label(step, "unnamed step")),
+                    "Run the step unconditionally, or record the narrowing with allow-gate-weakening: ci-integrity <reason>. A discipline step restricted to pull_request stops gating pushes to the default branch; the `merged-pr-body` directive source is the alternative when PR-body waivers are the reason.",
+                    "if-narrowed",
+                );
+            }
+        }
+    }
+}
+
+/// Reports a step that newly carries `continue-on-error: true`.
+fn check_step_continue_on_error(
+    ctx: &Context,
+    wf: &WorkflowFile,
+    site: &StepSite,
+    out: &mut GateOutcome,
+) {
+    let settings = &ctx.config.gates.ci_integrity;
+    let path = wf.path;
+    let head_content = wf.head_content;
+    let (step, base_step, approx_line) = (site.step, site.base_step, site.approx_line);
+    let (job_id, job_v) = (site.job.id, site.job.value);
+    // 5e. continue-on-error. In a job that verifies nothing (a summary,
+    // a report) no check is masked: a warning.
+    let verifies = is_verification_job(job_id, job_v);
+    let coe_severity = if verifies {
+        settings.severity
+    } else {
+        Severity::Warning
+    };
+    if settings.forbid_continue_on_error
+        && step.get("continue-on-error").and_then(|c| c.as_bool()) == Some(true)
+    {
+        let base_had_it = base_step
+            .and_then(|b| b.get("continue-on-error"))
+            .and_then(|c| c.as_bool())
+            == Some(true);
+        if !base_had_it {
+            let coe_line =
+                find_line_after(head_content, "continue-on-error", approx_line.unwrap_or(1))
+                    .or(approx_line);
+            let step_subject = step
+                .get("name")
+                .and_then(|n| n.as_str())
+                .or_else(|| step.get("id").and_then(|i| i.as_str()))
+                .unwrap_or("continue-on-error");
+            record_or_excuse(
+                ctx,
+                Some(head_content),
+                out,
+                coe_severity,
+                &crate::findings::STEP_FAILURE_MASKED_CONTINUE_ON_ERROR,
+                Some(path.to_string()),
+                coe_line,
+                if verifies {
+                    "Step carries 'continue-on-error: true', which masks failures in CI.".to_string()
+                } else {
+                    format!("Step carries 'continue-on-error: true' in job '{job_id}', which verifies nothing (a warning: no check is masked).")
+                },
+                "Remove continue-on-error or provide an allow-gate-weakening: ci-integrity <reason> directive.",
+                step_subject,
+            );
+        }
+    }
+}
+
+/// Reports a `run:` command that newly masks its exit code (`|| true`, `set +e`).
+fn check_step_exit_code_masked(
+    ctx: &Context,
+    wf: &WorkflowFile,
+    site: &StepSite,
+    out: &mut GateOutcome,
+) {
+    let settings = &ctx.config.gates.ci_integrity;
+    let path = wf.path;
+    let head_content = wf.head_content;
+    let (step, base_step, approx_line) = (site.step, site.base_step, site.approx_line);
+    let run_str = step.get("run").and_then(|r| r.as_str());
+    // 5f. Error suppression: || true / set +e
+    if settings.forbid_or_true {
+        if let Some(run_cmd) = run_str {
+            if masks_exit_code(run_cmd) {
+                let base_had_mask = base_step
+                    .and_then(|b| b.get("run"))
+                    .and_then(|r| r.as_str())
+                    .is_some_and(masks_exit_code);
+                if !base_had_mask {
+                    let mask_line =
+                        find_line_after(head_content, "|| true", approx_line.unwrap_or(1))
+                            .or_else(|| {
+                                find_line_after(head_content, "set +e", approx_line.unwrap_or(1))
+                            })
+                            .or(approx_line);
+                    let step_subject = step
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .or_else(|| step.get("id").and_then(|i| i.as_str()))
+                        .unwrap_or("or-true");
+                    record_or_excuse(
+                        ctx,
+                        Some(head_content),
+                        out,
+                        settings.severity,
+                        &crate::findings::EXIT_CODE_MASKED,
+                        Some(path.to_string()),
+                        mask_line,
+                        "Command uses '|| true' or 'set +e' to mask command failure.".to_string(),
+                        "Remove '|| true' or provide an allow-gate-weakening: ci-integrity <reason> directive.",
+                        step_subject,
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// Minimum run-body similarity (Dice coefficient over whitespace tokens) for a
