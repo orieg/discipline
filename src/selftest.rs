@@ -4988,6 +4988,48 @@ command = "cargo test"
                 && helper_change_beside(&[by_hand], &[(common, &exit("r.f1 < 1"))], "")? == reduced)
         },
     ),
+    #[cfg(feature = "lang-rust")]
+    (
+        "assertion-reduction: a Rust helper moved to another module of the crate stands for its checks only through the import that reaches it",
+        || {
+            let check = |n: usize| {
+                let asserts: String = (0..n).map(|i| format!("    assert_eq!(r.f{i}, {i});\n")).collect();
+                format!("fn check(r: &R) {{\n    let _ = r;\n{asserts}}}\n")
+            };
+            let lib = |declared: &str, imports: &str, helper: &str, call: &str| {
+                format!("{declared}#[cfg(test)]\nmod tests {{\n    use super::*;\n    {imports}\n{helper}    #[test]\n    fn create() {{\n        let r = &make();\n        {call}\n        assert_eq!(r.f0 + r.f1, 1);\n    }}\n}}\n")
+            };
+            let base = lib("", "", &check(3), "check(r);");
+            let declared = "#[cfg(test)]\nmod other;\n#[cfg(test)]\nmod test_support;\n";
+            let change = |head: &str, support: usize, other: usize| {
+                let (support, other) = (format!("pub(super) {}", check(support)), format!("pub(super) {}", check(other)));
+                helper_change(
+                    &[
+                        ("src/lib.rs", &base, head),
+                        ("src/test_support.rs", "", &support),
+                        ("src/other.rs", "", &other),
+                    ],
+                    "",
+                )
+            };
+            let imported = lib(declared, "use super::test_support::*;", "", "check(r);");
+            let not_imported = lib(declared, "", "", "check(r);");
+            let not_called = lib(declared, "use super::test_support::*;", "", "let _ = r;");
+            let untested = lib("mod other;\nmod test_support;\n", "use super::test_support::*;", "", "check(r);");
+            let reduced = vec!["assertion-reduction/assertions-reduced".to_string()];
+            // Moved whole and still called through the import: nothing is lost.
+            Ok(change(&imported, 3, 0)?.is_empty()
+                // It lost a check in the move.
+                && change(&imported, 2, 0)? == reduced
+                // A helper of the same name in a module the call does not go through.
+                && change(&imported, 0, 3)? == reduced
+                // Declared and not imported; imported and no longer called.
+                && change(&not_imported, 3, 0)? == reduced
+                && change(&not_called, 3, 0)? == reduced
+                // A module built outside tests too is the code under test.
+                && change(&untested, 3, 0)? == reduced)
+        },
+    ),
     #[cfg(feature = "lang-go")]
     (
         "assertion-reduction: gocheck suite methods are tests, and a local bound to a testify assertion object carries assertions",
@@ -9130,8 +9172,8 @@ fn helper_change_beside(
 ) -> Result<Vec<String>> {
     use crate::gitctx::{ChangeKind, ChangedFile};
     use crate::guards::agent_diff::{
-        evaluate_assertion_reduction, extract_facts, match_tests, pair_helpers_in_tree, FileFacts,
-        OutsideFile,
+        credit_crate_helpers, evaluate_assertion_reduction, extract_facts, match_tests,
+        pair_helpers_in_tree, FileFacts, OutsideFile,
     };
     let registry = crate::ast::default_registry();
     let vocab = AssertVocabulary::default();
@@ -9169,6 +9211,27 @@ fn helper_change_beside(
             text: String::new(),
         });
     }
+    // Each side of the change as a tree: the changed files that side holds, and the rest.
+    let side = |head: bool| -> Vec<(String, String)> {
+        let changed = files.iter().map(|(path, base, head_text)| {
+            let text = if head { head_text } else { base };
+            (path.to_string(), text.to_string())
+        });
+        let kept = unchanged
+            .iter()
+            .map(|(p, t)| (p.to_string(), t.to_string()));
+        changed
+            .filter(|(_, text)| !text.is_empty())
+            .chain(kept)
+            .collect()
+    };
+    let (base_tree, head_tree) = (side(false), side(true));
+    credit_crate_helpers(
+        &mut facts,
+        &registry,
+        [&base_tree, &head_tree],
+        [&vocab, &vocab],
+    )?;
     let (pairs, _, added) = match_tests(&facts);
     let helpers = pair_helpers_in_tree(&facts, &pairs, &outside);
     let directives = crate::tokens::parse_directives(body, crate::tokens::OverrideSource::PrBody);
