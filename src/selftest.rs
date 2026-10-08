@@ -4428,6 +4428,133 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "ci-integrity: a job, a step and a pin are located by their own key and value, not by text that contains them",
+        || {
+            use crate::guards::ci_integrity::{
+                child_key_line, discipline_pins, job_key_line, locate_pins, step_line, step_spans,
+            };
+            let wf = "name: test\non: [push]\n# test: old\njobs:\n  test-lint:\n    needs: [test]\n    steps:\n      - run: |\n          cargo build\n          cargo test\n  'test':\n    continue-on-error: true\n    steps:\n      - run: cargo test\n        continue-on-error: true\n      - uses: orieg/discipline@v0.17.2\n      - uses: orieg/discipline@v0.17\n";
+            let job = job_key_line(wf, "test");
+            let jobs_ok = job == Some(11)
+                && job_key_line(wf, "test-lint") == Some(5)
+                && job_key_line(wf, "lint").is_none()
+                && job_key_line(wf, "needs").is_none();
+            // The job's own key, not the step's key of the same name.
+            let key_ok = child_key_line(wf, 11, "continue-on-error") == Some(12)
+                && child_key_line(wf, 5, "continue-on-error").is_none();
+            let Some(spans) = step_spans(wf, 11, 3) else {
+                return Ok(false);
+            };
+            // The script is also a line of an earlier job's script.
+            let steps_ok = step_line(wf, spans[0], "", "", None, Some("cargo test")) == 14
+                && spans[0].item_key_line(wf, "continue-on-error") == Some(15)
+                && spans[1].item_key_line(wf, "continue-on-error").is_none()
+                && step_spans(wf, 11, 2).is_none();
+            let doc: serde_yaml::Value = serde_yaml::from_str(wf)?;
+            let mut pins = discipline_pins(&doc);
+            locate_pins(&mut pins, wf);
+            let lines: Vec<Option<usize>> = pins.iter().map(|p| p.line).collect();
+            Ok(jobs_ok && key_ok && steps_ok && lines == [Some(16), Some(17)])
+        },
+    ),
+    (
+        "command: base-tests reads the first report file in name order that holds cases",
+        || {
+            use crate::guards::command::{first_report_file_cases, TestStatus};
+            let dir = std::env::temp_dir().join(format!("discipline-selftest-reports-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir); // discipline:allow(error-swallowing): the directory may not exist yet
+            std::fs::create_dir_all(dir.join("nested"))?;
+            let failed = "<testsuite><testcase name=\"adds\" classname=\"a\"><failure message=\"boom\"/></testcase></testsuite>";
+            let passed = "<testsuite><testcase name=\"adds\" classname=\"a\"/></testsuite>";
+            // Written last, read first; `a.xml` holds no case and `nested` is not read.
+            std::fs::write(dir.join("nested/0.xml"), passed)?;
+            std::fs::write(dir.join("z.xml"), passed)?;
+            std::fs::write(dir.join("m.xml"), passed)?;
+            std::fs::write(dir.join("a.xml"), "<testsuite/>")?;
+            std::fs::write(dir.join("b.xml"), failed)?;
+            let first = first_report_file_cases(&dir);
+            std::fs::remove_file(dir.join("b.xml"))?;
+            let next = first_report_file_cases(&dir);
+            std::fs::remove_file(dir.join("m.xml"))?;
+            std::fs::remove_file(dir.join("z.xml"))?;
+            let none = first_report_file_cases(&dir);
+            std::fs::remove_dir_all(&dir)?;
+            Ok(first.len() == 1
+                && first[0].status == TestStatus::Failed
+                && next.len() == 1
+                && next[0].status != TestStatus::Failed
+                && none.is_empty())
+        },
+    ),
+    (
+        "archive-contents: a directory that cannot be listed matters only where archive_path can match below it",
+        || {
+            use crate::guards::archive_contents::pattern_can_match_below;
+            Ok(pattern_can_match_below("dist/*.tar", "dist")
+                && pattern_can_match_below("dist/*.tar", "dist/sub")
+                && pattern_can_match_below("dist/out/*.tar", "dist")
+                && pattern_can_match_below("**/*.tar", "locked")
+                && pattern_can_match_below("pkg*.tar", "pkgs")
+                && pattern_can_match_below("dist/*.tar", "")
+                && !pattern_can_match_below("dist/*.tar", "locked")
+                && !pattern_can_match_below("dist/out/*.tar", "dist/other")
+                && !pattern_can_match_below("dist/pkg.tar", "distant"))
+        },
+    ),
+    (
+        "dependency-delta: a manifest that does not parse is an error naming its path and line, not a manifest with no dependencies",
+        || {
+            use crate::guards::dependency::read_manifest;
+            let said = |content: &str, path: &str, want: &str| {
+                read_manifest(content, path)
+                    .err()
+                    .map(|e| e.to_string())
+                    .is_some_and(|e| e == want && !e.contains("SENTINEL"))
+            };
+            let broken = said("[dependencies]\nSENTINEL = \"*\"\n[dependencies\n", "a/Cargo.toml", "`a/Cargo.toml` does not parse as TOML (line 3)")
+                && said("[project]\ndependencies = [\"SENTINEL\"\n", "pyproject.toml", "`pyproject.toml` does not parse as TOML (line 3)")
+                && said("{\n\"dependencies\": {\"SENTINEL\": \"*\"},}\n", "package.json", "`package.json` does not parse as JSON (line 2)")
+                && said("{\"require\": {\"SENTINEL/x\": \"*\"},}\n", "composer.json", "`composer.json` does not parse as JSON (line 1)")
+                && said("[{\"dependencies\": {\"SENTINEL\": \"*\"}}]\n", "package.json", "`package.json` is not a JSON object");
+            // A manifest that parses is read, and one with no dependency is not an error.
+            let read = read_manifest("[dependencies]\nleftpad = \"*\"\n", "Cargo.toml")?.len() == 1
+                && read_manifest("{\"dependencies\": {\"leftpad\": \"*\"}}", "package.json")?.len() == 1
+                && read_manifest("[package]\nname = \"t\"\n", "Cargo.toml")?.is_empty()
+                && read_manifest("{}", "composer.json")?.is_empty()
+                // Read line by line: no form of these fails to parse.
+                && read_manifest("not a requirement line [\n", "go.mod")?.is_empty();
+            Ok(broken && read)
+        },
+    ),
+    (
+        "runner collection: a python_files entry that is not a glob leaves collection not determined",
+        || {
+            use crate::ast::runner_collection::{
+                check_runner_collected, glob_match, PytestCollectionRules, RunnerCollectionStatus,
+                PYTHON_FILES_UNREAD,
+            };
+            let with = |patterns: &str| {
+                let mut vocab = AssertVocabulary::default();
+                vocab.runner_rules.pytest =
+                    PytestCollectionRules::parse_ini(&format!("[pytest]\npython_files = {patterns}\n"));
+                vocab
+            };
+            let unknown = RunnerCollectionStatus::Unknown(PYTHON_FILES_UNREAD.to_string());
+            // Never matched as text inside the name, and never read as excluding the file.
+            let unread = glob_match("t[a", "t[a.py").is_none()
+                && check_runner_collected("checks/t[a.py", &with("t[a")) == unknown
+                && check_runner_collected("checks/other.py", &with("t[a")) == unknown;
+            // An entry that compiles and matches still decides, beside one that does not.
+            let decided = check_runner_collected("checks/test_a.py", &with("t[a test_*.py"))
+                == RunnerCollectionStatus::Collected
+                && check_runner_collected("checks/other.py", &with("test_*.py"))
+                    == RunnerCollectionStatus::NotCollected
+                && glob_match("t*.py", "t[a.py") == Some(true)
+                && glob_match("", "t.py") == Some(false);
+            Ok(unread && decided)
+        },
+    ),
+    (
         "dependency: manifest delta detects wildcards, unpinned git deps, and banned packages",
         || {
             use crate::guards::dependency::{parse_cargo_toml, parse_package_json};

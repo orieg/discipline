@@ -2,9 +2,9 @@
 //! conditions that narrow when a step runs, dropped flags and weakened discipline inputs.
 
 use super::{
-    find_line_after, find_line_number, find_step_line, is_verification_job, is_verification_step,
-    pair_steps, record_or_excuse, step_label, steps_match_identity, JobSite, StepMatch, StepSite,
-    WorkflowFile, GATE,
+    child_key_line, is_verification_job, is_verification_step, job_line, pair_steps,
+    record_or_excuse, step_label, step_line, step_spans, steps_match_identity, JobSite, StepMatch,
+    StepSite, WorkflowFile, GATE,
 };
 use crate::guards::{line_allows, Context, GateOutcome, Severity};
 use regex::Regex;
@@ -27,8 +27,7 @@ pub(super) fn inspect_jobs(
 
         for (job_k, job_v) in jobs_map {
             let job_id = job_k.as_str().unwrap_or("");
-            let job_line = find_line_number(head_content, &format!("{job_id}:"))
-                .or_else(|| find_line_number(head_content, job_id));
+            let job_line = job_line(head_content, job_id);
             let job = JobSite {
                 id: job_id,
                 value: job_v,
@@ -63,9 +62,9 @@ fn check_job_continue_on_error(
             .and_then(|c| c.as_bool())
             == Some(true);
         if !base_had_it {
-            let coe_line =
-                find_line_after(head_content, "continue-on-error", job_line.unwrap_or(1))
-                    .or(job_line);
+            let coe_line = job_line
+                .and_then(|l| child_key_line(head_content, l, "continue-on-error"))
+                .or(job_line);
             record_or_excuse(
                 ctx,
                 Some(head_content),
@@ -125,8 +124,9 @@ fn check_job_condition(ctx: &Context, wf: &WorkflowFile, job: &JobSite, out: &mu
                     })
                     .unwrap_or(false);
                 if !base_had_always {
-                    let if_line =
-                        find_line_after(head_content, "if:", job_line.unwrap_or(1)).or(job_line);
+                    let if_line = job_line
+                        .and_then(|l| child_key_line(head_content, l, "if"))
+                        .or(job_line);
                     record_or_excuse(
                         ctx,
                         Some(head_content),
@@ -166,6 +166,9 @@ fn inspect_job_steps(ctx: &Context, wf: &WorkflowFile, job: &JobSite, out: &mut 
                 }
             }
         }
+        let spans = job
+            .line
+            .and_then(|l| step_spans(head_content, l, steps.len()));
         for (step_idx, step) in steps.iter().enumerate() {
             let step_name = step.get("name").and_then(|n| n.as_str()).unwrap_or("");
             let step_id = step.get("id").and_then(|i| i.as_str()).unwrap_or("");
@@ -177,7 +180,11 @@ fn inspect_job_steps(ctx: &Context, wf: &WorkflowFile, job: &JobSite, out: &mut 
                 .and_then(|b_steps| b_steps.iter().find(|b| steps_match_identity(b, step)))
                 .or_else(|| renamed_from.get(&step_idx).copied());
 
-            let approx_line = find_step_line(head_content, step_name, step_id, uses_str, run_str);
+            // A line of the step itself; where the steps have no line each, the job's.
+            let span = spans.as_ref().map(|s| s[step_idx]);
+            let approx_line = span
+                .map(|s| step_line(head_content, s, step_name, step_id, uses_str, run_str))
+                .or(job.line);
 
             if let Some(b) = base_step {
                 if b == step {
@@ -199,6 +206,7 @@ fn inspect_job_steps(ctx: &Context, wf: &WorkflowFile, job: &JobSite, out: &mut 
                 step,
                 base_step,
                 approx_line,
+                span,
             };
             check_discipline_action_inputs(ctx, wf, &site, out);
             check_run_advisory(ctx, wf, &site, out);
@@ -558,7 +566,7 @@ fn check_step_runs_only_on_failure(
     let settings = &ctx.config.gates.ci_integrity;
     let path = wf.path;
     let head_content = wf.head_content;
-    let (step, base_step, approx_line) = (site.step, site.base_step, site.approx_line);
+    let (step, base_step) = (site.step, site.base_step);
     // 5d. An existing verification step that now runs only after a
     // failure (`if: failure()` without `always()`): it no longer runs
     // on a passing build, so what it checked goes unchecked. A new
@@ -576,8 +584,7 @@ fn check_step_runs_only_on_failure(
                     .and_then(|i| i.as_str())
                     .is_some_and(failure_only);
                 if !base_had_it {
-                    let if_line = find_line_after(head_content, "if:", approx_line.unwrap_or(1))
-                        .or(approx_line);
+                    let if_line = site.key_line(head_content, "if");
                     record_or_excuse(
                         ctx,
                         Some(head_content),
@@ -601,7 +608,7 @@ fn check_step_runs_only_on_failure(
 fn check_step_narrowed(ctx: &Context, wf: &WorkflowFile, site: &StepSite, out: &mut GateOutcome) {
     let path = wf.path;
     let head_content = wf.head_content;
-    let (step, base_step, approx_line) = (site.step, site.base_step, site.approx_line);
+    let (step, base_step) = (site.step, site.base_step);
     let job_id = site.job.id;
     // 5d'. A verification step that newly runs on fewer events or
     // conditions: a step-level `if:` added, or changed. The always() /
@@ -625,8 +632,7 @@ fn check_step_narrowed(ctx: &Context, wf: &WorkflowFile, site: &StepSite, out: &
         };
         if let Some(h) = head_if.as_deref().filter(|h| !masking(h)) {
             if base_if.as_deref() != Some(h) {
-                let if_line =
-                    find_line_after(head_content, "if:", approx_line.unwrap_or(1)).or(approx_line);
+                let if_line = site.key_line(head_content, "if");
                 let what = match &base_if {
                     None => format!("gains 'if: {h}'"),
                     Some(b) => format!("changes 'if: {b}' to 'if: {h}'"),
@@ -658,7 +664,7 @@ fn check_step_continue_on_error(
     let settings = &ctx.config.gates.ci_integrity;
     let path = wf.path;
     let head_content = wf.head_content;
-    let (step, base_step, approx_line) = (site.step, site.base_step, site.approx_line);
+    let (step, base_step) = (site.step, site.base_step);
     let (job_id, job_v) = (site.job.id, site.job.value);
     // 5e. continue-on-error. In a job that verifies nothing (a summary,
     // a report) no check is masked: a warning.
@@ -676,9 +682,7 @@ fn check_step_continue_on_error(
             .and_then(|c| c.as_bool())
             == Some(true);
         if !base_had_it {
-            let coe_line =
-                find_line_after(head_content, "continue-on-error", approx_line.unwrap_or(1))
-                    .or(approx_line);
+            let coe_line = site.key_line(head_content, "continue-on-error");
             let step_subject = step
                 .get("name")
                 .and_then(|n| n.as_str())
@@ -725,12 +729,10 @@ fn check_step_exit_code_masked(
                     .and_then(|r| r.as_str())
                     .is_some_and(masks_exit_code);
                 if !base_had_mask {
-                    let mask_line =
-                        find_line_after(head_content, "|| true", approx_line.unwrap_or(1))
-                            .or_else(|| {
-                                find_line_after(head_content, "set +e", approx_line.unwrap_or(1))
-                            })
-                            .or(approx_line);
+                    let mask_line = site
+                        .text_line(head_content, "|| true")
+                        .or_else(|| site.text_line(head_content, "set +e"))
+                        .or(approx_line);
                     let step_subject = step
                         .get("name")
                         .and_then(|n| n.as_str())

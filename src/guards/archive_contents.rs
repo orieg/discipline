@@ -413,54 +413,111 @@ fn find_matching_archives(root: &Path, pattern: &str) -> Result<Vec<PathBuf>> {
 
     let mut matches = Vec::new();
     let scan_target = pattern.starts_with("target/") || pattern.starts_with("target\\");
-    find_archives_recursive(root, root, &glob, scan_target, &mut matches)?;
+    let walk = ArchiveWalk {
+        root,
+        glob: &glob,
+        pattern,
+        scan_target,
+    };
+    walk.find(root, &mut matches)?;
     matches.sort();
     Ok(matches)
 }
 
-fn find_archives_recursive(
-    current: &Path,
-    root: &Path,
-    glob: &globset::GlobMatcher,
+/// The text of `pattern` before its first glob character: every path the pattern matches
+/// starts with it.
+fn literal_prefix(pattern: &str) -> &str {
+    let end = pattern
+        .find(['*', '?', '[', '{', '\\'])
+        .unwrap_or(pattern.len());
+    &pattern[..end]
+}
+
+/// Whether `pattern` can match a file below the directory `dir` (relative to the root,
+/// `/` separators, `""` for the root itself): the directory lies on the pattern's literal
+/// prefix, or the prefix ends inside it. `false` only when no match is possible.
+pub(crate) fn pattern_can_match_below(pattern: &str, dir: &str) -> bool {
+    if dir.is_empty() {
+        return true;
+    }
+    let (prefix, dir) = (literal_prefix(pattern), format!("{dir}/"));
+    dir.starts_with(prefix) || prefix.starts_with(&dir)
+}
+
+/// The walk of the working tree that looks for the files `archive_path` matches.
+struct ArchiveWalk<'a> {
+    root: &'a Path,
+    glob: &'a globset::GlobMatcher,
+    pattern: &'a str,
     scan_target: bool,
-    matches: &mut Vec<PathBuf>,
-) -> Result<()> {
-    if !current.is_dir() {
-        return Ok(());
+}
+
+impl ArchiveWalk<'_> {
+    /// `path` relative to the root, with `/` separators.
+    fn relative(&self, path: &Path) -> String {
+        path.strip_prefix(self.root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/")
     }
 
-    let entries = match std::fs::read_dir(current) {
-        Ok(e) => e,
-        Err(_) => return Ok(()),
-    };
+    /// A directory that cannot be listed, or an entry of it that cannot be read. Where
+    /// the pattern could match below it, the archive may be there, or a second archive
+    /// that makes the path ambiguous: the gate cannot say which file is the archive, as
+    /// for an archive it cannot open. Elsewhere nothing the pattern names is hidden.
+    fn unlisted(&self, dir: &Path, err: &std::io::Error) -> Result<()> {
+        let rel = self.relative(dir);
+        if !pattern_can_match_below(self.pattern, &rel) {
+            return Ok(());
+        }
+        let shown = if rel.is_empty() { "." } else { rel.as_str() };
+        bail!(
+            "directory `{shown}` could not be listed ({}) while looking for archive_path `{}`; a file the pattern matches may be below it",
+            err.kind(),
+            self.pattern
+        )
+    }
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let file_name = entry.file_name();
-        let name_str = file_name.to_string_lossy();
+    fn find(&self, current: &Path, matches: &mut Vec<PathBuf>) -> Result<()> {
+        if !current.is_dir() {
+            return Ok(());
+        }
 
-        if path.is_dir() {
-            if name_str == ".git"
-                || name_str == ".claude"
-                || name_str == ".gemini"
-                || name_str == ".antigravity"
-                || name_str == "node_modules"
-                || (!scan_target && name_str == "target")
-            {
-                continue;
-            }
-            find_archives_recursive(&path, root, glob, scan_target, matches)?;
-        } else if path.is_file() {
-            if let Ok(rel) = path.strip_prefix(root) {
-                let rel_str = rel.to_string_lossy().replace('\\', "/");
-                if glob.is_match(&rel_str) {
-                    matches.push(path);
+        let entries = match std::fs::read_dir(current) {
+            Ok(e) => e,
+            Err(e) => return self.unlisted(current, &e),
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    self.unlisted(current, &e)?;
+                    continue;
                 }
+            };
+            let path = entry.path();
+            let file_name = entry.file_name();
+            let name_str = file_name.to_string_lossy();
+
+            if path.is_dir() {
+                if name_str == ".git"
+                    || name_str == ".claude"
+                    || name_str == ".gemini"
+                    || name_str == ".antigravity"
+                    || name_str == "node_modules"
+                    || (!self.scan_target && name_str == "target")
+                {
+                    continue;
+                }
+                self.find(&path, matches)?;
+            } else if path.is_file() && self.glob.is_match(self.relative(&path)) {
+                matches.push(path);
             }
         }
-    }
 
-    Ok(())
+        Ok(())
+    }
 }
 
 /// Reads relative paths from an archive, stripping `strip_components` leading directory elements.

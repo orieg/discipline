@@ -1534,6 +1534,26 @@ pub struct TestCaseReport {
     pub failure_message: Option<String>,
 }
 
+/// The test cases of the first `*.xml` file in `dir`, in name order, that holds any; none
+/// when no file does. Files below `dir` are not looked at, and a file that cannot be read
+/// as text holds no cases.
+pub(crate) fn first_report_file_cases(dir: &Path) -> Vec<TestCaseReport> {
+    let mut reports: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "xml"))
+        .collect();
+    reports.sort();
+    reports
+        .iter()
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .map(|content| parse_junit_cases(&content))
+        .find(|cases| !cases.is_empty())
+        .unwrap_or_default()
+}
+
 pub fn parse_junit_cases(xml: &str) -> Vec<TestCaseReport> {
     let re_case =
         regex::Regex::new(r"(?s)<testcase\b([^>]*?)(?:/>|>(.*?)</testcase>)").expect("valid regex");
@@ -1718,22 +1738,12 @@ fn evaluate_base_tests(
     let combined_output = format!("{}\n{}", run_res.stdout, run_res.stderr);
     let mut cases = parse_junit_cases(&combined_output);
 
-    // Also look for test report XML files generated in temp_path if stdout did not contain JUnit XML
+    // With no JUnit XML in the output, the report is read from a file the command left
+    // at the top of its working directory: the first `*.xml` in name order that holds
+    // test cases. One file is read and the others are not; name order makes which one
+    // the same on every run and every file system (a directory listing has no order).
     if cases.is_empty() {
-        if let Ok(entries) = std::fs::read_dir(temp_path) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                if p.is_file() && p.extension().is_some_and(|e| e == "xml") {
-                    if let Ok(content) = std::fs::read_to_string(&p) {
-                        let f_cases = parse_junit_cases(&content);
-                        if !f_cases.is_empty() {
-                            cases = f_cases;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+        cases = first_report_file_cases(&temp_path);
     }
 
     let failed_cases: Vec<&TestCaseReport> = cases

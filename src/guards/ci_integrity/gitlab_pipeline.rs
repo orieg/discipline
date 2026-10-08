@@ -1,8 +1,8 @@
 //! GitLab pipeline files, compared with their base side.
 
 use super::{
-    describe_blocking, discipline_pin_changes, discipline_pins, find_line_number, locate_pins,
-    record_or_excuse, DisciplinePin,
+    describe_blocking, discipline_pin_changes, discipline_pins, locate_pins, record_or_excuse,
+    top_key_line, DisciplinePin,
 };
 use crate::guards::{Context, GateOutcome};
 use anyhow::Result;
@@ -109,7 +109,7 @@ pub(super) fn evaluate_gitlab_file(ctx: &Context, path: &str, out: &mut GateOutc
                 .iter()
                 .filter_map(|(_, l)| *l)
                 .min()
-                .or_else(|| find_line_number(&head, "include:")),
+                .or_else(|| top_key_line(&head, "include")),
             format!(
                 "The discipline that judges this change is chosen by the change: {}.",
                 describe_blocking(&blocking)
@@ -121,7 +121,8 @@ pub(super) fn evaluate_gitlab_file(ctx: &Context, path: &str, out: &mut GateOutc
     match super::ci_gitlab::diff_gitlab_ci_with(&base_docs, &head_docs) {
         Ok(found) => {
             for w in found {
-                let line = find_line_number(&head, &format!("{}:", w.job));
+                // A GitLab job is a top-level key. A job of an included file has no line here.
+                let line = top_key_line(&head, &w.job);
                 let before = out.violations.len();
                 let job = w.job.clone();
                 record_or_excuse(

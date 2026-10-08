@@ -1,5 +1,7 @@
 //! The discipline version a pipeline runs: where it is pinned and how a change moves it.
 
+use super::line_scalar;
+
 /// A value that chooses which discipline binary a pipeline runs: the action's `uses:`
 /// (with its ref), its `version`, `binary` and `download_url` inputs, a job container or
 /// image, and GitLab includes of the template or component.
@@ -11,9 +13,11 @@ pub struct DisciplinePin {
     pub line: Option<usize>,
 }
 
-/// Set each pin's line: the line holding its key and value (the image or include value
-/// alone), taking the n-th such line for the n-th pin with the same key and value.
-/// Comment lines do not count.
+/// Set each pin's line: the line whose value is the pin's value (for an include by
+/// project, the project), under the pin's key where it has one, taking the n-th such line
+/// for the n-th pin with the same key and value. The whole value is compared: a line
+/// holding a longer value that contains this one is another pin's. Comment lines do not
+/// count. A pin written across lines, or in a flow collection, keeps no line.
 pub fn locate_pins(pins: &mut [DisciplinePin], text: &str) {
     for i in 0..pins.len() {
         let (what, value) = (pins[i].what, pins[i].value.clone());
@@ -21,27 +25,26 @@ pub fn locate_pins(pins: &mut [DisciplinePin], text: &str) {
             .iter()
             .filter(|p| p.what == what && p.value == value)
             .count();
+        let scalars = || {
+            text.lines().enumerate().filter_map(|(n, l)| {
+                let t = l.trim_start().trim_start_matches("- ").trim_start();
+                (!t.starts_with('#')).then(|| (n + 1, t, line_scalar(l)))
+            })
+        };
         // An include by project is recorded as `project@ref`; the file names the project.
         let needle = match (what, value.rsplit_once('@')) {
-            ("include", Some((project, _))) if !text.contains(value.as_str()) => project,
+            ("include", Some((project, _))) if !scalars().any(|(_, _, v)| v == value) => project,
             _ => value.as_str(),
         };
         let key = match what {
             "uses" | "version" | "binary" | "download_url" => Some(format!("{what}:")),
             _ => None,
         };
-        let matching: Vec<usize> = text
-            .lines()
-            .enumerate()
-            .filter(|(_, l)| {
-                let t = l.trim_start().trim_start_matches("- ").trim_start();
-                !t.starts_with('#')
-                    && match &key {
-                        Some(k) => t.starts_with(k.as_str()) && t.contains(needle),
-                        None => t.contains(needle),
-                    }
+        let matching: Vec<usize> = scalars()
+            .filter(|(_, t, v)| {
+                *v == needle && key.as_ref().is_none_or(|k| t.starts_with(k.as_str()))
             })
-            .map(|(n, _)| n + 1)
+            .map(|(n, _, _)| n)
             .collect();
         pins[i].line = matching.get(nth).or(matching.first()).copied();
     }

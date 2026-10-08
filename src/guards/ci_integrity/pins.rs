@@ -1,6 +1,9 @@
 //! Pinning of actions, reusable workflows and container images.
 
-use super::{docker_image, find_line_after, find_step_line, record_or_excuse, GATE};
+use super::{
+    child_key_line, docker_image, job_line, record_or_excuse, step_line, step_spans, top_key_line,
+    Span, GATE,
+};
 use crate::guards::{line_allows, Context, GateOutcome};
 use std::collections::HashSet;
 
@@ -88,38 +91,20 @@ pub(crate) fn pin_verdict(kind: PinKind, value: &str, first_party: &[String]) ->
     }
 }
 
-/// The line of a YAML mapping key (`key:` at the start of a line, optionally quoted)
-/// at or after `start`.
-pub(crate) fn find_key_line(content: &str, key: &str, start: usize) -> Option<usize> {
-    let spellings = [key.to_string(), format!("'{key}'"), format!("\"{key}\"")];
-    content.lines().enumerate().find_map(|(idx, line)| {
-        let t = line.trim_start();
-        let hit = spellings.iter().any(|k| {
-            t.strip_prefix(k.as_str())
-                .and_then(|r| r.strip_prefix(':'))
-                .is_some_and(|r| r.is_empty() || r.starts_with([' ', '\t']))
-        });
-        (idx + 1 >= start && hit).then_some(idx + 1)
-    })
-}
-
-/// A step's `uses:`, as an action or, for `docker://`, an image. `cursor` is the line
-/// the search starts from; it moves past each reference found, so a reference repeated
-/// in later steps is located at its own line.
+/// A step's `uses:`, as an action or, for `docker://`, an image. `span` is the step's own
+/// lines; without one (steps not written one item each) the reference is reported at
+/// `fallback`, the line of what holds the steps.
 fn step_ref(
     step: &serde_yaml::Value,
     site: String,
     content: &str,
-    cursor: &mut usize,
+    span: Option<Span>,
+    fallback: Option<usize>,
 ) -> Option<PinRef> {
     let uses = step.get("uses").and_then(|u| u.as_str())?;
     let name = step.get("name").and_then(|n| n.as_str()).unwrap_or("");
     let id = step.get("id").and_then(|i| i.as_str()).unwrap_or("");
     let run = step.get("run").and_then(|r| r.as_str());
-    let line = find_line_after(content, uses, *cursor);
-    if let Some(l) = line {
-        *cursor = l + 1;
-    }
     Some(PinRef {
         kind: if docker_image(uses).is_some() {
             PinKind::Image
@@ -128,8 +113,10 @@ fn step_ref(
         },
         value: uses.to_string(),
         site,
-        line,
-        step_line: find_step_line(content, name, id, Some(uses), run),
+        line: span
+            .and_then(|s| s.item_key_line(content, "uses"))
+            .or(fallback),
+        step_line: span.map(|s| step_line(content, s, name, id, Some(uses), run)),
     })
 }
 
@@ -140,53 +127,65 @@ pub(crate) fn workflow_pin_refs(doc: &serde_yaml::Value, content: &str) -> Vec<P
     let Some(jobs) = doc.get("jobs").and_then(|j| j.as_mapping()) else {
         return refs;
     };
-    let jobs_line = find_key_line(content, "jobs", 1).unwrap_or(1);
     for (job_k, job) in jobs {
         let job_id = job_k.as_str().unwrap_or("");
-        let job_line = find_key_line(content, job_id, jobs_line).unwrap_or(jobs_line);
-        let at = |value: &str| find_line_after(content, value, job_line);
+        let job_line = job_line(content, job_id);
+        // A key of the job itself, and a key below one.
+        let own = |key: &str| job_line.and_then(|l| child_key_line(content, l, key));
+        let below =
+            |parent: Option<usize>, key: &str| parent.and_then(|l| child_key_line(content, l, key));
         if let Some(uses) = job.get("uses").and_then(|u| u.as_str()) {
             refs.push(PinRef {
                 kind: PinKind::ReusableWorkflow,
                 value: uses.to_string(),
                 site: format!("job '{job_id}' reusable workflow"),
-                line: at(uses),
+                line: own("uses").or(job_line),
                 step_line: None,
             });
         }
+        let container_line = own("container");
         let container = match job.get("container") {
-            Some(serde_yaml::Value::String(s)) => Some(s.as_str()),
-            Some(m) => m.get("image").and_then(|i| i.as_str()),
+            Some(serde_yaml::Value::String(s)) => Some((s.as_str(), container_line)),
+            Some(m) => m
+                .get("image")
+                .and_then(|i| i.as_str())
+                .map(|i| (i, below(container_line, "image").or(container_line))),
             None => None,
         };
-        if let Some(image) = container {
+        if let Some((image, line)) = container {
             refs.push(PinRef {
                 kind: PinKind::Image,
                 value: image.to_string(),
                 site: format!("job '{job_id}' container"),
-                line: at(image),
+                line: line.or(job_line),
                 step_line: None,
             });
         }
         if let Some(services) = job.get("services").and_then(|s| s.as_mapping()) {
+            let services_line = own("services");
             for (svc_k, svc) in services {
                 let svc_id = svc_k.as_str().unwrap_or("");
                 if let Some(image) = svc.get("image").and_then(|i| i.as_str()) {
+                    let svc_line = below(services_line, svc_id);
                     refs.push(PinRef {
                         kind: PinKind::Image,
                         value: image.to_string(),
                         site: format!("job '{job_id}' service '{svc_id}'"),
-                        line: at(image),
+                        line: below(svc_line, "image")
+                            .or(svc_line)
+                            .or(services_line)
+                            .or(job_line),
                         step_line: None,
                     });
                 }
             }
         }
         if let Some(steps) = job.get("steps").and_then(|s| s.as_sequence()) {
-            let mut cursor = job_line;
-            for step in steps {
+            let spans = job_line.and_then(|l| step_spans(content, l, steps.len()));
+            for (i, step) in steps.iter().enumerate() {
                 let site = format!("job '{job_id}' step");
-                if let Some(r) = step_ref(step, site, content, &mut cursor) {
+                let span = spans.as_ref().map(|s| s[i]);
+                if let Some(r) = step_ref(step, site, content, span, job_line) {
                     refs.push(r);
                 }
             }
@@ -204,10 +203,15 @@ pub(crate) fn action_pin_refs(doc: &serde_yaml::Value, content: &str) -> Vec<Pin
     else {
         return Vec::new();
     };
-    let mut cursor = find_key_line(content, "runs", 1).unwrap_or(1);
+    let runs_line = top_key_line(content, "runs");
+    let spans = runs_line.and_then(|l| step_spans(content, l, steps.len()));
     steps
         .iter()
-        .filter_map(|step| step_ref(step, "composite step".to_string(), content, &mut cursor))
+        .enumerate()
+        .filter_map(|(i, step)| {
+            let span = spans.as_ref().map(|s| s[i]);
+            step_ref(step, "composite step".to_string(), content, span, runs_line)
+        })
         .collect()
 }
 
@@ -445,10 +449,12 @@ mod tests {
 
     #[test]
     fn key_lines_match_whole_keys_only() {
+        use crate::guards::ci_integrity::{child_key_line, job_key_line, top_key_line};
         let c = "jobs:\n  rr:\n    runs-on: x\n  r:\n    uses: a/b@v1\n  'q':\n";
-        assert_eq!(find_key_line(c, "r", 1), Some(4));
-        assert_eq!(find_key_line(c, "q", 1), Some(6));
-        assert_eq!(find_key_line(c, "jobs", 1), Some(1));
-        assert_eq!(find_key_line(c, "rr", 3), None);
+        assert_eq!(job_key_line(c, "r"), Some(4));
+        assert_eq!(job_key_line(c, "q"), Some(6));
+        assert_eq!(top_key_line(c, "jobs"), Some(1));
+        // `rr` is a job, not a key of the job on line 4.
+        assert_eq!(child_key_line(c, 4, "rr"), None);
     }
 }

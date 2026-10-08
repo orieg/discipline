@@ -3099,12 +3099,15 @@ fn toolchain_config_reports_a_lowered_bar_and_lifts_it_by_key_or_path() {
     );
     assert_eq!(lifted.code, 0);
 
-    // Deleting a configuration file, and one that no longer parses.
+    // Deleting a configuration file, and one that no longer parses. `dependency-delta`
+    // stops the run on a `pyproject.toml` it cannot read and runs first, so it is off
+    // for this step: what is pinned here is what `toolchain-config` reports.
     repo.remove("tsconfig.json");
     repo.write("pyproject.toml", "[project\n");
     repo.commit("chore: break");
     assert_eq!(
-        repo.check(&[]).titles("toolchain-config"),
+        repo.check(&["--disable", "dependency-delta"])
+            .titles("toolchain-config"),
         vec![
             "Toolchain Configuration Unreadable",
             "Toolchain Configuration Deleted"

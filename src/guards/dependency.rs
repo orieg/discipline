@@ -727,7 +727,54 @@ pub fn parse_csproj(content: &str, path: &str) -> Vec<DependencyRecord> {
     records
 }
 
-/// Parses any supported manifest based on filename.
+/// Where a TOML parser stopped, as ` (line L)`, or empty when it gave no place. Location
+/// only: the parser's message can quote the text near the error.
+fn toml_error_line(content: &str, e: &toml::de::Error) -> String {
+    e.span()
+        .map(|s| {
+            let before = &content.as_bytes()[..s.start.min(content.len())];
+            let line = before.iter().filter(|b| **b == b'\n').count() + 1;
+            format!(" (line {line})")
+        })
+        .unwrap_or_default()
+}
+
+/// The dependencies a manifest declares, or why they could not be read: a `Cargo.toml` or
+/// `pyproject.toml` that is not TOML, a `package.json` or `composer.json` that is not
+/// JSON or whose root is not an object. The error names the path and the line, never the
+/// file's text. [`parse_manifest`] reads such a file as declaring nothing; a caller that
+/// must tell "no dependencies" from "could not be read" uses this.
+///
+/// `requirements*.txt`, `go.mod`, `Gemfile`, `*.csproj` and `Directory.Packages.props`
+/// are read line by line and have no form that fails to parse: a line that is not a
+/// dependency declares none.
+pub fn read_manifest(content: &str, path: &str) -> Result<Vec<DependencyRecord>> {
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    match file_name {
+        "Cargo.toml" | "pyproject.toml" => {
+            toml::from_str::<TomlValue>(content).map_err(|e| {
+                let at = toml_error_line(content, &e);
+                anyhow::anyhow!("`{path}` does not parse as TOML{at}")
+            })?;
+        }
+        "package.json" | "composer.json" => {
+            let val: JsonValue = serde_json::from_str(content).map_err(|e| {
+                anyhow::anyhow!("`{path}` does not parse as JSON (line {})", e.line())
+            })?;
+            if !val.is_object() {
+                anyhow::bail!("`{path}` is not a JSON object");
+            }
+        }
+        _ => {}
+    }
+    Ok(parse_manifest(content, path))
+}
+
+/// Parses any supported manifest based on filename. A manifest that does not parse
+/// declares nothing here; see [`read_manifest`].
 pub fn parse_manifest(content: &str, path: &str) -> Vec<DependencyRecord> {
     let p = Path::new(path);
     let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
@@ -880,14 +927,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
             // A policy file that does not parse is not an empty policy: the change that
             // breaks it would lift every ban in it. Location only, never the file's text.
             let val: TomlValue = toml::from_str(&content).map_err(|e| {
-                let at = e
-                    .span()
-                    .map(|s| {
-                        let before = &content.as_bytes()[..s.start.min(content.len())];
-                        let line = before.iter().filter(|b| **b == b'\n').count() + 1;
-                        format!(" (line {line})")
-                    })
-                    .unwrap_or_default();
+                let at = toml_error_line(&content, &e);
                 anyhow::anyhow!(
                     "`{deny_path}` (`gates.dependency-delta.deny_file`) does not parse as TOML{at}; its bans and source policy could not be read"
                 )
@@ -1013,9 +1053,19 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
         };
 
         let base_raw = ctx.git.base_content(&f.old_path)?;
-        let head_deps = parse_manifest(&head_content, &f.path);
+        // A head manifest that does not parse is not one that declares no dependency:
+        // what the change adds cannot be read, so the gate cannot answer.
+        let head_deps = read_manifest(&head_content, &f.path)
+            .map_err(|e| anyhow::anyhow!("{e}; its dependencies could not be read"))?;
+        // A base manifest that does not parse gives nothing to compare with. The change
+        // may be the one that repairs it: said, not stopped.
         let base_deps = match base_raw {
-            Some(ref b) => parse_manifest(b, &f.old_path),
+            Some(ref b) => read_manifest(b, &f.old_path).unwrap_or_else(|e| {
+                outcome.notes.push(format!(
+                    "{e} on the base side, so every dependency of the head side is read as added"
+                ));
+                Vec::new()
+            }),
             None => Vec::new(),
         };
 

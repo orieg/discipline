@@ -13,7 +13,10 @@
 //! Expressions are split into property paths by a small lexer of GitHub's expression
 //! language, not matched as substrings of the script.
 
-use super::ci_integrity::{find_key_line, find_line_after, workflow_has_trigger};
+use super::ci_integrity::{
+    child_key_line, job_line, step_line, step_spans, top_key_line, trigger_line,
+    workflow_has_trigger,
+};
 use crate::findings::FindingKind;
 
 /// One exposure found in a file. `key` identifies it across base and head, so an
@@ -281,9 +284,6 @@ pub(crate) fn workflow_exposures(
     content: &str,
     first_party: &[String],
 ) -> Vec<Exposure> {
-    let line_of = |needle: &str, from: usize| find_line_after(content, needle, from);
-    let jobs_line = find_key_line(content, "jobs", 1).unwrap_or(1);
-    let job_line = |job: &str| find_key_line(content, job, jobs_line);
     let mut out = Vec::new();
     let Some(jobs) = doc.get("jobs").and_then(|j| j.as_mapping()) else {
         return out;
@@ -293,7 +293,7 @@ pub(crate) fn workflow_exposures(
         out.push(Exposure {
             kind: &crate::findings::SCHEDULE_TRIGGER_WITH_SECRETS,
             key: "schedule".to_string(),
-            line: find_key_line(content, "schedule", 1).or_else(|| line_of("schedule", 1)),
+            line: trigger_line(content, "schedule"),
             message: "Workflow reads secrets and runs on a `schedule:` trigger: a scheduled run uses the default branch's workflow and whatever its actions resolve to that day, with no pull request to review it.".to_string(),
             remediation: "Keep secrets out of scheduled workflows, or pin every action by commit SHA and excuse with allow-ci-weakening: schedule <reason>.",
             subject: "schedule".to_string(),
@@ -301,7 +301,7 @@ pub(crate) fn workflow_exposures(
     }
     for (job_k, job) in jobs {
         let job_id = job_k.as_str().unwrap_or("");
-        let jl = job_line(job_id).unwrap_or(1);
+        let jl = job_line(content, job_id).unwrap_or(1);
         if job
             .get("secrets")
             .and_then(|s| s.as_str())
@@ -310,7 +310,7 @@ pub(crate) fn workflow_exposures(
             out.push(Exposure {
                 kind: &crate::findings::SECRETS_INHERIT,
                 key: job_id.to_string(),
-                line: find_key_line(content, "secrets", jl).or(Some(jl)),
+                line: child_key_line(content, jl, "secrets").or(Some(jl)),
                 message: format!("Job '{job_id}' passes every secret of the caller to the reusable workflow ('secrets: inherit')."),
                 remediation: "Pass only the secrets the called workflow needs (`secrets: { name: ${{ secrets.name }} }`), or excuse with allow-ci-weakening: secrets-inherit <reason>.",
                 subject: "secrets-inherit".to_string(),
@@ -321,25 +321,21 @@ pub(crate) fn workflow_exposures(
         };
         let can_write = job_can_write(doc, job);
         let job_secrets = reads_secrets(job);
-        let mut cursor = jl;
-        for step in steps {
+        // Each step's own lines; where the steps have no line each, the job's line.
+        let spans = step_spans(content, jl, steps.len());
+        for (i, step) in steps.iter().enumerate() {
             let name = step_name(step);
-            let anchor = step
-                .get("uses")
-                .or_else(|| step.get("run"))
-                .and_then(|v| v.as_str())
-                .and_then(|v| v.lines().next().map(str::to_string));
-            let sl = anchor
-                .as_deref()
-                .and_then(|a| line_of(a.trim(), cursor))
-                .unwrap_or(cursor);
-            cursor = sl + 1;
+            let span = spans.as_ref().map(|s| s[i]);
+            let uses = step.get("uses").and_then(|v| v.as_str());
+            let script = step.get("run").and_then(|v| v.as_str());
+            let sl = span.map_or(jl, |s| step_line(content, s, "", "", uses, script));
+            let line_of = |needle: &str| span.and_then(|s| s.line_with(content, sl, needle));
             if let Some(run) = step.get("run").and_then(|r| r.as_str()) {
                 for e in untrusted_expressions(run) {
                     out.push(Exposure {
                         kind: &crate::findings::TEMPLATE_INJECTION,
                         key: format!("{job_id}\u{1f}{e}"),
-                        line: line_of(&e, sl).or(Some(sl)),
+                        line: line_of(&e).or(Some(sl)),
                         message: format!("Step '{name}' in job '{job_id}' interpolates '${{{{ {e} }}}}' into its run: script; the runner substitutes the value before the shell parses it, so a crafted value runs as code."),
                         remediation: "Bind the value in the step's env: and read it as a quoted shell variable (\"$VALUE\"), or excuse with allow-ci-weakening: template-injection <reason>.",
                         subject: "template-injection".to_string(),
@@ -379,7 +375,6 @@ pub(crate) fn workflow_exposures(
 /// The exposures of a composite action's metadata file: template injection in its
 /// nested `run:` steps (its `inputs.*` come from the calling workflow).
 pub(crate) fn action_exposures(doc: &serde_yaml::Value, content: &str) -> Vec<Exposure> {
-    let line_of = |needle: &str, from: usize| find_line_after(content, needle, from);
     let mut out = Vec::new();
     let Some(steps) = doc
         .get("runs")
@@ -388,23 +383,23 @@ pub(crate) fn action_exposures(doc: &serde_yaml::Value, content: &str) -> Vec<Ex
     else {
         return out;
     };
-    let mut cursor = find_key_line(content, "runs", 1).unwrap_or(1);
-    for step in steps {
+    let runs_line = top_key_line(content, "runs");
+    let spans = runs_line.and_then(|l| step_spans(content, l, steps.len()));
+    for (i, step) in steps.iter().enumerate() {
         let Some(run) = step.get("run").and_then(|r| r.as_str()) else {
             continue;
         };
         let name = step_name(step);
-        let sl = run
-            .lines()
-            .next()
-            .and_then(|l| line_of(l.trim(), cursor))
-            .unwrap_or(cursor);
-        cursor = sl + 1;
+        let span = spans.as_ref().map(|s| s[i]);
+        let sl = span.map_or(runs_line.unwrap_or(1), |s| {
+            step_line(content, s, "", "", None, Some(run))
+        });
+        let line_of = |needle: &str| span.and_then(|s| s.line_with(content, sl, needle));
         for e in untrusted_expressions(run) {
             out.push(Exposure {
                 kind: &crate::findings::TEMPLATE_INJECTION,
                 key: format!("composite\u{1f}{e}"),
-                line: line_of(&e, sl).or(Some(sl)),
+                line: line_of(&e).or(Some(sl)),
                 message: format!("Composite step '{name}' interpolates '${{{{ {e} }}}}' into its run: script; the runner substitutes the value before the shell parses it, so a crafted value runs as code."),
                 remediation: "Bind the value in the step's env: and read it as a quoted shell variable (\"$VALUE\"), or excuse with allow-ci-weakening: template-injection <reason>.",
                 subject: "template-injection".to_string(),

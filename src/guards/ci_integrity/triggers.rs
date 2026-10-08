@@ -1,7 +1,7 @@
 //! Workflow triggers and token permissions: `pull_request_target` and a token widened to
 //! write.
 
-use super::{find_line_number, record_or_excuse, WorkflowFile};
+use super::{record_or_excuse, top_key_line, trigger_line, WorkflowFile};
 use crate::guards::{Context, GateOutcome};
 
 /// Workflow-level checks: a `pull_request_target` trigger introduced, permissions
@@ -23,7 +23,7 @@ pub(super) fn check_triggers_and_permissions(
         .unwrap_or(false);
 
     if head_has_pr_target && !base_has_pr_target {
-        let line_no = find_line_number(head_content, "pull_request_target");
+        let line_no = trigger_line(head_content, "pull_request_target");
         record_or_excuse(
             ctx,
             Some(head_content),
@@ -43,7 +43,7 @@ pub(super) fn check_triggers_and_permissions(
         let head_perm_level = workflow_permission_level(head_doc);
         let base_perm_level = workflow_permission_level(base_doc);
         if head_perm_level > base_perm_level {
-            let line_no = find_line_number(head_content, "permissions:");
+            let line_no = top_key_line(head_content, "permissions");
             record_or_excuse(
                 ctx,
                 Some(head_content),

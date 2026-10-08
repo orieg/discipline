@@ -1,9 +1,9 @@
 //! Verification workflows, jobs and steps the change removes.
 
 use super::{
-    find_line_number, is_verification_job, is_verification_step, job_needs, pair_steps,
-    record_or_excuse, step_body_similarity, step_label, verifying_body_markers, AddedSteps,
-    StepMatch, WorkflowFile, STEP_RENAME_SIMILARITY,
+    is_verification_job, is_verification_step, job_line, job_needs, pair_steps, record_or_excuse,
+    step_body_similarity, step_label, verifying_body_markers, AddedSteps, StepMatch, WorkflowFile,
+    STEP_RENAME_SIMILARITY,
 };
 use crate::guards::{Context, GateOutcome};
 use anyhow::Result;
@@ -160,7 +160,7 @@ fn compare_surviving_jobs(
                     settings.severity,
                     &crate::findings::JOB_TIMEOUT_REMOVED,
                     Some(path.to_string()),
-                    find_line_number(head_content, job_id),
+                    job_line(head_content, job_id),
                     format!("Job '{job_id}' timeout-minutes was removed."),
                     format!("Restore timeout-minutes to job '{job_id}' or excuse with allow-gate-weakening: ci-integrity <reason>."),
                     job_id,
@@ -220,7 +220,7 @@ fn report_removed_steps(
                     settings.severity,
                     &crate::findings::VERIFICATION_STEP_REMOVED,
                     Some(path.to_string()),
-                    find_line_number(head_content, job_id),
+                    job_line(head_content, job_id),
                     format!("Verification step '{step_name}' in job '{job_id}' was deleted: no step in head matches it by id, name, or run body ({why})."),
                     format!("Restore step '{step_name}' or excuse with allow-gate-weakening: ci-integrity <reason>."),
                     step_name,
