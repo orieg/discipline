@@ -2,6 +2,7 @@
 //! the tree-sitter extractor, plus deleted files.
 
 mod assertion_reduction;
+mod crate_helpers;
 mod deletion_rationale;
 mod helper_pairing;
 mod ignored_tests;
@@ -14,6 +15,7 @@ mod vacuous_tests;
 mod vocabulary;
 
 pub use assertion_reduction::*;
+pub use crate_helpers::*;
 pub use deletion_rationale::*;
 pub use helper_pairing::*;
 pub use ignored_tests::*;
@@ -107,6 +109,16 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
         });
     }
 
+    let crate_helper_notes = if gates.assertion_reduction.enabled {
+        credit_crate_helpers(
+            &mut analyzed_files,
+            &registry,
+            [&GitTree { ctx, head: false }, &GitTree { ctx, head: true }],
+            [&base_vocab, &head_vocab],
+        )?
+    } else {
+        Vec::new()
+    };
     let (pairs, removed, added) = match_tests(&analyzed_files);
     let outside = read_outside_files(ctx, &registry, &analyzed_files, &pairs, &head_vocab)?;
     let helpers = pair_helpers_in_tree(&analyzed_files, &pairs, &outside);
@@ -131,6 +143,8 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
         )?,
         evaluate_unsafe_safety_comment(&analyzed_files, &gates.unsafe_safety_comment)?,
     ];
+
+    ast_gates[0].notes.extend(crate_helper_notes);
 
     let first_enabled = [
         ("assertion-reduction", gates.assertion_reduction.enabled),
@@ -228,6 +242,38 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
         is_staged,
     )?);
     Ok(ast_gates)
+}
+
+/// One side of the change as the repository holds it: the base tree, or the head side
+/// (the working tree, or the index for a staged check).
+struct GitTree<'a> {
+    ctx: &'a Context<'a>,
+    head: bool,
+}
+
+impl CrateTree for GitTree<'_> {
+    fn paths(&self) -> Result<Vec<String>> {
+        if !self.head {
+            return self.ctx.git.base_tracked_files();
+        }
+        // A file the change adds may not be in the index yet.
+        let mut paths = self.ctx.git.tracked_files()?;
+        for file in self.ctx.git.changed_files()? {
+            if file.kind != ChangeKind::Deleted && !paths.contains(&file.path) {
+                paths.push(file.path);
+            }
+        }
+        Ok(paths)
+    }
+
+    fn read(&self, path: &str) -> Result<Option<String>> {
+        let bytes = if self.head {
+            self.ctx.git.head_bytes(path)?
+        } else {
+            self.ctx.git.base_bytes(path)?
+        };
+        Ok(bytes.map(|b| String::from_utf8_lossy(&b).into_owned()))
+    }
 }
 
 /// The other Go files of each package directory a changed test file stands in, per side
@@ -575,6 +621,11 @@ fn equality_exits_gained(base: &TestFn, head: &TestFn) -> usize {
 /// calls, the count the helper gained for one the base test already called. A call to a
 /// helper listed in `configured` (`assert_helper_fns`) is already one assertion of the
 /// test and counts one less.
+///
+/// **A helper in another file of the test's crate**, resolved through the crate's
+/// modules (`HelperReach::crate_helpers`, Rust), counts on both sides: the head's less
+/// the base's is added, and a shortfall, the checks of a call the head test no longer
+/// makes or of a helper that lost some, is taken from what the helpers above gave.
 fn helper_call_gain<'a>(
     base: &TestFn,
     head: &TestFn,
@@ -659,6 +710,17 @@ fn helper_call_gain<'a>(
             gain.names.push(head_helper.name.clone());
         }
     }
+    // Helpers in other files of the test's crate, counted on both sides: what the head
+    // side holds less than the base side is lost, and is taken from the rest.
+    let (crate_base, crate_head) = (&own_base.crate_helpers, &own_head.crate_helpers);
+    if crate_head.total > crate_base.total || crate_head.strong > crate_base.strong {
+        gain.names.extend(crate_head.names.iter().cloned());
+    }
+    gain.total = (gain.total + crate_head.total).saturating_sub(crate_base.total);
+    gain.strong = (gain.strong + crate_head.strong).saturating_sub(crate_base.strong);
+    gain.fatal = (gain.fatal + crate_head.fatal).saturating_sub(crate_base.fatal);
+    gain.equality =
+        (gain.equality + crate_head.equality_exits).saturating_sub(crate_base.equality_exits);
     gain
 }
 
