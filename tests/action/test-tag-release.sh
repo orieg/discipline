@@ -9,7 +9,8 @@ script="${here}/../../scripts/tag-release.sh"
 scratch="$(mktemp -d)"
 trap 'gpgconf --kill gpg-agent >/dev/null 2>&1 || true; rm -rf "${scratch}"' EXIT
 export GNUPGHOME="${scratch}/gnupg"
-mkdir -p -m 0700 "${GNUPGHOME}"
+mkdir -p "${GNUPGHOME}"
+chmod 0700 "${GNUPGHOME}"
 gpg --batch --passphrase '' --quick-generate-key "test <test@example.invalid>" default default never >/dev/null 2>&1
 keyid="$(gpg --with-colons --list-secret-keys | awk -F: '$1=="sec"{print $5; exit}')"
 
