@@ -1,5 +1,6 @@
 //! Java language pack: tree-sitter AST extraction of tests, assertions, and escape hatches.
 
+use super::ancestry::Ancestry;
 use anyhow::Result;
 use tree_sitter::Node;
 
@@ -43,9 +44,11 @@ impl LanguagePack for JavaPack {
         )?;
         let root = tree.root_node();
 
+        let anc = Ancestry::new(root);
         let mut extractor = JavaExtractor {
             dead: super::reach::dead_ranges(root, src, &JAVA_REACH),
             src: src.as_bytes(),
+            anc: &anc,
             vocab,
             is_test_path: is_java_test_path(path),
             facts: ParsedFileFacts {
@@ -60,9 +63,9 @@ impl LanguagePack for JavaPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
-        JAVA_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
-        super::caught_assertions::java(root, src, &mut extractor.facts.tests, vocab);
-        super::expected_exceptions::java(root, src, &mut extractor.facts.tests);
+        JAVA_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
+        super::caught_assertions::java(root, &anc, src, &mut extractor.facts.tests, vocab);
+        super::expected_exceptions::java(root, &anc, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
             src,
@@ -93,6 +96,8 @@ struct JavaExtractor<'a> {
     /// Byte ranges no execution reaches (`super::reach`).
     dead: super::reach::DeadRanges,
     src: &'a [u8],
+    /// The ancestors of the nodes of the file's tree (`super::ancestry`).
+    anc: &'a Ancestry<'a>,
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
     facts: ParsedFileFacts,
@@ -108,7 +113,7 @@ impl<'a> JavaExtractor<'a> {
         node.utf8_text(self.src).unwrap_or("")
     }
 
-    fn collect_comments_and_escape_hatches(&mut self, node: Node) {
+    fn collect_comments_and_escape_hatches(&mut self, node: Node<'a>) {
         let kind = node.kind();
         if kind == "annotation" || kind == "marker_annotation" {
             let name = node
@@ -148,12 +153,12 @@ impl<'a> JavaExtractor<'a> {
         }
     }
 
-    fn visit_root(&mut self, root: Node) {
+    fn visit_root(&mut self, root: Node<'a>) {
         let mut class_stack = Vec::new();
         self.visit_node(root, &mut class_stack, false);
     }
 
-    fn visit_node(&mut self, node: Node, class_stack: &mut Vec<String>, parent_ignored: bool) {
+    fn visit_node(&mut self, node: Node<'a>, class_stack: &mut Vec<String>, parent_ignored: bool) {
         match node.kind() {
             "class_declaration" | "record_declaration" => {
                 let class_name = node
@@ -188,7 +193,7 @@ impl<'a> JavaExtractor<'a> {
         }
     }
 
-    fn get_modifiers(node: Node) -> Option<Node> {
+    fn get_modifiers(node: Node<'a>) -> Option<Node<'a>> {
         for i in 0..node.child_count() {
             if let Some(c) = node.child(i) {
                 if c.kind() == "modifiers" {
@@ -202,7 +207,7 @@ impl<'a> JavaExtractor<'a> {
     /// JUnit 5 conditional annotations on a class or method
     /// (`@DisabledIfEnvironmentVariable(named = "CI", ..)`, `@DisabledOnOs(..)`): whether
     /// one always skips, and each conditional skip as the annotation and its verdict.
-    fn conditional_annotations(&self, node: Node) -> (bool, Vec<(String, CiVerdict)>) {
+    fn conditional_annotations(&self, node: Node<'a>) -> (bool, Vec<(String, CiVerdict)>) {
         let mut always = false;
         let mut conditional = Vec::new();
         let Some(modifiers) = Self::get_modifiers(node) else {
@@ -242,6 +247,7 @@ impl<'a> JavaExtractor<'a> {
                 "DisabledIf" | "EnabledIf" => super::ci_condition::jvm_condition_method(
                     Lang::Java,
                     annotation,
+                    self.anc,
                     self.src,
                     name == "EnabledIf",
                 ),
@@ -262,10 +268,10 @@ impl<'a> JavaExtractor<'a> {
 
     /// JUnit assumptions among the statements of a test body (`assumeTrue(..)`,
     /// `Assumptions.assumeFalse(..)`, `assumingThat(..)`), read by their condition.
-    fn record_assumptions(&self, body: Node, test: &mut TestFn) {
+    fn record_assumptions(&self, body: Node<'a>, test: &mut TestFn) {
         let mut cursor = body.walk();
         for statement in body.named_children(&mut cursor) {
-            match super::ci_condition::jvm_assumption(Lang::Java, statement, self.src) {
+            match super::ci_condition::jvm_assumption(Lang::Java, statement, self.anc, self.src) {
                 Some((_, SkipCondition::Always)) => test.ignored = true,
                 Some((text, SkipCondition::When(verdict))) => {
                     test.record_conditional_skip(text, verdict);
@@ -274,7 +280,7 @@ impl<'a> JavaExtractor<'a> {
             }
         }
         for (text, outcome) in
-            super::ci_condition::jvm_assumptions_under_if(Lang::Java, body, self.src)
+            super::ci_condition::jvm_assumptions_under_if(Lang::Java, body, self.anc, self.src)
         {
             match outcome {
                 SkipCondition::Always => test.ignored = true,
@@ -284,7 +290,7 @@ impl<'a> JavaExtractor<'a> {
         }
     }
 
-    fn check_modifiers_for_test_and_ignore(&self, node: Node) -> (bool, bool) {
+    fn check_modifiers_for_test_and_ignore(&self, node: Node<'a>) -> (bool, bool) {
         // Returns (is_ignored, is_test_annotated)
         let mut is_ignored = false;
         let mut is_test_annotated = false;
@@ -341,7 +347,7 @@ impl<'a> JavaExtractor<'a> {
         (is_ignored, is_test_annotated)
     }
 
-    fn visit_method(&mut self, node: Node, class_stack: &[String], parent_ignored: bool) {
+    fn visit_method(&mut self, node: Node<'a>, class_stack: &[String], parent_ignored: bool) {
         let method_name = node
             .child_by_field_name("name")
             .map(|n| self.text(n))
@@ -392,7 +398,7 @@ impl<'a> JavaExtractor<'a> {
             let mut direct_calls = Vec::new();
             if let Some(body) = node.child_by_field_name("body") {
                 self.scan_method_body(body, &mut test_fn, &mut direct_calls);
-                super::dispatch_calls(body, self.src, &JAVA_DISPATCH, &mut direct_calls);
+                super::dispatch_calls(body, self.anc, self.src, &JAVA_DISPATCH, &mut direct_calls);
             }
             let (always, conditional) = self.conditional_annotations(node);
             test_fn.ignored |= always;
@@ -446,7 +452,7 @@ impl<'a> JavaExtractor<'a> {
         }
     }
 
-    fn has_zero_parameters(method_node: Node) -> bool {
+    fn has_zero_parameters(method_node: Node<'a>) -> bool {
         if let Some(params) = method_node.child_by_field_name("parameters") {
             let mut cursor = params.walk();
             for child in params.children(&mut cursor) {
@@ -460,7 +466,7 @@ impl<'a> JavaExtractor<'a> {
 
     fn parse_expected_exception(
         &self,
-        node: Node,
+        node: Node<'a>,
     ) -> Option<super::expected_exceptions::ExpectedException> {
         if let Some(modifiers) = Self::get_modifiers(node) {
             let mut cursor = modifiers.walk();
@@ -478,7 +484,12 @@ impl<'a> JavaExtractor<'a> {
         None
     }
 
-    fn scan_method_body(&self, body: Node, test_fn: &mut TestFn, direct_calls: &mut Vec<String>) {
+    fn scan_method_body(
+        &self,
+        body: Node<'a>,
+        test_fn: &mut TestFn,
+        direct_calls: &mut Vec<String>,
+    ) {
         let mut cursor = body.walk();
         for child in body.children(&mut cursor) {
             self.scan_statement_or_expr(child, test_fn, direct_calls);
@@ -488,7 +499,7 @@ impl<'a> JavaExtractor<'a> {
     /// Records where the tautologies counted under `node` are (`TestFn::mark_tautologies`).
     fn scan_statement_or_expr(
         &self,
-        node: Node,
+        node: Node<'a>,
         test_fn: &mut TestFn,
         direct_calls: &mut Vec<String>,
     ) {
@@ -499,7 +510,7 @@ impl<'a> JavaExtractor<'a> {
 
     fn scan_statement_or_expr_unmarked(
         &self,
-        node: Node,
+        node: Node<'a>,
         test_fn: &mut TestFn,
         direct_calls: &mut Vec<String>,
     ) {
@@ -540,7 +551,7 @@ impl<'a> JavaExtractor<'a> {
 
     fn inspect_method_invocation(
         &self,
-        node: Node,
+        node: Node<'a>,
         test_fn: &mut TestFn,
         direct_calls: &mut Vec<String>,
     ) {
@@ -600,6 +611,7 @@ impl<'a> JavaExtractor<'a> {
                         &mut test_fn.equality_operands,
                         args[0],
                         args[1],
+                        self.anc,
                         self.src,
                     ) {
                         test_fn.tautologies += 1;
@@ -627,6 +639,7 @@ impl<'a> JavaExtractor<'a> {
                         &mut test_fn.equality_operands,
                         subject,
                         *expected,
+                        self.anc,
                         self.src,
                     ) {
                         test_fn.tautologies += 1;
@@ -714,7 +727,7 @@ impl<'a> JavaExtractor<'a> {
         }
     }
 
-    fn collect_arguments(args_node: Option<Node>) -> Vec<Node> {
+    fn collect_arguments(args_node: Option<Node<'a>>) -> Vec<Node<'a>> {
         let mut result = Vec::new();
         let Some(args) = args_node else {
             return result;
@@ -731,7 +744,12 @@ impl<'a> JavaExtractor<'a> {
 
 /// A method without a `body` field (abstract, interface) never reaches the classifier;
 /// a `default` interface method or a class method does.
-fn java_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
+fn java_fn_is_test<'t>(
+    node: tree_sitter::Node<'t>,
+    _: &Ancestry<'t>,
+    src: &str,
+    path: &str,
+) -> bool {
     if functions::is_test_file(path, Some(is_java_test_path)) {
         return true;
     }

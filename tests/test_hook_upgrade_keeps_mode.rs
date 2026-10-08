@@ -6,7 +6,8 @@
 mod common;
 
 use common::{Repo, Run};
-use discipline::hook::{config_for_mode, Agent, OPENCODE_OBSERVE_NEVER_BLOCKS};
+use discipline::hook::{config_for_mode, Agent, GENERATED_HEADER, OPENCODE_OBSERVE_NEVER_BLOCKS};
+use discipline::hookfile::{stamp, unstamped};
 use std::path::Path;
 
 const PLUGIN: &str = ".opencode/plugins/discipline.js";
@@ -37,18 +38,47 @@ fn read(repo: &Repo, rel: &str) -> String {
     std::fs::read_to_string(repo.file(rel)).unwrap()
 }
 
+/// `text`, a generated file whose body was altered, with the digest an earlier release
+/// would have written for that body: without it the alteration is an edit.
+fn restamped(text: &str) -> String {
+    stamp(&unstamped(text), GENERATED_HEADER, &[])
+}
+
+/// This release's plugin with one comment line of the template worded differently, and
+/// the digest of the plugin as it was before: what a hand edit leaves.
+fn altered_plugin(observe: bool) -> String {
+    let now = config_for_mode(Agent::Opencode, observe).1;
+    let old = now.replace(
+        "// the model reads it and repairs the change.",
+        "// the model reads it.",
+    );
+    assert_ne!(old, now, "the template still has the line this replaces");
+    old
+}
+
+/// `--upgrade` on `text`, the plugin with an alteration its digest does not cover: refused
+/// with the difference, and the file is left byte for byte.
+fn assert_upgrade_refuses_plugin(text: &str, extra: &[&str]) {
+    let (repo, home) = sandbox();
+    repo.write(PLUGIN, text);
+    let mut args = vec!["--agent", "opencode", "--upgrade"];
+    args.extend_from_slice(extra);
+    let refused = install(&repo, home.path(), &args);
+    assert_eq!(refused.code, 1, "{}{}", refused.stdout, refused.stderr);
+    assert!(
+        refused.stdout.contains("@@ ") && refused.stdout.contains("--force"),
+        "{}",
+        refused.stdout
+    );
+    assert_eq!(read(&repo, PLUGIN), text);
+}
+
 /// What this release writes for `agent`, as an earlier release would have left it: the
-/// same file with one comment line of the template worded differently (the plugin), or
-/// the v0.15.0 fixture (a JSON hook file).
+/// same file with one comment line of the template worded differently and that body's
+/// digest (the plugin), or the v0.15.0 fixture (a JSON hook file).
 fn earlier_release(agent: Agent, observe: bool) -> String {
     if agent == Agent::Opencode {
-        let now = config_for_mode(agent, observe).1;
-        let old = now.replace(
-            "// the model reads it and repairs the change.",
-            "// the model reads it.",
-        );
-        assert_ne!(old, now, "the template still has the line this replaces");
-        return old;
+        return restamped(&altered_plugin(observe));
     }
     std::fs::read_to_string(format!(
         "{}/tests/fixtures/hook_install/v0.15.0/{}.{}.json",
@@ -127,6 +157,9 @@ fn an_earlier_observe_plugin_is_upgraded_to_this_releases_observe_plugin() {
     let after = read(&repo, PLUGIN);
     assert!(plugin_is_observe(&after), "{}\n{after}", up.stdout);
     assert_eq!(after, config_for_mode(Agent::Opencode, true).1);
+
+    // The same alteration under the digest of the unaltered plugin is an edit.
+    assert_upgrade_refuses_plugin(&altered_plugin(true), &[]);
 }
 
 /// Control: an enforcing plugin stays enforcing through an upgrade, from this release
@@ -148,6 +181,9 @@ fn an_enforcing_plugin_stays_enforcing_through_upgrade() {
         read(&repo, PLUGIN),
         config_for_mode(Agent::Opencode, false).1
     );
+
+    // The same alteration under the digest of the unaltered plugin is an edit.
+    assert_upgrade_refuses_plugin(&altered_plugin(false), &[]);
 }
 
 /// Control: `--upgrade --observe` turns observe mode on, as it does for a JSON file.
@@ -271,6 +307,24 @@ fn a_plain_install_on_an_earlier_releases_file_still_says_so() {
         );
         assert_eq!(read(&repo, rel), old, "{agent:?}");
     }
+
+    // The plugin with the same alteration under the digest of the unaltered one is not
+    // called an earlier release's: it was changed after it was written.
+    let (repo, home) = sandbox();
+    let edited = altered_plugin(true);
+    repo.write(PLUGIN, &edited);
+    let plain = install(&repo, home.path(), &["--agent", "opencode", "--observe"]);
+    assert_eq!(plain.code, 0, "{}{}", plain.stdout, plain.stderr);
+    assert!(
+        plain.stdout.contains("was changed after")
+            && !plain
+                .stdout
+                .contains("was written by an earlier discipline release"),
+        "{}",
+        plain.stdout
+    );
+    assert_eq!(read(&repo, PLUGIN), edited);
+    assert_upgrade_refuses_plugin(&edited, &["--observe"]);
 }
 
 /// A plugin with the generated header whose marker line and commands disagree has no
@@ -316,17 +370,21 @@ fn a_plugin_whose_mode_cannot_be_read_is_refused_by_upgrade_and_left_unchanged()
 }
 
 /// What the refusal says to run works: with `--observe` given, the mode is asked for and
-/// need not be read.
+/// need not be read. A plugin whose marker line was removed was changed after it was
+/// written, so the rewrite also takes `--force`; without it the difference is printed and
+/// the file is left as it is.
 #[test]
-fn a_plugin_whose_mode_cannot_be_read_is_rewritten_when_observe_is_asked_for() {
+fn a_plugin_whose_mode_cannot_be_read_is_rewritten_with_observe_and_force() {
     let observe = config_for_mode(Agent::Opencode, true).1;
     let damaged = observe.replace(&format!("{OPENCODE_OBSERVE_NEVER_BLOCKS}\n"), "");
+    assert_upgrade_refuses_plugin(&damaged, &["--observe"]);
+
     let (repo, home) = sandbox();
     repo.write(PLUGIN, &damaged);
     let up = install(
         &repo,
         home.path(),
-        &["--agent", "opencode", "--upgrade", "--observe"],
+        &["--agent", "opencode", "--upgrade", "--observe", "--force"],
     );
     assert_eq!(up.code, 0, "{}{}", up.stdout, up.stderr);
     assert_eq!(read(&repo, PLUGIN), observe);
@@ -505,7 +563,8 @@ fn the_upgrade_output_names_the_mode_it_wrote() {
     let (repo, home) = sandbox();
     install(&repo, home.path(), &["--agent", "claude-code"]);
     let boot = ".claude/hooks/discipline-bootstrap.sh";
-    let old = read(&repo, boot).replace(&format!("v{v}"), "v0.0.1");
+    let altered = read(&repo, boot).replace(&format!("v{v}"), "v0.0.1");
+    let old = restamped(&altered);
     repo.write(boot, &old);
     let up = install(&repo, home.path(), &["--agent", "claude-code", "--upgrade"]);
     assert_eq!(up.code, 0, "{}{}", up.stdout, up.stderr);
@@ -515,6 +574,22 @@ fn the_upgrade_output_names_the_mode_it_wrote() {
         .find(|l| l.contains("upgraded") && l.contains(boot))
         .unwrap_or_else(|| panic!("no upgrade line: {}", up.stdout));
     assert!(line.ends_with(&format!("to discipline {v}")), "{line}");
+
+    // The same alteration under the digest of the unaltered script is an edit: no
+    // upgrade line, the difference, and the script as it was.
+    repo.write(boot, &altered);
+    let refused = install(&repo, home.path(), &["--agent", "claude-code", "--upgrade"]);
+    assert_eq!(refused.code, 1, "{}{}", refused.stdout, refused.stderr);
+    assert!(
+        refused.stdout.contains("-version=\"v0.0.1\"")
+            && !refused
+                .stdout
+                .lines()
+                .any(|l| l.contains("upgraded") && l.contains(boot)),
+        "{}",
+        refused.stdout
+    );
+    assert_eq!(read(&repo, boot), altered);
 }
 
 /// `--upgrade --observe` on an enforcing file says it wrote observe mode.

@@ -1,5 +1,6 @@
 //! Go language pack: tree-sitter AST extraction of tests, assertions, and escape hatches.
 
+use super::ancestry::Ancestry;
 use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
@@ -42,9 +43,11 @@ impl LanguagePack for GoPack {
         )?;
         let root = tree.root_node();
 
+        let anc = Ancestry::new(root);
         let mut extractor = GoExtractor {
             dead: super::reach::dead_ranges(root, src, &GO_REACH),
             src: src.as_bytes(),
+            anc: &anc,
             vocab,
             is_test_path: is_go_test_path(path),
             facts: ParsedFileFacts {
@@ -64,10 +67,16 @@ impl LanguagePack for GoPack {
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
-        GO_PACK.shared_facts(root, src, path, vocab, &mut extractor.facts);
+        GO_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
         super::bounds::go(root, src, &mut extractor.facts.tests);
         super::expectations::go(root, src, &mut extractor.facts.tests);
-        super::expected_exceptions::go(root, src, &mut extractor.facts.tests, &extractor.imports);
+        super::expected_exceptions::go(
+            root,
+            &anc,
+            src,
+            &mut extractor.facts.tests,
+            &extractor.imports,
+        );
         super::caught_assertions::go(root, src, &mut extractor.facts.tests, vocab);
         extractor.facts.prose = super::prose::extract(
             root,
@@ -104,6 +113,7 @@ pub fn resolve_package_cases(
         .map_err(|e| anyhow!("failed to load the Go grammar: {e}"))?;
     let tree = crate::ast::source_text::parse_file(&mut parser, path, src)?;
     let root = tree.root_node();
+    let anc = Ancestry::new(root);
     let Some(package) = go_package_name(root, src.as_bytes()) else {
         return Ok(());
     };
@@ -122,10 +132,7 @@ pub fn resolve_package_cases(
     }
     let siblings: Vec<GoSibling> = trees
         .iter()
-        .map(|(tree, src)| GoSibling {
-            src,
-            root: tree.root_node(),
-        })
+        .map(|(tree, src)| GoSibling::new(src, tree.root_node()))
         .collect();
     let mut cursor = root.walk();
     for decl in root.children(&mut cursor) {
@@ -144,7 +151,7 @@ pub fn resolve_package_cases(
             .find(|t| t.line == line && t.end_line == end_line && !t.name.contains('/'));
         if let Some(test) = test {
             let (cases, non_literal_cases, case_rows) =
-                extract_go_cases_in_package(body, src.as_bytes(), &siblings).into_parts();
+                extract_go_cases_in_package(body, &anc, src.as_bytes(), &siblings).into_parts();
             test.cases = cases;
             test.non_literal_cases = non_literal_cases;
             test.case_rows = case_rows;
@@ -191,6 +198,8 @@ struct GoExtractor<'a> {
     /// Byte ranges no execution reaches (`super::reach`).
     dead: super::reach::DeadRanges,
     src: &'a [u8],
+    /// The ancestors of the nodes of the file's tree (`super::ancestry`).
+    anc: &'a Ancestry<'a>,
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
     facts: ParsedFileFacts,
@@ -526,7 +535,7 @@ impl<'a> GoExtractor<'a> {
         node.utf8_text(self.src).unwrap_or("")
     }
 
-    fn collect_comments_and_escape_hatches(&mut self, node: Node) {
+    fn collect_comments_and_escape_hatches(&mut self, node: Node<'a>) {
         super::collect_comment_suppressions(
             node,
             self.src,
@@ -536,7 +545,7 @@ impl<'a> GoExtractor<'a> {
         );
     }
 
-    fn visit_root(&mut self, root: Node) {
+    fn visit_root(&mut self, root: Node<'a>) {
         let mut cursor = root.walk();
         for child in root.children(&mut cursor) {
             if child.kind() == "function_declaration" {
@@ -547,7 +556,7 @@ impl<'a> GoExtractor<'a> {
         }
     }
 
-    fn visit_function(&mut self, node: Node) {
+    fn visit_function(&mut self, node: Node<'a>) {
         let name_node = node.child_by_field_name("name");
         let func_name = name_node.map(|n| self.text(n)).unwrap_or("");
 
@@ -574,7 +583,7 @@ impl<'a> GoExtractor<'a> {
     /// it had as a helper, and what tells `Suite.TestAdd` from another suite's `TestAdd`.
     /// The suite's other methods (`SetupTest`, `TearDownSuite`, `BeforeTest`, its own
     /// checks) stay helpers.
-    fn visit_method(&mut self, node: Node) {
+    fn visit_method(&mut self, node: Node<'a>) {
         let method = node
             .child_by_field_name("name")
             .map(|n| self.text(n))
@@ -610,7 +619,7 @@ impl<'a> GoExtractor<'a> {
     }
 
     /// Records the function or method `node` as the test `name`.
-    fn record_test(&mut self, node: Node, name: &str) {
+    fn record_test(&mut self, node: Node<'a>, name: &str) {
         let mut test_fn = TestFn {
             name: name.to_string(),
             line: node.start_position().row + 1,
@@ -621,12 +630,12 @@ impl<'a> GoExtractor<'a> {
         self.enter_function(node);
         if let Some(body) = node.child_by_field_name("body") {
             let (cases, non_literal_cases, case_rows) =
-                super::test_cases::extract_go_cases(body, self.src).into_parts();
+                super::test_cases::extract_go_cases(body, self.anc, self.src).into_parts();
             test_fn.cases = cases;
             test_fn.non_literal_cases = non_literal_cases;
             test_fn.case_rows = case_rows;
             self.scan_block(body, &mut test_fn, name, &mut direct_calls);
-            super::dispatch_calls(body, self.src, &GO_DISPATCH, &mut direct_calls);
+            super::dispatch_calls(body, self.anc, self.src, &GO_DISPATCH, &mut direct_calls);
             if !test_fn.ignored {
                 self.record_conditional_early_exits(body, &mut test_fn);
             }
@@ -638,7 +647,7 @@ impl<'a> GoExtractor<'a> {
     /// Reads what the function or method `node` makes assertions on beside `t` and the
     /// suite: its gocheck `*C` parameters, and its locals bound to a testify assertion
     /// object.
-    fn enter_function(&mut self, node: Node) {
+    fn enter_function(&mut self, node: Node<'a>) {
         let src = std::str::from_utf8(self.src).unwrap_or("");
         self.gocheck = if self.is_test_path {
             gocheck_parameters(node, src)
@@ -656,7 +665,7 @@ impl<'a> GoExtractor<'a> {
     /// `r := require.New(t)` and `a := assert.New(t)`. `r.NoError(err)` then counts as
     /// `require.NoError(t, err)` does. A name bound to anything else, or assigned twice
     /// to objects that differ, is not recorded.
-    fn read_assertion_locals<'t>(&mut self, node: Node<'t>) {
+    fn read_assertion_locals(&mut self, node: Node<'a>) {
         if matches!(node.kind(), "short_var_declaration" | "var_spec") {
             let left = node
                 .child_by_field_name("left")
@@ -664,7 +673,7 @@ impl<'a> GoExtractor<'a> {
             let right = node
                 .child_by_field_name("right")
                 .or_else(|| node.child_by_field_name("value"));
-            let single = |n: Node<'t>| -> Option<Node<'t>> {
+            let single = |n: Node<'a>| -> Option<Node<'a>> {
                 match n.kind() {
                     "expression_list" => (n.named_child_count() == 1)
                         .then(|| n.named_child(0))
@@ -689,7 +698,7 @@ impl<'a> GoExtractor<'a> {
             }
         }
         let mut cursor = node.walk();
-        let children: Vec<Node<'t>> = node.children(&mut cursor).collect();
+        let children: Vec<Node<'a>> = node.children(&mut cursor).collect();
         for child in children {
             self.read_assertion_locals(child);
         }
@@ -698,7 +707,7 @@ impl<'a> GoExtractor<'a> {
     /// Whether `value` builds a testify assertion object, and whether its assertions
     /// stop the test: `s.Require()` / `require.New(t)` do, `s.Assert()` / `assert.New(t)`
     /// do not.
-    fn assertion_object(&self, value: Node) -> Option<bool> {
+    fn assertion_object(&self, value: Node<'a>) -> Option<bool> {
         if value.kind() != "call_expression" {
             return None;
         }
@@ -720,7 +729,7 @@ impl<'a> GoExtractor<'a> {
 
     /// The assertion a call makes on a local bound to a testify assertion object
     /// ([`Self::read_assertion_locals`]), and whether it stops the test.
-    fn local_assertion(&self, callee: Node) -> Option<(&'a str, bool)> {
+    fn local_assertion(&self, callee: Node<'a>) -> Option<(&'a str, bool)> {
         if callee.kind() != "selector_expression" {
             return None;
         }
@@ -741,7 +750,7 @@ impl<'a> GoExtractor<'a> {
     /// read. A checker that takes an expected value (`Equals`, `DeepEquals`, `Matches`,
     /// `HasLen`, ..) is an equality check; `IsNil` / `NotNil` are not; the same text on
     /// both sides of one is a tautology.
-    fn count_gocheck(&self, callee: Node, args: &[Node], test_fn: &mut TestFn) -> bool {
+    fn count_gocheck(&self, callee: Node<'a>, args: &[Node<'a>], test_fn: &mut TestFn) -> bool {
         if callee.kind() != "selector_expression" {
             return false;
         }
@@ -764,7 +773,7 @@ impl<'a> GoExtractor<'a> {
         }
         let checker = self.text(args[1]);
         let checker = checker.rsplit('.').next().unwrap_or(checker);
-        if let Some(call) = callee.parent() {
+        if let Some(call) = self.anc.parent(callee) {
             let src = std::str::from_utf8(self.src).unwrap_or("");
             test_fn
                 .expected_exceptions
@@ -787,6 +796,7 @@ impl<'a> GoExtractor<'a> {
                     &mut test_fn.equality_operands,
                     args[0],
                     args[2],
+                    self.anc,
                     self.src,
                 )
             } else {
@@ -804,7 +814,7 @@ impl<'a> GoExtractor<'a> {
     /// its first value argument: 1 on the `assert` or `require` package the file imports
     /// (`require.ErrorIs(t, err, target)`), 0 on the suite being read, on its
     /// `Require()` / `Assert()`, and on a local bound to an assertion object.
-    fn testify_call(&self, callee: Node) -> Option<(&'a str, usize)> {
+    fn testify_call(&self, callee: Node<'a>) -> Option<(&'a str, usize)> {
         if callee.kind() != "selector_expression" {
             return None;
         }
@@ -826,7 +836,7 @@ impl<'a> GoExtractor<'a> {
     /// Whether a call is `suite.Run(t, <suite value>)`: `Run` of testify's `suite`
     /// package, under the name the file imports it by, with a second argument that is
     /// not a function written in place.
-    fn is_suite_run(&self, callee: Node, args: &[Node]) -> bool {
+    fn is_suite_run(&self, callee: Node<'a>, args: &[Node<'a>]) -> bool {
         callee.kind() == "selector_expression"
             && callee
                 .child_by_field_name("field")
@@ -841,7 +851,7 @@ impl<'a> GoExtractor<'a> {
     /// The assertion a call makes on the suite being read, and whether it stops the
     /// test: `s.Equal(..)` and `s.Assert().Equal(..)` do not, `s.Require().Equal(..)`
     /// does, as `assert.Equal` and `require.Equal` do.
-    fn suite_assertion(&self, callee: Node) -> Option<(&'a str, bool)> {
+    fn suite_assertion(&self, callee: Node<'a>) -> Option<(&'a str, bool)> {
         let suite = self.suite_receiver.as_deref()?;
         if callee.kind() != "selector_expression" {
             return None;
@@ -882,7 +892,7 @@ impl<'a> GoExtractor<'a> {
 
     /// Records a non-test function or method as a helper; `resolvable` when a test's
     /// `name(...)` call in this file runs it.
-    fn record_helper(&mut self, node: Node, name: String, resolvable: bool) {
+    fn record_helper(&mut self, node: Node<'a>, name: String, resolvable: bool) {
         let Some(body) = node.child_by_field_name("body") else {
             return;
         };
@@ -918,7 +928,7 @@ impl<'a> GoExtractor<'a> {
         );
     }
 
-    fn is_benchmark_signature(&self, func_node: Node) -> bool {
+    fn is_benchmark_signature(&self, func_node: Node<'a>) -> bool {
         let Some(params) = func_node.child_by_field_name("parameters") else {
             return false;
         };
@@ -937,7 +947,7 @@ impl<'a> GoExtractor<'a> {
         false
     }
 
-    fn is_unit_test_signature(&self, func_node: Node) -> bool {
+    fn is_unit_test_signature(&self, func_node: Node<'a>) -> bool {
         let Some(params) = func_node.child_by_field_name("parameters") else {
             return false;
         };
@@ -973,7 +983,7 @@ impl<'a> GoExtractor<'a> {
 
     fn scan_block(
         &mut self,
-        block: Node,
+        block: Node<'a>,
         test_fn: &mut TestFn,
         parent_name: &str,
         direct_calls: &mut Vec<String>,
@@ -987,7 +997,7 @@ impl<'a> GoExtractor<'a> {
     /// Records where the tautologies counted under `node` are (`TestFn::mark_tautologies`).
     fn scan_node(
         &mut self,
-        node: Node,
+        node: Node<'a>,
         test_fn: &mut TestFn,
         parent_name: &str,
         direct_calls: &mut Vec<String>,
@@ -999,7 +1009,7 @@ impl<'a> GoExtractor<'a> {
 
     fn scan_node_unmarked(
         &mut self,
-        node: Node,
+        node: Node<'a>,
         test_fn: &mut TestFn,
         parent_name: &str,
         direct_calls: &mut Vec<String>,
@@ -1022,7 +1032,7 @@ impl<'a> GoExtractor<'a> {
 
     fn inspect_call(
         &mut self,
-        node: Node,
+        node: Node<'a>,
         test_fn: &mut TestFn,
         parent_name: &str,
         direct_calls: &mut Vec<String>,
@@ -1073,7 +1083,13 @@ impl<'a> GoExtractor<'a> {
             if let Some(func_lit) = args.iter().find(|a| a.kind() == "func_literal") {
                 if let Some(sub_body) = func_lit.child_by_field_name("body") {
                     self.scan_block(sub_body, &mut sub_test, &sub_name, &mut sub_calls);
-                    super::dispatch_calls(sub_body, self.src, &GO_DISPATCH, &mut sub_calls);
+                    super::dispatch_calls(
+                        sub_body,
+                        self.anc,
+                        self.src,
+                        &GO_DISPATCH,
+                        &mut sub_calls,
+                    );
                     if !sub_test.ignored {
                         self.record_conditional_early_exits(sub_body, &mut sub_test);
                     }
@@ -1098,9 +1114,10 @@ impl<'a> GoExtractor<'a> {
             // reported as a note. A constant condition skips every run.
             // A skip in the `else` branch of an `if` on a CI variable is conditional too.
             // A test keeps its first condition unless a later one makes it skip in CI.
-            let legacy = enclosing_if_condition(node, self.src);
+            let legacy = enclosing_if_condition(node, self.anc, self.src);
             let constant = legacy.as_deref() == Some("true");
-            let site = super::ci_condition::site(super::ci_condition::Lang::Go, node, self.src);
+            let site =
+                super::ci_condition::site(super::ci_condition::Lang::Go, node, self.anc, self.src);
             match super::ci_condition::conditional(legacy, site) {
                 Some((cond, verdict)) if !constant => {
                     test_fn.record_conditional_skip(cond, verdict);
@@ -1121,6 +1138,7 @@ impl<'a> GoExtractor<'a> {
                     method,
                     values,
                     node,
+                    self.anc,
                     src,
                     &self.imports,
                 ));
@@ -1210,7 +1228,7 @@ impl<'a> GoExtractor<'a> {
         &self,
         test_fn: &mut TestFn,
         method: &str,
-        args: &[Node],
+        args: &[Node<'a>],
         first: usize,
         fatal: bool,
     ) {
@@ -1239,6 +1257,7 @@ impl<'a> GoExtractor<'a> {
                             &mut test_fn.equality_operands,
                             *a,
                             *b,
+                            self.anc,
                             self.src,
                         ) =>
                     {
@@ -1267,7 +1286,7 @@ impl<'a> GoExtractor<'a> {
         }
     }
 
-    fn collect_arguments(args_node: Option<Node>) -> Vec<Node> {
+    fn collect_arguments(args_node: Option<Node<'a>>) -> Vec<Node<'a>> {
         let mut result = Vec::new();
         let Some(args) = args_node else {
             return result;
@@ -1282,7 +1301,7 @@ impl<'a> GoExtractor<'a> {
         result
     }
 
-    fn extract_string_literal(&self, node: Node) -> String {
+    fn extract_string_literal(&self, node: Node<'a>) -> String {
         let t = self.text(node).trim();
         if (t.starts_with('"') && t.ends_with('"')) || (t.starts_with('`') && t.ends_with('`')) {
             t[1..t.len() - 1].to_string()
@@ -1294,15 +1313,15 @@ impl<'a> GoExtractor<'a> {
     /// Early exits under a condition: the first `if` the text rule below accepts, then
     /// every `return` under an `if` (nested and `else` branches included) that a CI
     /// variable is involved in, through a variable, constant or helper of this file.
-    fn record_conditional_early_exits(&self, body: Node, test: &mut TestFn) {
+    fn record_conditional_early_exits(&self, body: Node<'a>, test: &mut TestFn) {
         use super::ci_condition::{self, CiVerdict, Lang};
         if let Some((cond, consequence)) = self.detect_go_conditional_early_exit(body) {
-            let verdict = ci_condition::site(Lang::Go, consequence, self.src)
+            let verdict = ci_condition::site(Lang::Go, consequence, self.anc, self.src)
                 .map_or(CiVerdict::NotCi, |s| s.verdict);
             test.record_conditional_skip(cond, verdict);
         }
         for exit in ci_condition::exits_under_if(body, &|n| n.kind() == "return_statement") {
-            if let Some(site) = ci_condition::site(Lang::Go, exit, self.src) {
+            if let Some(site) = ci_condition::site(Lang::Go, exit, self.anc, self.src) {
                 if site.related {
                     test.record_conditional_skip(site.text, site.verdict);
                 }
@@ -1372,7 +1391,7 @@ impl<'a> GoExtractor<'a> {
     }
 }
 
-fn go_fn_is_test(node: tree_sitter::Node, src: &str, path: &str) -> bool {
+fn go_fn_is_test<'t>(node: tree_sitter::Node<'t>, _: &Ancestry<'t>, src: &str, path: &str) -> bool {
     let name = node
         .child_by_field_name("name")
         .and_then(|n| n.utf8_text(src.as_bytes()).ok())
@@ -1441,9 +1460,9 @@ fn go_consequence_returns_early(consequence: Node, src: &[u8]) -> bool {
 
 /// The condition of the nearest `if` whose body holds `node`, stopping at the function
 /// the call is in; `None` when the call runs unconditionally.
-fn enclosing_if_condition(node: Node, src: &[u8]) -> Option<String> {
+fn enclosing_if_condition<'t>(node: Node<'t>, anc: &Ancestry<'t>, src: &[u8]) -> Option<String> {
     let mut cur = node;
-    while let Some(p) = cur.parent() {
+    while let Some(p) = anc.parent(cur) {
         match p.kind() {
             "function_declaration" | "method_declaration" | "func_literal" => return None,
             "if_statement" => {

@@ -12,13 +12,16 @@
 //! ([`fingerprint_for_version`]). Version 1 used the title in place of the code; a version-1 file still matches
 //! (with a deprecation note) until `discipline baseline --migrate` rewrites it.
 
+use crate::cli::load_config;
 use crate::config::Severity;
-use crate::guards::{GateOutcome, Violation};
+use crate::gitctx::GitCtx;
+use crate::guards::{run_checks, Context, GateOutcome, Violation};
 use crate::report::gitlab::sha256_hex;
-use anyhow::{Context as _, Result};
+use crate::style;
+use anyhow::{bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const DEFAULT_BASELINE_FILE: &str = "discipline-baseline.toml";
 
@@ -630,6 +633,235 @@ where
     BaselineMatchResult {
         baselined_count: total_baselined,
         stale_count,
+    }
+}
+
+/// The `discipline baseline` subcommand.
+pub fn run_cli(mut args: crate::cli::BaselineArgs) -> Result<bool> {
+    // The base detection and the gates read the event payload, as in `check`.
+    crate::gitctx::try_event_payload()?;
+    if args.baseline_file == std::path::Path::new(crate::baseline::DEFAULT_BASELINE_FILE) {
+        if let Some(p) = std::env::var("DISCIPLINE_BASELINE")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+        {
+            args.baseline_file = p;
+        }
+    }
+    if args.trust_workspace {
+        std::env::set_var("DISCIPLINE_TRUST_WORKSPACE", "1");
+    }
+    let git = if args.whole_tree || args.migrate {
+        GitCtx::open_whole_tree()?
+    } else {
+        let base_ref = crate::gitctx::detect_base_ref(args.base.as_deref(), None, None);
+        GitCtx::open(&base_ref, false)?
+    };
+    let (config, config_path) = load_config(&args.config, Some(git.root()), None, None)?;
+    // How every message of this command names the file: its path in the repository, or
+    // its file name alone when it is outside (the directory is then the runner's).
+    let baseline_path = git.root().join(&args.baseline_file);
+    let baseline_shown = crate::baseline::path_for_message(git.root(), &baseline_path);
+    let existing_baseline = if baseline_path.exists() {
+        // An unreadable baseline is not an empty one: rewriting it would drop entries.
+        Some(
+            crate::baseline::DisciplineBaseline::load_from_file_named(
+                &baseline_path,
+                &baseline_shown,
+            )
+            .with_context(|| {
+                format!(
+                    "existing baseline `{baseline_shown}` could not be read; fix or remove it first"
+                )
+            })?,
+        )
+    } else {
+        None
+    };
+    if args.migrate {
+        let Some(old) = existing_baseline.as_ref() else {
+            // No file is nothing to migrate, not an error: adoption scripts run this unconditionally.
+            println!(
+                "{} no baseline at `{}`; nothing to migrate.",
+                style::yellow("note:"),
+                baseline_shown
+            );
+            return Ok(true);
+        };
+        if old.version >= crate::baseline::FINGERPRINT_VERSION {
+            println!(
+                "`{}` already uses fingerprint version {}; nothing to migrate.",
+                baseline_shown, old.version
+            );
+            return Ok(true);
+        }
+    } else if args.write
+        && args.suite != crate::cli::SuiteChoice::All
+        && existing_baseline
+            .as_ref()
+            .is_some_and(|b| b.version < crate::baseline::FINGERPRINT_VERSION)
+    {
+        bail!(
+            "`{}` uses fingerprint version 1; run `discipline baseline --migrate` before writing part of it with --suite",
+            baseline_shown
+        );
+    }
+
+    let commits = git.commits()?;
+    let (directives, directive_notes) =
+        crate::tokens::extract_directives_for_config(None, &commits, &config);
+
+    let ctx = Context {
+        config: &config,
+        head_config: None,
+        git: &git,
+        config_path: &config_path,
+        baseline_path: None,
+        baseline: None,
+        staged: false,
+        pr_title: None,
+        pr_body: None,
+        directives,
+        directive_notes,
+        bench_provenance: None,
+        allow_cross_host_bench: false,
+        bench_base_file: None,
+        bench_head_file: None,
+        test_base_report: None,
+        test_head_report: None,
+        test_report: None,
+        forge: None,
+    };
+
+    let summary = run_checks(&config, args.suite, &ctx)?;
+
+    let reads = crate::gitctx::ReadRecorder::new();
+    let read_head = reads.head(&git);
+
+    if args.migrate {
+        let old = existing_baseline.expect("checked above");
+        let findings: Vec<&crate::guards::Violation> = summary
+            .outcomes
+            .iter()
+            .filter(|o| o.enabled)
+            .flat_map(|o| &o.violations)
+            .collect();
+        let (migrated, report) = crate::baseline::migrate(&old, &findings, &read_head);
+        reads.finish()?;
+        migrated.write_to_file(&baseline_path, &baseline_shown)?;
+        println!(
+            "{} rewrote {} to fingerprint version {}: {} entr{} migrated, {} stale entr{} dropped",
+            style::green("ok:"),
+            baseline_shown,
+            migrated.version,
+            report.migrated,
+            if report.migrated == 1 { "y" } else { "ies" },
+            report.dropped,
+            if report.dropped == 1 { "y" } else { "ies" },
+        );
+        println!(
+            "Commit it in a change of its own: `config-integrity` accepts a migration that changes nothing but the baseline."
+        );
+        return Ok(true);
+    }
+
+    let mut entries = Vec::new();
+    let examined_gates: std::collections::HashSet<&str> =
+        summary.outcomes.iter().map(|o| o.gate).collect();
+
+    // Preserve existing findings for gates that were not examined in this run (e.g. when --suite was passed)
+    if let Some(existing) = existing_baseline {
+        for entry in existing.findings {
+            if !examined_gates.contains(entry.gate.as_str()) {
+                entries.push(entry);
+            }
+        }
+    }
+
+    let policy = crate::baseline::RecordPolicy {
+        fail_on_warnings: args.fail_on_warnings,
+        all_severities: args.all_severities,
+    };
+    let mut recorded = crate::baseline::SeverityTally::default();
+    let mut skipped = crate::baseline::SeverityTally::default();
+
+    for o in &summary.outcomes {
+        if !o.enabled {
+            continue;
+        }
+        for v in &o.violations {
+            if !policy.records(v.severity) {
+                skipped.add(v.severity, v.gate);
+                continue;
+            }
+            recorded.add(v.severity, v.gate);
+            entries.push(crate::baseline::entry_for(v, &read_head));
+        }
+    }
+
+    reads.finish()?;
+    entries.sort();
+
+    let baseline_obj = crate::baseline::DisciplineBaseline {
+        version: crate::baseline::FINGERPRINT_VERSION,
+        findings: entries,
+    };
+
+    // Nothing disappears silently: say what was left out and how to include it.
+    let breakdown = {
+        let mut b = format!(
+            "  recorded: {}\n  skipped: {}",
+            recorded.summary(),
+            skipped.summary_by_gate()
+        );
+        if skipped.total() > 0 {
+            b.push_str(if policy.fail_on_warnings {
+                "\n  (notes never block; pass --all-severities to record them anyway)"
+            } else {
+                "\n  (non-blocking under the current configuration; pass --all-severities to record them, \
+                 or --fail-on-warnings if `check` runs with it)"
+            });
+        }
+        b
+    };
+
+    if args.write {
+        baseline_obj.write_to_file(&baseline_path, &baseline_shown)?;
+        println!(
+            "{} recorded {} grandfathered finding{} to {}",
+            style::green("ok:"),
+            baseline_obj.findings.len(),
+            if baseline_obj.findings.len() == 1 {
+                ""
+            } else {
+                "s"
+            },
+            baseline_shown
+        );
+        println!("{breakdown}");
+        if !baseline_obj.findings.is_empty() {
+            println!(
+                "\nTo commit this baseline under `config-integrity`, include this directive on its own line in the commit message or PR body:\n  allow-gate-weakening: baseline initial grandfathered baseline"
+            );
+        }
+        Ok(true)
+    } else {
+        println!(
+            "Found {} finding{} eligible for grandfathering.",
+            baseline_obj.findings.len(),
+            if baseline_obj.findings.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
+        );
+        println!("{breakdown}");
+        println!(
+            "Run `discipline baseline --write` to record them to {}.",
+            baseline_shown
+        );
+        Ok(true)
     }
 }
 

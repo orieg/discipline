@@ -1,5 +1,6 @@
 //! C and C++ language pack: tree-sitter AST extraction of tests, assertions, and escape hatches.
 
+use super::ancestry::Ancestry;
 use anyhow::Result;
 use tree_sitter::Node;
 
@@ -91,9 +92,11 @@ impl CPack {
         let root = tree.root_node();
 
         let (has_errors, first_line, error_count) = collect_error_nodes_info(root);
+        let anc = Ancestry::new(root);
         let mut extractor = CCppExtractor {
             dead: super::reach::dead_ranges(root, src, &C_REACH),
             src: src.as_bytes(),
+            anc: &anc,
             vocab,
             is_test_path: is_c_cpp_test_path(path),
             test_spans: Vec::new(),
@@ -110,7 +113,7 @@ impl CPack {
 
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
-        shared_facts(root, src, path, vocab, &mut extractor.facts);
+        shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
         Ok(extractor.facts)
     }
 }
@@ -157,9 +160,11 @@ impl LanguagePack for CppPack {
         let root = tree.root_node();
 
         let (has_errors, first_line, error_count) = collect_error_nodes_info(root);
+        let anc = Ancestry::new(root);
         let mut extractor = CCppExtractor {
             dead: super::reach::dead_ranges(root, src, &C_REACH),
             src: src.as_bytes(),
+            anc: &anc,
             vocab,
             is_test_path: is_c_cpp_test_path(path),
             test_spans: Vec::new(),
@@ -176,7 +181,7 @@ impl LanguagePack for CppPack {
 
         extractor.collect_comments_and_escape_hatches(root);
         extractor.visit_root(root);
-        shared_facts(root, src, path, vocab, &mut extractor.facts);
+        shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
         super::expected_exceptions::cpp(root, src, &mut extractor.facts.tests);
         Ok(extractor.facts)
     }
@@ -194,14 +199,15 @@ fn mask_macros(src: &str, vocab: &AssertVocabulary) -> Option<String> {
 }
 
 /// The facts the shared walkers supply, for both grammars (they share node kinds).
-fn shared_facts(
-    root: Node,
+fn shared_facts<'t>(
+    root: Node<'t>,
+    anc: &Ancestry<'t>,
     src: &str,
     path: &str,
     vocab: &AssertVocabulary,
     facts: &mut ParsedFileFacts,
 ) {
-    C_PACK.shared_facts(root, src, path, vocab, facts);
+    C_PACK.shared_facts(root, anc, src, path, vocab, facts);
     facts.prose = super::prose::extract(
         root,
         src,
@@ -212,7 +218,7 @@ fn shared_facts(
 /// A test-framework macro body (`TEST(Suite, Name) {}`) parses as a function definition
 /// whose declarator is the macro call; a C driver's `test_*` / `*_smoke` function or
 /// anything in a test path is a test too.
-fn c_fn_is_test(node: Node, src: &str, path: &str) -> bool {
+fn c_fn_is_test<'t>(node: Node<'t>, _: &Ancestry<'t>, src: &str, path: &str) -> bool {
     let decl = node
         .child_by_field_name("declarator")
         .and_then(|n| n.utf8_text(src.as_bytes()).ok())
@@ -418,6 +424,8 @@ struct CCppExtractor<'a> {
     /// Byte ranges no execution reaches (`super::reach`).
     dead: super::reach::DeadRanges,
     src: &'a [u8],
+    /// The ancestors of the nodes of the file's tree (`super::ancestry`).
+    anc: &'a Ancestry<'a>,
     vocab: &'a AssertVocabulary,
     is_test_path: bool,
     test_spans: Vec<std::ops::Range<usize>>,
@@ -440,7 +448,7 @@ impl<'a> CCppExtractor<'a> {
         node.utf8_text(self.src).unwrap_or("")
     }
 
-    fn collect_comments_and_escape_hatches(&mut self, node: Node) {
+    fn collect_comments_and_escape_hatches(&mut self, node: Node<'a>) {
         let src = self.src;
         super::collect_comment_suppressions(
             node,
@@ -465,7 +473,7 @@ impl<'a> CCppExtractor<'a> {
         );
     }
 
-    fn visit_root(&mut self, root: Node) {
+    fn visit_root(&mut self, root: Node<'a>) {
         self.walk_scope(root);
         self.resolve_same_file_helpers();
         self.collect_compile_time_asserts(root);
@@ -484,7 +492,7 @@ impl<'a> CCppExtractor<'a> {
         }
     }
 
-    fn is_compile_time_assert_node(&self, node: Node) -> bool {
+    fn is_compile_time_assert_node(&self, node: Node<'a>) -> bool {
         let kind = node.kind();
         if kind == "static_assert_declaration" {
             return true;
@@ -498,7 +506,7 @@ impl<'a> CCppExtractor<'a> {
         false
     }
 
-    fn collect_compile_time_asserts(&mut self, node: Node) {
+    fn collect_compile_time_asserts(&mut self, node: Node<'a>) {
         let byte_pos = node.start_byte();
         let in_test = self.test_spans.iter().any(|r| r.contains(&byte_pos));
         if !in_test && self.is_compile_time_assert_node(node) {
@@ -514,7 +522,7 @@ impl<'a> CCppExtractor<'a> {
         }
     }
 
-    fn walk_scope(&mut self, scope: Node) {
+    fn walk_scope(&mut self, scope: Node<'a>) {
         let mut cursor = scope.walk();
         let children: Vec<Node> = scope.children(&mut cursor).collect();
         let mut i = 0;
@@ -568,7 +576,13 @@ impl<'a> CCppExtractor<'a> {
                                 };
                                 let mut calls = Vec::new();
                                 self.extract_assertions_in_body(body, &mut test_fn, &mut calls);
-                                super::dispatch_calls(body, self.src, &C_DISPATCH, &mut calls);
+                                super::dispatch_calls(
+                                    body,
+                                    self.anc,
+                                    self.src,
+                                    &C_DISPATCH,
+                                    &mut calls,
+                                );
                                 self.test_calls.push(calls);
                                 self.test_spans.push(call.start_byte()..body.end_byte());
                                 self.facts.tests.push(test_fn);
@@ -612,11 +626,11 @@ impl<'a> CCppExtractor<'a> {
 
     /// Records the function `node` with `body` as a helper named `name`: what it checks,
     /// and the calls it makes.
-    fn record_helper(&mut self, node: Node, body: Node, name: String) {
+    fn record_helper(&mut self, node: Node<'a>, body: Node<'a>, name: String) {
         let mut helper_fn = TestFn::default();
         let mut dummy_calls = Vec::new();
         self.extract_assertions_in_body(body, &mut helper_fn, &mut dummy_calls);
-        super::dispatch_calls(body, self.src, &C_DISPATCH, &mut dummy_calls);
+        super::dispatch_calls(body, self.anc, self.src, &C_DISPATCH, &mut dummy_calls);
         self.helpers.insert(
             name.clone(),
             super::HelperFacts::from_scan(
@@ -642,7 +656,7 @@ impl<'a> CCppExtractor<'a> {
     /// Records the member functions a class or struct defines inside its body (also
     /// behind `template<..>`) as helpers named `Class::method`. A member that is only
     /// declared there has no body to read.
-    fn record_member_functions(&mut self, class: Node) {
+    fn record_member_functions(&mut self, class: Node<'a>) {
         let (Some(name), Some(body)) = (
             class.child_by_field_name("name"),
             class.child_by_field_name("body"),
@@ -678,7 +692,7 @@ impl<'a> CCppExtractor<'a> {
         }
     }
 
-    fn try_extract_function_definition_test(&mut self, node: Node) -> Option<TestFn> {
+    fn try_extract_function_definition_test(&mut self, node: Node<'a>) -> Option<TestFn> {
         let declarator_node = node.child_by_field_name("declarator")?;
         let body = node.child_by_field_name("body")?;
 
@@ -715,7 +729,7 @@ impl<'a> CCppExtractor<'a> {
             };
             let mut calls = Vec::new();
             self.extract_assertions_in_body(body, &mut test_fn, &mut calls);
-            super::dispatch_calls(body, self.src, &C_DISPATCH, &mut calls);
+            super::dispatch_calls(body, self.anc, self.src, &C_DISPATCH, &mut calls);
             self.test_calls.push(calls);
             return Some(test_fn);
         }
@@ -741,7 +755,7 @@ impl<'a> CCppExtractor<'a> {
             };
             let mut calls = Vec::new();
             self.extract_assertions_in_body(body, &mut test_fn, &mut calls);
-            super::dispatch_calls(body, self.src, &C_DISPATCH, &mut calls);
+            super::dispatch_calls(body, self.anc, self.src, &C_DISPATCH, &mut calls);
             self.test_calls.push(calls);
             return Some(test_fn);
         }
@@ -769,7 +783,7 @@ impl<'a> CCppExtractor<'a> {
             };
             let mut calls = Vec::new();
             self.extract_assertions_in_body(body, &mut test_fn, &mut calls);
-            super::dispatch_calls(body, self.src, &C_DISPATCH, &mut calls);
+            super::dispatch_calls(body, self.anc, self.src, &C_DISPATCH, &mut calls);
             self.test_calls.push(calls);
             return Some(test_fn);
         }
@@ -820,7 +834,7 @@ impl<'a> CCppExtractor<'a> {
         (self.text(declarator), Vec::new())
     }
 
-    fn extract_gtest_params(&self, params: &[Node]) -> (String, String, bool) {
+    fn extract_gtest_params(&self, params: &[Node<'a>]) -> (String, String, bool) {
         let suite = params
             .first()
             .map(|n| self.clean_param_text(*n))
@@ -833,12 +847,12 @@ impl<'a> CCppExtractor<'a> {
         (suite, case, is_ignored)
     }
 
-    fn clean_param_text(&self, node: Node) -> String {
+    fn clean_param_text(&self, node: Node<'a>) -> String {
         let raw = self.text(node).trim();
         raw.trim_matches('"').to_string()
     }
 
-    fn extract_catch2_metadata(&self, call: Node) -> (String, bool) {
+    fn extract_catch2_metadata(&self, call: Node<'a>) -> (String, bool) {
         let args = call
             .child_by_field_name("arguments")
             .map(|a| {
@@ -860,7 +874,7 @@ impl<'a> CCppExtractor<'a> {
     /// Whether the tags of a Catch2 test case hide it (`[.]`, `[.name]`, `[!hide]`). The
     /// tags are the string argument after the test's name: a name that contains `[.` is
     /// not a tag.
-    fn catch2_hidden(&self, args: &[Node]) -> bool {
+    fn catch2_hidden(&self, args: &[Node<'a>]) -> bool {
         args.iter()
             .map(|n| self.text(*n).trim())
             .filter(|text| text.starts_with('"'))
@@ -868,7 +882,7 @@ impl<'a> CCppExtractor<'a> {
             .any(|tags| tags.contains("[.") || tags.contains("[!hide]"))
     }
 
-    fn get_call_fn_name(&self, call: Node) -> &'a str {
+    fn get_call_fn_name(&self, call: Node<'a>) -> &'a str {
         let fn_node = call.child_by_field_name("function");
         let Some(f) = fn_node else { return "" };
         let kind = f.kind();
@@ -890,7 +904,7 @@ impl<'a> CCppExtractor<'a> {
 
     fn extract_assertions_in_body(
         &self,
-        node: Node,
+        node: Node<'a>,
         test_fn: &mut TestFn,
         calls: &mut Vec<String>,
     ) {
@@ -943,7 +957,7 @@ impl<'a> CCppExtractor<'a> {
                 fn_name,
                 "GTEST_SKIP" | "SKIP" | "TEST_IGNORE" | "TEST_IGNORE_MESSAGE"
             ) {
-                test_fn.record_skip(read_skip(Grammar::C, node, None, self.src));
+                test_fn.record_skip(read_skip(Grammar::C, node, self.anc, None, self.src));
                 return;
             }
 
@@ -1051,7 +1065,7 @@ impl<'a> CCppExtractor<'a> {
         }
     }
 
-    fn handle_gtest_assertion(&self, fn_name: &str, args: &[Node], test_fn: &mut TestFn) {
+    fn handle_gtest_assertion(&self, fn_name: &str, args: &[Node<'a>], test_fn: &mut TestFn) {
         test_fn.total_asserts += 1;
         if fn_name.starts_with("ASSERT_") {
             test_fn.fatal_asserts += 1;
@@ -1091,6 +1105,7 @@ impl<'a> CCppExtractor<'a> {
                         &mut test_fn.equality_operands,
                         args[0],
                         args[1],
+                        self.anc,
                         self.src,
                     )
                 } else {
@@ -1115,7 +1130,7 @@ impl<'a> CCppExtractor<'a> {
         }
     }
 
-    fn handle_catch2_assertion(&self, fn_name: &str, args: &[Node], test_fn: &mut TestFn) {
+    fn handle_catch2_assertion(&self, fn_name: &str, args: &[Node<'a>], test_fn: &mut TestFn) {
         test_fn.total_asserts += 1;
         if fn_name.starts_with("REQUIRE") {
             test_fn.fatal_asserts += 1;
@@ -1149,7 +1164,7 @@ impl<'a> CCppExtractor<'a> {
         }
     }
 
-    fn handle_c_assert(&self, args: &[Node], test_fn: &mut TestFn) {
+    fn handle_c_assert(&self, args: &[Node<'a>], test_fn: &mut TestFn) {
         test_fn.total_asserts += 1;
         test_fn.fatal_asserts += 1;
         if let Some(arg) = args.first() {
@@ -1168,7 +1183,7 @@ impl<'a> CCppExtractor<'a> {
     fn handle_generic_framework_assertion(
         &self,
         fn_name: &str,
-        args: &[Node],
+        args: &[Node<'a>],
         test_fn: &mut TestFn,
     ) {
         test_fn.total_asserts += 1;
@@ -1189,6 +1204,7 @@ impl<'a> CCppExtractor<'a> {
                         &mut test_fn.equality_operands,
                         args[0],
                         args[1],
+                        self.anc,
                         self.src,
                     )
                 } else {
@@ -1213,13 +1229,19 @@ impl<'a> CCppExtractor<'a> {
 
     /// `REQUIRE(a == a)`, `assert(a == a)`: a condition that is one `==` comparison is
     /// recorded when its sides are the same tokens (`self_comparison`).
-    fn note_equality_condition(&self, cond: Node, test_fn: &mut TestFn) -> bool {
+    fn note_equality_condition(&self, cond: Node<'a>, test_fn: &mut TestFn) -> bool {
         super::self_comparison::equality_sides(cond, self.src).is_some_and(|(left, right)| {
-            super::self_comparison::note(&mut test_fn.equality_operands, left, right, self.src)
+            super::self_comparison::note(
+                &mut test_fn.equality_operands,
+                left,
+                right,
+                self.anc,
+                self.src,
+            )
         })
     }
 
-    fn contains_comparison(&self, node: Node) -> bool {
+    fn contains_comparison(&self, node: Node<'a>) -> bool {
         let kind = node.kind();
         if kind == "binary_expression" {
             let mut cursor = node.walk();
@@ -1239,7 +1261,7 @@ impl<'a> CCppExtractor<'a> {
         false
     }
 
-    fn is_tautology_comparison(&self, node: Node) -> bool {
+    fn is_tautology_comparison(&self, node: Node<'a>) -> bool {
         let kind = node.kind();
         if kind == "binary_expression" {
             if let (Some(left), Some(right)) = (
@@ -1269,12 +1291,12 @@ impl<'a> CCppExtractor<'a> {
         false
     }
 
-    fn is_literal_true(&self, node: Node) -> bool {
+    fn is_literal_true(&self, node: Node<'a>) -> bool {
         let txt = self.text(node).trim();
         txt == "true" || txt == "1" || node.kind() == "true"
     }
 
-    fn is_literal_false(&self, node: Node) -> bool {
+    fn is_literal_false(&self, node: Node<'a>) -> bool {
         let txt = self.text(node).trim();
         txt == "false" || txt == "0" || node.kind() == "false"
     }

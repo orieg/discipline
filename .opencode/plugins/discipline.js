@@ -1,4 +1,5 @@
 // Written by `discipline hook install --agent opencode`.
+// discipline-hook-file: mode=observe sha256=e16c91589b50ede33cfc2231aee5af0f7d3cb58b31466f214af405a362098994
 // When a session is created, takes this worktree's lease for it. Before an edit tool, refuses an edit outside this session's worktree (the tool call
 // is sent on stdin; a refusal throws, and the model reads the reason). After it, runs
 // the discipline check and, when it fails, appends the report to the tool's output so
