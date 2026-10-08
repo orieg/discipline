@@ -47,10 +47,7 @@ fn config_integrity_still_runs_when_the_change_disables_it() {
 #[test]
 fn advisory_mode_is_not_honoured_over_an_unloadable_base() {
     let repo = repo_with_unloadable_base();
-    repo.write(
-        "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\nmode = \"advisory\"\n",
-    );
+    repo.write("discipline.toml", &format!("{HEAD}mode = \"advisory\"\n"));
     repo.write(
         "src/swallow.py",
         "import os\n\n\ndef remove(path):\n    try:\n        os.remove(path)\n    except OSError:\n        pass\n",
@@ -71,10 +68,7 @@ fn advisory_mode_is_not_honoured_over_an_unloadable_base() {
 #[test]
 fn advisory_mode_is_honoured_when_the_base_has_no_configuration() {
     let repo = Repo::new();
-    repo.write(
-        "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\nmode = \"advisory\"\n",
-    );
+    repo.write("discipline.toml", &format!("{HEAD}mode = \"advisory\"\n"));
     repo.write(
         "src/swallow.py",
         "import os\n\n\ndef remove(path):\n    try:\n        os.remove(path)\n    except OSError:\n        pass\n",

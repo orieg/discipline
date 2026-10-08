@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::Repo;
+use common::{Repo, CONFIG_HEAD};
 use serde_json::{json, Value};
 use std::io::Write;
 use std::process::Stdio;
@@ -166,7 +166,7 @@ fn check_diff_ignores_an_agent_chosen_base_and_the_changes_own_config() {
     );
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[gates.assertion-reduction]\nenabled = false\n",
+        &format!("{CONFIG_HEAD}[gates.assertion-reduction]\nenabled = false\n"),
     );
     repo.commit("test: simplify");
     let replies = session(

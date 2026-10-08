@@ -6,7 +6,7 @@
 //! `DISCIPLINE_NO_NETWORK=1`, so nothing else can be reached.
 
 mod common;
-use common::{FakeForge, Repo, Run};
+use common::{FakeForge, Repo, Run, CONFIG_HEAD};
 
 const WAIVER: &str = "allow-agent-instructions: AGENTS.md the rule was discussed in review";
 
@@ -141,7 +141,7 @@ fn a_422_that_does_not_say_the_commit_is_missing_stops_a_run_that_requires_the_r
     let (repo, _) = plain_change();
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[directives]\ndegrade_offline = false\n",
+        &format!("{CONFIG_HEAD}[directives]\ndegrade_offline = false\n"),
     );
     repo.commit("chore: require the record");
     let sha = head(&repo);
@@ -357,7 +357,7 @@ fn text_output_says_a_disabled_source_was_ignored() {
     let (repo, _) = instruction_change("docs: never skip");
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[directives]\nsources = [\"commits\"]\n",
+        &format!("{CONFIG_HEAD}[directives]\nsources = [\"commits\"]\n"),
     );
     repo.commit("chore: commit messages only");
     let run = repo.run(

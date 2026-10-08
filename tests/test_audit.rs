@@ -120,7 +120,7 @@ fn an_unreadable_historical_configuration_is_a_record_not_a_failure() {
     repo.git(&["checkout", "-q", "main"]);
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[gates.pii]\nretired_option = true\n",
+        &format!("{CONFIG_HEAD}[gates.pii]\nretired_option = true\n"),
     );
     repo.commit("chore: adopt (#1)");
     repo.write("discipline.toml", CONFIG_HEAD);

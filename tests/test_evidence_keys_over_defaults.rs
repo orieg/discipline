@@ -6,7 +6,7 @@
 //! prints a fixed line, so no preset's own tool is started.
 
 mod common;
-use common::{Repo, Run};
+use common::{Repo, Run, CONFIG_HEAD};
 
 const WEAKENED: &str = "Gate Weakened By This Change";
 
@@ -30,7 +30,7 @@ const PUBLIC_API_ENTRY: &str = "[gates.command]\n\n[[gates.command.commands]]\nn
 const NO_PRESET: &str = "[gates.command]\ncommand = \"echo 4 passed\"\n";
 
 fn config(gates: &str) -> String {
-    format!("[meta]\nversion = 1\nname = \"t\"\n\n{gates}")
+    format!("{CONFIG_HEAD}\n{gates}")
 }
 
 /// `base` committed on `main` with `base_files`, then `head` and `head_files` on `work`.
