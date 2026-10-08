@@ -6,7 +6,7 @@
 #![cfg(unix)]
 
 mod common;
-use common::{Repo, Run};
+use common::{Repo, Run, CONFIG_HEAD};
 
 /// Removes the loose object holding `path` as committed on `main`.
 fn lose_base_blob(repo: &Repo, path: &str) {
@@ -40,7 +40,7 @@ fn command_base_tests_does_not_skip_an_unreadable_base_test_file() {
     let repo = Repo::new();
     repo.commit_base(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[gates.test-floor]\nenabled = false\n[gates.command]\nenabled = true\npreset = \"base-tests\"\ncommand = \"true\"\n",
+        &format!("{CONFIG_HEAD}[gates.test-floor]\nenabled = false\n[gates.command]\nenabled = true\npreset = \"base-tests\"\ncommand = \"true\"\n"),
         "chore: configure base-tests",
     );
     lose_base_blob(&repo, "tests/a.rs");
@@ -92,7 +92,9 @@ fn a_directory_at_a_configured_path_reads_as_absent_not_as_a_failed_read() {
     );
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[gates.dependency-delta]\nenabled = true\ndeny_file = \"somedir\"\n",
+        &format!(
+            "{CONFIG_HEAD}[gates.dependency-delta]\nenabled = true\ndeny_file = \"somedir\"\n"
+        ),
     );
     repo.write("docs/plan.md", "# Plan\n\nPhase 1 then Phase 2, more.\n");
     let run = repo.check(&[]);
@@ -121,7 +123,7 @@ fn a_gitlink_on_the_base_side_reads_as_absent_not_as_a_failed_read() {
     commit_base_gitlink(&repo, "vendor/sub");
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[gates.test-floor]\nenabled = true\nconstant_file = \"vendor/sub\"\nconstant_name = \"MIN_TESTS\"\n",
+        &format!("{CONFIG_HEAD}[gates.test-floor]\nenabled = true\nconstant_file = \"vendor/sub\"\nconstant_name = \"MIN_TESTS\"\n"),
     );
     repo.write("docs/plan.md", "# Plan\n\nPhase 1 then Phase 2, more.\n");
     let run = repo.check(&[]);
@@ -143,7 +145,9 @@ fn a_staged_gitlink_reads_as_absent_not_as_a_failed_read() {
     let sha = repo.git_output(&["rev-parse", "HEAD"]);
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[gates.dependency-delta]\nenabled = true\ndeny_file = \"vendor/sub\"\n",
+        &format!(
+            "{CONFIG_HEAD}[gates.dependency-delta]\nenabled = true\ndeny_file = \"vendor/sub\"\n"
+        ),
     );
     repo.git(&["add", "discipline.toml"]);
     repo.git(&[

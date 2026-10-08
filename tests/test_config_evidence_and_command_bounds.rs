@@ -8,7 +8,7 @@
 //! or `printf`.
 
 mod common;
-use common::{Repo, Run};
+use common::{Repo, Run, CONFIG_HEAD};
 
 const WEAKENED: &str = "Gate Weakened By This Change";
 const MARKER: &str = "RAN_BY_CHANGE";
@@ -83,7 +83,7 @@ const GRADLE_BUILD: &str = "// gradle\n";
 const NO_RUNNER_DETECTED: &str = "# No test runner was detected here.";
 
 fn config(gates: &str) -> String {
-    format!("[meta]\nversion = 1\nname = \"t\"\n\n{gates}")
+    format!("{CONFIG_HEAD}\n{gates}")
 }
 
 /// `base` committed on `main` with `base_files`, then `head` and `head_files` on `work`.

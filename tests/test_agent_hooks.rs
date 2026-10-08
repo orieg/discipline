@@ -240,7 +240,7 @@ fn explain_names_the_rule_the_state_here_and_the_directive() {
 
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[gates.assertion-reduction]\nenabled = false\n",
+        &format!("{CONFIG_HEAD}[gates.assertion-reduction]\nenabled = false\n"),
     );
     let off = repo.run(
         &["explain", "error [assertion-reduction] Assertion Reduction"],
@@ -277,7 +277,7 @@ fn an_agent_cannot_silence_its_own_hook() {
     weakened(&repo);
     repo.write(
         "discipline.toml",
-        "[meta]\nversion = 1\nname = \"t\"\n[gates.assertion-reduction]\nenabled = false\n",
+        &format!("{CONFIG_HEAD}[gates.assertion-reduction]\nenabled = false\n"),
     );
     let run = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
     assert_eq!(

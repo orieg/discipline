@@ -14,6 +14,18 @@ use regex::Regex;
 
 type Case = (&'static str, fn() -> Result<bool>);
 
+fn facts(path: &str, src: &str) -> Result<crate::ast::ParsedFileFacts> {
+    let reg = crate::ast::default_registry();
+    let pack = reg
+        .find_pack(path)
+        .ok_or_else(|| anyhow::anyhow!("no language pack for {path}"))?;
+    pack.extract(path, src, &AssertVocabulary::default())
+}
+
+fn find_test<'a>(f: &'a crate::ast::ParsedFileFacts, name: &str) -> Option<&'a crate::ast::TestFn> {
+    f.tests.iter().find(|t| t.name == name)
+}
+
 const CASES: &[Case] = &[
     ("ast: weakened assertion lowers the strong count", || {
         let v = AssertVocabulary::default();
@@ -70,17 +82,13 @@ const CASES: &[Case] = &[
                 "#[test] fn t() { assert!(std::panic::catch_unwind(|| assert_eq!(1, 2)).is_err()); }",
                 &v,
             )?;
-            let reg = crate::ast::default_registry();
-            let py_pack = reg.find_pack("test.py").unwrap();
-            let bad_py = py_pack.extract(
+            let bad_py = facts(
                 "test.py",
                 "def test_x():\n    try:\n        assert 1 == 2\n    except AssertionError:\n        pass\n",
-                &v,
             )?;
-            let good_py = py_pack.extract(
+            let good_py = facts(
                 "test.py",
                 "def test_x():\n    try:\n        assert 1 == 2\n    except AssertionError:\n        raise\n",
-                &v,
             )?;
             Ok(bad_rs.tests[0].effective_asserts() == 0
                 && bad_rs.tests[0].caught_assertions.len() == 1
@@ -95,14 +103,8 @@ const CASES: &[Case] = &[
     (
         "ast: a handler swallows an assertion failure only when it catches the failure type and nothing looks at the outcome",
         || {
-            let v = AssertVocabulary::default();
-            let reg = crate::ast::default_registry();
             let caught = |path: &str, src: &str| -> Result<usize> {
-                let pack = reg
-                    .find_pack(path)
-                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
-                Ok(pack
-                    .extract(path, src, &v)?
+                Ok(facts(path, src)?
                     .tests
                     .iter()
                     .map(|t| t.caught_assertions.len())
@@ -170,17 +172,12 @@ const CASES: &[Case] = &[
     (
         "ast: a Go recover() swallows a check that panics, not an assertion that ends the test through t.FailNow",
         || {
-            let v = AssertVocabulary::default();
-            let reg = crate::ast::default_registry();
-            let pack = reg
-                .find_pack("p_test.go")
-                .ok_or_else(|| anyhow::anyhow!("no pack for Go"))?;
             let test = |deferred: &str, check: &str| -> Result<(usize, bool)> {
                 let src = format!(
                     "package p\n\nfunc TestA(t *testing.T) {{\n\tdefer func() {{\n\t\tif r := recover(); r != nil {{\n\t\t\t{deferred}\n\t\t}}\n\t}}()\n\t{check}\n}}\n\nfunc mustEqual(a, b int) {{\n\tif a != b {{\n\t\tpanic(\"not equal\")\n\t}}\n}}\n"
                 );
-                let facts = pack.extract("p_test.go", &src, &v)?;
-                let t = &facts.tests[0];
+                let f = facts("p_test.go", &src)?;
+                let t = &f.tests[0];
                 Ok((t.caught_assertions.len(), t.is_vacuous()))
             };
             Ok(test("log.Println(r)", "require.Equal(t, 4, add(2, 2))")? == (0, false)
@@ -194,17 +191,11 @@ const CASES: &[Case] = &[
     (
         "ast: a Python handler for a class that may be an assertion failure is reported when it only swallows; a standard class beside AssertionError is not",
         || {
-            let v = AssertVocabulary::default();
-            let reg = crate::ast::default_registry();
-            let pack = reg
-                .find_pack("test_x.py")
-                .ok_or_else(|| anyhow::anyhow!("no pack for Python"))?;
             let caught = |classes: &str, handler: &str| -> Result<usize> {
                 let src = format!(
                     "{classes}def test_x():\n    try:\n        assert f()\n    {handler}\n"
                 );
-                Ok(pack
-                    .extract("test_x.py", &src, &v)?
+                Ok(facts("test_x.py", &src)?
                     .tests
                     .iter()
                     .map(|t| t.caught_assertions.len())
@@ -225,14 +216,8 @@ const CASES: &[Case] = &[
     (
         "ast: an assertion in a callback inside a swallowing try is read only when the callback is known to run before the try ends; a named promise handler is judged by its body; a finally that returns discards the failure",
         || {
-            let v = AssertVocabulary::default();
-            let reg = crate::ast::default_registry();
             let caught = |path: &str, src: &str| -> Result<usize> {
-                let pack = reg
-                    .find_pack(path)
-                    .ok_or_else(|| anyhow::anyhow!("no pack for {path}"))?;
-                Ok(pack
-                    .extract(path, src, &v)?
+                Ok(facts(path, src)?
                     .tests
                     .iter()
                     .map(|t| t.caught_assertions.len())
@@ -349,29 +334,19 @@ const CASES: &[Case] = &[
     (
         "ast: a pack's own test-path convention counts as a test file",
         || {
-            let reg = crate::ast::default_registry();
-            let py = reg
-                .find_pack("src/test_helper.py")
-                .ok_or_else(|| anyhow::anyhow!("no python pack"))?;
-            let v = AssertVocabulary::default();
             let src = "def load(p):\n    try:\n        return open(p).read()\n    except OSError:\n        pass\n";
-            let own = py.extract("src/test_helper.py", src, &v)?;
-            let neg = py.extract("src/helper.py", src, &v)?;
+            let own = facts("src/test_helper.py", src)?;
+            let neg = facts("src/helper.py", src)?;
             Ok(own.swallowed.is_empty() && neg.swallowed.len() == 1)
         },
     ),
     (
         "ast: java own test-path convention counts as a test file",
         || {
-            let reg = crate::ast::default_registry();
-            let java = reg
-                .find_pack("src/main/java/TestHelper.java")
-                .ok_or_else(|| anyhow::anyhow!("no java pack"))?;
-            let v = AssertVocabulary::default();
             let own_src = "class TestHelper {\n  void m() {\n    try {\n      g();\n    } catch (Exception e) {}\n  }\n}\n";
             let neg_src = "class Helper {\n  void m() {\n    try {\n      g();\n    } catch (Exception e) {}\n  }\n}\n";
-            let own = java.extract("src/main/java/TestHelper.java", own_src, &v)?;
-            let neg = java.extract("src/main/java/Helper.java", neg_src, &v)?;
+            let own = facts("src/main/java/TestHelper.java", own_src)?;
+            let neg = facts("src/main/java/Helper.java", neg_src)?;
             Ok(own.swallowed.is_empty() && neg.swallowed.len() == 1)
         },
     ),
@@ -1172,14 +1147,8 @@ const CASES: &[Case] = &[
     (
         "suppression-delta: a C diagnostic pragma that silences is a site, push/pop and comments are not",
         || {
-            use crate::ast::default_registry;
-            let v = AssertVocabulary::default();
-            let reg = default_registry();
-            let pack = reg
-                .find_pack("src/a.c")
-                .ok_or_else(|| anyhow::anyhow!("no c pack"))?;
             let sites = |src: &str| -> anyhow::Result<usize> {
-                Ok(pack.extract("src/a.c", src, &v)?.escape_hatches.len())
+                Ok(facts("src/a.c", src)?.escape_hatches.len())
             };
             Ok(sites("#pragma GCC diagnostic ignored \"-Wunused\"\n#pragma clang diagnostic ignored \"-Wx\"\n#pragma warning(disable: 4996)\nint a;\n")? == 3
                 && sites("#pragma GCC diagnostic push\n#pragma GCC diagnostic pop\n#pragma once\n// #pragma warning(disable: 4996)\nconst char *s = \"#pragma GCC diagnostic ignored\";\n")? == 0)
@@ -1568,7 +1537,6 @@ const CASES: &[Case] = &[
         "calls: a delay or a trivial assertion spelled in a string literal or a comment is not counted",
         || {
             let v = AssertVocabulary::default();
-            let reg = crate::ast::default_registry();
             let text = analyze(
                 "#[test]\nfn t() {\n    let s = format!(\"std::thread::sleep(d) {}\", 1 /* r.is_ok() */);\n    assert_eq!(render(), \"assert!(r.is_ok())\");\n    assert_eq!(n(), 3, \"ok={}\", r.is_ok());\n}",
                 &v,
@@ -1577,16 +1545,13 @@ const CASES: &[Case] = &[
                 "#[test]\nfn t() {\n    select! { _ = tokio::time::sleep(d) => {} }\n    assert!(run().is_ok(), \"left\");\n}",
                 &v,
             )?;
-            let py = reg.find_pack("test.py").unwrap();
-            let py_text = py.extract(
+            let py_text = facts(
                 "test.py",
                 "def test_x():\n    src = \"time.sleep(1)\".strip()\n    assert render() == \"x is not None\"\n",
-                &v,
             )?;
-            let py_code = py.extract(
+            let py_code = facts(
                 "test.py",
                 "def test_x():\n    time.sleep(1)\n    assert render() is not None\n",
-                &v,
             )?;
             let counts = |f: &crate::ast::ParsedFileFacts| (f.tests[0].sleeps, f.tests[0].trivial_asserts);
             Ok(counts(&text) == (0, 0)
@@ -1626,10 +1591,7 @@ const CASES: &[Case] = &[
     (
         "ast: a swallowed tautology counts against a test once, and two swallowed assertions on one line are two",
         || {
-            let v = AssertVocabulary::default();
-            let reg = crate::ast::default_registry();
-            let py = reg.find_pack("test.py").unwrap();
-            let extract = |src: &str| py.extract("test.py", src, &v);
+            let extract = |src: &str| facts("test.py", src);
             let beside = extract(
                 "def test_x():\n    assert g() == 2\n    try:\n        assert True\n    except AssertionError:\n        pass\n",
             )?;
@@ -2314,16 +2276,10 @@ const CASES: &[Case] = &[
     (
         "ignored-tests: a Go `t.Skip` under `if testing.Short()` is conditional, a bare one is ignored",
         || {
-            use crate::ast::default_registry;
-            let v = AssertVocabulary::default();
-            let reg = default_registry();
-            let pack = reg
-                .find_pack("p_test.go")
-                .ok_or_else(|| anyhow::anyhow!("no go pack"))?;
             let src = "package p\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {\n\tif testing.Short() {\n\t\tt.Skip()\n\t}\n}\n\nfunc TestB(t *testing.T) {\n\tt.Skip()\n}\n";
-            let tests = pack.extract("p_test.go", src, &v)?.tests;
-            let a = tests.iter().find(|t| t.name == "TestA");
-            let b = tests.iter().find(|t| t.name == "TestB");
+            let f = facts("p_test.go", src)?;
+            let a = find_test(&f, "TestA");
+            let b = find_test(&f, "TestB");
             Ok(a.is_some_and(|t| !t.ignored && t.conditional_ignore.is_some())
                 && b.is_some_and(|t| t.ignored && t.conditional_ignore.is_none()))
         },
@@ -3928,7 +3884,7 @@ const CASES: &[Case] = &[
             // spending a level.
             let src = "def check(x):\n    if x != 1:\n        raise AssertionError(x)\n\ndef outer(x):\n    log(x)\n    check(x)\n\ndef two(x):\n    log(x)\n    outer(x)\n\ndef three(x):\n    log(x)\n    two(x)\n\ndef test_direct():\n    check(f())\n\ndef test_nested():\n    outer(f())\n\ndef test_too_deep():\n    three(f())\n";
             let facts = py_pack.extract("tests/test_mod.py", src, &vocab)?;
-            let by = |n: &str| facts.tests.iter().find(|t| t.name == n);
+            let by = |n: &str| find_test(&facts, n);
             Ok(by("test_direct").is_some_and(|t| t.total_asserts == 1)
                 && by("test_nested").is_some_and(|t| t.total_asserts == 1)
                 && by("test_too_deep").is_some_and(|t| t.total_asserts == 0))
@@ -4080,7 +4036,7 @@ const CASES: &[Case] = &[
             let vocab = AssertVocabulary::default();
             let src = "package pkg\n\ntype Suite struct {\n\tsuite.Suite\n}\n\nfunc (s *Suite) SetupTest() {\n\ts.Require().NoError(open())\n}\n\nfunc (s *Suite) TestAdd() {\n\ts.Equal(2, Add(1, 1))\n\ts.Require().NoError(run())\n\ts.Assert().True(ok())\n}\n\nfunc (s *Suite) TestEmpty() {\n\t_ = Add(1, 1)\n}\n\ntype Plain struct{ n int }\n\nfunc (p *Plain) TestConn() {\n\tp.Equal(1, 2)\n}\n";
             let facts = go_pack.extract("pkg_test.go", src, &vocab)?;
-            let by = |n: &str| facts.tests.iter().find(|t| t.name == n);
+            let by = |n: &str| find_test(&facts, n);
             Ok(facts.tests.len() == 2
                 && by("Suite.TestAdd").is_some_and(|t| {
                     (t.total_asserts, t.strong_asserts, t.fatal_asserts) == (3, 2, 1)
@@ -5850,7 +5806,7 @@ command = "cargo test"
             let v = AssertVocabulary::default();
             let cpp_code = "void fail_if_bad() { abort(); }\nint main() {\n    fail_if_bad();\n    return 1;\n}\n";
             let parsed = crate::ast::c_cpp::CppPack.extract("test_driver.cpp", cpp_code, &v)?;
-            let main_test = parsed.tests.iter().find(|t| t.name == "main").unwrap();
+            let main_test = find_test(&parsed, "main").unwrap();
             Ok(main_test.strong_asserts >= 1 && !main_test.is_vacuous())
         },
     ),
@@ -9187,27 +9143,19 @@ quickcheck! {
                 "expected 3 tests in proptest/quickcheck, got {}",
                 facts.tests.len()
             );
-            let parses_dates = facts
-                .tests
-                .iter()
-                .find(|t| t.name == "parses_dates")
-                .unwrap();
+            let parses_dates = find_test(&facts, "parses_dates").unwrap();
             anyhow::ensure!(
                 parses_dates.total_asserts == 2 && parses_dates.strong_asserts == 1,
                 "parses_dates should have 2 asserts and 1 strong assert"
             );
 
-            let prop_qc = facts.tests.iter().find(|t| t.name == "prop_qc").unwrap();
+            let prop_qc = find_test(&facts, "prop_qc").unwrap();
             anyhow::ensure!(
                 prop_qc.total_asserts == 1 && prop_qc.strong_asserts == 1 && !prop_qc.is_vacuous(),
                 "prop_qc should count as 1 strong assert and not vacuous"
             );
 
-            let prop_tautology = facts
-                .tests
-                .iter()
-                .find(|t| t.name == "prop_tautology")
-                .unwrap();
+            let prop_tautology = find_test(&facts, "prop_tautology").unwrap();
             anyhow::ensure!(
                 prop_tautology.is_vacuous(),
                 "prop_tautology should be vacuous"

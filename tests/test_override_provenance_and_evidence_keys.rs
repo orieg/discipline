@@ -7,9 +7,9 @@
 //! script, first on `PATH`, and no real toolchain is started.
 
 mod common;
-use common::{Repo, Run};
+use common::{Repo, Run, CONFIG_HEAD};
 
-const HEAD: &str = "[meta]\nversion = 1\nname = \"t\"\n\n";
+const HEAD: &str = CONFIG_HEAD;
 const MARKER: &str = "RAN_FROM_OVERRIDE";
 const ALLOW: (&str, &str) = ("DISCIPLINE_ALLOW_COMMAND_CHANGE", "1");
 const WEAKENED: &str = "config-integrity/gate-weakened";
