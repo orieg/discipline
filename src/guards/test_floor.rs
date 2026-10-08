@@ -6,6 +6,7 @@
 //! - Required test suite files must exist on disk unless explicitly excused.
 //! - Fails closed if the base floor cannot be resolved when configured.
 
+use crate::escape::unescape_xml;
 use crate::guards::{exempt_filter, Context, GateOutcome, Violation};
 use crate::tokens;
 use anyhow::{bail, Context as _, Result};
@@ -1483,14 +1484,6 @@ pub fn parse_junit_xml(xml: &str) -> Result<Vec<TestCaseReport>> {
     }
 
     Ok(cases)
-}
-
-fn unescape_xml(s: &str) -> String {
-    s.replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
 }
 
 /// Compares base passed test cases with head test cases.
