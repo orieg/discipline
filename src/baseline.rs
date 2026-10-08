@@ -326,16 +326,54 @@ fn message_fingerprint(v: &Violation, occurrence: usize) -> String {
     sha256_hex(source.as_bytes())
 }
 
+/// The lines of the files the findings of a run are in, each file read once: what
+/// [`line_and_occurrence`] answers for a finding, without reading its file and counting
+/// the lines above it again for each finding in the file.
+struct FileLines<F> {
+    read_file: F,
+    /// The lines of a file, by its path; `None` for a file that cannot be read.
+    lines_of: std::cell::RefCell<HashMap<String, Option<Lines>>>,
+}
+
+/// The lines of one file, as [`lines_and_occurrences`] lists them.
+type Lines = Vec<(String, usize)>;
+
+impl<F> FileLines<F>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    fn new(read_file: F) -> Self {
+        Self {
+            read_file,
+            lines_of: Default::default(),
+        }
+    }
+
+    /// The trimmed line `v` is on and which occurrence of it that is.
+    fn located(&self, v: &Violation) -> Option<(String, usize)> {
+        let (file, line) = (v.file.as_deref()?, v.line.filter(|l| *l > 0)?);
+        self.lines_of
+            .borrow_mut()
+            .entry(file.to_string())
+            .or_insert_with(|| {
+                (self.read_file)(file).map(|content| lines_and_occurrences(&content))
+            })
+            .as_ref()
+            .and_then(|lines| lines.get(line - 1).cloned())
+    }
+}
+
 /// For a finding on a later occurrence of a repeated line: the occurrence number, and the
 /// fingerprint the finding would have on the first occurrence. A baseline written before
 /// occurrences were told apart recorded every occurrence under that one fingerprint, one
 /// entry each. `None` for a first occurrence, an anchored finding, or a fingerprint that
-/// is not built from the line.
-fn first_occurrence_twin<F>(v: &Violation, read_file: F) -> Option<(usize, String)>
-where
-    F: Fn(&str) -> Option<String>,
-{
-    let (line, occurrence) = line_and_occurrence(v, read_file)?;
+/// is not built from the line. `located` is the finding's line and its occurrence
+/// ([`line_and_occurrence`]).
+fn first_occurrence_twin(
+    v: &Violation,
+    located: Option<(String, usize)>,
+) -> Option<(usize, String)> {
+    let (line, occurrence) = located?;
     if occurrence < 2 || v.anchor.is_some() {
         return None;
     }
@@ -383,16 +421,9 @@ where
     let mut occurrences = Vec::with_capacity(violations.len());
     // The lines of each file a finding is in, read once: reading the file and counting
     // the lines above for each finding read a file once for each finding in it.
-    let mut lines_of: HashMap<String, Option<Vec<(String, usize)>>> = HashMap::new();
+    let lines = FileLines::new(read_file);
     for (i, v) in violations.iter_mut().enumerate() {
-        let located = match (v.file.as_deref(), v.line.filter(|l| *l > 0)) {
-            (Some(file), Some(line)) => lines_of
-                .entry(file.to_string())
-                .or_insert_with(|| read_file(file).map(|content| lines_and_occurrences(&content)))
-                .as_ref()
-                .and_then(|lines| lines.get(line - 1).cloned()),
-            _ => None,
-        };
+        let located = lines.located(v);
         v.fingerprint = fingerprint_of(
             v,
             located.as_ref().map(|(l, n)| (l.as_str(), *n)),
@@ -553,6 +584,9 @@ where
 
     let mut total_baselined = 0;
     let mut matched_by_entry: HashMap<String, usize> = HashMap::new();
+    // A finding the baseline does not hold under its own fingerprint is looked for
+    // under another, made from its line: the file is read once for all of them.
+    let lines = FileLines::new(read_file);
 
     for outcome in outcomes.iter_mut() {
         if !outcome.enabled {
@@ -566,7 +600,12 @@ where
             let fp = if baseline.version >= FINGERPRINT_VERSION && !v.fingerprint.is_empty() {
                 v.fingerprint.clone()
             } else {
-                fingerprint_for_version(&v, &read_file, baseline.version)
+                let located = lines.located(&v);
+                fingerprint_of(
+                    &v,
+                    located.as_ref().map(|(l, n)| (l.as_str(), *n)),
+                    baseline.version,
+                )
             };
             // An entry recorded before occurrences of a repeated line were told apart
             // carries the first occurrence's fingerprint: `n` such entries accept the
@@ -575,7 +614,7 @@ where
                 if baseline.version < FINGERPRINT_VERSION {
                     return None;
                 }
-                let (occurrence, first) = first_occurrence_twin(&v, &read_file)?;
+                let (occurrence, first) = first_occurrence_twin(&v, lines.located(&v))?;
                 (recorded.get(&first).copied().unwrap_or(0) >= occurrence).then_some(first)
             };
             let matched = if available_fps.get(&fp).is_some_and(|n| *n > 0) {
@@ -1187,6 +1226,88 @@ mod tests {
         );
         // The file of the findings, and the one that cannot be read.
         assert_eq!((read_few, read_many), (2, 2));
+    }
+
+    /// The findings of one file left after a baseline of `entries` (version 2) is
+    /// applied, by line; how many times a file was read; and the steps counted.
+    fn left_after(lines: usize, entries: Vec<String>) -> (Vec<usize>, usize, u64) {
+        let mut found = findings_in(1, lines);
+        fill_fingerprints(&mut found.iter_mut().collect::<Vec<_>>(), |path| {
+            content_of(path, lines)
+        });
+        let mut out = GateOutcome::new("unsafe-safety-comment");
+        out.violations = found;
+        let baseline = DisciplineBaseline {
+            version: 2,
+            findings: entries
+                .into_iter()
+                .map(|fingerprint| BaselineEntry {
+                    gate: "unsafe-safety-comment".to_string(),
+                    rule: "c/x".to_string(),
+                    path: "src/f0.rs".to_string(),
+                    fingerprint,
+                })
+                .collect(),
+        };
+        let mut outcomes = vec![out];
+        let reads = std::cell::Cell::new(0);
+        let ((), counted) = crate::ast::ancestry::steps(|| {
+            apply_baseline_with_reader(
+                |path| {
+                    reads.set(reads.get() + 1);
+                    content_of(path, lines)
+                },
+                &baseline,
+                &mut outcomes,
+            );
+        });
+        (
+            outcomes[0]
+                .violations
+                .iter()
+                .filter_map(|v| v.line)
+                .collect(),
+            reads.get(),
+            counted,
+        )
+    }
+
+    /// A finding a baseline does not hold under its own fingerprint is looked for under
+    /// the one its line has on its first occurrence, and the file is read once for all
+    /// of them. Before #672 it was read for each finding, and its lines above the
+    /// finding counted again for each.
+    #[test]
+    fn findings_a_baseline_does_not_hold_are_looked_up_with_their_file_read_once() {
+        // `same();` stands on every third line, from the first. A baseline written
+        // before occurrences were told apart holds the first one's fingerprint once
+        // for each of the first three.
+        let first = compute_violation_fingerprint_with_content(
+            &Violation {
+                file: Some("src/f0.rs".to_string()),
+                line: Some(1),
+                ..finding("t", "c/x")
+            },
+            |path| content_of(path, 30),
+        );
+        let (left, reads, _) = left_after(30, vec![first.clone(), first.clone(), first.clone()]);
+        // Lines 1, 4 and 7 are accepted, the later occurrences and every other line
+        // are not; the line past the end and the file that cannot be read stay.
+        let wanted: Vec<usize> = (1..=31)
+            .filter(|l| ![1, 4, 7].contains(l))
+            .chain([3])
+            .collect();
+        assert_eq!(left, wanted);
+        // The file of the findings, and the one that cannot be read.
+        assert_eq!(reads, 2);
+        let ((_, read_few, few), (_, read_many, many)) = (
+            left_after(40, vec![first.clone()]),
+            left_after(160, vec![first]),
+        );
+        assert_eq!((read_few, read_many), (2, 2));
+        assert!(
+            few > 0 && many < 5 * few,
+            "{few} steps for 40, {many} for 160"
+        );
     }
 
     #[test]
