@@ -6,6 +6,7 @@ use tree_sitter::Node;
 
 use super::ci_condition::{read_skip, Grammar, SkipRead};
 use super::functions::{self, FunctionSpec};
+use super::suppressions::{CommentRule, Reports, Suppressions};
 use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
 /// C# language pack implementing [`LanguagePack`].
@@ -62,7 +63,7 @@ impl LanguagePack for CSharpPack {
             test_calls: Vec::new(),
         };
 
-        extractor.collect_comments_and_escape_hatches(root);
+        CS_SUPPRESSIONS.collect(root, extractor.src, &mut extractor.facts.escape_hatches);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
         CSHARP_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
@@ -110,58 +111,58 @@ struct CSharpExtractor<'a> {
 
 /// The comments that suppress a C# analyser; a `#pragma` directive and a
 /// `SuppressMessage` attribute are read from their own nodes.
-const CS_SUPPRESSIONS: super::CommentSuppressions = super::CommentSuppressions {
-    hash_comments: false,
-    markers: &[
-        "#pragma warning disable",
-        "pragma warning disable",
-        "NOLINT",
-    ],
+const CS_SUPPRESSIONS: Suppressions = Suppressions {
+    rules: &[CommentRule::opens(
+        &[
+            "#pragma warning disable",
+            "pragma warning disable",
+            "NOLINT",
+        ],
+        Reports::Body,
+    )],
+    other: Some(pragma_or_attribute_suppression),
+    ..Suppressions::SLASH_COMMENTS
 };
+
+/// A `#pragma warning disable` directive or a `SuppressMessage` attribute, pushed to
+/// `sites`.
+fn pragma_or_attribute_suppression(
+    node: Node,
+    src: &[u8],
+    sites: &mut Vec<EscapeHatchSite>,
+) -> bool {
+    let kind = node.kind();
+    let text = node.utf8_text(src).unwrap_or("");
+    let line = node.start_position().row + 1;
+    // C# preprocessor directive: pragma_directive / preproc_pragma
+    if (kind == "pragma_directive" || kind == "preproc_pragma") && text.contains("warning disable")
+    {
+        sites.push(EscapeHatchSite::LinterDisable {
+            line,
+            rule: text.trim().to_string(),
+            snippet: text.to_string(),
+        });
+    }
+    // C# SuppressMessageAttribute on declarations
+    if kind == "attribute" {
+        let attr_name = node
+            .child_by_field_name("name")
+            .map(|n| n.utf8_text(src).unwrap_or(""))
+            .unwrap_or("");
+        if attr_name == "SuppressMessage" || attr_name == "SuppressMessageAttribute" {
+            sites.push(EscapeHatchSite::LinterDisable {
+                line,
+                rule: text.to_string(),
+                snippet: text.to_string(),
+            });
+        }
+    }
+    true
+}
 
 impl<'a> CSharpExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
         node.utf8_text(self.src).unwrap_or("")
-    }
-
-    fn collect_comments_and_escape_hatches(&mut self, node: Node<'a>) {
-        let src = self.src;
-        super::collect_comment_suppressions(
-            node,
-            src,
-            &CS_SUPPRESSIONS,
-            &mut |node, sites| {
-                let kind = node.kind();
-                let text = node.utf8_text(src).unwrap_or("");
-                let line = node.start_position().row + 1;
-                // C# preprocessor directive: pragma_directive / preproc_pragma
-                if (kind == "pragma_directive" || kind == "preproc_pragma")
-                    && text.contains("warning disable")
-                {
-                    sites.push(EscapeHatchSite::LinterDisable {
-                        line,
-                        rule: text.trim().to_string(),
-                        snippet: text.to_string(),
-                    });
-                }
-                // C# SuppressMessageAttribute on declarations
-                if kind == "attribute" {
-                    let attr_name = node
-                        .child_by_field_name("name")
-                        .map(|n| n.utf8_text(src).unwrap_or(""))
-                        .unwrap_or("");
-                    if attr_name == "SuppressMessage" || attr_name == "SuppressMessageAttribute" {
-                        sites.push(EscapeHatchSite::LinterDisable {
-                            line,
-                            rule: text.to_string(),
-                            snippet: text.to_string(),
-                        });
-                    }
-                }
-                true
-            },
-            &mut self.facts.escape_hatches,
-        );
     }
 
     fn visit_root(&mut self, root: Node<'a>) {
