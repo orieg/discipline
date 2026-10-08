@@ -1,7 +1,7 @@
 //! The rollup job: that it needs every job of its workflow, keeps the jobs it needed,
 //! and that a documented job count matches the workflow.
 
-use super::{find_line_number, record_or_excuse, WorkflowFile, GATE, NOT_COMPARED};
+use super::{job_line, record_or_excuse, WorkflowFile, GATE, NOT_COMPARED};
 use crate::guards::{Context, GateOutcome, Violation};
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
@@ -106,7 +106,7 @@ pub(super) fn check_rollup_job(
                     settings.severity,
                     &crate::findings::ROLLUP_NEEDS_INCOMPLETE,
                     Some(path.to_string()),
-                    find_line_number(head_content, rollup),
+                    job_line(head_content, rollup),
                     format!("Rollup job '{rollup}' is missing dependencies on: {missing:?}"),
                     format!("Add the missing jobs to '{rollup}' needs: {missing:?}, or excuse with allow-gate-weakening: ci-integrity <reason>."),
                     rollup.as_str(),
@@ -157,7 +157,7 @@ fn check_rollup_needs_kept(
                             settings.severity,
                             &crate::findings::ROLLUP_NEEDS_REMOVED,
                             Some(path.to_string()),
-                            find_line_number(head_content, job_name),
+                            job_line(head_content, job_name),
                             format!("Rollup job '{job_name}' dropped dependency on '{dropped}' present in base."),
                             format!("Restore '{dropped}' to '{job_name}' needs, or excuse with allow-gate-weakening: ci-integrity <reason>."),
                             &dropped,

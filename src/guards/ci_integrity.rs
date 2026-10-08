@@ -30,6 +30,7 @@ mod banned;
 mod discipline_pin;
 mod gitlab_pipeline;
 mod job_steps;
+mod locate;
 mod pins;
 mod removed;
 mod rollup;
@@ -42,6 +43,7 @@ pub(crate) use banned::*;
 pub use discipline_pin::*;
 use gitlab_pipeline::*;
 pub use job_steps::*;
+pub(crate) use locate::*;
 pub(crate) use pins::*;
 pub(crate) use removed::*;
 pub use rollup::*;
@@ -235,6 +237,23 @@ struct StepSite<'a> {
     step: &'a serde_yaml::Value,
     base_step: Option<&'a serde_yaml::Value>,
     approx_line: Option<usize>,
+    /// The step's own lines, when the job's steps are written one item each.
+    span: Option<Span>,
+}
+
+impl StepSite<'_> {
+    /// The line of the step's key `key`, else the line the step is reported at.
+    fn key_line(&self, content: &str, key: &str) -> Option<usize> {
+        self.span
+            .and_then(|s| s.item_key_line(content, key))
+            .or(self.approx_line)
+    }
+
+    /// The first line of the step that contains `needle`.
+    fn text_line(&self, content: &str, needle: &str) -> Option<usize> {
+        self.span
+            .and_then(|s| s.line_with(content, s.start, needle))
+    }
 }
 
 /// Evaluates one GitHub workflow file against its base side. Returns whether the file
@@ -641,58 +660,6 @@ fn is_verification_job(job_id: &str, job: &serde_yaml::Value) -> bool {
         }
     }
     false
-}
-
-fn find_line_number(content: &str, needle: &str) -> Option<usize> {
-    for (idx, line) in content.lines().enumerate() {
-        if line.contains(needle) {
-            return Some(idx + 1);
-        }
-    }
-    None
-}
-
-pub(crate) fn find_line_after(content: &str, needle: &str, start_line: usize) -> Option<usize> {
-    for (idx, line) in content.lines().enumerate() {
-        let line_no = idx + 1;
-        if line_no >= start_line && line.contains(needle) {
-            return Some(line_no);
-        }
-    }
-    None
-}
-
-fn find_step_line(
-    content: &str,
-    name: &str,
-    id: &str,
-    uses: Option<&str>,
-    run: Option<&str>,
-) -> Option<usize> {
-    if !name.is_empty() {
-        if let Some(l) = find_line_number(content, name) {
-            return Some(l);
-        }
-    }
-    if !id.is_empty() {
-        if let Some(l) = find_line_number(content, &format!("id: {id}")) {
-            return Some(l);
-        }
-    }
-    if let Some(u) = uses {
-        if let Some(l) = find_line_number(content, u) {
-            return Some(l);
-        }
-    }
-    if let Some(r) = run {
-        let first = r.lines().next().unwrap_or("").trim();
-        if !first.is_empty() {
-            if let Some(l) = find_line_number(content, first) {
-                return Some(l);
-            }
-        }
-    }
-    None
 }
 
 /// The image name of a `docker://` reference, or `None` for any other `uses:`.

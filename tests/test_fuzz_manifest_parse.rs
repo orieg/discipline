@@ -188,12 +188,14 @@ fn deleting_a_string_that_spells_an_entry_is_not_a_removal() {
 
 /// The head manifest is not TOML: its targets cannot be read, and that is not the same
 /// as a manifest that lists none or all of them. The run could not check.
+/// `dependency-delta` reads the same file as a dependency manifest and runs first, so it
+/// is switched off here: this is the stop of `test-budget` itself.
 #[test]
 fn a_head_manifest_that_does_not_parse_stops_the_check() {
     let base = "[[bin]]\nname = \"parse\"\n\n[[bin]]\nname = \"eval\"\n";
     // The unclosed array breaks the file; both entries still stand in the text.
     let repo = manifest_change(base, &format!("{base}\n[features]\ndefault = [\n"));
-    let run = repo.check(&[]);
+    let run = repo.check(&["--disable", "dependency-delta"]);
     assert_eq!(run.code, 2, "{}\n{}", run.stdout, run.stderr);
     let (reason, gate) = run.could_not_check();
     assert_eq!(reason, "gate");
@@ -206,6 +208,30 @@ fn a_head_manifest_that_does_not_parse_stops_the_check() {
     );
     assert!(
         run.stderr.contains("its fuzz targets could not be read"),
+        "{}",
+        run.stderr
+    );
+}
+
+/// With both gates on, the same change stops in `dependency-delta`, which runs first and
+/// cannot read the file's dependencies either.
+#[test]
+fn a_head_manifest_that_does_not_parse_stops_in_dependency_delta_first() {
+    let base = "[[bin]]\nname = \"parse\"\n\n[[bin]]\nname = \"eval\"\n";
+    let repo = manifest_change(base, &format!("{base}\n[features]\ndefault = [\n"));
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 2, "{}\n{}", run.stdout, run.stderr);
+    let (reason, gate) = run.could_not_check();
+    assert_eq!(reason, "gate");
+    assert_eq!(gate.as_deref(), Some("dependency-delta"));
+    assert!(
+        run.stderr
+            .contains("`fuzz/Cargo.toml` does not parse as TOML (line "),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("its dependencies could not be read"),
         "{}",
         run.stderr
     );
