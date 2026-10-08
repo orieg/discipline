@@ -1667,6 +1667,8 @@ pub(crate) fn report_newly_added_nul_bytes(
     }
 }
 
+const ASSERTION_REDUCTION: &str = "assertion-reduction";
+
 pub fn evaluate_assertion_reduction(
     pairs: &[TestPair],
     added: &[Located],
@@ -1675,11 +1677,42 @@ pub fn evaluate_assertion_reduction(
     directives: &[crate::tokens::ParsedDirective],
     is_staged: bool,
 ) -> Result<GateOutcome> {
-    const GATE: &str = "assertion-reduction";
+    const GATE: &str = ASSERTION_REDUCTION;
     let exempt = exempt_filter(settings)?;
     let mut out = GateOutcome::new(GATE);
     out.examined = pairs.len() + helpers.len();
+    let cx = ReductionInputs {
+        settings,
+        directives,
+        is_staged,
+    };
 
+    report_caught_in_added_tests(added, &exempt, &cx, &mut out);
+    report_weakened_helpers(pairs, added, helpers, &exempt, &cx, &mut out);
+
+    let mut file_cases = FileCases::collect(pairs, added, &exempt);
+    for p in pairs.iter().filter(|p| !exempt.matches(p.path)) {
+        judge_pair(p, helpers, &mut file_cases, &cx, &mut out);
+    }
+    Ok(out)
+}
+
+/// What every phase of `assertion-reduction` reads besides the tests it judges.
+struct ReductionInputs<'a> {
+    settings: &'a crate::config::AssertionGate,
+    directives: &'a [crate::tokens::ParsedDirective],
+    is_staged: bool,
+}
+
+/// Reports, in each test the change adds, the assertions an enclosing handler catches.
+fn report_caught_in_added_tests(
+    added: &[Located],
+    exempt: &PathFilter,
+    cx: &ReductionInputs,
+    out: &mut GateOutcome,
+) {
+    const GATE: &str = ASSERTION_REDUCTION;
+    let (settings, directives, is_staged) = (cx.settings, cx.directives, cx.is_staged);
     for a in added.iter().filter(|a| !exempt.matches(a.path)) {
         // A test the change adds is read for swallowed assertions, so it is examined.
         out.examined += 1;
@@ -1720,7 +1753,20 @@ pub fn evaluate_assertion_reduction(
             );
         }
     }
+}
 
+/// Reports each test helper that lost assertions or was deleted, naming the tests that
+/// call it.
+fn report_weakened_helpers(
+    pairs: &[TestPair],
+    added: &[Located],
+    helpers: &[HelperPair],
+    exempt: &PathFilter,
+    cx: &ReductionInputs,
+    out: &mut GateOutcome,
+) {
+    const GATE: &str = ASSERTION_REDUCTION;
+    let (settings, directives, is_staged) = (cx.settings, cx.directives, cx.is_staged);
     for hp in helpers.iter().filter(|hp| !exempt.matches(hp.path)) {
         let b = hp.base;
         let (total_drop, strong_drop, fatal_drop, h_eff) = match hp.head {
@@ -1765,50 +1811,7 @@ pub fn evaluate_assertion_reduction(
             continue;
         }
 
-        let mut calling_tests = Vec::new();
-        for p in pairs {
-            if p.head.direct_calls.iter().any(|c| {
-                let c_leaf = c.rsplit("::").next().unwrap_or(c);
-                let c_leaf = c_leaf.rsplit('.').next().unwrap_or(c_leaf);
-                c_leaf == helper_leaf || c == &b.name
-            }) || p.base.direct_calls.iter().any(|c| {
-                let c_leaf = c.rsplit("::").next().unwrap_or(c);
-                let c_leaf = c_leaf.rsplit('.').next().unwrap_or(c_leaf);
-                c_leaf == helper_leaf || c == &b.name
-            }) {
-                calling_tests.push(p.head.name.clone());
-            }
-        }
-        for a in added {
-            if a.test.direct_calls.iter().any(|c| {
-                let c_leaf = c.rsplit("::").next().unwrap_or(c);
-                let c_leaf = c_leaf.rsplit('.').next().unwrap_or(c_leaf);
-                c_leaf == helper_leaf || c == &b.name
-            }) {
-                calling_tests.push(a.test.name.clone());
-            }
-        }
-        calling_tests.sort();
-        calling_tests.dedup();
-
-        let callers_str = if calling_tests.is_empty() {
-            String::new()
-        } else if calling_tests.len() <= 3 {
-            format!(
-                " (called by {})",
-                calling_tests
-                    .iter()
-                    .map(|n| format!("`{}`", n))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        } else {
-            format!(
-                " (called by {} tests: `{}` and others)",
-                calling_tests.len(),
-                calling_tests[0]
-            )
-        };
+        let callers_str = helper_callers_clause(pairs, added, helper_leaf, &b.name);
 
         let b_eff = b.effective_asserts();
         let msg = match hp.head {
@@ -1848,612 +1851,911 @@ pub fn evaluate_assertion_reduction(
         );
         out.anchor_last(b.name.clone());
     }
+}
 
-    let mut file_base_cases: std::collections::HashMap<&str, usize> =
-        std::collections::HashMap::new();
-    let mut file_head_cases: std::collections::HashMap<&str, usize> =
-        std::collections::HashMap::new();
-    // The cases that arrived on a test of each file: what a case dropped from another
-    // test of that file can have moved to.
-    let mut file_arrived_rows: std::collections::HashMap<&str, Vec<&str>> =
-        std::collections::HashMap::new();
-
-    for p in pairs.iter().filter(|p| !exempt.matches(p.path)) {
-        if let Some(c) = p.base.cases {
-            *file_base_cases.entry(p.path).or_default() += c;
+/// The clause of a helper finding that names the tests calling the helper: empty when
+/// none does.
+fn helper_callers_clause(
+    pairs: &[TestPair],
+    added: &[Located],
+    helper_leaf: &str,
+    helper_name: &str,
+) -> String {
+    let mut calling_tests = Vec::new();
+    for p in pairs {
+        if p.head.direct_calls.iter().any(|c| {
+            let c_leaf = c.rsplit("::").next().unwrap_or(c);
+            let c_leaf = c_leaf.rsplit('.').next().unwrap_or(c_leaf);
+            c_leaf == helper_leaf || c == helper_name
+        }) || p.base.direct_calls.iter().any(|c| {
+            let c_leaf = c.rsplit("::").next().unwrap_or(c);
+            let c_leaf = c_leaf.rsplit('.').next().unwrap_or(c_leaf);
+            c_leaf == helper_leaf || c == helper_name
+        }) {
+            calling_tests.push(p.head.name.clone());
         }
-        if let Some(c) = p.head.cases {
-            *file_head_cases.entry(p.path).or_default() += c;
-        }
-        file_arrived_rows
-            .entry(p.path)
-            .or_default()
-            .extend(arrived_case_rows(p.base, p.head));
     }
-    for a in added.iter().filter(|a| !exempt.matches(a.path)) {
-        if let Some(c) = a.test.cases {
-            *file_head_cases.entry(a.path).or_default() += c;
+    for a in added {
+        if a.test.direct_calls.iter().any(|c| {
+            let c_leaf = c.rsplit("::").next().unwrap_or(c);
+            let c_leaf = c_leaf.rsplit('.').next().unwrap_or(c_leaf);
+            c_leaf == helper_leaf || c == helper_name
+        }) {
+            calling_tests.push(a.test.name.clone());
         }
-        if let Some(rows) = &a.test.case_rows {
+    }
+    calling_tests.sort();
+    calling_tests.dedup();
+
+    if calling_tests.is_empty() {
+        String::new()
+    } else if calling_tests.len() <= 3 {
+        format!(
+            " (called by {})",
+            calling_tests
+                .iter()
+                .map(|n| format!("`{}`", n))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    } else {
+        format!(
+            " (called by {} tests: `{}` and others)",
+            calling_tests.len(),
+            calling_tests[0]
+        )
+    }
+}
+
+/// The literal case counts of each file's tests on each side, and the cases that arrived
+/// on a test of each file: what a case dropped from another test of that file can have
+/// moved to.
+struct FileCases<'a> {
+    base_cases: std::collections::HashMap<&'a str, usize>,
+    head_cases: std::collections::HashMap<&'a str, usize>,
+    arrived_rows: std::collections::HashMap<&'a str, Vec<&'a str>>,
+}
+
+impl<'a> FileCases<'a> {
+    fn collect(pairs: &[TestPair<'a>], added: &[Located<'a>], exempt: &PathFilter) -> Self {
+        let mut file_base_cases: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        let mut file_head_cases: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        // The cases that arrived on a test of each file: what a case dropped from another
+        // test of that file can have moved to.
+        let mut file_arrived_rows: std::collections::HashMap<&str, Vec<&str>> =
+            std::collections::HashMap::new();
+
+        for p in pairs.iter().filter(|p| !exempt.matches(p.path)) {
+            if let Some(c) = p.base.cases {
+                *file_base_cases.entry(p.path).or_default() += c;
+            }
+            if let Some(c) = p.head.cases {
+                *file_head_cases.entry(p.path).or_default() += c;
+            }
             file_arrived_rows
-                .entry(a.path)
+                .entry(p.path)
                 .or_default()
-                .extend(rows.iter().map(String::as_str));
+                .extend(arrived_case_rows(p.base, p.head));
+        }
+        for a in added.iter().filter(|a| !exempt.matches(a.path)) {
+            if let Some(c) = a.test.cases {
+                *file_head_cases.entry(a.path).or_default() += c;
+            }
+            if let Some(rows) = &a.test.case_rows {
+                file_arrived_rows
+                    .entry(a.path)
+                    .or_default()
+                    .extend(rows.iter().map(String::as_str));
+            }
+        }
+        FileCases {
+            base_cases: file_base_cases,
+            head_cases: file_head_cases,
+            arrived_rows: file_arrived_rows,
         }
     }
+}
 
-    for p in pairs.iter().filter(|p| !exempt.matches(p.path)) {
-        let (b, h) = (p.base, p.head);
-        if b.non_literal_cases || h.non_literal_cases {
-            out.notes.push(format!(
-                "{}:{}: non-literal test case source in `{}`; test case reduction cannot be statically verified",
-                p.path, h.line, h.name
-            ));
-        }
-        // A base side with a literal count is compared with whatever the head side is:
-        // a head with no literal count is a reduction that cannot be measured, not an
-        // unchanged test. One literal case is one run with or without its parametrization.
-        let case_change = match (b.cases, h.cases) {
-            (Some(b_cases), Some(h_cases)) if h_cases < b_cases => {
-                Some(CaseDrop::Fewer(b_cases, h_cases))
-            }
-            (Some(b_cases), None) if b_cases >= 2 => Some(if h.non_literal_cases {
-                CaseDrop::NotLiteral(b_cases)
-            } else {
-                CaseDrop::NotParametrized(b_cases)
-            }),
-            _ => None,
-        };
-        let mut cases_drop = false;
-        let mut cases_drop_info = None;
-        if let Some(change) = case_change {
-            // A dropped case is excused as moved when the same case, by its content,
-            // arrived on another test of the file. The file holding as many cases as
-            // before says nothing: three cases dropped beside an unrelated new test of
-            // three are three cases dropped.
-            let dropped = match change {
-                CaseDrop::Fewer(b_cases, h_cases) => b_cases - h_cases,
-                CaseDrop::NotLiteral(b_cases) | CaseDrop::NotParametrized(b_cases) => b_cases,
-            };
-            let left = left_case_rows(b, h, change);
-            let moved = match &left {
-                Some(left) => {
-                    let arrived = file_arrived_rows.entry(p.path).or_default();
-                    take_moved_rows(left, arrived, dropped)
-                }
-                None => 0,
-            };
-            let file_keeps_its_total = file_head_cases.get(p.path).copied().unwrap_or(0)
-                >= file_base_cases.get(p.path).copied().unwrap_or(0);
-            if moved >= dropped {
-                let what = match change {
-                    CaseDrop::Fewer(b_cases, h_cases) => {
-                        format!("test cases {b_cases} -> {h_cases}")
-                    }
-                    CaseDrop::NotLiteral(b_cases) | CaseDrop::NotParametrized(b_cases) => {
-                        format!("{b_cases} literal test cases no longer counted on it")
-                    }
-                };
-                out.notes.push(format!(
-                    "`{}` in `{}`: {} read as preserved across tests in same file ({} of {} dropped case(s) found moved to another test of the file, 0 not found)",
-                    h.name, p.path, what, moved, dropped
-                ));
-            } else {
-                if left.is_none() && file_keeps_its_total {
-                    out.notes.push(format!(
-                        "`{}` in `{}`: the file holds as many cases as before, but the cases dropped from this test cannot be compared by content (its case list is not literal rows on the side that had them, or is no longer a literal list), so none is read as moved",
-                        h.name, p.path
-                    ));
-                } else if moved > 0 || file_keeps_its_total {
-                    out.notes.push(format!(
-                        "`{}` in `{}`: {} of {} dropped case(s) found moved to another test of the file, {} not found",
-                        h.name,
-                        p.path,
-                        moved,
-                        dropped,
-                        dropped - moved
-                    ));
-                }
-                cases_drop = true;
-                cases_drop_info = Some(change);
-            }
-        }
-        let b_eff = b.effective_asserts();
-        let h_eff = h.effective_asserts();
-        let mut total_drop = h_eff < b_eff;
-        let mut strong_drop = h.strong_asserts < b.strong_asserts;
-        let newly_caught = crate::ast::caught_assertions::newly_caught(b, h);
-        if total_drop && h_eff + newly_caught.len() >= b_eff {
-            total_drop = false;
-        }
-        // Checks moved into same-file helpers that fail (assert, raise, throw, panic) in a
-        // loop: one `raise` in a helper's loop stands for many inline assertions, so the
-        // count drops while the test calls more such helpers than before. A helper that
-        // checks in a straight line stands for what it holds, which the pack counted into
-        // the test. Deleting a helper call lowers `helper_checks` and is still a drop.
-        if (total_drop || strong_drop) && moved_into_looping_helpers(b, h) {
-            out.notes.push(format!(
-                "`{}` in `{}`: assertions {} -> {} read as moved into same-file helpers that fail ({} -> {} calls)",
-                h.name, p.path, b_eff, h_eff, b.helper_checks, h.helper_checks
-            ));
-            total_drop = false;
-            strong_drop = false;
-        }
+/// Everything one paired test is reported for.
+struct PairFindings<'a> {
+    /// The drop in literal cases that is not read as moved to another test of the file.
+    case_drop: Option<CaseDrop>,
+    newly_caught: Vec<&'a crate::ast::caught_assertions::CaughtAssertion>,
+    loss: AssertionLoss,
+    mock_growth: bool,
+    loosened: Vec<crate::ast::bounds::Loosened>,
+    changed: Vec<usize>,
+    widened: Vec<crate::ast::expected_exceptions::Widened>,
+    self_compared: Vec<&'a crate::ast::self_comparison::SelfComparison>,
+    /// Assertions, fatal assertions or cases went down, or test doubles grew alone.
+    dropped: bool,
+}
 
-        // Checks moved into a helper the test's own count does not hold (one in another
-        // file, a same-file method called on a receiver, a same-file helper reached deeper
-        // than the pack follows): the helper stands for the checks its calls add to this
-        // test, and no more. A helper the test newly calls adds its head checks per call;
-        // one the base already called adds what it gained. What that does not cover is
-        // still a drop, reported with the helper's share counted in.
-        let mut helper_total = 0;
-        let mut helper_strong = 0;
-        let mut helper_fatal = 0;
-        if total_drop || strong_drop {
-            let moved = helper_call_gain(b, h, p.path, helpers, &settings.assert_helper_fns);
-            let mut note_the_move = true;
-            helper_fatal = moved.fatal;
-            if total_drop && h_eff + newly_caught.len() + moved.total >= b_eff {
-                total_drop = false;
-            }
-            if strong_drop && h.strong_asserts + moved.strong >= b.strong_asserts {
-                strong_drop = false;
-            }
-            // The count is covered and only strength falls short: an equality assertion
-            // rewritten in a same-file helper as a failure exit under an equality
-            // comparison (`if a != b { panic!() }`) is still an equality check.
-            if strong_drop && !total_drop {
-                let by_hand = equality_exits_gained(b, h) + moved.equality;
-                if by_hand > 0 && h.strong_asserts + moved.strong + by_hand >= b.strong_asserts {
-                    strong_drop = false;
-                    note_the_move = false;
-                    let whose = if moved.equality == 0 {
-                        "same-file "
-                    } else {
-                        ""
-                    };
-                    out.notes.push(format!(
-                        "`{}` in `{}`: equality assertions {} -> {} read as moved into {whose}helpers that fail on an equality comparison ({} exit(s))",
-                        h.name, p.path, b.strong_asserts, h.strong_asserts, by_hand
-                    ));
-                }
-            }
-            if total_drop || strong_drop {
-                helper_total = moved.total;
-                helper_strong = moved.strong;
-            } else if note_the_move {
-                out.notes.push(format!(
-                    "`{}` in `{}`: assertions {} -> {} read as moved into helper `{}` ({} check(s))",
-                    h.name,
-                    p.path,
-                    b_eff,
-                    h_eff,
-                    moved.names.join("`, `"),
-                    moved.total
-                ));
-            }
-        }
-
-        // A helper in the test's own file is counted in the test, so a helper that lost
-        // checks lowers the count of every test that calls it. That drop is the helper's,
-        // reported once on the helper: the test is not reported for it when everything the
-        // test lost, in count and in strength, is what its calls to those helpers lost. A
-        // helper in another file is not counted in the test, so a drop in the test beside
-        // one is the test's own and stays reported.
-        let mut attributed_fatal = 0;
-        if total_drop || strong_drop {
-            let (mut lost_total, mut lost_strong, mut lost_fatal) = (0, 0, 0);
-            let mut weakened_helper_names = Vec::new();
-            for call in &h.direct_calls {
-                let weakened = helpers.iter().find_map(|hp| {
-                    let head_helper = hp.head?;
-                    let lost = hp
-                        .base
-                        .effective_asserts()
-                        .saturating_sub(head_helper.effective_asserts());
-                    let lost_strength = hp
-                        .base
-                        .strong_asserts
-                        .saturating_sub(head_helper.strong_asserts);
-                    (hp.path == p.path
-                        && call_names_helper(call, &hp.base.name)
-                        && (lost > 0 || lost_strength > 0))
-                        .then(|| {
-                            (
-                                hp.base.name.as_str(),
-                                lost,
-                                lost_strength,
-                                hp.base
-                                    .fatal_asserts
-                                    .saturating_sub(head_helper.fatal_asserts),
-                            )
-                        })
-                });
-                if let Some((name, lost, lost_strength, lost_fatality)) = weakened {
-                    lost_total += lost;
-                    lost_strong += lost_strength;
-                    lost_fatal += lost_fatality;
-                    weakened_helper_names.push(name);
-                }
-            }
-            let delta_test = b_eff.saturating_sub(h_eff);
-            let delta_strong = b.strong_asserts.saturating_sub(h.strong_asserts);
-            if !weakened_helper_names.is_empty()
-                && delta_test <= lost_total
-                && delta_strong <= lost_strong
-            {
-                weakened_helper_names.dedup();
-                out.notes.push(format!(
-                    "`{}` in `{}`: assertion drop {} -> {} attributed to weakened helper `{}`",
-                    h.name,
-                    p.path,
-                    b_eff,
-                    h_eff,
-                    weakened_helper_names.join("`, `")
-                ));
-                total_drop = false;
-                strong_drop = false;
-                attributed_fatal = lost_fatal;
-            }
-        }
-        let fatal_drop = h.fatal_asserts + helper_fatal + attributed_fatal < b.fatal_asserts;
-        // More doubles in the test, and no stronger assertion on what the code produced:
-        // the shape of an integration failure sidestepped by mocking it away.
-        let mock_growth = h.mock_setups > b.mock_setups
-            && h.strong_asserts <= b.strong_asserts
-            && h_eff.saturating_sub(h.mock_asserts) <= b_eff.saturating_sub(b.mock_asserts);
-        // The same assertion with its numeric bound moved the loose way: the count holds.
-        let loosened = crate::ast::bounds::loosened(&b.bounds, &h.bounds);
-        // The same assertion expecting a different value: the count and strength hold.
-        let changed = crate::ast::expectations::changed(&b.expectations, &h.expectations);
-        // The same assertion with widened expected exception or dropped matcher.
-        let mut widened = crate::ast::expected_exceptions::widened_in(b, h);
-        // An expectation that is gone along with a lower count is the reduction below.
-        if total_drop || strong_drop {
-            widened.retain(|w| !w.dropped);
-        }
-        // Equality assertions that compare an operand with itself and that the base
-        // side did not hold (`ast::self_comparison`).
-        let self_compared = h.equality_operands.introduced_since(&b.equality_operands);
-        let dropped = total_drop || strong_drop || fatal_drop || mock_growth || cases_drop;
-        if !dropped
-            && loosened.is_empty()
-            && changed.is_empty()
-            && newly_caught.is_empty()
-            && widened.is_empty()
-            && self_compared.is_empty()
-        {
-            continue;
-        }
-
-        // For forced pairs (unrelated names forced together), the override directive MUST name
-        // the old test that was replaced/gutted. For non-forced pairs (exact name or similarity rename),
-        // naming either the old test or the new test is accepted.
-        // The finding the override lifts, as the report below would rank it: the drop
-        // (fewer assertions, weaker fatal ones, or doubles grown alone), else a loosened
-        // bound. One directive lifts every finding of the pair; the record names the first.
-        let lifts = if !newly_caught.is_empty() {
+impl PairFindings<'_> {
+    /// The finding the override lifts, as the report below would rank it: the drop
+    /// (fewer assertions, weaker fatal ones, or doubles grown alone), else a loosened
+    /// bound. One directive lifts every finding of the pair; the record names the first.
+    fn first_kind(&self) -> &'static crate::findings::FindingKind {
+        if !self.newly_caught.is_empty() {
             &crate::findings::ASSERTION_FAILURE_CAUGHT
-        } else if cases_drop {
+        } else if self.case_drop.is_some() {
             &crate::findings::TEST_CASES_REDUCED
-        } else if total_drop || strong_drop {
+        } else if self.loss.total || self.loss.strong {
             &crate::findings::ASSERTIONS_REDUCED
-        } else if fatal_drop {
+        } else if self.loss.fatal {
             &crate::findings::FATAL_ASSERTIONS_WEAKENED
-        } else if mock_growth {
+        } else if self.mock_growth {
             &crate::findings::MOCKING_INCREASED
-        } else if !loosened.is_empty() {
+        } else if !self.loosened.is_empty() {
             &crate::findings::ASSERTION_BOUND_LOOSENED
-        } else if !widened.is_empty() {
+        } else if !self.widened.is_empty() {
             &crate::findings::EXPECTED_EXCEPTION_WIDENED
-        } else if !changed.is_empty() {
+        } else if !self.changed.is_empty() {
             &crate::findings::EXPECTED_VALUE_CHANGED
         } else {
             &crate::findings::SELF_COMPARISON_ASSERTION_INTRODUCED
-        };
-        let lift = |subject: &str| {
+        }
+    }
+}
+
+/// How a message names the pair: the head test, or both names of a forced pair.
+fn pair_label(p: &TestPair) -> String {
+    if p.forced {
+        format!("Test `{}` -> `{}`", p.base.name, p.head.name)
+    } else {
+        format!("Test `{}`", p.head.name)
+    }
+}
+
+/// The test a remediation names in its directive: the base test of a forced pair.
+fn pair_directive_name<'a>(p: &TestPair<'a>) -> &'a str {
+    if p.forced {
+        leaf_name(p.base)
+    } else {
+        leaf_name(p.head)
+    }
+}
+
+/// Judges one paired test: what it lost, the directive that lifts it, and its findings.
+fn judge_pair<'a>(
+    p: &TestPair<'a>,
+    helpers: &[HelperPair],
+    file_cases: &mut FileCases<'a>,
+    cx: &ReductionInputs,
+    out: &mut GateOutcome,
+) {
+    const GATE: &str = ASSERTION_REDUCTION;
+    let directives = cx.directives;
+    let (b, h) = (p.base, p.head);
+    let Some(f) = pair_findings(p, helpers, file_cases, cx.settings, out) else {
+        return;
+    };
+
+    // For forced pairs (unrelated names forced together), the override directive MUST name
+    // the old test that was replaced/gutted. For non-forced pairs (exact name or similarity rename),
+    // naming either the old test or the new test is accepted.
+    let lifts = f.first_kind();
+    let lift = |subject: &str| {
+        tokens::find_override(
+            directives,
+            GATE,
+            lifts,
+            tokens::ALLOW_ASSERTION_DROP,
+            subject,
+        )
+    };
+    let allowed = if p.forced {
+        lift(leaf_name(b)).or_else(|| lift(p.path))
+    } else {
+        lift(leaf_name(h))
+            .or_else(|| lift(leaf_name(b)))
+            .or_else(|| lift(p.path))
+    };
+    if let Some(record) = allowed {
+        out.overrides.push(record);
+        return;
+    }
+
+    let mut case_drop_allowed = false;
+    if f.case_drop.is_some() {
+        let lift_case = |subject: &str| {
             tokens::find_override(
                 directives,
                 GATE,
-                lifts,
-                tokens::ALLOW_ASSERTION_DROP,
+                &crate::findings::TEST_CASES_REDUCED,
+                tokens::ALLOW_CASE_DROP,
                 subject,
             )
         };
-        let allowed = if p.forced {
-            lift(leaf_name(b)).or_else(|| lift(p.path))
+        let allowed_case = if p.forced {
+            lift_case(leaf_name(b)).or_else(|| lift_case(p.path))
         } else {
-            lift(leaf_name(h))
-                .or_else(|| lift(leaf_name(b)))
-                .or_else(|| lift(p.path))
+            lift_case(leaf_name(h))
+                .or_else(|| lift_case(leaf_name(b)))
+                .or_else(|| lift_case(p.path))
         };
-        if let Some(record) = allowed {
+        if let Some(record) = allowed_case {
             out.overrides.push(record);
-            continue;
+            case_drop_allowed = true;
         }
+    }
 
-        let mut case_drop_allowed = false;
-        if cases_drop {
-            let lift_case = |subject: &str| {
-                tokens::find_override(
-                    directives,
-                    GATE,
-                    &crate::findings::TEST_CASES_REDUCED,
-                    tokens::ALLOW_CASE_DROP,
-                    subject,
-                )
-            };
-            let allowed_case = if p.forced {
-                lift_case(leaf_name(b)).or_else(|| lift_case(p.path))
-            } else {
-                lift_case(leaf_name(h))
-                    .or_else(|| lift_case(leaf_name(b)))
-                    .or_else(|| lift_case(p.path))
-            };
-            if let Some(record) = allowed_case {
-                out.overrides.push(record);
-                case_drop_allowed = true;
-            }
+    report_newly_caught(p, &f, cx, out);
+    report_self_comparisons(p, &f, out);
+    report_loosened_bounds(p, &f, cx, out);
+    report_changed_expectations(p, &f, cx, out);
+    report_widened_exceptions(p, &f, cx, out);
+    if !f.dropped {
+        return;
+    }
+
+    report_case_drop(p, &f, case_drop_allowed, cx, out);
+    report_assertion_loss(p, &f, cx, out);
+}
+
+/// Everything the pair is reported for, with the notes on what was read as moved.
+/// `None` when the head test weakens nothing.
+fn pair_findings<'a>(
+    p: &TestPair<'a>,
+    helpers: &[HelperPair],
+    file_cases: &mut FileCases<'a>,
+    settings: &crate::config::AssertionGate,
+    out: &mut GateOutcome,
+) -> Option<PairFindings<'a>> {
+    let (b, h) = (p.base, p.head);
+    let case_drop = unmoved_case_drop(p, file_cases, out);
+    let cases_drop = case_drop.is_some();
+    let b_eff = b.effective_asserts();
+    let h_eff = h.effective_asserts();
+    let newly_caught = crate::ast::caught_assertions::newly_caught(b, h);
+    let loss = assertion_loss(p, helpers, newly_caught.len(), settings, out);
+    let (total_drop, strong_drop, fatal_drop) = (loss.total, loss.strong, loss.fatal);
+    // More doubles in the test, and no stronger assertion on what the code produced:
+    // the shape of an integration failure sidestepped by mocking it away.
+    let mock_growth = h.mock_setups > b.mock_setups
+        && h.strong_asserts <= b.strong_asserts
+        && h_eff.saturating_sub(h.mock_asserts) <= b_eff.saturating_sub(b.mock_asserts);
+    // The same assertion with its numeric bound moved the loose way: the count holds.
+    let loosened = crate::ast::bounds::loosened(&b.bounds, &h.bounds);
+    // The same assertion expecting a different value: the count and strength hold.
+    let changed = crate::ast::expectations::changed(&b.expectations, &h.expectations);
+    // The same assertion with widened expected exception or dropped matcher.
+    let mut widened = crate::ast::expected_exceptions::widened_in(b, h);
+    // An expectation that is gone along with a lower count is the reduction below.
+    if total_drop || strong_drop {
+        widened.retain(|w| !w.dropped);
+    }
+    // Equality assertions that compare an operand with itself and that the base
+    // side did not hold (`ast::self_comparison`).
+    let self_compared = h.equality_operands.introduced_since(&b.equality_operands);
+    let dropped = total_drop || strong_drop || fatal_drop || mock_growth || cases_drop;
+    if !dropped
+        && loosened.is_empty()
+        && changed.is_empty()
+        && newly_caught.is_empty()
+        && widened.is_empty()
+        && self_compared.is_empty()
+    {
+        return None;
+    }
+    Some(PairFindings {
+        case_drop,
+        newly_caught,
+        loss,
+        mock_growth,
+        loosened,
+        changed,
+        widened,
+        self_compared,
+        dropped,
+    })
+}
+
+/// The drop in the pair's literal case count that is not read as moved to another test
+/// of the file. Notes what was read as moved and what could not be compared.
+fn unmoved_case_drop<'a>(
+    p: &TestPair<'a>,
+    file_cases: &mut FileCases<'a>,
+    out: &mut GateOutcome,
+) -> Option<CaseDrop> {
+    let (b, h) = (p.base, p.head);
+    if b.non_literal_cases || h.non_literal_cases {
+        out.notes.push(format!(
+            "{}:{}: non-literal test case source in `{}`; test case reduction cannot be statically verified",
+            p.path, h.line, h.name
+        ));
+    }
+    // A base side with a literal count is compared with whatever the head side is:
+    // a head with no literal count is a reduction that cannot be measured, not an
+    // unchanged test. One literal case is one run with or without its parametrization.
+    let case_change = match (b.cases, h.cases) {
+        (Some(b_cases), Some(h_cases)) if h_cases < b_cases => {
+            Some(CaseDrop::Fewer(b_cases, h_cases))
         }
-
-        let test_label = if p.forced {
-            format!("Test `{}` -> `{}`", b.name, h.name)
+        (Some(b_cases), None) if b_cases >= 2 => Some(if h.non_literal_cases {
+            CaseDrop::NotLiteral(b_cases)
         } else {
-            format!("Test `{}`", h.name)
+            CaseDrop::NotParametrized(b_cases)
+        }),
+        _ => None,
+    };
+    let mut cases_drop_info = None;
+    if let Some(change) = case_change {
+        // A dropped case is excused as moved when the same case, by its content,
+        // arrived on another test of the file. The file holding as many cases as
+        // before says nothing: three cases dropped beside an unrelated new test of
+        // three are three cases dropped.
+        let dropped = match change {
+            CaseDrop::Fewer(b_cases, h_cases) => b_cases - h_cases,
+            CaseDrop::NotLiteral(b_cases) | CaseDrop::NotParametrized(b_cases) => b_cases,
         };
-        let directive_name = if p.forced { leaf_name(b) } else { leaf_name(h) };
+        let left = left_case_rows(b, h, change);
+        let moved = match &left {
+            Some(left) => {
+                let arrived = file_cases.arrived_rows.entry(p.path).or_default();
+                take_moved_rows(left, arrived, dropped)
+            }
+            None => 0,
+        };
+        let file_keeps_its_total = file_cases.head_cases.get(p.path).copied().unwrap_or(0)
+            >= file_cases.base_cases.get(p.path).copied().unwrap_or(0);
+        if moved >= dropped {
+            let what = match change {
+                CaseDrop::Fewer(b_cases, h_cases) => {
+                    format!("test cases {b_cases} -> {h_cases}")
+                }
+                CaseDrop::NotLiteral(b_cases) | CaseDrop::NotParametrized(b_cases) => {
+                    format!("{b_cases} literal test cases no longer counted on it")
+                }
+            };
+            out.notes.push(format!(
+                "`{}` in `{}`: {} read as preserved across tests in same file ({} of {} dropped case(s) found moved to another test of the file, 0 not found)",
+                h.name, p.path, what, moved, dropped
+            ));
+        } else {
+            if left.is_none() && file_keeps_its_total {
+                out.notes.push(format!(
+                    "`{}` in `{}`: the file holds as many cases as before, but the cases dropped from this test cannot be compared by content (its case list is not literal rows on the side that had them, or is no longer a literal list), so none is read as moved",
+                    h.name, p.path
+                ));
+            } else if moved > 0 || file_keeps_its_total {
+                out.notes.push(format!(
+                    "`{}` in `{}`: {} of {} dropped case(s) found moved to another test of the file, {} not found",
+                    h.name,
+                    p.path,
+                    moved,
+                    dropped,
+                    dropped - moved
+                ));
+            }
+            cases_drop_info = Some(change);
+        }
+    }
+    cases_drop_info
+}
 
-        for c in &newly_caught {
-            out.push(
-                if is_staged {
-                    crate::config::Severity::Warning
-                } else {
-                    settings.severity()
-                },
-                &crate::findings::ASSERTION_FAILURE_CAUGHT,
-                Some(p.path),
-                Some(c.line),
-                format!(
-                    "{test_label}: the assertion on line {} is caught by an enclosing handler (line {}) without failing the test; it is not an effective check.",
-                    c.line, c.handler_line
-                ),
-                &format!(
-                    "Restore the assertion to propagate failures, or justify the handler in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
-                    directive_name
-                ),
-            );
-        }
+/// What a paired test lost in assertions once the checks its helpers stand for are
+/// counted.
+struct AssertionLoss {
+    /// Fewer effective assertions.
+    total: bool,
+    /// Fewer equality / pattern assertions.
+    strong: bool,
+    /// Fewer fatal assertions.
+    fatal: bool,
+    /// The checks the test's calls to paired helpers add, counted into a reported drop.
+    helper_total: usize,
+    helper_strong: usize,
+}
 
-        // One finding for one act: a rewrite that also lowers the count is the
-        // `assertions-reduced` finding below, at the gate's severity, whose message names
-        // these lines. Reported here only while the count holds, as a warning: the form
-        // is exact, and a deliberate reflexivity check is a legitimate test.
-        let folded_into_reduction = total_drop || strong_drop;
-        for s in self_compared.iter().filter(|_| !folded_into_reduction) {
-            out.push(
-                crate::config::Severity::Warning,
-                &crate::findings::SELF_COMPARISON_ASSERTION_INTRODUCED,
-                Some(p.path),
-                Some(s.line),
-                format!(
-                    "{test_label}: the equality assertion on line {} now compares an expression with itself, so it holds whatever the code does. {SELF_COMPARISON_SCOPE}",
-                    s.line
-                ),
-                &format!(
-                    "Compare the value with what is expected of it. A deliberate reflexivity check takes, on its own line in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
-                    directive_name
-                ),
-            );
-            out.anchor_last(h.name.clone());
-            note_self_comparison_scope(&mut out);
-        }
+/// Compares the pair's assertion counts, crediting the checks moved into helpers and
+/// attributing to a weakened helper the drop that is the helper's.
+fn assertion_loss(
+    p: &TestPair,
+    helpers: &[HelperPair],
+    newly_caught: usize,
+    settings: &crate::config::AssertionGate,
+    out: &mut GateOutcome,
+) -> AssertionLoss {
+    let (b, h) = (p.base, p.head);
+    let b_eff = b.effective_asserts();
+    let h_eff = h.effective_asserts();
+    let mut loss = AssertionLoss {
+        total: h_eff < b_eff,
+        strong: h.strong_asserts < b.strong_asserts,
+        fatal: false,
+        helper_total: 0,
+        helper_strong: 0,
+    };
+    if loss.total && h_eff + newly_caught >= b_eff {
+        loss.total = false;
+    }
+    // Checks moved into same-file helpers that fail (assert, raise, throw, panic) in a
+    // loop: one `raise` in a helper's loop stands for many inline assertions, so the
+    // count drops while the test calls more such helpers than before. A helper that
+    // checks in a straight line stands for what it holds, which the pack counted into
+    // the test. Deleting a helper call lowers `helper_checks` and is still a drop.
+    if (loss.total || loss.strong) && moved_into_looping_helpers(b, h) {
+        out.notes.push(format!(
+            "`{}` in `{}`: assertions {} -> {} read as moved into same-file helpers that fail ({} -> {} calls)",
+            h.name, p.path, b_eff, h_eff, b.helper_checks, h.helper_checks
+        ));
+        loss.total = false;
+        loss.strong = false;
+    }
 
-        for l in &loosened {
-            out.push(
-                if is_staged {
-                    crate::config::Severity::Warning
-                } else {
-                    settings.severity()
-                },
-                &crate::findings::ASSERTION_BOUND_LOOSENED,
-                Some(p.path),
-                Some(l.line),
-                // The line and the two literals only: the assertion's text is the change's
-                // own and is not echoed into a report agents read.
-                format!(
-                    "{test_label}: the assertion on line {} moved its bound from {} to {}, which accepts more results.",
-                    l.line, l.from, l.to
-                ),
-                &format!(
-                    "Restore the bound, or justify the change on its own line in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
-                    directive_name
-                ),
-            );
-        }
-        for &line in &changed {
-            out.push(
-                if is_staged {
-                    crate::config::Severity::Warning
-                } else {
-                    settings.severity()
-                },
-                &crate::findings::EXPECTED_VALUE_CHANGED,
-                Some(p.path),
-                Some(line),
-                // The line only: an expected value is the change's own text (a string can
-                // carry anything) and is not echoed into a report agents read.
-                format!(
-                    "{test_label}: the assertion on line {line} now expects a different value; the assertion is otherwise unchanged."
-                ),
-                &format!(
-                    "Restore the expected value, or justify the new one on its own line in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
-                    directive_name
-                ),
-            );
-            out.anchor_last(h.name.clone());
-        }
-        for w in &widened {
-            out.push(
-                if is_staged {
-                    crate::config::Severity::Warning
-                } else {
-                    settings.severity()
-                },
-                &crate::findings::EXPECTED_EXCEPTION_WIDENED,
-                Some(p.path),
-                Some(if w.dropped { h.line } else { w.line }),
-                if w.dropped {
-                    // The base expectation has no line at head: the test is the location.
-                    format!(
-                        "{test_label}: {}; no expectation at head stands for it, so the test passes without that failure. An expectation replaced on purpose is lifted with `allow-assertion-drop: {} <reason>`.",
-                        w.detail, directive_name
-                    )
-                } else {
-                    format!(
-                        "{test_label}: the expected failure on line {} was widened ({}); it now accepts more failures.",
-                        w.line, w.detail
-                    )
-                },
-                &format!(
-                    "Restore the expected failure or matcher, or justify the change on its own line in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
-                    directive_name
-                ),
-            );
-            out.anchor_last(h.name.clone());
-        }
-        if !dropped {
-            continue;
-        }
+    let helper_fatal = credit_helper_calls(p, helpers, newly_caught, settings, &mut loss, out);
 
-        if let Some(change) = cases_drop_info {
-            if !case_drop_allowed {
-                let severity = if is_staged {
-                    crate::config::Severity::Warning
+    let attributed_fatal = attribute_to_weakened_helpers(p, helpers, &mut loss, out);
+    loss.fatal = h.fatal_asserts + helper_fatal + attributed_fatal < b.fatal_asserts;
+    loss
+}
+
+/// Credits the pair with the checks its calls to helpers add. Returns the fatal checks
+/// among them.
+fn credit_helper_calls(
+    p: &TestPair,
+    helpers: &[HelperPair],
+    newly_caught: usize,
+    settings: &crate::config::AssertionGate,
+    loss: &mut AssertionLoss,
+    out: &mut GateOutcome,
+) -> usize {
+    let (b, h) = (p.base, p.head);
+    let b_eff = b.effective_asserts();
+    let h_eff = h.effective_asserts();
+    // Checks moved into a helper the test's own count does not hold (one in another
+    // file, a same-file method called on a receiver, a same-file helper reached deeper
+    // than the pack follows): the helper stands for the checks its calls add to this
+    // test, and no more. A helper the test newly calls adds its head checks per call;
+    // one the base already called adds what it gained. What that does not cover is
+    // still a drop, reported with the helper's share counted in.
+    let mut helper_fatal = 0;
+    if loss.total || loss.strong {
+        let moved = helper_call_gain(b, h, p.path, helpers, &settings.assert_helper_fns);
+        let mut note_the_move = true;
+        helper_fatal = moved.fatal;
+        if loss.total && h_eff + newly_caught + moved.total >= b_eff {
+            loss.total = false;
+        }
+        if loss.strong && h.strong_asserts + moved.strong >= b.strong_asserts {
+            loss.strong = false;
+        }
+        // The count is covered and only strength falls short: an equality assertion
+        // rewritten in a same-file helper as a failure exit under an equality
+        // comparison (`if a != b { panic!() }`) is still an equality check.
+        if loss.strong && !loss.total {
+            let by_hand = equality_exits_gained(b, h) + moved.equality;
+            if by_hand > 0 && h.strong_asserts + moved.strong + by_hand >= b.strong_asserts {
+                loss.strong = false;
+                note_the_move = false;
+                let whose = if moved.equality == 0 {
+                    "same-file "
                 } else {
-                    settings.severity()
+                    ""
                 };
-                let violation_line = if h.total_asserts > 0 { h.line } else { b.line };
-                out.push(
-                    severity,
-                    &crate::findings::TEST_CASES_REDUCED,
-                    Some(p.path),
-                    Some(violation_line),
-                    // Counts only: a case source is the change's own text and is not echoed.
-                    match change {
-                        CaseDrop::Fewer(b_cases, h_cases) => format!(
-                            "{test_label}: test cases in parametrized / table-driven test dropped from {b_cases} to {h_cases}."
-                        ),
-                        CaseDrop::NotLiteral(b_cases) => format!(
-                            "{test_label}: the case source is no longer a literal list and its cases cannot be counted; it had {b_cases} literal cases."
-                        ),
-                        CaseDrop::NotParametrized(b_cases) => format!(
-                            "{test_label}: ran {b_cases} cases and is no longer read as parametrized; no case list is found on it."
-                        ),
-                    },
-                    &format!(
-                        "Restore the test cases, or justify the drop on its own line in the PR body or \
-                         a commit message: `allow-case-drop: {} <reason>`.",
-                        directive_name
-                    ),
-                );
+                out.notes.push(format!(
+                    "`{}` in `{}`: equality assertions {} -> {} read as moved into {whose}helpers that fail on an equality comparison ({} exit(s))",
+                    h.name, p.path, b.strong_asserts, h.strong_asserts, by_hand
+                ));
             }
         }
-
-        if !total_drop && !strong_drop && !fatal_drop && mock_growth {
-            out.push(
-                crate::config::Severity::Warning,
-                &crate::findings::MOCKING_INCREASED,
-                Some(p.path),
-                Some(h.line),
-                format!(
-                    "{test_label}: test doubles rose from {} to {} while assertions on real output did not grow (equality / pattern assertions: {} -> {}).",
-                    b.mock_setups, h.mock_setups, b.strong_asserts, h.strong_asserts
-                ),
-                &format!(
-                    "Assert on what the code produces alongside the new doubles, or justify the change in the PR body: `allow-assertion-drop: {} <reason>`.",
-                    directive_name
-                ),
-            );
-            continue;
+        if loss.total || loss.strong {
+            loss.helper_total = moved.total;
+            loss.helper_strong = moved.strong;
+        } else if note_the_move {
+            out.notes.push(format!(
+                "`{}` in `{}`: assertions {} -> {} read as moved into helper `{}` ({} check(s))",
+                h.name,
+                p.path,
+                b_eff,
+                h_eff,
+                moved.names.join("`, `"),
+                moved.total
+            ));
         }
+    }
+    helper_fatal
+}
 
-        if !total_drop && !strong_drop && fatal_drop {
-            out.push(
-                crate::config::Severity::Warning,
-                &crate::findings::FATAL_ASSERTIONS_WEAKENED,
-                Some(p.path),
-                Some(h.line),
-                format!(
-                    "{test_label}: fatal assertions dropped from {} to {} (weakened from abort-on-failure to non-fatal).",
-                    b.fatal_asserts, h.fatal_asserts
-                ),
-                &format!(
-                    "Restore fatal assertions (e.g. ASSERT_* or require.*), or justify the change in the PR body: `allow-assertion-drop: {} <reason>`.",
-                    directive_name
-                ),
-            );
-            continue;
+/// Clears a drop that is entirely what the test's same-file helpers lost. Returns the
+/// fatal checks those helpers lost.
+fn attribute_to_weakened_helpers(
+    p: &TestPair,
+    helpers: &[HelperPair],
+    loss: &mut AssertionLoss,
+    out: &mut GateOutcome,
+) -> usize {
+    let (b, h) = (p.base, p.head);
+    let b_eff = b.effective_asserts();
+    let h_eff = h.effective_asserts();
+    // A helper in the test's own file is counted in the test, so a helper that lost
+    // checks lowers the count of every test that calls it. That drop is the helper's,
+    // reported once on the helper: the test is not reported for it when everything the
+    // test lost, in count and in strength, is what its calls to those helpers lost. A
+    // helper in another file is not counted in the test, so a drop in the test beside
+    // one is the test's own and stays reported.
+    let mut attributed_fatal = 0;
+    if loss.total || loss.strong {
+        let (mut lost_total, mut lost_strong, mut lost_fatal) = (0, 0, 0);
+        let mut weakened_helper_names = Vec::new();
+        for call in &h.direct_calls {
+            let weakened = helpers.iter().find_map(|hp| {
+                let head_helper = hp.head?;
+                let lost = hp
+                    .base
+                    .effective_asserts()
+                    .saturating_sub(head_helper.effective_asserts());
+                let lost_strength = hp
+                    .base
+                    .strong_asserts
+                    .saturating_sub(head_helper.strong_asserts);
+                (hp.path == p.path
+                    && call_names_helper(call, &hp.base.name)
+                    && (lost > 0 || lost_strength > 0))
+                    .then(|| {
+                        (
+                            hp.base.name.as_str(),
+                            lost,
+                            lost_strength,
+                            hp.base
+                                .fatal_asserts
+                                .saturating_sub(head_helper.fatal_asserts),
+                        )
+                    })
+            });
+            if let Some((name, lost, lost_strength, lost_fatality)) = weakened {
+                lost_total += lost;
+                lost_strong += lost_strength;
+                lost_fatal += lost_fatality;
+                weakened_helper_names.push(name);
+            }
         }
-
-        if !total_drop && !strong_drop {
-            continue;
+        let delta_test = b_eff.saturating_sub(h_eff);
+        let delta_strong = b.strong_asserts.saturating_sub(h.strong_asserts);
+        if !weakened_helper_names.is_empty()
+            && delta_test <= lost_total
+            && delta_strong <= lost_strong
+        {
+            weakened_helper_names.dedup();
+            out.notes.push(format!(
+                "`{}` in `{}`: assertion drop {} -> {} attributed to weakened helper `{}`",
+                h.name,
+                p.path,
+                b_eff,
+                h_eff,
+                weakened_helper_names.join("`, `")
+            ));
+            loss.total = false;
+            loss.strong = false;
+            attributed_fatal = lost_fatal;
         }
+    }
+    attributed_fatal
+}
 
-        // The head side counts the checks the test's paired-helper calls account for, so
-        // a partly moved test reads as what it still checks, not as its inline count.
-        let what = if total_drop {
-            format!(
-                "effective assertions dropped from {} to {}",
-                b.effective_asserts(),
-                h.effective_asserts() + helper_total
-            )
-        } else {
-            format!(
-                "equality / pattern assertions dropped from {} to {} (weakened to a looser form)",
-                b.strong_asserts,
-                h.strong_asserts + helper_strong
-            )
-        };
-        let test_label = if p.forced {
-            format!("Test `{}` -> `{}`", b.name, h.name)
-        } else {
-            format!("Test `{}`", h.name)
-        };
-        let directive_name = if p.forced { leaf_name(b) } else { leaf_name(h) };
-
-        let severity = if is_staged {
-            crate::config::Severity::Warning
-        } else {
-            settings.severity()
-        };
-
-        let violation_line = if h.total_asserts > 0 { h.line } else { b.line };
-
+/// Reports each assertion an enclosing handler newly catches.
+fn report_newly_caught(
+    p: &TestPair,
+    f: &PairFindings,
+    cx: &ReductionInputs,
+    out: &mut GateOutcome,
+) {
+    let (settings, is_staged) = (cx.settings, cx.is_staged);
+    let test_label = pair_label(p);
+    let directive_name = pair_directive_name(p);
+    for c in &f.newly_caught {
         out.push(
-            severity,
-            &crate::findings::ASSERTIONS_REDUCED,
-            Some(p.path),
-            Some(violation_line),
-            if self_compared.is_empty() {
-                format!("{test_label}: {what}.")
+            if is_staged {
+                crate::config::Severity::Warning
             } else {
-                format!(
-                    "{test_label}: {what}; {} equality assertion(s) now compare an expression with itself (line {}). {SELF_COMPARISON_SCOPE}",
-                    self_compared.len(),
-                    lines_of(&self_compared)
-                )
+                settings.severity()
             },
+            &crate::findings::ASSERTION_FAILURE_CAUGHT,
+            Some(p.path),
+            Some(c.line),
+            format!(
+                "{test_label}: the assertion on line {} is caught by an enclosing handler (line {}) without failing the test; it is not an effective check.",
+                c.line, c.handler_line
+            ),
             &format!(
-                "Restore the assertions, or justify the drop on its own line in the PR body or \
-                 a commit message: `allow-assertion-drop: {} <reason>`.",
+                "Restore the assertion to propagate failures, or justify the handler in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
                 directive_name
             ),
         );
-        if !self_compared.is_empty() {
-            note_self_comparison_scope(&mut out);
+    }
+}
+
+/// Reports each equality assertion that newly compares an expression with itself, while
+/// the assertion count holds.
+fn report_self_comparisons(p: &TestPair, f: &PairFindings, out: &mut GateOutcome) {
+    let h = p.head;
+    let test_label = pair_label(p);
+    let directive_name = pair_directive_name(p);
+    // One finding for one act: a rewrite that also lowers the count is the
+    // `assertions-reduced` finding below, at the gate's severity, whose message names
+    // these lines. Reported here only while the count holds, as a warning: the form
+    // is exact, and a deliberate reflexivity check is a legitimate test.
+    let folded_into_reduction = f.loss.total || f.loss.strong;
+    for s in f.self_compared.iter().filter(|_| !folded_into_reduction) {
+        out.push(
+            crate::config::Severity::Warning,
+            &crate::findings::SELF_COMPARISON_ASSERTION_INTRODUCED,
+            Some(p.path),
+            Some(s.line),
+            format!(
+                "{test_label}: the equality assertion on line {} now compares an expression with itself, so it holds whatever the code does. {SELF_COMPARISON_SCOPE}",
+                s.line
+            ),
+            &format!(
+                "Compare the value with what is expected of it. A deliberate reflexivity check takes, on its own line in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
+                directive_name
+            ),
+        );
+        out.anchor_last(h.name.clone());
+        note_self_comparison_scope(out);
+    }
+}
+
+/// Reports each assertion whose numeric bound moved the loose way.
+fn report_loosened_bounds(
+    p: &TestPair,
+    f: &PairFindings,
+    cx: &ReductionInputs,
+    out: &mut GateOutcome,
+) {
+    let (settings, is_staged) = (cx.settings, cx.is_staged);
+    let test_label = pair_label(p);
+    let directive_name = pair_directive_name(p);
+    for l in &f.loosened {
+        out.push(
+            if is_staged {
+                crate::config::Severity::Warning
+            } else {
+                settings.severity()
+            },
+            &crate::findings::ASSERTION_BOUND_LOOSENED,
+            Some(p.path),
+            Some(l.line),
+            // The line and the two literals only: the assertion's text is the change's
+            // own and is not echoed into a report agents read.
+            format!(
+                "{test_label}: the assertion on line {} moved its bound from {} to {}, which accepts more results.",
+                l.line, l.from, l.to
+            ),
+            &format!(
+                "Restore the bound, or justify the change on its own line in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
+                directive_name
+            ),
+        );
+    }
+}
+
+/// Reports each assertion that now expects a different value.
+fn report_changed_expectations(
+    p: &TestPair,
+    f: &PairFindings,
+    cx: &ReductionInputs,
+    out: &mut GateOutcome,
+) {
+    let h = p.head;
+    let (settings, is_staged) = (cx.settings, cx.is_staged);
+    let test_label = pair_label(p);
+    let directive_name = pair_directive_name(p);
+    for &line in &f.changed {
+        out.push(
+            if is_staged {
+                crate::config::Severity::Warning
+            } else {
+                settings.severity()
+            },
+            &crate::findings::EXPECTED_VALUE_CHANGED,
+            Some(p.path),
+            Some(line),
+            // The line only: an expected value is the change's own text (a string can
+            // carry anything) and is not echoed into a report agents read.
+            format!(
+                "{test_label}: the assertion on line {line} now expects a different value; the assertion is otherwise unchanged."
+            ),
+            &format!(
+                "Restore the expected value, or justify the new one on its own line in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
+                directive_name
+            ),
+        );
+        out.anchor_last(h.name.clone());
+    }
+}
+
+/// Reports each expected failure that was widened or dropped.
+fn report_widened_exceptions(
+    p: &TestPair,
+    f: &PairFindings,
+    cx: &ReductionInputs,
+    out: &mut GateOutcome,
+) {
+    let h = p.head;
+    let (settings, is_staged) = (cx.settings, cx.is_staged);
+    let test_label = pair_label(p);
+    let directive_name = pair_directive_name(p);
+    for w in &f.widened {
+        out.push(
+            if is_staged {
+                crate::config::Severity::Warning
+            } else {
+                settings.severity()
+            },
+            &crate::findings::EXPECTED_EXCEPTION_WIDENED,
+            Some(p.path),
+            Some(if w.dropped { h.line } else { w.line }),
+            if w.dropped {
+                // The base expectation has no line at head: the test is the location.
+                format!(
+                    "{test_label}: {}; no expectation at head stands for it, so the test passes without that failure. An expectation replaced on purpose is lifted with `allow-assertion-drop: {} <reason>`.",
+                    w.detail, directive_name
+                )
+            } else {
+                format!(
+                    "{test_label}: the expected failure on line {} was widened ({}); it now accepts more failures.",
+                    w.line, w.detail
+                )
+            },
+            &format!(
+                "Restore the expected failure or matcher, or justify the change on its own line in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
+                directive_name
+            ),
+        );
+        out.anchor_last(h.name.clone());
+    }
+}
+
+/// Reports a drop in literal test cases that no `allow-case-drop` directive lifted.
+fn report_case_drop(
+    p: &TestPair,
+    f: &PairFindings,
+    case_drop_allowed: bool,
+    cx: &ReductionInputs,
+    out: &mut GateOutcome,
+) {
+    let (b, h) = (p.base, p.head);
+    let (settings, is_staged) = (cx.settings, cx.is_staged);
+    let test_label = pair_label(p);
+    let directive_name = pair_directive_name(p);
+    if let Some(change) = f.case_drop {
+        if !case_drop_allowed {
+            let severity = if is_staged {
+                crate::config::Severity::Warning
+            } else {
+                settings.severity()
+            };
+            let violation_line = if h.total_asserts > 0 { h.line } else { b.line };
+            out.push(
+                severity,
+                &crate::findings::TEST_CASES_REDUCED,
+                Some(p.path),
+                Some(violation_line),
+                // Counts only: a case source is the change's own text and is not echoed.
+                match change {
+                    CaseDrop::Fewer(b_cases, h_cases) => format!(
+                        "{test_label}: test cases in parametrized / table-driven test dropped from {b_cases} to {h_cases}."
+                    ),
+                    CaseDrop::NotLiteral(b_cases) => format!(
+                        "{test_label}: the case source is no longer a literal list and its cases cannot be counted; it had {b_cases} literal cases."
+                    ),
+                    CaseDrop::NotParametrized(b_cases) => format!(
+                        "{test_label}: ran {b_cases} cases and is no longer read as parametrized; no case list is found on it."
+                    ),
+                },
+                &format!(
+                    "Restore the test cases, or justify the drop on its own line in the PR body or \
+                     a commit message: `allow-case-drop: {} <reason>`.",
+                    directive_name
+                ),
+            );
         }
     }
-    Ok(out)
+}
+
+/// Reports what the pair lost in assertions: test doubles grown alone, fatal assertions
+/// weakened alone, or fewer assertions.
+fn report_assertion_loss(
+    p: &TestPair,
+    f: &PairFindings,
+    cx: &ReductionInputs,
+    out: &mut GateOutcome,
+) {
+    let (b, h) = (p.base, p.head);
+    let (settings, is_staged) = (cx.settings, cx.is_staged);
+    let test_label = pair_label(p);
+    let directive_name = pair_directive_name(p);
+    if !f.loss.total && !f.loss.strong && !f.loss.fatal && f.mock_growth {
+        out.push(
+            crate::config::Severity::Warning,
+            &crate::findings::MOCKING_INCREASED,
+            Some(p.path),
+            Some(h.line),
+            format!(
+                "{test_label}: test doubles rose from {} to {} while assertions on real output did not grow (equality / pattern assertions: {} -> {}).",
+                b.mock_setups, h.mock_setups, b.strong_asserts, h.strong_asserts
+            ),
+            &format!(
+                "Assert on what the code produces alongside the new doubles, or justify the change in the PR body: `allow-assertion-drop: {} <reason>`.",
+                directive_name
+            ),
+        );
+        return;
+    }
+
+    if !f.loss.total && !f.loss.strong && f.loss.fatal {
+        out.push(
+            crate::config::Severity::Warning,
+            &crate::findings::FATAL_ASSERTIONS_WEAKENED,
+            Some(p.path),
+            Some(h.line),
+            format!(
+                "{test_label}: fatal assertions dropped from {} to {} (weakened from abort-on-failure to non-fatal).",
+                b.fatal_asserts, h.fatal_asserts
+            ),
+            &format!(
+                "Restore fatal assertions (e.g. ASSERT_* or require.*), or justify the change in the PR body: `allow-assertion-drop: {} <reason>`.",
+                directive_name
+            ),
+        );
+        return;
+    }
+
+    if !f.loss.total && !f.loss.strong {
+        return;
+    }
+
+    // The head side counts the checks the test's paired-helper calls account for, so
+    // a partly moved test reads as what it still checks, not as its inline count.
+    let what = if f.loss.total {
+        format!(
+            "effective assertions dropped from {} to {}",
+            b.effective_asserts(),
+            h.effective_asserts() + f.loss.helper_total
+        )
+    } else {
+        format!(
+            "equality / pattern assertions dropped from {} to {} (weakened to a looser form)",
+            b.strong_asserts,
+            h.strong_asserts + f.loss.helper_strong
+        )
+    };
+
+    let severity = if is_staged {
+        crate::config::Severity::Warning
+    } else {
+        settings.severity()
+    };
+
+    let violation_line = if h.total_asserts > 0 { h.line } else { b.line };
+
+    out.push(
+        severity,
+        &crate::findings::ASSERTIONS_REDUCED,
+        Some(p.path),
+        Some(violation_line),
+        if f.self_compared.is_empty() {
+            format!("{test_label}: {what}.")
+        } else {
+            format!(
+                "{test_label}: {what}; {} equality assertion(s) now compare an expression with itself (line {}). {SELF_COMPARISON_SCOPE}",
+                f.self_compared.len(),
+                lines_of(&f.self_compared)
+            )
+        },
+        &format!(
+            "Restore the assertions, or justify the drop on its own line in the PR body or \
+             a commit message: `allow-assertion-drop: {} <reason>`.",
+            directive_name
+        ),
+    );
+    if !f.self_compared.is_empty() {
+        note_self_comparison_scope(out);
+    }
 }
 
 /// The cases that arrived on a paired test: on its head side and not on its base side,

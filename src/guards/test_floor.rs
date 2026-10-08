@@ -22,8 +22,103 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     let filter = exempt_filter(settings)?;
     let sides = SideVocabularies::new(ctx);
 
+    let base_cfg = base_configuration(ctx, &mut out)?;
+    let base_min_tests = base_cfg.as_ref().and_then(|c| c.gates.test_floor.min_tests);
+    let untrusted_test_command = test_command_is_untrusted(ctx, base_cfg.as_ref());
+    let head_min_tests = settings.min_tests;
+
+    // 1. Resolve base floor constant from constant_file if configured.
+    let BaseFloorConstant::Read(base_floor_const) = base_floor_constant(ctx, &mut out)? else {
+        return Ok(out);
+    };
+
+    // 2. Check if head constant is lower than base constant.
+    check_floor_constant_not_lowered(ctx, base_floor_const, &mut out)?;
+
+    // 3. Check min_tests comparison against base discipline.toml.
+    check_configured_floor_not_lowered(ctx, &sides, base_min_tests, &mut out)?;
+
+    // 4. Required test suites check.
+    check_required_suites(ctx, &mut out);
+
+    // Base ref discipline.toml takes precedence over HEAD discipline.toml to prevent self-lowering.
+    let explicit_floor = base_min_tests.or(head_min_tests).or(base_floor_const);
+
+    // The zero-config ratchet counts the base ref statically; it cannot build
+    // and run the base ref's tests. Comparing that against a runtime count
+    // mixes two counting bases (see docs/GATES.md, test-floor), so the result
+    // would be meaningless in either direction. Refuse before running anything.
+    if settings.test_command.is_some() && explicit_floor.is_none() && !untrusted_test_command {
+        bail!(
+            "test-floor: `test_command` supplies a runtime test count, but no floor is configured to \
+             compare it against; set `min_tests` (or `constant_file` + `constant_name`) to a count on \
+             the same basis, or remove `test_command` to use the static ratchet"
+        );
+    }
+
+    // 5. Resolve test reports for identity-based ratcheting
+    let reports = resolve_test_reports(ctx, &mut out)?;
+
+    // 6. Test Identity Ratchet
+    check_test_identities(ctx, &reports, &mut out);
+
+    // The test files the change moves out of the default run. This reads the runner
+    // rules of both sides, whatever the counting basis.
+    let moved = tests_moved_out(ctx, &filter, &sides)?;
+
+    // A command the change supplies is not run, and no count stands in for it: the floor
+    // was set on that command's basis, so a static count would compare two bases.
+    if untrusted_test_command {
+        out.push(
+            settings.severity,
+            &crate::findings::UNTRUSTED_TEST_COMMAND,
+            Some(ctx.config_path),
+            None,
+            if ctx.git.has_base() {
+                "The change adds or alters `test_command` in `[gates.test-floor]` without runner environment authorization; a command cannot be introduced or altered by the change it judges, so it was not run and the test count was not taken."
+            } else {
+                "This CI run has no base ref to compare `test_command` in `[gates.test-floor]` with, and no runner environment authorization; a command cannot be introduced by the change it judges, so it was not run and the test count was not taken."
+            }
+            .to_string(),
+            "Configure `test_command` in the merge base ref's discipline.toml, or set DISCIPLINE_ALLOW_COMMAND_CHANGE on the runner to accept the change.",
+        );
+        report_tests_moved_out(ctx, &mut out, &moved, false);
+        return Ok(out);
+    }
+
+    // 7. Calculate measured test count.
+    let measured = measure_test_count(ctx, &filter, &sides, reports.head.as_deref(), &mut out)?;
+    out.examined = measured.count;
+
+    // 8. Compare against the effective floor.
+    let before_count = out.violations.len();
+    compare_with_floor(
+        ctx,
+        &filter,
+        &sides,
+        explicit_floor,
+        reports.base.as_deref(),
+        &measured,
+        &mut out,
+    )?;
+
+    // 9. Tests the change moves out of the default run. A count finding this run
+    // reports already covers the files that left the count with them. One that a
+    // directive lifted does not: the directive named the count, not the rule.
+    let count_reported = before_count != out.violations.len();
+    report_tests_moved_out(ctx, &mut out, &moved, count_reported);
+
+    Ok(out)
+}
+
+/// The base side's configuration. One that does not load with this binary is noted and
+/// read as absent.
+fn base_configuration(
+    ctx: &Context,
+    out: &mut GateOutcome,
+) -> Result<Option<crate::config::DisciplineConfig>> {
     // Read base discipline.toml to get base configuration
-    let base_cfg = match ctx.base_config_text()? {
+    Ok(match ctx.base_config_text()? {
         None => None,
         Some(s) => match crate::config::DisciplineConfig::from_toml_str(&s) {
             Ok(cfg) => Some(cfg),
@@ -35,9 +130,15 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
                 None
             }
         },
-    };
-    let base_min_tests = base_cfg.as_ref().and_then(|c| c.gates.test_floor.min_tests);
+    })
+}
 
+/// Whether `test_command` is one the change supplies and the runner does not authorise.
+fn test_command_is_untrusted(
+    ctx: &Context,
+    base_cfg: Option<&crate::config::DisciplineConfig>,
+) -> bool {
+    let settings = &ctx.config.gates.test_floor;
     // `test_command` is executed. Under the default policy side the configuration in
     // force is the change's own copy, so a command the base side does not have is one the
     // change supplies. Under `--policy-from base` the copy in force is the base's and the
@@ -48,18 +149,27 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     let unvouched = if ctx.git.has_base() {
         test_command_supplied_by_change(
             settings.test_command.as_deref(),
-            base_cfg
-                .as_ref()
-                .and_then(|c| c.gates.test_floor.test_command.as_deref()),
+            base_cfg.and_then(|c| c.gates.test_floor.test_command.as_deref()),
         )
     } else {
         settings.test_command.is_some() && crate::gitctx::is_ci_environment()
     };
-    let untrusted_test_command =
-        unvouched && !crate::guards::command::runner_authorises_command_change();
-    let head_min_tests = settings.min_tests;
+    unvouched && !crate::guards::command::runner_authorises_command_change()
+}
 
-    // 1. Resolve base floor constant from constant_file if configured.
+/// What reading the floor constant on the base side gave.
+enum BaseFloorConstant {
+    /// The value, or `None` when no constant is configured or a directive lifted its
+    /// absence.
+    Read(Option<usize>),
+    /// The constant or its file is not on the base side and the finding is reported:
+    /// nothing else is checked.
+    Missing,
+}
+
+/// The floor constant of `constant_file` on the base side, when one is configured.
+fn base_floor_constant(ctx: &Context, out: &mut GateOutcome) -> Result<BaseFloorConstant> {
+    let settings = &ctx.config.gates.test_floor;
     let mut base_floor_const: Option<usize> = None;
     if let (Some(const_file), Some(const_name)) = (&settings.constant_file, &settings.constant_name)
     {
@@ -103,7 +213,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
                                     .to_string(),
                             ),
                         });
-                        return Ok(out);
+                        return Ok(BaseFloorConstant::Missing);
                     }
                 }
             }
@@ -132,7 +242,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
                                 .to_string(),
                         ),
                     });
-                    return Ok(out);
+                    return Ok(BaseFloorConstant::Missing);
                 }
             }
             Err(e) => {
@@ -140,8 +250,17 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
             }
         }
     }
+    Ok(BaseFloorConstant::Read(base_floor_const))
+}
 
-    // 2. Check if head constant is lower than base constant.
+/// Reports a floor constant the head side lowered below the base side's or no longer
+/// defines.
+fn check_floor_constant_not_lowered(
+    ctx: &Context,
+    base_floor_const: Option<usize>,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    let settings = &ctx.config.gates.test_floor;
     if let (Some(const_file), Some(const_name), Some(base_floor)) = (
         &settings.constant_file,
         &settings.constant_name,
@@ -195,8 +314,18 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
             }
         }
     }
+    Ok(())
+}
 
-    // 3. Check min_tests comparison against base discipline.toml.
+/// Reports `min_tests` lowered below, or removed from, the base side's configuration.
+fn check_configured_floor_not_lowered(
+    ctx: &Context,
+    sides: &SideVocabularies,
+    base_min_tests: Option<usize>,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    let settings = &ctx.config.gates.test_floor;
+    let head_min_tests = settings.min_tests;
     if let Some(base_min) = base_min_tests {
         let lowered = match head_min_tests {
             Some(h) => h < base_min,
@@ -204,7 +333,7 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         };
         if lowered {
             if let Some(ov) =
-                find_test_floor_override(ctx, &sides, &crate::findings::CONFIGURED_FLOOR_DECREASED)?
+                find_test_floor_override(ctx, sides, &crate::findings::CONFIGURED_FLOOR_DECREASED)?
             {
                 out.overrides.push(ov);
             } else {
@@ -231,8 +360,12 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
             }
         }
     }
+    Ok(())
+}
 
-    // 4. Required test suites check.
+/// Reports each required test suite file that is missing from the repository.
+fn check_required_suites(ctx: &Context, out: &mut GateOutcome) {
+    let settings = &ctx.config.gates.test_floor;
     for suite in &settings.required_suites {
         let full = Path::new(ctx.git.root()).join(suite);
         if !full.is_file() {
@@ -263,23 +396,17 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
             }
         }
     }
+}
 
-    // Base ref discipline.toml takes precedence over HEAD discipline.toml to prevent self-lowering.
-    let explicit_floor = base_min_tests.or(head_min_tests).or(base_floor_const);
+/// The test cases of the head and base test reports, for each side that has one.
+struct TestReports {
+    head: Option<Vec<TestCaseReport>>,
+    base: Option<Vec<TestCaseReport>>,
+}
 
-    // The zero-config ratchet counts the base ref statically; it cannot build
-    // and run the base ref's tests. Comparing that against a runtime count
-    // mixes two counting bases (see docs/GATES.md, test-floor), so the result
-    // would be meaningless in either direction. Refuse before running anything.
-    if settings.test_command.is_some() && explicit_floor.is_none() && !untrusted_test_command {
-        bail!(
-            "test-floor: `test_command` supplies a runtime test count, but no floor is configured to \
-             compare it against; set `min_tests` (or `constant_file` + `constant_name`) to a count on \
-             the same basis, or remove `test_command` to use the static ratchet"
-        );
-    }
-
-    // 5. Resolve test reports for identity-based ratcheting
+/// Locates and parses the head and base test reports the identity ratchet compares.
+fn resolve_test_reports(ctx: &Context, out: &mut GateOutcome) -> Result<TestReports> {
+    let settings = &ctx.config.gates.test_floor;
     let env_head = std::env::var("DISCIPLINE_TEST_HEAD_REPORT")
         .ok()
         .filter(|s| !s.trim().is_empty());
@@ -377,8 +504,17 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         }
     }
 
-    // 6. Test Identity Ratchet
-    if let (Some(base_cases), Some(head_cases)) = (&base_cases_opt, &head_cases_opt) {
+    Ok(TestReports {
+        head: head_cases_opt,
+        base: base_cases_opt,
+    })
+}
+
+/// Reports each test that passed in the base report and is missing, skipped or failed in
+/// the head report.
+fn check_test_identities(ctx: &Context, reports: &TestReports, out: &mut GateOutcome) {
+    let settings = &ctx.config.gates.test_floor;
+    if let (Some(base_cases), Some(head_cases)) = (&reports.base, &reports.head) {
         let identity_violations = compare_test_identities(base_cases, head_cases);
         let base_passed_count = base_cases
             .iter()
@@ -467,39 +603,31 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
             }
         }
     }
+}
 
-    // The test files the change moves out of the default run. This reads the runner
-    // rules of both sides, whatever the counting basis.
-    let moved = tests_moved_out(ctx, &filter, &sides)?;
+/// The measured test count, with the head side's static count when that is its basis.
+struct MeasuredCount {
+    count: usize,
+    head_static: Option<AstTestCount>,
+}
 
-    // A command the change supplies is not run, and no count stands in for it: the floor
-    // was set on that command's basis, so a static count would compare two bases.
-    if untrusted_test_command {
-        out.push(
-            settings.severity,
-            &crate::findings::UNTRUSTED_TEST_COMMAND,
-            Some(ctx.config_path),
-            None,
-            if ctx.git.has_base() {
-                "The change adds or alters `test_command` in `[gates.test-floor]` without runner environment authorization; a command cannot be introduced or altered by the change it judges, so it was not run and the test count was not taken."
-            } else {
-                "This CI run has no base ref to compare `test_command` in `[gates.test-floor]` with, and no runner environment authorization; a command cannot be introduced by the change it judges, so it was not run and the test count was not taken."
-            }
-            .to_string(),
-            "Configure `test_command` in the merge base ref's discipline.toml, or set DISCIPLINE_ALLOW_COMMAND_CHANGE on the runner to accept the change.",
-        );
-        report_tests_moved_out(ctx, &mut out, &moved, false);
-        return Ok(out);
-    }
-
-    // 7. Calculate measured test count.
+/// Measures the test count: from `test_command`, else the head report, else a static
+/// count of the head side.
+fn measure_test_count(
+    ctx: &Context,
+    filter: &crate::guards::PathFilter,
+    sides: &SideVocabularies,
+    head_cases: Option<&[TestCaseReport]>,
+    out: &mut GateOutcome,
+) -> Result<MeasuredCount> {
+    let settings = &ctx.config.gates.test_floor;
     let mut head_static: Option<AstTestCount> = None;
     let measured_count = if let Some(cmd) = &settings.test_command {
         count_tests_via_command(cmd, Path::new(ctx.git.root()))?
-    } else if let Some(head_cases) = &head_cases_opt {
+    } else if let Some(head_cases) = head_cases {
         head_cases.len()
     } else {
-        let head = count_workspace_ast_tests(ctx, &filter, sides.head()?)?;
+        let head = count_workspace_ast_tests(ctx, filter, sides.head()?)?;
         for note in head.notes("head") {
             if !out.notes.contains(&note) {
                 out.notes.push(note);
@@ -509,126 +637,170 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         head_static = Some(head);
         running
     };
-    out.examined = measured_count;
+    Ok(MeasuredCount {
+        count: measured_count,
+        head_static,
+    })
+}
 
-    // 8. Compare against the effective floor.
-    let before_count = out.violations.len();
+/// Compares the measured count with the effective floor: the configured one, else the
+/// base report's count, else a static count of the base side.
+fn compare_with_floor(
+    ctx: &Context,
+    filter: &crate::guards::PathFilter,
+    sides: &SideVocabularies,
+    explicit_floor: Option<usize>,
+    base_cases: Option<&[TestCaseReport]>,
+    measured: &MeasuredCount,
+    out: &mut GateOutcome,
+) -> Result<()> {
     if let Some(floor) = explicit_floor {
-        if measured_count + settings.tolerance < floor {
-            if let Some(ov) =
-                find_test_floor_override(ctx, &sides, &crate::findings::TEST_COUNT_BELOW_FLOOR)?
-            {
-                out.overrides.push(ov);
-            } else {
-                out.violations.push(Violation {
-                    gate: GATE,
-                    severity: ctx.overridable(settings.severity),
-                    code: crate::findings::full_code(GATE, &crate::findings::TEST_COUNT_BELOW_FLOOR),
-                    fingerprint: String::new(),
-                    title: crate::findings::TEST_COUNT_BELOW_FLOOR.title.to_string(),
-                    anchor: None,
-                    legacy_title: crate::findings::TEST_COUNT_BELOW_FLOOR.was_title(),
-                    file: None,
-                    line: None,
-                    message: format!(
-                        "Workspace test count ({measured_count}) is below the required floor of {floor}."
-                    ),
-                    remediation: Some(
-                        "Restore deleted tests or provide an allow-test-shrink: <reason> directive in the PR description."
-                            .to_string(),
-                    ),
-                });
-            }
-        }
-    } else if let Some(base_cases) = &base_cases_opt {
-        let base_count = base_cases.len();
-        if base_count > 0 && measured_count + settings.tolerance < base_count {
-            if let Some(ov) =
-                find_test_floor_override(ctx, &sides, &crate::findings::TEST_COUNT_BELOW_FLOOR)?
-            {
-                out.overrides.push(ov);
-            } else {
-                out.violations.push(Violation {
-                    gate: GATE,
-                    severity: ctx.overridable(settings.severity),
-                    code: crate::findings::full_code(GATE, &crate::findings::TEST_COUNT_BELOW_FLOOR),
-                    fingerprint: String::new(),
-                    title: crate::findings::TEST_COUNT_BELOW_FLOOR.title.to_string(),
-                    anchor: None,
-                    legacy_title: crate::findings::TEST_COUNT_BELOW_FLOOR.was_title(),
-                    file: None,
-                    line: None,
-                    message: format!(
-                        "Workspace test count ({measured_count}) dropped below base ref count ({base_count}) [tolerance: {}].",
-                        settings.tolerance
-                    ),
-                    remediation: Some(
-                        "Restore deleted tests or provide an allow-test-shrink: <reason> directive in the PR description."
-                            .to_string(),
-                    ),
-                });
-            }
-        }
+        compare_with_configured_floor(ctx, sides, floor, measured.count, out)
+    } else if let Some(base_cases) = base_cases {
+        compare_with_base_report(ctx, sides, base_cases, measured.count, out)
     } else {
-        // Zero-config ratchet: compare head AST test count against base ref AST test count.
-        let base = count_base_workspace_ast_tests(ctx, &filter, sides.base()?)?;
-        for note in base.notes("base") {
-            if !out.notes.contains(&note) {
-                out.notes.push(note);
-            }
-        }
-        if let Some(head) = &head_static {
-            // A renamed file is the base side's file under its old path.
-            let renamed: std::collections::BTreeMap<String, String> = ctx
-                .git
-                .changed_files()?
-                .into_iter()
-                .filter(|cf| cf.old_path != cf.path && !cf.is_deleted())
-                .map(|cf| (cf.path, cf.old_path))
-                .collect();
-            out.notes.extend(head.transition_notes(&base, &renamed));
-        }
-        let base_count = base.running;
-        if base_count > 0 && measured_count + settings.tolerance < base_count {
-            if let Some(ov) =
-                find_test_floor_override(ctx, &sides, &crate::findings::TEST_COUNT_BELOW_FLOOR)?
-            {
-                out.overrides.push(ov);
-            } else {
-                out.violations.push(Violation {
-                    gate: GATE,
-                    severity: ctx.overridable(settings.severity),
-                    code: crate::findings::full_code(GATE, &crate::findings::TEST_COUNT_BELOW_FLOOR),
-                    fingerprint: String::new(),
-                    title: crate::findings::TEST_COUNT_BELOW_FLOOR.title.to_string(),
-                    anchor: None,
-                    legacy_title: crate::findings::TEST_COUNT_BELOW_FLOOR.was_title(),
-                    file: None,
-                    line: None,
-                    message: format!(
-                        "Workspace test count ({measured_count}) dropped below base ref count ({base_count}) [tolerance: {}].",
-                        settings.tolerance
-                    ),
-                    remediation: Some(
-                        "Restore deleted tests or provide an allow-test-shrink: <reason> directive in the PR description."
-                            .to_string(),
-                    ),
-                });
-            }
-        } else if base_count == 0 {
-            out.notes.push(
-                "no test count floor configured and zero base ref tests detected".to_string(),
-            );
+        compare_with_base_static_count(ctx, filter, sides, measured, out)
+    }
+}
+
+/// Reports a measured count below the configured floor.
+fn compare_with_configured_floor(
+    ctx: &Context,
+    sides: &SideVocabularies,
+    floor: usize,
+    measured_count: usize,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    let settings = &ctx.config.gates.test_floor;
+    if measured_count + settings.tolerance < floor {
+        if let Some(ov) =
+            find_test_floor_override(ctx, sides, &crate::findings::TEST_COUNT_BELOW_FLOOR)?
+        {
+            out.overrides.push(ov);
+        } else {
+            out.violations.push(Violation {
+                gate: GATE,
+                severity: ctx.overridable(settings.severity),
+                code: crate::findings::full_code(GATE, &crate::findings::TEST_COUNT_BELOW_FLOOR),
+                fingerprint: String::new(),
+                title: crate::findings::TEST_COUNT_BELOW_FLOOR.title.to_string(),
+                anchor: None,
+                legacy_title: crate::findings::TEST_COUNT_BELOW_FLOOR.was_title(),
+                file: None,
+                line: None,
+                message: format!(
+                    "Workspace test count ({measured_count}) is below the required floor of {floor}."
+                ),
+                remediation: Some(
+                    "Restore deleted tests or provide an allow-test-shrink: <reason> directive in the PR description."
+                        .to_string(),
+                ),
+            });
         }
     }
+    Ok(())
+}
 
-    // 9. Tests the change moves out of the default run. A count finding this run
-    // reports already covers the files that left the count with them. One that a
-    // directive lifted does not: the directive named the count, not the rule.
-    let count_reported = before_count != out.violations.len();
-    report_tests_moved_out(ctx, &mut out, &moved, count_reported);
+/// Reports a measured count below the number of cases in the base report.
+fn compare_with_base_report(
+    ctx: &Context,
+    sides: &SideVocabularies,
+    base_cases: &[TestCaseReport],
+    measured_count: usize,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    let settings = &ctx.config.gates.test_floor;
+    let base_count = base_cases.len();
+    if base_count > 0 && measured_count + settings.tolerance < base_count {
+        if let Some(ov) =
+            find_test_floor_override(ctx, sides, &crate::findings::TEST_COUNT_BELOW_FLOOR)?
+        {
+            out.overrides.push(ov);
+        } else {
+            out.violations.push(Violation {
+                gate: GATE,
+                severity: ctx.overridable(settings.severity),
+                code: crate::findings::full_code(GATE, &crate::findings::TEST_COUNT_BELOW_FLOOR),
+                fingerprint: String::new(),
+                title: crate::findings::TEST_COUNT_BELOW_FLOOR.title.to_string(),
+                anchor: None,
+                legacy_title: crate::findings::TEST_COUNT_BELOW_FLOOR.was_title(),
+                file: None,
+                line: None,
+                message: format!(
+                    "Workspace test count ({measured_count}) dropped below base ref count ({base_count}) [tolerance: {}].",
+                    settings.tolerance
+                ),
+                remediation: Some(
+                    "Restore deleted tests or provide an allow-test-shrink: <reason> directive in the PR description."
+                        .to_string(),
+                ),
+            });
+        }
+    }
+    Ok(())
+}
 
-    Ok(out)
+/// Reports a measured count below a static count of the base side.
+fn compare_with_base_static_count(
+    ctx: &Context,
+    filter: &crate::guards::PathFilter,
+    sides: &SideVocabularies,
+    measured: &MeasuredCount,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    let settings = &ctx.config.gates.test_floor;
+    let measured_count = measured.count;
+    // Zero-config ratchet: compare head AST test count against base ref AST test count.
+    let base = count_base_workspace_ast_tests(ctx, filter, sides.base()?)?;
+    for note in base.notes("base") {
+        if !out.notes.contains(&note) {
+            out.notes.push(note);
+        }
+    }
+    if let Some(head) = &measured.head_static {
+        // A renamed file is the base side's file under its old path.
+        let renamed: std::collections::BTreeMap<String, String> = ctx
+            .git
+            .changed_files()?
+            .into_iter()
+            .filter(|cf| cf.old_path != cf.path && !cf.is_deleted())
+            .map(|cf| (cf.path, cf.old_path))
+            .collect();
+        out.notes.extend(head.transition_notes(&base, &renamed));
+    }
+    let base_count = base.running;
+    if base_count > 0 && measured_count + settings.tolerance < base_count {
+        if let Some(ov) =
+            find_test_floor_override(ctx, sides, &crate::findings::TEST_COUNT_BELOW_FLOOR)?
+        {
+            out.overrides.push(ov);
+        } else {
+            out.violations.push(Violation {
+                gate: GATE,
+                severity: ctx.overridable(settings.severity),
+                code: crate::findings::full_code(GATE, &crate::findings::TEST_COUNT_BELOW_FLOOR),
+                fingerprint: String::new(),
+                title: crate::findings::TEST_COUNT_BELOW_FLOOR.title.to_string(),
+                anchor: None,
+                legacy_title: crate::findings::TEST_COUNT_BELOW_FLOOR.was_title(),
+                file: None,
+                line: None,
+                message: format!(
+                    "Workspace test count ({measured_count}) dropped below base ref count ({base_count}) [tolerance: {}].",
+                    settings.tolerance
+                ),
+                remediation: Some(
+                    "Restore deleted tests or provide an allow-test-shrink: <reason> directive in the PR description."
+                        .to_string(),
+                ),
+            });
+        }
+    } else if base_count == 0 {
+        out.notes
+            .push("no test count floor configured and zero base ref tests detected".to_string());
+    }
+    Ok(())
 }
 
 /// The assertion vocabulary of each side, with its runner collection rules, built at
