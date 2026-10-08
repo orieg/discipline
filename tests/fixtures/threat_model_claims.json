@@ -294,7 +294,7 @@
       "code": "src/doctor.rs",
       "pinning_tests": [
         "tests/test_doctor.rs::doctor_required_check_without_discipline_fails",
-        "src/doctor.rs::review_rules_are_read_from_rulesets_and_classic_protection",
+        "src/doctor/protection_findings.rs::review_rules_are_read_from_rulesets_and_classic_protection",
         "tests/test_doctor.rs::doctor_reports_auto_merge_forking_secret_scanning_and_dependency_alerts"
       ],
       "verdict": "holds"
@@ -1392,7 +1392,7 @@
       "category": "doctor",
       "claim": "doctor reports whether the repository has a SECURITY.md where a forge looks for it, as information when it has none",
       "source": "docs/guides/ci-platforms.md:\u00a78 security policy",
-      "code": "src/doctor.rs:security_policy_finding",
+      "code": "src/doctor/local_files.rs:security_policy_finding",
       "pinning_tests": [
         "tests/test_doctor.rs::doctor_says_whether_the_repository_has_a_security_policy"
       ],
@@ -1415,10 +1415,10 @@
       "category": "gates",
       "claim": "removing an optional configuration key whose absence reads looser (max_noise_cv; a gate's allow_hidden = false under a global allow_hidden = true) is reported as a weakening",
       "source": "docs/GATES.md:config-integrity",
-      "code": "src/guards/integrity.rs:diff_configs",
+      "code": "src/guards/integrity/config_diff.rs:diff_configs",
       "pinning_tests": [
         "tests/test_gates_e2e.rs::removing_an_optional_limit_or_a_stricter_switch_is_a_weakening",
-        "src/guards/integrity.rs::removing_an_optional_key_is_judged_by_what_absent_means"
+        "src/guards/integrity/config_diff.rs::removing_an_optional_key_is_judged_by_what_absent_means"
       ],
       "verdict": "holds"
     },
@@ -1451,9 +1451,9 @@
       "category": "doctor",
       "claim": "on Gitea and Forgejo, doctor reports a workflow that runs discipline as protected only when a protected file pattern covers it as the forge matches it (case folded, * and ? stopping at . and /), so .gitea/workflows/* is not reported as protecting ci.yml",
       "source": "docs/guides/ci-platforms.md:Gitea & Forgejo, issue:#428",
-      "code": "src/doctor.rs:forge_file_glob",
+      "code": "src/doctor/protection_findings.rs:forge_file_glob",
       "pinning_tests": [
-        "src/doctor.rs::protected_file_patterns_match_as_gitea_and_forgejo_apply_them",
+        "src/doctor/protection_findings.rs::protected_file_patterns_match_as_gitea_and_forgejo_apply_them",
         "tests/test_doctor.rs::doctor_checks_what_owner_ratification_relies_on_gitea"
       ],
       "verdict": "holds"
