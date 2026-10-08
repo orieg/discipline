@@ -193,6 +193,39 @@ pub fn generate_schema() -> Value {
                     }
                 }
             },
+            "hooks": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "Checks `discipline hook run` makes inside an agent's session and nowhere else; `check` does not read this table",
+                "properties": {
+                    "premature-stop": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "description": "At the end of a turn, a final message that announces an action the agent did not take. Read from the base ref's configuration",
+                        "properties": {
+                            "enabled": {
+                                "type": "boolean",
+                                "description": "Judge the final message of a turn once the change check has passed (default: false)"
+                            },
+                            "mode": {
+                                "type": "string",
+                                "enum": ["observe", "refuse"],
+                                "default": "observe",
+                                "description": "observe logs a match to the hook's observation log and lets the stop through; refuse refuses the stop and hands the agent the reason (default: observe)"
+                            },
+                            "max_per_session": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "description": "Most stops refused in one session; the next one is let through (default: 3)"
+                            },
+                            "tool_call_as_text": {
+                                "type": "boolean",
+                                "description": "Also judge a final message that ends in a tool call written out as text (default: true)"
+                            }
+                        }
+                    }
+                }
+            },
             "gates": {
                 "type": "object",
                 "additionalProperties": false,

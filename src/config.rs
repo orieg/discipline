@@ -489,6 +489,8 @@ pub struct DisciplineConfig {
     pub languages: LanguagesConfig,
     #[serde(default)]
     pub gates: Gates,
+    #[serde(default)]
+    pub hooks: HooksConfig,
     /// Deprecated key names this configuration used, one note each (see [`KEY_ALIASES`]).
     #[serde(skip)]
     pub deprecations: Vec<String>,
@@ -623,6 +625,50 @@ pub fn apply_key_aliases(value: &mut Value, aliases: &[KeyAlias]) -> Result<Vec<
         }
     }
     Ok(notes)
+}
+
+/// Checks `discipline hook run` makes inside an agent's session and nowhere else. `check`
+/// never reads this table: these are not gates, and CI sees no agent session.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HooksConfig {
+    #[serde(rename = "premature-stop")]
+    pub premature_stop: PrematureStopConfig,
+}
+
+/// At the end of a turn: a final message that announces an action the agent did not
+/// take (`src/turn.rs`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PrematureStopConfig {
+    pub enabled: bool,
+    pub mode: StopMode,
+    /// Most stops refused in one session; the next one is let through.
+    pub max_per_session: u32,
+    /// Also judge a final message that ends in a tool call written out as text.
+    pub tool_call_as_text: bool,
+}
+
+impl Default for PrematureStopConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: StopMode::Observe,
+            max_per_session: 3,
+            tool_call_as_text: true,
+        }
+    }
+}
+
+/// What a matched end of turn does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum StopMode {
+    /// Log the match and let the stop through.
+    #[default]
+    Observe,
+    /// Refuse the stop and hand the agent the reason.
+    Refuse,
 }
 
 /// Per-language parsing settings, read by the language packs before any gate runs.
@@ -2384,6 +2430,7 @@ impl DisciplineConfig {
             tests: TestsConfig::default(),
             languages: LanguagesConfig::default(),
             gates: Gates::default(),
+            hooks: HooksConfig::default(),
             deprecations: Vec::new(),
         }
     }

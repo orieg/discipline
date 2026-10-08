@@ -1,0 +1,13 @@
+{
+  "artifactDirectoryPath": "/home/user/.agent/session",
+  "conversationId": "00000000-0000-0000-0000-000000000000",
+  "error": "",
+  "executionNum": 1,
+  "fullyIdle": true,
+  "modelName": "model",
+  "terminationReason": "NO_TOOL_CALL",
+  "transcriptPath": "/home/user/.agent/transcript",
+  "workspacePaths": [
+    "/work/repo"
+  ]
+}

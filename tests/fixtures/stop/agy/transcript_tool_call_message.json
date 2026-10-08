@@ -1,0 +1,10 @@
+{
+  "source": "MODEL",
+  "status": "DONE",
+  "tool_calls": [
+    {
+      "name": "run_command"
+    }
+  ],
+  "type": "PLANNER_RESPONSE"
+}

@@ -1859,6 +1859,42 @@
       },
       "type": "object"
     },
+    "hooks": {
+      "additionalProperties": false,
+      "description": "Checks `discipline hook run` makes inside an agent's session and nowhere else; `check` does not read this table",
+      "properties": {
+        "premature-stop": {
+          "additionalProperties": false,
+          "description": "At the end of a turn, a final message that announces an action the agent did not take. Read from the base ref's configuration",
+          "properties": {
+            "enabled": {
+              "description": "Judge the final message of a turn once the change check has passed (default: false)",
+              "type": "boolean"
+            },
+            "max_per_session": {
+              "description": "Most stops refused in one session; the next one is let through (default: 3)",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "mode": {
+              "default": "observe",
+              "description": "observe logs a match to the hook's observation log and lets the stop through; refuse refuses the stop and hands the agent the reason (default: observe)",
+              "enum": [
+                "observe",
+                "refuse"
+              ],
+              "type": "string"
+            },
+            "tool_call_as_text": {
+              "description": "Also judge a final message that ends in a tool call written out as text (default: true)",
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "languages": {
       "additionalProperties": false,
       "description": "Per-language parsing settings, read by the language packs before any gate runs",
