@@ -54,6 +54,8 @@ pub mod runner_collection;
 pub mod runner_config;
 #[cfg(feature = "lang-rust")]
 pub mod rust;
+#[cfg(feature = "lang-rust")]
+pub mod rust_modules;
 #[cfg(feature = "lang-scala")]
 pub mod scala;
 #[cfg(any(feature = "lang-ruby", feature = "lang-python"))]
@@ -338,8 +340,10 @@ pub struct HelperReach {
     /// Effective, strong and fatal checks the pack counted into the test for each entry
     /// of `counted_helper_calls`.
     pub counted: Vec<(usize, usize, usize)>,
-    /// The calls, direct or on a receiver, that name a helper of the test's own file. A
-    /// helper of the same name in another file gives such a call no credit.
+    /// The calls, direct or on a receiver, that name a helper of the test's own file, and
+    /// the calls that resolved to a helper of another file of the test's crate
+    /// (`crate_helpers`). A helper of the same name in another file gives such a call no
+    /// credit.
     pub own_file_calls: Vec<String>,
     /// Checks of the same-file helpers the test calls that the pack did not count into
     /// it: those of a method called on a receiver, and those a helper reaches more calls
@@ -357,6 +361,24 @@ pub struct HelperReach {
     /// same-file helpers the test calls and the pack counted (`helper_loops`): equality
     /// checks written by hand, which the pack counts as checks and not as equality ones.
     pub equality_exits: usize,
+    /// Checks of the helpers the test calls in other files of its crate, each call
+    /// resolved through the crate's modules (Rust; `guards::agent_diff::crate_helpers`).
+    /// Filled on both sides of a pair: what the head holds beyond the base is what the
+    /// change moved there, and what it holds less is taken from what other helpers
+    /// account for.
+    pub crate_helpers: CrateHelperChecks,
+}
+
+/// The checks of the crate helpers a test calls ([`HelperReach::crate_helpers`]), one
+/// helper's counted once per call.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CrateHelperChecks {
+    pub total: usize,
+    pub strong: usize,
+    pub fatal: usize,
+    pub equality_exits: usize,
+    /// The helpers those checks are in, each with its file.
+    pub names: Vec<String>,
 }
 
 /// The innermost test whose lines hold `line`: the shortest such span, and the first of
@@ -366,6 +388,38 @@ pub(crate) fn innermost_test(tests: &mut [TestFn], line: usize) -> Option<&mut T
         .iter_mut()
         .filter(|t| t.line <= line && line <= t.end_line.max(t.line))
         .min_by_key(|t| t.end_line.saturating_sub(t.line))
+}
+
+/// For each line of a source of `last_line` lines, the index of the test
+/// [`innermost_test`] answers for it; the entry of a line is at its number.
+///
+/// A reader that places many records asks this table and not `innermost_test`, which
+/// reads every test for each answer. The table is made in one pass over the lines with
+/// the tests that have begun kept in a heap, shortest first.
+pub(crate) fn innermost_tests_by_line(tests: &[TestFn], last_line: usize) -> Vec<Option<usize>> {
+    use std::cmp::Reverse;
+    let mut by_start: Vec<usize> = (0..tests.len()).collect();
+    by_start.sort_by_key(|&i| tests[i].line);
+    let mut begun = by_start.into_iter().peekable();
+    // The shortest span first, and of two as short the first in `tests`.
+    let mut open = std::collections::BinaryHeap::new();
+    let mut out = Vec::with_capacity(last_line.saturating_add(1));
+    for line in 0..=last_line {
+        while let Some(i) = begun.next_if(|&i| tests[i].line <= line) {
+            let t = &tests[i];
+            open.push(Reverse((t.end_line.saturating_sub(t.line), i)));
+        }
+        // A test that ended above this line holds no later one either.
+        while open.peek().is_some_and(|Reverse((_, i))| {
+            let t: &TestFn = &tests[*i];
+            t.end_line.max(t.line) < line
+        }) {
+            open.pop();
+        }
+        out.push(open.peek().map(|Reverse((_, i))| *i));
+    }
+    ancestry::count(tests.len() + out.len());
+    out
 }
 
 impl TestFn {
@@ -1857,6 +1911,46 @@ pub(crate) const TRANSITIVE_WRAPPER_COUNTS: [(usize, usize); 5] =
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The table of lines answers as `innermost_test` does, for every line: tests one
+    /// inside another, two of one span, a test whose end is not tracked, one that ends
+    /// past the source, and lines no test holds.
+    #[test]
+    fn the_table_of_lines_answers_as_innermost_test_does() {
+        let spans: &[(usize, usize)] = &[
+            (2, 30),
+            (4, 12),
+            (4, 12),
+            (5, 6),
+            (6, 0),
+            (9, 9),
+            (14, 40),
+            (15, usize::MAX),
+            (16, 18),
+            (0, 1),
+            (25, 3),
+        ];
+        let mut tests: Vec<TestFn> = spans
+            .iter()
+            .enumerate()
+            .map(|(i, &(line, end_line))| TestFn {
+                name: format!("t{i}"),
+                line,
+                end_line,
+                ..Default::default()
+            })
+            .collect();
+        let table = innermost_tests_by_line(&tests, 50);
+        assert_eq!(table.len(), 51);
+        for (line, answer) in table.iter().enumerate() {
+            let named = answer.map(|i| format!("t{i}"));
+            let asked = innermost_test(&mut tests, line).map(|t| t.name.clone());
+            assert_eq!(named, asked, "line {line}");
+        }
+        // The answers differ from line to line, so the comparison is of something.
+        let distinct: std::collections::HashSet<_> = table.iter().collect();
+        assert!(distinct.len() >= 9, "{distinct:?}");
+    }
 
     struct MockCustomPack;
 
