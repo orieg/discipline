@@ -12,6 +12,7 @@ pub mod citation_metadata;
 pub mod claim_registry;
 pub mod command;
 pub mod commit_provenance;
+pub mod config_delta;
 pub mod confusables;
 #[cfg(test)]
 mod confusables_tests;
