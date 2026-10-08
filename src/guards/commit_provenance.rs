@@ -515,7 +515,6 @@ mod tests {
             sha: "0123456789abcdef".into(),
             author_name: author.into(),
             author_email: email.into(),
-            committer_email: email.into(),
             message: message.into(),
             parent_count: 1,
         }

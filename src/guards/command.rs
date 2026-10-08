@@ -18,6 +18,7 @@
 
 use crate::config::{DisciplineConfig, GateSettings};
 use crate::could_not_check::{tag, Reason};
+use crate::escape::unescape_xml;
 use crate::guards::presets;
 use crate::guards::{Context, GateOutcome};
 use crate::tokens;
@@ -1531,14 +1532,6 @@ pub struct TestCaseReport {
     pub classname: Option<String>,
     pub status: TestStatus,
     pub failure_message: Option<String>,
-}
-
-fn unescape_xml(s: &str) -> String {
-    s.replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
 }
 
 pub fn parse_junit_cases(xml: &str) -> Vec<TestCaseReport> {

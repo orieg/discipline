@@ -23,7 +23,6 @@ pub struct CommitDetail {
     pub sha: String,
     pub author_name: String,
     pub author_email: String,
-    pub committer_email: String,
     pub message: String,
     pub parent_count: usize,
 }
@@ -32,12 +31,10 @@ impl CommitDetail {
     /// The authorship and message of `commit`, the message read by [`commit_message`].
     pub fn of(commit: &git2::Commit) -> Self {
         let author = commit.author();
-        let committer = commit.committer();
         CommitDetail {
             sha: commit.id().to_string(),
             author_name: author.name().unwrap_or("").to_string(),
             author_email: author.email().unwrap_or("").to_string(),
-            committer_email: committer.email().unwrap_or("").to_string(),
             message: commit_message(commit),
             parent_count: commit.parent_count(),
         }
@@ -2849,7 +2846,6 @@ mod tests {
                 sha: oid.to_string(),
                 author_name: "An Author".to_string(),
                 author_email: "author@example.invalid".to_string(),
-                committer_email: "committer@example.invalid".to_string(),
                 message: "subject\n\nbody: \u{e9}\n".to_string(),
                 parent_count: 2,
             }

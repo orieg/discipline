@@ -5,10 +5,15 @@
 //! styles and the one script are inlined, the charts are SVG drawn here, and fonts are
 //! the reader's system fonts. Without the script every view prints in sequence; with it,
 //! the views become tabs reachable by `#anchor` (`#protected`, `#c-<commit>`, `#g-<gate>`).
-//! Author-written text (subjects, file names, directive names) is escaped.
+//! Text from outside the binary (a subject, a file name, a directive name, a
+//! configuration key or value, a parse error, a reference, what a forge answered, the
+//! remote's address) is written with `esc`: markup is escaped and a control,
+//! bidirectional or invisible character is shown as U+FFFD. The binary's own words (a
+//! kind, a class, a state, a label, a commit id, its version) are written with `own`,
+//! which escapes markup only.
 
 use crate::audit::{Record, Signal, Summary, GUARD_GATES};
-use crate::escape::html as esc;
+use crate::escape::{html as own, html_author_text as esc};
 use std::collections::{BTreeMap, BTreeSet};
 
 const STYLE: &str = include_str!("audit_html/style.css");
@@ -46,7 +51,7 @@ fn ch(r: &Record) -> String {
     format!(
         r##"<a href="#{}" class="chg">{}</a>"##,
         anchor(r),
-        esc(&label(r))
+        own(&label(r))
     )
 }
 
@@ -311,7 +316,7 @@ fn check_label(id: &str) -> &str {
 }
 
 fn dot(class: &str) -> String {
-    format!(r##"<span class="dot k-{}"></span>"##, esc(class))
+    format!(r##"<span class="dot k-{}"></span>"##, own(class))
 }
 
 fn table(head: &[&str], rows: &str) -> String {
@@ -427,14 +432,14 @@ fn rate_chart(s: &Summary) -> String {
             x(b),
             x(b),
             top + ph,
-            esc(&label(r)),
+            own(&label(r)),
             esc(r.gate.as_deref().unwrap_or(""))));
         if guard {
             o.push_str(&format!(
                 r##"<text x="{:.1}" y="{}" class="ann" text-anchor="end">{} {}</text>"##,
                 x(b) - 4.0,
                 top + 10.0,
-                esc(&label(r)),
+                own(&label(r)),
                 esc(r.gate.as_deref().unwrap_or(""))
             ));
         }
@@ -651,7 +656,7 @@ fn cites_cell(r: &Record, s: &Summary) -> String {
                         r##" <span class="badge bad">not found</span>"##.to_string()
                     }
                     ("open", _) => r##" <span class="badge ok">open</span>"##.to_string(),
-                    (other, _) => format!(r##" <span class="badge muted">{}</span>"##, esc(other)),
+                    (other, _) => format!(r##" <span class="badge muted">{}</span>"##, own(other)),
                 })
                 .unwrap_or_default();
             format!("{label}{state}")
@@ -886,7 +891,7 @@ fn checks_list(s: &Summary) -> String {
             prose(&c.detail)
         };
         checks.push_str(&format!(r##"<li class="chk {cls}"><span class="st">{st}</span><span class="what">{}</span><span class="src">{src}</span></li>"##,
-            esc(check_label(c.id))));
+            own(check_label(c.id))));
     }
     checks
 }
@@ -1303,7 +1308,7 @@ fn change_fact(r: &Record, s: &Summary) -> String {
                 "off"
             }
         ),
-        _ => esc(r.kind),
+        _ => own(r.kind),
     }
 }
 
@@ -1357,7 +1362,7 @@ fn gates_list(s: &Summary) -> String {
                     "protected path <code>{}</code> edited",
                     esc(r.file.as_deref().unwrap_or(""))
                 ),
-                other => esc(other),
+                other => own(other),
             };
             tl.push_str(&format!(
                 "<li>{}{} {} {what}{}</li>",
@@ -1407,7 +1412,7 @@ fn records_table(s: &Summary) -> String {
             let what = format!("{what}{}", source(r, s));
             let status = if r.evidence == "claimed" { "Requested" } else { "In effect" };
             let source = if r.tier == "C" { "Author's text" } else { "Repository" };
-            format!(r##"<tr data-class="{}" data-gate="{}"><td>{}</td><td>{}</td><td>{}{}</td><td><code>{}</code></td><td>{what}</td><td>{status}</td><td>{source}</td></tr>"##, esc(r.class), esc(r.gate.as_deref().unwrap_or("")), ch(r), date(r.time), dot(r.class), class_label(r.class), esc(r.gate.as_deref().unwrap_or("–")))
+            format!(r##"<tr data-class="{}" data-gate="{}"><td>{}</td><td>{}</td><td>{}{}</td><td><code>{}</code></td><td>{what}</td><td>{status}</td><td>{source}</td></tr>"##, own(r.class), esc(r.gate.as_deref().unwrap_or("")), ch(r), date(r.time), dot(r.class), class_label(r.class), esc(r.gate.as_deref().unwrap_or("–")))
         })
         .collect();
     table(
@@ -1580,11 +1585,11 @@ pub fn render(s: &Summary) -> String {
 </body>
 </html>
 "##,
-        version = esc(&s.version),
+        version = own(&s.version),
         read_line = read_line(s),
         repo = esc(&repo_name),
         reference = esc(&s.reference),
-        tip = esc(&s.tip[..s.tip.len().min(10)]),
+        tip = own(&s.tip[..s.tip.len().min(10)]),
         prot_n = s.protected_edits.len(),
         change_n = order.len(),
         rec_n = s.records.len(),

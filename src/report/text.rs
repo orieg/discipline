@@ -33,7 +33,8 @@
 //!
 //! The machine formats (JSON, SARIF, GitLab code quality) carry the text as it is,
 //! encoded by their serialiser; JUnit XML drops what XML 1.0 forbids (`junit.rs`), and
-//! the audit page escapes for HTML (`escape::html`).
+//! the audit page escapes for HTML and shows a control or invisible character as
+//! U+FFFD (`escape::html_author_text`).
 //!
 //! A message with none of the characters named here is written byte for byte.
 
@@ -45,7 +46,7 @@ pub const REPLACEMENT: char = '\u{FFFD}';
 /// carriage return), the bidirectional embedding, override and isolate controls (text
 /// shown in another order than it is stored), and the Unicode line and paragraph
 /// separators (a line break that is not `\n`). A tab is one too; callers keep it.
-fn is_control(c: char) -> bool {
+pub(crate) fn is_control(c: char) -> bool {
     c.is_control()
         || matches!(
             c,
