@@ -8259,6 +8259,41 @@ smoke_cost::set_contains
         },
     ),
     (
+        "doctor: hook-mode distinguishes observe, enforcing and unknown; pretool text does not say refuses for observe",
+        || {
+            use crate::doctor::{multi_agent_findings, Status};
+            use crate::hook::{config_for_opts, Agent};
+            let dir = std::env::temp_dir().join(format!("discipline-selftest-hook-mode-{}", std::process::id()));
+            if dir.exists() {
+                std::fs::remove_dir_all(&dir)?;
+            }
+            git2::Repository::init(&dir)?;
+            let (rel, obs) = config_for_opts(Agent::ClaudeCode, true, None);
+            let path = dir.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap())?;
+            std::fs::write(&path, &obs)?;
+            let f = multi_agent_findings(&dir);
+            let mode = f.iter().find(|x| x.id == "hook-mode").map(|x| x.status);
+            let pre = f.iter().find(|x| x.id == "pretool-hook").unwrap();
+            let obs_ok = mode == Some(Status::Warn) && !pre.summary.contains("refuses") && pre.summary.contains("logs");
+
+            let (_, enf) = config_for_opts(Agent::ClaudeCode, false, None);
+            std::fs::write(&path, &enf)?;
+            let f = multi_agent_findings(&dir);
+            let mode = f.iter().find(|x| x.id == "hook-mode").map(|x| x.status);
+            let pre = f.iter().find(|x| x.id == "pretool-hook").unwrap();
+            let enf_ok = mode == Some(Status::Pass) && pre.summary.contains("refuses");
+
+            std::fs::write(&path, format!("{enf}\n// edited"))?;
+            let f = multi_agent_findings(&dir);
+            let mode = f.iter().find(|x| x.id == "hook-mode").map(|x| x.status);
+            let edit_ok = mode == Some(Status::Unknown);
+
+            std::fs::remove_dir_all(&dir)?;
+            Ok(obs_ok && enf_ok && edit_ok)
+        },
+    ),
+    (
         "presets: cargo-public-api, miri, and sanitizers preset resolution",
         || {
             use crate::guards::presets::resolve_preset;

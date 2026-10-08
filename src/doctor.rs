@@ -107,9 +107,13 @@ impl Report {
     /// `0` healthy, `1` a failure (or a warning under `strict`), `2` undecided.
     pub fn exit_code(&self, strict: bool) -> u8 {
         let has = |s: Status| self.findings.iter().any(|f| f.status == s);
+        let has_strict_warn = self
+            .findings
+            .iter()
+            .any(|f| f.status == Status::Warn && f.id != "hook-mode");
         if has(Status::Unknown) {
             2
-        } else if has(Status::Fail) || (strict && has(Status::Warn)) {
+        } else if has(Status::Fail) || (strict && has_strict_warn) {
             1
         } else {
             0
@@ -206,6 +210,7 @@ pub const DOCTOR_FINDINGS: &[&str] = &[
     "force-push",
     "forge-token",
     "forking",
+    "hook-mode",
     "immutable-releases",
     "last-push-approval",
     "leases",
