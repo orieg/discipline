@@ -2,9 +2,9 @@
 //! change than before it.
 
 use super::{
-    call_names_helper, equality_exits_gained, helper_call_gain, leaf_name, lines_of,
-    moved_into_looping_helpers, note_self_comparison_scope, HelperPair, Located, TestPair,
-    SELF_COMPARISON_SCOPE,
+    call_names_helper, equality_exits_gained, helper_call_gain, leaf_name,
+    leave_helpers_shown_by_tests, lines_of, moved_into_looping_helpers, note_self_comparison_scope,
+    FileFacts, HelperPair, Located, TestPair, WeakenedCrateHelper, SELF_COMPARISON_SCOPE,
 };
 use crate::ast::TestFn;
 use crate::config::GateSettings;
@@ -43,10 +43,10 @@ pub fn evaluate_assertion_reduction(
 }
 
 /// What every phase of `assertion-reduction` reads besides the tests it judges.
-struct ReductionInputs<'a> {
-    settings: &'a crate::config::AssertionGate,
-    directives: &'a [crate::tokens::ParsedDirective],
-    is_staged: bool,
+pub struct ReductionInputs<'a> {
+    pub settings: &'a crate::config::AssertionGate,
+    pub directives: &'a [crate::tokens::ParsedDirective],
+    pub is_staged: bool,
 }
 
 /// Reports, in each test the change adds, the assertions an enclosing handler catches.
@@ -110,92 +110,139 @@ fn report_weakened_helpers(
     cx: &ReductionInputs,
     out: &mut GateOutcome,
 ) {
+    for hp in helpers.iter().filter(|hp| !exempt.matches(hp.path)) {
+        let callers = |leaf: &str| helper_callers_clause(pairs, added, leaf, &hp.base.name);
+        report_weakened_helper(hp, &callers, cx, out);
+    }
+}
+
+/// Reports the helpers of a crate's test-only modules that lost assertions or were
+/// deleted ([`WeakenedCrateHelper`]), as [`report_weakened_helpers`] reports a helper of
+/// a test-support file: the same finding, lifted by the same directive, naming the tests
+/// whose calls resolve to the helper. A helper that a dropping test of its own file
+/// already shows is not reported a second time (`leave_helpers_shown_by_tests`).
+/// `helpers` are the pairs that credit a test.
+pub fn report_weakened_crate_helpers<'a>(
+    weakened: &'a [WeakenedCrateHelper],
+    pairs: &[TestPair<'a>],
+    files: &'a [FileFacts],
+    helpers: &[HelperPair<'a>],
+    cx: &ReductionInputs,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    let exempt = exempt_filter(cx.settings)?;
+    let mut judged: Vec<HelperPair<'a>> = weakened
+        .iter()
+        .map(|w| HelperPair {
+            path: &w.path,
+            base: &w.base,
+            head: w.head.as_ref(),
+        })
+        .collect();
+    leave_helpers_shown_by_tests(&mut judged, pairs, files, Some(helpers));
+    out.examined += weakened.len();
+    for hp in judged.iter().filter(|hp| !exempt.matches(hp.path)) {
+        let callers = |_: &str| {
+            let of = weakened.iter().find(|w| std::ptr::eq(&w.base, hp.base));
+            callers_clause(of.map(|w| w.callers.clone()).unwrap_or_default())
+        };
+        report_weakened_helper(hp, &callers, cx, out);
+    }
+    Ok(())
+}
+
+/// Reports `hp` when its helper lost assertions or was deleted. `callers` gives the
+/// clause naming the tests that call the helper, from the last segment of its name.
+fn report_weakened_helper(
+    hp: &HelperPair,
+    callers: &dyn Fn(&str) -> String,
+    cx: &ReductionInputs,
+    out: &mut GateOutcome,
+) {
     const GATE: &str = ASSERTION_REDUCTION;
     let (settings, directives, is_staged) = (cx.settings, cx.directives, cx.is_staged);
-    for hp in helpers.iter().filter(|hp| !exempt.matches(hp.path)) {
-        let b = hp.base;
-        let (total_drop, strong_drop, fatal_drop, h_eff) = match hp.head {
-            Some(h) => {
-                let b_eff = b.effective_asserts();
-                let h_eff = h.effective_asserts();
-                (
-                    h_eff < b_eff,
-                    h.strong_asserts < b.strong_asserts,
-                    h.fatal_asserts < b.fatal_asserts,
-                    h_eff,
-                )
-            }
-            None => (
-                b.effective_asserts() > 0,
-                b.strong_asserts > 0,
-                b.fatal_asserts > 0,
-                0,
-            ),
-        };
-        if !total_drop && !strong_drop && !fatal_drop {
-            continue;
-        }
-
-        let lift = |subject: &str| {
-            tokens::find_override(
-                directives,
-                GATE,
-                &crate::findings::TEST_HELPER_WEAKENED,
-                tokens::ALLOW_ASSERTION_DROP,
-                subject,
+    let b = hp.base;
+    let (total_drop, strong_drop, fatal_drop, h_eff) = match hp.head {
+        Some(h) => {
+            let b_eff = b.effective_asserts();
+            let h_eff = h.effective_asserts();
+            (
+                h_eff < b_eff,
+                h.strong_asserts < b.strong_asserts,
+                h.fatal_asserts < b.fatal_asserts,
+                h_eff,
             )
-        };
-        let helper_leaf = b.name.rsplit("::").next().unwrap_or(&b.name);
-        let file_leaf = hp.path.rsplit('/').next().unwrap_or(hp.path);
-        let allowed = lift(helper_leaf)
-            .or_else(|| lift(&b.name))
-            .or_else(|| lift(hp.path))
-            .or_else(|| lift(file_leaf));
-        if let Some(record) = allowed {
-            out.overrides.push(record);
-            continue;
         }
-
-        let callers_str = helper_callers_clause(pairs, added, helper_leaf, &b.name);
-
-        let b_eff = b.effective_asserts();
-        let msg = match hp.head {
-            None => format!(
-                "Helper `{}`: deleted or checks removed (previously had {} assertion(s)){}.",
-                b.name, b_eff, callers_str
-            ),
-            Some(_) if total_drop => format!(
-                "Helper `{}`: effective assertions dropped from {} to {}{}.",
-                b.name, b_eff, h_eff, callers_str
-            ),
-            Some(h) if strong_drop => format!(
-                "Helper `{}`: equality / pattern assertions dropped from {} to {} (weakened to a looser form){}.",
-                b.name, b.strong_asserts, h.strong_asserts, callers_str
-            ),
-            Some(h) => format!(
-                "Helper `{}`: fatal assertions dropped from {} to {}{}.",
-                b.name, b.fatal_asserts, h.fatal_asserts, callers_str
-            ),
-        };
-
-        let severity = if is_staged {
-            crate::config::Severity::Warning
-        } else {
-            settings.severity()
-        };
-        let line = hp.head.map(|h| h.line).unwrap_or(b.line);
-        out.push(
-            severity,
-            &crate::findings::TEST_HELPER_WEAKENED,
-            Some(hp.path),
-            Some(line),
-            msg,
-            &format!(
-                "Restore the assertions in `{helper_leaf}`, or justify the change in the PR body or a commit message: `allow-assertion-drop: {helper_leaf} <reason>`."
-            ),
-        );
-        out.anchor_last(b.name.clone());
+        None => (
+            b.effective_asserts() > 0,
+            b.strong_asserts > 0,
+            b.fatal_asserts > 0,
+            0,
+        ),
+    };
+    if !total_drop && !strong_drop && !fatal_drop {
+        return;
     }
+
+    let lift = |subject: &str| {
+        tokens::find_override(
+            directives,
+            GATE,
+            &crate::findings::TEST_HELPER_WEAKENED,
+            tokens::ALLOW_ASSERTION_DROP,
+            subject,
+        )
+    };
+    let helper_leaf = b.name.rsplit("::").next().unwrap_or(&b.name);
+    let file_leaf = hp.path.rsplit('/').next().unwrap_or(hp.path);
+    let allowed = lift(helper_leaf)
+        .or_else(|| lift(&b.name))
+        .or_else(|| lift(hp.path))
+        .or_else(|| lift(file_leaf));
+    if let Some(record) = allowed {
+        out.overrides.push(record);
+        return;
+    }
+
+    let callers_str = callers(helper_leaf);
+
+    let b_eff = b.effective_asserts();
+    let msg = match hp.head {
+        None => format!(
+            "Helper `{}`: deleted or checks removed (previously had {} assertion(s)){}.",
+            b.name, b_eff, callers_str
+        ),
+        Some(_) if total_drop => format!(
+            "Helper `{}`: effective assertions dropped from {} to {}{}.",
+            b.name, b_eff, h_eff, callers_str
+        ),
+        Some(h) if strong_drop => format!(
+            "Helper `{}`: equality / pattern assertions dropped from {} to {} (weakened to a looser form){}.",
+            b.name, b.strong_asserts, h.strong_asserts, callers_str
+        ),
+        Some(h) => format!(
+            "Helper `{}`: fatal assertions dropped from {} to {}{}.",
+            b.name, b.fatal_asserts, h.fatal_asserts, callers_str
+        ),
+    };
+
+    let severity = if is_staged {
+        crate::config::Severity::Warning
+    } else {
+        settings.severity()
+    };
+    let line = hp.head.map(|h| h.line).unwrap_or(b.line);
+    out.push(
+        severity,
+        &crate::findings::TEST_HELPER_WEAKENED,
+        Some(hp.path),
+        Some(line),
+        msg,
+        &format!(
+            "Restore the assertions in `{helper_leaf}`, or justify the change in the PR body or a commit message: `allow-assertion-drop: {helper_leaf} <reason>`."
+        ),
+    );
+    out.anchor_last(b.name.clone());
 }
 
 /// The clause of a helper finding that names the tests calling the helper: empty when
@@ -229,6 +276,12 @@ fn helper_callers_clause(
             calling_tests.push(a.test.name.clone());
         }
     }
+    callers_clause(calling_tests)
+}
+
+/// ` (called by ..)` naming `calling_tests`: up to three by name, the first and a count
+/// beyond that; empty when there is none.
+fn callers_clause(mut calling_tests: Vec<String>) -> String {
     calling_tests.sort();
     calling_tests.dedup();
 
