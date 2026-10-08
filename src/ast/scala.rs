@@ -119,7 +119,8 @@ struct ScalaExtractor<'a> {
     test_calls: Vec<Vec<String>>,
 }
 
-/// `@nowarn`, `@SuppressWarnings` and `@unchecked`, and the comments that turn
+/// `@nowarn`, `@SuppressWarnings` and `@unchecked` under any qualifier
+/// (`@scala.annotation.nowarn`), and the comments that turn
 /// scalastyle or scalafix off; the rule of a comment is the first word after the marker.
 const SCALA_SUPPRESSIONS: Suppressions = Suppressions {
     comments: &["comment", "block_comment"],
@@ -134,7 +135,7 @@ const SCALA_SUPPRESSIONS: Suppressions = Suppressions {
     )],
     annotations: Some(&AnnotationSuppressions {
         kinds: &["annotation"],
-        name: AnnotationName::Field,
+        name: AnnotationName::LastSegment,
         names: &["nowarn", "SuppressWarnings", "unchecked"],
         rule: AnnotationRule::Arguments {
             trimmed: false,

@@ -273,27 +273,56 @@ const PY_SUPPRESSIONS: Suppressions = Suppressions {
     open: &["#"],
     close: &[],
     rules: &[
-        CommentRule::opens(&["type: ignore"], Reports::TypeIgnore("mypy")),
+        // mypy reads the type comments of Python's own tokenizer (`Parser/lexer/lexer.c`
+        // in CPython, read from its source), where each space of `# type: ` stands for
+        // any run of spaces and tabs, none included, before `ignore`: `# type:ignore`
+        // is the same comment as `# type: ignore`. It opens the comment.
+        CommentRule {
+            loose_spaces: true,
+            ..CommentRule::opens(&["type: ignore"], Reports::TypeIgnore("mypy"))
+        },
+        // flake8 (`NOQA_INLINE_REGEXP` in its `defaults.py`) searches the line for
+        // `# noqa` in any letter-case, and ruff (`lex_inline_noqa` in its `noqa.rs`)
+        // looks at every `#` of the comment for `noqa` in any letter-case; both read
+        // from their sources. So `# NOQA` is one, and so is the `# noqa` that follows
+        // other comment text or another tool's comment (`# type: ignore # noqa`).
+        CommentRule {
+            any_case: true,
+            later: true,
+            ..CommentRule::opens(
+                &["noqa"],
+                Reports::Rest(RuleText {
+                    after: &["noqa:"],
+                    then: &[],
+                    first_word: false,
+                    empty_is_all: false,
+                }),
+            )
+        },
         CommentRule::opens(
-            &["noqa", "ruff: noqa"],
+            &["ruff: noqa"],
             Reports::Rest(RuleText {
-                after: &["noqa:", "ruff: noqa:"],
+                after: &["ruff: noqa:"],
                 then: &[],
                 first_word: false,
                 empty_is_all: false,
             }),
         ),
         CommentRule::opens(&["pragma: no cover"], Reports::Rule("coverage")),
+        // pylint (`MESSAGE_KEYWORDS` in its `pragma_parser.py`, read from its source)
+        // takes `disable-next` beside `disable`: the messages are turned off for the
+        // next line.
         CommentRule::opens(
-            &["pylint: disable="],
+            &["pylint: disable=", "pylint: disable-next="],
             Reports::Rest(RuleText {
-                after: &["pylint: disable="],
+                after: &["pylint: disable=", "pylint: disable-next="],
                 then: &[],
                 first_word: false,
                 empty_is_all: false,
             }),
         ),
     ],
+    piece: "#",
     ..Suppressions::SLASH_COMMENTS
 };
 

@@ -6,7 +6,10 @@ use tree_sitter::Node;
 
 use super::ci_condition::{CiVerdict, Lang, SkipCondition};
 use super::functions::{self, FunctionSpec};
-use super::suppressions::{AnnotationName, AnnotationRule, AnnotationSuppressions, Suppressions};
+use super::suppressions::{
+    AnnotationName, AnnotationRule, AnnotationSuppressions, CommentRule, Reports, RuleText,
+    Suppressions,
+};
 use super::{AssertVocabulary, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
 /// Java language pack implementing [`LanguagePack`].
@@ -109,14 +112,40 @@ struct JavaExtractor<'a> {
     class_skips: Vec<Vec<(String, CiVerdict)>>,
 }
 
-/// `@SuppressWarnings`, with the rule its argument names. A comment is never a
-/// suppression: the annotation named in a comment or in a Javadoc `{@code ...}`
-/// suppresses nothing, so no comment is read.
+/// `@SuppressWarnings`, with the rule its argument names, under any qualifier
+/// (`@java.lang.SuppressWarnings`), and two comments. The annotation named in a comment
+/// or in a Javadoc `{@code ...}` suppresses nothing and is not read.
 const JAVA_SUPPRESSIONS: Suppressions = Suppressions {
-    comments: &[],
+    comments: &["line_comment", "block_comment"],
+    rules: &[
+        // SonarJava (`CommentLinesVisitor`, read from its source): an issue is dropped
+        // on every line where a comment holds `NOSONAR`, in these capitals, anywhere
+        // in the line of the comment. The comment that opens a file is the one
+        // exception there; it is read here like any other.
+        CommentRule {
+            anywhere: true,
+            ..CommentRule::opens(&["NOSONAR"], Reports::Rule("NOSONAR"))
+        },
+        // IntelliJ IDEA (`SuppressionUtil.SUPPRESS_IN_LINE_COMMENT_PATTERN`, read from
+        // its source): a `//` comment before a statement that is `noinspection`, after
+        // optional blanks, then a blank and one or more inspection ids. A block comment
+        // is not matched by that pattern, and `noinspection` alone names no id.
+        CommentRule {
+            kinds: &["line_comment"],
+            ..CommentRule::opens(
+                &["noinspection ", "noinspection\t"],
+                Reports::Rest(RuleText {
+                    after: &["noinspection"],
+                    then: &[],
+                    first_word: false,
+                    empty_is_all: false,
+                }),
+            )
+        },
+    ],
     annotations: Some(&AnnotationSuppressions {
         kinds: &["annotation", "marker_annotation"],
-        name: AnnotationName::Field,
+        name: AnnotationName::LastSegment,
         names: &["SuppressWarnings"],
         rule: AnnotationRule::Arguments {
             trimmed: true,

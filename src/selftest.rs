@@ -1186,6 +1186,56 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "suppression-delta: a qualified @java.lang.SuppressWarnings, // NOSONAR and //noinspection are sites in Java, a near miss is not",
+        || {
+            let (yes, no) = (
+                "@java.lang.SuppressWarnings(\"x\")\nclass A { // NOSONAR\n  //noinspection X\n  int f;\n}\n",
+                "@my.NotSuppressWarnings(\"x\")\nclass A { // nosonar\n  //noinspection\n  int f;\n}\n",
+            );
+            Ok(suppression_count("src/A.java", yes)? == 3 && suppression_count("src/A.java", no)? == 0)
+        },
+    ),
+    (
+        "suppression-delta: @file:Suppress, @kotlin.Suppress and // NOSONAR are sites in Kotlin, a near miss is not",
+        || {
+            let (yes, no) = (
+                "@file:Suppress(\"x\")\n@kotlin.Suppress(\"y\")\nclass A // NOSONAR\n",
+                "@file:JvmName(\"x\")\n@my.Suppressed(\"y\")\nclass A // see NOSONAR\n",
+            );
+            Ok(suppression_count("src/a.kt", yes)? == 3 && suppression_count("src/a.kt", no)? == 0)
+        },
+    ),
+    (
+        "suppression-delta: a qualified @scala.annotation.nowarn is a site in Scala, another name is not",
+        || {
+            let (yes, no) = (
+                "@scala.annotation.nowarn\nclass A {\n  @annotation.nowarn(\"cat=x\") val f = 1\n}\n",
+                "@my.notnowarn\nclass A {\n  @scala.deprecated val f = 1\n}\n",
+            );
+            Ok(suppression_count("src/a.scala", yes)? == 2 && suppression_count("src/a.scala", no)? == 0)
+        },
+    ),
+    (
+        "suppression-delta: #rubocop:disable without a space is a site in Ruby, #rubocop:enable is not",
+        || {
+            let (yes, no) = (
+                "#rubocop:disable A\nx = 1 #  rubocop : todo B\n",
+                "#rubocop:enable A\nx = 1 # rubo cop:disable B\n",
+            );
+            Ok(suppression_count("lib/a.rb", yes)? == 2 && suppression_count("lib/a.rb", no)? == 0)
+        },
+    ),
+    (
+        "suppression-delta: # NOQA, # type:ignore, disable-next and a noqa after other comment text are sites in Python, one per tool",
+        || {
+            let (yes, no) = (
+                "# NOQA\n# pylint: disable-next=a\nx = 1  # type:ignore\ny = 2  # note # noqa\nz = 3  # type: ignore # noqa\n",
+                "# note noqa\n# pylint: disable-nxt=a\nx = 1  # typ:ignore\ny = \"# NOQA\"\n",
+            );
+            Ok(suppression_count("pkg/a.py", yes)? == 6 && suppression_count("pkg/a.py", no)? == 0)
+        },
+    ),
+    (
         "stub-bodies: a body replaced by todo!() is reported, a body given to a stub is not",
         || {
             use crate::guards::stub_bodies::judge;
@@ -9324,6 +9374,12 @@ fn extract(path: &str, src: &str) -> Result<crate::ast::ParsedFileFacts> {
         .find_pack(path)
         .ok_or_else(|| anyhow::anyhow!("no language pack for {path}"))?;
     crate::guards::agent_diff::extract_facts(pack, path, src, &AssertVocabulary::default())
+}
+
+/// How many suppression sites `suppression-delta` reads in `src` as the file `path`.
+fn suppression_count(path: &str, src: &str) -> Result<usize> {
+    let hatches = extract(path, src)?.escape_hatches;
+    Ok(crate::guards::suppression_delta::sites_of(&hatches).len())
 }
 
 /// The case count and non-literal flag the language pack for `path` reads on the first
