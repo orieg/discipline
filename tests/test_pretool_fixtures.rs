@@ -193,7 +193,7 @@ fn no_fixture_names_a_local_machine() {
 
 /// (fixture, event-name pointer, event name, session pointer, directory pointer): the
 /// fields `hook run --event session-start` reads. OpenCode's is the raw `session.created`
-/// event; the generated plugin maps it to `{input: {sessionID}, cwd}`.
+/// event of 1.x and of 2.x; the generated plugin maps each to `{input: {sessionID}, cwd}`.
 const SESSION_STARTS: &[(&str, &str, &str, &str, &str)] = &[
     (
         "codex/session_start.json",
@@ -237,7 +237,26 @@ const SESSION_STARTS: &[(&str, &str, &str, &str, &str)] = &[
         "/properties/sessionID",
         "/properties/info/directory",
     ),
+    (
+        "opencode/session_created_v2.json",
+        "/type",
+        "session.created",
+        "/data/sessionID",
+        "/location/directory",
+    ),
 ];
+
+/// OpenCode 2.x, when the plugin was loaded after the session was made
+/// (`opencode run --standalone`), delivers no `session.created`: the first event naming
+/// the session is this one, which names no directory.
+#[test]
+fn the_recorded_opencode_2x_execution_start_names_its_session_and_no_directory() {
+    let v = fixture("opencode/session_execution_started_v2.json");
+    assert_eq!(text(&v, "/type"), "session.execution.started");
+    assert!(!text(&v, "/data/sessionID").is_empty());
+    assert_eq!(v.pointer("/location"), None);
+    assert_eq!(v.pointer("/data/location"), None);
+}
 
 #[test]
 fn each_recorded_session_start_names_its_session_and_directory() {

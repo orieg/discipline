@@ -1829,8 +1829,10 @@ fn the_committed_hook_files_are_what_hook_install_observe_writes() {
 const OPENCODE_DRIVER: &str = r#"
 let behaviour = "exit-0"
 const ran = []
-function shell(strings) {
+const stdins = []
+function shell(strings, ...args) {
   ran.push(strings.join("<arg>"))
+  stdins.push(args[0])
   if (behaviour === "throws") throw new Error("command not found: discipline")
   const result = {
     exitCode: behaviour === "exit-1" ? 1 : 0,
@@ -1858,11 +1860,33 @@ const notices = []
 const realError = console.error
 console.error = (...words) => notices.push(words.join(" "))
 const v2 = {}
+// OpenCode 2.x's `event.subscribe` (RUN with 2.0.22): one parameter, no callback
+// registration, the events as an async iterable. `emit` resolves once the consumer has
+// come back for the event after `e`, or after a second when nothing consumes the stream.
+const subscribeArgs = []
+const queued = []
+let waiting = null
+let consumed = null
+const events = {
+  [Symbol.asyncIterator]: () => ({
+    next: () => {
+      if (consumed) { consumed(); consumed = null }
+      if (queued.length) return Promise.resolve({ value: queued.shift(), done: false })
+      return new Promise((deliver) => { waiting = deliver })
+    },
+  }),
+}
+const emit = (e) => new Promise((done) => {
+  const timer = setTimeout(done, 1000)
+  consumed = () => { clearTimeout(timer); done() }
+  if (waiting) { const deliver = waiting; waiting = null; deliver({ value: e, done: false }) }
+  else queued.push(e)
+})
 let setupThrew = false
 try {
   plugin.default.setup({
     tool: { hook: (name, handler) => { v2[name] = handler } },
-    event: { subscribe: (handler) => { v2.event = handler } },
+    event: { subscribe: (...args) => { subscribeArgs.push(args.map((a) => typeof a)); return events } },
     location: { directory },
   })
 } catch { setupThrew = true }
@@ -1875,7 +1899,7 @@ const handlers = {
   "v1 session": () => v1.event({ event: { type: "session.created", properties: { sessionID: "s" } } }),
   "v1 pre-tool": () => v1["tool.execute.before"]({ tool: "edit", sessionID: "s" }, { args: { filePath: "a.rs" } }),
   "v1 post-edit": () => v1["tool.execute.after"]({ tool: "edit" }, { output: "" }),
-  "v2 session": () => v2.event({ type: "session.created", properties: { sessionID: "s" } }),
+  "v2 session": () => emit({ type: "session.execution.started", data: { sessionID: "s " + behaviour } }),
   "v2 pre-tool": () => v2["execute.before"]({ tool: "edit", sessionID: "s", input: { filePath: "a.rs" } }),
   "v2 post-edit": () => v2["execute.after"]({ tool: "edit", result: { output: "" } }),
 }
@@ -1890,11 +1914,39 @@ for (behaviour of ["exit-0", "exit-1", "throws", "rejects"]) {
     commands[behaviour + " " + name] = ran.slice()
   }
 }
+// The recorded 2.x events of two sessions, as a plugin sees them: `created` then
+// `started` (the background service), `started` alone (`--standalone`), each once more,
+// and events that start no session.
+const created = JSON.parse(process.env.SESSION_CREATED_V2)
+const started = JSON.parse(process.env.SESSION_EXECUTION_STARTED_V2)
+started.data.sessionID = started.durable.aggregateID = "standalone"
+behaviour = "exit-0"
+ran.length = 0
+stdins.length = 0
+for (const e of [
+  { type: "model.updated", location: { directory }, data: {} },
+  created,
+  { ...started, data: { sessionID: created.data.sessionID } },
+  started,
+  { type: "session.step.started", data: { sessionID: "other" } },
+  { type: "session.execution.started", data: {} },
+  null,
+  created,
+  started,
+]) await emit(e)
+const v2Leases = []
+for (const stdin of stdins) v2Leases.push(JSON.parse(await stdin.text()))
+const v2LeaseCommands = ran.slice()
+
 behaviour = "exit-1"
 ran.length = 0
 await v1["tool.execute.before"]({ tool: "read" }, { args: {} })
 await v2["execute.before"]({ tool: "read", input: {} })
 console.log(JSON.stringify({
+  directory,
+  subscribeArgs,
+  v2Leases,
+  v2LeaseCommands,
   registered: Object.keys(v2).sort(),
   setupThrew,
   registeredNotices,
@@ -1937,8 +1989,20 @@ fn run_opencode_plugin(observe: bool, test: &str) -> Option<serde_json::Value> {
     )
     .unwrap();
     std::fs::write(dir.path().join("driver.mjs"), OPENCODE_DRIVER).unwrap();
+    let recorded = |name: &str| {
+        std::fs::read_to_string(format!(
+            "{}/tests/fixtures/pretool/opencode/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap()
+    };
     let out = common::script_command("node")
         .arg("driver.mjs")
+        .env("SESSION_CREATED_V2", recorded("session_created_v2.json"))
+        .env(
+            "SESSION_EXECUTION_STARTED_V2",
+            recorded("session_execution_started_v2.json"),
+        )
         .current_dir(dir.path())
         .output()
         .unwrap();
@@ -1953,8 +2017,10 @@ fn run_opencode_plugin(observe: bool, test: &str) -> Option<serde_json::Value> {
     // ran its command, and a tool that is neither an edit nor a shell command ran none.
     assert_eq!(
         v["registered"],
-        serde_json::json!(["event", "execute.after", "execute.before"])
+        serde_json::json!(["execute.after", "execute.before"])
     );
+    // The 2.x event stream is asked for once, with no callback (2.x ignores one).
+    assert_eq!(v["subscribeArgs"], serde_json::json!([[]]), "{v}");
     assert_eq!(v["setupThrew"], false, "{v}");
     assert_eq!(v["registeredNotices"], 0, "{v}");
     assert_eq!(v["ranForARead"], 0, "{v}");
@@ -1993,6 +2059,42 @@ fn the_opencode_observe_plugin_never_throws_whatever_the_command_does() {
         .collect();
     assert!(threw.is_empty(), "observe mode threw from: {threw:?}");
     assert_eq!(v["unregisteredNotices"], serde_json::json!([]), "{v}");
+}
+
+/// On OpenCode 2.x a session takes its worktree's lease once, in either mode: on
+/// `session.created` where the plugin sees it (the directory is the event's), else on
+/// `session.execution.started` (the plugin's directory). The payload is the one
+/// `hook run --event session-start` reads. Events that start no session, and a session
+/// already leased, run nothing.
+#[test]
+fn the_opencode_2x_plugin_takes_the_lease_once_per_session_from_the_event_stream() {
+    for observe in [true, false] {
+        let Some(v) = run_opencode_plugin(
+            observe,
+            "the_opencode_2x_plugin_takes_the_lease_once_per_session_from_the_event_stream",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            v["v2Leases"],
+            serde_json::json!([
+                {
+                    "input": { "sessionID": "00000000-0000-0000-0000-000000000000" },
+                    "cwd": "/work/repo"
+                },
+                { "input": { "sessionID": "standalone" }, "cwd": v["directory"] },
+            ]),
+            "observe={observe}: {v}"
+        );
+        let commands = v["v2LeaseCommands"].as_array().unwrap();
+        assert_eq!(commands.len(), 2, "observe={observe}: {v}");
+        for command in commands {
+            assert_eq!(
+                command, "discipline hook run --agent opencode --event session-start < <arg>",
+                "observe={observe}"
+            );
+        }
+    }
 }
 
 /// Issue 570: an enforcing OpenCode plugin stays fail-closed. The pre-tool handler of
