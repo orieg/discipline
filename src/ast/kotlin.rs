@@ -16,7 +16,10 @@ use tree_sitter::Node;
 
 use super::ci_condition::{CiVerdict, Lang, SkipCondition};
 use super::functions::{self, FunctionSpec};
-use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
+use super::suppressions::{
+    self, AnnotationName, AnnotationRule, AnnotationSuppressions, Suppressions,
+};
+use super::{AssertVocabulary, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
 /// Kotlin language pack implementing [`LanguagePack`].
 pub struct KotlinPack;
@@ -70,7 +73,7 @@ impl LanguagePack for KotlinPack {
             class_skips: Vec::new(),
         };
 
-        extractor.collect_escape_hatches(root);
+        KOTLIN_SUPPRESSIONS.collect(root, extractor.src, &mut extractor.facts.escape_hatches);
         extractor.visit_node(root, &mut Vec::new(), false);
         extractor.resolve_same_file_helpers();
         KOTLIN_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
@@ -159,6 +162,19 @@ struct KotlinExtractor<'a> {
     class_skips: Vec<Vec<(String, CiVerdict)>>,
 }
 
+/// `@Suppress`, `@SuppressWarnings` and `@SuppressLint`, with the rule the annotation's
+/// text holds after its first parenthesis. No comment is read.
+const KOTLIN_SUPPRESSIONS: Suppressions = Suppressions {
+    comments: &[],
+    annotations: Some(&AnnotationSuppressions {
+        kinds: &["annotation"],
+        name: AnnotationName::FirstIdentifier,
+        names: &["Suppress", "SuppressWarnings", "SuppressLint"],
+        rule: AnnotationRule::AfterParen,
+    }),
+    ..Suppressions::SLASH_COMMENTS
+};
+
 impl<'a> KotlinExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
         node.utf8_text(self.src).unwrap_or("")
@@ -166,18 +182,7 @@ impl<'a> KotlinExtractor<'a> {
 
     /// The first identifier under an annotation: `Disabled` in `@Disabled("slow")`.
     fn annotation_name(&self, node: Node) -> &'a str {
-        let mut stack = vec![node];
-        while let Some(n) = stack.pop() {
-            if n.kind() == "identifier" {
-                return self.text(n);
-            }
-            let mut cursor = n.walk();
-            let children: Vec<Node> = n.named_children(&mut cursor).collect();
-            for c in children.into_iter().rev() {
-                stack.push(c);
-            }
-        }
-        ""
+        suppressions::first_identifier(node, self.src)
     }
 
     /// Annotations on a declaration: (name, whole text).
@@ -284,31 +289,6 @@ impl<'a> KotlinExtractor<'a> {
                 SkipCondition::When(verdict) => test.record_conditional_skip(text, verdict),
                 SkipCondition::Never => {}
             }
-        }
-    }
-
-    fn collect_escape_hatches(&mut self, node: Node<'a>) {
-        if node.kind() == "annotation" {
-            let name = self.annotation_name(node);
-            if matches!(name, "Suppress" | "SuppressWarnings" | "SuppressLint") {
-                let text = self.text(node);
-                let rule = text
-                    .split_once('(')
-                    .map(|(_, r)| r.trim_end_matches(')').trim().trim_matches('"').to_string())
-                    .unwrap_or_else(|| "all".to_string());
-                self.facts
-                    .escape_hatches
-                    .push(EscapeHatchSite::LinterDisable {
-                        line: node.start_position().row + 1,
-                        rule,
-                        snippet: text.to_string(),
-                    });
-            }
-            return;
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.collect_escape_hatches(child);
         }
     }
 
@@ -984,6 +964,7 @@ pub const KOTLIN_WRAPPER: super::WrapperSpec = super::WrapperSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::EscapeHatchSite;
 
     /// A test calling a thin wrapper gets the credit of one calling the wrapped function
     /// (`crate::ast::thin_wrapper_counts` names the controls).

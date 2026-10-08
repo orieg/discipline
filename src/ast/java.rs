@@ -6,7 +6,8 @@ use tree_sitter::Node;
 
 use super::ci_condition::{CiVerdict, Lang, SkipCondition};
 use super::functions::{self, FunctionSpec};
-use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
+use super::suppressions::{AnnotationName, AnnotationRule, AnnotationSuppressions, Suppressions};
+use super::{AssertVocabulary, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
 /// Java language pack implementing [`LanguagePack`].
 pub struct JavaPack;
@@ -60,7 +61,7 @@ impl LanguagePack for JavaPack {
             class_skips: Vec::new(),
         };
 
-        extractor.collect_comments_and_escape_hatches(root);
+        JAVA_SUPPRESSIONS.collect(root, extractor.src, &mut extractor.facts.escape_hatches);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
         JAVA_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
@@ -108,49 +109,26 @@ struct JavaExtractor<'a> {
     class_skips: Vec<Vec<(String, CiVerdict)>>,
 }
 
+/// `@SuppressWarnings`, with the rule its argument names. A comment is never a
+/// suppression: the annotation named in a comment or in a Javadoc `{@code ...}`
+/// suppresses nothing, so no comment is read.
+const JAVA_SUPPRESSIONS: Suppressions = Suppressions {
+    comments: &[],
+    annotations: Some(&AnnotationSuppressions {
+        kinds: &["annotation", "marker_annotation"],
+        name: AnnotationName::Field,
+        names: &["SuppressWarnings"],
+        rule: AnnotationRule::Arguments {
+            trimmed: true,
+            empty_is_all: false,
+        },
+    }),
+    ..Suppressions::SLASH_COMMENTS
+};
+
 impl<'a> JavaExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
         node.utf8_text(self.src).unwrap_or("")
-    }
-
-    fn collect_comments_and_escape_hatches(&mut self, node: Node<'a>) {
-        let kind = node.kind();
-        if kind == "annotation" || kind == "marker_annotation" {
-            let name = node
-                .child_by_field_name("name")
-                .map(|n| self.text(n))
-                .unwrap_or("");
-            if name == "SuppressWarnings" {
-                let rule = node
-                    .child_by_field_name("arguments")
-                    .map(|a| {
-                        self.text(a)
-                            .trim_matches(['(', ')'])
-                            .trim()
-                            .trim_matches('"')
-                            .to_string()
-                    })
-                    .unwrap_or_else(|| "all".to_string());
-                self.facts
-                    .escape_hatches
-                    .push(EscapeHatchSite::LinterDisable {
-                        line: node.start_position().row + 1,
-                        rule,
-                        snippet: self.text(node).to_string(),
-                    });
-            }
-            return;
-        }
-        // A comment is never a suppression: `@SuppressWarnings` named in a comment or a
-        // Javadoc `{@code ...}` suppresses nothing. Only the annotation node above counts.
-        if kind == "line_comment" || kind == "block_comment" {
-            return;
-        }
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.collect_comments_and_escape_hatches(child);
-        }
     }
 
     fn visit_root(&mut self, root: Node<'a>) {
@@ -900,6 +878,7 @@ pub const JAVA_WRAPPER: super::WrapperSpec = super::WrapperSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::EscapeHatchSite;
 
     /// The whole-file handler rule is the shared-or-own superset: an empty handler is
     /// silent in a file only the shared rule recognises (`benches/`) and in one only

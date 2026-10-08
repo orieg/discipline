@@ -6,7 +6,8 @@ use tree_sitter::Node;
 
 use super::ci_condition::SkipCondition;
 use super::functions::{self, FunctionSpec};
-use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
+use super::suppressions::{CommentRule, Reports, RuleText, Suppressions};
+use super::{AssertVocabulary, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
 /// JavaScript & TypeScript language pack implementing [`LanguagePack`].
 pub struct JavaScriptPack;
@@ -67,7 +68,7 @@ impl LanguagePack for JavaScriptPack {
             std_asserts: std_assert_names(root, &anc, src),
         };
 
-        extractor.collect_comments_and_escape_hatches(root);
+        JS_SUPPRESSIONS.collect(root, extractor.src, &mut extractor.facts.escape_hatches);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers(root);
         JS_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
@@ -373,68 +374,39 @@ const JS_FUNCTION_KINDS: &[&str] = &[
     "class_declaration",
 ];
 
+/// The comments that suppress the TypeScript checker, ESLint or a coverage tool. A
+/// coverage marker counts anywhere in the comment.
+const JS_SUPPRESSIONS: Suppressions = Suppressions {
+    rules: &[
+        CommentRule::opens(
+            &["@ts-ignore", "@ts-expect-error", "@ts-nocheck"],
+            Reports::TypeIgnore("typescript"),
+        ),
+        CommentRule::opens(
+            &["eslint-disable"],
+            Reports::Rest(RuleText {
+                after: &[
+                    "eslint-disable-line",
+                    "eslint-disable-next-line",
+                    "eslint-disable",
+                ],
+                then: &[],
+                first_word: false,
+                empty_is_all: true,
+            }),
+        ),
+        CommentRule {
+            markers: &["istanbul ignore", "c8 ignore"],
+            anywhere: true,
+            reports: Reports::Rule("coverage"),
+        },
+    ],
+    ..Suppressions::SLASH_COMMENTS
+};
+
 impl<'a> JsExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
         node.utf8_text(self.src).unwrap_or("")
-    }
-
-    fn collect_comments_and_escape_hatches(&mut self, node: Node<'a>) {
-        if node.kind() == "comment" {
-            let text = self.text(node);
-            let line = node.start_position().row + 1;
-            let trimmed = text
-                .trim_start_matches("//")
-                .trim_start_matches("/*")
-                .trim_end_matches("*/")
-                .trim();
-
-            if trimmed.starts_with("@ts-ignore")
-                || trimmed.starts_with("@ts-expect-error")
-                || trimmed.starts_with("@ts-nocheck")
-            {
-                self.facts.escape_hatches.push(EscapeHatchSite::TypeIgnore {
-                    line,
-                    tool: "typescript".to_string(),
-                    snippet: text.to_string(),
-                });
-            } else if trimmed.starts_with("eslint-disable") {
-                let rule = if let Some(rest) = trimmed.strip_prefix("eslint-disable-line") {
-                    rest.trim().to_string()
-                } else if let Some(rest) = trimmed.strip_prefix("eslint-disable-next-line") {
-                    rest.trim().to_string()
-                } else if let Some(rest) = trimmed.strip_prefix("eslint-disable") {
-                    rest.trim().to_string()
-                } else {
-                    "all".to_string()
-                };
-                let rule = if rule.is_empty() {
-                    "all".to_string()
-                } else {
-                    rule
-                };
-                self.facts
-                    .escape_hatches
-                    .push(EscapeHatchSite::LinterDisable {
-                        line,
-                        rule,
-                        snippet: text.to_string(),
-                    });
-            } else if trimmed.contains("istanbul ignore") || trimmed.contains("c8 ignore") {
-                self.facts
-                    .escape_hatches
-                    .push(EscapeHatchSite::LinterDisable {
-                        line,
-                        rule: "coverage".to_string(),
-                        snippet: text.to_string(),
-                    });
-            }
-            return;
-        }
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.collect_comments_and_escape_hatches(child);
-        }
     }
 
     fn visit_root(&mut self, root: Node<'a>) {
@@ -1648,6 +1620,7 @@ pub const JS_WRAPPER: super::WrapperSpec = super::WrapperSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::EscapeHatchSite;
 
     /// A test calling a thin wrapper gets the credit of one calling the wrapped function
     /// (`crate::ast::thin_wrapper_counts` names the controls).
