@@ -44,6 +44,9 @@ fn publish_step_defects(workflow: &Value) -> (usize, Vec<String>) {
             if job["permissions"]["id-token"].as_str() != Some("write") {
                 defects.push(format!("{at}: the job lacks `id-token: write`"));
             }
+            if job["environment"].as_str() != Some("release") {
+                defects.push(format!("{at}: the job lacks `environment: release`"));
+            }
             let Some(token) = step["env"]["CARGO_REGISTRY_TOKEN"].as_str() else {
                 defects.push(format!("{at}: no CARGO_REGISTRY_TOKEN in the step's env"));
                 continue;
@@ -92,7 +95,7 @@ fn every_cargo_publish_step_authenticates_with_an_exchanged_token() {
 fn a_publish_step_without_an_exchanged_token_is_reported() {
     let job = |steps: &str| -> Value {
         serde_yaml::from_str(&format!(
-            "jobs:\n  promote:\n    permissions:\n      id-token: write\n    steps:\n{steps}"
+            "jobs:\n  promote:\n    environment: release\n    permissions:\n      id-token: write\n    steps:\n{steps}"
         ))
         .unwrap()
     };
@@ -132,11 +135,23 @@ fn a_publish_step_without_an_exchanged_token_is_reported() {
     let good = format!("      - id: auth\n        uses: {EXCHANGE_ACTION}{pin}\n      - run: cargo publish --locked\n        env:\n          CARGO_REGISTRY_TOKEN: ${{{{ steps.auth.outputs.token }}}}\n");
     assert_eq!(publish_step_defects(&job(&good)), (1, Vec::new()));
 
-    let no_permission: Value =
-        serde_yaml::from_str(&format!("jobs:\n  promote:\n    steps:\n{good}")).unwrap();
+    let no_permission: Value = serde_yaml::from_str(&format!(
+        "jobs:\n  promote:\n    environment: release\n    steps:\n{good}"
+    ))
+    .unwrap();
     let (_, defects) = publish_step_defects(&no_permission);
     assert!(
         defects.len() == 1 && defects[0].contains("lacks `id-token: write`"),
+        "{defects:?}"
+    );
+
+    let no_env: Value = serde_yaml::from_str(&format!(
+        "jobs:\n  promote:\n    permissions:\n      id-token: write\n    steps:\n{good}"
+    ))
+    .unwrap();
+    let (_, defects) = publish_step_defects(&no_env);
+    assert!(
+        defects.len() == 1 && defects[0].contains("lacks `environment: release`"),
         "{defects:?}"
     );
 }
