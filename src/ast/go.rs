@@ -5,6 +5,7 @@ use anyhow::{anyhow, Result};
 use tree_sitter::{Node, Parser};
 
 use super::functions::{self, FunctionSpec};
+use super::suppressions::{CommentRule, Reports, Suppressions};
 use super::{AssertVocabulary, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
 /// Go language pack implementing [`LanguagePack`].
@@ -64,7 +65,7 @@ impl LanguagePack for GoPack {
             imports: super::expected_exceptions::go_imports(root, src),
         };
 
-        extractor.collect_comments_and_escape_hatches(root);
+        GO_SUPPRESSIONS.collect(root, extractor.src, &mut extractor.facts.escape_hatches);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
         GO_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
@@ -525,24 +526,17 @@ fn suite_types(root: Node, src: &str) -> std::collections::HashSet<String> {
 }
 
 /// The comments that suppress a Go linter.
-const GO_SUPPRESSIONS: super::CommentSuppressions = super::CommentSuppressions {
-    hash_comments: false,
-    markers: &["nolint", "lint:ignore", "revive:disable"],
+const GO_SUPPRESSIONS: Suppressions = Suppressions {
+    rules: &[CommentRule::opens(
+        &["nolint", "lint:ignore", "revive:disable"],
+        Reports::Body,
+    )],
+    ..Suppressions::SLASH_COMMENTS
 };
 
 impl<'a> GoExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
         node.utf8_text(self.src).unwrap_or("")
-    }
-
-    fn collect_comments_and_escape_hatches(&mut self, node: Node<'a>) {
-        super::collect_comment_suppressions(
-            node,
-            self.src,
-            &GO_SUPPRESSIONS,
-            &mut |_, _| true,
-            &mut self.facts.escape_hatches,
-        );
     }
 
     fn visit_root(&mut self, root: Node<'a>) {

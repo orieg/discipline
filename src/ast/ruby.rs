@@ -6,7 +6,8 @@ use tree_sitter::Node;
 
 use super::ci_condition::{read_skip, Grammar};
 use super::functions::{self, FunctionSpec};
-use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
+use super::suppressions::{CommentRule, Reports, RuleText, Suppressions};
+use super::{AssertVocabulary, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
 /// Ruby language pack implementing [`LanguagePack`].
 pub struct RubyPack;
@@ -66,7 +67,7 @@ impl LanguagePack for RubyPack {
             test_calls: Vec::new(),
         };
 
-        extractor.collect_comments_and_escape_hatches(root);
+        RUBY_SUPPRESSIONS.collect(root, extractor.src, &mut extractor.facts.escape_hatches);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
         RUBY_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
@@ -211,35 +212,27 @@ struct RubyExtractor<'a> {
     test_calls: Vec<Vec<String>>,
 }
 
+/// `# rubocop:disable` and `# rubocop:todo` comments. The comment is read whole, its
+/// `#` and the one space after it included, and the snippet is the comment trimmed.
+const RUBY_SUPPRESSIONS: Suppressions = Suppressions {
+    open: &[],
+    close: &[],
+    rules: &[CommentRule::opens(
+        &["# rubocop:disable", "# rubocop:todo"],
+        Reports::Rest(RuleText {
+            after: &[],
+            then: &["# rubocop:disable", "# rubocop:todo"],
+            first_word: false,
+            empty_is_all: false,
+        }),
+    )],
+    trimmed_snippet: true,
+    ..Suppressions::SLASH_COMMENTS
+};
+
 impl<'a> RubyExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
         node.utf8_text(self.src).unwrap_or("")
-    }
-
-    fn collect_comments_and_escape_hatches(&mut self, node: Node<'a>) {
-        let kind = node.kind();
-        if kind == "comment" {
-            let text = self.text(node).trim();
-            let line = node.start_position().row + 1;
-            if text.starts_with("# rubocop:disable") || text.starts_with("# rubocop:todo") {
-                let rule = text
-                    .trim_start_matches("# rubocop:disable")
-                    .trim_start_matches("# rubocop:todo")
-                    .trim();
-                self.facts
-                    .escape_hatches
-                    .push(EscapeHatchSite::LinterDisable {
-                        line,
-                        rule: rule.to_string(),
-                        snippet: text.to_string(),
-                    });
-            }
-        }
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.collect_comments_and_escape_hatches(child);
-        }
     }
 
     fn visit_root(&mut self, root: Node<'a>) {

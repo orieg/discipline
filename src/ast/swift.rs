@@ -11,7 +11,8 @@ use tree_sitter::Node;
 
 use super::ci_condition::{read_skip, Grammar, SkipCondition, SkipRead};
 use super::functions::{self, FunctionSpec};
-use super::{AssertVocabulary, EscapeHatchSite, Fact, LanguagePack, ParsedFileFacts, TestFn};
+use super::suppressions::{CommentRule, Reports, RuleText, Suppressions};
+use super::{AssertVocabulary, Fact, LanguagePack, ParsedFileFacts, TestFn};
 
 /// The Swift parser, reachable only through a text that ends in a line break.
 ///
@@ -139,7 +140,7 @@ impl LanguagePack for SwiftPack {
             inherited_skips: Vec::new(),
         };
 
-        extractor.collect_escape_hatches(root);
+        SWIFT_SUPPRESSIONS.collect(root, extractor.src, &mut extractor.facts.escape_hatches);
         extractor.visit_node(root, &mut Vec::new(), false, false);
         extractor.resolve_same_file_helpers();
         SWIFT_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
@@ -193,6 +194,23 @@ struct SwiftExtractor<'a> {
     /// Conditional skips of the enclosing suites (`@Suite(.disabled(if: ..))`).
     inherited_skips: Vec<SkipRead>,
 }
+
+/// `// swiftlint:disable rule` comments. `:next`, `:this` and `:previous` after the
+/// marker say which line the suppression covers and are not part of the rule, which is
+/// the first word after them.
+const SWIFT_SUPPRESSIONS: Suppressions = Suppressions {
+    comments: &["comment", "multiline_comment"],
+    rules: &[CommentRule::opens(
+        &["swiftlint:disable"],
+        Reports::Rest(RuleText {
+            after: &["swiftlint:disable"],
+            then: &[":next", ":this", ":previous"],
+            first_word: true,
+            empty_is_all: false,
+        }),
+    )],
+    ..Suppressions::SLASH_COMMENTS
+};
 
 impl<'a> SwiftExtractor<'a> {
     fn text(&self, node: Node) -> &'a str {
@@ -282,40 +300,6 @@ impl<'a> SwiftExtractor<'a> {
             }
         }
         out
-    }
-
-    /// `// swiftlint:disable rule` and `// swiftlint:disable:next rule` comments.
-    fn collect_escape_hatches(&mut self, node: Node<'a>) {
-        if matches!(node.kind(), "comment" | "multiline_comment") {
-            let text = self.text(node);
-            let body = text
-                .trim_start_matches("//")
-                .trim_start_matches("/*")
-                .trim_end_matches("*/")
-                .trim();
-            if let Some(rest) = body.strip_prefix("swiftlint:disable") {
-                let rule = rest
-                    .trim_start_matches(":next")
-                    .trim_start_matches(":this")
-                    .trim_start_matches(":previous")
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("all")
-                    .to_string();
-                self.facts
-                    .escape_hatches
-                    .push(EscapeHatchSite::LinterDisable {
-                        line: node.start_position().row + 1,
-                        rule,
-                        snippet: text.to_string(),
-                    });
-            }
-            return;
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.collect_escape_hatches(child);
-        }
     }
 
     /// Whether a type inherits from `XCTestCase` (directly, as the grammar shows it).
@@ -811,6 +795,7 @@ pub const SWIFT_WRAPPER: super::WrapperSpec = super::WrapperSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::EscapeHatchSite;
 
     /// A test calling a thin wrapper gets the credit of one calling the wrapped function
     /// (`crate::ast::thin_wrapper_counts` names the controls).
