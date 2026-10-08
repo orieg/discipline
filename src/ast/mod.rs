@@ -367,6 +367,38 @@ pub(crate) fn innermost_test(tests: &mut [TestFn], line: usize) -> Option<&mut T
         .min_by_key(|t| t.end_line.saturating_sub(t.line))
 }
 
+/// For each line of a source of `last_line` lines, the index of the test
+/// [`innermost_test`] answers for it; the entry of a line is at its number.
+///
+/// A reader that places many records asks this table and not `innermost_test`, which
+/// reads every test for each answer. The table is made in one pass over the lines with
+/// the tests that have begun kept in a heap, shortest first.
+pub(crate) fn innermost_tests_by_line(tests: &[TestFn], last_line: usize) -> Vec<Option<usize>> {
+    use std::cmp::Reverse;
+    let mut by_start: Vec<usize> = (0..tests.len()).collect();
+    by_start.sort_by_key(|&i| tests[i].line);
+    let mut begun = by_start.into_iter().peekable();
+    // The shortest span first, and of two as short the first in `tests`.
+    let mut open = std::collections::BinaryHeap::new();
+    let mut out = Vec::with_capacity(last_line.saturating_add(1));
+    for line in 0..=last_line {
+        while let Some(i) = begun.next_if(|&i| tests[i].line <= line) {
+            let t = &tests[i];
+            open.push(Reverse((t.end_line.saturating_sub(t.line), i)));
+        }
+        // A test that ended above this line holds no later one either.
+        while open.peek().is_some_and(|Reverse((_, i))| {
+            let t: &TestFn = &tests[*i];
+            t.end_line.max(t.line) < line
+        }) {
+            open.pop();
+        }
+        out.push(open.peek().map(|Reverse((_, i))| *i));
+    }
+    ancestry::count(tests.len() + out.len());
+    out
+}
+
 impl TestFn {
     /// Assertions that can actually fail: not a tautology, and not swallowed by a handler.
     /// An assertion that is both counts against the test once.
@@ -1896,6 +1928,46 @@ pub(crate) const TRANSITIVE_WRAPPER_COUNTS: [(usize, usize); 5] =
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The table of lines answers as `innermost_test` does, for every line: tests one
+    /// inside another, two of one span, a test whose end is not tracked, one that ends
+    /// past the source, and lines no test holds.
+    #[test]
+    fn the_table_of_lines_answers_as_innermost_test_does() {
+        let spans: &[(usize, usize)] = &[
+            (2, 30),
+            (4, 12),
+            (4, 12),
+            (5, 6),
+            (6, 0),
+            (9, 9),
+            (14, 40),
+            (15, usize::MAX),
+            (16, 18),
+            (0, 1),
+            (25, 3),
+        ];
+        let mut tests: Vec<TestFn> = spans
+            .iter()
+            .enumerate()
+            .map(|(i, &(line, end_line))| TestFn {
+                name: format!("t{i}"),
+                line,
+                end_line,
+                ..Default::default()
+            })
+            .collect();
+        let table = innermost_tests_by_line(&tests, 50);
+        assert_eq!(table.len(), 51);
+        for (line, answer) in table.iter().enumerate() {
+            let named = answer.map(|i| format!("t{i}"));
+            let asked = innermost_test(&mut tests, line).map(|t| t.name.clone());
+            assert_eq!(named, asked, "line {line}");
+        }
+        // The answers differ from line to line, so the comparison is of something.
+        let distinct: std::collections::HashSet<_> = table.iter().collect();
+        assert!(distinct.len() >= 9, "{distinct:?}");
+    }
 
     struct MockCustomPack;
 
