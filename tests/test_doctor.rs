@@ -1589,3 +1589,137 @@ fn doctor_reports_mutation_preset_finding() {
         "Go runner without mutation preset must not emit mutation-testing finding"
     );
 }
+
+#[test]
+fn doctor_reports_hook_mode_truthfully() {
+    let repo = Repo::new();
+    repo.commit_base(".github/workflows/ci.yml", WORKFLOW, "base");
+
+    let agents = [
+        ("claude-code", ".claude/settings.json"),
+        ("copilot", ".github/hooks/discipline.json"),
+        ("agy", ".agents/hooks.json"),
+        ("opencode", ".opencode/plugins/discipline.js"),
+        ("qwen", ".qwen/settings.json"),
+        ("codex", ".codex/hooks.json"),
+    ];
+
+    for (agent, rel) in agents {
+        // 1. Observe mode: Warn, pretool does not say "refuses"
+        let install_obs = repo.run(&["hook", "install", "--agent", agent, "--observe"], &[]);
+        assert_eq!(install_obs.code, 0, "{agent}: {}", install_obs.stderr);
+
+        let run = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+        let v: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+        let findings = v["findings"].as_array().unwrap();
+
+        let hook_mode = findings
+            .iter()
+            .find(|f| f["id"] == "hook-mode" && f["summary"].as_str().unwrap().contains(rel))
+            .unwrap_or_else(|| panic!("must emit hook-mode finding for {agent} in observe mode"));
+        assert_eq!(
+            hook_mode["status"], "warn",
+            "{agent} observe mode must be warn"
+        );
+        assert!(
+            hook_mode["summary"].as_str().unwrap().contains("observe"),
+            "{agent}: {hook_mode}"
+        );
+        let rem = hook_mode["remediation"]
+            .as_str()
+            .expect("must have remediation");
+        assert!(rem.contains("discipline hook install"), "{agent}: {rem}");
+
+        let pretool = findings
+            .iter()
+            .find(|f| f["id"] == "pretool-hook" && f["summary"].as_str().unwrap().contains(rel))
+            .unwrap_or_else(|| panic!("must emit pretool-hook finding for {agent}"));
+        assert_eq!(pretool["status"], "pass");
+        assert!(
+            !pretool["summary"].as_str().unwrap().contains("refuses"),
+            "{agent} observe pretool text must not contain 'refuses': {}",
+            pretool["summary"]
+        );
+        assert!(
+            pretool["summary"].as_str().unwrap().contains("logs"),
+            "{agent} observe pretool text must say logs: {}",
+            pretool["summary"]
+        );
+
+        std::fs::remove_file(repo.path().join(rel)).unwrap();
+
+        // 2. Enforcing mode: Pass, pretool says "refuses"
+        let install_enf = repo.run(&["hook", "install", "--agent", agent], &[]);
+        assert_eq!(install_enf.code, 0, "{agent}: {}", install_enf.stderr);
+
+        let run = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+        let v: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+        let findings = v["findings"].as_array().unwrap();
+
+        let hook_mode = findings
+            .iter()
+            .find(|f| f["id"] == "hook-mode" && f["summary"].as_str().unwrap().contains(rel))
+            .unwrap_or_else(|| panic!("must emit hook-mode finding for {agent} in enforcing mode"));
+        assert_eq!(
+            hook_mode["status"], "pass",
+            "{agent} enforcing mode must be pass"
+        );
+
+        let pretool = findings
+            .iter()
+            .find(|f| f["id"] == "pretool-hook" && f["summary"].as_str().unwrap().contains(rel))
+            .unwrap_or_else(|| panic!("must emit pretool-hook finding for {agent}"));
+        assert_eq!(pretool["status"], "pass");
+        assert!(
+            pretool["summary"].as_str().unwrap().contains("refuses"),
+            "{agent} enforcing pretool text must contain 'refuses': {}",
+            pretool["summary"]
+        );
+
+        // 3. Edited file: Unknown
+        let existing = std::fs::read_to_string(repo.path().join(rel)).unwrap();
+        let edited = format!("{existing}\n// edited custom line");
+        std::fs::write(repo.path().join(rel), edited).unwrap();
+
+        let run = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+        let v: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+        let findings = v["findings"].as_array().unwrap();
+
+        let hook_mode = findings
+            .iter()
+            .find(|f| f["id"] == "hook-mode" && f["summary"].as_str().unwrap().contains(rel))
+            .unwrap_or_else(|| panic!("must emit hook-mode finding for {agent} when edited"));
+        assert_eq!(
+            hook_mode["status"], "unknown",
+            "{agent} edited file must be unknown"
+        );
+
+        std::fs::remove_file(repo.path().join(rel)).unwrap();
+    }
+
+    // 4. Hook file with no check or stop entry: Warn
+    std::fs::create_dir_all(repo.path().join(".claude")).unwrap();
+    std::fs::write(
+        repo.path().join(".claude/settings.json"),
+        r#"{"hooks":{"PreToolUse":[{"matcher":"Edit","hooks":[{"type":"command","command":"discipline hook run --agent claude-code --event pre-tool"}]}]}}"#,
+    ).unwrap();
+    let run = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+    let v: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    let findings = v["findings"].as_array().unwrap();
+    let hook_mode = findings
+        .iter()
+        .find(|f| {
+            f["id"] == "hook-mode"
+                && f["summary"]
+                    .as_str()
+                    .unwrap()
+                    .contains(".claude/settings.json")
+        })
+        .expect("must emit hook-mode finding for hook file with no check or stop entry");
+    assert_eq!(hook_mode["status"], "warn");
+    assert!(hook_mode["summary"]
+        .as_str()
+        .unwrap()
+        .contains("no check or stop entry"));
+    std::fs::remove_file(repo.path().join(".claude/settings.json")).unwrap();
+}

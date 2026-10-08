@@ -1362,6 +1362,9 @@ pub fn generated_mode(agent: Agent, user: bool, text: &str) -> Option<bool> {
         return generated_user_json_hooks(agent, text).map(|g| g.observe);
     }
     if agent == Agent::Opencode {
+        if crate::hookfile::stamp_state(text) == crate::hookfile::Stamp::Edited {
+            return None;
+        }
         return text
             .contains(GENERATED_HEADER)
             .then(|| opencode_plugin_mode(text))

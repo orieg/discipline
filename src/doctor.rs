@@ -206,6 +206,7 @@ pub const DOCTOR_FINDINGS: &[&str] = &[
     "force-push",
     "forge-token",
     "forking",
+    "hook-mode",
     "immutable-releases",
     "last-push-approval",
     "leases",

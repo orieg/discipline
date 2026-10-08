@@ -115,8 +115,8 @@ pub fn agent_permission_findings(
 /// discipline hook, which it skips without a message in a folder it does not trust. `None`
 /// without a repository hook or without Copilot CLI configuration (a CI runner, or a
 /// machine where Copilot CLI has not run).
-/// A generated agent hook file: agent id, path, and whether its text has the pre-tool entry.
-type HookFile = (&'static str, &'static str, fn(&str) -> bool);
+/// A generated agent hook file: agent, path, and whether its text has the pre-tool entry.
+type HookFile = (crate::hook::Agent, &'static str, Option<fn(&str) -> bool>);
 
 /// Several agents in one repository (docs/ROADMAP.md, Phase 13 Step 4):
 ///
@@ -128,7 +128,11 @@ type HookFile = (&'static str, &'static str, fn(&str) -> bool);
 ///   are listed (information).
 /// - `pretool-hook`: a generated agent hook file without its pre-tool entry, which a file
 ///   written before that entry existed lacks (information: the entry needs a discipline
-///   release that has `hook run --event pre-tool`).
+///   release that has `hook run --event pre-tool`). An observe-mode file logs and does not
+///   refuse.
+/// - `hook-mode`: the mode of each agent hook file (pass when enforcing, warning when observe,
+///   naming the file and how to switch; unknown when unreadable; warning when no check or
+///   stop entry is present).
 pub fn multi_agent_findings(root: &Path) -> Vec<Finding> {
     let mut out = Vec::new();
     let Ok(repo) = crate::gitctx::discover_repository(root) else {
@@ -202,25 +206,38 @@ pub fn multi_agent_findings(root: &Path) -> Vec<Finding> {
             Ok(_) => {}
         }
     }
-    let files: [HookFile; 6] = [
-        ("claude-code", ".claude/settings.json", |t| {
-            t.contains("\"PreToolUse\"") && t.contains("--event pre-tool")
-        }),
-        ("copilot", ".github/hooks/discipline.json", |t| {
-            t.contains("\"preToolUse\"") && t.contains("--event pre-tool")
-        }),
-        ("agy", ".agents/hooks.json", |t| {
-            t.contains("\"PreToolUse\"") && t.contains("--event pre-tool")
-        }),
-        ("opencode", ".opencode/plugins/discipline.js", |t| {
-            t.contains("tool.execute.before") && t.contains("--event pre-tool")
-        }),
-        ("qwen", ".qwen/settings.json", |t| {
-            t.contains("\"PreToolUse\"") && t.contains("--event pre-tool")
-        }),
-        ("codex", ".codex/hooks.json", |t| {
-            t.contains("\"PreToolUse\"") && t.contains("--event pre-tool")
-        }),
+    let files: [HookFile; 7] = [
+        (
+            crate::hook::Agent::ClaudeCode,
+            ".claude/settings.json",
+            Some(|t| t.contains("\"PreToolUse\"") && t.contains("--event pre-tool")),
+        ),
+        (
+            crate::hook::Agent::Copilot,
+            ".github/hooks/discipline.json",
+            Some(|t| t.contains("\"preToolUse\"") && t.contains("--event pre-tool")),
+        ),
+        (
+            crate::hook::Agent::Agy,
+            ".agents/hooks.json",
+            Some(|t| t.contains("\"PreToolUse\"") && t.contains("--event pre-tool")),
+        ),
+        (
+            crate::hook::Agent::Opencode,
+            ".opencode/plugins/discipline.js",
+            Some(|t| t.contains("tool.execute.before") && t.contains("--event pre-tool")),
+        ),
+        (
+            crate::hook::Agent::Qwen,
+            ".qwen/settings.json",
+            Some(|t| t.contains("\"PreToolUse\"") && t.contains("--event pre-tool")),
+        ),
+        (
+            crate::hook::Agent::Codex,
+            ".codex/hooks.json",
+            Some(|t| t.contains("\"PreToolUse\"") && t.contains("--event pre-tool")),
+        ),
+        (crate::hook::Agent::Cursor, ".cursor/hooks.json", None),
     ];
     for (agent, rel, has) in files {
         let Some(text) = read(root, rel) else {
@@ -229,24 +246,73 @@ pub fn multi_agent_findings(root: &Path) -> Vec<Finding> {
         if !text.contains("discipline hook run") {
             continue;
         }
-        out.push(if has(&text) {
-            Finding::new(
-                "pretool-hook",
-                Status::Pass,
-                format!("`{rel}` refuses an edit outside the session's worktree before it runs"),
-            )
+        let agent_id = agent.id();
+        let is_observe = crate::hook::generated_mode(agent, false, &text) == Some(true)
+            || text.contains("--event pre-tool --observe")
+            || (agent == crate::hook::Agent::Opencode && text.contains(" --observe"));
+        if let Some(has) = has {
+            out.push(if has(&text) {
+                Finding::new(
+                    "pretool-hook",
+                    Status::Pass,
+                    if is_observe {
+                        format!("`{rel}` logs an edit outside the session's worktree before it runs")
+                    } else {
+                        format!("`{rel}` refuses an edit outside the session's worktree before it runs")
+                    },
+                )
+            } else {
+                Finding::new(
+                    "pretool-hook",
+                    Status::Info,
+                    format!("`{rel}` has no pre-tool entry: {agent_id} can edit another worktree before any check runs"),
+                )
+                .fix(format!(
+                    "Once the installed discipline has `hook run --event pre-tool`, regenerate it: `discipline hook install --agent {agent_id} --upgrade` (a file with hooks or settings of its own is not rewritten: merge the entry it prints)."
+                ))
+            });
+        }
+        if !has_check_or_stop(agent, &text) {
+            out.push(
+                Finding::new(
+                    "hook-mode",
+                    Status::Warn,
+                    format!("`{rel}` has no check or stop entry: {agent_id} can make changes without any check running"),
+                )
+                .fix(format!("Run `discipline hook install --agent {agent_id} --upgrade` to add the check entry.")),
+            );
         } else {
-            Finding::new(
-                "pretool-hook",
-                Status::Info,
-                format!("`{rel}` has no pre-tool entry: {agent} can edit another worktree before any check runs"),
-            )
-            .fix(format!(
-                "Once the installed discipline has `hook run --event pre-tool`, regenerate it: `discipline hook install --agent {agent} --upgrade` (a file with hooks or settings of its own is not rewritten: merge the entry it prints)."
-            ))
-        });
+            out.push(match crate::hook::generated_mode(agent, false, &text) {
+                Some(true) => Finding::new(
+                    "hook-mode",
+                    Status::Warn,
+                    format!("`{rel}` is in observe mode: it logs what it would block without blocking"),
+                )
+                .fix(format!("To switch to enforcing, delete `{rel}` and run `discipline hook install --agent {agent_id}`.")),
+                Some(false) => Finding::new(
+                    "hook-mode",
+                    Status::Pass,
+                    format!("`{rel}` is in enforcing mode"),
+                ),
+                None => Finding::new(
+                    "hook-mode",
+                    Status::Unknown,
+                    format!("the mode of `{rel}` could not be read: it was edited or is not a recognised hook file"),
+                )
+                .fix(format!("Regenerate with `discipline hook install --agent {agent_id} --upgrade --force` or repair the file.")),
+            });
+        }
     }
     out
+}
+
+fn has_check_or_stop(agent: crate::hook::Agent, text: &str) -> bool {
+    let run = format!("discipline hook run --agent {}", agent.id());
+    text.lines().any(|line| {
+        line.contains(&run)
+            && !line.contains("--event pre-tool")
+            && !line.contains("--event session-start")
+    })
 }
 
 /// `agent-sandbox`: the modes and switches in each agent's settings that run it with less
