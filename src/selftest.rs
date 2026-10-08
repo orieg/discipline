@@ -1428,7 +1428,6 @@ const CASES: &[Case] = &[
                 sha: "1".repeat(40),
                 author_name: "A".to_string(),
                 author_email: "a@x".to_string(),
-                committer_email: "a@x".to_string(),
                 message: message.to_string(),
                 parent_count: 1,
             };
@@ -1472,7 +1471,6 @@ const CASES: &[Case] = &[
                 sha: sha.to_string(),
                 author_name: "A".to_string(),
                 author_email: "a@x".to_string(),
-                committer_email: "a@x".to_string(),
                 message: "fix: x\n".to_string(),
                 parent_count: 1,
             };
@@ -1931,6 +1929,28 @@ const CASES: &[Case] = &[
                 && c.contains("\\|")
                 && !c.contains('\n')
                 && !c.contains("allow-assertion-drop"))
+        },
+    ),
+    (
+        "audit page: a control, bidirectional or invisible character in a subject is shown as U+FFFD",
+        || {
+            use crate::audit::{directive_records, ChangeInfoRef, Summary};
+            let change = ChangeInfoRef {
+                sha: "a".repeat(40),
+                pr: None,
+                time: 0,
+                ord: 0,
+                subject: "feat: a\u{202e}b\u{1b}c\u{200b}d <e>".to_string(),
+            };
+            let records = directive_records("s\n\nno-issue: release bookkeeping", &change, false);
+            let page = crate::audit_html::render(&Summary::from_records(
+                "main".into(),
+                1,
+                records,
+                Vec::new(),
+            ));
+            Ok(page.contains("feat: a\u{fffd}b\u{fffd}c\u{fffd}d &lt;e&gt;")
+                && !page.contains(['\u{202e}', '\u{1b}', '\u{200b}']))
         },
     ),
     (

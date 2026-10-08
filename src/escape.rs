@@ -2,7 +2,8 @@
 //!
 //! | Output | Function | What it does |
 //! |---|---|---|
-//! | HTML content and attribute values (the audit page) | [`html`] | `&`, `<`, `>`, `"` and `'` become entities |
+//! | HTML content and attribute values, the tool's own words (the audit page) | [`html`] | `&`, `<`, `>`, `"` and `'` become entities |
+//! | HTML content and attribute values, text from outside the binary (the audit page) | [`html_author_text`] | [`html`], and a control, bidirectional or invisible character becomes U+FFFD |
 //! | HTML content (the generated reference tables) | [`html_content`] | `&`, `<`, `>` and `"` become entities |
 //! | XML 1.0 content and attribute values (JUnit) | [`xml`] | the five entities; forbidden characters are dropped |
 //! | A Markdown table cell of generated documentation | [`docs_markdown_cell`] | a pipe, `<`, `>` and a line break; Markdown stays live |
@@ -27,6 +28,40 @@ pub fn html(s: &str) -> String {
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Whether `c` is shown as U+FFFD in text the audit page quotes: what a report replaces
+/// in a terminal line or a Markdown cell ([`crate::report::text`]: the C0 and C1
+/// controls, DEL, the bidirectional embeddings, overrides and isolates, U+061C, the
+/// line and paragraph separators), and what `instruction-smuggling` reports as
+/// invisible (the zero-width characters, U+200E and U+200F among them, the soft hyphen,
+/// the tag characters). A tab, a line feed and a carriage return are white space in
+/// HTML and stay.
+fn is_hidden(c: char) -> bool {
+    !matches!(c, '\t' | '\n' | '\r')
+        && (crate::report::text::is_control(c)
+            || crate::guards::instruction_smuggling::invisible_class(c).is_some())
+}
+
+/// Escape text from outside the binary (a commit subject, a file name, a configuration
+/// value, what a forge answered) for HTML content and attribute values. Differs from
+/// [`html`]: every character [`is_hidden`] names becomes U+FFFD, so the text cannot
+/// reorder or hide what the page shows around it. Text with none of them is written as
+/// [`html`] writes it.
+pub fn html_author_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c if is_hidden(c) => out.push(crate::report::text::REPLACEMENT),
             _ => out.push(c),
         }
     }
@@ -65,6 +100,16 @@ pub(crate) fn xml(s: &str) -> String {
     out
 }
 
+/// The five predefined XML entities read back as their characters, `&amp;` last so
+/// that `&amp;lt;` reads as `&lt;`. Numeric character references are left as written.
+pub(crate) fn unescape_xml(s: &str) -> String {
+    s.replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
 /// Text of the tool's own documentation as a Markdown table cell. Differs from
 /// [`markdown_cell`]: only a pipe, `<`, `>` and a line feed are changed, so `&`, a
 /// backslash and Markdown markup (a code span the caller wrote) pass through.
@@ -89,6 +134,55 @@ pub fn comment_markdown_cell(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn author_text_for_html_shows_each_hidden_character_as_the_replacement() {
+        // One of each class, and the three white-space controls that stay.
+        for (class, c) in [
+            ("C0", '\u{1}'),
+            ("C0 (ESC)", '\u{1b}'),
+            ("DEL", '\u{7f}'),
+            ("C1", '\u{9b}'),
+            ("bidirectional embedding", '\u{202a}'),
+            ("bidirectional override", '\u{202e}'),
+            ("bidirectional isolate", '\u{2066}'),
+            ("directional mark", '\u{200e}'),
+            ("directional mark", '\u{200f}'),
+            ("Arabic letter mark", '\u{61c}'),
+            ("line separator", '\u{2028}'),
+            ("paragraph separator", '\u{2029}'),
+            ("zero-width space", '\u{200b}'),
+            ("word joiner", '\u{2060}'),
+            ("byte order mark", '\u{feff}'),
+            ("soft hyphen", '\u{ad}'),
+            ("tag character", '\u{e0041}'),
+        ] {
+            assert_eq!(
+                html_author_text(&format!("a{c}b")),
+                "a\u{fffd}b",
+                "{class} U+{:04X}",
+                c as u32
+            );
+        }
+        assert_eq!(html_author_text("a\tb\nc\rd"), "a\tb\nc\rd");
+        // Markup is escaped as `html` escapes it, and ordinary text is the same bytes.
+        for text in [PUNCTUATION.trim_end_matches('\u{202e}'), HOSTILE, ""] {
+            assert_eq!(html_author_text(text), html(text));
+        }
+        assert_eq!(
+            html_author_text(CONTROLS),
+            "a\u{fffd}b\u{fffd}c\rd\u{fffd}e\u{fffe}f\u{ffff}g"
+        );
+    }
+
+    #[test]
+    fn the_xml_entities_are_read_back_once() {
+        assert_eq!(
+            unescape_xml("&lt;a b=&quot;c&quot;&gt;&apos;&amp;"),
+            "<a b=\"c\">'&"
+        );
+        assert_eq!(unescape_xml("&amp;lt; &#60; plain"), "&lt; &#60; plain");
+    }
 
     /// Every ASCII punctuation character, a newline, a tab, a pipe, a backtick, a
     /// mention and some non-ASCII text.
