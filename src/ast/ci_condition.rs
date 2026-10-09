@@ -1485,9 +1485,10 @@ pub fn skip_condition<'t>(
 ///
 /// An environment variable is a CI variable by the rule for an environment read; a
 /// system property only when its name is a CI variable name (`ci`, `CI`). `matches` is a
-/// regular expression and is not evaluated, except that `Enabled..` on a CI variable with
-/// a value that reads as off (`false`, `0`) runs the test outside CI only. Operating
-/// system, runtime version and `@DisabledIf("method")` conditions read no CI variable.
+/// regular expression and is not evaluated, except that a value reading as off
+/// (`false`, `0`) inverts whether the annotation skips in CI (`Disabled..` runs in CI,
+/// `Enabled..` runs outside CI only). Operating system, runtime version and
+/// `@DisabledIf("method")` conditions read no CI variable.
 pub fn jvm_annotation(
     name: &str,
     named: Option<&str>,
@@ -1510,8 +1511,14 @@ pub fn jvm_annotation(
         )
     });
     Some(match name {
-        "DisabledIfEnvironmentVariable" => variable(false).map_or(other, |v| skips(&v)),
-        "DisabledIfSystemProperty" => variable(true).map_or(other, |v| skips(&v)),
+        "DisabledIfEnvironmentVariable" => match variable(false) {
+            Some(v) if !off => skips(&v),
+            _ => other,
+        },
+        "DisabledIfSystemProperty" => match variable(true) {
+            Some(v) if !off => skips(&v),
+            _ => other,
+        },
         "EnabledIfEnvironmentVariable" => match variable(false) {
             Some(v) if off => skips(&v),
             _ => other,

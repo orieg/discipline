@@ -1022,7 +1022,8 @@ fn control_rounds() -> Value {
     )
 }
 
-fn ratio_run(runner: &str, cells: &[(&str, f64)]) -> Value {
+fn ratio_run(repo: &Repo, runner: &str, cells: &[(&str, f64)]) -> Value {
+    let commit = repo.git_output(&["rev-parse", "HEAD"]);
     let cells: serde_json::Map<String, Value> = cells
         .iter()
         .map(|(id, c)| (id.to_string(), json!({ "rounds": rounds(*c) })))
@@ -1033,7 +1034,7 @@ fn ratio_run(runner: &str, cells: &[(&str, f64)]) -> Value {
             "platform": "linux-glibc-x86_64",
             "runner_class": "ubuntu-24.04",
             "runner_id": runner,
-            "commit": "abc123",
+            "commit": commit,
             "twin": {"identity": "reference-build", "version": "1.0.5"}
         },
         "axes": {"timing": {
@@ -1051,6 +1052,7 @@ fn ratio_base(repo: &Repo) {
     for (i, scale) in [1.00, 1.01, 0.99].iter().enumerate() {
         let p = dir.path().join(format!("run{i}.json"));
         let run = ratio_run(
+            repo,
             &format!("runner-{i}"),
             &[
                 ("map_get", 1.0 * scale),
@@ -1096,6 +1098,7 @@ fn cells_regressed(repo: &Repo, holds: Holds) -> Inputs {
         Holds::Both => (1.3, 2.6),
     };
     let run = ratio_run(
+        repo,
         "r9",
         &[("map_get", get), ("map_insert", insert), ("map_scan", 3.0)],
     );
@@ -1108,11 +1111,12 @@ fn cells_missing(repo: &Repo, holds: Holds) -> Inputs {
         Holds::B => &[("map_get", 1.0), ("map_scan", 3.0)],
         Holds::Both => &[("map_scan", 3.0)],
     };
-    paired_inputs(repo, &ratio_run("r9", cells))
+    paired_inputs(repo, &ratio_run(repo, "r9", cells))
 }
 
 fn cells_not_comparable(repo: &Repo, holds: Holds) -> Inputs {
     let mut run = ratio_run(
+        repo,
         "r9",
         &[("map_get", 1.0), ("map_insert", 2.0), ("map_scan", 3.0)],
     );
@@ -1129,6 +1133,7 @@ fn cells_not_comparable(repo: &Repo, holds: Holds) -> Inputs {
 
 fn cells_with_a_disagreeing_ratio(repo: &Repo, holds: Holds) -> Inputs {
     let mut run = ratio_run(
+        repo,
         "r9",
         &[("map_get", 1.0), ("map_insert", 2.0), ("map_scan", 3.0)],
     );

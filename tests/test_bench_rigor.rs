@@ -422,16 +422,12 @@ fn bench_derive_records_derived_floors_and_twin_identity() {
 #[test]
 fn paired_ratio_clean_run_passes() {
     let (repo, _) = paired_repo();
+    let commit = repo.git_output(&["rev-parse", "HEAD"]);
     let dir = tempfile::tempdir().unwrap();
     let run_file = dir.path().join("run.json");
     write_json(
         &run_file,
-        &ratio_run(
-            "def456",
-            "r9",
-            &[("map_get", 1.0), ("map_insert", 2.0)],
-            1.0,
-        ),
+        &ratio_run(&commit, "r9", &[("map_get", 1.0), ("map_insert", 2.0)], 1.0),
     );
     let run = paired_check(&repo, &run_file, &[]);
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
@@ -441,12 +437,13 @@ fn paired_ratio_clean_run_passes() {
 #[test]
 fn paired_ratio_true_regression_fails() {
     let (repo, _) = paired_repo();
+    let commit = repo.git_output(&["rev-parse", "HEAD"]);
     let dir = tempfile::tempdir().unwrap();
     let run_file = dir.path().join("run.json");
     write_json(
         &run_file,
         &ratio_run(
-            "def456",
+            &commit,
             "r9",
             &[("map_get", 1.30), ("map_insert", 2.0)],
             1.0,
@@ -467,12 +464,13 @@ fn paired_ratio_true_regression_fails() {
 #[test]
 fn paired_ratio_contaminated_control_is_not_comparable_never_a_regression() {
     let (repo, _) = paired_repo();
+    let commit = repo.git_output(&["rev-parse", "HEAD"]);
     let dir = tempfile::tempdir().unwrap();
     let run_file = dir.path().join("run.json");
     write_json(
         &run_file,
         &ratio_run(
-            "def456",
+            &commit,
             "r9",
             &[("map_get", 1.30), ("map_insert", 2.0)],
             1.25,
@@ -494,9 +492,10 @@ fn paired_ratio_contaminated_control_is_not_comparable_never_a_regression() {
 #[test]
 fn paired_ratio_run_without_controls_is_refused() {
     let (repo, _) = paired_repo();
+    let commit = repo.git_output(&["rev-parse", "HEAD"]);
     let dir = tempfile::tempdir().unwrap();
     let run_file = dir.path().join("run.json");
-    let mut v = ratio_run("def456", "r9", &[("map_get", 1.0)], 1.0);
+    let mut v = ratio_run(&commit, "r9", &[("map_get", 1.0)], 1.0);
     v["axes"]["timing"]["controls"] = json!({});
     write_json(&run_file, &v);
     let run = paired_check(&repo, &run_file, &[]);
@@ -523,12 +522,13 @@ fn paired_ratio_baseline_is_read_from_the_base_ref_and_loosening_is_flagged() {
     repo.write(BASELINE, &serde_json::to_string_pretty(&loose).unwrap());
     repo.commit("chore: widen floors");
 
+    let commit = repo.git_output(&["rev-parse", "HEAD"]);
     let dir = tempfile::tempdir().unwrap();
     let run_file = dir.path().join("run.json");
     write_json(
         &run_file,
         &ratio_run(
-            "def456",
+            &commit,
             "r9",
             &[("map_get", 1.30), ("map_insert", 2.0)],
             1.0,
@@ -579,16 +579,12 @@ fn paired_ratio_baseline_changed_with_source_is_a_violation_unless_named() {
     repo.write("src/lib.rs", &format!("{GOOD_LIB}\npub fn g() {{}}\n"));
     repo.commit("feat: change code and baseline together");
 
+    let commit = repo.git_output(&["rev-parse", "HEAD"]);
     let dir = tempfile::tempdir().unwrap();
     let run_file = dir.path().join("run.json");
     write_json(
         &run_file,
-        &ratio_run(
-            "def456",
-            "r9",
-            &[("map_get", 1.0), ("map_insert", 2.0)],
-            1.0,
-        ),
+        &ratio_run(&commit, "r9", &[("map_get", 1.0), ("map_insert", 2.0)], 1.0),
     );
     let run = paired_check(&repo, &run_file, &[]);
     assert_eq!(run.code, 1, "{}", run.stdout);
@@ -612,14 +608,10 @@ fn paired_ratio_baseline_changed_with_source_is_a_violation_unless_named() {
 #[test]
 fn paired_ratio_twin_version_change_invalidates_the_baseline() {
     let (repo, _) = paired_repo();
+    let commit = repo.git_output(&["rev-parse", "HEAD"]);
     let dir = tempfile::tempdir().unwrap();
     let run_file = dir.path().join("run.json");
-    let mut v = ratio_run(
-        "def456",
-        "r9",
-        &[("map_get", 1.0), ("map_insert", 2.0)],
-        1.0,
-    );
+    let mut v = ratio_run(&commit, "r9", &[("map_get", 1.0), ("map_insert", 2.0)], 1.0);
     v["provenance"]["twin"]["version"] = json!("1.0.6");
     write_json(&run_file, &v);
     let run = paired_check(&repo, &run_file, &[]);
@@ -628,4 +620,56 @@ fn paired_ratio_twin_version_change_invalidates_the_baseline() {
         .as_str()
         .unwrap()
         .contains("baseline invalidated by twin change"));
+}
+
+#[test]
+fn paired_ratio_unresolving_commit_is_not_comparable() {
+    let (repo, _) = paired_repo();
+    let dir = tempfile::tempdir().unwrap();
+    let run_file = dir.path().join("run.json");
+    write_json(
+        &run_file,
+        &ratio_run(
+            "0123456789abcdef0123456789abcdef01234567",
+            "r9",
+            &[("map_get", 1.0), ("map_insert", 2.0)],
+            1.0,
+        ),
+    );
+    let run = paired_check(&repo, &run_file, &[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert_eq!(
+        run.titles("bench-regression"),
+        vec!["Paired Ratio Not Comparable"]
+    );
+    assert!(run.violations("bench-regression")[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("names no object in this repository"));
+}
+
+#[test]
+fn paired_ratio_abbreviated_commit_is_not_comparable() {
+    let (repo, _) = paired_repo();
+    let dir = tempfile::tempdir().unwrap();
+    let run_file = dir.path().join("run.json");
+    write_json(
+        &run_file,
+        &ratio_run(
+            "def456",
+            "r9",
+            &[("map_get", 1.0), ("map_insert", 2.0)],
+            1.0,
+        ),
+    );
+    let run = paired_check(&repo, &run_file, &[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert_eq!(
+        run.titles("bench-regression"),
+        vec!["Paired Ratio Not Comparable"]
+    );
+    assert!(run.violations("bench-regression")[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("not a full 40-digit SHA-1 object id"));
 }

@@ -137,7 +137,7 @@ fn tag_fields(body: &str) -> Option<(String, String)> {
     Some((host, commit))
 }
 
-fn is_hex_id(s: &str, digits: std::ops::RangeInclusive<usize>) -> bool {
+pub(crate) fn is_hex_id(s: &str, digits: std::ops::RangeInclusive<usize>) -> bool {
     digits.contains(&s.len()) && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
@@ -217,9 +217,10 @@ pub struct Figure {
 /// The readings of a number as written. A comma followed by groups of three digits
 /// separates thousands; a single comma can also be a decimal mark.
 fn number_readings(literal: &str) -> Vec<Reading> {
-    let (int, frac) = match literal.split_once('.') {
+    let unseparated = literal.replace('_', "");
+    let (int, frac) = match unseparated.split_once('.') {
         Some((i, f)) => (i, Some(f)),
-        None => (literal, None),
+        None => (unseparated.as_str(), None),
     };
     let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
     if frac.is_some_and(|f| !digits(f)) {
@@ -260,7 +261,7 @@ pub fn figures(line: &str) -> Vec<Figure> {
         let matched = m.as_str();
         let number_len = matched
             .bytes()
-            .take_while(|b| b.is_ascii_digit() || matches!(b, b'.' | b','))
+            .take_while(|b| b.is_ascii_digit() || matches!(b, b'.' | b',' | b'_'))
             .count();
         let number_end = m.start() + number_len;
         let mut start = m.start();
@@ -269,7 +270,7 @@ pub fn figures(line: &str) -> Vec<Figure> {
         while start >= 1 {
             let digit = bytes[start - 1].is_ascii_digit();
             let separator = start >= 2
-                && matches!(bytes[start - 1], b'.' | b',')
+                && matches!(bytes[start - 1], b'.' | b',' | b'_')
                 && bytes[start - 2].is_ascii_digit();
             if !(digit || separator) {
                 break;
@@ -1155,6 +1156,12 @@ pub(crate) mod tests {
         );
         // A range is two figures' worth of text, not a negative number.
         assert_eq!(read("10-12 ms")[0].1, [(12.0, 0)]);
+        // Underscore thousands separator and percent form
+        assert_eq!(
+            read("1_000_000 ops/s"),
+            [("1_000_000 ops/s".to_string(), vec![(1_000_000.0, 0)])]
+        );
+        assert_eq!(read("40%"), [("40%".to_string(), vec![(40.0, 0)])]);
         // A number with no unit is not a figure.
         assert!(read("in 2024 we ran 3 rounds").is_empty());
     }
