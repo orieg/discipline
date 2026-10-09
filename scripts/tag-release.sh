@@ -75,7 +75,7 @@ locked="$(git show "${sha}:Cargo.lock" |
 if ! command -v gh > /dev/null 2>&1; then
   die "cannot check commit CI status: gh is not installed or not on PATH"
 fi
-ci_out="$(gh run list --commit "${sha}" --workflow "CI" --json status,conclusion --jq 'if .[0] then "\(.status) \(.conclusion)" else empty end' 2>&1)" ||
+ci_out="$(gh run list --commit "${sha}" --workflow "CI" --json status,conclusion --jq 'if .[0] then "\(.[0].status) \(.[0].conclusion)" else empty end' 2>&1)" ||
   die "cannot read CI status for commit ${sha} through gh: ${ci_out}"
 [ -n "${ci_out}" ] ||
   die "no CI runs found for commit ${sha}"
