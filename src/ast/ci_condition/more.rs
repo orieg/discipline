@@ -632,7 +632,7 @@ impl<'t, 's> Reader<'t, 's> {
             | "conjunction_expression"
             | "disjunction_expression"
             | "nil_coalescing_expression" => self.binary(n),
-            "nil" => Shape::Lit(Lit::Falsy),
+            "nil" | "nil_literal" => Shape::Lit(Lit::Falsy),
             "boolean_literal" => self.boolean(n),
             "integer_literal" => Shape::Lit(Lit::Num(self.text(n).trim().to_string())),
             "simple_identifier" => Shape::Name(self.text(n).to_string()),
