@@ -8691,6 +8691,7 @@ smoke_cost::set_contains
                     policy: FreshnessPolicy { measurement_jobs: &[], source_paths: &[] },
                     instruments: &Unavailable,
                     location: "run.json",
+                    evidence: None,
                 };
                 evaluate_run(r, Some(&baseline), &opts, &mut out)?;
                 Ok(out)

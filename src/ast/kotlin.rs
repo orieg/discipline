@@ -448,6 +448,13 @@ impl<'a> KotlinExtractor<'a> {
                 &KOTLIN_DISPATCH,
                 &mut direct_calls,
             );
+            self.record_assumptions(body, &mut test_fn);
+            if !test_fn.ignored {
+                let inherited = self.class_skips.iter().flatten().cloned();
+                for (text, verdict) in inherited {
+                    test_fn.record_conditional_skip(text, verdict);
+                }
+            }
             self.facts.tests.push(test_fn);
             self.test_calls.push(direct_calls);
         }
@@ -1348,5 +1355,51 @@ class QTest {
                 ("QTest.never", true, false, false),
             ]
         );
+    }
+
+    #[test]
+    fn kotest_spec_inherits_class_conditional_skips() {
+        const KOTEST_SUITE: &str = r#"
+@DisabledOnOs(OS.WINDOWS)
+class SpecTest : StringSpec({
+    "passes on non-windows" {
+        1 shouldBe 1
+    }
+})
+
+@DisabledIfEnvironmentVariable(named = "CI", matches = "true")
+class CiSpecTest : FunSpec({
+    test("skips in ci") {
+        1 shouldBe 1
+    }
+})
+"#;
+        let facts = KotlinPack
+            .extract(
+                "src/test/kotlin/SpecTest.kt",
+                KOTEST_SUITE,
+                &AssertVocabulary::default(),
+            )
+            .unwrap();
+        assert_eq!(facts.tests.len(), 2);
+        let test1 = &facts.tests[0];
+        assert_eq!(test1.name, "SpecTest.passes on non-windows");
+        assert!(!test1.ignored);
+        assert!(test1.conditional_ignore.is_some());
+        assert_eq!(
+            test1.conditional_ignore.as_deref(),
+            Some("@DisabledOnOs(OS.WINDOWS)")
+        );
+        assert!(!test1.is_ci_skip());
+
+        let test2 = &facts.tests[1];
+        assert_eq!(test2.name, "CiSpecTest.skips in ci");
+        assert!(!test2.ignored);
+        assert!(test2.conditional_ignore.is_some());
+        assert_eq!(
+            test2.conditional_ignore.as_deref(),
+            Some("@DisabledIfEnvironmentVariable(named = \"CI\", matches = \"true\")")
+        );
+        assert!(test2.is_ci_skip());
     }
 }

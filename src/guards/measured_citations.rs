@@ -137,7 +137,7 @@ fn tag_fields(body: &str) -> Option<(String, String)> {
     Some((host, commit))
 }
 
-fn is_hex_id(s: &str, digits: std::ops::RangeInclusive<usize>) -> bool {
+pub(crate) fn is_hex_id(s: &str, digits: std::ops::RangeInclusive<usize>) -> bool {
     digits.contains(&s.len()) && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 

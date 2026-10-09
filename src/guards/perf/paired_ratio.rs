@@ -420,6 +420,7 @@ pub struct EvalOptions<'a> {
     pub instruments: &'a dyn citation::CitationInstruments,
     /// Where findings are located in the report.
     pub location: &'a str,
+    pub evidence: Option<&'a dyn crate::guards::measured_citations::Evidence>,
 }
 
 /// `about` names what could not be compared (the baseline, the twin, an axis, a cell):
@@ -492,6 +493,56 @@ pub fn evaluate_run(
 ) -> Result<()> {
     out.examined += run.axes.values().map(|a| a.cells.len()).sum::<usize>();
     let prov = &run.provenance;
+
+    if let Some(ev) = opts.evidence {
+        let commit = &prov.commit;
+        if !crate::guards::measured_citations::is_hex_id(commit, 40..=40) {
+            not_comparable(
+                out,
+                opts,
+                "commit",
+                format!("run provenance commit `{commit}` is not a full 40-digit SHA-1 object id"),
+            );
+            return Ok(());
+        }
+        match ev.lookup_commit(commit)? {
+            crate::gitctx::CommitLookup::Commit(_) => {}
+            crate::gitctx::CommitLookup::NotACommit => {
+                not_comparable(
+                    out,
+                    opts,
+                    "commit",
+                    format!(
+                        "run provenance commit `{commit}` names an object that is not a commit"
+                    ),
+                );
+                return Ok(());
+            }
+            crate::gitctx::CommitLookup::Ambiguous => {
+                not_comparable(
+                    out,
+                    opts,
+                    "commit",
+                    format!("run provenance commit `{commit}` matches more than one object"),
+                );
+                return Ok(());
+            }
+            crate::gitctx::CommitLookup::Missing if ev.is_shallow() => {
+                out.notes.push(format!(
+                    "paired-ratio: run provenance commit `{commit}` could not be verified in this shallow clone"
+                ));
+            }
+            crate::gitctx::CommitLookup::Missing => {
+                not_comparable(
+                    out,
+                    opts,
+                    "commit",
+                    format!("run provenance commit `{commit}` names no object in this repository"),
+                );
+                return Ok(());
+            }
+        }
+    }
 
     let Some(baseline) = baseline else {
         not_comparable(
@@ -1004,6 +1055,7 @@ pub fn bench_paired_ratio(ctx: &Context) -> Result<GateOutcome> {
         },
         instruments: &instruments,
         location: &head_file,
+        evidence: Some(ctx.git),
     };
     evaluate_run(&run, baseline.as_ref(), &opts, &mut out)?;
     Ok(out)
@@ -1384,6 +1436,7 @@ mod tests {
             },
             instruments: &citation::Unavailable,
             location: "run.json",
+            evidence: None,
         };
         evaluate_run(run, baseline, &opts, &mut out)?;
         Ok(out)
@@ -1654,6 +1707,7 @@ mod tests {
                 },
                 instruments: &instruments,
                 location: "run.json",
+                evidence: None,
             };
             evaluate_run(
                 &run,
@@ -1776,5 +1830,94 @@ mod tests {
         assert!(
             derive_platform(&[derive_run("abc123", 1.0, 2.0), other_twin], false, 50.0).is_err()
         );
+    }
+
+    #[test]
+    fn evaluate_run_validates_provenance_commit_against_evidence() {
+        use crate::guards::measured_citations::tests::Fake;
+
+        let fake_repo = Fake {
+            commits: vec!["1111111111222222222233333333334444444444"],
+            other_objects: vec!["aaaaaaaaaabbbbbbbbbbccccccccccdddddddddd"],
+            shallow: false,
+            files: vec![],
+        };
+
+        let mut run = run_with(&[("map_get", rounds(1.01, TIGHT, 1.0))], &[("ctl", 1.0)]);
+        run.provenance.commit = "1111111111222222222233333333334444444444".to_string();
+
+        let baseline = baseline_with(5.0, &["map_get"]);
+        let mut out = GateOutcome::new(GATE);
+        let opts = EvalOptions {
+            severity: Severity::Error,
+            tolerance_pct: None,
+            allow_cross_runner: false,
+            require_sourced_override: false,
+            directives: &[],
+            policy: citation::FreshnessPolicy {
+                measurement_jobs: &[],
+                source_paths: &[],
+            },
+            instruments: &citation::Unavailable,
+            location: "run.json",
+            evidence: Some(&fake_repo),
+        };
+
+        // 1. Valid commit -> passes
+        evaluate_run(&run, Some(&baseline), &opts, &mut out).unwrap();
+        assert!(out.violations.is_empty(), "{:?}", out.violations);
+
+        // 2. Abbreviated / non-40-hex commit -> not comparable
+        let mut short_run = run.clone();
+        short_run.provenance.commit = "1111111".to_string();
+        let mut out_short = GateOutcome::new(GATE);
+        evaluate_run(&short_run, Some(&baseline), &opts, &mut out_short).unwrap();
+        assert_eq!(titles(&out_short), vec!["Paired Ratio Not Comparable"]);
+        assert!(out_short.violations[0]
+            .message
+            .contains("not a full 40-digit SHA-1 object id"));
+
+        // 3. Commit missing in repo -> not comparable
+        let mut missing_run = run.clone();
+        missing_run.provenance.commit = "9999999999888888888877777777776666666666".to_string();
+        let mut out_missing = GateOutcome::new(GATE);
+        evaluate_run(&missing_run, Some(&baseline), &opts, &mut out_missing).unwrap();
+        assert_eq!(titles(&out_missing), vec!["Paired Ratio Not Comparable"]);
+        assert!(out_missing.violations[0]
+            .message
+            .contains("names no object in this repository"));
+
+        // 4. Object is not a commit -> not comparable
+        let mut not_commit_run = run.clone();
+        not_commit_run.provenance.commit = "aaaaaaaaaabbbbbbbbbbccccccccccdddddddddd".to_string();
+        let mut out_not_commit = GateOutcome::new(GATE);
+        evaluate_run(&not_commit_run, Some(&baseline), &opts, &mut out_not_commit).unwrap();
+        assert_eq!(titles(&out_not_commit), vec!["Paired Ratio Not Comparable"]);
+        assert!(out_not_commit.violations[0]
+            .message
+            .contains("names an object that is not a commit"));
+
+        // 5. Shallow clone -> note emitted, not a failure
+        let shallow_repo = Fake {
+            commits: vec![],
+            other_objects: vec![],
+            shallow: true,
+            files: vec![],
+        };
+        let shallow_opts = EvalOptions {
+            evidence: Some(&shallow_repo),
+            ..opts
+        };
+        let mut out_shallow = GateOutcome::new(GATE);
+        evaluate_run(&run, Some(&baseline), &shallow_opts, &mut out_shallow).unwrap();
+        assert!(
+            out_shallow.violations.is_empty(),
+            "{:?}",
+            out_shallow.violations
+        );
+        assert!(out_shallow
+            .notes
+            .iter()
+            .any(|n| n.contains("could not be verified in this shallow clone")));
     }
 }
