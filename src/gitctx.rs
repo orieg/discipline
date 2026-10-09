@@ -1052,6 +1052,43 @@ impl GitCtx {
         Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
     }
 
+    /// Raw bytes of `path` at `commit_hex`; `None` when commit or path does not exist.
+    pub fn commit_bytes(&self, commit_hex: &str, path: &str) -> Result<Option<Vec<u8>>> {
+        let obj = match self.repo.find_object_by_prefix(commit_hex, None) {
+            Ok(obj) => obj,
+            Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        let Ok(commit) = obj.peel_to_commit() else {
+            return Ok(None);
+        };
+        let tree = commit.tree()?;
+        let rel_path = self.normalize_repo_path(path);
+        match tree.get_path(std::path::Path::new(rel_path)) {
+            Ok(entry) if entry.kind() != Some(git2::ObjectType::Blob) => Ok(None),
+            Ok(entry) => {
+                let blob = self.repo.find_blob(entry.id())?;
+                Ok(Some(blob.content().to_vec()))
+            }
+            Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Content of `path` at `commit_hex`; `None` when commit or path does not exist, or is binary.
+    pub fn commit_content(&self, commit_hex: &str, path: &str) -> Result<Option<String>> {
+        let Some(bytes) = self
+            .commit_bytes(commit_hex, path)
+            .with_context(|| format!("failed to read `{path}` at commit `{commit_hex}`"))?
+        else {
+            return Ok(None);
+        };
+        if is_binary_file(path, &bytes) {
+            return Ok(None);
+        }
+        Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
+    }
+
     /// Raw bytes of `path` on the head side (index when staged, else worktree).
     pub fn head_bytes(&self, path: &str) -> Result<Option<Vec<u8>>> {
         let rel_path = self.normalize_repo_path(path);
@@ -1777,6 +1814,49 @@ pub(crate) mod test_support {
             .unwrap();
         drop(tree);
         std::fs::write(&file, head).unwrap();
+        let git = GitCtx {
+            repo,
+            base: Some(commit),
+            base_label: "base".to_string(),
+            staged: false,
+            run: super::next_run(),
+        };
+        (dir, git)
+    }
+
+    /// A temporary repository with arbitrary base and head files.
+    pub(crate) fn repo_with_files(
+        base_files: &[(&str, &str)],
+        head_files: &[(&str, &str)],
+    ) -> (tempfile::TempDir, GitCtx) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let mut index = repo.index().unwrap();
+        for (path, content) in base_files {
+            let file = dir.path().join(path);
+            if let Some(parent) = file.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(&file, content).unwrap();
+            index.add_path(std::path::Path::new(path)).unwrap();
+        }
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.invalid").unwrap();
+        let commit = repo
+            .commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+            .unwrap();
+        drop(tree);
+        let mut index = repo.index().unwrap();
+        for (path, content) in head_files {
+            let file = dir.path().join(path);
+            if let Some(parent) = file.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(&file, content).unwrap();
+            index.add_path(std::path::Path::new(path)).unwrap();
+        }
+        index.write().unwrap();
         let git = GitCtx {
             repo,
             base: Some(commit),

@@ -395,6 +395,30 @@ pub const GATES: &[GateInfo] = &[
         available: true,
         delta_only: false,
     },
+    GateInfo {
+        id: "gate-command-lint",
+        suite: Suite::AgentGuard,
+        summary: "reject vacuous, masked, or inverted verification commands in plan files",
+        languages: "markdown, shell",
+        available: true,
+        delta_only: false,
+    },
+    GateInfo {
+        id: "mechanism-sections",
+        suite: Suite::Hygiene,
+        summary: "require (inferred) or (verified: <target>) evidence tags in root cause sections",
+        languages: "markdown",
+        available: true,
+        delta_only: false,
+    },
+    GateInfo {
+        id: "citation-anchors",
+        suite: Suite::Hygiene,
+        summary: "verify path:line@sha citations against quoted text and git history",
+        languages: "markdown, any",
+        available: true,
+        delta_only: false,
+    },
 ];
 
 pub fn gate_info(id: &str) -> Option<&'static GateInfo> {
@@ -777,6 +801,9 @@ pub struct Gates {
     pub msrv: MsrvGate,
     pub miri: MiriGate,
     pub sanitizers: SanitizersGate,
+    pub gate_command_lint: GateCommandLintGate,
+    pub mechanism_sections: MechanismSectionsGate,
+    pub citation_anchors: CitationAnchorsGate,
 }
 
 /// `error-swallowing`: the shared keys plus the paths where a numeric fallback in an
@@ -881,7 +908,10 @@ impl_gate_settings!(
     UnsafeBudgetGate,
     MsrvGate,
     MiriGate,
-    SanitizersGate
+    SanitizersGate,
+    GateCommandLintGate,
+    MechanismSectionsGate,
+    CitationAnchorsGate
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2212,6 +2242,9 @@ pub struct ScopeConfinementGate {
     pub exempt_paths: Vec<String>,
     pub allowed_paths: Vec<String>,
     pub forbidden_paths: Vec<String>,
+    pub check_plans: bool,
+    pub plan_paths: Vec<String>,
+    pub require_declared_outputs: bool,
 }
 
 impl Default for ScopeConfinementGate {
@@ -2222,6 +2255,12 @@ impl Default for ScopeConfinementGate {
             exempt_paths: Vec::new(),
             allowed_paths: Vec::new(),
             forbidden_paths: Vec::new(),
+            check_plans: false,
+            plan_paths: vec![
+                "plans/**/*.md".to_string(),
+                "docs/plans/**/*.md".to_string(),
+            ],
+            require_declared_outputs: false,
         }
     }
 }
@@ -2356,6 +2395,91 @@ impl Default for SanitizersGate {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GateCommandLintGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub plan_paths: Vec<String>,
+    pub allow_pipeline_without_pipefail: bool,
+}
+
+impl Default for GateCommandLintGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            plan_paths: vec![
+                "plans/**/*.md".to_string(),
+                "docs/plans/**/*.md".to_string(),
+            ],
+            allow_pipeline_without_pipefail: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MechanismSectionsGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub diff_only: bool,
+    pub section_headings: Vec<String>,
+}
+
+impl Default for MechanismSectionsGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            diff_only: true,
+            section_headings: vec![
+                "Mechanism".to_string(),
+                "Root cause".to_string(),
+                "Cause".to_string(),
+            ],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UnanchoredCitationsMode {
+    Ignore,
+    Warn,
+    Reject,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CitationAnchorsGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub diff_only: bool,
+    pub unanchored_citations: UnanchoredCitationsMode,
+    pub verify_tracker_titles: bool,
+    pub require_online: bool,
+}
+
+impl Default for CitationAnchorsGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            diff_only: true,
+            unanchored_citations: UnanchoredCitationsMode::Warn,
+            verify_tracker_titles: false,
+            require_online: false,
+        }
+    }
+}
+
 impl Gates {
     pub fn settings(&self, id: &str) -> Option<&dyn GateSettings> {
         Some(match id {
@@ -2401,6 +2525,9 @@ impl Gates {
             "msrv" => &self.msrv,
             "miri" => &self.miri,
             "sanitizers" => &self.sanitizers,
+            "gate-command-lint" => &self.gate_command_lint,
+            "mechanism-sections" => &self.mechanism_sections,
+            "citation-anchors" => &self.citation_anchors,
             _ => return None,
         })
     }

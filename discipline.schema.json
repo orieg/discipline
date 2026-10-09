@@ -311,6 +311,43 @@
       },
       "type": "object"
     },
+    "CitationAnchorsGate": {
+      "additionalProperties": false,
+      "properties": {
+        "diff_only": {
+          "description": "Whether to inspect changed files only rather than the whole tree",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "require_online": {
+          "description": "Whether offline operation fails closed when verifying tracker titles",
+          "type": "boolean"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "unanchored_citations": {
+          "description": "How unanchored path:line citations are handled",
+          "enum": [
+            "ignore",
+            "warn",
+            "reject"
+          ],
+          "type": "string"
+        },
+        "verify_tracker_titles": {
+          "description": "Whether to verify claimed issue or pull request titles via forge API",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "CitationMetadataGate": {
       "additionalProperties": false,
       "properties": {
@@ -582,6 +619,30 @@
       },
       "type": "object"
     },
+    "GateCommandLintGate": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_pipeline_without_pipefail": {
+          "description": "Whether to permit piped gate commands without explicit pipefail",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "plan_paths": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Glob patterns of plan files to inspect"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
     "GoldenGate": {
       "additionalProperties": false,
       "properties": {
@@ -761,6 +822,30 @@
         "job",
         "guard"
       ],
+      "type": "object"
+    },
+    "MechanismSectionsGate": {
+      "additionalProperties": false,
+      "properties": {
+        "diff_only": {
+          "description": "Whether to inspect changed files only rather than the whole tree",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "section_headings": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Section headings designating mechanism or root-cause sections"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
       "type": "object"
     },
     "MiriGate": {
@@ -1120,6 +1205,10 @@
           "$ref": "#/$defs/StringListOrReset",
           "description": "Glob patterns of paths agents are authorized to modify"
         },
+        "check_plans": {
+          "description": "Whether to inspect plan files for planned output paths",
+          "type": "boolean"
+        },
         "enabled": {
           "description": "Whether this gate is active",
           "type": "boolean"
@@ -1130,6 +1219,14 @@
         "forbidden_paths": {
           "$ref": "#/$defs/StringListOrReset",
           "description": "Glob patterns of paths agents are strictly forbidden to touch"
+        },
+        "plan_paths": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Glob patterns of plan files to inspect"
+        },
+        "require_declared_outputs": {
+          "description": "Whether plan files must declare at least one output path",
+          "type": "boolean"
         },
         "severity": {
           "$ref": "#/$defs/Severity"
@@ -1584,6 +1681,14 @@
           ],
           "description": "rollup skip set matches each job's `if:` under the observed filter outputs"
         },
+        "citation-anchors": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/CitationAnchorsGate"
+            }
+          ],
+          "description": "verify path:line@sha citations against quoted text and git history"
+        },
         "citation-metadata": {
           "allOf": [
             {
@@ -1640,6 +1745,14 @@
           ],
           "description": "no new empty error handler or discarded Result outside tests"
         },
+        "gate-command-lint": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/GateCommandLintGate"
+            }
+          ],
+          "description": "reject vacuous, masked, or inverted verification commands in plan files"
+        },
         "golden-output": {
           "allOf": [
             {
@@ -1687,6 +1800,14 @@
             }
           ],
           "description": "reconcile git-tracked files against packaging manifest declarations"
+        },
+        "mechanism-sections": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/MechanismSectionsGate"
+            }
+          ],
+          "description": "require (inferred) or (verified: <target>) evidence tags in root cause sections"
         },
         "miri": {
           "allOf": [

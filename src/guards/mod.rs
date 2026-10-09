@@ -8,6 +8,7 @@ pub mod ci_exposure;
 pub mod ci_gitlab;
 pub mod ci_integrity;
 pub mod ci_skip_set;
+pub mod citation_anchors;
 pub mod citation_metadata;
 pub mod claim_registry;
 pub mod command;
@@ -18,6 +19,7 @@ pub mod confusables;
 mod confusables_tests;
 pub mod dependency;
 pub mod error_swallowing;
+pub mod gate_command_lint;
 pub mod harness_tampering;
 pub mod hygiene;
 pub mod instruction_smuggling;
@@ -26,6 +28,7 @@ pub mod issue_link;
 pub mod lockfile;
 pub mod manifest_sync;
 pub mod measured_citations;
+pub mod mechanism_sections;
 pub mod miri;
 pub mod msrv;
 pub mod perf;
@@ -1041,6 +1044,9 @@ pub fn run_checks(
             "msrv" => msrv::evaluate_msrv(ctx),
             "miri" => miri::evaluate_miri(ctx),
             "sanitizers" => sanitizers::evaluate_sanitizers(ctx),
+            "gate-command-lint" => gate_command_lint::evaluate_gate_command_lint(ctx),
+            "mechanism-sections" => mechanism_sections::evaluate_mechanism_sections(ctx),
+            "citation-anchors" => citation_anchors::evaluate_citation_anchors(ctx),
             "assertion-reduction"
             | "vacuous-tests"
             | "ignored-tests"
@@ -1370,6 +1376,7 @@ const GLOB_LIST_KEYS: &[&str] = &[
     "record_paths",
     "required_paths",
     "constant_fallback_paths",
+    "plan_paths",
 ];
 
 /// One step of the way to a configured value: a table key or an array index.
@@ -2149,6 +2156,7 @@ mod tests {
         "mock_assert_fns",
         "mock_setup_fns",
         "placeholders",
+        "section_headings",
         // Regular expressions, compiled by `check_configured_patterns` (`PATTERN_KEYS`,
         // and `forbid_output` by name).
         "allow_patterns",
@@ -2315,7 +2323,7 @@ mod tests {
     /// How many string lists hold neither globs nor patterns (`NOT_GLOB_LISTS` without
     /// the pattern keys). A list added there changes this count, which is where its
     /// author says whether its entries are regular expressions.
-    const LISTS_OF_NEITHER_GLOBS_NOR_PATTERNS: usize = 33;
+    const LISTS_OF_NEITHER_GLOBS_NOR_PATTERNS: usize = 34;
 
     /// Every string and string-list property of the configuration schema:
     /// `(name, is a list, description)`.

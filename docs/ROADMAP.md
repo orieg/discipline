@@ -90,6 +90,9 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel. Phase 8 Tier 0 a
 | [`archive-contents`](GATES.md#archive-contents) | integrity | any | distribution archive must contain required paths and zero forbidden developer artifacts |
 | [`manifest-sync`](GATES.md#manifest-sync) | integrity | any | reconcile git-tracked files against packaging manifest declarations |
 | [`version-lockstep`](GATES.md#version-lockstep) | integrity | any | version declarations across headers, manifests, and files must remain in lockstep |
+| [`gate-command-lint`](GATES.md#gate-command-lint) | agent-guard | markdown, shell | reject vacuous, masked, or inverted verification commands in plan files |
+| [`mechanism-sections`](GATES.md#mechanism-sections) | hygiene | markdown | require (inferred) or (verified: <target>) evidence tags in root cause sections |
+| [`citation-anchors`](GATES.md#citation-anchors) | hygiene | markdown, any | verify path:line@sha citations against quoted text and git history |
 <!-- /generated -->
 
 ---
