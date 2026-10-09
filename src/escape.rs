@@ -42,9 +42,7 @@ pub fn html(s: &str) -> String {
 /// the tag characters). A tab, a line feed and a carriage return are white space in
 /// HTML and stay.
 fn is_hidden(c: char) -> bool {
-    !matches!(c, '\t' | '\n' | '\r')
-        && (crate::report::text::is_control(c)
-            || crate::guards::instruction_smuggling::invisible_class(c).is_some())
+    !matches!(c, '\t' | '\n' | '\r') && crate::report::text::is_control(c)
 }
 
 /// Escape text from outside the binary (a commit subject, a file name, a configuration
