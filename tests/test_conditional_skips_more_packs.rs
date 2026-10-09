@@ -1044,6 +1044,98 @@ fn build_id_and_the_ci_prefix_count_in_an_environment_read_only() {
     ));
 }
 
+/// Skips inside loops, switch/case/match, and preprocessor conditionals (#if, #ifdef)
+/// are conditional skips, never unconditional ignores (#651).
+#[test]
+fn skips_under_loops_switch_match_and_preprocessor_are_conditional() {
+    check(bodies(
+        CS,
+        cs,
+        &[
+            ("#if CI\n        Assert.Ignore(\"x\");\n#endif", CiSkip),
+            ("#if !CI\n        Assert.Ignore(\"x\");\n#endif", Note),
+            ("while (flag) { Assert.Ignore(\"x\"); }", Note),
+            (
+                "for (int i = 0; i < 10; i++) { Assert.Ignore(\"x\"); }",
+                Note,
+            ),
+            ("switch (x) { case 1: Assert.Ignore(\"x\"); break; }", Note),
+        ],
+    ));
+    check(bodies(
+        RB,
+        rb,
+        &[
+            ("for x in xs do\n      skip \"x\"\n    end", Note),
+            ("while cond\n      skip \"x\"\n    end", Note),
+            ("case x\n    when 1\n      skip \"x\"\n    end", Note),
+        ],
+    ));
+    check(bodies(
+        PHP,
+        php,
+        &[
+            ("while ($cond) { $this->markTestSkipped('x'); }", Note),
+            (
+                "for ($i = 0; $i < 10; $i++) { $this->markTestSkipped('x'); }",
+                Note,
+            ),
+            (
+                "switch ($x) { case 1: $this->markTestSkipped('x'); break; }",
+                Note,
+            ),
+            (
+                "match ($x) { 1 => $this->markTestSkipped('x'), default => null };",
+                Note,
+            ),
+        ],
+    ));
+    check(bodies(
+        SWIFT,
+        swift,
+        &[
+            ("#if CI\n        throw XCTSkip(\"x\")\n#endif", CiSkip),
+            ("#if !CI\n        throw XCTSkip(\"x\")\n#endif", Note),
+            ("for x in xs { throw XCTSkip(\"x\") }", Note),
+            ("while cond { throw XCTSkip(\"x\") }", Note),
+            (
+                "switch x { case 1: throw XCTSkip(\"x\")\ndefault: break }",
+                Note,
+            ),
+        ],
+    ));
+    check(bodies(
+        SCALA,
+        scala,
+        &[
+            ("for (x <- xs) { cancel(\"x\") }", Note),
+            ("while (cond) { cancel(\"x\") }", Note),
+            ("x match { case 1 => cancel(\"x\") }", Note),
+        ],
+    ));
+    check(bodies(
+        CPP,
+        cpp,
+        &[
+            ("#ifdef CI\n  GTEST_SKIP();\n#endif", CiSkip),
+            ("#ifndef CI\n  GTEST_SKIP();\n#endif", Note),
+            ("#if defined(CI)\n  GTEST_SKIP();\n#endif", CiSkip),
+            ("while (cond) { GTEST_SKIP(); }", Note),
+            ("switch (x) { case 1: GTEST_SKIP(); break; }", Note),
+        ],
+    ));
+    check(bodies(
+        C,
+        unity,
+        &[
+            ("#ifdef CI\n  TEST_IGNORE();\n#endif", CiSkip),
+            ("#ifndef CI\n  TEST_IGNORE();\n#endif", Note),
+            ("while (cond) { TEST_IGNORE(); }", Note),
+            ("switch (x) { case 1: TEST_IGNORE(); break; }", Note),
+        ],
+    ));
+}
+
 // --- severity and approval ----------------------------------------------------------
 
 const CI_SKIP_WARNING: &str = "[gates.ignored-tests]\nci_skip_severity = \"warning\"\n";
