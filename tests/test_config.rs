@@ -401,11 +401,12 @@ fn test_init_starter_detects_runners_and_generates_valid_config() {
     let starter_gradle = generate_starter("demo-gradle", gradle_dir.path());
     assert!(starter_gradle.contains("preset = \"pit\""));
 
-    // 6. Uncommenting the test-floor block produces a valid test_command and test_report in config
+    // 6. Uncommenting the test-floor block produces a valid test_command, test_report and min_tests in config
     let uncommented = starter_py
         .replace("# [gates.test-floor]", "[gates.test-floor]")
         .replace("# test_command =", "test_command =")
-        .replace("# test_report =", "test_report =");
+        .replace("# test_report =", "test_report =")
+        .replace("# min_tests =", "min_tests =");
     let cfg_uncommented = DisciplineConfig::from_toml_str(&uncommented).unwrap();
     let tf = cfg_uncommented.gates.test_floor;
     assert_eq!(
@@ -413,6 +414,7 @@ fn test_init_starter_detects_runners_and_generates_valid_config() {
         Some("pytest --junitxml=reports/junit.xml")
     );
     assert_eq!(tf.test_report.as_deref(), Some("reports/junit.xml"));
+    assert_eq!(tf.min_tests, Some(1));
 
     // 7. Uncommenting the mutation preset block produces valid [[gates.command.commands]]
     let uncommented_mut = starter_rust

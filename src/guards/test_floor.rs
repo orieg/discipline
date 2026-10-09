@@ -57,19 +57,11 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         );
     }
 
-    // 5. Resolve test reports for identity-based ratcheting
-    let reports = resolve_test_reports(ctx, &mut out)?;
-
-    // 6. Test Identity Ratchet
-    check_test_identities(ctx, &reports, &mut out);
-
+    // 5. Check untrusted test_command before running anything.
     // The test files the change moves out of the default run. This reads the runner
     // rules of both sides, whatever the counting basis.
-    let moved = tests_moved_out(ctx, &filter, &sides)?;
-
-    // A command the change supplies is not run, and no count stands in for it: the floor
-    // was set on that command's basis, so a static count would compare two bases.
     if untrusted_test_command {
+        let moved = tests_moved_out(ctx, &filter, &sides)?;
         out.push(
             settings.severity,
             &crate::findings::UNTRUSTED_TEST_COMMAND,
@@ -87,23 +79,47 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
         return Ok(out);
     }
 
-    // 7. Calculate measured test count.
-    let measured = measure_test_count(ctx, &filter, &sides, reports.head.as_deref(), &mut out)?;
+    // 6. Run trusted test_command if configured before reading the report it produces.
+    let cmd_count = if let Some(cmd) = &settings.test_command {
+        Some(count_tests_via_command(cmd, Path::new(ctx.git.root()))?)
+    } else {
+        None
+    };
+
+    // 7. Resolve test reports for identity-based ratcheting
+    let reports = resolve_test_reports(ctx, &mut out)?;
+
+    // 8. Test Identity Ratchet
+    check_test_identities(ctx, &reports, &mut out);
+
+    // The test files the change moves out of the default run. This reads the runner
+    // rules of both sides, whatever the counting basis.
+    let moved = tests_moved_out(ctx, &filter, &sides)?;
+
+    // 9. Calculate measured test count.
+    let measured = measure_test_count(
+        ctx,
+        &filter,
+        &sides,
+        cmd_count,
+        reports.head.as_deref(),
+        &mut out,
+    )?;
     out.examined = measured.count;
 
-    // 8. Compare against the effective floor.
+    // 10. Compare against the effective floor.
     let before_count = out.violations.len();
     compare_with_floor(
         ctx,
         &filter,
         &sides,
         explicit_floor,
-        reports.base.as_deref(),
+        &reports,
         &measured,
         &mut out,
     )?;
 
-    // 9. Tests the change moves out of the default run. A count finding this run
+    // 11. Tests the change moves out of the default run. A count finding this run
     // reports already covers the files that left the count with them. One that a
     // directive lifted does not: the directive named the count, not the rule.
     let count_reported = before_count != out.violations.len();
@@ -540,7 +556,6 @@ fn check_test_identities(ctx: &Context, reports: &TestReports, out: &mut GateOut
             let dot_fmt;
             let colon_fmt;
             if let Some(cn) = &viol.classname {
-                candidate_subjects.push(cn.as_str());
                 dot_fmt = format!("{cn}.{}", viol.name);
                 candidate_subjects.push(&dot_fmt);
                 colon_fmt = format!("{cn}::{}", viol.name);
@@ -612,21 +627,24 @@ struct MeasuredCount {
     head_static: Option<AstTestCount>,
 }
 
-/// Measures the test count: from `test_command`, else the head report, else a static
+/// Measures the test count: from the head report, else `test_command`, else a static
 /// count of the head side.
 fn measure_test_count(
     ctx: &Context,
     filter: &crate::guards::PathFilter,
     sides: &SideVocabularies,
+    cmd_count: Option<usize>,
     head_cases: Option<&[TestCaseReport]>,
     out: &mut GateOutcome,
 ) -> Result<MeasuredCount> {
-    let settings = &ctx.config.gates.test_floor;
     let mut head_static: Option<AstTestCount> = None;
-    let measured_count = if let Some(cmd) = &settings.test_command {
-        count_tests_via_command(cmd, Path::new(ctx.git.root()))?
-    } else if let Some(head_cases) = head_cases {
-        head_cases.len()
+    let measured_count = if let Some(head_cases) = head_cases {
+        head_cases
+            .iter()
+            .filter(|c| c.status == TestStatus::Passed)
+            .count()
+    } else if let Some(count) = cmd_count {
+        count
     } else {
         let head = count_workspace_ast_tests(ctx, filter, sides.head()?)?;
         for note in head.notes("head") {
@@ -651,14 +669,27 @@ fn compare_with_floor(
     filter: &crate::guards::PathFilter,
     sides: &SideVocabularies,
     explicit_floor: Option<usize>,
-    base_cases: Option<&[TestCaseReport]>,
+    reports: &TestReports,
     measured: &MeasuredCount,
     out: &mut GateOutcome,
 ) -> Result<()> {
     if let Some(floor) = explicit_floor {
         compare_with_configured_floor(ctx, sides, floor, measured.count, out)
-    } else if let Some(base_cases) = base_cases {
-        compare_with_base_report(ctx, sides, base_cases, measured.count, out)
+    } else if let Some(base_cases) = reports.base.as_deref() {
+        compare_with_base_report(
+            ctx,
+            sides,
+            base_cases,
+            reports.head.as_deref(),
+            measured.count,
+            out,
+        )
+    } else if measured.head_static.is_none() {
+        bail!(
+            "test-floor: a runtime test report supplies the test count, but no base report or floor is configured to \
+             compare it against; provide `base_report`, set `min_tests` (or `constant_file` + `constant_name`), \
+             or remove the report to use the static ratchet"
+        );
     } else {
         compare_with_base_static_count(ctx, filter, sides, measured, out)
     }
@@ -707,18 +738,68 @@ fn compare_with_base_report(
     ctx: &Context,
     sides: &SideVocabularies,
     base_cases: &[TestCaseReport],
+    head_cases: Option<&[TestCaseReport]>,
     measured_count: usize,
     out: &mut GateOutcome,
 ) -> Result<()> {
     let settings = &ctx.config.gates.test_floor;
-    let base_count = base_cases.len();
+    let base_count = base_cases
+        .iter()
+        .filter(|c| c.status == TestStatus::Passed)
+        .count();
     if base_count > 0 && measured_count + settings.tolerance < base_count {
         if let Some(ov) =
             find_test_floor_override(ctx, sides, &crate::findings::TEST_COUNT_BELOW_FLOOR)?
         {
             out.overrides.push(ov);
-        } else {
-            out.violations.push(Violation {
+            return Ok(());
+        }
+
+        // Check if any test that passed in base but not in head was excused
+        if let Some(head) = head_cases {
+            let passed_head_ids: std::collections::HashSet<&str> = head
+                .iter()
+                .filter(|c| c.status == TestStatus::Passed)
+                .map(|c| c.id.as_str())
+                .collect();
+            for base_case in base_cases.iter().filter(|c| c.status == TestStatus::Passed) {
+                if !passed_head_ids.contains(base_case.id.as_str()) {
+                    let mut candidate_subjects =
+                        vec![base_case.id.as_str(), base_case.name.as_str()];
+                    let dot_fmt;
+                    let colon_fmt;
+                    if let Some(cn) = &base_case.classname {
+                        dot_fmt = format!("{cn}.{}", base_case.name);
+                        candidate_subjects.push(&dot_fmt);
+                        colon_fmt = format!("{cn}::{}", base_case.name);
+                        if colon_fmt != base_case.id {
+                            candidate_subjects.push(&colon_fmt);
+                        }
+                    }
+                    for subj in candidate_subjects {
+                        if let Some(ov) = ctx.find_override(
+                            GATE,
+                            &crate::findings::TEST_COUNT_BELOW_FLOOR,
+                            tokens::ALLOW_TEST_SHRINK,
+                            subj,
+                        ) {
+                            out.overrides.push(ov);
+                            return Ok(());
+                        }
+                        if let Some(ov) = ctx.find_override(
+                            GATE,
+                            &crate::findings::TEST_COUNT_BELOW_FLOOR,
+                            tokens::REMOVES,
+                            subj,
+                        ) {
+                            out.overrides.push(ov);
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+        out.violations.push(Violation {
                 gate: GATE,
                 severity: ctx.overridable(settings.severity),
                 code: crate::findings::full_code(GATE, &crate::findings::TEST_COUNT_BELOW_FLOOR),
@@ -737,7 +818,6 @@ fn compare_with_base_report(
                         .to_string(),
                 ),
             });
-        }
     }
     Ok(())
 }
@@ -1397,7 +1477,7 @@ pub struct TestIdentityViolation {
 pub fn parse_junit_xml(xml: &str) -> Result<Vec<TestCaseReport>> {
     let trimmed = xml.trim();
     if trimmed.is_empty() {
-        return Ok(Vec::new());
+        bail!("JUnit XML test report is empty");
     }
 
     if !xml.contains("<testcase") && !xml.contains("<testsuite") {
@@ -1481,6 +1561,10 @@ pub fn parse_junit_xml(xml: &str) -> Result<Vec<TestCaseReport>> {
             classname,
             status,
         });
+    }
+
+    if cases.is_empty() {
+        bail!("JUnit XML test report contains no <testcase> elements");
     }
 
     Ok(cases)
@@ -1669,6 +1753,21 @@ test_blob_compact: test
         assert_eq!(cases[0].id, "pkg&sub::test\"quoted\"");
         assert_eq!(cases[0].name, "test\"quoted\"");
         assert_eq!(cases[0].classname.as_deref(), Some("pkg&sub"));
+    }
+
+    #[test]
+    fn test_parse_junit_xml_empty_fails() {
+        assert!(parse_junit_xml("").is_err());
+        assert!(parse_junit_xml("   \n\t  ").is_err());
+    }
+
+    #[test]
+    fn test_parse_junit_xml_no_testcase_fails() {
+        let sample = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="empty_suite">
+</testsuite>
+"#;
+        assert!(parse_junit_xml(sample).is_err());
     }
 
     #[test]

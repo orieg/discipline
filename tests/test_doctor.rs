@@ -1492,12 +1492,12 @@ fn doctor_reports_test_report_finding_for_runtime_identity_ratcheting() {
         .unwrap()
         .contains("gates.test-floor"));
 
-    // Case 2: test_report configured -> Status: Pass
+    // Case 2: build-output test_report without base_report -> Status: Warn
     repo.write(
         "discipline.toml",
         "[meta]\nversion = 1\nname = \"r\"\n\n[gates.test-floor]\ntest_report = \"target/nextest/ci/junit.xml\"\n",
     );
-    repo.commit("ci: configure test_report");
+    repo.commit("ci: configure build-output test_report");
     let run2 = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
     assert_eq!(run2.code, 0, "{}", run2.stdout);
     let v2: serde_json::Value = serde_json::from_str(&run2.stdout).unwrap();
@@ -1507,11 +1507,33 @@ fn doctor_reports_test_report_finding_for_runtime_identity_ratcheting() {
         .iter()
         .find(|f| f["id"] == "test-report")
         .expect("must emit test-report finding");
-    assert_eq!(f2["status"], "pass", "{f2}");
+    assert_eq!(f2["status"], "warn", "{f2}");
     assert!(f2["summary"]
         .as_str()
         .unwrap()
         .contains("target/nextest/ci/junit.xml"));
+    assert!(f2["remediation"].as_str().unwrap().contains("base_report"));
+
+    // Case 3: test_report configured with tracked path -> Status: Pass
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"r\"\n\n[gates.test-floor]\ntest_report = \"reports/junit.xml\"\n",
+    );
+    repo.commit("ci: configure tracked test_report");
+    let run3 = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+    assert_eq!(run3.code, 0, "{}", run3.stdout);
+    let v3: serde_json::Value = serde_json::from_str(&run3.stdout).unwrap();
+    let f3 = v3["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["id"] == "test-report")
+        .expect("must emit test-report finding");
+    assert_eq!(f3["status"], "pass", "{f3}");
+    assert!(f3["summary"]
+        .as_str()
+        .unwrap()
+        .contains("reports/junit.xml"));
 }
 
 #[test]

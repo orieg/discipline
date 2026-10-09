@@ -12805,7 +12805,7 @@ fn test_floor_identity_ratchet_committed_report_e2e() {
     let run_skipped = repo.check(&["--base", "HEAD~1"]);
     assert_eq!(
         run_skipped.titles("test-floor"),
-        vec!["Test Dropped From Suite"]
+        vec!["Test Dropped From Suite", "Test Count Below Floor"]
     );
     let v_skip = run_skipped.violations("test-floor");
     assert!(
@@ -12835,7 +12835,7 @@ fn test_floor_identity_ratchet_committed_report_e2e() {
     let run_failed = repo.check(&["--base", "HEAD~1"]);
     assert_eq!(
         run_failed.titles("test-floor"),
-        vec!["Test Dropped From Suite"]
+        vec!["Test Dropped From Suite", "Test Count Below Floor"]
     );
     let v_fail = run_failed.violations("test-floor");
     assert!(
@@ -12845,6 +12845,29 @@ fn test_floor_identity_ratchet_committed_report_e2e() {
             .contains("'pkg::auth::test_logout' passed on base ref but failed in head test report"),
         "Must flag test as failed: {:?}",
         v_fail[0]["message"]
+    );
+
+    // Case 6: Dropping test_logout without replacement (count 2 -> 1), excused with allow-test-shrink: test_logout
+    repo.git(&["reset", "--hard", "HEAD~1"]); // back to initial commit
+    repo.write(
+        "reports/junit.xml",
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="unit">
+    <testcase classname="pkg::auth" name="test_login"/>
+  </testsuite>
+</testsuites>
+"#,
+    );
+    repo.commit(
+        "test: drop test_logout without replacement\n\nallow-test-shrink: test_logout retired",
+    );
+    let run_excused_both = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_excused_both.titles("test-floor").len(),
+        0,
+        "allow-test-shrink must excuse both dropped test identity and count reduction: {}",
+        run_excused_both.stdout
     );
 }
 
@@ -19485,4 +19508,247 @@ fn proptest_and_quickcheck_assertion_reduction_and_vacuous_e2e() {
     );
     assert!(run_pass.violations("assertion-reduction").is_empty());
     assert!(run_pass.violations("vacuous-tests").is_empty());
+}
+
+#[test]
+fn test_floor_refuses_mixed_basis_runtime_report_without_floor_or_base_report() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"repo\"\n[gates.test-floor]\nenabled = true\n",
+    );
+    repo.write("src/lib.rs", "#[test]\nfn t1() {}\n#[test]\nfn t2() {}\n");
+    repo.commit("feat: initial commit with static tests");
+
+    let head_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="suite">
+  <testcase name="test_one"/>
+</testsuite>
+"#;
+    repo.write("head_report.xml", head_xml);
+
+    // Supplying runtime head report without base_report or explicit floor must bail with exit 2
+    let run = repo.check(&["--base", "HEAD", "--test-head-report", "head_report.xml"]);
+    assert_eq!(
+        run.code, 2,
+        "must exit 2 on mixed-basis comparison: {}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains("a runtime test report supplies the test count, but no base report or floor is configured")
+            || run.stderr.contains("a runtime test report supplies the test count, but no base report or floor is configured"),
+        "stdout: {}\nstderr: {}",
+        run.stdout,
+        run.stderr
+    );
+}
+
+#[test]
+fn test_floor_classname_directive_does_not_lift_every_test_in_class() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"repo\"\n[gates.test-floor]\nenabled = true\n",
+    );
+    let base_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="suite">
+  <testcase classname="pkg::auth" name="test_login"/>
+  <testcase classname="pkg::auth" name="test_logout"/>
+</testsuite>
+"#;
+    let head_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="suite">
+  <testcase classname="pkg::auth" name="test_login"/>
+  <testcase classname="pkg::auth" name="test_status"/>
+</testsuite>
+"#;
+    repo.write("base_report.xml", base_xml);
+    repo.write("head_report.xml", head_xml);
+    repo.commit("feat: initial reports");
+
+    // Directive naming only the classname "pkg::auth" does NOT lift test_logout
+    repo.commit(
+        "test: drop test_logout with classname directive\n\nallow-test-shrink: pkg::auth dropped",
+    );
+    let run_class = repo.check(&[
+        "--base",
+        "HEAD~1",
+        "--test-base-report",
+        "base_report.xml",
+        "--test-head-report",
+        "head_report.xml",
+    ]);
+    assert_eq!(
+        run_class.titles("test-floor"),
+        vec!["Test Dropped From Suite"],
+        "Bare classname must NOT lift dropped test"
+    );
+
+    // Directive naming the test itself lifts it
+    repo.commit("test: excuse with test name\n\nallow-test-shrink: test_logout dropped");
+    let run_test = repo.check(&[
+        "--base",
+        "HEAD~2",
+        "--test-base-report",
+        "base_report.xml",
+        "--test-head-report",
+        "head_report.xml",
+    ]);
+    assert_eq!(
+        run_test.titles("test-floor").len(),
+        0,
+        "Naming test must excuse dropped test"
+    );
+
+    // Directive naming qualified test identifier also lifts it
+    repo.git(&["reset", "--hard", "HEAD~1"]);
+    repo.commit(
+        "test: excuse with qualified name\n\nallow-test-shrink: pkg::auth::test_logout dropped",
+    );
+    let run_qualified = repo.check(&[
+        "--base",
+        "HEAD~2",
+        "--test-base-report",
+        "base_report.xml",
+        "--test-head-report",
+        "head_report.xml",
+    ]);
+    assert_eq!(
+        run_qualified.titles("test-floor").len(),
+        0,
+        "Qualified test identifier must excuse dropped test"
+    );
+}
+
+#[test]
+fn test_floor_only_passed_cases_counted_in_reports() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"repo\"\n[gates.test-floor]\nenabled = true\n",
+    );
+    // Base report has 2 passed, 1 failed, 1 skipped -> 2 passed tests
+    let base_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="suite">
+  <testcase name="test_p1"/>
+  <testcase name="test_p2"/>
+  <testcase name="test_f1"><failure message="fail">x</failure></testcase>
+  <testcase name="test_s1"><skipped/></testcase>
+</testsuite>
+"#;
+    // Head report has 2 passed -> 2 passed tests (count preserved at 2)
+    let head_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="suite">
+  <testcase name="test_p1"/>
+  <testcase name="test_p2"/>
+</testsuite>
+"#;
+    repo.write("base_report.xml", base_xml);
+    repo.write("head_report.xml", head_xml);
+    repo.commit("feat: initial commit");
+
+    let run_pass = repo.check(&[
+        "--base",
+        "HEAD",
+        "--test-base-report",
+        "base_report.xml",
+        "--test-head-report",
+        "head_report.xml",
+    ]);
+    assert_eq!(
+        run_pass.titles("test-floor").len(),
+        0,
+        "Equal passed counts must pass: {}",
+        run_pass.stdout
+    );
+
+    // Head report with only 1 passed (while base had 2 passed) -> count drop violation
+    let head_shrunk = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="suite">
+  <testcase name="test_p1"/>
+  <testcase name="test_p2"><failure message="now failing">err</failure></testcase>
+</testsuite>
+"#;
+    repo.write("head_report.xml", head_shrunk);
+    let run_shrunk = repo.check(&[
+        "--base",
+        "HEAD",
+        "--test-base-report",
+        "base_report.xml",
+        "--test-head-report",
+        "head_report.xml",
+    ]);
+    assert_eq!(
+        run_shrunk.titles("test-floor"),
+        vec!["Test Dropped From Suite", "Test Count Below Floor"],
+        "Must flag both dropped test identity and count below floor: {:?}",
+        run_shrunk.titles("test-floor")
+    );
+}
+
+#[test]
+fn test_floor_empty_report_fails_closed() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"repo\"\n[gates.test-floor]\nenabled = true\nmin_tests = 1\n",
+    );
+    repo.write("empty.xml", "");
+    repo.commit("feat: initial commit");
+
+    let run_empty = repo.check(&["--base", "HEAD", "--test-head-report", "empty.xml"]);
+    assert_eq!(
+        run_empty.code, 2,
+        "Empty report must exit 2: {}",
+        run_empty.stdout
+    );
+    assert!(
+        run_empty.stdout.contains("JUnit XML test report is empty")
+            || run_empty.stderr.contains("JUnit XML test report is empty"),
+        "stderr/stdout must mention empty report: stdout: {}, stderr: {}",
+        run_empty.stdout,
+        run_empty.stderr
+    );
+
+    repo.write(
+        "no_cases.xml",
+        "<?xml version=\"1.0\"?>\n<testsuite name=\"none\"/>\n",
+    );
+    let run_no_cases = repo.check(&["--base", "HEAD", "--test-head-report", "no_cases.xml"]);
+    assert_eq!(
+        run_no_cases.code, 2,
+        "Report with 0 testcases must exit 2: {}",
+        run_no_cases.stdout
+    );
+    assert!(
+        run_no_cases
+            .stdout
+            .contains("JUnit XML test report contains no <testcase> elements")
+            || run_no_cases
+                .stderr
+                .contains("JUnit XML test report contains no <testcase> elements"),
+        "stderr/stdout must mention no testcase elements: stdout: {}, stderr: {}",
+        run_no_cases.stdout,
+        run_no_cases.stderr
+    );
+}
+
+#[test]
+fn test_floor_test_command_runs_before_resolving_head_report() {
+    let repo = Repo::new();
+    // Test command generates reports/junit.xml and outputs test count
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"repo\"\n[gates.test-floor]\nenabled = true\nmin_tests = 1\ntest_command = \"sh -c 'mkdir -p reports && printf \\\"<testsuite><testcase name=\\\\\\\"t1\\\\\\\"/></testsuite>\\\\n\\\" > reports/junit.xml; echo 1 passed'\"\ntest_report = \"reports/junit.xml\"\n",
+    );
+    // Notice: reports/junit.xml is NOT present on disk before running check
+    repo.commit("feat: test command produces report");
+
+    let run = repo.check(&["--base", "HEAD"]);
+    assert_eq!(
+        run.code, 0,
+        "test_command must run before test_report is resolved: {}{}",
+        run.stdout, run.stderr
+    );
+    assert_eq!(run.titles("test-floor").len(), 0);
 }

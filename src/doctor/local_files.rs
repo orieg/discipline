@@ -35,13 +35,33 @@ pub fn test_report_finding(
             .as_deref()
             .or(cfg.gates.test_floor.head_report.as_deref())
     });
+    let base_report = repo_config.and_then(|cfg| cfg.gates.test_floor.base_report.as_deref());
 
     if let Some(rep) = configured_report {
-        Some(Finding::new(
-            "test-report",
-            Status::Pass,
-            format!("test-floor runtime identity ratcheting is configured (`{rep}`)"),
-        ))
+        let rep_normalized = rep.replace('\\', "/");
+        let norm = rep_normalized.strip_prefix("./").unwrap_or(&rep_normalized);
+        let is_build_output = norm.starts_with("target/")
+            || norm.starts_with("build/")
+            || norm.starts_with("out/")
+            || norm.starts_with("dist/");
+        if is_build_output && base_report.is_none() {
+            Some(
+                Finding::new(
+                    "test-report",
+                    Status::Warn,
+                    format!(
+                        "test_report is configured to a build-output path (`{rep}`) without `base_report`: git cannot retrieve base ref reports from build output directories, so identity ratcheting cannot engage"
+                    ),
+                )
+                .fix("Configure `base_report` in [gates.test-floor] to point to a base artifact, or write test reports to a tracked path (or pass --test-base-report / DISCIPLINE_TEST_BASE_REPORT in CI)."),
+            )
+        } else {
+            Some(Finding::new(
+                "test-report",
+                Status::Pass,
+                format!("test-floor runtime identity ratcheting is configured (`{rep}`)"),
+            ))
+        }
     } else {
         crate::init::TestRunner::detect(root).map(|runner| {
             Finding::new(

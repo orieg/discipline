@@ -7363,6 +7363,47 @@ test tests::c: test
         },
     ),
     (
+        "test-floor: test-dropped-from-suite detects dropped, skipped, or failed test identities",
+        || {
+            use crate::guards::test_floor::{
+                compare_test_identities, parse_junit_xml, TestIdentityIssue,
+            };
+            let base_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="suite">
+  <testcase classname="pkg::auth" name="test_login"/>
+  <testcase classname="pkg::auth" name="test_logout"/>
+  <testcase classname="pkg::auth" name="test_token"/>
+  <testcase classname="pkg::auth" name="test_refresh"/>
+</testsuite>"#;
+            let head_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="suite">
+  <testcase classname="pkg::auth" name="test_login"/>
+  <testcase classname="pkg::auth" name="test_logout">
+    <failure message="assertion failed">timeout</failure>
+  </testcase>
+  <testcase classname="pkg::auth" name="test_refresh">
+    <skipped message="temporarily disabled"/>
+  </testcase>
+  <!-- test_token was dropped -->
+</testsuite>"#;
+            let base_cases = parse_junit_xml(base_xml)?;
+            let head_cases = parse_junit_xml(head_xml)?;
+            let viols = compare_test_identities(&base_cases, &head_cases);
+            let failed = viols.iter().find(|v| v.id == "pkg::auth::test_logout");
+            let dropped = viols.iter().find(|v| v.id == "pkg::auth::test_token");
+            let skipped = viols.iter().find(|v| v.id == "pkg::auth::test_refresh");
+            let empty_fails = parse_junit_xml("").is_err();
+            let no_cases_fails = parse_junit_xml("<testsuite name=\"empty\"/>").is_err();
+
+            Ok(viols.len() == 3
+                && failed.is_some_and(|v| v.issue == TestIdentityIssue::Failed)
+                && dropped.is_some_and(|v| v.issue == TestIdentityIssue::Missing)
+                && skipped.is_some_and(|v| v.issue == TestIdentityIssue::Skipped)
+                && empty_fails
+                && no_cases_fails)
+        },
+    ),
+    (
         "ci-integrity: rollup needs detection, pinning, and error masks",
         || {
             use crate::guards::ci_integrity::parse_workflow_jobs;

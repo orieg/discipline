@@ -58,7 +58,7 @@ impl TestRunner {
 
     pub fn config_snippet(self) -> String {
         format!(
-            "# [gates.test-floor]\n# test_command = \"{}\"\n# test_report = \"{}\"",
+            "# [gates.test-floor]\n# test_command = \"{}\"\n# test_report = \"{}\"\n# min_tests = 1",
             self.test_command(),
             self.test_report()
         )
