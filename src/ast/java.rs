@@ -1404,6 +1404,12 @@ class QTest {
             ),
             (
                 "DisabledIfEnvironmentVariable",
+                Some("CI"),
+                Some("false"),
+                other.clone(),
+            ),
+            (
+                "DisabledIfEnvironmentVariable",
                 Some("SLOW"),
                 Some(".*"),
                 other.clone(),
@@ -1432,6 +1438,12 @@ class QTest {
                 Some("ci"),
                 Some("true"),
                 skips("CI"),
+            ),
+            (
+                "DisabledIfSystemProperty",
+                Some("ci"),
+                Some("false"),
+                other.clone(),
             ),
             (
                 "DisabledIfSystemProperty",
