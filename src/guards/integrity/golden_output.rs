@@ -192,18 +192,15 @@ pub fn golden_output(ctx: &Context) -> Result<GateOutcome> {
         } else {
             &crate::findings::GOLDEN_CHANGED_WITHOUT_DIRECTIVE
         };
-        if let Some(ov) = ctx.find_override(GATE, golden, tokens::ALLOW_GOLDEN_UPDATE, &file.path) {
-            out.overrides.push(ov);
-            continue;
-        }
-        if !file.old_path.is_empty() && file.old_path != file.path {
-            if let Some(ov) =
-                ctx.find_override(GATE, golden, tokens::ALLOW_GOLDEN_UPDATE, &file.old_path)
-            {
-                out.overrides.push(ov);
-                continue;
-            }
-        }
+        let ov = ctx
+            .find_override(GATE, golden, tokens::ALLOW_GOLDEN_UPDATE, &file.path)
+            .or_else(|| {
+                if !file.old_path.is_empty() && file.old_path != file.path {
+                    ctx.find_override(GATE, golden, tokens::ALLOW_GOLDEN_UPDATE, &file.old_path)
+                } else {
+                    None
+                }
+            });
 
         let action = match file.kind {
             ChangeKind::Deleted => "deleted",
@@ -218,11 +215,11 @@ pub fn golden_output(ctx: &Context) -> Result<GateOutcome> {
         } else {
             (&crate::findings::GOLDEN_CHANGED_WITHOUT_DIRECTIVE, "")
         };
-        out.push(
+        out.lift_or_push(
+            ov,
             ctx.overridable(settings.severity()),
             title,
-            Some(&file.path),
-            None,
+            (Some(&file.path), None),
             format!(
                 "Committed golden/snapshot file `{}` was {action} ({} line(s) rewritten) without an explicit override.{context}",
                 file.path,

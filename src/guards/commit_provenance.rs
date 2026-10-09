@@ -474,18 +474,15 @@ pub fn commit_provenance(ctx: &Context) -> Result<GateOutcome> {
         review_key,
     ) {
         let short: String = f.sha.chars().take(7).collect();
-        if let Some(ov) = ctx
+        let ov = ctx
             .find_override(GATE, f.kind, tokens::ALLOW_COMMIT_PROVENANCE, &short)
-            .or_else(|| ctx.find_override(GATE, f.kind, tokens::ALLOW_COMMIT_PROVENANCE, &f.sha))
-        {
-            out.overrides.push(ov);
-            continue;
-        }
-        out.push(
+            .or_else(|| ctx.find_override(GATE, f.kind, tokens::ALLOW_COMMIT_PROVENANCE, &f.sha));
+        let anchored = ov.is_none();
+        out.lift_or_push(
+            ov,
             ctx.overridable(settings.severity()),
             f.kind,
-            None,
-            None,
+            (None, None),
             format!("{}.", f.what),
             &if f.entry.is_some() {
                 format!(
@@ -499,7 +496,9 @@ pub fn commit_provenance(ctx: &Context) -> Result<GateOutcome> {
         );
         // No file and no line: without the anchor every finding of one code would share a
         // fingerprint, and one baseline entry would hide a finding on any other commit.
-        out.anchor_last(f.anchor);
+        if anchored {
+            out.anchor_last(f.anchor);
+        }
     }
     Ok(out)
 }

@@ -132,42 +132,41 @@ pub fn evaluate_version_lockstep(ctx: &Context) -> Result<GateOutcome> {
                     })
                 });
 
-            if let Some(ov) = allowed {
-                out.overrides.push(ov);
-            } else {
-                let details = extracted
-                    .iter()
-                    .map(|(p, v)| {
-                        let mark = if v != reference { " (drifted)" } else { "" };
-                        format!("  - `{p}` declares `{v}`{mark}")
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
+            let anchored = allowed.is_none();
+            let details = extracted
+                .iter()
+                .map(|(p, v)| {
+                    let mark = if v != reference { " (drifted)" } else { "" };
+                    format!("  - `{p}` declares `{v}`{mark}")
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
 
-                // The finding points at the file that drifted from the group's
-                // consensus, so an annotation lands where the edit is needed.
-                out.push(
-                    ctx.overridable(settings.severity),
-                    &crate::findings::VERSION_MISMATCH,
-                    Some(first_drifted),
-                    None,
-                    format!(
-                        "version declarations in group `{}` disagree: {} drifted from `{}`:\n{}",
-                        group.name,
-                        drifted
-                            .iter()
-                            .map(|p| format!("`{p}`"))
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        reference,
-                        details
-                    ),
-                    &format!(
-                        "synchronize version strings across all sources in group `{}` or justify with `allow-version-mismatch: {} <reason>`",
-                        group.name, group.name
-                    ),
-                );
-                // Two groups can drift in one file: the group tells their findings apart.
+            // The finding points at the file that drifted from the group's
+            // consensus, so an annotation lands where the edit is needed.
+            out.lift_or_push(
+                allowed,
+                ctx.overridable(settings.severity),
+                &crate::findings::VERSION_MISMATCH,
+                (Some(first_drifted), None),
+                format!(
+                    "version declarations in group `{}` disagree: {} drifted from `{}`:\n{}",
+                    group.name,
+                    drifted
+                        .iter()
+                        .map(|p| format!("`{p}`"))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    reference,
+                    details
+                ),
+                &format!(
+                    "synchronize version strings across all sources in group `{}` or justify with `allow-version-mismatch: {} <reason>`",
+                    group.name, group.name
+                ),
+            );
+            // Two groups can drift in one file: the group tells their findings apart.
+            if anchored {
                 out.anchor_last(format!("group:{}", group.name));
             }
         }

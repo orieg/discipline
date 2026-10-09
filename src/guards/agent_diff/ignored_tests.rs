@@ -160,26 +160,23 @@ pub fn evaluate_ignored_tests(
         if exempt.matches(path) {
             continue;
         }
-        if let Some(record) = tokens::find_override(
+        let record = tokens::find_override(
             directives,
             GATE,
             &crate::findings::TEST_RETRY_ADDED,
             tokens::ALLOW_IGNORE,
             leaf_name(test),
-        ) {
-            out.overrides.push(record);
-            continue;
-        }
+        );
         let marker = test.retries.as_deref().unwrap_or("");
-        out.push(
+        out.lift_or_push(
+            record,
             if is_staged {
                 crate::config::Severity::Warning
             } else {
                 settings.severity()
             },
             &crate::findings::TEST_RETRY_ADDED,
-            Some(path),
-            Some(test.line),
+            (Some(path), Some(test.line)),
             format!(
                 "Test `{}` carries a retry marker (`{marker}`); a failure passes on a later attempt.",
                 test.name
@@ -256,16 +253,13 @@ pub fn evaluate_ignored_tests(
         if is_approved {
             continue;
         }
-        if let Some(record) = tokens::find_override(
+        let record = tokens::find_override(
             directives,
             GATE,
             &crate::findings::TEST_CONDITIONALLY_SKIPPED,
             tokens::ALLOW_IGNORE,
             leaf_name(test),
-        ) {
-            out.overrides.push(record);
-            continue;
-        }
+        );
         let severity = if is_ci {
             if is_staged {
                 crate::config::Severity::Warning
@@ -283,11 +277,11 @@ pub fn evaluate_ignored_tests(
         } else {
             "Conditional skips are monitored. If this was unintended, remove the conditional ignore attribute.".to_string()
         };
-        out.push(
+        out.lift_or_push(
+            record,
             severity,
             &crate::findings::TEST_CONDITIONALLY_SKIPPED,
-            Some(path),
-            Some(test.line),
+            (Some(path), Some(test.line)),
             if !added_vars.is_empty() {
                 format!(
                     "Test `{}` is conditionally skipped under predicate `{}`, which adds CI variable `{}` to a skip that was already CI-conditional.",

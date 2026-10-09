@@ -7,7 +7,7 @@
 //! - Fails closed if the base floor cannot be resolved when configured.
 
 use crate::escape::unescape_xml;
-use crate::guards::{exempt_filter, Context, GateOutcome, Violation};
+use crate::guards::{exempt_filter, Context, GateOutcome};
 use crate::tokens;
 use anyhow::{bail, Context as _, Result};
 use regex::Regex;
@@ -204,61 +204,45 @@ fn base_floor_constant(ctx: &Context, out: &mut GateOutcome) -> Result<BaseFloor
                     base_floor_const = Some(val);
                 } else {
                     let subject = const_name.as_str();
-                    if let Some(ov) = ctx.find_override(
+                    let ov = ctx.find_override(
                         GATE,
                         &crate::findings::FLOOR_CONSTANT_MISSING_IN_BASE,
                         tokens::ALLOW_TEST_SHRINK,
                         subject,
-                    ) {
-                        out.overrides.push(ov);
-                    } else {
-                        out.violations.push(Violation {
-                            gate: GATE,
-                            severity: ctx.overridable(settings.severity),
-                            code: crate::findings::full_code(GATE, &crate::findings::FLOOR_CONSTANT_MISSING_IN_BASE),
-                            fingerprint: String::new(),
-                            title: crate::findings::FLOOR_CONSTANT_MISSING_IN_BASE.title.to_string(),
-                            anchor: None,
-                            legacy_title: crate::findings::FLOOR_CONSTANT_MISSING_IN_BASE.was_title(),
-                            file: Some(const_file.clone()),
-                            line: None,
-                            message: format!(
-                                "Floor constant '{const_name}' not found in '{const_file}' on base ref."
-                            ),
-                            remediation: Some(
-                                "Ensure the constant is defined on the base branch or provide an allow-test-shrink directive."
-                                    .to_string(),
-                            ),
-                        });
+                    );
+                    let missing = ov.is_none();
+                    out.lift_or_push(
+                        ov,
+                        ctx.overridable(settings.severity),
+                        &crate::findings::FLOOR_CONSTANT_MISSING_IN_BASE,
+                        (Some(const_file.as_str()), None),
+                        format!(
+                            "Floor constant '{const_name}' not found in '{const_file}' on base ref."
+                        ),
+                        "Ensure the constant is defined on the base branch or provide an allow-test-shrink directive.",
+                    );
+                    if missing {
                         return Ok(BaseFloorConstant::Missing);
                     }
                 }
             }
             Ok(None) => {
-                if let Some(ov) = ctx.find_override(
+                let ov = ctx.find_override(
                     GATE,
                     &crate::findings::FLOOR_CONSTANT_FILE_MISSING_IN_BASE,
                     tokens::ALLOW_TEST_SHRINK,
                     const_file,
-                ) {
-                    out.overrides.push(ov);
-                } else {
-                    out.violations.push(Violation {
-                        gate: GATE,
-                        severity: ctx.overridable(settings.severity),
-                        code: crate::findings::full_code(GATE, &crate::findings::FLOOR_CONSTANT_FILE_MISSING_IN_BASE),
-                        fingerprint: String::new(),
-                        title: crate::findings::FLOOR_CONSTANT_FILE_MISSING_IN_BASE.title.to_string(),
-                        anchor: None,
-                        legacy_title: crate::findings::FLOOR_CONSTANT_FILE_MISSING_IN_BASE.was_title(),
-                        file: Some(const_file.clone()),
-                        line: None,
-                        message: format!("Base ref does not contain floor constant file '{const_file}'."),
-                        remediation: Some(
-                            "Ensure the file exists on the base branch or provide an allow-test-shrink directive."
-                                .to_string(),
-                        ),
-                    });
+                );
+                let missing = ov.is_none();
+                out.lift_or_push(
+                    ov,
+                    ctx.overridable(settings.severity),
+                    &crate::findings::FLOOR_CONSTANT_FILE_MISSING_IN_BASE,
+                    (Some(const_file.as_str()), None),
+                    format!("Base ref does not contain floor constant file '{const_file}'."),
+                    "Ensure the file exists on the base branch or provide an allow-test-shrink directive.",
+                );
+                if missing {
                     return Ok(BaseFloorConstant::Missing);
                 }
             }
@@ -297,38 +281,27 @@ fn check_floor_constant_not_lowered(
                 .and_then(|m| m.as_str().parse().ok())
         });
         if head_val.is_none_or(|v| v < base_floor) {
-            if let Some(ov) = ctx.find_override(
+            let ov = ctx.find_override(
                 GATE,
                 &crate::findings::FLOOR_CONSTANT_DECREASED,
                 tokens::ALLOW_TEST_SHRINK,
                 const_name,
-            ) {
-                out.overrides.push(ov);
-            } else {
-                out.violations.push(Violation {
-                    gate: GATE,
-                    severity: ctx.overridable(settings.severity),
-                    code: crate::findings::full_code(GATE, &crate::findings::FLOOR_CONSTANT_DECREASED),
-                    fingerprint: String::new(),
-                    title: crate::findings::FLOOR_CONSTANT_DECREASED.title.to_string(),
-                    anchor: None,
-                    legacy_title: crate::findings::FLOOR_CONSTANT_DECREASED.was_title(),
-                    file: Some(const_file.clone()),
-                    line: None,
-                    message: match head_val {
-                        Some(head_val) => format!(
-                            "Floor constant '{const_name}' ({head_val}) was decreased below base ref ({base_floor})."
-                        ),
-                        None => format!(
-                            "Floor constant '{const_name}' ({base_floor} on the base ref) is no longer defined as a number in '{const_file}'."
-                        ),
-                    },
-                    remediation: Some(
-                        "Restore the floor constant or provide an allow-test-shrink: <reason> directive in the PR description."
-                            .to_string(),
+            );
+            out.lift_or_push(
+                ov,
+                ctx.overridable(settings.severity),
+                &crate::findings::FLOOR_CONSTANT_DECREASED,
+                (Some(const_file.as_str()), None),
+                match head_val {
+                    Some(head_val) => format!(
+                        "Floor constant '{const_name}' ({head_val}) was decreased below base ref ({base_floor})."
                     ),
-                });
-            }
+                    None => format!(
+                        "Floor constant '{const_name}' ({base_floor} on the base ref) is no longer defined as a number in '{const_file}'."
+                    ),
+                },
+                "Restore the floor constant or provide an allow-test-shrink: <reason> directive in the PR description.",
+            );
         }
     }
     Ok(())
@@ -349,32 +322,24 @@ fn check_configured_floor_not_lowered(
             None => true,
         };
         if lowered {
-            if let Some(ov) =
-                find_test_floor_override(ctx, sides, &crate::findings::CONFIGURED_FLOOR_DECREASED)?
-            {
-                out.overrides.push(ov);
-            } else {
-                let msg = match head_min_tests {
-                    Some(h) => format!("Test count floor (min_tests = {h}) was lowered below base ref ({base_min})."),
-                    None => format!("Test count floor (min_tests = {base_min}) was removed from discipline.toml."),
-                };
-                out.violations.push(Violation {
-                    gate: GATE,
-                    severity: ctx.overridable(settings.severity),
-                    code: crate::findings::full_code(GATE, &crate::findings::CONFIGURED_FLOOR_DECREASED),
-                    fingerprint: String::new(),
-                    title: crate::findings::CONFIGURED_FLOOR_DECREASED.title.to_string(),
-                    anchor: None,
-                    legacy_title: crate::findings::CONFIGURED_FLOOR_DECREASED.was_title(),
-                    file: Some(ctx.config_path.to_string()),
-                    line: None,
-                    message: msg,
-                    remediation: Some(
-                        "Restore min_tests or provide an allow-test-shrink: <reason> directive in the PR description."
-                            .to_string(),
-                    ),
-                });
-            }
+            let ov =
+                find_test_floor_override(ctx, sides, &crate::findings::CONFIGURED_FLOOR_DECREASED)?;
+            let msg = match head_min_tests {
+                Some(h) => format!(
+                    "Test count floor (min_tests = {h}) was lowered below base ref ({base_min})."
+                ),
+                None => format!(
+                    "Test count floor (min_tests = {base_min}) was removed from discipline.toml."
+                ),
+            };
+            out.lift_or_push(
+                ov,
+                ctx.overridable(settings.severity),
+                &crate::findings::CONFIGURED_FLOOR_DECREASED,
+                (Some(ctx.config_path), None),
+                msg,
+                "Restore min_tests or provide an allow-test-shrink: <reason> directive in the PR description.",
+            );
         }
     }
     Ok(())
@@ -386,31 +351,20 @@ fn check_required_suites(ctx: &Context, out: &mut GateOutcome) {
     for suite in &settings.required_suites {
         let full = Path::new(ctx.git.root()).join(suite);
         if !full.is_file() {
-            if let Some(ov) = ctx.find_override(
+            let ov = ctx.find_override(
                 GATE,
                 &crate::findings::REQUIRED_SUITE_MISSING,
                 tokens::ALLOW_TEST_SHRINK,
                 suite,
-            ) {
-                out.overrides.push(ov);
-            } else {
-                out.violations.push(Violation {
-                    gate: GATE,
-                    severity: ctx.overridable(settings.severity),
-                    code: crate::findings::full_code(GATE, &crate::findings::REQUIRED_SUITE_MISSING),
-                    fingerprint: String::new(),
-                    title: crate::findings::REQUIRED_SUITE_MISSING.title.to_string(),
-                    anchor: None,
-                    legacy_title: crate::findings::REQUIRED_SUITE_MISSING.was_title(),
-                    file: Some(suite.clone()),
-                    line: None,
-                    message: format!("Required test suite file '{suite}' is missing from the repository."),
-                    remediation: Some(
-                        "Restore the required test suite or provide an allow-test-shrink: <reason> directive in the PR description."
-                            .to_string(),
-                    ),
-                });
-            }
+            );
+            out.lift_or_push(
+                ov,
+                ctx.overridable(settings.severity),
+                &crate::findings::REQUIRED_SUITE_MISSING,
+                (Some(suite), None),
+                format!("Required test suite file '{suite}' is missing from the repository."),
+                "Restore the required test suite or provide an allow-test-shrink: <reason> directive in the PR description.",
+            );
         }
     }
 }
@@ -542,16 +496,6 @@ fn check_test_identities(ctx: &Context, reports: &TestReports, out: &mut GateOut
         ));
 
         for viol in identity_violations {
-            if let Some(ov) = ctx.find_override(
-                GATE,
-                &crate::findings::TEST_IDENTITY_DROPPED,
-                tokens::ALLOW_GATE_WEAKENING,
-                GATE,
-            ) {
-                out.overrides.push(ov);
-                continue;
-            }
-
             let mut candidate_subjects = vec![viol.id.as_str(), viol.name.as_str()];
             let dot_fmt;
             let colon_fmt;
@@ -564,58 +508,55 @@ fn check_test_identities(ctx: &Context, reports: &TestReports, out: &mut GateOut
                 }
             }
 
-            let mut found_override = None;
-            for subj in candidate_subjects {
-                if let Some(ov) = ctx.find_override(
+            let found_override = ctx
+                .find_override(
                     GATE,
                     &crate::findings::TEST_IDENTITY_DROPPED,
-                    tokens::ALLOW_TEST_SHRINK,
-                    subj,
-                ) {
-                    found_override = Some(ov);
-                    break;
-                }
-                if let Some(ov) = ctx.find_override(
+                    tokens::ALLOW_GATE_WEAKENING,
                     GATE,
-                    &crate::findings::TEST_IDENTITY_DROPPED,
-                    tokens::REMOVES,
-                    subj,
-                ) {
-                    found_override = Some(ov);
-                    break;
-                }
-            }
-
-            if let Some(ov) = found_override {
-                out.overrides.push(ov);
-            } else {
-                let (action_msg, remediation_verb) = match viol.issue {
-                    TestIdentityIssue::Missing => {
-                        ("is missing from head test report", "Restore the test")
-                    }
-                    TestIdentityIssue::Skipped => {
-                        ("is skipped in head test report", "Re-enable the test")
-                    }
-                    TestIdentityIssue::Failed => {
-                        ("failed in head test report", "Fix the test failure")
-                    }
-                };
-                out.violations.push(Violation {
-                    gate: GATE,
-                    severity: ctx.overridable(settings.severity),
-                    code: crate::findings::full_code(GATE, &crate::findings::TEST_IDENTITY_DROPPED),
-                    fingerprint: String::new(),
-                    title: crate::findings::TEST_IDENTITY_DROPPED.title.to_string(),
-                    // No file and no line: the test's identity tells it from another.
-                    anchor: Some(format!("test:{}", viol.id)),
-                    legacy_title: crate::findings::TEST_IDENTITY_DROPPED.was_title(),
-                    file: None,
-                    line: None,
-                    message: format!("Test '{}' passed on base ref but {action_msg}.", viol.id),
-                    remediation: Some(format!(
-                        "{remediation_verb} or provide an allow-test-shrink: <test-id> <reason> directive in the PR description."
-                    )),
+                )
+                .or_else(|| {
+                    candidate_subjects.into_iter().find_map(|subj| {
+                        ctx.find_override(
+                            GATE,
+                            &crate::findings::TEST_IDENTITY_DROPPED,
+                            tokens::ALLOW_TEST_SHRINK,
+                            subj,
+                        )
+                        .or_else(|| {
+                            ctx.find_override(
+                                GATE,
+                                &crate::findings::TEST_IDENTITY_DROPPED,
+                                tokens::REMOVES,
+                                subj,
+                            )
+                        })
+                    })
                 });
+
+            let anchored = found_override.is_none();
+            let (action_msg, remediation_verb) = match viol.issue {
+                TestIdentityIssue::Missing => {
+                    ("is missing from head test report", "Restore the test")
+                }
+                TestIdentityIssue::Skipped => {
+                    ("is skipped in head test report", "Re-enable the test")
+                }
+                TestIdentityIssue::Failed => ("failed in head test report", "Fix the test failure"),
+            };
+            out.lift_or_push(
+                found_override,
+                ctx.overridable(settings.severity),
+                &crate::findings::TEST_IDENTITY_DROPPED,
+                (None, None),
+                format!("Test '{}' passed on base ref but {action_msg}.", viol.id),
+                &format!(
+                    "{remediation_verb} or provide an allow-test-shrink: <test-id> <reason> directive in the PR description."
+                ),
+            );
+            if anchored {
+                // No file and no line: the test's identity tells it from another.
+                out.anchor_last(format!("test:{}", viol.id));
             }
         }
     }
@@ -705,30 +646,17 @@ fn compare_with_configured_floor(
 ) -> Result<()> {
     let settings = &ctx.config.gates.test_floor;
     if measured_count + settings.tolerance < floor {
-        if let Some(ov) =
-            find_test_floor_override(ctx, sides, &crate::findings::TEST_COUNT_BELOW_FLOOR)?
-        {
-            out.overrides.push(ov);
-        } else {
-            out.violations.push(Violation {
-                gate: GATE,
-                severity: ctx.overridable(settings.severity),
-                code: crate::findings::full_code(GATE, &crate::findings::TEST_COUNT_BELOW_FLOOR),
-                fingerprint: String::new(),
-                title: crate::findings::TEST_COUNT_BELOW_FLOOR.title.to_string(),
-                anchor: None,
-                legacy_title: crate::findings::TEST_COUNT_BELOW_FLOOR.was_title(),
-                file: None,
-                line: None,
-                message: format!(
-                    "Workspace test count ({measured_count}) is below the required floor of {floor}."
-                ),
-                remediation: Some(
-                    "Restore deleted tests or provide an allow-test-shrink: <reason> directive in the PR description."
-                        .to_string(),
-                ),
-            });
-        }
+        let ov = find_test_floor_override(ctx, sides, &crate::findings::TEST_COUNT_BELOW_FLOOR)?;
+        out.lift_or_push(
+            ov,
+            ctx.overridable(settings.severity),
+            &crate::findings::TEST_COUNT_BELOW_FLOOR,
+            (None, None),
+            format!(
+                "Workspace test count ({measured_count}) is below the required floor of {floor}."
+            ),
+            "Restore deleted tests or provide an allow-test-shrink: <reason> directive in the PR description.",
+        );
     }
     Ok(())
 }
@@ -748,76 +676,63 @@ fn compare_with_base_report(
         .filter(|c| c.status == TestStatus::Passed)
         .count();
     if base_count > 0 && measured_count + settings.tolerance < base_count {
-        if let Some(ov) =
-            find_test_floor_override(ctx, sides, &crate::findings::TEST_COUNT_BELOW_FLOOR)?
-        {
-            out.overrides.push(ov);
-            return Ok(());
-        }
-
-        // Check if any test that passed in base but not in head was excused
-        if let Some(head) = head_cases {
-            let passed_head_ids: std::collections::HashSet<&str> = head
-                .iter()
-                .filter(|c| c.status == TestStatus::Passed)
-                .map(|c| c.id.as_str())
-                .collect();
-            for base_case in base_cases.iter().filter(|c| c.status == TestStatus::Passed) {
-                if !passed_head_ids.contains(base_case.id.as_str()) {
-                    let mut candidate_subjects =
-                        vec![base_case.id.as_str(), base_case.name.as_str()];
-                    let dot_fmt;
-                    let colon_fmt;
-                    if let Some(cn) = &base_case.classname {
-                        dot_fmt = format!("{cn}.{}", base_case.name);
-                        candidate_subjects.push(&dot_fmt);
-                        colon_fmt = format!("{cn}::{}", base_case.name);
-                        if colon_fmt != base_case.id {
-                            candidate_subjects.push(&colon_fmt);
-                        }
-                    }
-                    for subj in candidate_subjects {
-                        if let Some(ov) = ctx.find_override(
-                            GATE,
-                            &crate::findings::TEST_COUNT_BELOW_FLOOR,
-                            tokens::ALLOW_TEST_SHRINK,
-                            subj,
-                        ) {
-                            out.overrides.push(ov);
-                            return Ok(());
-                        }
-                        if let Some(ov) = ctx.find_override(
-                            GATE,
-                            &crate::findings::TEST_COUNT_BELOW_FLOOR,
-                            tokens::REMOVES,
-                            subj,
-                        ) {
-                            out.overrides.push(ov);
-                            return Ok(());
+        let ov = find_test_floor_override(ctx, sides, &crate::findings::TEST_COUNT_BELOW_FLOOR)?
+            .or_else(|| {
+                // Check if any test that passed in base but not in head was excused
+                if let Some(head) = head_cases {
+                    let passed_head_ids: std::collections::HashSet<&str> = head
+                        .iter()
+                        .filter(|c| c.status == TestStatus::Passed)
+                        .map(|c| c.id.as_str())
+                        .collect();
+                    for base_case in base_cases.iter().filter(|c| c.status == TestStatus::Passed) {
+                        if !passed_head_ids.contains(base_case.id.as_str()) {
+                            let mut candidate_subjects =
+                                vec![base_case.id.as_str(), base_case.name.as_str()];
+                            let dot_fmt;
+                            let colon_fmt;
+                            if let Some(cn) = &base_case.classname {
+                                dot_fmt = format!("{cn}.{}", base_case.name);
+                                candidate_subjects.push(&dot_fmt);
+                                colon_fmt = format!("{cn}::{}", base_case.name);
+                                if colon_fmt != base_case.id {
+                                    candidate_subjects.push(&colon_fmt);
+                                }
+                            }
+                            for subj in candidate_subjects {
+                                if let Some(ov) = ctx.find_override(
+                                    GATE,
+                                    &crate::findings::TEST_COUNT_BELOW_FLOOR,
+                                    tokens::ALLOW_TEST_SHRINK,
+                                    subj,
+                                ) {
+                                    return Some(ov);
+                                }
+                                if let Some(ov) = ctx.find_override(
+                                    GATE,
+                                    &crate::findings::TEST_COUNT_BELOW_FLOOR,
+                                    tokens::REMOVES,
+                                    subj,
+                                ) {
+                                    return Some(ov);
+                                }
+                            }
                         }
                     }
                 }
-            }
-        }
-        out.violations.push(Violation {
-                gate: GATE,
-                severity: ctx.overridable(settings.severity),
-                code: crate::findings::full_code(GATE, &crate::findings::TEST_COUNT_BELOW_FLOOR),
-                fingerprint: String::new(),
-                title: crate::findings::TEST_COUNT_BELOW_FLOOR.title.to_string(),
-                anchor: None,
-                legacy_title: crate::findings::TEST_COUNT_BELOW_FLOOR.was_title(),
-                file: None,
-                line: None,
-                message: format!(
-                    "Workspace test count ({measured_count}) dropped below base ref count ({base_count}) [tolerance: {}].",
-                    settings.tolerance
-                ),
-                remediation: Some(
-                    "Restore deleted tests or provide an allow-test-shrink: <reason> directive in the PR description."
-                        .to_string(),
-                ),
+                None
             });
+        out.lift_or_push(
+            ov,
+            ctx.overridable(settings.severity),
+            &crate::findings::TEST_COUNT_BELOW_FLOOR,
+            (None, None),
+            format!(
+                "Workspace test count ({measured_count}) dropped below base ref count ({base_count}) [tolerance: {}].",
+                settings.tolerance
+            ),
+            "Restore deleted tests or provide an allow-test-shrink: <reason> directive in the PR description.",
+        );
     }
     Ok(())
 }
@@ -852,31 +767,18 @@ fn compare_with_base_static_count(
     }
     let base_count = base.running;
     if base_count > 0 && measured_count + settings.tolerance < base_count {
-        if let Some(ov) =
-            find_test_floor_override(ctx, sides, &crate::findings::TEST_COUNT_BELOW_FLOOR)?
-        {
-            out.overrides.push(ov);
-        } else {
-            out.violations.push(Violation {
-                gate: GATE,
-                severity: ctx.overridable(settings.severity),
-                code: crate::findings::full_code(GATE, &crate::findings::TEST_COUNT_BELOW_FLOOR),
-                fingerprint: String::new(),
-                title: crate::findings::TEST_COUNT_BELOW_FLOOR.title.to_string(),
-                anchor: None,
-                legacy_title: crate::findings::TEST_COUNT_BELOW_FLOOR.was_title(),
-                file: None,
-                line: None,
-                message: format!(
-                    "Workspace test count ({measured_count}) dropped below base ref count ({base_count}) [tolerance: {}].",
-                    settings.tolerance
-                ),
-                remediation: Some(
-                    "Restore deleted tests or provide an allow-test-shrink: <reason> directive in the PR description."
-                        .to_string(),
-                ),
-            });
-        }
+        let ov = find_test_floor_override(ctx, sides, &crate::findings::TEST_COUNT_BELOW_FLOOR)?;
+        out.lift_or_push(
+            ov,
+            ctx.overridable(settings.severity),
+            &crate::findings::TEST_COUNT_BELOW_FLOOR,
+            (None, None),
+            format!(
+                "Workspace test count ({measured_count}) dropped below base ref count ({base_count}) [tolerance: {}].",
+                settings.tolerance
+            ),
+            "Restore deleted tests or provide an allow-test-shrink: <reason> directive in the PR description.",
+        );
     } else if base_count == 0 {
         out.notes
             .push("no test count floor configured and zero base ref tests detected".to_string());
@@ -1052,19 +954,18 @@ fn report_tests_moved_out(
             .or_else(|| {
                 ctx.find_override(GATE, kind, tokens::ALLOW_TEST_SHRINK, &group.mechanism.file)
             });
-        if let Some(ov) = lifted {
-            out.overrides.push(ov);
-            continue;
-        }
-        out.push(
+        let anchored = lifted.is_none();
+        out.lift_or_push(
+            lifted,
             ctx.overridable(settings.severity),
             kind,
-            Some(&group.mechanism.file),
-            group.mechanism.line,
+            (Some(&group.mechanism.file), group.mechanism.line),
             group.message(),
             "Take the rule back so the default run collects the tests again, or provide an allow-test-shrink: <file> <reason> directive in the PR description naming the file that holds the rule.",
         );
-        out.anchor_last(format!("moved-out:{}", group.mechanism.key));
+        if anchored {
+            out.anchor_last(format!("moved-out:{}", group.mechanism.key));
+        }
     }
 }
 

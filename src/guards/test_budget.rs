@@ -16,7 +16,7 @@
 //! - Seed corpus directories do not shrink without a directive (`fuzz/corpus/**`, `corpus/**`)
 
 use crate::gitctx::ChangeKind;
-use crate::guards::{Context, GateOutcome, PathFilter, Violation};
+use crate::guards::{Context, GateOutcome, PathFilter};
 use crate::tokens;
 use anyhow::Result;
 use regex::Regex;
@@ -316,7 +316,7 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                 if !head_targets.contains(target) {
                     // Fuzz target removed from harness list
                     let subject = format!("fuzz target {target}");
-                    if let Some(rec) = ctx
+                    let rec = ctx
                         .find_override(
                             GATE,
                             &crate::findings::FUZZ_TARGET_REMOVED,
@@ -330,29 +330,24 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                                 tokens::ALLOW_TEST_SHRINK,
                                 target,
                             )
-                        })
-                    {
-                        outcome.overrides.push(rec);
-                    } else {
-                        outcome.violations.push(Violation {
-                            gate: GATE,
-                            code: crate::findings::full_code(GATE, &crate::findings::FUZZ_TARGET_REMOVED),
-                            fingerprint: String::new(),
-                            title: crate::findings::FUZZ_TARGET_REMOVED.title.to_string(),
-                            // One harness lists many targets: the target tells them apart.
-                            anchor: Some(format!("fuzz-target:{target}")),
-                            legacy_title: crate::findings::FUZZ_TARGET_REMOVED.was_title(),
-                            message: format!(
-                                "Fuzz target `{target}` was removed from fuzz harness `{}` without an explicit override.",
-                                f.path
-                            ),
-                            file: Some(f.path.clone()),
-                            line: None,
-                            remediation: Some(format!(
-                                "Restore fuzz target `{target}` or justify removal with `allow-test-shrink: {target} <reason>`."
-                            )),
-                            severity: gate.severity,
                         });
+                    let anchored = rec.is_none();
+                    outcome.lift_or_push(
+                        rec,
+                        gate.severity,
+                        &crate::findings::FUZZ_TARGET_REMOVED,
+                        (Some(&f.path), None),
+                        format!(
+                            "Fuzz target `{target}` was removed from fuzz harness `{}` without an explicit override.",
+                            f.path
+                        ),
+                        &format!(
+                            "Restore fuzz target `{target}` or justify removal with `allow-test-shrink: {target} <reason>`."
+                        ),
+                    );
+                    if anchored {
+                        // One harness lists many targets: the target tells them apart.
+                        outcome.anchor_last(format!("fuzz-target:{target}"));
                     }
                 }
             }
@@ -365,7 +360,7 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                 .and_then(|s| s.to_str())
                 .unwrap_or(&f.old_path);
             let subject = format!("fuzz target {target_name}");
-            if let Some(rec) = ctx
+            let rec = ctx
                 .find_override(
                     GATE,
                     &crate::findings::FUZZ_TARGET_DELETED,
@@ -387,30 +382,21 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                         tokens::ALLOW_TEST_SHRINK,
                         &f.old_path,
                     )
-                })
-            {
-                outcome.overrides.push(rec);
-            } else {
-                outcome.violations.push(Violation {
-                    gate: GATE,
-                    code: crate::findings::full_code(GATE, &crate::findings::FUZZ_TARGET_DELETED),
-                    fingerprint: String::new(),
-                    title: crate::findings::FUZZ_TARGET_DELETED.title.to_string(),
-                    anchor: None,
-                    legacy_title: crate::findings::FUZZ_TARGET_DELETED.was_title(),
-                    message: format!(
-                        "Fuzz target file `{}` was deleted without an explicit override.",
-                        f.old_path
-                    ),
-                    file: Some(f.old_path.clone()),
-                    line: None,
-                    remediation: Some(format!(
-                        "Restore fuzz target `{}` or justify deletion with `allow-test-shrink: {target_name} <reason>`.",
-                        f.old_path
-                    )),
-                    severity: gate.severity,
                 });
-            }
+            outcome.lift_or_push(
+                rec,
+                gate.severity,
+                &crate::findings::FUZZ_TARGET_DELETED,
+                (Some(&f.old_path), None),
+                format!(
+                    "Fuzz target file `{}` was deleted without an explicit override.",
+                    f.old_path
+                ),
+                &format!(
+                    "Restore fuzz target `{}` or justify deletion with `allow-test-shrink: {target_name} <reason>`.",
+                    f.old_path
+                ),
+            );
         }
 
         // Compare property test and fuzz flags between base and head
@@ -463,7 +449,7 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                     .and_then(|s| s.to_str())
                     .unwrap_or(&f.path);
 
-                if let Some(rec) = ctx
+                let rec = ctx
                     .find_override(
                         GATE,
                         &crate::findings::TEST_BUDGET_DECREASED,
@@ -485,30 +471,22 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                             tokens::ALLOW_TEST_SHRINK,
                             file_stem,
                         )
-                    })
-                {
-                    outcome.overrides.push(rec);
-                } else {
-                    outcome.violations.push(Violation {
-                        gate: GATE,
-                        code: crate::findings::full_code(GATE, &crate::findings::TEST_BUDGET_DECREASED),
-                        fingerprint: String::new(),
-                        title: crate::findings::TEST_BUDGET_DECREASED.title.to_string(),
-                        anchor: None,
-                        legacy_title: crate::findings::TEST_BUDGET_DECREASED.was_title(),
-                        message: format!(
-                            "Testing effort `{}` in `{}` reduced from {} to {}.",
-                            base_m.subject, f.path, base_m.value, head_val_str
-                        ),
-                        file: Some(f.path.clone()),
-                        line: matching_head.map(|h| h.line).or(Some(base_m.line)),
-                        remediation: Some(format!(
-                            "Restore testing effort to at least {} or justify with `allow-test-shrink: {} <reason>`.",
-                            base_m.value, base_m.subject
-                        )),
-                        severity: gate.severity,
                     });
-                }
+                let line = matching_head.map(|h| h.line).or(Some(base_m.line));
+                outcome.lift_or_push(
+                    rec,
+                    gate.severity,
+                    &crate::findings::TEST_BUDGET_DECREASED,
+                    (Some(&f.path), line),
+                    format!(
+                        "Testing effort `{}` in `{}` reduced from {} to {}.",
+                        base_m.subject, f.path, base_m.value, head_val_str
+                    ),
+                    &format!(
+                        "Restore testing effort to at least {} or justify with `allow-test-shrink: {} <reason>`.",
+                        base_m.value, base_m.subject
+                    ),
+                );
             }
         }
     }
@@ -523,7 +501,7 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                 .and_then(|s| s.to_str())
                 .unwrap_or(&dir);
 
-            if let Some(rec) = ctx
+            let rec = ctx
                 .find_override(
                     GATE,
                     &crate::findings::SEED_CORPUS_DECREASED,
@@ -545,28 +523,19 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                         tokens::ALLOW_TEST_SHRINK,
                         dir_stem,
                     )
-                })
-            {
-                outcome.overrides.push(rec);
-            } else {
-                outcome.violations.push(Violation {
-                    gate: GATE,
-                    code: crate::findings::full_code(GATE, &crate::findings::SEED_CORPUS_DECREASED),
-                    fingerprint: String::new(),
-                    title: crate::findings::SEED_CORPUS_DECREASED.title.to_string(),
-                    anchor: None,
-                    legacy_title: crate::findings::SEED_CORPUS_DECREASED.was_title(),
-                    message: format!(
-                        "Seed corpus directory `{dir}` lost {deleted_count} seed file(s) without an explicit override."
-                    ),
-                    file: Some(dir.clone()),
-                    line: None,
-                    remediation: Some(format!(
-                        "Restore corpus seeds or justify reduction with `allow-test-shrink: {dir_stem} <reason>`."
-                    )),
-                    severity: gate.severity,
                 });
-            }
+            outcome.lift_or_push(
+                rec,
+                gate.severity,
+                &crate::findings::SEED_CORPUS_DECREASED,
+                (Some(&dir), None),
+                format!(
+                    "Seed corpus directory `{dir}` lost {deleted_count} seed file(s) without an explicit override."
+                ),
+                &format!(
+                    "Restore corpus seeds or justify reduction with `allow-test-shrink: {dir_stem} <reason>`."
+                ),
+            );
         }
     }
 

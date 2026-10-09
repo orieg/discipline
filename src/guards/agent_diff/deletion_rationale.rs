@@ -67,19 +67,16 @@ pub fn evaluate_deletion_rationale(
             continue;
         }
         out.examined += 1;
-        if let Some(record) = check_override(
+        let record = check_override(
             &crate::findings::FILE_DELETED_WITHOUT_RATIONALE,
             &file.path,
             None,
-        ) {
-            out.overrides.push(record);
-            continue;
-        }
-        out.push(
+        );
+        out.lift_or_push(
+            record,
             severity,
             &crate::findings::FILE_DELETED_WITHOUT_RATIONALE,
-            Some(&file.path),
-            None,
+            (Some(&file.path), None),
             format!(
                 "`{}` was deleted and no `removes:` directive names it.",
                 file.path
@@ -101,19 +98,17 @@ pub fn evaluate_deletion_rationale(
             continue;
         }
         out.examined += 1;
-        if let Some(record) = check_override(
+        let record = check_override(
             &crate::findings::TEST_REMOVED_WITHOUT_RATIONALE,
             leaf_name(r.test),
             Some(r.path),
-        ) {
-            out.overrides.push(record);
-            continue;
-        }
-        out.push(
+        );
+        let anchored = record.is_none();
+        out.lift_or_push(
+            record,
             severity,
             &crate::findings::TEST_REMOVED_WITHOUT_RATIONALE,
-            Some(r.path),
-            None,
+            (Some(r.path), None),
             format!("Test `{}` was removed from `{}`.", r.test.name, r.path),
             &format!(
                 "State why on its own line in the PR body or a commit message: \
@@ -121,7 +116,9 @@ pub fn evaluate_deletion_rationale(
                 leaf_name(r.test)
             ),
         );
-        out.anchor_last(r.test.name.clone());
+        if anchored {
+            out.anchor_last(r.test.name.clone());
+        }
     }
     Ok(out)
 }

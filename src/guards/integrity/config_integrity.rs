@@ -103,20 +103,18 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                     .map(|t| t.len())
                     .unwrap_or(0);
                 for w in weakenings {
-                    if let Some(record) = ctx.find_override(
+                    let record = ctx.find_override(
                         GATE,
                         &crate::findings::GATE_WEAKENED,
                         tokens::ALLOW_GATE_WEAKENING,
                         &w.gate,
-                    ) {
-                        out.overrides.push(record);
-                        continue;
-                    }
-                    out.push(
+                    );
+                    let anchored = record.is_none();
+                    out.lift_or_push(
+                        record,
                         ctx.overridable(severity),
                         &crate::findings::GATE_WEAKENED,
-                        Some(ctx.config_path),
-                        None,
+                        (Some(ctx.config_path), None),
                         format!("[{}] {}.", w.gate, w.what()),
                         &format!(
                             "Revert the change, or justify it on its own line in the PR body or a commit \
@@ -124,7 +122,9 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                             w.gate
                         ),
                     );
-                    out.anchor_last(format!("{}.{}", w.gate, w.key()));
+                    if anchored {
+                        out.anchor_last(format!("{}.{}", w.gate, w.key()));
+                    }
                 }
             }
             Err(e) => {
@@ -282,7 +282,7 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
             } else {
                 &crate::findings::BASELINE_INCREASED
             };
-            if let Some(record) = ctx
+            let record = ctx
                 .find_override(GATE, lifts, tokens::ALLOW_GATE_WEAKENING, "baseline")
                 .or_else(|| {
                     ctx.find_override(GATE, lifts, tokens::ALLOW_GATE_WEAKENING, baseline_filename)
@@ -295,27 +295,25 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                                 baseline_given,
                             )
                         })
-                })
-            {
-                out.overrides.push(record);
-            } else if !new_fps.is_empty() && h_count <= b_count {
+                });
+            if !new_fps.is_empty() && h_count <= b_count {
                 let count = new_fps.len();
                 let sample = new_fps.first().unwrap_or(&"");
-                out.push(
+                out.lift_or_push(
+                    record,
                     ctx.overridable(severity),
                     &crate::findings::BASELINE_NEW_FINDINGS,
-                    Some(baseline_shown),
-                    None,
+                    (Some(baseline_shown), None),
                     format!("[baseline] Grandfathered baseline contains {count} new fingerprint(s) not present on base (e.g. `{sample}`). A 1-for-1 replacement of grandfathered findings with new ones is forbidden."),
                     "Revert the baseline modification, or justify it on its own line in the PR body or a commit message: `allow-gate-weakening: baseline <reason>`.",
                 );
             } else {
                 let diff = h_count.saturating_sub(b_count);
-                out.push(
+                out.lift_or_push(
+                    record,
                     ctx.overridable(severity),
                     &crate::findings::BASELINE_INCREASED,
-                    Some(baseline_shown),
-                    None,
+                    (Some(baseline_shown), None),
                     format!("[baseline] Grandfathered baseline grew from {b_count} to {h_count} findings ({diff} new grandfathered findings)."),
                     "Revert the baseline growth, or justify it on its own line in the PR body or a commit message: `allow-gate-weakening: baseline <reason>`.",
                 );

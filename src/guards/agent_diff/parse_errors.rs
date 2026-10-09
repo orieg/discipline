@@ -109,40 +109,35 @@ pub(crate) fn report_newly_added_nul_bytes(
             continue;
         }
         if ff.newly_added_nul {
-            if let Some(record) =
-                // The finding lands in the first enabled AST gate: its own marker lifts it.
+            // The finding lands in the first enabled AST gate: its own marker lifts it.
+            let record = tokens::find_override(
+                directives,
+                out.gate,
+                &crate::findings::NUL_BYTE_ADDED,
+                tokens::ALLOW_NUL,
+                &ff.file.path,
+            )
+            .or_else(|| {
+                let own = format!("discipline:allow({})", out.gate);
+                let short = format!("allow({})", out.gate);
                 tokens::find_override(
                     directives,
                     out.gate,
                     &crate::findings::NUL_BYTE_ADDED,
-                    tokens::ALLOW_NUL,
+                    &[own.as_str(), short.as_str()],
                     &ff.file.path,
                 )
-                .or_else(|| {
-                    let own = format!("discipline:allow({})", out.gate);
-                    let short = format!("allow({})", out.gate);
-                    tokens::find_override(
-                        directives,
-                        out.gate,
-                        &crate::findings::NUL_BYTE_ADDED,
-                        &[own.as_str(), short.as_str()],
-                        &ff.file.path,
-                    )
-                })
-            {
-                out.overrides.push(record);
-                continue;
-            }
+            });
             let sev = if is_staged {
                 crate::config::Severity::Warning
             } else {
                 severity
             };
-            out.push(
+            out.lift_or_push(
+                record,
                 sev,
                 &crate::findings::NUL_BYTE_ADDED,
-                Some(&ff.file.path),
-                None,
+                (Some(&ff.file.path), None),
                 format!(
                     "Source file `{}` contains a newly added NUL byte; refusing corrupted or binary source without directive.",
                     ff.file.path

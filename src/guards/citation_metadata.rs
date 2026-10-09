@@ -100,27 +100,27 @@ pub fn citation_metadata(ctx: &Context) -> Result<GateOutcome> {
             ));
             continue;
         }
-        if let Some(ov) = ctx.find_override(
+        let ov = ctx.find_override(
             GATE,
             problem.kind,
             tokens::ALLOW_CITATION_METADATA,
             problem.file,
-        ) {
-            out.overrides.push(ov);
-            continue;
-        }
-        out.push(
+        );
+        let anchored = ov.is_none();
+        out.lift_or_push(
+            ov,
             severity,
             problem.kind,
-            Some(problem.file),
-            None,
+            (Some(problem.file), None),
             problem.message.clone(),
             &format!(
                 "correct `{}`, or justify it on its own line in the PR body or a commit message: `allow-citation-metadata: {} <reason>`",
                 problem.file, problem.file
             ),
         );
-        out.anchor_last(problem.anchor);
+        if anchored {
+            out.anchor_last(problem.anchor);
+        }
     }
     Ok(out)
 }

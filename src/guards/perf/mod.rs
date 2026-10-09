@@ -113,24 +113,20 @@ pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
                 )
             });
 
-            if let Some(ov) = allowed {
-                out.overrides.push(ov);
-            } else {
-                out.push(
-                    ctx.overridable(settings.severity),
-                    &crate::findings::BENCHMARK_ARTIFACT_DELETED,
-                    Some(&file.path),
-                    None,
-                    format!(
-                        "benchmark artifact `{}` was deleted without an explicit scoped `allow-regression:` directive (generic `removes:` does not permit benchmark removal)",
-                        file.path
-                    ),
-                    &format!(
-                        "restore the benchmark artifact, or justify its deletion on its own line in the PR body or a commit message: `allow-regression: {} <rationale>`",
-                        file.path
-                    ),
-                );
-            }
+            out.lift_or_push(
+                allowed,
+                ctx.overridable(settings.severity),
+                &crate::findings::BENCHMARK_ARTIFACT_DELETED,
+                (Some(&file.path), None),
+                format!(
+                    "benchmark artifact `{}` was deleted without an explicit scoped `allow-regression:` directive (generic `removes:` does not permit benchmark removal)",
+                    file.path
+                ),
+                &format!(
+                    "restore the benchmark artifact, or justify its deletion on its own line in the PR body or a commit message: `allow-regression: {} <rationale>`",
+                    file.path
+                ),
+            );
             continue;
         }
 
@@ -159,24 +155,20 @@ pub fn bench_regression(ctx: &Context) -> Result<GateOutcome> {
                 )
             })?;
 
-            if let Some(ov) = allowed {
-                out.overrides.push(ov);
-            } else {
-                out.push(
-                    ctx.overridable(settings.severity),
-                    &crate::findings::NEW_ARTIFACT_BASELINE_MISSING,
-                    Some(&file.path),
-                    None,
-                    format!(
-                        "benchmark artifact `{}` was added without a merge-base baseline; newly added benchmark artifacts require an explicit scoped `allow-regression:` directive",
-                        file.path
-                    ),
-                    &format!(
-                        "justify adding the new benchmark baseline on its own line in the PR body or a commit message: `allow-regression: {} <rationale>`",
-                        file.path
-                    ),
-                );
-            }
+            out.lift_or_push(
+                allowed,
+                ctx.overridable(settings.severity),
+                &crate::findings::NEW_ARTIFACT_BASELINE_MISSING,
+                (Some(&file.path), None),
+                format!(
+                    "benchmark artifact `{}` was added without a merge-base baseline; newly added benchmark artifacts require an explicit scoped `allow-regression:` directive",
+                    file.path
+                ),
+                &format!(
+                    "justify adding the new benchmark baseline on its own line in the PR body or a commit message: `allow-regression: {} <rationale>`",
+                    file.path
+                ),
+            );
             continue;
         }
 
@@ -794,23 +786,22 @@ pub fn evaluate_metrics_regression_with_instruments(
                     s,
                 )
             });
-            if let Some(ov) = allowed {
-                out.overrides.push(ov);
-            } else {
-                out.push(
-                    severity,
-                    &crate::findings::BENCHMARK_REMOVED,
-                    Some(head_path),
-                    None,
-                    format!(
-                        "benchmark `{}` was removed from `{}` without a scoped `allow-regression:` directive",
-                        b.name, head_path
-                    ),
-                    &format!(
-                        "restore benchmark `{}` or add directive `allow-regression: {} <rationale>`",
-                        b.name, b.name
-                    ),
-                );
+            let anchored = allowed.is_none();
+            out.lift_or_push(
+                allowed,
+                severity,
+                &crate::findings::BENCHMARK_REMOVED,
+                (Some(head_path), None),
+                format!(
+                    "benchmark `{}` was removed from `{}` without a scoped `allow-regression:` directive",
+                    b.name, head_path
+                ),
+                &format!(
+                    "restore benchmark `{}` or add directive `allow-regression: {} <rationale>`",
+                    b.name, b.name
+                ),
+            );
+            if anchored {
                 // One artifact holds many arms: the arm tells its findings apart.
                 out.anchor_last(b.name.clone());
             }
@@ -848,23 +839,22 @@ pub fn evaluate_metrics_regression_with_instruments(
                     s,
                 )
             });
-            if let Some(ov) = allowed {
-                out.overrides.push(ov);
-            } else {
-                out.push(
-                    severity,
-                    &crate::findings::NEW_OR_RENAMED_ARM_BASELINE_MISSING,
-                    Some(head_path),
-                    None,
-                    format!(
-                        "benchmark `{}` in `{}` lacks baseline entry in `{}`; missing base benchmark entry requires explicit scoped `allow-regression:` directive",
-                        h.name, head_path, base_path
-                    ),
-                    &format!(
-                        "add baseline entry for `{}` or add directive `allow-regression: {} <rationale>`",
-                        h.name, h.name
-                    ),
-                );
+            let anchored = allowed.is_none();
+            out.lift_or_push(
+                allowed,
+                severity,
+                &crate::findings::NEW_OR_RENAMED_ARM_BASELINE_MISSING,
+                (Some(head_path), None),
+                format!(
+                    "benchmark `{}` in `{}` lacks baseline entry in `{}`; missing base benchmark entry requires explicit scoped `allow-regression:` directive",
+                    h.name, head_path, base_path
+                ),
+                &format!(
+                    "add baseline entry for `{}` or add directive `allow-regression: {} <rationale>`",
+                    h.name, h.name
+                ),
+            );
+            if anchored {
                 out.anchor_last(h.name.clone());
             }
             continue;
@@ -921,28 +911,27 @@ pub fn evaluate_metrics_regression_with_instruments(
                 });
 
                 if decision.is_regression {
-                    if let Some(ov) = allowed {
-                        out.overrides.push(ov);
-                    } else {
-                        out.push(
-                            severity,
-                            &crate::findings::PERFORMANCE_REGRESSED,
-                            Some(head_path),
-                            None,
-                            format!(
-                                "benchmark `{}` in `{}` regressed: {} (point: {:.2} -> {:.2} {})",
-                                h.name,
-                                head_path,
-                                decision.note,
-                                c_base.point_estimate,
-                                c_head.point_estimate,
-                                h.unit
-                            ),
-                            &format!(
-                                "optimize `{}` or add directive `allow-regression: {} <rationale>`",
-                                h.name, h.name
-                            ),
-                        );
+                    let anchored = allowed.is_none();
+                    out.lift_or_push(
+                        allowed,
+                        severity,
+                        &crate::findings::PERFORMANCE_REGRESSED,
+                        (Some(head_path), None),
+                        format!(
+                            "benchmark `{}` in `{}` regressed: {} (point: {:.2} -> {:.2} {})",
+                            h.name,
+                            head_path,
+                            decision.note,
+                            c_base.point_estimate,
+                            c_head.point_estimate,
+                            h.unit
+                        ),
+                        &format!(
+                            "optimize `{}` or add directive `allow-regression: {} <rationale>`",
+                            h.name, h.name
+                        ),
+                    );
+                    if anchored {
                         out.anchor_last(h.name.clone());
                     }
                 } else if decision.method.starts_with("not_comparable")

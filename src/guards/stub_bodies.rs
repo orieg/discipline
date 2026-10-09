@@ -153,18 +153,14 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
         out.examined += head.functions.iter().filter(|f| !f.is_test).count();
         for f in judge(&base, &head.functions) {
             let lift = |subject: &str| ctx.find_override(GATE, f.kind, tokens::ALLOW_STUB, subject);
-            if let Some(ov) = lift(&f.name)
+            let ov = lift(&f.name)
                 .or_else(|| lift(&file.path))
-                .or_else(|| file.path.rsplit('/').next().and_then(lift))
-            {
-                out.overrides.push(ov);
-                continue;
-            }
-            out.push(
+                .or_else(|| file.path.rsplit('/').next().and_then(lift));
+            out.lift_or_push(
+                ov,
                 ctx.overridable(settings.severity()),
                 f.kind,
-                Some(&file.path),
-                Some(f.line),
+                (Some(&file.path), Some(f.line)),
                 format!("{} in `{}`.", f.what, file.path),
                 &format!(
                     "Implement it, or justify the stub on its own line in the PR body or a commit message: `allow-stub: {} <reason>`.",
