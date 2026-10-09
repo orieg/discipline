@@ -241,6 +241,49 @@ fn a_required_trailer_is_needed_in_each_entry_of_a_squash() {
 }
 
 #[test]
+fn a_squash_entry_subject_with_bidi_and_control_characters_is_neutralised_in_terminal_output() {
+    const CFG: &str =
+        "required_trailers = [\"Ticket\"]\nrequire_agent_review = false\n\n[gates.instruction-smuggling]\nenabled = false\n";
+    let hostile_subject = "test: bad \u{1b}[2J\u{202e}\u{200b}invisible\u{202c}";
+    let msg = format!(
+        "feat: parser (#7)\n\n* feat: parser\n\nTicket: 12\n\n* {hostile_subject}\n\nSigned-off-by: Dev Eloper <dev@example.com>\n"
+    );
+    let repo = repo_with(CFG);
+    commit_verbatim(&repo, "a.txt", &msg);
+    let run_json = repo.check(&[]);
+    assert_eq!(titles(&run_json), ["Commit Trailer Missing"]);
+    let violations = run_json.violations("commit-provenance");
+    let message = violations[0]["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains(&format!("`{hostile_subject}`")),
+        "raw json keeps original characters: {message}"
+    );
+
+    let run_text = repo.run(&["check", "--format", "terminal", "--base", "main"], &[]);
+    assert!(
+        run_text
+            .stdout
+            .contains("`test: bad \u{fffd}[2J\u{fffd}\u{fffd}invisible\u{fffd}`"),
+        "terminal output replaces hostile characters with replacement char: {}",
+        run_text.stdout
+    );
+    assert!(run_text.stdout.contains("has no `Ticket:` trailer"));
+    assert!(!run_text.stdout.contains("\u{1b}"), "no ESC in stdout");
+    assert!(
+        !run_text.stdout.contains("\u{202e}"),
+        "no bidi override in stdout"
+    );
+    assert!(
+        !run_text.stdout.contains("\u{200b}"),
+        "no zero-width space in stdout"
+    );
+    assert!(
+        !run_text.stdout.contains("\u{202c}"),
+        "no bidi pop in stdout"
+    );
+}
+
+#[test]
 fn an_ordinary_commit_is_read_as_before() {
     const CFG: &str = "required_trailers = [\"Signed-off-by\"]\n";
     // Control: the last paragraph is the trailer block.

@@ -195,13 +195,14 @@ pub fn squash_entries(message: &str) -> Entries {
     Entries::Delimited(entries)
 }
 
-/// An entry's subject as a finding quotes it: one line, without the characters that would
-/// end the code span around it, cut to a length a report line can hold.
+/// An entry's subject as a finding quotes it: without backticks that would close the code
+/// span around it, cut to a length a report line can hold. Control and invisible characters
+/// are preserved for the reporting layer to neutralize, maintaining verbatim fidelity in JSON.
 fn quoted_subject(subject: &str) -> String {
     const MAX: usize = 60;
     let clean: String = subject
         .chars()
-        .map(|c| if c == '`' || c.is_control() { ' ' } else { c })
+        .map(|c| if c == '`' { ' ' } else { c })
         .collect();
     let clean = clean.trim();
     if clean.chars().count() > MAX {
@@ -1005,7 +1006,10 @@ mod tests {
 
     #[test]
     fn an_entry_subject_is_quoted_on_one_line_and_cut() {
-        assert_eq!(quoted_subject("feat: `x`\u{1b}[2J"), "feat:  x  [2J");
+        assert_eq!(
+            quoted_subject("feat: `x`\u{1b}[2J\u{202e}\u{200b}"),
+            "feat:  x \u{1b}[2J\u{202e}\u{200b}"
+        );
         let long = "a".repeat(80);
         let q = quoted_subject(&long);
         assert_eq!(q.chars().count(), 63);

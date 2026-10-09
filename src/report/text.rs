@@ -44,14 +44,14 @@ pub const REPLACEMENT: char = '\u{FFFD}';
 /// Whether `c` can change how a terminal or a renderer lays text out without being
 /// visible itself: the C0 and C1 controls and DEL (ESC, CSI, the bell, backspace,
 /// carriage return), the bidirectional embedding, override and isolate controls (text
-/// shown in another order than it is stored), and the Unicode line and paragraph
-/// separators (a line break that is not `\n`). A tab is one too; callers keep it.
+/// shown in another order than it is stored), the Unicode line and paragraph
+/// separators (a line break that is not `\n`), and invisible characters (zero-width
+/// spaces, joiners, directional marks, soft hyphens and tag characters). A tab is
+/// one too; callers keep it.
 pub(crate) fn is_control(c: char) -> bool {
     c.is_control()
-        || matches!(
-            c,
-            '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{061C}' | '\u{2028}' | '\u{2029}'
-        )
+        || matches!(c, '\u{061C}' | '\u{2028}' | '\u{2029}')
+        || crate::guards::instruction_smuggling::invisible_class(c).is_some()
 }
 
 /// `text` for one line of a terminal report: it stays one line, and carries no escape
@@ -629,8 +629,13 @@ mod tests {
         // The reader sees that something was there.
         assert_eq!(terminal_line("ok\nStatus: PASS"), "ok\u{fffd}Status: PASS");
         assert_eq!(terminal_line("\u{1b}[31mred"), "\u{fffd}[31mred");
-        // A joiner is part of a word in several scripts and of an emoji: kept.
-        assert_eq!(terminal_line("a\u{200d}b"), "a\u{200d}b");
+        // Zero-width characters (including joiners), bidi controls, and tag characters become U+FFFD.
+        assert_eq!(terminal_line("a\u{200d}b"), "a\u{fffd}b");
+        assert_eq!(terminal_line("a\u{200b}b"), "a\u{fffd}b");
+        assert_eq!(terminal_line("a\u{200e}b"), "a\u{fffd}b");
+        assert_eq!(terminal_line("a\u{200f}b"), "a\u{fffd}b");
+        assert_eq!(terminal_line("a\u{ad}b"), "a\u{fffd}b");
+        assert_eq!(terminal_line("a\u{e0041}b"), "a\u{fffd}b");
         assert_eq!(terminal_line("a\tb"), "a\tb");
     }
 
@@ -1310,6 +1315,91 @@ mod tests {
         for text in PLAIN {
             assert_eq!(agent_field(text), one_line(text));
             assert_eq!(agent_field_text(text), *text);
+        }
+    }
+
+    /// #681: all four human-facing sinks replace invisible, bidi, and tag characters with U+FFFD.
+    #[test]
+    fn invisible_and_bidi_characters_are_replaced_with_replacement_symbol() {
+        for (name, c) in [
+            ("zero-width space", '\u{200b}'),
+            ("zero-width non-joiner", '\u{200c}'),
+            ("zero-width joiner", '\u{200d}'),
+            ("left-to-right mark", '\u{200e}'),
+            ("right-to-left mark", '\u{200f}'),
+            ("word joiner", '\u{2060}'),
+            ("invisible separator", '\u{2063}'),
+            ("invisible boundary", '\u{2064}'),
+            ("byte order mark", '\u{feff}'),
+            ("mongolian vowel separator", '\u{180e}'),
+            ("soft hyphen", '\u{ad}'),
+            ("bidi override", '\u{202e}'),
+            ("bidi isolate", '\u{2066}'),
+            ("arabic letter mark", '\u{061c}'),
+            ("tag character", '\u{e0041}'),
+            ("tag boundary start", '\u{e0000}'),
+            ("tag boundary end", '\u{e007f}'),
+        ] {
+            assert!(
+                is_control(c),
+                "{name} (U+{:04X}) must be is_control",
+                c as u32
+            );
+            assert_eq!(
+                terminal_line(&format!("pre{c}post")),
+                "pre\u{fffd}post",
+                "{name}"
+            );
+            assert_eq!(
+                markdown_cell(&format!("pre{c}post")),
+                "pre\u{fffd}post",
+                "{name}"
+            );
+            assert_eq!(
+                agent_span(&format!("pre{c}post")),
+                "`pre\u{fffd}post`",
+                "{name}"
+            );
+            assert_eq!(
+                crate::escape::comment_markdown_cell(&format!("pre{c}post")),
+                "pre\u{fffd}post",
+                "{name}"
+            );
+        }
+
+        // Negative controls: ordinary visible text, non-whitespace symbols, and code points outside
+        // the ranges must not be classified as control characters or replaced.
+        for (name, c) in [
+            ("hyphen", '\u{2010}'),
+            ("en dash", '\u{2013}'),
+            ("middle dot", '\u{00b7}'),
+            ("unassigned invisible boundary", '\u{2065}'),
+        ] {
+            assert!(
+                !is_control(c),
+                "{name} (U+{:04X}) must not be is_control",
+                c as u32
+            );
+            assert_eq!(
+                terminal_line(&format!("pre{c}post")),
+                format!("pre{c}post"),
+                "{name}"
+            );
+            assert_eq!(
+                markdown_cell(&format!("pre{c}post")),
+                format!("pre{c}post"),
+                "{name}"
+            );
+            assert_eq!(
+                agent_span(&format!("pre{c}post")),
+                format!("`pre{c}post`"),
+                "{name}"
+            );
+            assert_eq!(
+                crate::escape::comment_markdown_cell(&format!("pre{c}post")),
+                format!("pre{c}post"),
+                "{name}"
+            );
         }
     }
 }
