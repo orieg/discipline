@@ -1,10 +1,11 @@
 //! Findings land on the line of what they name, and an input that cannot be read is said
 //! (#678): a `ci-integrity` finding is located by the job's own key and the step's own
 //! lines, never by the first line that contains the name; `base-tests` reads the report
-//! files a command wrote in name order; `archive-contents` stops on a directory it cannot
-//! list; `dependency-delta` stops on a manifest that does not parse; and a pytest
-//! `python_files` entry that is not a readable glob decides nothing. Each defect has a
-//! test that failed before its fix and a control beside it.
+//! files a command wrote in name order and ignores committed root `*.xml`; `archive-contents`
+//! stops on a directory it cannot list; `dependency-delta` stops on a manifest that does not
+//! parse, and a base lockfile that does not parse adds a note; and a pytest `python_files`
+//! entry that is not a readable glob or an unparseable `pyproject.toml` leaves collection
+//! not determined. Each defect has a test that failed before its fix and a control beside it.
 
 mod common;
 use common::{Repo, Run, CONFIG_HEAD};
@@ -508,6 +509,40 @@ fn base_tests_reads_a_single_report_file_and_prefers_the_output() {
     assert!(located(&run, "command").is_empty(), "{}", all(&run));
 }
 
+/// A committed `*.xml` at the repository root holds test cases (e.g. a fixture or
+/// template) and was not written by the command: it is never read as the command's report.
+#[test]
+fn base_tests_ignores_committed_root_xml() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", &format!("{CONFIG_HEAD}{BASE_TESTS}")),
+            (
+                "out.sh",
+                &format!("printf '%s' '{PASSED}' > generated.xml\n"),
+            ),
+            ("fixture.xml", FAILED),
+        ],
+        "ci: base configuration and committed xml fixture",
+    );
+    repo.write(
+        "docs/plan.md",
+        "# Plan\n\nPhase 1, Phase 2, then Phase 3.\n",
+    );
+    repo.commit("docs: extend the plan");
+    let run = repo.check(&[]);
+    assert!(
+        located(&run, "command").is_empty(),
+        "fixture.xml should have been ignored: {}",
+        all(&run)
+    );
+    assert!(
+        notes(&run, "command").contains("1 base tests passed against head code"),
+        "generated.xml should have been evaluated: {}",
+        all(&run)
+    );
+}
+
 // ---- archive-contents: a directory that cannot be listed -------------------------
 
 #[cfg(unix)]
@@ -682,6 +717,33 @@ fn a_base_manifest_that_does_not_parse_is_a_note() {
     }
 }
 
+/// A base lockfile that does not parse gives nothing to compare with; the change that
+/// repairs it is not stopped, and the note says the base lockfile did not parse.
+#[test]
+fn a_base_lockfile_that_does_not_parse_is_a_note() {
+    let base_broken = "[[package]]\nname = \"t\"\nversion = \"0.1.0\"\n[dependencies\n";
+    let head_good = "version = 3\n\n[[package]]\nname = \"t\"\nversion = \"0.1.0\"\n";
+    let repo = changed_file("Cargo.lock", base_broken, head_good, "");
+    let run = repo.check(&[]);
+    assert!(run.json()["could_not_check"].is_null(), "{}", all(&run));
+    let n = notes(&run, "dependency-delta");
+    assert!(
+        n.contains("lockfile `Cargo.lock` does not parse on the base side, so every entry of the head side is judged against default hosts"),
+        "{n}"
+    );
+}
+
+/// Control: a clean lockfile modification emits no unparseable note.
+#[test]
+fn a_valid_lockfile_emits_no_unparseable_note() {
+    let base_good = "version = 3\n\n[[package]]\nname = \"t\"\nversion = \"0.1.0\"\n";
+    let head_good = "version = 3\n\n[[package]]\nname = \"t\"\nversion = \"0.2.0\"\n";
+    let repo = changed_file("Cargo.lock", base_good, head_good, "");
+    let run = repo.check(&[]);
+    let n = notes(&run, "dependency-delta");
+    assert!(!n.contains("does not parse on the base side"), "{n}");
+}
+
 /// Control: the same additions in manifests that parse are reported.
 #[test]
 fn a_manifest_that_parses_still_reports_a_wildcard_dependency() {
@@ -751,4 +813,39 @@ fn a_readable_python_files_entry_decides_collection() {
     assert_eq!(run.code, 0, "{}", all(&run));
     let n = notes(&run, "test-floor");
     assert!(!n.contains("`python_files`"), "{n}");
+}
+
+/// An unparseable `pyproject.toml` leaves pytest configuration unreadable, so collection
+/// cannot be determined.
+#[test]
+fn an_unparseable_pyproject_toml_leaves_collection_not_determined() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            (
+                "pyproject.toml",
+                "[project]\nname = \"t\"\nversion = \"0.1.0\"\n",
+            ),
+            ("checks/test_base.py", PY_TEST),
+        ],
+        "test: base",
+    );
+    repo.write("pyproject.toml", "[tool.pytest.ini_options\ninvalid toml\n");
+    repo.commit("test: break pyproject.toml");
+    let run = repo.check(&["--disable", "dependency-delta"]);
+    assert_eq!(run.code, 1, "{}", all(&run));
+    assert_eq!(
+        located(&run, "toolchain-config"),
+        [(
+            "toolchain-config/toolchain-config-unreadable".to_string(),
+            None
+        )],
+        "{}",
+        all(&run)
+    );
+    let n = notes(&run, "test-floor");
+    assert!(
+        n.contains("the pytest configuration `pyproject.toml` cannot be read"),
+        "{n}"
+    );
 }

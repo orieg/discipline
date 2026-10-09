@@ -1536,14 +1536,21 @@ pub struct TestCaseReport {
 
 /// The test cases of the first `*.xml` file in `dir`, in name order, that holds any; none
 /// when no file does. Files below `dir` are not looked at, and a file that cannot be read
-/// as text holds no cases.
-pub(crate) fn first_report_file_cases(dir: &Path) -> Vec<TestCaseReport> {
+/// as text holds no cases. Files whose name is in `ignore` (committed files copied into the
+/// directory) are skipped.
+pub(crate) fn first_report_file_cases(dir: &Path, ignore: &[&str]) -> Vec<TestCaseReport> {
     let mut reports: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
         .map(|entry| entry.path())
-        .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "xml"))
+        .filter(|p| {
+            p.is_file()
+                && p.extension().is_some_and(|e| e == "xml")
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|name| !ignore.contains(&name))
+        })
         .collect();
     reports.sort();
     reports
@@ -1692,9 +1699,10 @@ fn evaluate_base_tests(
     let _guard = TempDirGuard(temp_path.clone());
 
     // Copy all tracked files from head working tree into temp_path
-    for file in ctx.git.tracked_files()? {
-        let src = ctx.git.root().join(&file);
-        let dst = temp_path.join(&file);
+    let tracked = ctx.git.tracked_files()?;
+    for file in &tracked {
+        let src = ctx.git.root().join(file);
+        let dst = temp_path.join(file);
         if let Some(parent) = dst.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -1742,8 +1750,15 @@ fn evaluate_base_tests(
     // at the top of its working directory: the first `*.xml` in name order that holds
     // test cases. One file is read and the others are not; name order makes which one
     // the same on every run and every file system (a directory listing has no order).
+    // Root `*.xml` files that are committed in the repository were copied into `temp_path`;
+    // they are not reports produced by the command and must not be read as one.
     if cases.is_empty() {
-        cases = first_report_file_cases(&temp_path);
+        let ignore_xml: Vec<&str> = tracked
+            .iter()
+            .filter(|f| !f.contains('/') && f.ends_with(".xml"))
+            .map(String::as_str)
+            .collect();
+        cases = first_report_file_cases(&temp_path, &ignore_xml);
     }
 
     let failed_cases: Vec<&TestCaseReport> = cases

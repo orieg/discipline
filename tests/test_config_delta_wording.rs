@@ -195,3 +195,30 @@ fn each_gate_says_in_its_own_words_that_it_examined_nothing() {
         assert_eq!(outcome["notes"], serde_json::json!([note]), "{gate}");
     }
 }
+
+#[test]
+fn toolchain_config_reports_unparseable_package_json() {
+    let repo = changed(&[(
+        "package.json",
+        "{\"name\": \"t\"}\n",
+        Some("{\"name\": \"t\",}\n"),
+    )]);
+    let run = repo.check(&[
+        "--enable",
+        "toolchain-config",
+        "--disable",
+        "dependency-delta",
+    ]);
+    assert_eq!(
+        wording(&run, "toolchain-config"),
+        [row(
+            "toolchain-config/toolchain-config-unreadable",
+            "package.json",
+            "`package.json` could not be parsed on one side, so its weakening could not be checked.",
+            "Fix the file so it parses.",
+        )],
+        "{}{}",
+        run.stdout,
+        run.stderr
+    );
+}

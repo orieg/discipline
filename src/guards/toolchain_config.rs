@@ -493,4 +493,16 @@ mod tests {
         // Losing an entry is `Shrunk`'s finding, not this one.
         assert!(inherited_changes(".eslintrc.json", &h, &b).is_empty());
     }
+
+    #[test]
+    fn package_json_is_strictly_parsed_as_json() {
+        assert!(load("package.json", "{\"name\": \"a\",}\n").is_none());
+        assert!(load("package.json", "{\n  // comment\n  \"name\": \"a\"\n}\n").is_none());
+        assert!(load("package.json", "{\"name\": \"a\"}\n").is_some());
+        // Relative / nested paths are also strictly parsed.
+        assert!(load("packages/sub/package.json", "{\"name\": \"a\",}\n").is_none());
+        assert!(load("packages/sub/package.json", "{\"name\": \"a\"}\n").is_some());
+        // Control: tsconfig.json allows comments and trailing commas.
+        assert!(load("tsconfig.json", "{\"name\": \"a\",}\n").is_some());
+    }
 }
