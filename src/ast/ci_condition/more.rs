@@ -439,7 +439,7 @@ impl<'t, 's> Reader<'t, 's> {
             "postfix_unary_expression" if self.text(n).trim_end().ends_with('!') => {
                 self.last_child(n)
             }
-            "prefix_unary_expression" => self.negation(n, None),
+            "prefix_unary_expression" | "unary_expression" => self.negation(n, None),
             "binary_expression" => self.binary(n),
             "is_pattern_expression" => {
                 let (Some(value), Some(mut pattern)) = (
@@ -733,6 +733,7 @@ impl<'t, 's> Reader<'t, 's> {
                 .child_by_field_name("value")
                 .map_or(Shape::Other, Shape::Inner),
             "unary_expression" => self.negation(n, n.child_by_field_name("argument")),
+            "preproc_defined" => named(n).first().map_or(Shape::Other, |c| Shape::Inner(*c)),
             "binary_expression" => self.binary(n),
             "null" | "nullptr" | "false" => Shape::Lit(Lit::Falsy),
             "true" => Shape::Lit(Lit::Truthy),
@@ -1273,6 +1274,126 @@ impl<'t, 's> Reader<'t, 's> {
         }
     }
 
+    fn swift_directive_guards(&self, parent: Node<'t>, cur: Node<'t>) -> Vec<Guard<'t>> {
+        if self.g != Grammar::Swift || parent.kind() != "statements" {
+            return Vec::new();
+        }
+        let cur_start = cur.start_byte();
+        let mut cursor = parent.walk();
+        let has_closing = parent.children(&mut cursor).any(|c| {
+            c.kind() == "directive"
+                && c.start_byte() >= cur.end_byte()
+                && self.text(c).trim().starts_with("#endif")
+        });
+        if !has_closing {
+            return Vec::new();
+        }
+
+        struct Layer<'a> {
+            earlier_conds: Vec<Node<'a>>,
+            active: Option<(Node<'a>, bool)>,
+        }
+        let mut stack: Vec<Layer<'t>> = Vec::new();
+
+        let mut cursor = parent.walk();
+        for child in parent.children(&mut cursor) {
+            if child.start_byte() >= cur_start {
+                break;
+            }
+            if child.kind() != "directive" {
+                continue;
+            }
+            let text = self.text(child).trim();
+            let is_negated = child
+                .children(&mut child.walk())
+                .any(|c| c.kind() == "!" || self.text(c).trim() == "!");
+            if text.starts_with("#if") {
+                let cond = named(child).first().copied();
+                stack.push(Layer {
+                    earlier_conds: Vec::new(),
+                    active: cond.map(|c| (c, is_negated)),
+                });
+            } else if text.starts_with("#elseif") {
+                if let Some(top) = stack.last_mut() {
+                    if let Some((prev, _)) = top.active.take() {
+                        top.earlier_conds.push(prev);
+                    }
+                    let cond = named(child).first().copied();
+                    top.active = cond.map(|c| (c, is_negated));
+                }
+            } else if text.starts_with("#else") {
+                if let Some(top) = stack.last_mut() {
+                    if let Some((prev, _)) = top.active.take() {
+                        top.earlier_conds.push(prev);
+                    }
+                    top.active = None;
+                }
+            } else if text.starts_with("#endif") {
+                stack.pop();
+            }
+        }
+
+        let mut guards = Vec::new();
+        for layer in stack {
+            for earlier in layer.earlier_conds {
+                guards.push(Guard {
+                    conds: vec![earlier],
+                    negated: true,
+                });
+            }
+            if let Some((active, negated)) = layer.active {
+                guards.push(Guard {
+                    conds: vec![active],
+                    negated,
+                });
+            }
+        }
+        guards
+    }
+
+    fn preproc_guards(&self, parent: Node<'t>, cur: Node<'t>) -> Vec<Guard<'t>> {
+        let kind = parent.kind();
+        let one = |cond: Node<'t>, negated: bool| {
+            vec![Guard {
+                conds: vec![cond],
+                negated,
+            }]
+        };
+        match kind {
+            "preproc_if" | "preproc_elif" => {
+                let Some(cond) = parent.child_by_field_name("condition") else {
+                    return Vec::new();
+                };
+                if cond.id() == cur.id() {
+                    return Vec::new();
+                }
+                let in_alt = named(parent).iter().any(|c| {
+                    matches!(c.kind(), "preproc_elif" | "preproc_else")
+                        && (c.id() == cur.id() || cur.start_byte() >= c.start_byte())
+                });
+                one(cond, in_alt)
+            }
+            "preproc_ifdef" | "preproc_ifndef" => {
+                let Some(name) = parent.child_by_field_name("name") else {
+                    return Vec::new();
+                };
+                if name.id() == cur.id() {
+                    return Vec::new();
+                }
+                let is_ifndef = kind == "preproc_ifndef"
+                    || parent
+                        .child(0)
+                        .is_some_and(|c| self.text(c).trim() == "#ifndef");
+                let in_alt = named(parent).iter().any(|c| {
+                    matches!(c.kind(), "preproc_elif" | "preproc_else")
+                        && (c.id() == cur.id() || cur.start_byte() >= c.start_byte())
+                });
+                one(name, if is_ifndef { !in_alt } else { in_alt })
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// The conditions `parent` puts on its child `cur`.
     fn guards(&self, parent: Node<'t>, cur: Node<'t>) -> Vec<Guard<'t>> {
         let one = |cond: Node<'t>, negated: bool| {
@@ -1282,6 +1403,20 @@ impl<'t, 's> Reader<'t, 's> {
             }]
         };
         let kind = parent.kind();
+        // Swift directives in `statements`
+        if self.g == Grammar::Swift && kind == "statements" {
+            let swift_guards = self.swift_directive_guards(parent, cur);
+            if !swift_guards.is_empty() {
+                return swift_guards;
+            }
+        }
+        // Preprocessor conditionals in C, ObjC, C#
+        if matches!(self.g, Grammar::C | Grammar::ObjC | Grammar::CSharp) {
+            let preproc = self.preproc_guards(parent, cur);
+            if !preproc.is_empty() {
+                return preproc;
+            }
+        }
         // Swift: the conditions carry no branch field; the branches stand before and
         // after the `else` keyword, and the body of a `guard` after its `else`.
         if self.g == Grammar::Swift && matches!(kind, "if_statement" | "guard_statement") {
@@ -1318,6 +1453,106 @@ impl<'t, 's> Reader<'t, 's> {
             }
             return Vec::new();
         }
+
+        // Loops: while, until, do-while, for, foreach
+        let loop_guard = match self.g {
+            Grammar::C | Grammar::ObjC => match kind {
+                "while_statement" | "do_statement" => {
+                    parent.child_by_field_name("condition").map(|c| (c, false))
+                }
+                "for_statement" => parent.child_by_field_name("condition").map(|c| (c, false)),
+                "for_range_loop" => parent.child_by_field_name("right").map(|c| (c, false)),
+                _ => None,
+            },
+            Grammar::CSharp => match kind {
+                "while_statement" | "do_statement" => {
+                    parent.child_by_field_name("condition").map(|c| (c, false))
+                }
+                "for_statement" => parent.child_by_field_name("condition").map(|c| (c, false)),
+                "foreach_statement" => parent.child_by_field_name("right").map(|c| (c, false)),
+                _ => None,
+            },
+            Grammar::Ruby => match kind {
+                "while" | "while_modifier" => {
+                    parent.child_by_field_name("condition").map(|c| (c, false))
+                }
+                "until" | "until_modifier" => {
+                    parent.child_by_field_name("condition").map(|c| (c, true))
+                }
+                "for" => parent
+                    .child_by_field_name("value")
+                    .map(|v| (named(v).last().copied().unwrap_or(v), false)),
+                _ => None,
+            },
+            Grammar::Php => match kind {
+                "while_statement" | "do_statement" => {
+                    parent.child_by_field_name("condition").map(|c| (c, false))
+                }
+                "for_statement" => parent.child_by_field_name("condition").map(|c| (c, false)),
+                "foreach_statement" => {
+                    let mut cursor = parent.walk();
+                    let coll = parent
+                        .children(&mut cursor)
+                        .take_while(|c| c.kind() != "as")
+                        .filter(|c| c.is_named())
+                        .last();
+                    coll.map(|c| (c, false))
+                }
+                _ => None,
+            },
+            Grammar::Swift => match kind {
+                "while_statement" | "repeat_while_statement" => {
+                    parent.child_by_field_name("condition").map(|c| (c, false))
+                }
+                "for_statement" => parent.child_by_field_name("collection").map(|c| (c, false)),
+                _ => None,
+            },
+            Grammar::Scala => match kind {
+                "while_expression" | "do_while_expression" => {
+                    parent.child_by_field_name("condition").map(|c| (c, false))
+                }
+                "for_expression" => parent
+                    .children(&mut parent.walk())
+                    .find(|c| c.kind() == "enumerators")
+                    .map(|c| (c, false)),
+                _ => None,
+            },
+        };
+        if let Some((cond, negated)) = loop_guard {
+            if cond.id() != cur.id() {
+                return one(cond, negated);
+            }
+        }
+
+        // Switch / Match / Case
+        let switch_guard = match self.g {
+            Grammar::C | Grammar::ObjC | Grammar::Php => match kind {
+                "switch_statement" | "match_expression" => parent.child_by_field_name("condition"),
+                _ => None,
+            },
+            Grammar::CSharp => match kind {
+                "switch_statement" | "switch_expression" => parent.child_by_field_name("value"),
+                _ => None,
+            },
+            Grammar::Swift => match kind {
+                "switch_statement" => parent.child_by_field_name("expr"),
+                _ => None,
+            },
+            Grammar::Ruby => match kind {
+                "case" => parent.child_by_field_name("value"),
+                _ => None,
+            },
+            Grammar::Scala => match kind {
+                "match_expression" => parent.child_by_field_name("value"),
+                _ => None,
+            },
+        };
+        if let Some(cond) = switch_guard {
+            if cond.id() != cur.id() {
+                return one(cond, false);
+            }
+        }
+
         let conditional = match self.g {
             Grammar::CSharp => matches!(kind, "if_statement" | "conditional_expression"),
             Grammar::Ruby => matches!(
@@ -1764,5 +1999,181 @@ mod tests {
             conditional("[settings environment][@\"HOME\"] != nil", false)
         );
         assert_eq!(objc("XCTSkip(@\"x\");"), UNCONDITIONAL);
+    }
+
+    #[test]
+    fn skips_under_loops_switch_match_and_preprocessor_conditionals_are_read() {
+        // C#
+        let env_cs = "Environment.GetEnvironmentVariable(\"CI\")";
+        assert_eq!(
+            cs(&format!("while ({env_cs} != null) {{ Assert.Ignore(); }}")),
+            conditional(&format!("{env_cs} != null"), true)
+        );
+        assert_eq!(
+            cs("while (NotCi()) { Assert.Ignore(); }"),
+            conditional("NotCi()", false)
+        );
+        assert_eq!(
+            cs("for (int i = 0; i < 10; i++) { Assert.Ignore(); }"),
+            conditional("i < 10", false)
+        );
+        assert_eq!(
+            cs("foreach (var x in list) { Assert.Ignore(); }"),
+            conditional("list", false)
+        );
+        assert_eq!(
+            cs("do { Assert.Ignore(); } while (c);"),
+            conditional("c", false)
+        );
+        assert_eq!(
+            cs(&format!(
+                "switch ({env_cs}) {{ case \"1\": Assert.Ignore(); break; }}"
+            )),
+            conditional(env_cs, true)
+        );
+        assert_eq!(
+            cs("#if CI\nAssert.Ignore();\n#endif"),
+            conditional("CI", true)
+        );
+        assert_eq!(
+            cs("#if !CI\nAssert.Ignore();\n#endif"),
+            conditional("!CI", false)
+        );
+
+        // Ruby
+        assert_eq!(
+            rb("while ENV[\"CI\"]; skip; end"),
+            conditional("ENV[\"CI\"]", true)
+        );
+        assert_eq!(
+            rb("until ENV[\"CI\"]; skip; end"),
+            conditional("!(ENV[\"CI\"])", false)
+        );
+        assert_eq!(
+            rb("skip while ENV[\"CI\"]"),
+            conditional("ENV[\"CI\"]", true)
+        );
+        assert_eq!(
+            rb("skip until ENV[\"CI\"]"),
+            conditional("!(ENV[\"CI\"])", false)
+        );
+        assert_eq!(rb("for x in xs; skip; end"), conditional("xs", false));
+        assert_eq!(
+            rb("case ENV[\"CI\"]; when 1; skip; end"),
+            conditional("ENV[\"CI\"]", true)
+        );
+
+        // PHP
+        assert_eq!(
+            php("while (getenv('CI')) { $this->markTestSkipped(); }"),
+            conditional("getenv('CI')", true)
+        );
+        assert_eq!(
+            php("for ($i = 0; $i < 10; $i++) { $this->markTestSkipped(); }"),
+            conditional("$i < 10", false)
+        );
+        assert_eq!(
+            php("do { $this->markTestSkipped(); } while ($c);"),
+            conditional("$c", false)
+        );
+        assert_eq!(
+            php("foreach ($xs as $x) { $this->markTestSkipped(); }"),
+            conditional("$xs", false)
+        );
+        assert_eq!(
+            php("switch (getenv('CI')) { case 1: $this->markTestSkipped(); }"),
+            conditional("getenv('CI')", true)
+        );
+        assert_eq!(
+            php("$res = match (getenv('CI')) { 1 => $this->markTestSkipped(), default => null };"),
+            conditional("getenv('CI')", true)
+        );
+
+        // Swift
+        let env_swift = "ProcessInfo.processInfo.environment[\"CI\"]";
+        assert_eq!(
+            swift(&format!("while {env_swift} != nil {{ throw XCTSkip() }}")),
+            conditional(&format!("{env_swift} != nil"), true)
+        );
+        assert_eq!(
+            swift("repeat { throw XCTSkip() } while c"),
+            conditional("c", false)
+        );
+        assert_eq!(
+            swift("for x in xs { throw XCTSkip() }"),
+            conditional("xs", false)
+        );
+        assert_eq!(
+            swift(&format!(
+                "switch {env_swift} {{ case nil: throw XCTSkip(); default: break; }}"
+            )),
+            conditional(env_swift, true)
+        );
+        assert_eq!(
+            swift("#if CI\nthrow XCTSkip()\n#endif"),
+            conditional("CI", true)
+        );
+        assert_eq!(
+            swift("#if !CI\nthrow XCTSkip()\n#endif"),
+            conditional("!(CI)", false)
+        );
+
+        // Scala
+        assert_eq!(
+            scala("while (sys.env.contains(\"CI\")) { cancel() }"),
+            conditional("sys.env.contains(\"CI\")", true)
+        );
+        assert_eq!(
+            scala("for (x <- xs) { cancel() }"),
+            conditional("x <- xs", false)
+        );
+        assert_eq!(
+            scala("sys.env.get(\"CI\") match { case Some(_) => cancel(); case _ => () }"),
+            conditional("sys.env.get(\"CI\")", true)
+        );
+
+        // C / C++ / ObjC
+        let cpp = |body: &str| {
+            read(
+                "tests/q_test.cpp",
+                &format!("TEST(Q, Adds) {{\n  {body}\n  EXPECT_EQ(1 + 1, 2);\n}}\n"),
+            )
+        };
+        assert_eq!(
+            cpp("while (std::getenv(\"CI\")) { GTEST_SKIP(); }"),
+            conditional("std::getenv(\"CI\")", true)
+        );
+        assert_eq!(
+            cpp("for (int i = 0; i < 10; i++) { GTEST_SKIP(); }"),
+            conditional("i < 10", false)
+        );
+        assert_eq!(
+            cpp("do { GTEST_SKIP(); } while (c);"),
+            conditional("c", false)
+        );
+        assert_eq!(
+            cpp("switch (my::getenv(\"CI\")) { case 1: GTEST_SKIP(); }"),
+            conditional("my::getenv(\"CI\")", true)
+        );
+        assert_eq!(
+            cpp("#ifdef CI\nGTEST_SKIP();\n#endif"),
+            conditional("CI", true)
+        );
+        assert_eq!(
+            cpp("#ifndef CI\nGTEST_SKIP();\n#endif"),
+            conditional("!(CI)", false)
+        );
+        assert_eq!(
+            cpp("#if defined(CI)\nGTEST_SKIP();\n#endif"),
+            conditional("defined(CI)", true)
+        );
+        assert_eq!(
+            cpp("#if !defined(CI)\nGTEST_SKIP();\n#endif"),
+            conditional("!defined(CI)", false)
+        );
+        assert_eq!(
+            cpp("#if OTHER\n//\n#elif defined(CI)\nGTEST_SKIP();\n#endif"),
+            conditional("defined(CI)", true)
+        );
     }
 }

@@ -21,7 +21,7 @@ pub const GATE: &str = "provenance-tags";
 
 /// A figure: a number carrying a unit, or a multiplier (`2.9x`).
 pub(crate) static UNIT_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b\d+(?:[.,]\d+)?\s*(?:ns|µs|us|ms|ops/s|Mops/s|M ops/s|M/s|B/key|B/k|bytes/key|GB|MB|KiB|MiB)\b|\d+(?:\.\d+)?\s*[×x]\b").expect("valid regex")
+    Regex::new(r"(?i)\b\d+(?:[.,_]\d+)*\s*(?:ns|µs|us|ms|ops/s|Mops/s|M ops/s|M/s|B/key|B/k|bytes/key|GB|MB|KiB|MiB)\b|\b\d+(?:[.,_]\d+)*\s*%(?:\s|$|[^\w])|\b\d+(?:[.,_]\d+)*\s*(?:x\b|×(?:\s|$|[^\w]))").expect("valid regex")
 });
 
 static PROVENANCE_TAG: LazyLock<Regex> = LazyLock::new(|| {
@@ -42,7 +42,7 @@ static MECHANISM_EVIDENCE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static WALLCLOCK_RATIO: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\b\d+(?:\.\d+)?\s*(?:x\b|×(?:\s|$|[^\w]))").unwrap());
+    LazyLock::new(|| Regex::new(r"(?i)\b\d+(?:[.,_]\d+)*\s*(?:x\b|×(?:\s|$|[^\w]))").unwrap());
 
 static WALLCLOCK_CONTEXT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)(?:\bns\b|µs|\bus\b|\bms\b|ops/s|Mops|M/s|latency|throughput|faster|slower|speedup|wall.?clock)").expect("valid regex")
@@ -57,26 +57,26 @@ static INTERVAL_EVIDENCE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static PAIRED_VS_PAT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:\b\d+(?:\.\d+)?\s*(?:ns|µs|us|ms|s|B/key|B/k|bytes/key|B/docID|bits/docID|B/tok|B/entry|Mops/s|M ops/s|M/s|Minst|M inst|inst|tps|M\b)\b(?:\*\*)?\s*(?:vs\.?|vs|against)\s*(?:\*\*)?\d+(?:\.\d+)?|\b\d+(?:\.\d+)?\b(?:\*\*)?\s*(?:vs\.?|vs|against)\s*(?:\*\*)?\d+(?:\.\d+)?\s*(?:ns|µs|us|ms|s|B/key|B/k|bytes/key|B/docID|bits/docID|B/tok|B/entry|Mops/s|M ops/s|M/s|Minst|M inst|inst|tps|M\b)\b)").expect("valid regex")
+    Regex::new(r"(?i)(?:\b\d+(?:[.,_]\d+)*\s*(?:ns|µs|us|ms|s|ops/s|B/key|B/k|bytes/key|B/docID|bits/docID|B/tok|B/entry|Mops/s|M ops/s|M/s|Minst|M inst|inst|tps|M\b)\b(?:\*\*)?\s*(?:vs\.?|vs|against)\s*(?:\*\*)?\d+(?:[.,_]\d+)*|\b\d+(?:[.,_]\d+)*\b(?:\*\*)?\s*(?:vs\.?|vs|against)\s*(?:\*\*)?\d+(?:[.,_]\d+)*\s*(?:ns|µs|us|ms|s|ops/s|B/key|B/k|bytes/key|B/docID|bits/docID|B/tok|B/entry|Mops/s|M ops/s|M/s|Minst|M inst|inst|tps|M\b)\b)").expect("valid regex")
 });
 
 static INSTRUCTION_METRIC_PAT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:\b\d+(?:\.\d+)?\s*[x×]\s*(?:the\s+)?instructions?\b|\b\d+(?:\.\d+)?\s*(?:M\s*inst|Minst|inst|instructions?|instruction-retired|Ir)\b|\b\d+(?:\.\d+)?%\s*(?:fewer|more)?\s*instructions?\b)").expect("valid regex")
+    Regex::new(r"(?i)(?:\b\d+(?:[.,_]\d+)*\s*[x×]\s*(?:the\s+)?instructions?\b|\b\d+(?:[.,_]\d+)*\s*(?:M\s*inst|Minst|inst|instructions?|instruction-retired|Ir)\b|\b\d+(?:[.,_]\d+)*%\s*(?:fewer|more)?\s*instructions?\b)").expect("valid regex")
 });
 
 static TIME_METRIC_PAT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:\b\d+(?:\.\d+)?\s*(?:ns|µs|us|ms|s)\b|\b\d+(?:\.\d+)?\s*[x×]\s*(?:faster|slower|speedup)?\s*(?:in\s+)?wall[- ]?clock\b|wall[- ]?clock(?:\s+latency)?\s*(?:of\s*)?\d+(?:\.\d+)?\s*(?:ns|µs|us|ms|s|x|×)|\b\d+(?:\.\d+)?\s*[x×]\s*(?:faster|slower)\b)").expect("valid regex")
+    Regex::new(r"(?i)(?:\b\d+(?:[.,_]\d+)*\s*(?:ns|µs|us|ms|s)\b|\b\d+(?:[.,_]\d+)*\s*(?:[x×]|%)\s*(?:faster|slower|speedup)?\s*(?:in\s+)?wall[- ]?clock\b|wall[- ]?clock(?:\s+latency)?\s*(?:of\s*)?\d+(?:[.,_]\d+)*\s*(?:ns|µs|us|ms|s|x|×|%)|\b\d+(?:[.,_]\d+)*\s*(?:[x×]|%)\s*(?:faster|slower)\b)").expect("valid regex")
 });
 
 static THROUGHPUT_METRIC_PAT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)(?:\b\d+(?:\.\d+)?\s*(?:Mops/s|M ops/s|Mops|tps|M/s|ops/s|items/sec|inserts/sec)\b)",
+        r"(?i)(?:\b\d+(?:[.,_]\d+)*\s*(?:Mops/s|M ops/s|Mops|tps|M/s|ops/s|items/sec|inserts/sec)\b|\b\d+(?:[.,_]\d+)*\s*%\s*(?:higher|lower|more|less)?\s*(?:throughput|ops/s|tps)\b)",
     )
     .unwrap()
 });
 
 static MEMORY_METRIC_PAT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:\b\d+(?:\.\d+)?\s*(?:B/key|B/k|bytes/key|B/docID|bits/docID|B/tok|B/entry|B/state)\b|\b\d+(?:\.\d+)?\s*[x×]\s*(?:lower|higher|less|more)?\s*(?:RAM|memory|heap|footprint)\b|\b\d+(?:\.\d+)?\s*(?:MB|MiB|GB|GiB|KB|KiB)\s*(?:RAM|heap|memory|live heap)\b)").expect("valid regex")
+    Regex::new(r"(?i)(?:\b\d+(?:[.,_]\d+)*\s*(?:B/key|B/k|bytes/key|B/docID|bits/docID|B/tok|B/entry|B/state)\b|\b\d+(?:[.,_]\d+)*\s*(?:[x×]|%)\s*(?:lower|higher|less|more)?\s*(?:RAM|memory|heap|footprint)\b|\b\d+(?:[.,_]\d+)*\s*(?:MB|MiB|GB|GiB|KB|KiB)\s*(?:RAM|heap|memory|live heap)\b)").expect("valid regex")
 });
 
 static WORKLOAD_TAG_PAT: LazyLock<Regex> = LazyLock::new(|| {
@@ -1091,5 +1091,60 @@ mod tests {
             "Achieves 2.66x lower RAM at 1.9M ops/s (workload: domain_grammar_masks).\n";
         let findings = scan_markdown_text(cross_ram_tagged, "t.md", false, false, false, true);
         assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn test_figure_thousands_grouping_and_percent_forms() {
+        // Thousands grouping in wallclock interval check
+        let thousands_bare = "Point lookups are 1,000x faster in wall-clock latency.\n";
+        let findings = scan_markdown_text(thousands_bare, "t.md", false, false, true, false);
+        assert_eq!(
+            findings.len(),
+            1,
+            "1,000x faster wall-clock must be flagged without interval"
+        );
+
+        let thousands_interval =
+            "Point lookups are 1,000x faster in wall-clock latency [950x, 1050x].\n";
+        let findings = scan_markdown_text(thousands_interval, "t.md", false, false, true, false);
+        assert!(findings.is_empty(), "1,000x faster with interval must pass");
+
+        // Thousands grouping and percent in cross-metric
+        let cross_percent = "Achieves 40% lower RAM at 1,000,000 ops/s.\n";
+        let findings = scan_markdown_text(cross_percent, "t.md", false, false, false, true);
+        assert_eq!(
+            findings.len(),
+            1,
+            "40% lower RAM at 1,000,000 ops/s must be flagged without tag"
+        );
+
+        // Thousands grouping in paired figures
+        let paired_thousands = "Sequential lookup is 1,000,000 ops/s vs 500,000 ops/s.\n";
+        let findings = scan_markdown_text(paired_thousands, "t.md", false, false, false, true);
+        assert_eq!(findings.len(), 1);
+        assert!(
+            findings[0].message.contains("1,000,000 ops/s vs 500,000"),
+            "finding message must retain thousands group: got {}",
+            findings[0].message
+        );
+    }
+
+    #[test]
+    fn test_table_with_percent_and_underscore_numerics() {
+        let table_percent = "| Arm | Improvement |\n| --- | --- |\n| Opt | +40% |\n";
+        let findings = scan_markdown_text(table_percent, "t.md", true, false, false, false);
+        assert_eq!(
+            findings.len(),
+            1,
+            "table with percent numerics must be flagged without provenance tag"
+        );
+
+        let table_underscore = "| Arm | Throughput |\n| --- | --- |\n| Opt | 1_000_000 ops/s |\n";
+        let findings = scan_markdown_text(table_underscore, "t.md", true, false, false, false);
+        assert_eq!(
+            findings.len(),
+            1,
+            "table with underscore numerics must be flagged without provenance tag"
+        );
     }
 }

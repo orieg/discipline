@@ -572,6 +572,34 @@ fn a_tagged_figure_must_match_a_value_of_the_cited_artifact() {
 }
 
 #[test]
+fn tagged_figures_with_thousands_separators_and_percent_match_artifact() {
+    let doc = figure_doc(
+        "Throughput is 1,234,567 ops/s (or 1_234_567 ops/s) with 99.5% cache hit (measured: bench-box, abc1234; `results/perf.json`).",
+    );
+    let artifact = "{\"throughput\": 1234567.0, \"cache_hit_pct\": 99.5}\n";
+    let (repo, _) = repo_with(FIGURES);
+    let run = check(
+        &repo,
+        &[("results/perf.json", artifact), ("docs/perf.md", &doc)],
+    );
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(
+        notes(&run).contains("figures compared in 1 tagged paragraph(s)"),
+        "{}",
+        notes(&run)
+    );
+
+    // Negative control: a figure with thousands separators that disagrees with the artifact.
+    let stale = doc.replace("1,234,567", "1,234,568");
+    let run = check(
+        &repo,
+        &[("results/perf.json", artifact), ("docs/perf.md", &stale)],
+    );
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert_eq!(codes(&run), [DISAGREES]);
+}
+
+#[test]
 fn a_caption_tag_covers_its_table_and_csv_cells_are_values() {
     let table = |ns: &str| {
         figure_doc(&format!(
