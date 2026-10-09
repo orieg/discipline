@@ -701,49 +701,62 @@ fn helper_call_gain<'a>(
     };
     let (base_sites, head_sites) = (sites(base, false), sites(head, true));
     let (own_base, own_head) = (&base.helper_reach, &head.helper_reach);
-    let mut gain = HelperCallGain {
-        total: own_head.total.saturating_sub(own_base.total),
-        strong: own_head.strong.saturating_sub(own_base.strong),
-        fatal: own_head.fatal.saturating_sub(own_base.fatal),
-        equality: 0,
-        names: Vec::new(),
-    };
-    if gain.total > 0 || gain.strong > 0 {
-        gain.names.extend(own_head.names.iter().cloned());
+    let mut net_total = own_head.total as i64 - own_base.total as i64;
+    let mut net_strong = own_head.strong as i64 - own_base.strong as i64;
+    let mut net_fatal = own_head.fatal as i64 - own_base.fatal as i64;
+    let mut net_equality = 0i64;
+    let mut names = Vec::new();
+    if own_head.total > own_base.total || own_head.strong > own_base.strong {
+        names.extend(own_head.names.iter().cloned());
     }
     for (i, &(base_helper, head_helper, _)) in paired.iter().enumerate() {
         let (base_calls, base_counted) = base_sites[i];
         let (head_calls, head_counted) = head_sites[i];
-        let total = (head_calls * head_helper.effective_asserts())
-            .saturating_sub(head_counted)
-            .saturating_sub(
-                (base_calls * base_helper.effective_asserts()).saturating_sub(base_counted),
-            );
-        let strong = (head_calls * head_helper.strong_asserts)
-            .saturating_sub(base_calls * base_helper.strong_asserts);
-        let fatal = (head_calls * head_helper.fatal_asserts)
-            .saturating_sub(base_calls * base_helper.fatal_asserts);
-        gain.equality += (head_calls * head_helper.equality_exits)
-            .saturating_sub(base_calls * base_helper.equality_exits);
-        if total > 0 || strong > 0 {
-            gain.total += total;
-            gain.strong += strong;
-            gain.fatal += fatal;
-            gain.names.push(head_helper.name.clone());
+        let head_eff = (head_calls * head_helper.effective_asserts()).saturating_sub(head_counted);
+        let base_eff = (base_calls * base_helper.effective_asserts()).saturating_sub(base_counted);
+        let total_diff = head_eff as i64 - base_eff as i64;
+        let strong_diff = (head_calls * head_helper.strong_asserts) as i64
+            - (base_calls * base_helper.strong_asserts) as i64;
+        let fatal_diff = (head_calls * head_helper.fatal_asserts) as i64
+            - (base_calls * base_helper.fatal_asserts) as i64;
+        let equality_diff = (head_calls * head_helper.equality_exits) as i64
+            - (base_calls * base_helper.equality_exits) as i64;
+        net_total += total_diff;
+        net_strong += strong_diff;
+        net_fatal += fatal_diff;
+        net_equality += equality_diff;
+        if total_diff > 0 || strong_diff > 0 {
+            names.push(head_helper.name.clone());
         }
     }
     // Helpers in other files of the test's crate, counted on both sides: what the head
     // side holds less than the base side is lost, and is taken from the rest.
     let (crate_base, crate_head) = (&own_base.crate_helpers, &own_head.crate_helpers);
-    if crate_head.total > crate_base.total || crate_head.strong > crate_base.strong {
-        gain.names.extend(crate_head.names.iter().cloned());
+    let crate_total_diff = crate_head.total as i64 - crate_base.total as i64;
+    let crate_strong_diff = crate_head.strong as i64 - crate_base.strong as i64;
+    let crate_fatal_diff = crate_head.fatal as i64 - crate_base.fatal as i64;
+    let crate_equality_diff = crate_head.equality_exits as i64 - crate_base.equality_exits as i64;
+    net_total += crate_total_diff;
+    net_strong += crate_strong_diff;
+    net_fatal += crate_fatal_diff;
+    net_equality += crate_equality_diff;
+    if crate_total_diff > 0 || crate_strong_diff > 0 {
+        names.extend(crate_head.names.iter().cloned());
     }
-    gain.total = (gain.total + crate_head.total).saturating_sub(crate_base.total);
-    gain.strong = (gain.strong + crate_head.strong).saturating_sub(crate_base.strong);
-    gain.fatal = (gain.fatal + crate_head.fatal).saturating_sub(crate_base.fatal);
-    gain.equality =
-        (gain.equality + crate_head.equality_exits).saturating_sub(crate_base.equality_exits);
-    gain
+    let total = net_total.max(0) as usize;
+    let strong = net_strong.max(0) as usize;
+    let fatal = net_fatal.max(0) as usize;
+    let equality = net_equality.max(0) as usize;
+    if total == 0 && strong == 0 {
+        names.clear();
+    }
+    HelperCallGain {
+        total,
+        strong,
+        fatal,
+        equality,
+        names,
+    }
 }
 
 pub(crate) fn leaf_name(test: &TestFn) -> &str {
@@ -849,5 +862,49 @@ mod tests {
         h.helper_reach.receiver_calls = vec!["check".to_string()];
         let gain = helper_call_gain(&b, &h, "src/lib.rs", &helpers, &[]);
         assert_eq!((gain.total, gain.strong), (3, 3));
+    }
+
+    /// #688: helper_call_gain must use signed math across own reach, helper pairs, and
+    /// crate helpers so losses in one source offset gains in another.
+    #[test]
+    fn helper_call_gain_signed_arithmetic_prevents_masking_losses() {
+        // Case 1: Own reach lost 5 checks, helper gained 3 checks.
+        // Net is -2, so gain.total should be 0.
+        let mut b = calling_test(5, 5, &[]);
+        b.helper_reach.total = 5;
+        b.helper_reach.strong = 5;
+        let mut h = calling_test(0, 0, &["check"]);
+        h.helper_reach.total = 0;
+        h.helper_reach.strong = 0;
+        let helper = helper_facts("check", 3, 3);
+        let helpers = [HelperPair {
+            path: "tests/helpers.py",
+            base: &helper,
+            head: Some(&helper),
+        }];
+        let gain = helper_call_gain(&b, &h, "tests/test_api.py", &helpers, &[]);
+        assert_eq!((gain.total, gain.strong), (0, 0));
+
+        // Case 2: Helper A lost 4 checks, Helper B gained 3 checks.
+        // Net is -1, so gain.total should be 0.
+        let old_a = helper_facts("check_a", 4, 4);
+        let new_a = helper_facts("check_a", 0, 0);
+        let b_helper = helper_facts("check_b", 3, 3);
+        let helpers = [
+            HelperPair {
+                path: "tests/helpers.py",
+                base: &old_a,
+                head: Some(&new_a),
+            },
+            HelperPair {
+                path: "tests/helpers.py",
+                base: &b_helper,
+                head: Some(&b_helper),
+            },
+        ];
+        let b = calling_test(4, 4, &["check_a"]);
+        let h = calling_test(0, 0, &["check_a", "check_b"]);
+        let gain = helper_call_gain(&b, &h, "tests/test_api.py", &helpers, &[]);
+        assert_eq!((gain.total, gain.strong), (0, 0));
     }
 }
