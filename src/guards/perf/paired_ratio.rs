@@ -621,25 +621,24 @@ pub fn evaluate_run(
             if axis.cells.contains_key(id) {
                 continue;
             }
-            match tokens::find_override(
+            let ov = tokens::find_override(
                 opts.directives,
                 GATE,
                 &crate::findings::PAIRED_RATIO_CELL_MISSING,
                 tokens::ALLOW_REGRESSION,
                 id,
-            ) {
-                Some(ov) => out.overrides.push(ov),
-                None => {
-                    out.push(
-                        opts.severity,
-                        &crate::findings::PAIRED_RATIO_CELL_MISSING,
-                        Some(opts.location),
-                        None,
-                        format!("baselined cell `{axis_name}/{id}` is absent from this run; a cell that stops being measured stops being gated"),
-                        &format!("restore the cell, or justify its removal: `allow-regression: {id} <rationale>`"),
-                    );
-                    out.anchor_last(format!("cell:{axis_name}/{id}"));
-                }
+            );
+            let anchored = ov.is_none();
+            out.lift_or_push(
+                ov,
+                opts.severity,
+                &crate::findings::PAIRED_RATIO_CELL_MISSING,
+                (Some(opts.location), None),
+                format!("baselined cell `{axis_name}/{id}` is absent from this run; a cell that stops being measured stops being gated"),
+                &format!("restore the cell, or justify its removal: `allow-regression: {id} <rationale>`"),
+            );
+            if anchored {
+                out.anchor_last(format!("cell:{axis_name}/{id}"));
             }
         }
 
@@ -880,20 +879,17 @@ fn check_baseline_change(
         (None, None) => Vec::new(),
     };
     if !found.is_empty() {
-        match &named {
-            Some(ov) => out.overrides.push(ov.clone()),
-            None => out.push(
-                severity,
-                &crate::findings::RATIO_BASELINE_LOOSENED,
-                Some(path),
-                None,
-                format!(
-                    "the paired-ratio baseline is a threshold file, and this change loosens it: {}",
-                    found.join("; ")
-                ),
-                &format!("re-derive it with `discipline bench derive` in a dedicated change, and justify it: `allow-regression: {path} <rationale>`"),
+        out.lift_or_push(
+            named.clone(),
+            severity,
+            &crate::findings::RATIO_BASELINE_LOOSENED,
+            (Some(path), None),
+            format!(
+                "the paired-ratio baseline is a threshold file, and this change loosens it: {}",
+                found.join("; ")
             ),
-        }
+            &format!("re-derive it with `discipline bench derive` in a dedicated change, and justify it: `allow-regression: {path} <rationale>`"),
+        );
     }
 
     // A baseline change travels alone.

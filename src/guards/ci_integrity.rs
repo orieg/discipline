@@ -903,12 +903,15 @@ fn record_or_excuse(
         })
         .or_else(|| ctx.find_override(GATE, kind, tokens::ALLOW_GATE_WEAKENING, GATE));
 
-    if let Some(record) = ov {
-        out.overrides.push(record);
-    } else {
-        let rem_str = remediation.into();
-        out.push(severity, kind, file.as_deref(), line, message, &rem_str);
-    }
+    let rem_str = remediation.into();
+    out.lift_or_push(
+        ov,
+        severity,
+        kind,
+        (file.as_deref(), line),
+        message,
+        &rem_str,
+    );
 }
 
 #[cfg(test)]

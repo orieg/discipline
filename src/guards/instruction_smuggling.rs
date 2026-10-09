@@ -595,23 +595,18 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
                 out.examined += 1;
                 // The finding has no line: a directive written as `path:line` names a
                 // line of the file, not its removal.
-                if let Some(ov) =
-                    lift_file(&crate::findings::AGENT_INSTRUCTIONS_CHANGED, &file.path)
-                {
-                    out.overrides.push(ov);
-                } else {
-                    out.push(
-                        ctx.overridable(settings.severity()),
-                        &crate::findings::AGENT_INSTRUCTIONS_CHANGED,
-                        Some(&file.path),
-                        None,
-                        format!("`{}` instructs agents; this change deletes it.", file.path),
-                        &format!(
-                            "Review the removal, then record it: `allow-agent-instructions: {} <reason>`.",
-                            file.path
-                        ),
-                    );
-                }
+                let ov = lift_file(&crate::findings::AGENT_INSTRUCTIONS_CHANGED, &file.path);
+                out.lift_or_push(
+                    ov,
+                    ctx.overridable(settings.severity()),
+                    &crate::findings::AGENT_INSTRUCTIONS_CHANGED,
+                    (Some(&file.path), None),
+                    format!("`{}` instructs agents; this change deletes it.", file.path),
+                    &format!(
+                        "Review the removal, then record it: `allow-agent-instructions: {} <reason>`.",
+                        file.path
+                    ),
+                );
             }
             continue;
         }
@@ -636,25 +631,22 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
                 file.path
             ));
         } else if instructs(&file.path) && !ctx.git.is_whole_tree() {
-            if let Some(ov) = lift_file(&crate::findings::AGENT_INSTRUCTIONS_CHANGED, &file.path) {
-                out.overrides.push(ov);
-            } else {
-                out.push(
-                    ctx.overridable(settings.severity()),
-                    &crate::findings::AGENT_INSTRUCTIONS_CHANGED,
-                    Some(&file.path),
-                    None,
-                    format!(
-                        "`{}` instructs agents; this change edits it ({} added line(s)).",
-                        file.path,
-                        file.added_lines.len()
-                    ),
-                    &format!(
-                        "Review the new instructions as code, then record the change: `allow-agent-instructions: {} <reason>`.",
-                        file.path
-                    ),
-                );
-            }
+            let ov = lift_file(&crate::findings::AGENT_INSTRUCTIONS_CHANGED, &file.path);
+            out.lift_or_push(
+                ov,
+                ctx.overridable(settings.severity()),
+                &crate::findings::AGENT_INSTRUCTIONS_CHANGED,
+                (Some(&file.path), None),
+                format!(
+                    "`{}` instructs agents; this change edits it ({} added line(s)).",
+                    file.path,
+                    file.added_lines.len()
+                ),
+                &format!(
+                    "Review the new instructions as code, then record the change: `allow-agent-instructions: {} <reason>`.",
+                    file.path
+                ),
+            );
         }
 
         // 1. Invisible characters in added lines, any text file.
@@ -667,17 +659,13 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
             if classes.is_empty() {
                 continue;
             }
-            if let Some(ov) = lift_line(&crate::findings::INVISIBLE_CHARACTERS_ADDED, &file.path, n)
-                .or_else(|| lift_file(&crate::findings::INVISIBLE_CHARACTERS_ADDED, &file.path))
-            {
-                out.overrides.push(ov);
-                continue;
-            }
-            out.push(
+            let ov = lift_line(&crate::findings::INVISIBLE_CHARACTERS_ADDED, &file.path, n)
+                .or_else(|| lift_file(&crate::findings::INVISIBLE_CHARACTERS_ADDED, &file.path));
+            out.lift_or_push(
+                ov,
                 ctx.overridable(settings.severity()),
                 &crate::findings::INVISIBLE_CHARACTERS_ADDED,
-                Some(&file.path),
-                Some(n),
+                (Some(&file.path), Some(n)),
                 format!(
                     "Line {n} of `{}` contains {} character(s); what a reviewer sees is not what a parser or an agent reads.",
                     file.path,
@@ -745,19 +733,15 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
                     )
                 })
                 .or_else(|| lift_file(&crate::findings::INSTRUCTION_LIKE_TEXT_ADDED, &file.path));
-            if let Some(ov) = lifted {
-                out.overrides.push(ov);
-                return;
-            }
             let at = match lines.last() {
                 Some(end) if *end != line => format!("Lines {line}-{end}"),
                 _ => format!("Line {line}"),
             };
-            out.push(
+            out.lift_or_push(
+                lifted,
                 ctx.overridable(heuristic_sev),
                 &crate::findings::INSTRUCTION_LIKE_TEXT_ADDED,
-                Some(&file.path),
-                Some(line),
+                (Some(&file.path), Some(line)),
                 format!(
                     "{at} of `{}` carries text of class {} in a comment, string or prose; text there is read by agents, not by the compiler.",
                     file.path,

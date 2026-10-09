@@ -625,24 +625,19 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
 
         for f in findings {
             let override_rec = ctx.find_override(GATE, f.kind, tokens::ALLOW_PROVENANCE, path);
-
-            if let Some(ov) = override_rec {
-                out.overrides.push(ov);
+            let severity = if f.is_warning {
+                crate::config::Severity::Warning
             } else {
-                let severity = if f.is_warning {
-                    crate::config::Severity::Warning
-                } else {
-                    settings.severity()
-                };
-                out.push(
-                    severity,
-                    f.kind,
-                    Some(path),
-                    Some(f.line),
-                    f.message,
-                    f.remediation,
-                );
-            }
+                settings.severity()
+            };
+            out.lift_or_push(
+                override_rec,
+                severity,
+                f.kind,
+                (Some(path), Some(f.line)),
+                f.message,
+                f.remediation,
+            );
         }
     }
 
@@ -748,22 +743,22 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
         records_judged += scan.judged;
         cited.cannot_check.extend(scan.cannot_check);
         for f in scan.findings {
-            if let Some(ov) = ctx.find_override(
+            let ov = ctx.find_override(
                 GATE,
                 &crate::findings::UNRESOLVABLE_RECORD_COMMIT,
                 tokens::ALLOW_PROVENANCE,
                 path,
-            ) {
-                out.overrides.push(ov);
-            } else {
-                out.push(
-                    settings.severity(),
-                    &crate::findings::UNRESOLVABLE_RECORD_COMMIT,
-                    Some(path),
-                    f.line,
-                    f.message,
-                    "Record the full id of the commit the result was measured at; a harness that cannot read its revision must fail, not write a stand-in.",
-                );
+            );
+            let anchored = ov.is_none();
+            out.lift_or_push(
+                ov,
+                settings.severity(),
+                &crate::findings::UNRESOLVABLE_RECORD_COMMIT,
+                (Some(path), f.line),
+                f.message,
+                "Record the full id of the commit the result was measured at; a harness that cannot read its revision must fail, not write a stand-in.",
+            );
+            if anchored {
                 if let Some(anchor) = f.anchor {
                     out.anchor_last(anchor);
                 }
@@ -856,22 +851,22 @@ pub fn evaluate_provenance_tags(ctx: &Context) -> Result<GateOutcome> {
                     .collect()
             };
             for (line, message, anchor) in hits {
-                if let Some(ov) = ctx.find_override(
+                let ov = ctx.find_override(
                     GATE,
                     &crate::findings::SUPERSEDED_FIGURE_REPUBLISHED,
                     tokens::ALLOW_PROVENANCE,
                     path,
-                ) {
-                    out.overrides.push(ov);
-                } else {
-                    out.push(
-                        settings.severity(),
-                        &crate::findings::SUPERSEDED_FIGURE_REPUBLISHED,
-                        Some(path),
-                        line,
-                        message,
-                        "Replace the figure with its current value, or mark it retracted/superseded within three lines.",
-                    );
+                );
+                let anchored = ov.is_none();
+                out.lift_or_push(
+                    ov,
+                    settings.severity(),
+                    &crate::findings::SUPERSEDED_FIGURE_REPUBLISHED,
+                    (Some(path), line),
+                    message,
+                    "Replace the figure with its current value, or mark it retracted/superseded within three lines.",
+                );
+                if anchored {
                     if let Some(anchor) = anchor {
                         out.anchor_last(anchor);
                     }

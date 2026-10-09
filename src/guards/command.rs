@@ -1776,90 +1776,79 @@ fn evaluate_base_tests(
 
     if !failed_cases.is_empty() {
         for failed in failed_cases {
-            let mut excused = false;
-            for subj in &[&failed.id, &failed.name] {
-                if let Some(ov) = ctx.find_override(
+            let ov = [&failed.id, &failed.name].into_iter().find_map(|subj| {
+                ctx.find_override(
                     "command",
                     &crate::findings::BASE_TEST_FAILED,
                     tokens::ALLOW_BEHAVIOR_CHANGE,
                     subj,
-                ) {
-                    outcome.overrides.push(ov);
-                    excused = true;
-                    break;
-                }
-            }
-            if !excused {
-                let msg = format!(
-                    "Base test `{}` failed when executed against head code: {}",
-                    failed.id,
-                    failed
-                        .failure_message
-                        .as_deref()
-                        .unwrap_or("assertion failure")
-                );
-                let rem = format!(
-                    "Restore expected behavior or excuse intentional behavior change with `allow-behavior-change: {} <reason>`.",
-                    failed.name
-                );
-                outcome.push(
-                    gate.severity(),
-                    &crate::findings::BASE_TEST_FAILED,
-                    None,
-                    None,
-                    msg,
-                    &rem,
-                );
+                )
+            });
+            let anchored = ov.is_none();
+            let msg = format!(
+                "Base test `{}` failed when executed against head code: {}",
+                failed.id,
+                failed
+                    .failure_message
+                    .as_deref()
+                    .unwrap_or("assertion failure")
+            );
+            let rem = format!(
+                "Restore expected behavior or excuse intentional behavior change with `allow-behavior-change: {} <reason>`.",
+                failed.name
+            );
+            outcome.lift_or_push(
+                ov,
+                gate.severity(),
+                &crate::findings::BASE_TEST_FAILED,
+                (None, None),
+                msg,
+                &rem,
+            );
+            if anchored {
                 // The message quotes the failure text, which can change run to run.
                 outcome.anchor_last(format!("test:{}", failed.id));
             }
         }
     } else {
         // Test runner failed (e.g. compilation error or exit failure without parsed JUnit failure)
-        let mut excused = false;
-        for subj in &["compile", "base-tests"] {
-            if let Some(ov) = ctx.find_override(
+        let ov = ["compile", "base-tests"].into_iter().find_map(|subj| {
+            ctx.find_override(
                 "command",
                 &crate::findings::BASE_TEST_FAILED,
                 tokens::ALLOW_BEHAVIOR_CHANGE,
                 subj,
-            ) {
-                outcome.overrides.push(ov);
-                excused = true;
-                break;
+            )
+        });
+        let sample_err = run_res
+            .stderr
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .take(5)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let msg = format!(
+            "Base test suite failed against head code (exit code {:?}):\n{}",
+            run_res.status.code(),
+            if sample_err.is_empty() {
+                run_res
+                    .stdout
+                    .lines()
+                    .take(5)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                sample_err
             }
-        }
-        if !excused {
-            let sample_err = run_res
-                .stderr
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .take(5)
-                .collect::<Vec<_>>()
-                .join("\n");
-            let msg = format!(
-                "Base test suite failed against head code (exit code {:?}):\n{}",
-                run_res.status.code(),
-                if sample_err.is_empty() {
-                    run_res
-                        .stdout
-                        .lines()
-                        .take(5)
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                } else {
-                    sample_err
-                }
-            );
-            outcome.push(
-                gate.severity(),
-                &crate::findings::BASE_TEST_FAILED,
-                None,
-                None,
-                msg,
-                "Fix base test compilation error against head API or excuse with `allow-behavior-change: compile <reason>`.",
-            );
-        }
+        );
+        outcome.lift_or_push(
+            ov,
+            gate.severity(),
+            &crate::findings::BASE_TEST_FAILED,
+            (None, None),
+            msg,
+            "Fix base test compilation error against head API or excuse with `allow-behavior-change: compile <reason>`.",
+        );
     }
 
     Ok(())

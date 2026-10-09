@@ -243,18 +243,15 @@ pub fn build_hooks(ctx: &Context) -> Result<GateOutcome> {
         let base = ctx.git.base_content(&file.old_path)?;
         for f in judge(&file, base.as_deref(), head.as_deref()) {
             let lift = |s: &str| ctx.find_override(GATE, f.kind, tokens::ALLOW_BUILD_HOOK, s);
-            if let Some(ov) = lift(&f.subject)
+            let ov = lift(&f.subject)
                 .or_else(|| lift(&file.path))
-                .or_else(|| lift(name))
-            {
-                out.overrides.push(ov);
-                continue;
-            }
-            out.push(
+                .or_else(|| lift(name));
+            let anchored = ov.is_none();
+            out.lift_or_push(
+                ov,
                 ctx.overridable(settings.severity()),
                 f.kind,
-                Some(&file.path),
-                f.line,
+                (Some(&file.path), f.line),
                 format!("{}.", f.what),
                 &format!(
                     "Review it as code that runs unasked, then record it: `allow-build-hook: {} <reason>`.",
@@ -263,7 +260,7 @@ pub fn build_hooks(ctx: &Context) -> Result<GateOutcome> {
             );
             // A lifecycle script has no line and shares its manifest with the others: its
             // name tells them apart. A finding about the file as a whole needs nothing.
-            if f.line.is_none() && f.subject != file.path {
+            if anchored && f.line.is_none() && f.subject != file.path {
                 out.anchor_last(format!("script:{}", f.subject));
             }
         }

@@ -133,19 +133,16 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
             if has_issue_reference(msg, &re_issue) {
                 return Ok(out);
             }
-            if let Some(waiver) = waiver(
+            let w = waiver(
                 settings,
                 &ctx.directives,
                 &crate::findings::ISSUE_LINK_MISSING_IN_COMMIT_MESSAGE,
-            ) {
-                out.overrides.push(waiver);
-                return Ok(out);
-            }
-            out.push(
+            );
+            out.lift_or_push(
+                w,
                 settings.severity(),
                 &crate::findings::ISSUE_LINK_MISSING_IN_COMMIT_MESSAGE,
-                None,
-                None,
+                (None, None),
                 "Commit message does not reference a tracking issue (#123) and lacks a no-issue waiver.".to_string(),
                 "Reference a tracking issue in the commit message, or add 'no-issue: <reason>'.",
             );
@@ -183,23 +180,20 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
             }
             if !found {
                 // Check if any directive waived it
-                if let Some(waiver) = waiver(
+                let w = waiver(
                     settings,
                     &ctx.directives,
                     &crate::findings::ISSUE_LINK_MISSING_IN_COMMITS,
-                ) {
-                    out.overrides.push(waiver);
-                } else {
-                    out.push(
-                        settings.severity(),
-                        &crate::findings::ISSUE_LINK_MISSING_IN_COMMITS,
-                        None,
-                        None,
-                        "No commit message on the branch references a tracking issue (#123) and lack a no-issue waiver."
-                            .to_string(),
-                        "Reference a tracking issue in a commit message, or add 'no-issue: <reason>' to the commit message.",
-                    );
-                }
+                );
+                out.lift_or_push(
+                    w,
+                    settings.severity(),
+                    &crate::findings::ISSUE_LINK_MISSING_IN_COMMITS,
+                    (None, None),
+                    "No commit message on the branch references a tracking issue (#123) and lack a no-issue waiver."
+                        .to_string(),
+                    "Reference a tracking issue in a commit message, or add 'no-issue: <reason>' to the commit message.",
+                );
             }
             return Ok(out);
         } else {
@@ -234,21 +228,16 @@ pub fn evaluate_issue_link(ctx: &Context) -> Result<GateOutcome> {
     }
 
     // 2. Check for waiver directive `no-issue: <reason>`
-    if let Some(waiver) = waiver(
+    let w = waiver(
         settings,
         &ctx.directives,
         &crate::findings::ISSUE_LINK_MISSING,
-    ) {
-        out.overrides.push(waiver);
-        return Ok(out);
-    }
-
-    // 3. Report violation
-    out.push(
+    );
+    out.lift_or_push(
+        w,
         settings.severity(),
         &crate::findings::ISSUE_LINK_MISSING,
-        None,
-        None,
+        (None, None),
         "Pull request title and body do not reference any tracking issue (#123, Fixes #123) and lack a no-issue waiver."
             .to_string(),
         "Reference a tracking issue (#123, Fixes #123) in the PR title or body, or add 'no-issue: <reason>' to the PR body.",
@@ -379,49 +368,43 @@ fn verify_references(
         } else {
             &crate::findings::ISSUE_REFERENCE_NOT_FOUND
         };
-        if let Some(w) = waiver(settings, &ctx.directives, ref_kind) {
-            out.overrides.push(w);
-            return Ok(out);
-        }
+        let w = waiver(settings, &ctx.directives, ref_kind);
         let listed = resolved
             .iter()
             .map(|r| r.describe())
             .collect::<Vec<_>>()
             .join(", ");
         if closed && settings.require_open_issue {
-            out.push(
+            out.lift_or_push(
+                w,
                 settings.severity(),
                 &crate::findings::ISSUE_REFERENCE_CLOSED,
-                None,
-                None,
+                (None, None),
                 format!("Every issue this pull request references is closed ({listed})."),
                 "Reference the open issue this change tracks, or add 'no-issue: <reason>' to the PR body.",
             );
         } else {
-            out.push(
+            out.lift_or_push(
+                w,
                 settings.severity(),
                 &crate::findings::ISSUE_REFERENCE_NOT_FOUND,
-                None,
-                None,
+                (None, None),
                 format!("No reference in the pull request is an issue of this repository ({listed})."),
                 "Reference an existing issue of this repository (#123), or add 'no-issue: <reason>' to the PR body.",
             );
         }
         return Ok(out);
     }
-    if let Some(w) = waiver(
+    let w = waiver(
         settings,
         &ctx.directives,
         &crate::findings::ISSUE_LINK_MISSING,
-    ) {
-        out.overrides.push(w);
-        return Ok(out);
-    }
-    out.push(
+    );
+    out.lift_or_push(
+        w,
         settings.severity(),
         &crate::findings::ISSUE_LINK_MISSING,
-        None,
-        None,
+        (None, None),
         "Pull request title and body do not reference any tracking issue (#123, Fixes #123) and lack a no-issue waiver."
             .to_string(),
         "Reference a tracking issue (#123, Fixes #123) in the PR title or body, or add 'no-issue: <reason>' to the PR body.",

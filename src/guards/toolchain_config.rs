@@ -91,13 +91,10 @@ fn build_file(
                 subject,
             )
         };
-        if let Some(ov) = lift(&change.flag)
+        let ov = lift(&change.flag)
             .or_else(|| lift(&change.context))
-            .or_else(|| lift(&file.path))
-        {
-            out.overrides.push(ov);
-            continue;
-        }
+            .or_else(|| lift(&file.path));
+        let anchored = ov.is_none();
         let (what, remedy) = if change.gained {
             (
                 "gained",
@@ -109,11 +106,11 @@ fn build_file(
                 "Restore it, or justify the loss on its own line in the PR body or a commit message",
             )
         };
-        out.push(
+        out.lift_or_push(
+            ov,
             ctx.overridable(severity),
             &crate::findings::TOOLCHAIN_CONFIG_WEAKENED,
-            Some(&file.path),
-            change.line,
+            (Some(&file.path), change.line),
             format!(
                 "`{}` {what} `{}` in `{}`; the compiler warning bar is lower.",
                 change.context, change.flag, file.path
@@ -123,7 +120,9 @@ fn build_file(
                 change.flag
             ),
         );
-        out.anchor_last(format!("{} {}", change.context, change.flag));
+        if anchored {
+            out.anchor_last(format!("{} {}", change.context, change.flag));
+        }
     }
     Ok(())
 }

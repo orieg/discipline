@@ -98,11 +98,7 @@ pub fn evaluate_archive_contents(ctx: &Context) -> Result<GateOutcome> {
     for req in &settings.required_paths {
         let found = entries.iter().any(|entry| {
             if req.contains('*') || req.contains('?') {
-                GlobBuilder::new(req)
-                    .literal_separator(false)
-                    .build()
-                    .map(|g| g.compile_matcher().is_match(entry))
-                    .unwrap_or(false)
+                crate::doctor_settings::glob_matches(req, entry, false)
             } else {
                 entry == req
             }

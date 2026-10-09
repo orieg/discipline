@@ -97,27 +97,22 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
                     subject,
                 )
             };
-            if let Some(ov) =
-                lift(&file.path).or_else(|| file.path.rsplit('/').next().and_then(lift))
-            {
-                out.overrides.push(ov);
-                lifted_reclassification = true;
-            } else {
-                out.push(
-                    ctx.overridable(settings.severity()),
-                    &crate::findings::TEST_PATH_RECLASSIFIED,
-                    Some(&file.path),
-                    None,
-                    format!(
-                        "`{}` was renamed from `{}` into test scope and is still judged as production code.",
-                        file.path, file.old_path
-                    ),
-                    &format!(
-                        "Rename it back out of test scope, or justify the move on its own line in the PR body or a commit message: `allow-swallow: {} <reason>`.",
-                        file.path
-                    ),
-                );
-            }
+            let ov = lift(&file.path).or_else(|| file.path.rsplit('/').next().and_then(lift));
+            lifted_reclassification = ov.is_some();
+            out.lift_or_push(
+                ov,
+                ctx.overridable(settings.severity()),
+                &crate::findings::TEST_PATH_RECLASSIFIED,
+                (Some(&file.path), None),
+                format!(
+                    "`{}` was renamed from `{}` into test scope and is still judged as production code.",
+                    file.path, file.old_path
+                ),
+                &format!(
+                    "Rename it back out of test scope, or justify the move on its own line in the PR body or a commit message: `allow-swallow: {} <reason>`.",
+                    file.path
+                ),
+            );
         }
         let Some(head_src) = ctx.git.head_content(&file.path)? else {
             out.notes.push(super::unread_note(&file.path));
@@ -242,15 +237,11 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
                     site.line
                 ),
             ];
-            if let Some(ov) = own
+            let ov = own
                 .iter()
                 .find_map(|s| ctx.find_override(GATE, title, tokens::ALLOW_SWALLOW, s))
                 .or_else(|| lift(&file.path))
-                .or_else(|| file.path.rsplit('/').next().and_then(lift))
-            {
-                out.overrides.push(ov);
-                continue;
-            }
+                .or_else(|| file.path.rsplit('/').next().and_then(lift));
             // The syntax tree carries no types: a callee off a pack's known-fallible list
             // may return a plain value, so it never blocks on its own.
             let severity = if matches!(site.kind, "discarded-value" | "skipped-input")
@@ -269,11 +260,11 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
             } else {
                 "Handle or propagate the error"
             };
-            out.push(
+            out.lift_or_push(
+                ov,
                 ctx.overridable(severity),
                 title,
-                Some(&file.path),
-                Some(site.line),
+                (Some(&file.path), Some(site.line)),
                 format!("`{}` {what} in `{}`.", site.snippet, file.path),
                 &format!(
                     "{fix}, or justify it on its own line in the PR body or a commit message: `allow-swallow: {} <reason>` (or `discipline:allow(error-swallowing)` on the line).",

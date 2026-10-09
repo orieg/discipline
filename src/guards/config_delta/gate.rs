@@ -89,16 +89,13 @@ pub fn run(ctx: &Context, settings: &BasicGate, gate: &TreeGate) -> Result<GateO
                 if file.kind == ChangeKind::Added {
                     continue;
                 }
-                if let Some(ov) = lift(gate.not_analysed, &file.path) {
-                    out.overrides.push(ov);
-                    continue;
-                }
+                let ov = lift(gate.not_analysed, &file.path);
                 let sev = settings.severity().capped_at_warning();
-                out.push(
+                out.lift_or_push(
+                    ov,
                     ctx.overridable(sev),
                     gate.not_analysed,
-                    Some(&file.path),
-                    None,
+                    (Some(&file.path), None),
                     (gate.executable_message)(&file.path),
                     &format!(
                         "Review the change; record it with `{directive}: <path> <reason>` if it is intended."
@@ -160,18 +157,15 @@ pub fn run(ctx: &Context, settings: &BasicGate, gate: &TreeGate) -> Result<GateO
                     None => Vec::new(),
                 };
                 for (key, gained) in inherited {
-                    if let Some(ov) = lift(gate.not_analysed, &key)
-                        .or_else(|| lift(gate.not_analysed, &file.path))
-                    {
-                        out.overrides.push(ov);
-                        continue;
-                    }
+                    let ov = lift(gate.not_analysed, &key)
+                        .or_else(|| lift(gate.not_analysed, &file.path));
+                    let anchored = ov.is_none();
                     let sev = settings.severity().capped_at_warning();
-                    out.push(
+                    out.lift_or_push(
+                        ov,
                         ctx.overridable(sev),
                         gate.not_analysed,
-                        Some(&file.path),
-                        None,
+                        (Some(&file.path), None),
                         format!(
                             "`{key}` in `{}` now inherits {gained}; what an inherited configuration loosens cannot be read from this diff.",
                             file.path
@@ -181,28 +175,29 @@ pub fn run(ctx: &Context, settings: &BasicGate, gate: &TreeGate) -> Result<GateO
                         ),
                     );
                     // One file can inherit through several keys: the key tells them apart.
-                    out.anchor_last(key.clone());
+                    if anchored {
+                        out.anchor_last(key.clone());
+                    }
                 }
                 for w in diff_trees(base_tree, head_tree, &rules) {
-                    if let Some(ov) = lift(gate.changed, &w.key)
+                    let ov = lift(gate.changed, &w.key)
                         .or_else(|| w.key.rsplit('.').next().and_then(|k| lift(gate.changed, k)))
-                        .or_else(|| lift(gate.changed, &file.path))
-                    {
-                        out.overrides.push(ov);
-                        continue;
-                    }
-                    out.push(
+                        .or_else(|| lift(gate.changed, &file.path));
+                    let anchored = ov.is_none();
+                    out.lift_or_push(
+                        ov,
                         ctx.overridable(settings.severity()),
                         gate.changed,
-                        Some(&file.path),
-                        None,
+                        (Some(&file.path), None),
                         format!("`{}` {} in `{}`.", w.key, w.what, file.path),
                         &format!(
                             "Revert it, or justify it on its own line in the PR body or a commit message: `{directive}: {} <reason>`.",
                             w.key
                         ),
                     );
-                    out.anchor_last(w.key.clone());
+                    if anchored {
+                        out.anchor_last(w.key.clone());
+                    }
                 }
             }
         }

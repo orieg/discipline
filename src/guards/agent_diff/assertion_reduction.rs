@@ -199,10 +199,7 @@ fn report_weakened_helper(
         .or_else(|| lift(&b.name))
         .or_else(|| lift(hp.path))
         .or_else(|| lift(file_leaf));
-    if let Some(record) = allowed {
-        out.overrides.push(record);
-        return;
-    }
+    let anchored = allowed.is_none();
 
     let callers_str = callers(helper_leaf);
 
@@ -232,17 +229,19 @@ fn report_weakened_helper(
         settings.severity()
     };
     let line = hp.head.map(|h| h.line).unwrap_or(b.line);
-    out.push(
+    out.lift_or_push(
+        allowed,
         severity,
         &crate::findings::TEST_HELPER_WEAKENED,
-        Some(hp.path),
-        Some(line),
+        (Some(hp.path), Some(line)),
         msg,
         &format!(
             "Restore the assertions in `{helper_leaf}`, or justify the change in the PR body or a commit message: `allow-assertion-drop: {helper_leaf} <reason>`."
         ),
     );
-    out.anchor_last(b.name.clone());
+    if anchored {
+        out.anchor_last(b.name.clone());
+    }
 }
 
 /// The clause of a helper finding that names the tests calling the helper: empty when
