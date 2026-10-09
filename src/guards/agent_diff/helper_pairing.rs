@@ -344,10 +344,8 @@ pub fn match_helpers<'a>(files: &'a [FileFacts]) -> Vec<HelperPair<'a>> {
             )
         })
         .collect();
-    let tracked_file = |ff: &FileFacts| {
-        crate::ast::functions::test_support_path(&ff.file.path)
-            || crate::ast::functions::test_support_path(&ff.file.old_path)
-    };
+    let tracked_base = |ff: &FileFacts| crate::ast::functions::test_support_path(&ff.file.old_path);
+    let tracked_head = |ff: &FileFacts| crate::ast::functions::test_support_path(&ff.file.path);
     // Head helpers already paired, and base helpers of tracked files still unpaired.
     let mut head_taken: Vec<Vec<bool>> = sides
         .iter()
@@ -357,23 +355,29 @@ pub fn match_helpers<'a>(files: &'a [FileFacts]) -> Vec<HelperPair<'a>> {
 
     for (fi, ff) in files.iter().enumerate() {
         let (base, head) = (&sides[fi].0, &sides[fi].1);
-        let (mut matched, base_left) = match_in_file(base, head, &mut head_taken[fi]);
-        if !tracked_file(ff) {
+        let base_tracked = tracked_base(ff);
+        let head_tracked = tracked_head(ff);
+        if !base_tracked && !head_tracked {
             continue;
         }
-        matched.sort_unstable();
-        for (bi, hi) in matched {
-            let (b, h) = (&base.tracked[bi], &head.tracked[hi]);
-            // Its own body and its calls are as they were: what it lost, a helper it
-            // calls lost, and that helper is paired and reported on its own.
-            let inherited = inherited_loss(base, head, bi, hi);
-            pairs.push(HelperPair {
-                path: &ff.file.path,
-                base: if inherited { h } else { b },
-                head: Some(h),
-            });
+        if base_tracked && head_tracked {
+            let (mut matched, base_left) = match_in_file(base, head, &mut head_taken[fi]);
+            matched.sort_unstable();
+            for (bi, hi) in matched {
+                let (b, h) = (&base.tracked[bi], &head.tracked[hi]);
+                // Its own body and its calls are as they were: what it lost, a helper it
+                // calls lost, and that helper is paired and reported on its own.
+                let inherited = inherited_loss(base, head, bi, hi);
+                pairs.push(HelperPair {
+                    path: &ff.file.path,
+                    base: if inherited { h } else { b },
+                    head: Some(h),
+                });
+            }
+            unpaired_base.extend(base_left.into_iter().map(|bi| (fi, bi)));
+        } else if base_tracked {
+            unpaired_base.extend((0..base.tracked.len()).map(|bi| (fi, bi)));
         }
-        unpaired_base.extend(base_left.into_iter().map(|bi| (fi, bi)));
     }
 
     // (3) Moved to another changed file, where a helper of that name is new.
@@ -383,7 +387,7 @@ pub fn match_helpers<'a>(files: &'a [FileFacts]) -> Vec<HelperPair<'a>> {
             continue;
         }
         let moved = (0..files.len())
-            .filter(|&other| other != fi)
+            .filter(|&other| other != fi && tracked_head(&files[other]))
             .find_map(|other| {
                 let head = &sides[other].1;
                 (0..head.tracked.len())
@@ -400,17 +404,24 @@ pub fn match_helpers<'a>(files: &'a [FileFacts]) -> Vec<HelperPair<'a>> {
                 });
             }
             // (4) Deleted.
-            None => pairs.push(HelperPair {
-                path: &files[fi].file.path,
-                base: b,
-                head: None,
-            }),
+            None => {
+                let path = if tracked_base(&files[fi]) {
+                    &files[fi].file.old_path
+                } else {
+                    &files[fi].file.path
+                };
+                pairs.push(HelperPair {
+                    path,
+                    base: b,
+                    head: None,
+                });
+            }
         }
     }
 
     // New on the head side of a tracked file.
     for (fi, ff) in files.iter().enumerate() {
-        if !tracked_file(ff) {
+        if !tracked_head(ff) {
             continue;
         }
         for (hi, h) in sides[fi].1.tracked.iter().enumerate() {
@@ -805,5 +816,72 @@ mod tests {
             .unwrap();
         assert_eq!(cross.path, "tests/utils.py");
         assert_eq!(cross.head.unwrap().line, 25);
+    }
+
+    /// #688: match_helpers must not pair a helper leaving a test-support file into a
+    /// non-test-support file. Such a move must be treated as deleted (head: None).
+    #[test]
+    fn test_match_helpers_does_not_pair_into_non_test_support_file() {
+        let h_base = crate::ast::TestHelperFacts {
+            name: "check".to_string(),
+            line: 5,
+            end_line: 10,
+            total_asserts: 2,
+            strong_asserts: 2,
+            tautologies: 0,
+            fatal_asserts: 0,
+            helper_checks: 0,
+            equality_exits: 0,
+        };
+        let h_head = crate::ast::TestHelperFacts {
+            name: "check".to_string(),
+            line: 15,
+            end_line: 20,
+            total_asserts: 2,
+            strong_asserts: 2,
+            tautologies: 0,
+            fatal_asserts: 0,
+            helper_checks: 0,
+            equality_exits: 0,
+        };
+        let file1 = FileFacts {
+            file: crate::gitctx::ChangedFile {
+                path: "tests/helpers.py".to_string(),
+                old_path: "tests/helpers.py".to_string(),
+                kind: crate::gitctx::ChangeKind::Modified,
+                added_lines: Default::default(),
+            },
+            base: Some(crate::ast::ParsedFileFacts {
+                test_helpers: vec![h_base.clone()],
+                ..Default::default()
+            }),
+            head: Some(crate::ast::ParsedFileFacts::default()),
+            newly_added_nul: false,
+        };
+        let file2 = FileFacts {
+            file: crate::gitctx::ChangedFile {
+                path: "src/app.py".to_string(),
+                old_path: "src/app.py".to_string(),
+                kind: crate::gitctx::ChangeKind::Modified,
+                added_lines: Default::default(),
+            },
+            base: Some(crate::ast::ParsedFileFacts::default()),
+            head: Some(crate::ast::ParsedFileFacts {
+                test_helpers: vec![h_head.clone()],
+                ..Default::default()
+            }),
+            newly_added_nul: false,
+        };
+
+        let files = [file1, file2];
+        let matched = match_helpers(&files);
+        assert_eq!(matched.len(), 1);
+        let pair = &matched[0];
+        assert_eq!(pair.path, "tests/helpers.py");
+        assert!(
+            pair.head.is_none(),
+            "expected helper moved to non-test-support file to be treated as deleted (head: None), got Some in {}",
+            pair.path
+        );
     }
 }

@@ -521,3 +521,34 @@ fn a_sibling_helper_the_test_already_called_stands_for_no_dropped_assertion() {
     );
     assert_dropped("resolved on the head side only", &run);
 }
+
+/// #688: a helper moved out of a test-support path into a non-test-support path
+/// stands for nothing and is reported as deleted.
+#[test]
+fn a_helper_moved_to_a_non_test_support_path_is_reported_as_deleted() {
+    let helper = "def check(r):\n    assert r.a == 1\n    assert r.b == 2\n";
+    let test = "def test_it():\n    check(r)\n";
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("discipline.toml", CONFIG_HEAD);
+    repo.write("tests/helpers.py", helper);
+    repo.write("tests/test_app.py", test);
+    repo.commit("test: base");
+
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.git(&["rm", "-q", "tests/helpers.py"]);
+    repo.write("src/app_helpers.py", helper);
+    repo.commit("refactor: move helper to non-test-support file");
+
+    let run = repo.check(&["--base", "main"]);
+    let violations = reported(&run);
+    assert_eq!(
+        violations,
+        vec![(
+            "Test Helper Function Weakened".to_string(),
+            "tests/helpers.py".to_string()
+        )],
+        "{}",
+        run.stdout
+    );
+}
