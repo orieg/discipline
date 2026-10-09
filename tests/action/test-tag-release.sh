@@ -21,13 +21,25 @@ if [ "${GH_MOCK_FAIL:-0}" = "1" ]; then
   echo "error: simulated gh failure" >&2
   exit 1
 fi
+jq_expr=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --jq) jq_expr="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
 case "${GH_MOCK_STATUS:-success}" in
-  failure) echo "completed failure" ;;
-  in_progress) echo "in_progress " ;;
-  empty) ;;
-  success) echo "completed success" ;;
-  *) echo "${GH_MOCK_STATUS}" ;;
+  failure) json='[{"status":"completed","conclusion":"failure"}]' ;;
+  in_progress) json='[{"status":"in_progress","conclusion":""}]' ;;
+  empty) json='[]' ;;
+  success) json='[{"status":"completed","conclusion":"success"}]' ;;
+  *) json="${GH_MOCK_STATUS}" ;;
 esac
+if [ -n "${jq_expr}" ]; then
+  echo "${json}" | jq -r "${jq_expr}"
+else
+  echo "${json}"
+fi
 EOF
 chmod +x "${scratch}/bin/gh"
 export PATH="${scratch}/bin:${PATH}"
