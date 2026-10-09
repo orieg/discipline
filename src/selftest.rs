@@ -4478,15 +4478,18 @@ const CASES: &[Case] = &[
             std::fs::write(dir.join("m.xml"), passed)?;
             std::fs::write(dir.join("a.xml"), "<testsuite/>")?;
             std::fs::write(dir.join("b.xml"), failed)?;
-            let first = first_report_file_cases(&dir);
+            let first = first_report_file_cases(&dir, &[]);
+            let ignored = first_report_file_cases(&dir, &["b.xml"]);
             std::fs::remove_file(dir.join("b.xml"))?;
-            let next = first_report_file_cases(&dir);
+            let next = first_report_file_cases(&dir, &[]);
             std::fs::remove_file(dir.join("m.xml"))?;
             std::fs::remove_file(dir.join("z.xml"))?;
-            let none = first_report_file_cases(&dir);
+            let none = first_report_file_cases(&dir, &[]);
             std::fs::remove_dir_all(&dir)?;
             Ok(first.len() == 1
                 && first[0].status == TestStatus::Failed
+                && ignored.len() == 1
+                && ignored[0].status == TestStatus::Passed
                 && next.len() == 1
                 && next[0].status != TestStatus::Failed
                 && none.is_empty())
@@ -4557,7 +4560,10 @@ const CASES: &[Case] = &[
                     == RunnerCollectionStatus::NotCollected
                 && glob_match("t*.py", "t[a.py") == Some(true)
                 && glob_match("", "t.py") == Some(false);
-            Ok(unread && decided)
+            let broken_toml = PytestCollectionRules::parse_pyproject_toml("invalid toml [");
+            let toml_ok = broken_toml.unparseable.as_deref() == Some("pyproject.toml")
+                && !broken_toml.configured;
+            Ok(unread && decided && toml_ok)
         },
     ),
     (

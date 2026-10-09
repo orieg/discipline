@@ -74,6 +74,8 @@ pub struct PytestCollectionRules {
     pub conftests: Vec<(String, ConftestIgnores)>,
     /// The file the configuration was read from.
     pub source: Option<String>,
+    /// The configuration file could not be parsed.
+    pub unparseable: Option<String>,
 }
 
 /// pytest's default `norecursedirs` (`_pytest/main.py`, pytest 8.4). `__pycache__` is
@@ -120,6 +122,7 @@ impl Default for PytestCollectionRules {
             norecursedirs: None,
             conftests: Vec::new(),
             source: None,
+            unparseable: None,
         }
     }
 }
@@ -170,9 +173,11 @@ impl PytestCollectionRules {
     pub fn parse_pyproject_toml(content: &str) -> Self {
         let mut rules = Self::default();
         let Ok(val) = toml::from_str::<toml::Value>(content) else {
+            rules.unparseable = Some("pyproject.toml".to_string());
             return rules;
         };
         let Some(root) = val.as_table() else {
+            rules.unparseable = Some("pyproject.toml".to_string());
             return rules;
         };
 
@@ -3674,7 +3679,7 @@ impl RunnerCollectionRules {
                 _ => PytestCollectionRules::parse_ini(&src),
             };
             parsed.configured |= matches!(*file, "pytest.ini" | ".pytest.ini");
-            if parsed.configured {
+            if parsed.configured || parsed.unparseable.is_some() {
                 parsed.source = Some((*file).to_string());
                 rules.pytest = parsed;
                 break;
@@ -4107,6 +4112,11 @@ pub fn check_runner_collected(
 
     if lower.ends_with(".py") {
         let pytest = &vocab.runner_rules.pytest;
+        if let Some(unparseable) = &pytest.unparseable {
+            return RunnerCollectionStatus::Unknown(format!(
+                "the pytest configuration `{unparseable}` cannot be read"
+            ));
+        }
         match (pytest.collection(&norm), pytest.configured) {
             // An entry that is not a glob decides nothing, in either direction.
             (None, _) => RunnerCollectionStatus::Unknown(PYTHON_FILES_UNREAD.to_string()),
@@ -4382,6 +4392,12 @@ python_files = ["*_checks.py", "test_*.py"]
         assert!(rules.is_collected("tests/o_checks.py"));
         assert!(rules.is_collected("tests/test_o.py"));
         assert!(!rules.is_collected("tests/helpers.py"));
+        assert!(rules.unparseable.is_none());
+
+        // Unparseable pyproject.toml
+        let broken = PytestCollectionRules::parse_pyproject_toml("invalid toml [");
+        assert_eq!(broken.unparseable.as_deref(), Some("pyproject.toml"));
+        assert!(!broken.configured);
 
         // Custom testpaths
         let testpaths_ini = r#"
@@ -4795,6 +4811,15 @@ python_files = test_*.py
                 "{files:?}"
             );
         }
+
+        // An unparseable pyproject.toml leaves collection unknown even for default test paths.
+        let broken = vocab_with(&[("pyproject.toml", "[tool.pytest.ini_options\ninvalid toml")]);
+        assert_eq!(
+            check_runner_collected("tests/test_o.py", &broken),
+            RunnerCollectionStatus::Unknown(
+                "the pytest configuration `pyproject.toml` cannot be read".to_string()
+            )
+        );
     }
 
     #[test]

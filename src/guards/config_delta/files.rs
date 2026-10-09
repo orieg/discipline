@@ -215,6 +215,9 @@ pub fn load(name: &str, content: &str) -> Option<Value> {
     if name.ends_with(".toml") || name == ".cargo/config" || name == "config" {
         let v: toml::Value = toml::from_str(content).ok()?;
         serde_json::to_value(v).ok()
+    } else if name == "package.json" || name.ends_with("/package.json") {
+        // `package.json` must be strict JSON; comments and trailing commas are invalid.
+        serde_json::from_str(content).ok()
     } else if name.ends_with(".json") || name.ends_with(".jsonc") || name == ".eslintrc" {
         serde_json::from_str(&strip_jsonc(content)).ok()
     } else if name.ends_with(".yml") || name.ends_with(".yaml") {

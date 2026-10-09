@@ -1015,10 +1015,20 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
             continue;
         };
         // No base side (a new lockfile): every entry is judged against the default hosts.
-        let base_entries = base_raw
-            .as_deref()
-            .and_then(|c| lockfile::parse_lock(fname, c))
-            .unwrap_or_default();
+        // A base lockfile that does not parse gives nothing to compare with; said, not stopped.
+        let base_entries = match base_raw.as_deref() {
+            Some(b) => match lockfile::parse_lock(fname, b) {
+                Some(entries) => entries,
+                None => {
+                    outcome.notes.push(format!(
+                        "lockfile `{}` does not parse on the base side, so every entry of the head side is judged against default hosts",
+                        f.old_path
+                    ));
+                    Default::default()
+                }
+            },
+            None => Default::default(),
+        };
         for finding in lockfile::diff_lock(&base_entries, &head_entries) {
             let before = outcome.violations.len();
             lock_violation(

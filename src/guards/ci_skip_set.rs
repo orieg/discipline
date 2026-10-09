@@ -974,11 +974,7 @@ pub fn github_from_env() -> BTreeMap<String, String> {
 
 /// Line of the `<job>:` key in the workflow, for the report.
 fn job_line(workflow_src: &str, job: &str) -> Option<usize> {
-    let key = format!("{job}:");
-    workflow_src
-        .lines()
-        .position(|l| l.starts_with(' ') && l.trim() == key)
-        .map(|i| i + 1)
+    super::ci_integrity::job_key_line(workflow_src, job)
 }
 
 fn registered(kind: FindingKind) -> &'static crate::findings::FindingKind {
@@ -1702,5 +1698,31 @@ jobs:
             err.to_string().contains(".forgejo/workflows/ci.yml"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn job_line_anchors_to_top_level_jobs_and_recognizes_quoted_keys() {
+        let wf = "\
+name: ci
+on: [push]
+jobs:
+  build:
+    steps:
+      - name: test
+        run: echo
+        env:
+          test: value
+  'quoted-single':
+    runs-on: ubuntu-latest
+  \"quoted-double\":
+    runs-on: ubuntu-latest
+  test:
+    runs-on: ubuntu-latest
+";
+        assert_eq!(job_line(wf, "test"), Some(14));
+        assert_eq!(job_line(wf, "quoted-single"), Some(10));
+        assert_eq!(job_line(wf, "quoted-double"), Some(12));
+        assert_eq!(job_line(wf, "build"), Some(4));
+        assert_eq!(job_line(wf, "nonexistent"), None);
     }
 }
