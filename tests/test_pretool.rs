@@ -88,6 +88,7 @@ const AGENTS: &[(&str, &str)] = &[
     ("opencode", "opencode/write.json"),
     // OpenCode 2.x names the target `path`; `filePath` is its legacy spelling.
     ("opencode", "opencode/write_v2.json"),
+    ("opencode", "opencode/edit_v2.json"),
     ("qwen", "qwen/write_file.json"),
     ("codex", "codex/apply_patch.json"),
 ];
@@ -233,12 +234,14 @@ fn an_edit_outside_any_repository_is_not_this_checks_concern() {
     assert_eq!(o.code, 0, "{}", o.stderr);
 }
 
-/// The recorded shell payload of `agent`, its command replaced by `command`.
-fn shell(agent: &str, cwd: &Path, command: &str) -> String {
+/// The recorded shell payload of `agent`, its command replaced by `command`. `edit` is
+/// the agent's edit fixture: OpenCode 2.x, whose shell tool is `shell`, has its own.
+fn shell(agent: &str, edit: &str, cwd: &Path, command: &str) -> String {
     let (rel, recorded) = match agent {
         "claude-code" => ("claude-code/bash.json", "echo hi > b.txt"),
         "copilot" => ("copilot/bash.json", "git -C wt2 status"),
         "agy" => ("agy/run_command.json", "git -C wt2 status"),
+        "opencode" if edit.ends_with("_v2.json") => ("opencode/shell_v2.json", "git -C wt2 status"),
         "opencode" => ("opencode/bash.json", "git -C wt2 status"),
         "qwen" => ("qwen/run_shell_command.json", "echo hi > shell.txt"),
         "codex" => ("codex/bash.json", "echo hi > shell.txt"),
@@ -253,13 +256,13 @@ fn shell(agent: &str, cwd: &Path, command: &str) -> String {
 #[test]
 fn each_agent_is_refused_a_shell_command_that_acts_on_another_worktree() {
     let (_repo, main, _wt2) = two_worktrees();
-    for (agent, _) in AGENTS {
+    for (agent, edit) in AGENTS {
         for refused in [
             "git -C wt2 commit -m x",
             "echo hi > wt2/escape.txt",
             "cd wt2",
         ] {
-            let o = pretool(&main, agent, &shell(agent, &main, refused), &[]);
+            let o = pretool(&main, agent, &shell(agent, edit, &main, refused), &[]);
             assert!(
                 denied(agent, &o),
                 "{agent} `{refused}`: {} {} {}",
@@ -273,7 +276,7 @@ fn each_agent_is_refused_a_shell_command_that_acts_on_another_worktree() {
             );
         }
         for allowed in ["git -C wt2 status", "echo hi > own.txt", "ls wt2"] {
-            let o = pretool(&main, agent, &shell(agent, &main, allowed), &[]);
+            let o = pretool(&main, agent, &shell(agent, edit, &main, allowed), &[]);
             assert!(
                 !denied(agent, &o) && o.code == 0,
                 "{agent} `{allowed}`: {} {} {}",
@@ -308,7 +311,12 @@ fn a_force_push_of_a_branch_another_worktree_leased_is_refused() {
     let o = pretool(
         &main,
         "claude-code",
-        &shell("claude-code", &main, "git push --force origin feat/stack"),
+        &shell(
+            "claude-code",
+            "",
+            &main,
+            "git push --force origin feat/stack",
+        ),
         &[],
     );
     assert_eq!(o.code, 2, "{}", o.stderr);
@@ -320,7 +328,7 @@ fn a_force_push_of_a_branch_another_worktree_leased_is_refused() {
     let plain = pretool(
         &main,
         "claude-code",
-        &shell("claude-code", &main, "git push origin feat/stack"),
+        &shell("claude-code", "", &main, "git push origin feat/stack"),
         &[],
     );
     assert_eq!(plain.code, 0, "{}", plain.stderr);
@@ -353,7 +361,7 @@ fn a_shell_command_with_non_ascii_words_is_judged_by_its_own_text() {
     assert_eq!(take.code, 0, "{}", take.stderr);
     // The worktree's directory is quoted as one code span.
     let other = format!("(`{}`)", main.join("wt\u{e9}").display());
-    for (agent, _) in AGENTS {
+    for (agent, edit) in AGENTS {
         for (refused, names) in [
             ("git -C wt\u{e9} commit -m \u{1f389}", other.as_str()),
             (
@@ -366,7 +374,7 @@ fn a_shell_command_with_non_ascii_words_is_judged_by_its_own_text() {
                 "force-pushes `feat/\u{e9}t\u{e9}`",
             ),
         ] {
-            let o = pretool(&main, agent, &shell(agent, &main, refused), &[]);
+            let o = pretool(&main, agent, &shell(agent, edit, &main, refused), &[]);
             assert!(
                 denied(agent, &o),
                 "{agent} `{refused}`: {} {} {}",
@@ -391,7 +399,7 @@ fn a_shell_command_with_non_ascii_words_is_judged_by_its_own_text() {
             "echo {\u{8e753}",
             "echo {1..\u{8e753}}",
         ] {
-            let o = pretool(&main, agent, &shell(agent, &main, allowed), &[]);
+            let o = pretool(&main, agent, &shell(agent, edit, &main, allowed), &[]);
             assert!(
                 !denied(agent, &o) && o.code == 0,
                 "{agent} `{allowed}`: {} {} {}",
@@ -433,12 +441,12 @@ fn the_618_fuzz_seeds_are_committed_and_their_commands_are_answered() {
         let command = format!("{}\ntrue", String::from_utf8_lossy(&seed[1..]));
         assert!(command.contains("{\u{8e753}") || command.contains("{1..\u{8e753}"));
         let quoted = serde_json::to_string(&command).unwrap();
-        let payload = shell("claude-code", &main, &quoted[1..quoted.len() - 1]);
+        let payload = shell("claude-code", "", &main, &quoted[1..quoted.len() - 1]);
         let o = pretool(&main, "claude-code", &payload, &[]);
         assert_eq!((o.code, o.stderr.as_str()), (0, ""), "{name}");
         // The same command aimed at the other worktree is refused: it was read.
         let aimed = serde_json::to_string(&format!("cd wt2 && {command}")).unwrap();
-        let payload = shell("claude-code", &main, &aimed[1..aimed.len() - 1]);
+        let payload = shell("claude-code", "", &main, &aimed[1..aimed.len() - 1]);
         let o = pretool(&main, "claude-code", &payload, &[]);
         assert!(
             o.code == 2 && o.stderr.contains("worktree `wt2`"),
@@ -471,7 +479,7 @@ fn a_shell_command_nested_past_the_depth_limit_is_refused_by_the_hook() {
     assert_eq!(seed[0], 0);
     assert_eq!(String::from_utf8_lossy(&seed[1..]), nested(4_200, "true"));
     let run = |command: &str| {
-        let payload = shell("claude-code", &main, command);
+        let payload = shell("claude-code", "", &main, command);
         pretool(&main, "claude-code", &payload, &[])
     };
     for subshells in [4_200, 20_000] {

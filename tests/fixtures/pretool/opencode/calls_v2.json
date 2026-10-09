@@ -1,0 +1,41 @@
+{
+  "agent": "OpenCode 2.0.22",
+  "event": "tool.hook(\"execute.before\") (plugin)",
+  "observed": "RUN 2026-10-08",
+  "note": "The call object each handler received, ids zeroed. The generated plugin maps it to {input: {tool, sessionID}, output: {args: call.input}, cwd}; shell_v2.json, write_v2.json and edit_v2.json are that mapping. The model chose relative paths for write and edit; the tools take absolute ones too.",
+  "calls": [
+    {
+      "tool": "shell",
+      "sessionID": "00000000-0000-0000-0000-000000000000",
+      "agent": "build",
+      "messageID": "00000000-0000-0000-0000-000000000000",
+      "id": "00000000-0000-0000-0000-000000000000",
+      "input": {
+        "command": "git -C ../probe-wt2 status"
+      }
+    },
+    {
+      "tool": "write",
+      "sessionID": "00000000-0000-0000-0000-000000000000",
+      "agent": "build",
+      "messageID": "00000000-0000-0000-0000-000000000000",
+      "id": "00000000-0000-0000-0000-000000000000",
+      "input": {
+        "path": "b.txt",
+        "content": "hello"
+      }
+    },
+    {
+      "tool": "edit",
+      "sessionID": "00000000-0000-0000-0000-000000000000",
+      "agent": "build",
+      "messageID": "00000000-0000-0000-0000-000000000000",
+      "id": "00000000-0000-0000-0000-000000000000",
+      "input": {
+        "path": "a.txt",
+        "oldString": "hi",
+        "newString": "hey"
+      }
+    }
+  ]
+}

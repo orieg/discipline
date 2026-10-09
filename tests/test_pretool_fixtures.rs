@@ -102,6 +102,22 @@ const PAYLOADS: &[(&str, &str, &str, &str, &str, &str)] = &[
         "",
     ),
     (
+        "opencode/edit_v2.json",
+        "/input/tool",
+        "edit",
+        "/output/args/path",
+        "/input/sessionID",
+        "",
+    ),
+    (
+        "opencode/shell_v2.json",
+        "/input/tool",
+        "shell",
+        "/output/args/command",
+        "/input/sessionID",
+        "",
+    ),
+    (
         "copilot/bash.json",
         "/toolName",
         "bash",

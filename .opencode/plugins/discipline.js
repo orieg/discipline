@@ -1,5 +1,5 @@
 // Written by `discipline hook install --agent opencode`.
-// discipline-hook-file: mode=observe sha256=abffb77e5610677b6c4457a1984b56c688f4c4a36b2032dc21d3e0cca097a505
+// discipline-hook-file: mode=observe sha256=3e1a3edae9fadeddf4cc58432c7c68ef9e2509e7d84a6d41064853b79e8a937a
 // When a session is created, takes this worktree's lease for it. Before an edit tool, refuses an edit outside this session's worktree (the tool call
 // is sent on stdin; a refusal throws, and the model reads the reason). After it, runs
 // the discipline check and, when it fails, appends the report to the tool's output so
@@ -8,6 +8,8 @@
 import { $ } from "bun"
 
 const EDIT_TOOLS = ["edit", "write", "apply_patch"]
+// OpenCode 2.x names its shell tool `shell`; 1.x named it `bash`.
+const SHELL_TOOLS = ["bash", "shell"]
 
 export const Discipline = async ({ $, directory }) => ({
   // A new session takes this worktree's lease; it never blocks the session.
@@ -68,7 +70,7 @@ export default {
     tool?.hook?.("execute.before", async (call) => {
       try {
         const toolName = call.tool ?? call.input?.tool
-        if (!EDIT_TOOLS.includes(toolName) && toolName !== "bash") return
+        if (!EDIT_TOOLS.includes(toolName) && !SHELL_TOOLS.includes(toolName)) return
         const payload = new Response(JSON.stringify({
           input: { tool: toolName, sessionID: call.sessionID },
           output: { args: call.input ?? {} },
@@ -82,7 +84,8 @@ export default {
       try {
         const toolName = call.tool ?? call.input?.tool
         if (!EDIT_TOOLS.includes(toolName)) return
-        const r = await $`discipline hook run --agent opencode --observe`.cwd(directory).nothrow().quiet()
+        const none = new Response("")
+        const r = await $`discipline hook run --agent opencode --observe < ${none}`.cwd(directory).nothrow().quiet()
         if (r.exitCode !== 0) {
           if (call.result) {
             call.result.output = (call.result.output ?? "") + "\n\n" + r.stdout.toString() + r.stderr.toString()

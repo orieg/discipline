@@ -1826,6 +1826,8 @@ fn the_committed_hook_files_are_what_hook_install_observe_writes() {
 /// `.cwd()`, `.nothrow()` and `.quiet()` and is awaited for `exitCode`, `stdout` and
 /// `stderr`. `behaviour` picks what the command does: exits 0, exits 1, throws from the
 /// call itself, or rejects when awaited (both stand for a command that cannot be run).
+/// `calls.json` beside it is `tests/fixtures/pretool/opencode/calls_v2.json`: the call
+/// objects OpenCode 2.0.22 handed `execute.before` for a shell command, a write and an edit.
 const OPENCODE_DRIVER: &str = r#"
 let behaviour = "exit-0"
 const ran = []
@@ -1895,6 +1897,8 @@ const registeredNotices = notices.length
 try { plugin.default.setup({}) } catch { setupThrew = true }
 console.error = realError
 
+const { readFileSync } = await import("node:fs")
+const [shellCall, writeCall, editCall] = JSON.parse(readFileSync("calls.json", "utf8")).calls
 const handlers = {
   "v1 session": () => v1.event({ event: { type: "session.created", properties: { sessionID: "s" } } }),
   "v1 pre-tool": () => v1["tool.execute.before"]({ tool: "edit", sessionID: "s" }, { args: { filePath: "a.rs" } }),
@@ -1902,16 +1906,24 @@ const handlers = {
   "v2 session": () => emit({ type: "session.execution.started", data: { sessionID: "s " + behaviour } }),
   "v2 pre-tool": () => v2["execute.before"]({ tool: "edit", sessionID: "s", input: { filePath: "a.rs" } }),
   "v2 post-edit": () => v2["execute.after"]({ tool: "edit", result: { output: "" } }),
+  "v2 shell pre-tool": () => v2["execute.before"](structuredClone(shellCall)),
+  "v2 write pre-tool": () => v2["execute.before"](structuredClone(writeCall)),
+  "v2 edit pre-tool": () => v2["execute.before"](structuredClone(editCall)),
 }
 const outcome = {}
 const commands = {}
+const sent = {}
 for (behaviour of ["exit-0", "exit-1", "throws", "rejects"]) {
   for (const [name, call] of Object.entries(handlers)) {
     ran.length = 0
+    stdins.length = 0
     let threw = false
     try { await call() } catch { threw = true }
     outcome[behaviour + " " + name] = threw
     commands[behaviour + " " + name] = ran.slice()
+    // What each command read on stdin: the template passes it as a `Response`.
+    sent[behaviour + " " + name] = await Promise.all(
+      stdins.filter((a) => a !== undefined).map((a) => (a instanceof Response ? a.clone().text() : String(a))))
   }
 }
 // The recorded 2.x events of two sessions, as a plugin sees them: `created` then
@@ -1953,6 +1965,7 @@ console.log(JSON.stringify({
   unregisteredNotices: notices.slice(registeredNotices),
   outcome,
   commands,
+  sent,
   ranForARead: ran.length,
 }))
 "#;
@@ -1996,6 +2009,14 @@ fn run_opencode_plugin(observe: bool, test: &str) -> Option<serde_json::Value> {
         ))
         .unwrap()
     };
+    std::fs::copy(
+        format!(
+            "{}/tests/fixtures/pretool/opencode/calls_v2.json",
+            env!("CARGO_MANIFEST_DIR")
+        ),
+        dir.path().join("calls.json"),
+    )
+    .unwrap();
     let out = common::script_command("node")
         .arg("driver.mjs")
         .env("SESSION_CREATED_V2", recorded("session_created_v2.json"))
@@ -2035,7 +2056,45 @@ fn run_opencode_plugin(observe: bool, test: &str) -> Option<serde_json::Value> {
         let ran = ran.as_array().unwrap();
         assert_eq!(ran.len(), 1, "{key}: {ran:?}");
         assert!(ran[0].as_str().unwrap().contains(want), "{key}: {ran:?}");
+        // Every command of the 2.x block is given its stdin. `hook run` reads stdin to
+        // its end, and an OpenCode 2.x server's own stdin never ends (RUN, 2.0.22
+        // `--standalone`: the check after a write did not return).
+        if key.contains(" v2 ") {
+            assert!(
+                ran[0].as_str().unwrap().contains(" < <arg>"),
+                "{key} inherits stdin: {ran:?}"
+            );
+            assert_eq!(v["sent"][key].as_array().unwrap().len(), 1, "{key}: {v}");
+        }
     }
+    // The recorded 2.x calls reach the pre-tool check as the payload the parser reads:
+    // the tool's own name, the session, and the call's `input` as the arguments.
+    for (tool, args) in [
+        (
+            "shell",
+            serde_json::json!({"command": "git -C ../probe-wt2 status"}),
+        ),
+        (
+            "write",
+            serde_json::json!({"path": "b.txt", "content": "hello"}),
+        ),
+        (
+            "edit",
+            serde_json::json!({"path": "a.txt", "oldString": "hi", "newString": "hey"}),
+        ),
+    ] {
+        let key = format!("exit-0 v2 {tool} pre-tool");
+        let sent: serde_json::Value =
+            serde_json::from_str(v["sent"][&key][0].as_str().unwrap()).unwrap();
+        assert_eq!(sent["input"]["tool"], tool, "{key}");
+        assert_eq!(
+            sent["input"]["sessionID"], "00000000-0000-0000-0000-000000000000",
+            "{key}"
+        );
+        assert_eq!(sent["output"]["args"], args, "{key}");
+        assert!(sent["cwd"].as_str().is_some_and(|c| !c.is_empty()), "{key}");
+    }
+    assert_eq!(v["sent"]["exit-0 v2 post-edit"][0], "", "{v}");
     Some(v)
 }
 
@@ -2051,7 +2110,7 @@ fn the_opencode_observe_plugin_never_throws_whatever_the_command_does() {
         return;
     };
     let outcome = v["outcome"].as_object().unwrap();
-    assert_eq!(outcome.len(), 24, "{v}");
+    assert_eq!(outcome.len(), 36, "{v}");
     let threw: Vec<&String> = outcome
         .iter()
         .filter(|(_, threw)| threw.as_bool() != Some(false))
@@ -2109,7 +2168,7 @@ fn the_opencode_enforcing_plugin_refuses_a_call_it_could_not_check() {
     ) else {
         return;
     };
-    for block in ["v1", "v2"] {
+    for block in ["v1", "v2", "v2 shell", "v2 write", "v2 edit"] {
         for (behaviour, threw) in [
             ("exit-0", false),
             ("exit-1", true),
