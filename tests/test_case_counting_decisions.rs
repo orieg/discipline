@@ -1339,3 +1339,136 @@ fn go_table_moved_to_another_file_of_the_package_keeps_its_rows() {
         "no longer read as parametrized",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Deno standard assertions in expected values and bounds (#659)
+// ---------------------------------------------------------------------------
+
+const DENO_STD_BASE: &str = "\
+import { assertEquals, assertLess, assertGreater, assertAlmostEquals } from \"jsr:@std/assert@1\";
+
+Deno.test(\"math operations\", () => {
+    assertEquals(add(1, 2), 3);
+    assertLess(read(), 10);
+    assertGreater(score(), 0.9);
+    assertAlmostEquals(measure(), 1.0, 1e-4);
+});
+";
+
+/// Deno standard assertions read by the other readers of JavaScript assertions:
+/// expected values, numeric bounds (less, greater, almost equals), and negative controls
+/// (tightened bounds, aliased imports, non-standard modules) (#659).
+#[test]
+fn deno_standard_assertion_expected_value_changed_and_bound_loosened() {
+    // Expected value changed: reports expected-value-changed.
+    let run = judge(
+        "tests/math.test.js",
+        DENO_STD_BASE,
+        &DENO_STD_BASE.replace("assertEquals(add(1, 2), 3);", "assertEquals(add(1, 2), 4);"),
+    );
+    assert_one(&run, "expected-value-changed", Some(4));
+
+    // Bound loosened (assertLess: bound increased from 10 to 20): reports assertion-bound-loosened.
+    let run = judge(
+        "tests/math.test.js",
+        DENO_STD_BASE,
+        &DENO_STD_BASE.replace("assertLess(read(), 10);", "assertLess(read(), 20);"),
+    );
+    assert_one(&run, "assertion-bound-loosened", Some(5));
+
+    // Bound loosened (assertGreater: bound decreased from 0.9 to 0.5): reports assertion-bound-loosened.
+    let run = judge(
+        "tests/math.test.js",
+        DENO_STD_BASE,
+        &DENO_STD_BASE.replace(
+            "assertGreater(score(), 0.9);",
+            "assertGreater(score(), 0.5);",
+        ),
+    );
+    assert_one(&run, "assertion-bound-loosened", Some(6));
+
+    // Bound loosened (assertAlmostEquals: tolerance increased from 1e-4 to 1e-2): reports assertion-bound-loosened.
+    let run = judge(
+        "tests/math.test.js",
+        DENO_STD_BASE,
+        &DENO_STD_BASE.replace(
+            "assertAlmostEquals(measure(), 1.0, 1e-4);",
+            "assertAlmostEquals(measure(), 1.0, 1e-2);",
+        ),
+    );
+    assert_one(&run, "assertion-bound-loosened", Some(7));
+
+    // Negative control: bounds tightened (assertLess decreased, assertGreater increased, tolerance decreased).
+    let run = judge(
+        "tests/math.test.js",
+        DENO_STD_BASE,
+        &DENO_STD_BASE.replace("assertLess(read(), 10);", "assertLess(read(), 5);"),
+    );
+    assert_clean(&run);
+
+    let run = judge(
+        "tests/math.test.js",
+        DENO_STD_BASE,
+        &DENO_STD_BASE.replace(
+            "assertGreater(score(), 0.9);",
+            "assertGreater(score(), 0.95);",
+        ),
+    );
+    assert_clean(&run);
+
+    let run = judge(
+        "tests/math.test.js",
+        DENO_STD_BASE,
+        &DENO_STD_BASE.replace(
+            "assertAlmostEquals(measure(), 1.0, 1e-4);",
+            "assertAlmostEquals(measure(), 1.0, 1e-6);",
+        ),
+    );
+    assert_clean(&run);
+
+    // Negative control: aliased import is not read as expected-value or bound assertion.
+    let aliased_base = "\
+import { assertEquals as same, assertLess as below } from \"jsr:@std/assert@1\";
+
+Deno.test(\"math operations\", () => {
+    same(add(1, 2), 3);
+    below(read(), 10);
+});
+";
+    let run = judge(
+        "tests/math.test.js",
+        aliased_base,
+        &aliased_base.replace("same(add(1, 2), 3);", "same(add(1, 2), 4);"),
+    );
+    assert_clean(&run);
+
+    let run = judge(
+        "tests/math.test.js",
+        aliased_base,
+        &aliased_base.replace("below(read(), 10);", "below(read(), 20);"),
+    );
+    assert_clean(&run);
+
+    // Negative control: non-standard import module is not read.
+    let non_std_base = "\
+import { assertEquals, assertLess } from \"./local.js\";
+
+Deno.test(\"math operations\", () => {
+    assertEquals(add(1, 2), 3);
+    assertLess(read(), 10);
+});
+";
+    let run = judge(
+        "tests/math.test.js",
+        non_std_base,
+        &non_std_base.replace("assertEquals(add(1, 2), 3);", "assertEquals(add(1, 2), 4);"),
+    );
+    assert_clean(&run);
+
+    let run = judge(
+        "tests/math.test.js",
+        non_std_base,
+        &non_std_base.replace("assertLess(read(), 10);", "assertLess(read(), 20);"),
+    );
+    assert_clean(&run);
+}

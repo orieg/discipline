@@ -755,3 +755,89 @@ fn receiver_call_without_parentheses_is_followed() {
     assert_eq!(vacuous_in_added(path, &file("    assert(r.f1 == 1)\n")), 0);
     assert_eq!(vacuous_in_added(path, &file("    log(r)\n")), 1);
 }
+
+#[test]
+fn deno_standard_assertions_caught_inside_test_are_reported() {
+    let repo = Repo::new();
+    let base = r#"import { assertEquals, assertLess } from "jsr:@std/assert";
+
+Deno.test("math", () => {
+    assertEquals(add(2, 2), 4);
+    assertLess(latency(), 100);
+});
+"#;
+    let head_caught = r#"import { assertEquals, assertLess } from "jsr:@std/assert";
+
+Deno.test("math", () => {
+    try {
+        assertEquals(add(2, 2), 4);
+    } catch {}
+    assertLess(latency(), 100);
+});
+"#;
+    repo.commit_base_files(&[("deno.json", "{}"), ("calc_test.ts", base)], "test: base");
+    repo.write("calc_test.ts", head_caught);
+    repo.commit("test: swallow assertEquals");
+    let run = repo.check(&[]);
+    let violations = run.violations("assertion-reduction");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(
+        violations[0]["code"],
+        "assertion-reduction/assertion-failure-caught"
+    );
+    assert_eq!(violations[0]["line"], 5);
+
+    // Negative control 1: assertion in handler does not swallow
+    let head_assert_in_handler = r#"import { assertEquals, assertLess } from "jsr:@std/assert";
+
+Deno.test("math", () => {
+    try {
+        f();
+    } catch (e) {
+        assertEquals(e.message, "err");
+    }
+    assertLess(latency(), 100);
+});
+"#;
+    repo.write("calc_test.ts", head_assert_in_handler);
+    repo.commit("test: assert in catch");
+    let run = repo.check(&[]);
+    let violations = run.violations("assertion-reduction");
+    assert!(
+        violations.is_empty(),
+        "expected no violations, got: {violations:?}"
+    );
+
+    // Negative control 2: non-std assert caught is not reported as standard assertion
+    let base_local = r#"import { assertEquals } from "./local.ts";
+
+Deno.test("math", () => {
+    assertEquals(add(2, 2), 4);
+});
+"#;
+    let head_local_caught = r#"import { assertEquals } from "./local.ts";
+
+Deno.test("math", () => {
+    try {
+        assertEquals(add(2, 2), 4);
+    } catch {}
+});
+"#;
+    let repo2 = Repo::new();
+    repo2.commit_base_files(
+        &[
+            ("deno.json", "{}"),
+            ("local_test.ts", base_local),
+            ("local.ts", "export function assertEquals() {}\n"),
+        ],
+        "test: base",
+    );
+    repo2.write("local_test.ts", head_local_caught);
+    repo2.commit("test: swallow local");
+    let run2 = repo2.check(&[]);
+    let violations2 = run2.violations("assertion-reduction");
+    assert!(
+        violations2.is_empty(),
+        "expected no violations, got: {violations2:?}"
+    );
+}

@@ -408,10 +408,24 @@ const JS_ASSERT_METHODS: &[&str] = &[
     "notDeepStrictEqual",
 ];
 
+const JS_DENO_EQ_METHODS: &[&str] = &[
+    "assertEquals",
+    "assertStrictEquals",
+    "assertNotEquals",
+    "assertNotStrictEquals",
+];
+
 /// JS/TS: the argument of `toBe` / `toEqual`-family matchers, both arguments of
-/// `assert.equal`-family calls, any string argument of `toMatchInlineSnapshot`, and a
-/// literal operand of `===` / `==` / `!==` / `!=` inside an `assert(...)` / `expect(...)`.
-pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
+/// `assert.equal`-family calls, Deno standard equality assertions (`assertEquals`,
+/// `assertStrictEquals`, `assertNotEquals`, `assertNotStrictEquals`), any string
+/// argument of `toMatchInlineSnapshot`, and a literal operand of `===` / `==` / `!==` /
+/// `!=` inside an `assert(...)` / `expect(...)`.
+pub fn javascript(
+    root: Node,
+    src: &str,
+    tests: &mut [TestFn],
+    std_asserts: &[(String, &'static str)],
+) {
     if tests.is_empty() {
         return;
     }
@@ -427,18 +441,9 @@ pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
         walk(node, &mut |n| {
             match n.kind() {
                 "call_expression" => {
-                    let Some(member) = n
-                        .child_by_field_name("function")
-                        .filter(|f| f.kind() == "member_expression")
-                    else {
+                    let Some(func) = n.child_by_field_name("function") else {
                         return true;
                     };
-                    let method = member
-                        .child_by_field_name("property")
-                        .map_or("", |p| text(p, src));
-                    let object = member
-                        .child_by_field_name("object")
-                        .map_or("", |o| text(o, src));
                     let args: Vec<Node> = n
                         .child_by_field_name("arguments")
                         .map(|a| {
@@ -446,18 +451,38 @@ pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
                             a.named_children(&mut c).collect()
                         })
                         .unwrap_or_default();
-                    let picked: Vec<Node> =
-                        if object == "assert" && JS_ASSERT_METHODS.contains(&method) {
-                            args.into_iter().take(2).collect()
-                        } else if JS_MATCHERS.contains(&method) {
-                            args.into_iter().take(1).collect()
-                        } else if method == "toMatchInlineSnapshot" {
-                            args.into_iter()
-                                .filter(|a| matches!(a.kind(), "string" | "template_string"))
-                                .collect()
-                        } else {
-                            Vec::new()
-                        };
+                    let picked: Vec<Node> = match func.kind() {
+                        "member_expression" => {
+                            let method = func
+                                .child_by_field_name("property")
+                                .map_or("", |p| text(p, src));
+                            let object = func
+                                .child_by_field_name("object")
+                                .map_or("", |o| text(o, src));
+                            if object == "assert" && JS_ASSERT_METHODS.contains(&method) {
+                                args.into_iter().take(2).collect()
+                            } else if JS_MATCHERS.contains(&method) {
+                                args.into_iter().take(1).collect()
+                            } else if method == "toMatchInlineSnapshot" {
+                                args.into_iter()
+                                    .filter(|a| matches!(a.kind(), "string" | "template_string"))
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            }
+                        }
+                        "identifier" => {
+                            let name = text(func, src);
+                            if JS_DENO_EQ_METHODS.contains(&name)
+                                && std_asserts.iter().any(|(bound, _)| bound == name)
+                            {
+                                args.into_iter().take(2).collect()
+                            } else {
+                                Vec::new()
+                            }
+                        }
+                        _ => Vec::new(),
+                    };
                     for a in picked.into_iter().filter(|a| js_lit(*a, src)) {
                         reader.record(node, a, src);
                     }
@@ -614,6 +639,31 @@ mod tests {
                 src
             ),
             vec!["2", "'y'", "true", "`\"ok\"`", "3"]
+        );
+    }
+
+    #[test]
+    fn javascript_reads_deno_standard_assertions() {
+        let src = r#"
+import { assertEquals, assertStrictEquals, assertNotEquals, assertNotStrictEquals, assertEquals as same } from "jsr:@std/assert";
+import { assertEquals as localEq } from "./local.js";
+
+test("deno asserts", () => {
+  assertEquals(f(1), 2);
+  assertStrictEquals(x, "expected");
+  assertNotEquals(y, 10);
+  assertNotStrictEquals(z, null);
+  same(a, 99);
+  localEq(b, 100);
+});
+"#;
+        assert_eq!(
+            literals(
+                &crate::ast::javascript::JavaScriptPack,
+                "src/x.test.js",
+                src
+            ),
+            vec!["2", "\"expected\"", "10", "null"]
         );
     }
 
