@@ -224,6 +224,10 @@ pub struct Payload {
     /// The payload lists work still running for the session (`background_tasks`,
     /// `session_crons`, `crons`): a turn that ends there has handed over, not stopped.
     pub background_work: bool,
+    /// The transcript path named by the payload (`transcriptPath` or `transcript_path`).
+    pub transcript_path: Option<PathBuf>,
+    /// agy's execution count (`executionNum`).
+    pub execution_num: Option<u64>,
 }
 
 pub fn parse_payload(raw: &str) -> Payload {
@@ -264,6 +268,7 @@ pub fn parse_payload(raw: &str) -> Payload {
             .map(str::to_string),
         session: v
             .get("session_id")
+            .or_else(|| v.get("sessionId"))
             .and_then(|s| s.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_string),
@@ -274,6 +279,13 @@ pub fn parse_payload(raw: &str) -> Payload {
                     .and_then(|l| l.as_array())
                     .is_some_and(|l| !l.is_empty())
             }),
+        transcript_path: v
+            .get("transcriptPath")
+            .or_else(|| v.get("transcript_path"))
+            .and_then(|p| p.as_str())
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from),
+        execution_num: v.get("executionNum").and_then(|n| n.as_u64()),
     }
 }
 
@@ -498,6 +510,51 @@ fn stop_payload_carries_the_message(agent: Agent) -> bool {
     matches!(agent, Agent::ClaudeCode | Agent::Codex | Agent::Qwen)
 }
 
+/// The agents supported by the premature stop check.
+fn agent_supports_premature_stop(agent: Agent) -> bool {
+    matches!(
+        agent,
+        Agent::ClaudeCode | Agent::Codex | Agent::Qwen | Agent::Copilot | Agent::Agy
+    )
+}
+
+/// The agent-specific refusal response for a premature stop.
+fn refusal_for(agent: Agent, text: &str) -> HookOutput {
+    match agent {
+        Agent::ClaudeCode | Agent::Codex | Agent::Qwen | Agent::Aider | Agent::Opencode => {
+            HookOutput {
+                stdout: String::new(),
+                stderr: text.to_string(),
+                code: 2,
+            }
+        }
+        Agent::Copilot => HookOutput {
+            stdout: format!(
+                "{}\n",
+                serde_json::json!({ "decision": "block", "reason": text.trim_end() })
+            ),
+            stderr: String::new(),
+            code: 0,
+        },
+        Agent::Agy => HookOutput {
+            stdout: format!(
+                "{}\n",
+                serde_json::json!({ "decision": "continue", "reason": text.trim_end() })
+            ),
+            stderr: String::new(),
+            code: 0,
+        },
+        Agent::Cursor => HookOutput {
+            stdout: format!(
+                "{}\n",
+                serde_json::json!({ "followup_message": text.trim_end() })
+            ),
+            stderr: String::new(),
+            code: 0,
+        },
+    }
+}
+
 /// `[hooks.premature-stop]` of the configuration on the base side of the change: the
 /// merge base of `HEAD` with the base the check measures against. `None` when that
 /// cannot be established (no base, no `discipline.toml` there, one that does not load):
@@ -554,12 +611,13 @@ fn append_observation(dir: &Path, entry: &serde_json::Value) -> Option<PathBuf> 
 /// The end-of-turn check (`crate::turn`): `Some` when this stop is answered here, `None`
 /// when the turn is not judged or nothing was found, and the change check's answer stands.
 ///
-/// The final message is judged only when the payload carries it, the base ref's
-/// `[hooks.premature-stop]` is enabled, and the payload lists no background work. In
-/// observe mode (`--observe`, or `mode = "observe"`) a match is logged and said on
-/// stderr, and the stop is let through. In refuse mode the stop is refused once: a stop
-/// this hook already continued (`stop_hook_active`) and a session at its cap are let
-/// through with the match said on stderr. Neither the log nor stderr holds the message.
+/// The final message is judged only when the payload carries it or names a transcript that
+/// carries it, the base ref's `[hooks.premature-stop]` is enabled, and the payload lists no
+/// background work. In observe mode (`--observe`, or `mode = "observe"`) a match is logged
+/// and said on stderr, and the stop is let through. In refuse mode the stop is refused once:
+/// a stop this hook already continued (`stop_hook_active` or agy `executionNum > 0`) and a
+/// session at its cap are let through with the match said on stderr. Neither the log nor
+/// stderr holds the message.
 fn premature_stop(
     agent: Agent,
     dir: &Path,
@@ -567,11 +625,41 @@ fn premature_stop(
     payload: &Payload,
     observe: bool,
 ) -> Option<HookOutput> {
-    if !stop_payload_carries_the_message(agent) || payload.background_work {
+    if !agent_supports_premature_stop(agent) || payload.background_work {
         return None;
     }
-    let message = payload.last_assistant_message.as_deref()?;
     let config = base_premature_stop(dir, side).filter(|c| c.enabled)?;
+
+    let (message, tool_call_followed) = if stop_payload_carries_the_message(agent) {
+        let m = payload.last_assistant_message.as_deref()?;
+        (Some(m.to_string()), false)
+    } else if matches!(agent, Agent::Copilot | Agent::Agy) {
+        let Some(tpath) = payload.transcript_path.as_deref() else {
+            let mut out = translate_event(agent, Event::Stop, 0, "", "");
+            out.stderr =
+                "discipline: no transcript path in stop payload; premature stop check skipped\n"
+                    .to_string();
+            return Some(out);
+        };
+        match crate::transcript::read_final_turn(agent, tpath) {
+            Ok(turn) => (turn.message, turn.tool_call_followed),
+            Err(e) => {
+                let mut out = translate_event(agent, Event::Stop, 0, "", "");
+                out.stderr = format!(
+                    "discipline: could not read transcript '{}': {e}\n",
+                    tpath.display()
+                );
+                return Some(out);
+            }
+        }
+    } else {
+        return None;
+    };
+
+    if tool_call_followed {
+        return None;
+    }
+    let message = message.as_deref()?;
     let verdict = crate::turn::judge(message, config.tool_call_as_text)?;
     let code = verdict.kind.code();
     let mut out = translate_event(agent, Event::Stop, 0, "", "");
@@ -598,15 +686,19 @@ fn premature_stop(
         );
         return Some(out);
     }
-    let counter = payload.session.as_deref().and_then(|s| {
-        let repo = crate::gitctx::discover_repository(dir).ok()?;
-        crate::turn::counter_path(repo.path(), s)
-    });
+    let counter = payload
+        .session
+        .as_deref()
+        .or(payload.conversation.as_deref())
+        .and_then(|s| {
+            let repo = crate::gitctx::discover_repository(dir).ok()?;
+            crate::turn::counter_path(repo.path(), s)
+        });
     let so_far = counter
         .as_deref()
         .map(crate::turn::refused_so_far)
         .unwrap_or(0);
-    let let_through = if payload.stop_hook_active {
+    let let_through = if payload.stop_hook_active || payload.execution_num.is_some_and(|n| n > 0) {
         Some("the agent's loop guard")
     } else if so_far >= config.max_per_session {
         Some("this session's cap (hooks.premature-stop.max_per_session)")
@@ -625,11 +717,7 @@ fn premature_stop(
         );
         return Some(out);
     }
-    Some(HookOutput {
-        stdout: String::new(),
-        stderr: verdict.refusal(),
-        code: 2,
-    })
+    Some(refusal_for(agent, &verdict.refusal()))
 }
 
 /// `reason, gate <gate>` from a run that could not check, as the text an agent reads
@@ -3555,10 +3643,14 @@ mod tests {
         );
         assert!(agy.stop, "{agy:?}");
         assert_eq!(agy.conversation.as_deref(), Some("c-1"));
+        assert_eq!(agy.transcript_path.as_deref(), Some(Path::new("/t")));
+        assert_eq!(agy.execution_num, Some(0));
         let copilot = parse_payload(
             r#"{"cwd":"/w","sessionId":"s","stopReason":"end_turn","stop_hook_active":true,"timestamp":1,"transcriptPath":"/t"}"#,
         );
         assert!(copilot.stop && copilot.stop_hook_active, "{copilot:?}");
+        assert_eq!(copilot.session.as_deref(), Some("s"));
+        assert_eq!(copilot.transcript_path.as_deref(), Some(Path::new("/t")));
     }
 
     #[test]

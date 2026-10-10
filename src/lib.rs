@@ -37,6 +37,7 @@ pub mod schema;
 pub mod selftest;
 pub mod style;
 pub mod tokens;
+pub mod transcript;
 pub mod turn;
 
 pub use config::DisciplineConfig;

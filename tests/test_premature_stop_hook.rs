@@ -289,3 +289,213 @@ fn a_change_with_findings_is_answered_by_its_report_not_by_the_turn() {
         run.stderr
     );
 }
+
+#[test]
+fn refuse_mode_refuses_copilot_transcript_and_handles_continuation() {
+    let repo = repo_with("enabled = true\nmode = \"refuse\"\n");
+    let transcript = format!(
+        "{}/tests/fixtures/stop/copilot/transcript_last_message.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let payload = recorded("copilot/stop.json", |v| {
+        v["transcriptPath"] = transcript.clone().into();
+    });
+    let run = hook(&repo, &["--agent", "copilot"], &payload);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_eq!(run.stderr, "");
+    let decision: Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(decision["decision"], "block");
+    let reason = decision["reason"].as_str().unwrap();
+    assert!(
+        reason.contains(&format!("[{CODE}]"))
+            && reason.contains(&format!("`{SENTENCE}`"))
+            && reason.contains("Do it now, or say in one sentence why you cannot."),
+        "reason: {reason}"
+    );
+
+    // Continuation: stop_hook_active = true lets through at loop guard
+    let continued = recorded("copilot/stop_continued.json", |v| {
+        v["transcriptPath"] = transcript.into();
+    });
+    let run = hook(&repo, &["--agent", "copilot"], &continued);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_eq!(run.stdout, "");
+    assert!(
+        run.stderr.contains("loop guard") && run.stderr.contains(CODE),
+        "stderr: {}",
+        run.stderr
+    );
+
+    // Directory resolution: passing the directory resolves transcript_last_message.json
+    let dir = format!("{}/tests/fixtures/stop/copilot", env!("CARGO_MANIFEST_DIR"));
+    let dir_payload = recorded("copilot/stop.json", |v| {
+        v["transcriptPath"] = dir.into();
+    });
+    let dir_run = hook(&repo, &["--agent", "copilot"], &dir_payload);
+    assert_eq!(dir_run.code, 0, "{}", dir_run.stderr);
+    let dir_decision: Value = serde_json::from_str(&dir_run.stdout).unwrap();
+    assert_eq!(dir_decision["decision"], "block");
+}
+
+#[test]
+fn refuse_mode_refuses_agy_transcript_and_handles_continuation() {
+    let repo = repo_with("enabled = true\nmode = \"refuse\"\n");
+    let transcript = format!(
+        "{}/tests/fixtures/stop/agy/transcript_last_message.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let payload = recorded("agy/stop.json", |v| {
+        v["transcriptPath"] = transcript.clone().into();
+    });
+    let run = hook(&repo, &["--agent", "agy"], &payload);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_eq!(run.stderr, "");
+    let decision: Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(decision["decision"], "continue");
+    let reason = decision["reason"].as_str().unwrap();
+    assert!(
+        reason.contains(&format!("[{CODE}]"))
+            && reason.contains(&format!("`{SENTENCE}`"))
+            && reason.contains("Do it now, or say in one sentence why you cannot."),
+        "reason: {reason}"
+    );
+
+    // Continuation: executionNum = 1 lets through at loop guard
+    let continued = recorded("agy/stop_continued.json", |v| {
+        v["transcriptPath"] = transcript.into();
+    });
+    let run = hook(&repo, &["--agent", "agy"], &continued);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_eq!(run.stdout.trim(), "{}");
+    assert!(
+        run.stderr.contains("loop guard") && run.stderr.contains(CODE),
+        "stderr: {}",
+        run.stderr
+    );
+
+    // Directory resolution: passing the directory resolves transcript_last_message.json
+    let dir = format!("{}/tests/fixtures/stop/agy", env!("CARGO_MANIFEST_DIR"));
+    let dir_payload = recorded("agy/stop.json", |v| {
+        v["transcriptPath"] = dir.into();
+    });
+    let dir_run = hook(&repo, &["--agent", "agy"], &dir_payload);
+    assert_eq!(dir_run.code, 0, "{}", dir_run.stderr);
+    let dir_decision: Value = serde_json::from_str(&dir_run.stdout).unwrap();
+    assert_eq!(dir_decision["decision"], "continue");
+}
+
+#[test]
+fn observe_mode_logs_copilot_and_agy_premature_stops() {
+    let repo = repo_with("enabled = true\nmode = \"observe\"\n");
+    for (agent, dir) in [("copilot", "copilot"), ("agy", "agy")] {
+        let transcript = format!(
+            "{}/tests/fixtures/stop/{dir}/transcript_last_message.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let payload = recorded(&format!("{dir}/stop.json"), |v| {
+            v["transcriptPath"] = transcript.into();
+        });
+        let run = hook(&repo, &["--agent", agent], &payload);
+        assert_eq!(run.code, 0, "{agent}: {}", run.stderr);
+        let expected_stdout = if agent == "agy" { "{}\n" } else { "" };
+        assert_eq!(run.stdout, expected_stdout, "{agent}");
+        assert!(
+            run.stderr.contains("observe mode, not enforced") && run.stderr.contains(CODE),
+            "{agent}: {}",
+            run.stderr
+        );
+    }
+    let log = observe_log(&repo);
+    let agents: Vec<String> = log
+        .lines()
+        .map(|line| {
+            let entry: Value = serde_json::from_str(line).unwrap();
+            assert_eq!(entry["event"], "stop");
+            assert_eq!(entry["verdict"], "premature-stop");
+            assert_eq!(entry["codes"], serde_json::json!([CODE]));
+            entry["agent"].as_str().unwrap().to_string()
+        })
+        .collect();
+    assert_eq!(agents, vec!["copilot", "agy"]);
+}
+
+#[test]
+fn copilot_and_agy_tool_call_in_transcript_lets_stop_through() {
+    let repo = repo_with("enabled = true\nmode = \"refuse\"\n");
+
+    // Agy with tool_calls in transcript
+    let agy_tool_transcript = format!(
+        "{}/tests/fixtures/stop/agy/transcript_tool_call_message.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let payload = recorded("agy/stop.json", |v| {
+        v["transcriptPath"] = agy_tool_transcript.into();
+    });
+    let run = hook(&repo, &["--agent", "agy"], &payload);
+    assert_eq!(
+        (run.code, run.stdout.trim(), run.stderr.as_str()),
+        (0, "{}", "")
+    );
+
+    // Copilot with toolRequests in transcript
+    let copilot_tmp = repo.path().join("copilot_tool_transcript.json");
+    std::fs::write(
+        &copilot_tmp,
+        serde_json::json!({
+            "type": "assistant.message",
+            "data": {
+                "content": SENTENCE,
+                "toolRequests": [{"name": "run_command"}]
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let payload = recorded("copilot/stop.json", |v| {
+        v["transcriptPath"] = copilot_tmp.to_str().unwrap().into();
+    });
+    let run = hook(&repo, &["--agent", "copilot"], &payload);
+    assert_eq!(
+        (run.code, run.stdout.as_str(), run.stderr.as_str()),
+        (0, "", "")
+    );
+}
+
+#[test]
+fn copilot_and_agy_missing_or_unreadable_transcript_skipped_with_warning() {
+    let repo = repo_with("enabled = true\nmode = \"refuse\"\n");
+
+    // Missing transcriptPath in payload
+    for (agent, dir) in [("copilot", "copilot"), ("agy", "agy")] {
+        let payload = recorded(&format!("{dir}/stop.json"), |v| {
+            v.as_object_mut().unwrap().remove("transcriptPath");
+        });
+        let run = hook(&repo, &["--agent", agent], &payload);
+        assert_eq!(run.code, 0, "{agent}: {}", run.stderr);
+        let expected_stdout = if agent == "agy" { "{}\n" } else { "" };
+        assert_eq!(run.stdout, expected_stdout, "{agent}");
+        assert!(
+            run.stderr
+                .contains("no transcript path in stop payload; premature stop check skipped"),
+            "{agent}: {}",
+            run.stderr
+        );
+    }
+
+    // Non-existent transcriptPath
+    for (agent, dir) in [("copilot", "copilot"), ("agy", "agy")] {
+        let payload = recorded(&format!("{dir}/stop.json"), |v| {
+            v["transcriptPath"] = "/path/that/does/not/exist/transcript.json".into();
+        });
+        let run = hook(&repo, &["--agent", agent], &payload);
+        assert_eq!(run.code, 0, "{agent}: {}", run.stderr);
+        let expected_stdout = if agent == "agy" { "{}\n" } else { "" };
+        assert_eq!(run.stdout, expected_stdout, "{agent}");
+        assert!(
+            run.stderr
+                .contains("could not read transcript '/path/that/does/not/exist/transcript.json'"),
+            "{agent}: {}",
+            run.stderr
+        );
+    }
+}

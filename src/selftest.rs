@@ -2099,6 +2099,26 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "hook: transcript readers extract final assistant message and tool requests for copilot and agy",
+        || {
+            use crate::transcript::{parse_agy_transcript, parse_copilot_transcript};
+            let copilot_msg = r#"{"type":"assistant.message","data":{"content":"Now let me test.","toolRequests":[]}}"#;
+            let copilot_tool = r#"{"type":"assistant.message","data":{"content":"","toolRequests":[{"name":"run"}]}}"#;
+            let agy_msg = r#"{"type":"PLANNER_RESPONSE","content":"Now let me test."}"#;
+            let agy_tool = r#"{"type":"PLANNER_RESPONSE","tool_calls":[{"name":"run"}]}"#;
+            let c_m = parse_copilot_transcript(copilot_msg)?;
+            let c_t = parse_copilot_transcript(copilot_tool)?;
+            let a_m = parse_agy_transcript(agy_msg)?;
+            let a_t = parse_agy_transcript(agy_tool)?;
+            Ok(c_m.message.as_deref() == Some("Now let me test.")
+                && !c_m.tool_call_followed
+                && c_t.tool_call_followed
+                && a_m.message.as_deref() == Some("Now let me test.")
+                && !a_m.tool_call_followed
+                && a_t.tool_call_followed)
+        },
+    ),
+    (
         "error-swallowing: a Rust discard is sorted by callee, an accessor is not a site",
         || {
             let v = AssertVocabulary::default();
