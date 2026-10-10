@@ -20,7 +20,11 @@ src/ast/mod.rs Tests | Fact vocabulary every pack lists in `supplies`; no gate a
 src/ast/mod.rs EscapeHatches | Fact vocabulary every pack lists in `supplies`; no gate asks for it
 src/forge.rs log | CannedApi request log, read by the unit tests of the forge readers
 src/forge.rs was_called | CannedApi request log, read by the unit tests of the forge readers
-src/guards/perf/bounds.rs with_ci | builds the estimates of the interval-comparison unit tests; production sets `ci` directly
+src/guards/perf/bounds.rs minimum_detectable_difference | reference-pinned bound with no caller yet
 src/guards/perf/bounds.rs regressed | exact-counter threshold; the gate compares `delta_pct` itself
+src/guards/perf/bounds.rs sample_size_for_interval | reference-pinned bound with no caller yet
+src/guards/perf/bounds.rs standard_normal_quantile | reference-pinned bound with no caller yet
 src/guards/perf/bounds.rs wilson_score_interval | reference-pinned bound with no caller yet
+src/guards/perf/bounds.rs with_ci | builds the estimates of the interval-comparison unit tests; production sets `ci` directly
 src/turn.rs NAMESPACE | turn codes prefix asserted by unit tests
+
