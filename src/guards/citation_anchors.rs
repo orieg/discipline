@@ -7,7 +7,13 @@ use crate::gitctx::CommitLookup;
 use crate::guards::{Context, GateOutcome, PathFilter};
 use anyhow::Result;
 
+use std::sync::LazyLock;
+
 pub const GATE: &str = "citation-anchors";
+
+static VALID_ANCHOR_TAIL: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r#"^@[0-9a-fA-F]{4,40}\s+["'][^"']+["']"#).unwrap()
+});
 
 #[derive(Debug, Clone)]
 pub struct AnchoredCitation {
@@ -90,7 +96,7 @@ pub fn extract_unanchored_citations(content: &str) -> Vec<UnanchoredCitation> {
             }
             let line_match = caps.get(2).unwrap();
             let after_match = &line[line_match.end()..];
-            if after_match.starts_with('@') {
+            if VALID_ANCHOR_TAIL.is_match(after_match) {
                 continue;
             }
             let line_val: usize = match line_match.as_str().parse() {
@@ -244,6 +250,12 @@ pub fn evaluate_citation_anchors(ctx: &Context) -> Result<GateOutcome> {
         if let Some(ref re) = tracker_re {
             for caps in re.captures_iter(&content) {
                 let num = caps.get(1).unwrap().as_str();
+                let expected_title = caps.get(2).unwrap().as_str();
+                let line_num = content[..caps.get(0).unwrap().start()]
+                    .lines()
+                    .count()
+                    .max(1);
+
                 let no_network = std::env::var("DISCIPLINE_NO_NETWORK").is_ok();
                 if no_network || ctx.forge.is_none() {
                     if settings.require_online {
@@ -255,6 +267,54 @@ pub fn evaluate_citation_anchors(ctx: &Context) -> Result<GateOutcome> {
                             "tracker reference #{num} title check skipped (offline/no network)"
                         ));
                         out.examined += 1;
+                    }
+                } else {
+                    let access = ctx.forge.as_ref().unwrap();
+                    let forge = (access.identify)().map_err(|e| {
+                        anyhow::anyhow!("citation-anchors cannot identify the forge: {e}")
+                    })?;
+                    let api_path = match forge.kind {
+                        crate::forge::ForgeKind::GitLab => format!(
+                            "projects/{}/issues/{num}",
+                            crate::forge::gitlab_project_id(&forge.repo)
+                        ),
+                        _ => format!("repos/{}/issues/{num}", forge.repo),
+                    };
+                    out.examined += 1;
+                    match access.api.fetch(&forge, &api_path) {
+                        Ok(issue_json) => {
+                            let actual_title = issue_json
+                                .get("title")
+                                .and_then(|t| t.as_str())
+                                .unwrap_or("");
+                            if actual_title != expected_title {
+                                out.add_violation(
+                                    settings.severity,
+                                    &crate::findings::TRACKER_TITLE_MISMATCH,
+                                    &path,
+                                    line_num,
+                                    format!(
+                                        "tracker reference #{num} title mismatch: expected \"{expected_title}\", forge has \"{actual_title}\""
+                                    ),
+                                    "update the cited tracker title to match the forge issue title",
+                                );
+                            }
+                        }
+                        Err(e) if e.kind == crate::forge::ForgeErrorKind::NotFound => {
+                            out.add_violation(
+                                settings.severity,
+                                &crate::findings::TRACKER_TITLE_MISMATCH,
+                                &path,
+                                line_num,
+                                format!("tracker reference #{num} does not exist on forge"),
+                                "verify the issue number exists on the host forge",
+                            );
+                        }
+                        Err(e) => {
+                            return Err(anyhow::anyhow!(
+                                "failed to fetch issue #{num} from forge: {e}"
+                            ));
+                        }
                     }
                 }
             }
@@ -394,5 +454,14 @@ unanchored_citations = "reject"
             "citation-anchors/unanchored-citation"
         );
         assert_eq!(out_reject.violations[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn test_malformed_anchor_tail_treated_as_unanchored() {
+        let content = "Reference to src/auth.rs:10@invalid without quote\n";
+        let unanchored = extract_unanchored_citations(content);
+        assert_eq!(unanchored.len(), 1);
+        assert_eq!(unanchored[0].path, "src/auth.rs");
+        assert_eq!(unanchored[0].line, 10);
     }
 }
