@@ -16,6 +16,7 @@ use std::path::Path;
 use toml::Value;
 
 pub const HOSTNAME_DENYLIST_ENV: &str = "DISCIPLINE_HOSTNAME_DENYLIST";
+pub const TERM_DENYLIST_ENV: &str = "DISCIPLINE_TERM_DENYLIST";
 pub const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1149,6 +1150,10 @@ pub struct PiiGate {
     /// Hostnames that must never appear. Matched as whole tokens,
     /// case-insensitively, and never echoed back in reports.
     pub hostname_denylist: Vec<String>,
+    /// Terms (words or phrases) that must never appear in committed files, paths,
+    /// commit messages, PR title or branch name. Matched as whole tokens,
+    /// case-insensitively by default, or case-sensitively with prefix `case:` or `case-sensitive:`.
+    pub term_denylist: Vec<String>,
     /// Additional banned regexes (emails, internal domains, ticket prefixes ...).
     pub extra_patterns: Vec<String>,
     /// A line matching any of these is not a violation.
@@ -1183,6 +1188,7 @@ impl Default for PiiGate {
             .map(|s| s.to_string())
             .collect(),
             hostname_denylist: Vec::new(),
+            term_denylist: Vec::new(),
             extra_patterns: Vec::new(),
             allow_patterns: Vec::new(),
             scan_pr_body: true,
@@ -2540,6 +2546,7 @@ pub struct Overrides {
     pub enable: Vec<String>,
     pub disable: Vec<String>,
     pub hostname_denylist: Vec<String>,
+    pub term_denylist: Vec<String>,
     pub directive_sources: Option<Vec<String>>,
     pub fail_on_overrides: Option<bool>,
 }
@@ -2704,6 +2711,19 @@ impl DisciplineConfig {
             );
             let mut layer = Value::Table(Default::default());
             set_path(&mut layer, &["gates", "pii", "hostname_denylist"], extra);
+            merge(&mut value, layer);
+        }
+
+        if !overrides.term_denylist.is_empty() {
+            let extra = Value::Array(
+                overrides
+                    .term_denylist
+                    .iter()
+                    .map(|h| Value::String(h.clone()))
+                    .collect(),
+            );
+            let mut layer = Value::Table(Default::default());
+            set_path(&mut layer, &["gates", "pii", "term_denylist"], extra);
             merge(&mut value, layer);
         }
 

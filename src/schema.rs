@@ -305,6 +305,7 @@ pub fn generate_schema() -> Value {
                 "secrets": { "type": "boolean", "description": "Check every text file for fixed-format credentials: private-key headers, AWS, GitHub, Slack and OpenAI/Anthropic tokens, and literal Authorization Bearer values. Matches the token format only; there is no entropy check" },
                 "allowed_users": { "$ref": "#/$defs/StringListOrReset", "description": "Username tokens permitted inside home-directory paths" },
                 "hostname_denylist": { "$ref": "#/$defs/StringListOrReset", "description": "Whole-token, case-insensitive hostnames that must not appear" },
+                "term_denylist": { "$ref": "#/$defs/StringListOrReset", "description": "Words or phrases that must not appear in committed files, paths, commit messages, PR title or branch name; matched as whole tokens, case-insensitively by default, or case-sensitively with prefix `case:` or `case-sensitive:`" },
                 "extra_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Additional regex patterns to reject" },
                 "allow_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Regex patterns exempted from rejection" },
                 "scan_pr_body": { "type": "boolean", "description": "Whether to scan PR description text" },

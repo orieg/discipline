@@ -2148,6 +2148,7 @@ mod tests {
         "reference_repos",
         "required_trailers",
         "sources",
+        "term_denylist",
         "unconditional_jobs",
         // Text matched as a substring or a prefix.
         "agent_markers",
@@ -2323,7 +2324,7 @@ mod tests {
     /// How many string lists hold neither globs nor patterns (`NOT_GLOB_LISTS` without
     /// the pattern keys). A list added there changes this count, which is where its
     /// author says whether its entries are regular expressions.
-    const LISTS_OF_NEITHER_GLOBS_NOR_PATTERNS: usize = 34;
+    const LISTS_OF_NEITHER_GLOBS_NOR_PATTERNS: usize = 35;
 
     /// Every string and string-list property of the configuration schema:
     /// `(name, is a list, description)`.

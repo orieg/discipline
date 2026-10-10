@@ -1414,6 +1414,33 @@ impl GitCtx {
         let body: String = lines.collect::<Vec<_>>().join("\n").trim().to_string();
         Ok(body)
     }
+
+    /// Returns the HEAD branch name, if available (from CI environment or repo HEAD).
+    pub fn head_branch(&self) -> Option<String> {
+        let from_pr = std::env::var("GITHUB_HEAD_REF")
+            .or_else(|_| std::env::var("CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"))
+            .or_else(|_| std::env::var("FORGEJO_HEAD_REF"))
+            .or_else(|_| std::env::var("GITEA_HEAD_REF"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        if from_pr.is_some() {
+            return from_pr;
+        }
+        if let Ok(head) = self.repo.head() {
+            if let Ok(name) = head.shorthand() {
+                if !name.is_empty() && name != "HEAD" {
+                    return Some(name.to_string());
+                }
+            }
+        }
+        std::env::var("GITHUB_REF_NAME")
+            .or_else(|_| std::env::var("CI_COMMIT_BRANCH"))
+            .or_else(|_| std::env::var("CI_COMMIT_REF_NAME"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
 }
 
 /// Whether the run is on a CI runner, by the markers the forges set.

@@ -1665,6 +1665,230 @@ fn active_config_exempt_from_hostname_denylist() {
 }
 
 #[test]
+fn term_denylist_comes_from_config_or_secret_env_and_is_never_echoed() {
+    let repo = Repo::new();
+    repo.write("docs/notes.md", "mentions secret-codename here\n");
+    repo.commit("docs: notes");
+    assert_eq!(repo.check(&[]).code, 0, "no denylist, no finding");
+
+    let run = repo.run(
+        &["check", "--format", "json", "--base", "main"],
+        &[("DISCIPLINE_TERM_DENYLIST", "otherterm, secret-codename")],
+    );
+    assert_eq!(run.code, 1);
+    assert_eq!(run.titles("pii").len(), 1);
+    assert!(!run.stdout.to_lowercase().contains("secret-codename"));
+
+    let inline = repo.check(&[
+        "--config-override",
+        "[gates.pii]\nterm_denylist = [\"secret-codename\"]",
+    ]);
+    assert_eq!(inline.code, 1);
+}
+
+#[test]
+fn active_config_exempt_from_term_denylist() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"demo\"\n\n[gates.pii]\nenabled = true\nterm_denylist = [\"secret-codename\"]\n",
+    );
+    repo.commit("config: set term denylist");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.code, 0,
+        "active config should not flag its own term denylist: {}",
+        run.stdout
+    );
+    assert_eq!(run.titles("pii").len(), 0);
+
+    repo.write("src/lib.rs", "// uses secret-codename\n");
+    let run2 = repo.check(&[]);
+    assert_eq!(run2.code, 1);
+}
+
+#[test]
+fn test_term_denylist_added_file_path() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"demo\"\n\n[gates.pii]\nenabled = true\nterm_denylist = [\"secret-widget\"]\n",
+    );
+    repo.commit("config: init");
+
+    repo.write("src/secret-widget.rs", "// safe code\n");
+    repo.commit("feat: add secret widget");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let violations = run.violations("pii");
+    assert_eq!(violations.len(), 1);
+    assert!(violations[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Found a denylisted term in path of an added file (match not echoed)."));
+    assert!(!run.stdout.to_lowercase().contains("secret-widget"));
+}
+
+#[test]
+fn test_term_denylist_renamed_file_path() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"demo\"\n\n[gates.pii]\nenabled = true\nterm_denylist = [\"secret-gadget\"]\n",
+    );
+    repo.git(&["mv", "tests/a.rs", "tests/secret-gadget.rs"]);
+    repo.commit("refactor: rename gadget");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let violations = run.violations("pii");
+    assert_eq!(violations.len(), 1);
+    assert!(violations[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Found a denylisted term in path of a renamed file (match not echoed)."));
+    assert!(!run.stdout.to_lowercase().contains("secret-gadget"));
+}
+
+#[test]
+fn test_term_denylist_commit_message() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"demo\"\n\n[gates.pii]\nenabled = true\nterm_denylist = [\"secret-release\"]\n",
+    );
+    repo.commit("config: init");
+
+    repo.write("src/lib.rs", "// clean code\n");
+    repo.commit("feat: prep secret-release now");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let violations = run.violations("pii");
+    assert_eq!(violations.len(), 1);
+    assert!(violations[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("message (match not echoed)."));
+    assert!(!run.stdout.to_lowercase().contains("secret-release"));
+}
+
+#[test]
+fn test_term_denylist_pr_title() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"demo\"\n\n[gates.pii]\nenabled = true\nterm_denylist = [\"secret-feature\"]\n",
+    );
+    repo.commit("config: init");
+
+    repo.write("src/lib.rs", "// clean code\n");
+    let run = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[("PR_TITLE", "feat: implement secret-feature")],
+    );
+    assert_eq!(run.code, 1);
+    let violations = run.violations("pii");
+    assert_eq!(violations.len(), 1);
+    assert!(violations[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Found a denylisted term in pull request title (match not echoed)."));
+    assert!(!run.stdout.to_lowercase().contains("secret-feature"));
+}
+
+#[test]
+fn test_term_denylist_branch_name() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"demo\"\n\n[gates.pii]\nenabled = true\nterm_denylist = [\"secret-branch\"]\n",
+    );
+    repo.commit("config: init");
+
+    repo.git(&["checkout", "-b", "feat/secret-branch"]);
+    repo.write("src/lib.rs", "// clean code\n");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let violations = run.violations("pii");
+    assert_eq!(violations.len(), 1);
+    assert!(violations[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Found a denylisted term in branch name (match not echoed)."));
+    assert!(!run.stdout.to_lowercase().contains("secret-branch"));
+}
+
+#[test]
+fn test_term_denylist_never_echoes_in_any_output_format() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"demo\"\n\n[gates.pii]\nenabled = true\nterm_denylist = [\"stealth-product\"]\n",
+    );
+    repo.commit("config: init");
+
+    repo.git(&["checkout", "-b", "feat/stealth-product"]);
+    repo.write(
+        "src/stealth-product.rs",
+        "// comment mentions stealth-product\n",
+    );
+    repo.commit("feat: add stealth-product code");
+
+    let formats = &[
+        "terminal",
+        "json",
+        "sarif",
+        "junit",
+        "gitlab",
+        "agent-prompt",
+    ];
+    for format in formats {
+        let run = repo.run(
+            &["check", "--base", "main", "--format", format],
+            &[("PR_TITLE", "WIP: stealth-product implementation")],
+        );
+        assert_eq!(run.code, 1, "failed for format {format}");
+        let combined = format!("{}\n{}", run.stdout, run.stderr).to_lowercase();
+        assert!(
+            !combined.contains("stealth-product"),
+            "format {format} leaked secret term: {combined}"
+        );
+    }
+}
+
+#[test]
+fn test_term_denylist_controls() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"demo\"\n\n[gates.pii]\nenabled = true\nterm_denylist = [\n  \"project\",\n  \"case:StrictName\",\n  \"alpha beta\",\n]\n",
+    );
+    repo.commit("config: init");
+
+    // 1. Control: term inside longer word is not matched
+    repo.write("src/lib.rs", "let projector = true;\n");
+    assert_eq!(repo.check(&[]).code, 0, "longer word should not match");
+
+    // 2. Control: case-sensitive entry does not match other case
+    repo.write("src/lib.rs", "let name = \"strictname\";\n");
+    assert_eq!(repo.check(&[]).code, 0, "case mismatch should not match");
+
+    // 3. Control: phrase entry needs tokens in sequence
+    repo.write("src/lib.rs", "let x = \"beta alpha\";\n");
+    assert_eq!(
+        repo.check(&[]).code,
+        0,
+        "out of order tokens should not match"
+    );
+
+    // Negative controls: when they match, they fail
+    repo.write("src/lib.rs", "let name = \"StrictName\";\n");
+    assert_eq!(repo.check(&[]).code, 1, "exact case should match");
+
+    repo.write("src/lib.rs", "let x = \"alpha   beta\";\n");
+    assert_eq!(repo.check(&[]).code, 1, "phrase sequence should match");
+}
+
+#[test]
 fn pii_rfc1918_network_id_exemption_and_json_streaming() {
     let repo = Repo::new();
     repo.write(

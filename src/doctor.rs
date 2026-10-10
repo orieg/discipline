@@ -230,6 +230,7 @@ pub const DOCTOR_FINDINGS: &[&str] = &[
     "security-policy",
     "signed-commits",
     "tag-protection",
+    "term-denylist",
     "test-report",
     "thread-resolution",
     "token",

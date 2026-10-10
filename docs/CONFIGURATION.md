@@ -22,7 +22,7 @@ Discipline employs a 5-layer configuration hierarchy. With zero configuration, e
 | **2. Repository configuration** | `discipline.toml` | ↑ | Durable, peer-reviewed repository policy. |
 | **3. Inline TOML override** | `--config-override`, `DISCIPLINE_CONFIG_OVERRIDE`, action input `config_override` | ↑ | Per-workflow tuning without modifying files. |
 | **4. Gate switches** | `--enable` / `--disable`, `DISCIPLINE_ENABLE` / `DISCIPLINE_DISABLE`, action inputs `enable` / `disable` | ↑ | Command-line switches (comma- or newline-separated). |
-| **5. Secret denylist** | `DISCIPLINE_HOSTNAME_DENYLIST` (legacy fallback `DOCS_HOSTNAME_DENYLIST`), action input `hostname_denylist` | Highest | Sensitive hostnames that must not appear even in repository config. |
+| **5. Secret denylist** | `DISCIPLINE_HOSTNAME_DENYLIST` (legacy fallback `DOCS_HOSTNAME_DENYLIST`), `DISCIPLINE_TERM_DENYLIST`, action input `hostname_denylist` | Highest | Sensitive hostnames and private terms that must not appear even in repository config. |
 
 Two `check` switches apply after layer 5: `--directive-sources` (`DISCIPLINE_DIRECTIVE_SOURCES`, action input `directive_sources`) replaces `directives.sources`, and `--fail-on-overrides` can only turn `fail_on_overrides` on.
 
@@ -35,7 +35,7 @@ Two `check` switches apply after layer 5: `--directive-sources` (`DISCIPLINE_DIR
 `discipline.toml` is read over the built-in defaults key by key: a key it leaves out keeps its default, and a list it sets replaces the built-in list (`config-integrity` reports the edit). From layer 3 up, values merge onto the file's as TOML under strict typing (F6); a list key the file left out is inserted whole, so it replaces the built-in default:
 - **Tables** merge recursively key by key.
 - **Scalars** replace previous values.
-- **Tightening lists** (`hostname_denylist`, `extra_patterns`, `paths`, `include`, `deny_dependencies`, `manifests`, ...): append-only; a reset marker on them is ignored.
+- **Tightening lists** (`hostname_denylist`, `term_denylist`, `extra_patterns`, `paths`, `include`, `deny_dependencies`, `manifests`, ...): append-only; a reset marker on them is ignored.
 - **Loosening lists** (`exempt_paths`, `allow_patterns`, `allowed_users`, `assert_helper_fns`, `extra_assert_macros`, `allow_dependencies`, `directives.sources`): append by default; a reset clears the lower layers' list first. Reset works only in `--config-override` / `config_override`; in `discipline.toml` the table form fails schema validation.
   ```toml
   [gates.pii]
@@ -270,6 +270,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.pii.scan_pr_body` | boolean | `true` | Whether to scan PR description text |
 | `gates.pii.secrets` | boolean | `true` | Check every text file for fixed-format credentials: private-key headers, AWS, GitHub, Slack and OpenAI/Anthropic tokens, and literal Authorization Bearer values. Matches the token format only; there is no entropy check |
 | `gates.pii.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.pii.term_denylist` | list | `[]` | Words or phrases that must not appear in committed files, paths, commit messages, PR title or branch name; matched as whole tokens, case-insensitively by default, or case-sensitively with prefix `case:` or `case-sensitive:` |
 | `gates.pr-checklist.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.pr-checklist.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.pr-checklist.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |

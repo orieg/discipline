@@ -235,6 +235,7 @@ name = "{project_name}"
 # [gates.pii]
 # allowed_users = ["runner", "user", "username"]
 # hostname_denylist = ["internal.corp"]
+# term_denylist = ["secret-project", "case:InternalCodeName"]
 
 # [gates.time-estimates]
 # allow_patterns = ['^timeout: \d+']

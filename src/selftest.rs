@@ -6370,6 +6370,27 @@ command = "cargo test"
         },
     ),
     (
+        "pii: term denylist respects boundaries, case sensitivity, and phrases",
+        || {
+            let s = PiiGate {
+                term_denylist: vec![
+                    "internal-project".into(),
+                    "case:StrictSecret".into(),
+                    "Super Secret Project".into(),
+                ],
+                ..PiiGate::default()
+            };
+            let rules = pii_rules(&s)?;
+            let hit = |text: &str| rules.iter().any(|r| r.re.is_match(text));
+            Ok(hit("working on internal-project today")
+                && !hit("the internal-projector is running")
+                && hit("release StrictSecret now")
+                && !hit("release strictsecret now")
+                && hit("working on Super   Secret   Project")
+                && !hit("working on Super Other Project"))
+        },
+    ),
+    (
         "tokens: namespaced directive prefix discipline: accepted",
         || {
             let parsed = crate::tokens::parse_directives(

@@ -962,6 +962,10 @@
         },
         "severity": {
           "$ref": "#/$defs/Severity"
+        },
+        "term_denylist": {
+          "$ref": "#/$defs/StringListOrReset",
+          "description": "Words or phrases that must not appear in committed files, paths, commit messages, PR title or branch name; matched as whole tokens, case-insensitively by default, or case-sensitively with prefix `case:` or `case-sensitive:`"
         }
       },
       "type": "object"

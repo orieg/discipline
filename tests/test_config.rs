@@ -834,6 +834,7 @@ const REVIEWED_DYNAMIC_READS: &[(&str, &str, &str)] = &[
     ),
     ("src/guards/mod.rs", "REPLAY_CASE_ENV", NAMED_CONSTANT),
     ("src/cli.rs", "HOSTNAME_DENYLIST_ENV", NAMED_CONSTANT),
+    ("src/cli.rs", "TERM_DENYLIST_ENV", NAMED_CONSTANT),
     (
         "src/guards/command.rs",
         "&env_key",

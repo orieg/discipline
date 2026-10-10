@@ -1016,7 +1016,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it catches:**
   - Local home directory paths: `/Users/<username>/...`, `/home/<username>/...`, `C:\Users\<username>\...`.
   - Private IPv4 LAN addresses: `10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`.
-  - Whole-token matches of denylisted internal hostnames.
+  - Whole-token matches of denylisted internal hostnames (`hostname_denylist`) and private terms (`term_denylist`, with optional `case:` / `case-sensitive:` prefix or multi-token phrases), scanned across file contents, added/renamed paths, commit messages, PR title, and branch name. Matches are never echoed in reports or logs.
   - With `secrets` (on by default): fixed-format credentials in every text file, from the one token table `shell-secrets` shares (`src/guards/token_formats.rs`). The report names the file, the line and the token class; the matched value is never echoed in any output format. The classes:
     - private-key headers (`-----BEGIN [<label> ]PRIVATE KEY-----`, including `PGP PRIVATE KEY BLOCK`);
     - AWS access key ids (`AKIA`, `ASIA`, `ABIA`, `ACCA` plus 16 characters);
@@ -1046,7 +1046,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Binary files (non-text).
   *(Note: Other test code is explicitly scanned because test fixtures are where paths and IPs frequently leak. Self-referential fixtures must use runtime assembly, inline `discipline:allow(pii)`, or `exempt_paths`).*
 - **Lifting directive:** `<!-- discipline:allow(pii) -->` or `docs-lint: allow` on the matching line.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `home_paths`, `lan_ips`, `redact_lan_ips`, `secrets`, `agent_config_refs`, `agent_config_standard_paths`, `allowed_users`, `hostname_denylist`, `extra_patterns`, `allow_patterns`, `scan_pr_body`, `diff_only`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `home_paths`, `lan_ips`, `redact_lan_ips`, `secrets`, `agent_config_refs`, `agent_config_standard_paths`, `allowed_users`, `hostname_denylist`, `term_denylist`, `extra_patterns`, `allow_patterns`, `scan_pr_body`, `diff_only`.
 
 #### `agent-scratch`
 - **Rule:** Agent transcripts, session files, and scratch artifacts must never be tracked in git.
@@ -1311,7 +1311,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Removing `ci_skip_severity` where it was above the gate's `severity`, and removing or repointing `test-floor`'s `test_report`, `base_report` or `head_report`.
   - Removing an optional key whose absence reads looser than the value removed: `max_noise_cv` (absent means no noise check), and a gate's `allow_hidden = false` when `[directives] allow_hidden = true` (the gate then inherits it). Removing `noise_margin_pct` is not one: absent means 0.
   - Growing loosening lists (`exempt_paths`, `allowed_users`, `allow_patterns`, `assert_helper_fns`, `allowed_suppressions`).
-  - Shrinking tightening lists (`paths`, `include`, `hostname_denylist`, `workflows`, `forbidden_paths`, `deny_dependencies`), and emptying an allow-list (`allow_dependencies`, `allowed_paths`).
+  - Shrinking tightening lists (`paths`, `include`, `hostname_denylist`, `term_denylist`, `workflows`, `forbidden_paths`, `deny_dependencies`), and emptying an allow-list (`allow_dependencies`, `allowed_paths`).
   - Removing or editing an entry of a list of tables (`groups`, `rules`, `commands`, `citation_measurement_jobs`). An entry of `groups`, `rules` or `commands` is matched across base and head by its identity, and an entry whose only edits tighten it is not a loss:
 
     | Option | Identity | Stricter edits | Every other field |
