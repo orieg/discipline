@@ -404,26 +404,26 @@ pub fn standard_normal_quantile(p: f64) -> Result<f64> {
         bail!("probability p must be strictly between 0 and 1, got {p}");
     }
 
-    // Exact constants for common statistical critical values
-    if (p - 0.975).abs() < 1e-6 {
+    // Exact pinned IEEE-754 constants for canonical statistical critical values
+    if p == 0.975 {
         return Ok(1.959_963_984_540_054);
-    } else if (p - 0.025).abs() < 1e-6 {
+    } else if p == 0.025 {
         return Ok(-1.959_963_984_540_054);
-    } else if (p - 0.995).abs() < 1e-6 {
+    } else if p == 0.995 {
         return Ok(2.575_829_303_548_900_4);
-    } else if (p - 0.005).abs() < 1e-6 {
+    } else if p == 0.005 {
         return Ok(-2.575_829_303_548_900_4);
-    } else if (p - 0.95).abs() < 1e-6 {
+    } else if p == 0.95 {
         return Ok(1.644_853_626_951_472_2);
-    } else if (p - 0.05).abs() < 1e-6 {
+    } else if p == 0.05 {
         return Ok(-1.644_853_626_951_472_2);
-    } else if (p - 0.80).abs() < 1e-6 {
+    } else if p == 0.80 {
         return Ok(0.841_621_233_572_914_3);
-    } else if (p - 0.20).abs() < 1e-6 {
+    } else if p == 0.20 {
         return Ok(-0.841_621_233_572_914_3);
-    } else if (p - 0.90).abs() < 1e-6 {
+    } else if p == 0.90 {
         return Ok(1.281_551_565_544_600_4);
-    } else if (p - 0.10).abs() < 1e-6 {
+    } else if p == 0.10 {
         return Ok(-1.281_551_565_544_600_4);
     }
 
@@ -581,6 +581,13 @@ pub fn minimum_detectable_difference(
 
     let disc = (b * b - 4.0 * a * c).max(0.0);
     let delta = (-b + disc.sqrt()) / (2.0 * a);
+
+    if p1 + delta > 1.0 {
+        bail!(
+            "statistical power {power} is unachievable for binomial proportion: minimum detectable difference {delta:.4} requires p2 = {p2:.4} > 1.0",
+            p2 = p1 + delta
+        );
+    }
 
     Ok(delta)
 }

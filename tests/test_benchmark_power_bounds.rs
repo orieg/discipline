@@ -126,4 +126,7 @@ fn test_sample_size_and_mdd_invalid_inputs_fail_closed() {
     assert!(minimum_detectable_difference(100, 100, 0.6, 1.0, 0.8).is_err());
     assert!(minimum_detectable_difference(100, 100, 0.6, 0.95, 0.0).is_err());
     assert!(minimum_detectable_difference(100, 100, 0.6, 0.95, 1.0).is_err());
+
+    // Power unachievable when p1 + delta > 1.0
+    assert!(minimum_detectable_difference(10, 10, 0.98, 0.95, 0.99).is_err());
 }
