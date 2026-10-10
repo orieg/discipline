@@ -30,6 +30,11 @@ pub struct FunctionFacts {
     pub shape: BodyShape,
     /// A test function or a test-file member: judged by the test gates, not here.
     pub is_test: bool,
+    /// The enclosing class, struct or trait name, if inside one.
+    pub type_name: Option<String>,
+    /// AST-level carve-out for equality methods: test-double in test path, mock framework
+    /// stub, or generated equals (dataclass, record, Lombok, derived PartialEq).
+    pub equality_carved_out: bool,
 }
 
 /// Per-language description of function nodes.
@@ -129,13 +134,166 @@ fn describe<'t>(
         _ => body,
     };
     let shape = classify_body(body, src, spec);
+    let is_test = (spec.is_test)(node, anc, src, path);
+    let (type_name, equality_carved_out) = if is_equality_name(&name) {
+        let type_info = enclosing_type(node, anc, src);
+        let carved = if is_constant_true_shape(&shape) {
+            check_equality_carved_out(node, type_info.as_ref(), is_test, anc, src, path)
+        } else {
+            false
+        };
+        (type_info.map(|(n, _)| n), carved)
+    } else {
+        (None, false)
+    };
     Some(FunctionFacts {
         name,
         line: node.start_position().row + 1,
         end_line: node.end_position().row + 1,
         shape,
-        is_test: (spec.is_test)(node, anc, src, path),
+        is_test,
+        type_name,
+        equality_carved_out,
     })
+}
+
+fn enclosing_type<'t>(node: Node<'t>, anc: &Ancestry<'t>, src: &str) -> Option<(String, Node<'t>)> {
+    let mut curr = node;
+    while let Some(p) = anc.parent(curr) {
+        match p.kind() {
+            "class_definition" | "class_declaration" | "record_declaration" | "struct_item"
+            | "enum_item" | "impl_item" | "struct_specifier" | "class_specifier"
+            | "object_definition" => {
+                let name = p
+                    .child_by_field_name("name")
+                    .or_else(|| p.child_by_field_name("type"))
+                    .map(|n| text(n, src).trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| {
+                        let mut cursor = p.walk();
+                        let found = p
+                            .named_children(&mut cursor)
+                            .find(|c| c.kind() == "type_identifier" || c.kind() == "identifier")
+                            .map(|n| text(n, src).trim().to_string());
+                        found
+                    });
+                return name.map(|n| (n, p));
+            }
+            _ => curr = p,
+        }
+    }
+    None
+}
+
+fn is_test_double_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.contains("stub")
+        || lower.contains("fake")
+        || lower.contains("mock")
+        || lower.contains("dummy")
+        || lower.contains("double")
+        || lower.contains("spy")
+}
+
+fn has_mock_framework_markers(src: &str) -> bool {
+    src.contains("unittest.mock")
+        || src.contains("pytest_mock")
+        || src.contains("from mock import")
+        || src.contains("import mock")
+        || src.contains("org.mockito")
+        || src.contains("mockall")
+        || src.contains("mockito::")
+        || src.contains("gomock")
+}
+
+fn check_equality_carved_out<'t>(
+    node: Node<'t>,
+    type_info: Option<&(String, Node<'t>)>,
+    is_test: bool,
+    anc: &Ancestry<'t>,
+    src: &str,
+    path: &str,
+) -> bool {
+    let type_name = type_info.map(|(n, _)| n.as_str()).unwrap_or("");
+    let parent_node = type_info.map(|(_, p)| *p);
+
+    // 1. Test-double carve-out in test paths:
+    if (is_test || test_path(path)) && is_test_double_name(type_name) {
+        return true;
+    }
+
+    // 2. Mock framework stubs (AST-level imports, base classes, decorators):
+    if let Some(p) = parent_node {
+        if let Some(bases) = p.child_by_field_name("superclasses") {
+            let b_text = text(bases, src);
+            if b_text.contains("Mock")
+                || b_text.contains("MagicMock")
+                || b_text.contains("AsyncMock")
+            {
+                return true;
+            }
+        }
+    }
+    if has_mock_framework_markers(src) && (is_test || is_test_double_name(type_name)) {
+        return true;
+    }
+
+    // 3. Generated equality markers:
+    if let Some(p) = parent_node {
+        if p.kind() == "record_declaration" {
+            return true;
+        }
+        if let Some(bases) = p.child_by_field_name("superclasses") {
+            let b_text = text(bases, src);
+            if b_text.contains("BaseModel") {
+                return true;
+            }
+        }
+        if let Some(above) = anc.parent(p) {
+            if above.kind() == "decorated_definition" {
+                let above_text = text(above, src);
+                if above_text.contains("@dataclass")
+                    || above_text.contains("@attrs.define")
+                    || above_text.contains("@attr.s")
+                    || above_text.contains("@attr.define")
+                    || above_text.contains("@pydantic")
+                {
+                    return true;
+                }
+            }
+        }
+        let p_text = text(p, src);
+        if p_text.contains("@EqualsAndHashCode")
+            || p_text.contains("@Data")
+            || p_text.contains("@Value")
+            || p_text.contains("@Generated")
+            || p_text.contains("#[automatically_derived]")
+            || (p_text.contains("#[derive(") && p_text.contains("PartialEq"))
+        {
+            return true;
+        }
+        if let Some(modifiers) = p.child_by_field_name("modifiers") {
+            let mod_text = text(modifiers, src);
+            if mod_text.contains("data") || mod_text.contains("case") {
+                return true;
+            }
+        }
+    }
+
+    if let Some(above) = anc.parent(node) {
+        if above.kind() == "decorated_definition" {
+            let above_text = text(above, src);
+            if above_text.contains("@generated") || above_text.contains("@Generated") {
+                return true;
+            }
+        }
+    }
+    let fn_text = text(node, src);
+    if fn_text.contains("#[automatically_derived]") || fn_text.contains("@Generated") {
+        return true;
+    }
+
+    false
 }
 
 /// C and C++ name a function through its declarator: `static int *f(int a)` is a
@@ -215,6 +373,13 @@ pub fn classify_body(body: Node, src: &str, spec: &FunctionSpec) -> BodyShape {
                 {
                     BodyShape::Stub(marker)
                 }
+                Some(BodyShape::Trivial(t))
+                    if stmts[..stmts.len() - 1]
+                        .iter()
+                        .all(|st| super::handlers::is_logging_statement(text(*st, src))) =>
+                {
+                    BodyShape::Trivial(t)
+                }
                 _ => BodyShape::Substantive,
             }
         }
@@ -258,6 +423,40 @@ const NOT_IMPLEMENTED_WORDS: &[&str] = &[
     "tbd",
     "stub",
 ];
+
+/// Whether `name` names an equality method (`__eq__`, `eq`, `equals`, `Equals`, `operator==`, `==`).
+pub fn is_equality_name(name: &str) -> bool {
+    matches!(
+        name,
+        "__eq__" | "eq" | "equals" | "Equals" | "operator==" | "=="
+    ) || name.ends_with("::eq")
+        || name.ends_with("::operator==")
+        || name.ends_with(".equals")
+        || name.ends_with(".Equals")
+}
+
+/// Whether `shape` represents a whole-body constant `true` return.
+pub fn is_constant_true_shape(shape: &BodyShape) -> bool {
+    let BodyShape::Trivial(s) = shape else {
+        return false;
+    };
+    let s = s.trim().trim_end_matches(';').trim();
+    if s == "true" || s == "True" || s == "YES" {
+        return true;
+    }
+    if let Some(rest) = s.strip_prefix("return") {
+        let rest = rest.trim();
+        let unparenthesized = rest.trim_start_matches('(').trim_end_matches(')').trim();
+        if unparenthesized == "true"
+            || unparenthesized == "True"
+            || unparenthesized == "YES"
+            || unparenthesized == "Boolean.TRUE"
+        {
+            return true;
+        }
+    }
+    false
+}
 
 fn strip_semicolon(t: &str) -> &str {
     t.trim().trim_end_matches(';').trim()

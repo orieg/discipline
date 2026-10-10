@@ -195,6 +195,7 @@ findings! {
     // stub-bodies
     STUB_BODY_ADDED = ["stub-bodies"], "stub-body-added", "Stub Body Added", Same;
     BODY_REPLACED_BY_STUB = ["stub-bodies"], "body-replaced-by-stub", "Function Body Replaced By Stub", Same;
+    EQUALITY_MADE_CONSTANT = ["stub-bodies"], "equality-made-constant", "Equality Method Made Constant", Same;
 
     // harness-tampering
     TEST_MAIN_RESULT_DISCARDED = ["harness-tampering"], "test-main-result-discarded", "Go TestMain Discards The Test Result", Same;

@@ -26,6 +26,7 @@ pub const GATE: &str = "stub-bodies";
 pub struct Finding {
     pub kind: &'static crate::findings::FindingKind,
     pub name: String,
+    pub type_name: Option<String>,
     pub line: usize,
     pub what: String,
 }
@@ -49,7 +50,8 @@ pub fn judge(base: &[FunctionFacts], head: &[FunctionFacts]) -> Vec<Finding> {
     let mut taken: HashMap<&str, usize> = HashMap::new();
     let mut found = Vec::new();
     for h in head {
-        if h.is_test {
+        let is_eq = crate::ast::functions::is_equality_name(&h.name);
+        if h.is_test && !is_eq {
             continue;
         }
         let idx = taken.entry(h.name.as_str()).or_default();
@@ -57,20 +59,60 @@ pub fn judge(base: &[FunctionFacts], head: &[FunctionFacts]) -> Vec<Finding> {
         *idx += 1;
         match b {
             None => {
-                if let BodyShape::Stub(m) = &h.shape {
+                if is_eq
+                    && crate::ast::functions::is_constant_true_shape(&h.shape)
+                    && !h.equality_carved_out
+                {
                     found.push(Finding {
-                        kind: &crate::findings::STUB_BODY_ADDED,
+                        kind: &crate::findings::EQUALITY_MADE_CONSTANT,
                         name: h.name.clone(),
+                        type_name: h.type_name.clone(),
                         line: h.line,
-                        what: format!("`{}` is added with the body `{m}` and nothing else", h.name),
+                        what: format!(
+                            "`{}` is an equality method added returning constant `true`",
+                            h.name
+                        ),
                     });
+                } else if let BodyShape::Stub(m) = &h.shape {
+                    if !h.is_test {
+                        found.push(Finding {
+                            kind: &crate::findings::STUB_BODY_ADDED,
+                            name: h.name.clone(),
+                            type_name: h.type_name.clone(),
+                            line: h.line,
+                            what: format!(
+                                "`{}` is added with the body `{m}` and nothing else",
+                                h.name
+                            ),
+                        });
+                    }
                 }
             }
             Some(b) => {
-                if b.shape == BodyShape::Substantive && h.shape != BodyShape::Substantive {
+                if is_eq
+                    && crate::ast::functions::is_constant_true_shape(&h.shape)
+                    && !h.equality_carved_out
+                {
+                    if !crate::ast::functions::is_constant_true_shape(&b.shape) {
+                        found.push(Finding {
+                            kind: &crate::findings::EQUALITY_MADE_CONSTANT,
+                            name: h.name.clone(),
+                            type_name: h.type_name.clone(),
+                            line: h.line,
+                            what: format!(
+                                "`{}` is an equality method that now returns constant `true`",
+                                h.name
+                            ),
+                        });
+                    }
+                } else if b.shape == BodyShape::Substantive
+                    && h.shape != BodyShape::Substantive
+                    && !h.is_test
+                {
                     found.push(Finding {
                         kind: &crate::findings::BODY_REPLACED_BY_STUB,
                         name: h.name.clone(),
+                        type_name: h.type_name.clone(),
                         line: h.line,
                         what: format!(
                             "`{}` had a body on the base side and now has {}",
@@ -150,22 +192,40 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
                 }
             }
         }
-        out.examined += head.functions.iter().filter(|f| !f.is_test).count();
+        out.examined += head
+            .functions
+            .iter()
+            .filter(|f| !f.is_test || crate::ast::functions::is_equality_name(&f.name))
+            .count();
         for f in judge(&base, &head.functions) {
             let lift = |subject: &str| ctx.find_override(GATE, f.kind, tokens::ALLOW_STUB, subject);
             let ov = lift(&f.name)
+                .or_else(|| f.type_name.as_deref().and_then(lift))
                 .or_else(|| lift(&file.path))
                 .or_else(|| file.path.rsplit('/').next().and_then(lift));
+            let severity = if f.kind == &crate::findings::EQUALITY_MADE_CONSTANT {
+                settings.severity().capped_at_warning()
+            } else {
+                settings.severity()
+            };
+            let fix = if f.kind == &crate::findings::EQUALITY_MADE_CONSTANT {
+                format!(
+                    "Implement a real equality comparison, or justify the marker type on its own line in the PR body or a commit message: `allow-stub: {} <reason>`.",
+                    f.type_name.as_deref().unwrap_or(&f.name)
+                )
+            } else {
+                format!(
+                    "Implement it, or justify the stub on its own line in the PR body or a commit message: `allow-stub: {} <reason>`.",
+                    f.name
+                )
+            };
             out.lift_or_push(
                 ov,
-                ctx.overridable(settings.severity()),
+                ctx.overridable(severity),
                 f.kind,
                 (Some(&file.path), Some(f.line)),
                 format!("{} in `{}`.", f.what, file.path),
-                &format!(
-                    "Implement it, or justify the stub on its own line in the PR body or a commit message: `allow-stub: {} <reason>`.",
-                    f.name
-                ),
+                &fix,
             );
         }
     }
@@ -189,6 +249,8 @@ mod tests {
             end_line: line,
             shape,
             is_test,
+            type_name: None,
+            equality_carved_out: false,
         }
     }
 
@@ -245,5 +307,44 @@ mod tests {
             f("m", 30, BodyShape::Substantive, false),
         ];
         assert_eq!(judge(&base, &swapped).len(), 1);
+    }
+
+    #[test]
+    fn added_equality_returning_true_is_reported_and_carved_out_or_other_trivial_is_not() {
+        let mut carved = f("__eq__", 1, BodyShape::Trivial("return True".into()), false);
+        carved.equality_carved_out = true;
+
+        let head = vec![
+            f("__eq__", 2, BodyShape::Trivial("return True".into()), false),
+            carved,
+            f(
+                "__eq__",
+                3,
+                BodyShape::Trivial("return False".into()),
+                false,
+            ),
+            f("__ne__", 4, BodyShape::Trivial("return True".into()), false),
+            f("other", 5, BodyShape::Trivial("return True".into()), false),
+        ];
+        let got = judge(&[], &head);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].kind.title, "Equality Method Made Constant");
+        assert_eq!(got[0].line, 2);
+    }
+
+    #[test]
+    fn changed_equality_made_constant_is_reported() {
+        let base = vec![
+            f("__eq__", 1, BodyShape::Substantive, false),
+            f("eq", 5, BodyShape::Trivial("true".into()), false),
+        ];
+        let head = vec![
+            f("__eq__", 1, BodyShape::Trivial("return True".into()), false),
+            f("eq", 5, BodyShape::Trivial("true".into()), false),
+        ];
+        let got = judge(&base, &head);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].kind.title, "Equality Method Made Constant");
+        assert_eq!(got[0].name, "__eq__");
     }
 }
