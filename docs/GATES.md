@@ -153,6 +153,7 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `golden-output/golden-output-changed-without-directive` | Golden Output Changed |
 | `stub-bodies/stub-body-added` | Stub Body Added |
 | `stub-bodies/body-replaced-by-stub` | Function Body Replaced By Stub |
+| `stub-bodies/equality-made-constant` | Equality Method Made Constant |
 | `harness-tampering/test-main-result-discarded` | Go TestMain Discards The Test Result |
 | `harness-tampering/pytest-hook-masks-results` | Pytest Hook Masks Test Results |
 | `harness-tampering/unittest-result-method-replaced` | Unittest Result Method Replaced |
@@ -788,22 +789,27 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it catches:**
   - `Stub Body Added`: a new non-test function whose whole body is a stub marker.
   - `Function Body Replaced By Stub`: a function whose base body was substantive and whose head body is a stub, empty, or a bare constant return (`None`, `return null`, `return nil, nil`).
+  - `Equality Method Made Constant` (`stub-bodies/equality-made-constant`, **`warning` at most**): an added or changed equality method (`__eq__`, `eq`, `equals`, `Equals`, `operator==`, `==`) whose body returns constant `true` (including preceded only by logging statements, comments, or docstrings).
+    - **Carve-outs:** Test doubles in test paths (classes named `Stub*`, `Fake*`, `Mock*`, `Dummy*`, `Double*`, `Spy*`); mock framework stubs (subclassing or importing `unittest.mock`, `MagicMock`, `pytest_mock`, `mockito`, `mockall`, `gomock`); and generated equality markers (`@dataclass`, `BaseModel`, `@EqualsAndHashCode`, Java `record`, `#[derive(PartialEq)]`, `#[automatically_derived]`).
 - **Failing diff (rejected):**
   ```diff
   - pub fn parse(s: &str) -> Option<u32> { s.trim().parse().ok() }
   + pub fn parse(s: &str) -> Option<u32> { None }
   + pub fn validate(s: &str) -> bool { todo!() }
+  + def __eq__(self, other): return True
   ```
 - **Passing commit / PR body (accepted):**
   ```text
   allow-stub: validate schema lands with the next migration
+  allow-stub: WildcardMatcher represents universal equality by design
   ```
 - **What it does NOT catch:**
-  - An added empty or constant-returning function (`fn noop() {}`, `return null`): a no-op is a legitimate shape for a new function; only a marker that says "not implemented" is reported when added.
-  - A stub padded with a second statement (a log line, an assignment), or a body that special-cases the inputs its tests use: mutation presets of the [`command`](#command) gate (`cargo-mutants`, which is diff-scoped, `mutmut`, `stryker`, `pit`) are the control for that class (see also `discipline init` and `doctor`).
-  - Test functions, `#[cfg(test)]` modules, abstract and overload members, Protocol / interface declarations, `.pyi` stubs, classes deriving from `abc.ABC`, and a base-class method that a subclass in the same file overrides (the stub is the contract, not an unimplemented function). Files under `[tests] paths` (every pack) and functions named in `[tests] functions` (Python and Rust packs only).
+  - An added empty or constant-returning function (`fn noop() {}`, `return null`), unless it is an equality method returning constant `true`: a no-op is a legitimate shape for a new function; only a marker that says "not implemented" is reported when added.
+  - A stub padded with a second statement (a log line, an assignment), or a body that special-cases the inputs its tests use (equality methods returning constant `true` with logging statements are detected; otherwise mutation presets are the control): mutation presets of the [`command`](#command) gate (`cargo-mutants`, which is diff-scoped, `mutmut`, `stryker`, `pit`) are the control for that class (see also `discipline init` and `doctor`).
+  - Test functions, `#[cfg(test)]` modules, abstract and overload members, Protocol / interface declarations, `.pyi` stubs, classes deriving from `abc.ABC`, and a base-class method that a subclass in the same file overrides (the stub is the contract, not an unimplemented function). Files under `[tests] paths` (every pack) and functions named in `[tests] functions` (Python and Rust packs only). Test-double equality in test scope (`Stub*`, `Fake*`, `Mock*`) and mock framework subclasses are carved out.
   - A body changed for the worse while staying substantive.
-- **Lifting directive:** `allow-stub: <function-name-or-path> <reason>`. A file path lifts every finding in that file.
+  - Field comparisons, delegating inequality (`!=` / `__ne__`), and near-constant residual forms (`x = True; return x`, `return (a == b) or True`).
+- **Lifting directive:** `allow-stub: <function-name-or-type-or-path> <reason>`. A type name lifts equality method findings for that type; a file path lifts every finding in that file.
 - **Default:** on, `error`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`.
 

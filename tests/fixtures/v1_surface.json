@@ -1365,6 +1365,7 @@
       "shell-secrets/private-key-block",
       "shell-secrets/slack-token",
       "stub-bodies/body-replaced-by-stub",
+      "stub-bodies/equality-made-constant",
       "stub-bodies/stub-body-added",
       "suppression-delta/suppression-added",
       "test-budget/fuzz-target-deleted",
