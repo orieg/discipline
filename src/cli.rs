@@ -311,6 +311,7 @@ pub enum HookEvent {
 }
 
 #[derive(Args, Debug)]
+#[command(group(clap::ArgGroup::new("force_prereq").args(["upgrade", "enforce"])))]
 pub struct HookInstallArgs {
     /// The agent to configure
     #[arg(long, value_enum)]
@@ -321,8 +322,12 @@ pub struct HookInstallArgs {
     pub user: bool,
 
     /// Write the hook commands in observe mode (hook run --observe): the agent is never blocked while a hook is rolled out
-    #[arg(long)]
+    #[arg(long, conflicts_with = "enforce")]
     pub observe: bool,
+
+    /// Write the hook commands in enforcing mode: rewrites a file an earlier release generated in observe mode to enforcing mode (refuses an edited file without --force)
+    #[arg(long, conflicts_with = "observe")]
+    pub enforce: bool,
 
     /// Also write .github/workflows/copilot-setup-steps.yml, which installs discipline for Copilot cloud agent (copilot only)
     #[arg(long, conflicts_with = "user")]
@@ -331,7 +336,7 @@ pub struct HookInstallArgs {
     /// `Written by \`discipline hook install\`` header (the Claude Code bootstrap, the Copilot
     /// setup step, the OpenCode plugin) whose digest line matches its content, or a JSON hook
     /// file holding only the entries a release writes. A hook file keeps its mode (observe or
-    /// enforcing; --observe can only turn observe mode on) and a JSON file its longer check
+    /// enforcing; --observe can only turn observe mode on; --enforce switches to enforcing) and a JSON file its longer check
     /// timeout. Any other file is left as it is, with the difference printed and exit 1: one
     /// edited after it was written, one an earlier release wrote without a digest, and a JSON
     /// file with hooks or settings of its own whose discipline entries differ (see --force).
@@ -339,11 +344,11 @@ pub struct HookInstallArgs {
     #[arg(long)]
     pub upgrade: bool,
 
-    /// With --upgrade, also rewrite a file that cannot be told from an edited one, and print
+    /// With --upgrade or --enforce, also rewrite a file that cannot be told from an edited one, and print
     /// what was discarded. In a JSON hook file with hooks or settings of its own, only the
     /// discipline entries are replaced. A bootstrap pinned with --pin-sums is still never
     /// replaced by an unpinned one
-    #[arg(long, requires = "upgrade")]
+    #[arg(long, requires = "force_prereq")]
     pub force: bool,
 
     /// Seconds the agent gives each check before killing it (agy, qwen, copilot; default: agy 300, the others 120). Raise it on a machine where a check can run long

@@ -224,7 +224,7 @@ fn a_plain_install_on_a_plugin_in_the_other_mode_names_both_modes() {
             .stdout
             .contains("is in observe mode and this command asked for enforcing mode")
             && plain.stdout.contains("it was not changed")
-            && plain.stdout.contains("delete"),
+            && plain.stdout.contains("--enforce"),
         "{}",
         plain.stdout
     );
