@@ -1766,6 +1766,11 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
       <td>Hostnames the pii gate must reject (comma or newline separated). Pass a secret; matches are never echoed.</td>
     </tr>
     <tr>
+      <td class="gate-id">term_denylist</td>
+      <td><em>(none)</em></td>
+      <td>Words or phrases the pii gate must reject (comma or newline separated). Pass a secret; matches are never echoed.</td>
+    </tr>
+    <tr>
       <td class="gate-id">fail_on_warnings</td>
       <td><code>false</code></td>
       <td>Treat warnings as failures.</td>

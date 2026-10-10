@@ -1762,3 +1762,27 @@ fn doctor_reports_hook_mode_truthfully() {
         .contains("no check or stop entry"));
     std::fs::remove_file(repo.path().join(".claude/settings.json")).unwrap();
 }
+
+#[test]
+fn doctor_warns_when_public_repo_has_committed_term_denylist() {
+    let api = github_api(GOOD_RULES);
+    let repo = protected_repo();
+    repo.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}\n[gates.pii]\nterm_denylist = [\"secret-term\"]\n"),
+    );
+    repo.commit("config: add term_denylist");
+
+    let run = doctor_json(&repo, &api);
+    let v: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    let findings = v["findings"].as_array().unwrap();
+    let term_finding = findings
+        .iter()
+        .find(|f| f["id"] == "term-denylist")
+        .expect("must emit term-denylist finding");
+    assert_eq!(term_finding["status"], "warn");
+    assert!(term_finding["summary"]
+        .as_str()
+        .unwrap()
+        .contains("public repository with committed `term_denylist`"));
+}

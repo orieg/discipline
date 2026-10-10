@@ -347,6 +347,68 @@ pub fn run(input: &DoctorInput) -> Report {
                             &rp.agent_logins,
                         ));
                     }
+                    let visibility = match forge.kind {
+                        ForgeKind::GitHub | ForgeKind::Gitea | ForgeKind::Forgejo => input
+                            .api
+                            .fetch(forge, &format!("repos/{}", forge.repo))
+                            .ok()
+                            .and_then(|v| {
+                                v.get("visibility")
+                                    .and_then(|s| s.as_str())
+                                    .map(str::to_string)
+                                    .or_else(|| {
+                                        v.get("private").and_then(|p| p.as_bool()).map(|p| {
+                                            if p {
+                                                "private".to_string()
+                                            } else {
+                                                "public".to_string()
+                                            }
+                                        })
+                                    })
+                            }),
+                        ForgeKind::GitLab => {
+                            let id = crate::forge::gitlab_project_id(&forge.repo);
+                            input
+                                .api
+                                .fetch(forge, &format!("projects/{id}"))
+                                .ok()
+                                .and_then(|v| {
+                                    v.get("visibility")
+                                        .and_then(|s| s.as_str())
+                                        .map(str::to_string)
+                                })
+                        }
+                    };
+
+                    let has_terms = repo_config
+                        .as_ref()
+                        .map(|c| !c.gates.pii.term_denylist.is_empty())
+                        .unwrap_or(false);
+
+                    findings.push(match (visibility.as_deref(), has_terms) {
+                        (Some("public"), true) => Finding::new(
+                            "term-denylist",
+                            Status::Warn,
+                            "public repository with committed `term_denylist` in discipline.toml: the list of private terms is exposed to anyone who can view the repository",
+                        )
+                        .fix("Move private terms to DISCIPLINE_TERM_DENYLIST in CI secrets or action inputs so the denylist itself is not public."),
+                        (Some(vis), true) => Finding::new(
+                            "term-denylist",
+                            Status::Pass,
+                            format!("{vis} repository: committed `term_denylist` is not exposed to the public"),
+                        ),
+                        (None, true) => Finding::new(
+                            "term-denylist",
+                            Status::Info,
+                            "`term_denylist` is configured in discipline.toml; repository visibility could not be verified",
+                        )
+                        .fix("Ensure the repository is private, or pass terms via DISCIPLINE_TERM_DENYLIST in CI secrets."),
+                        _ => Finding::new(
+                            "term-denylist",
+                            Status::Pass,
+                            "no `term_denylist` committed in discipline.toml (pass private terms through DISCIPLINE_TERM_DENYLIST in CI secrets)",
+                        ),
+                    });
                 }
             }
         }

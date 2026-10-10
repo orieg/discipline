@@ -137,6 +137,38 @@ pub fn pii_rules(settings: &PiiGate) -> Result<Vec<PiiRule>> {
             token_class: None,
         });
     }
+    for term in &settings.term_denylist {
+        let term = term.trim();
+        if term.is_empty() {
+            continue;
+        }
+        let (case_sensitive, clean_term) = if let Some(t) = term.strip_prefix("case-sensitive:") {
+            (true, t.trim())
+        } else if let Some(t) = term.strip_prefix("case:") {
+            (true, t.trim())
+        } else {
+            (false, term)
+        };
+        if clean_term.is_empty() {
+            continue;
+        }
+        let words: Vec<&str> = clean_term.split_whitespace().collect();
+        let pattern = words
+            .iter()
+            .map(|w| regex::escape(w))
+            .collect::<Vec<_>>()
+            .join(r"\s+");
+        let flags = if case_sensitive { "" } else { "(?i)" };
+        rules.push(PiiRule {
+            re: Regex::new(&format!(
+                r"{flags}(?:^|[^A-Za-z0-9-]){pattern}(?:$|[^A-Za-z0-9-])"
+            ))?,
+            label: "denylisted term",
+            user_group: false,
+            redact: true,
+            token_class: None,
+        });
+    }
     for p in &settings.extra_patterns {
         rules.push(PiiRule {
             re: Regex::new(p).with_context(|| format!("invalid pii extra_patterns regex `{p}`"))?,
@@ -236,7 +268,9 @@ fn scan_json(opts: &PiiScanOptions<'_>, text: &str, out: &mut GateOutcome) -> bo
 
     for token in tokens {
         for rule in opts.rules {
-            if opts.is_active_config && rule.label == "denylisted hostname" {
+            if opts.is_active_config
+                && (rule.label == "denylisted hostname" || rule.label == "denylisted term")
+            {
                 continue;
             }
             for caps in rule.re.captures_iter(token) {
@@ -293,11 +327,20 @@ fn scan_json(opts: &PiiScanOptions<'_>, text: &str, out: &mut GateOutcome) -> bo
                         (false, s) => format!("{} `{s}`", rule.label),
                         _ => format!("{} (match not echoed)", rule.label),
                     };
+                    let is_denylisted_path = opts.rules.iter().any(|r| {
+                        (r.label == "denylisted hostname" || r.label == "denylisted term")
+                            && r.re.is_match(opts.label)
+                    });
+                    let (rep_file, rep_line) = if is_denylisted_path {
+                        (None, None)
+                    } else {
+                        (Some(opts.label), Some(line_num))
+                    };
                     out.push(
                         opts.settings.severity(),
                         &crate::findings::HOST_OR_PII_LEAK,
-                        Some(opts.label),
-                        Some(line_num),
+                        rep_file,
+                        rep_line,
                         format!("Found a {detail}."),
                         "Replace it with a placeholder such as `<home>` or `<host>`. A line that must \
                          keep it can carry `discipline:allow(pii)` or `docs-lint: allow`.",
@@ -408,7 +451,9 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
                 continue;
             }
             let hit = rules.iter().find_map(|rule| {
-                if active_cfg && rule.label == "denylisted hostname" {
+                if active_cfg
+                    && (rule.label == "denylisted hostname" || rule.label == "denylisted term")
+                {
                     return None;
                 }
                 rule.re.captures_iter(line).find_map(|caps| {
@@ -466,11 +511,20 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
                 (false, Some(m)) => format!("{} `{m}`", rule.label),
                 _ => format!("{} (match not echoed)", rule.label),
             };
+            let is_denylisted_path = rules.iter().any(|r| {
+                (r.label == "denylisted hostname" || r.label == "denylisted term")
+                    && r.re.is_match(label)
+            });
+            let (rep_file, rep_line) = if is_denylisted_path {
+                (None, None)
+            } else {
+                (Some(label), Some(idx + 1))
+            };
             out.push(
                 settings.severity(),
                 &crate::findings::HOST_OR_PII_LEAK,
-                Some(label),
-                Some(idx + 1),
+                rep_file,
+                rep_line,
                 format!("Found a {detail}."),
                 "Replace it with a placeholder such as `<home>` or `<host>`. A line that must \
                  keep it can carry `discipline:allow(pii)` or `docs-lint: allow`.",
@@ -545,6 +599,121 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
         scan(label, text, None, out);
     };
     scan_pr_body(ctx, settings.scan_pr_body, &mut out, &mut scan_body);
+
+    let denylist_rules: Vec<&PiiRule> = rules
+        .iter()
+        .filter(|r| r.label == "denylisted hostname" || r.label == "denylisted term")
+        .collect();
+
+    if !denylist_rules.is_empty() {
+        let changed = ctx.git.changed_files()?;
+        for f in &changed {
+            if f.kind == crate::gitctx::ChangeKind::Added
+                || f.kind == crate::gitctx::ChangeKind::Renamed
+            {
+                if exempt.matches(&f.path) || is_active_config(&f.path) {
+                    continue;
+                }
+                if allowed.iter().any(|re| re.is_match(&f.path)) {
+                    continue;
+                }
+                for rule in &denylist_rules {
+                    if rule.re.is_match(&f.path) {
+                        let source = if f.kind == crate::gitctx::ChangeKind::Renamed {
+                            "path of a renamed file"
+                        } else {
+                            "path of an added file"
+                        };
+                        out.push(
+                            settings.severity(),
+                            &crate::findings::HOST_OR_PII_LEAK,
+                            None,
+                            None,
+                            format!("Found a {} in {source} (match not echoed).", rule.label),
+                            "Rename the file to avoid the denylisted term or hostname.",
+                        );
+                        out.anchor_last(format!("file-path:{}", f.path));
+                        break;
+                    }
+                }
+            }
+        }
+
+        let commits = ctx.git.commit_details().unwrap_or_default();
+        for commit in &commits {
+            let sha7 = &commit.sha[..7.min(commit.sha.len())];
+            if allowed.iter().any(|re| re.is_match(&commit.message)) {
+                continue;
+            }
+            for rule in &denylist_rules {
+                if rule.re.is_match(&commit.message) {
+                    out.push(
+                        settings.severity(),
+                        &crate::findings::HOST_OR_PII_LEAK,
+                        None,
+                        None,
+                        format!(
+                            "Found a {} in commit {sha7} message (match not echoed).",
+                            rule.label
+                        ),
+                        "Rewrite git history (git commit --amend or git rebase -i) to remove the denylisted term or hostname from the commit message.",
+                    );
+                    out.anchor_last(format!("commit:{}", commit.sha));
+                    break;
+                }
+            }
+        }
+
+        if let Some(title) = ctx
+            .pr_title
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        {
+            if !allowed.iter().any(|re| re.is_match(title)) {
+                for rule in &denylist_rules {
+                    if rule.re.is_match(title) {
+                        out.push(
+                            settings.severity(),
+                            &crate::findings::HOST_OR_PII_LEAK,
+                            None,
+                            None,
+                            format!("Found a {} in pull request title (match not echoed).", rule.label),
+                            "Edit the pull request title to remove the denylisted term or hostname.",
+                        );
+                        out.anchor_last("pr-title");
+                        break;
+                    }
+                }
+            }
+        }
+
+        if let Some(branch) = ctx
+            .git
+            .head_branch()
+            .as_deref()
+            .map(str::trim)
+            .filter(|b| !b.is_empty())
+        {
+            if !allowed.iter().any(|re| re.is_match(branch)) {
+                for rule in &denylist_rules {
+                    if rule.re.is_match(branch) {
+                        out.push(
+                            settings.severity(),
+                            &crate::findings::HOST_OR_PII_LEAK,
+                            None,
+                            None,
+                            format!("Found a {} in branch name (match not echoed).", rule.label),
+                            "Rename the branch to remove the denylisted term or hostname.",
+                        );
+                        out.anchor_last("branch");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     Ok(out)
 }
 
@@ -595,6 +764,49 @@ mod tests {
         assert!(!rule_hits(&s, "the buildboxes are idle"));
         assert!(!rule_hits(&s, "my-buildbox-2"));
         assert!(!rule_hits(&PiiGate::default(), "measured on buildbox"));
+    }
+
+    #[test]
+    fn term_denylist_is_whole_token_and_case_insensitive_by_default() {
+        let s = PiiGate {
+            term_denylist: vec!["project".into()],
+            ..PiiGate::default()
+        };
+        assert!(rule_hits(&s, "this is our Project"));
+        assert!(rule_hits(&s, "PROJECT"));
+        assert!(rule_hits(&s, "project"));
+        assert!(!rule_hits(&s, "the projector is on"));
+        assert!(!rule_hits(&s, "subproject"));
+        assert!(!rule_hits(&PiiGate::default(), "this is our Project"));
+    }
+
+    #[test]
+    fn term_denylist_supports_case_sensitive_prefix() {
+        let s = PiiGate {
+            term_denylist: vec!["case:Codename".into(), "case-sensitive:AlphaOne".into()],
+            ..PiiGate::default()
+        };
+        assert!(rule_hits(&s, "launch Codename today"));
+        assert!(!rule_hits(&s, "launch codename today"));
+        assert!(!rule_hits(&s, "launch CODENAME today"));
+
+        assert!(rule_hits(&s, "target is AlphaOne"));
+        assert!(!rule_hits(&s, "target is alphaone"));
+        assert!(!rule_hits(&s, "target is ALPHAONE"));
+    }
+
+    #[test]
+    fn term_denylist_supports_phrase_entries() {
+        let s = PiiGate {
+            term_denylist: vec!["Secret Project".into()],
+            ..PiiGate::default()
+        };
+        assert!(rule_hits(&s, "this is Secret Project"));
+        assert!(rule_hits(&s, "this is secret   project"));
+        assert!(rule_hits(&s, "SECRET PROJECT"));
+        assert!(!rule_hits(&s, "Project Secret"));
+        assert!(!rule_hits(&s, "Secret Other Project"));
+        assert!(!rule_hits(&s, "SecretProject"));
     }
 
     /// One live-format line per fixed-format class, assembled at run time so this file

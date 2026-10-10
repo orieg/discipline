@@ -37,6 +37,10 @@ inputs:
     description: 'Hostnames the pii gate must reject (comma or newline separated). Pass a secret; matches are never echoed.'
     required: false
     default: ''
+  term_denylist:
+    description: 'Words or phrases the pii gate must reject (comma or newline separated). Pass a secret; matches are never echoed.'
+    required: false
+    default: ''
   fail_on_warnings:
     description: 'Treat warnings as failures.'
     required: false
@@ -322,6 +326,7 @@ runs:
         DISCIPLINE_DISABLE: ${{ inputs.disable }}
         DISCIPLINE_CONFIG_OVERRIDE: ${{ inputs.config_override }}
         DISCIPLINE_HOSTNAME_DENYLIST: ${{ inputs.hostname_denylist }}
+        DISCIPLINE_TERM_DENYLIST: ${{ inputs.term_denylist }}
         DISCIPLINE_FAIL_ON_WARNINGS: ${{ inputs.fail_on_warnings == 'true' && 'true' || 'false' }}
         DISCIPLINE_FAIL_ON_OVERRIDES: ${{ inputs.fail_on_overrides == 'true' && 'true' || 'false' }}
         DISCIPLINE_ADVISORY: ${{ inputs.advisory == 'true' && 'true' || 'false' }}

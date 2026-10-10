@@ -1,4 +1,6 @@
-use crate::config::{split_list, DisciplineConfig, Overrides, HOSTNAME_DENYLIST_ENV};
+use crate::config::{
+    split_list, DisciplineConfig, Overrides, HOSTNAME_DENYLIST_ENV, TERM_DENYLIST_ENV,
+};
 use crate::style;
 use anyhow::{bail, Context as _, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -734,6 +736,9 @@ pub fn build_overrides(
         disable: args.disable.iter().flat_map(|s| split_list(s)).collect(),
         hostname_denylist: std::env::var(HOSTNAME_DENYLIST_ENV)
             .or_else(|_| std::env::var("DOCS_HOSTNAME_DENYLIST"))
+            .map(|v| split_list(&v))
+            .unwrap_or_default(),
+        term_denylist: std::env::var(TERM_DENYLIST_ENV)
             .map(|v| split_list(&v))
             .unwrap_or_default(),
         directive_sources: extra_directive_sources,
