@@ -462,10 +462,62 @@ fn copilot_and_agy_tool_call_in_transcript_lets_stop_through() {
 }
 
 #[test]
-fn copilot_and_agy_missing_or_unreadable_transcript_skipped_with_warning() {
+fn copilot_and_agy_missing_or_unreadable_transcript_refused_in_refuse_mode() {
     let repo = repo_with("enabled = true\nmode = \"refuse\"\n");
 
-    // Missing transcriptPath in payload
+    // Missing transcriptPath in payload fails closed
+    for (agent, dir) in [("copilot", "copilot"), ("agy", "agy")] {
+        let payload = recorded(&format!("{dir}/stop.json"), |v| {
+            v.as_object_mut().unwrap().remove("transcriptPath");
+        });
+        let run = hook(&repo, &["--agent", agent], &payload);
+        assert_eq!(run.code, 0, "{agent}: {}", run.stderr);
+        let expected_decision = if agent == "copilot" {
+            "\"decision\":\"block\""
+        } else {
+            "\"decision\":\"continue\""
+        };
+        assert!(
+            run.stdout.contains(expected_decision),
+            "{agent} expected refusal decision in stdout: {}",
+            run.stdout
+        );
+        assert!(
+            run.stdout.contains("no transcript path in stop payload"),
+            "{agent} expected reason in stdout: {}",
+            run.stdout
+        );
+    }
+
+    // Non-existent transcriptPath fails closed
+    for (agent, dir) in [("copilot", "copilot"), ("agy", "agy")] {
+        let payload = recorded(&format!("{dir}/stop.json"), |v| {
+            v["transcriptPath"] = "/path/that/does/not/exist/transcript.json".into();
+        });
+        let run = hook(&repo, &["--agent", agent], &payload);
+        assert_eq!(run.code, 0, "{agent}: {}", run.stderr);
+        let expected_decision = if agent == "copilot" {
+            "\"decision\":\"block\""
+        } else {
+            "\"decision\":\"continue\""
+        };
+        assert!(
+            run.stdout.contains(expected_decision),
+            "{agent} expected refusal decision in stdout: {}",
+            run.stdout
+        );
+        assert!(
+            run.stdout.contains("could not read transcript '/path/that/does/not/exist/transcript.json'"),
+            "{agent} expected reason in stdout: {}",
+            run.stdout
+        );
+    }
+}
+
+#[test]
+fn copilot_and_agy_missing_or_unreadable_transcript_skipped_in_observe_mode() {
+    let repo = repo_with("enabled = true\nmode = \"observe\"\n");
+
     for (agent, dir) in [("copilot", "copilot"), ("agy", "agy")] {
         let payload = recorded(&format!("{dir}/stop.json"), |v| {
             v.as_object_mut().unwrap().remove("transcriptPath");
@@ -477,23 +529,6 @@ fn copilot_and_agy_missing_or_unreadable_transcript_skipped_with_warning() {
         assert!(
             run.stderr
                 .contains("no transcript path in stop payload; premature stop check skipped"),
-            "{agent}: {}",
-            run.stderr
-        );
-    }
-
-    // Non-existent transcriptPath
-    for (agent, dir) in [("copilot", "copilot"), ("agy", "agy")] {
-        let payload = recorded(&format!("{dir}/stop.json"), |v| {
-            v["transcriptPath"] = "/path/that/does/not/exist/transcript.json".into();
-        });
-        let run = hook(&repo, &["--agent", agent], &payload);
-        assert_eq!(run.code, 0, "{agent}: {}", run.stderr);
-        let expected_stdout = if agent == "agy" { "{}\n" } else { "" };
-        assert_eq!(run.stdout, expected_stdout, "{agent}");
-        assert!(
-            run.stderr
-                .contains("could not read transcript '/path/that/does/not/exist/transcript.json'"),
             "{agent}: {}",
             run.stderr
         );

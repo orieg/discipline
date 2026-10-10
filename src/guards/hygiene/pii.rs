@@ -161,7 +161,7 @@ pub fn pii_rules(settings: &PiiGate) -> Result<Vec<PiiRule>> {
         let flags = if case_sensitive { "" } else { "(?i)" };
         rules.push(PiiRule {
             re: Regex::new(&format!(
-                r"{flags}(?:^|[^A-Za-z0-9-]){pattern}(?:$|[^A-Za-z0-9-])"
+                r"{flags}(?:^|[^A-Za-z0-9]){pattern}(?:$|[^A-Za-z0-9])"
             ))?,
             label: "denylisted term",
             user_group: false,
@@ -1095,5 +1095,30 @@ mod tests {
         assert!(out_masked.violations[0]
             .message
             .contains("(match not echoed)"));
+    }
+
+    #[test]
+    fn test_denylisted_term_matches_kebab_case_paths_and_branches() {
+        let settings = PiiGate {
+            term_denylist: vec!["secret".to_string(), "Project Falcon".to_string()],
+            ..Default::default()
+        };
+        let rules = pii_rules(&settings).unwrap();
+        let term_rule = rules.iter().find(|r| r.label == "denylisted term").unwrap();
+
+        // Kebab-case branch names and paths must match
+        assert!(term_rule.re.is_match("feat/my-secret-branch"));
+        assert!(term_rule.re.is_match("src/secret-component.rs"));
+        assert!(term_rule.re.is_match("src/my_secret_token.rs"));
+
+        // Multi-word phrase matching
+        let falcon_rule = rules.iter().filter(|r| r.label == "denylisted term").nth(1).unwrap();
+        assert!(falcon_rule.re.is_match("release/Project Falcon"));
+        assert!(falcon_rule.re.is_match("feat: start Project   Falcon now"));
+
+        // Boundary controls: substring within a larger word must not match
+        assert!(!term_rule.re.is_match("notasecret"));
+        assert!(!term_rule.re.is_match("secrets"));
+        assert!(!term_rule.re.is_match("secretary"));
     }
 }

@@ -59,6 +59,9 @@ pub fn resolve_transcript_file(agent: Agent, path: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Maximum allowed transcript file size (50 MB) to prevent OOM / unbounded reads.
+pub const MAX_TRANSCRIPT_BYTES: u64 = 50 * 1024 * 1024;
+
 /// Reads the final turn from a transcript for `agent`.
 ///
 /// Yields the final assistant message and whether a tool call accompanied or followed it.
@@ -66,6 +69,18 @@ pub fn resolve_transcript_file(agent: Agent, path: &Path) -> Option<PathBuf> {
 pub fn read_final_turn(agent: Agent, path: &Path) -> Result<TurnEnding> {
     let file = resolve_transcript_file(agent, path)
         .ok_or_else(|| anyhow::anyhow!("transcript file '{}' does not exist", path.display()))?;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        bail!("transcript path '{}' is not a regular file", file.display());
+    }
+    if meta.len() > MAX_TRANSCRIPT_BYTES {
+        bail!(
+            "transcript file '{}' exceeds maximum allowed size ({} bytes > {} bytes)",
+            file.display(),
+            meta.len(),
+            MAX_TRANSCRIPT_BYTES
+        );
+    }
     let content = std::fs::read_to_string(&file)?;
     match agent {
         Agent::Copilot => parse_copilot_transcript(&content),
@@ -90,10 +105,17 @@ pub fn parse_copilot_transcript(content: &str) -> Result<TurnEnding> {
     }
 
     // 2. Iterate JSON Lines from the end.
+    let mut last_non_empty = None;
     for line in content.lines().rev() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
+        }
+        if last_non_empty.is_none() {
+            last_non_empty = Some(trimmed);
+            if serde_json::from_str::<Value>(trimmed).is_err() {
+                bail!("final line of transcript is malformed or incomplete JSON");
+            }
         }
         if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
             if val.get("type").and_then(Value::as_str) == Some("assistant.message") {
@@ -136,10 +158,17 @@ pub fn parse_agy_transcript(content: &str) -> Result<TurnEnding> {
     }
 
     // 2. Iterate JSON Lines from the end.
+    let mut last_non_empty = None;
     for line in content.lines().rev() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
+        }
+        if last_non_empty.is_none() {
+            last_non_empty = Some(trimmed);
+            if serde_json::from_str::<Value>(trimmed).is_err() {
+                bail!("final line of transcript is malformed or incomplete JSON");
+            }
         }
         if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
             if val.get("type").and_then(Value::as_str) == Some("PLANNER_RESPONSE") {
