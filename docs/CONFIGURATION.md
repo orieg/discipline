@@ -132,6 +132,13 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.ci-skip-set.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.ci-skip-set.unconditional_jobs` | list | `[]` | Jobs that must never be skipped, whatever their dependencies did |
 | `gates.ci-skip-set.workflow` | string | `".github/workflows/ci.yml"` | Repo-relative path of the workflow whose rollup job supplies the runtime needs context (DISCIPLINE_CI_CONTEXT). Left at the default, the running workflow (GITHUB_WORKFLOW_REF) or the first ci.yml under .github/, .gitea/ or .forgejo/workflows/ is used |
+| `gates.citation-anchors.diff_only` | boolean | `true` | Whether to inspect changed files only rather than the whole tree |
+| `gates.citation-anchors.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.citation-anchors.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.citation-anchors.require_online` | boolean | `false` | Whether offline operation fails closed when verifying tracker titles |
+| `gates.citation-anchors.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.citation-anchors.unanchored_citations` | string | `"warn"` | How unanchored path:line citations are handled |
+| `gates.citation-anchors.verify_tracker_titles` | boolean | `false` | Whether to verify claimed issue or pull request titles via forge API |
 | `gates.citation-metadata.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.citation-metadata.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.citation-metadata.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
@@ -193,6 +200,11 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.error-swallowing.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.error-swallowing.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.error-swallowing.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.gate-command-lint.allow_pipeline_without_pipefail` | boolean | `false` | Whether to permit piped gate commands without explicit pipefail |
+| `gates.gate-command-lint.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.gate-command-lint.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.gate-command-lint.plan_paths` | list | `["plans/**/*.md","docs/plans/**/*.md"]` | Glob patterns of plan files to inspect |
+| `gates.gate-command-lint.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.golden-output.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.golden-output.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.golden-output.paths` | list | *(8 entries)* | Committed golden/snapshot globs whose edits require a directive |
@@ -228,6 +240,11 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.manifest-sync.rules[].manifest` | string | *(required)* | Path to packaging manifest (e.g. package.xml) |
 | `gates.manifest-sync.rules[].watched_paths` | list | *(required)* | Git file globs that must be registered in the manifest |
 | `gates.manifest-sync.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.mechanism-sections.diff_only` | boolean | `true` | Whether to inspect changed files only rather than the whole tree |
+| `gates.mechanism-sections.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.mechanism-sections.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.mechanism-sections.section_headings` | list | `["Mechanism","Root cause","Cause"]` | Section headings designating mechanism or root-cause sections |
+| `gates.mechanism-sections.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.miri.args` | list | `[]` | Additional CLI arguments passed to cargo miri test, one argument per item (ASCII letters, digits and _ . / : = , @ + -). They are executed, so a change under review cannot add or alter them |
 | `gates.miri.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.miri.exempt_paths` | list | `[]` | File path globs exempted from this gate |
@@ -306,9 +323,12 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.sanitizers.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.sanitizers.timeout_seconds` | integer | `300` | Maximum execution time in seconds (default: 300) |
 | `gates.scope-confinement.allowed_paths` | list | `[]` | Glob patterns of paths agents are authorized to modify |
+| `gates.scope-confinement.check_plans` | boolean | `false` | Whether to inspect plan files for planned output paths |
 | `gates.scope-confinement.enabled` | boolean | `false` | Whether this gate is active |
 | `gates.scope-confinement.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.scope-confinement.forbidden_paths` | list | `[]` | Glob patterns of paths agents are strictly forbidden to touch |
+| `gates.scope-confinement.plan_paths` | list | `["plans/**/*.md","docs/plans/**/*.md"]` | Glob patterns of plan files to inspect |
+| `gates.scope-confinement.require_declared_outputs` | boolean | `false` | Whether plan files must declare at least one output path |
 | `gates.scope-confinement.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.shell-secrets.allow_patterns` | list | `[]` | Custom regex patterns exempted from violation |
 | `gates.shell-secrets.diff_only` | boolean | `false` | When true, scans only modified lines in the git diff rather than all tracked files |

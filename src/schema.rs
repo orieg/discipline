@@ -80,6 +80,9 @@ pub fn generate_schema() -> Value {
             "msrv" => "#/$defs/MsrvGate",
             "miri" => "#/$defs/MiriGate",
             "sanitizers" => "#/$defs/SanitizersGate",
+            "gate-command-lint" => "#/$defs/GateCommandLintGate",
+            "mechanism-sections" => "#/$defs/MechanismSectionsGate",
+            "citation-anchors" => "#/$defs/CitationAnchorsGate",
             _ => "#/$defs/BasicGate",
         };
         let desc = gate_info(g.id).map(|info| info.summary).unwrap_or("");
@@ -557,7 +560,10 @@ pub fn generate_schema() -> Value {
             })),
             "ScopeConfinementGate": gate_table(json!({
                 "allowed_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Glob patterns of paths agents are authorized to modify" },
-                "forbidden_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Glob patterns of paths agents are strictly forbidden to touch" }
+                "forbidden_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Glob patterns of paths agents are strictly forbidden to touch" },
+                "check_plans": { "type": "boolean", "description": "Whether to inspect plan files for planned output paths" },
+                "plan_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Glob patterns of plan files to inspect" },
+                "require_declared_outputs": { "type": "boolean", "description": "Whether plan files must declare at least one output path" }
             })),
             "SuppressionDeltaGate": gate_table(json!({
                 "max_increase": { "type": "integer", "description": "Maximum net increase in suppression annotations permitted (default: 0)" },
@@ -580,6 +586,20 @@ pub fn generate_schema() -> Value {
                 "sanitizer": { "type": "string", "description": "Sanitizer name to activate (e.g. \"address\", \"thread\"): a lower-case letter, then lower-case letters, digits and -. It reaches the command that runs, so a change under review cannot alter it" },
                 "canary": { "type": "boolean", "description": "Whether to verify a negative-control race canary before main tests. It selects a command that runs, so a change under review cannot alter it. The canary is checked for ThreadSanitizer's diagnostic: with a sanitizer other than \"thread\" it is a configuration error" },
                 "timeout_seconds": { "type": "integer", "description": "Maximum execution time in seconds (default: 300)" }
+            })),
+            "GateCommandLintGate": gate_table(json!({
+                "plan_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Glob patterns of plan files to inspect" },
+                "allow_pipeline_without_pipefail": { "type": "boolean", "description": "Whether to permit piped gate commands without explicit pipefail" }
+            })),
+            "MechanismSectionsGate": gate_table(json!({
+                "diff_only": { "type": "boolean", "description": "Whether to inspect changed files only rather than the whole tree" },
+                "section_headings": { "$ref": "#/$defs/StringListOrReset", "description": "Section headings designating mechanism or root-cause sections" }
+            })),
+            "CitationAnchorsGate": gate_table(json!({
+                "diff_only": { "type": "boolean", "description": "Whether to inspect changed files only rather than the whole tree" },
+                "unanchored_citations": { "type": "string", "enum": ["ignore", "warn", "reject"], "description": "How unanchored path:line citations are handled" },
+                "verify_tracker_titles": { "type": "boolean", "description": "Whether to verify claimed issue or pull request titles via forge API" },
+                "require_online": { "type": "boolean", "description": "Whether offline operation fails closed when verifying tracker titles" }
             }))
         }
     })

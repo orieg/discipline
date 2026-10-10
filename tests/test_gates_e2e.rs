@@ -7992,7 +7992,7 @@ fn override_record_audit_trail_and_step_outputs() {
     ));
     assert!(
         run.stdout.contains(
-            "gates:  25 passed, 0 failed, 16 disabled, 1 not evaluated (22 items examined)"
+            "gates:  25 passed, 0 failed, 19 disabled, 1 not evaluated (22 items examined)"
         ),
         "{}",
         run.stdout
@@ -8014,7 +8014,7 @@ fn override_record_audit_trail_and_step_outputs() {
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
         step_summary.contains(
-            "**Summary:** 25 passed, 0 failed, 16 disabled, 1 not evaluated (22 items examined)"
+            "**Summary:** 25 passed, 0 failed, 19 disabled, 1 not evaluated (22 items examined)"
         ),
         "{step_summary}"
     );
@@ -19751,4 +19751,180 @@ fn test_floor_test_command_runs_before_resolving_head_report() {
         run.stdout, run.stderr
     );
     assert_eq!(run.titles("test-floor").len(), 0);
+}
+
+// ---- citation-anchors e2e --------------------------------------------------
+
+#[test]
+fn citation_anchors_e2e_controls() {
+    let repo = Repo::new();
+    repo.write("src/lib.rs", "pub fn core_metric() -> usize {\n    42\n}\n");
+    repo.commit("feat: initial metric");
+    let sha = repo.git_output(&["rev-parse", "HEAD"]);
+    let short_sha = &sha[..7];
+
+    repo.write(
+        "discipline.toml",
+        r#"
+[meta]
+version = 1
+name = "repo"
+[gates.citation-anchors]
+enabled = true
+unanchored_citations = "ignore"
+"#,
+    );
+
+    // Negative control: text mismatch
+    repo.write(
+        "docs/plan.md",
+        &format!("# Verification\n\nSee src/lib.rs:2@{short_sha} \"pub fn nonexistent()\"\n"),
+    );
+    repo.commit("docs: add invalid citation");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let codes: Vec<String> = run
+        .violations("citation-anchors")
+        .into_iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(codes, vec!["citation-anchors/text-mismatch"]);
+
+    // Positive control: valid citation
+    repo.write(
+        "docs/plan.md",
+        &format!("# Verification\n\nSee src/lib.rs:2@{short_sha} \"42\"\n"),
+    );
+    repo.commit("docs: fix citation text");
+    let run_pass = repo.check(&[]);
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+    assert!(run_pass.violations("citation-anchors").is_empty());
+}
+
+// ---- gate-command-lint e2e -------------------------------------------------
+
+#[test]
+fn gate_command_lint_e2e_controls() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        r#"
+[meta]
+version = 1
+name = "repo"
+[gates.gate-command-lint]
+enabled = true
+"#,
+    );
+
+    // Negative control: masked pipeline exit in plan gate
+    repo.write(
+        "plans/phase1.md",
+        "# Plan\n\n```bash gate\ncargo test | grep ok\n```\n",
+    );
+    repo.commit("plan: masked gate command");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let codes: Vec<String> = run
+        .violations("gate-command-lint")
+        .into_iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(codes, vec!["gate-command-lint/pipeline-exit-masked"]);
+
+    // Positive control: unmasked gate command
+    repo.write(
+        "plans/phase1.md",
+        "# Plan\n\n```bash gate\ncargo test\n```\n",
+    );
+    repo.commit("plan: valid gate command");
+    let run_pass = repo.check(&[]);
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+    assert!(run_pass.violations("gate-command-lint").is_empty());
+}
+
+// ---- scope-confinement plan checking e2e -----------------------------------
+
+#[test]
+fn scope_confinement_plan_check_e2e_controls() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        r#"
+[meta]
+version = 1
+name = "repo"
+[gates.scope-confinement]
+enabled = true
+forbidden_paths = ["restricted/**"]
+check_plans = true
+"#,
+    );
+
+    // Negative control: planned output in forbidden scope
+    repo.write(
+        "plans/phase1.md",
+        "# Plan\n\nOutputs:\n- `restricted/secret.rs`\n",
+    );
+    repo.commit("plan: write to restricted directory");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let codes: Vec<String> = run
+        .violations("scope-confinement")
+        .into_iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        codes,
+        vec!["scope-confinement/planned-file-in-forbidden-scope"]
+    );
+
+    // Positive control: planned output in allowed scope
+    repo.write("plans/phase1.md", "# Plan\n\nOutputs:\n- `src/safe.rs`\n");
+    repo.commit("plan: write to safe directory");
+    let run_pass = repo.check(&[]);
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+    assert!(run_pass.violations("scope-confinement").is_empty());
+}
+
+// ---- mechanism-sections e2e ------------------------------------------------
+
+#[test]
+fn mechanism_sections_e2e_controls() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        r#"
+[meta]
+version = 1
+name = "repo"
+[gates.mechanism-sections]
+enabled = true
+"#,
+    );
+
+    // Negative control: untagged claim in root cause section
+    repo.write(
+        "docs/incident.md",
+        "# Incident Analysis\n\n## Root cause\n\nThe cache eviction policy caused the spike.\n",
+    );
+    repo.commit("docs: untagged root cause claim");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let codes: Vec<String> = run
+        .violations("mechanism-sections")
+        .into_iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(codes, vec!["mechanism-sections/untagged-mechanism-claim"]);
+
+    // Positive control: tagged claim
+    repo.write(
+        "docs/incident.md",
+        "# Incident Analysis\n\n## Root cause\n\n(inferred) The cache eviction policy caused the spike.\n",
+    );
+    repo.commit("docs: tag root cause claim");
+    let run_pass = repo.check(&[]);
+    assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
+    assert!(run_pass.violations("mechanism-sections").is_empty());
 }

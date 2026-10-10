@@ -979,7 +979,7 @@
       <div class="stat-item">
         <h3>
 <!-- generated:gate-count -->
-42
+45
 <!-- /generated -->
         </h3>
         <p>Fail-Closed Gates</p>
@@ -1357,8 +1357,8 @@ Test `adds`: effective assertions dropped from 2 to 0.
 
     <div class="gate-search-wrapper">
 <!-- generated:gate-search -->
-      <input type="text" id="gate-search" class="gate-search-input" placeholder="Search 42 gates by id, category, language, or rule..." aria-label="Search active gates">
-      <span id="gate-count" class="gate-count">Showing 42 of 42 gates</span>
+      <input type="text" id="gate-search" class="gate-search-input" placeholder="Search 45 gates by id, category, language, or rule..." aria-label="Search active gates">
+      <span id="gate-count" class="gate-count">Showing 45 of 45 gates</span>
 <!-- /generated -->
     </div>
 
@@ -1668,6 +1668,27 @@ Test `adds`: effective assertions dropped from 2 to 0.
             <td><span class="gate-badge badge-lang">Off</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
             <td>version declarations across headers, manifests, and files must remain in lockstep</td>
+          </tr>
+          <tr>
+            <td class="gate-id">gate-command-lint</td>
+            <td>Agent Guard</td>
+            <td><span class="gate-badge badge-lang">Off</span></td>
+            <td><span class="gate-badge badge-lang">markdown, shell</span></td>
+            <td>reject vacuous, masked, or inverted verification commands in plan files</td>
+          </tr>
+          <tr>
+            <td class="gate-id">mechanism-sections</td>
+            <td>Hygiene</td>
+            <td><span class="gate-badge badge-lang">Off</span></td>
+            <td><span class="gate-badge badge-lang">markdown</span></td>
+            <td>require (inferred) or (verified: &lt;target&gt;) evidence tags in root cause sections</td>
+          </tr>
+          <tr>
+            <td class="gate-id">citation-anchors</td>
+            <td>Hygiene</td>
+            <td><span class="gate-badge badge-lang">Off</span></td>
+            <td><span class="gate-badge badge-lang">markdown, any</span></td>
+            <td>verify path:line@sha citations against quoted text and git history</td>
           </tr>
 <!-- /generated -->
         </tbody>

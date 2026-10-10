@@ -240,6 +240,29 @@ findings! {
     // scope-confinement
     FILE_IN_FORBIDDEN_SCOPE = ["scope-confinement"], "file-in-forbidden-scope", "File In Forbidden Scope", Message;
     FILE_OUTSIDE_AUTHORIZED_SCOPE = ["scope-confinement"], "file-outside-authorized-scope", "File Outside Authorized Scope", Message;
+    PLANNED_FILE_IN_FORBIDDEN_SCOPE = ["scope-confinement"], "planned-file-in-forbidden-scope", "Planned File In Forbidden Scope", Same;
+    PLANNED_FILE_OUTSIDE_AUTHORIZED_SCOPE = ["scope-confinement"], "planned-file-outside-authorized-scope", "Planned File Outside Authorized Scope", Same;
+    PLAN_WITHOUT_DECLARED_OUTPUTS = ["scope-confinement"], "plan-without-declared-outputs", "Plan Without Declared Outputs", Same;
+
+    // gate-command-lint
+    PIPELINE_EXIT_MASKED = ["gate-command-lint"], "pipeline-exit-masked", "Pipeline Exit Masked", Same;
+    PRE_EXISTING_PATH_TEST = ["gate-command-lint"], "pre-existing-path-test", "Pre Existing Path Test", Same;
+    PROSE_NEGATION_DETECTED = ["gate-command-lint"], "prose-negation-detected", "Prose Negation Detected", Same;
+    UNFAILABLE_COMMAND = ["gate-command-lint"], "unfailable-command", "Unfailable Command", Same;
+    NO_GATES_DECLARED = ["gate-command-lint"], "no-gates-declared", "No Gates Declared", Same;
+
+    // mechanism-sections
+    UNTAGGED_MECHANISM_CLAIM = ["mechanism-sections"], "untagged-mechanism-claim", "Untagged Mechanism Claim", Same;
+    EVIDENCE_TARGET_NOT_FOUND = ["mechanism-sections"], "evidence-target-not-found", "Evidence Target Not Found", Same;
+    EMPTY_DESIGNATED_SECTION = ["mechanism-sections"], "empty-designated-section", "Empty Designated Section", Same;
+
+    // citation-anchors
+    COMMIT_UNRESOLVABLE = ["citation-anchors"], "commit-unresolvable", "Commit Unresolvable", Same;
+    FILE_NOT_FOUND = ["citation-anchors"], "file-not-found", "File Not Found", Same;
+    LINE_OUT_OF_BOUNDS = ["citation-anchors"], "line-out-of-bounds", "Line Out Of Bounds", Same;
+    TEXT_MISMATCH = ["citation-anchors"], "text-mismatch", "Text Mismatch", Same;
+    UNANCHORED_CITATION = ["citation-anchors"], "unanchored-citation", "Unanchored Citation", Same;
+    TRACKER_TITLE_MISMATCH = ["citation-anchors"], "tracker-title-mismatch", "Tracker Title Mismatch", Same;
 
     // suppression-delta
     SUPPRESSION_ADDED = ["suppression-delta"], "suppression-added", "Suppression Added", Message;

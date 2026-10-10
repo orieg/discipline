@@ -300,6 +300,15 @@ reconcile git\-tracked files against packaging manifest declarations (integrity;
 .TP
 .B [gates.version-lockstep]
 version declarations across headers, manifests, and files must remain in lockstep (integrity; default: off; languages: any)
+.TP
+.B [gates.gate-command-lint]
+reject vacuous, masked, or inverted verification commands in plan files (agent-guard; default: off; languages: markdown, shell)
+.TP
+.B [gates.mechanism-sections]
+require (inferred) or (verified: <target>) evidence tags in root cause sections (hygiene; default: off; languages: markdown)
+.TP
+.B [gates.citation-anchors]
+verify path:line@sha citations against quoted text and git history (hygiene; default: off; languages: markdown, any)
 .\" /generated
 
 .SH OVERRIDE DIRECTIVES

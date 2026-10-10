@@ -20,6 +20,9 @@ fn dogfood_config_loads_with_every_available_gate_on() {
             || gate.id == "sanitizers"
             // Opt-in, and new: enabling it here is a change to the protected `discipline.toml`.
             || gate.id == "harness-tampering"
+            || gate.id == "gate-command-lint"
+            || gate.id == "citation-anchors"
+            || gate.id == "mechanism-sections"
         {
             continue;
         }
@@ -300,6 +303,9 @@ name = "my-test-proj"
             || g.id == "msrv"
             || g.id == "miri"
             || g.id == "sanitizers"
+            || g.id == "gate-command-lint"
+            || g.id == "citation-anchors"
+            || g.id == "mechanism-sections"
         {
             assert!(
                 !cfg.gates.settings(g.id).unwrap().enabled(),
@@ -646,6 +652,9 @@ const DEFAULTS_SNAPSHOT: &[(&str, bool, Severity)] = &[
     ("unsafe-budget", false, Severity::Error),
     ("msrv", false, Severity::Error),
     ("bench-regression", true, Severity::Warning),
+    ("gate-command-lint", false, Severity::Error),
+    ("citation-anchors", false, Severity::Error),
+    ("mechanism-sections", false, Severity::Error),
 ];
 
 #[test]

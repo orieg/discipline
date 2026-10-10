@@ -59,6 +59,9 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`archive-contents`](#archive-contents) | integrity | **shipped** | any | distribution archive must contain required paths and zero forbidden developer artifacts |
 | [`manifest-sync`](#manifest-sync) | integrity | **shipped** | any | reconcile git-tracked files against packaging manifest declarations |
 | [`version-lockstep`](#version-lockstep) | integrity | **shipped** | any | version declarations across headers, manifests, and files must remain in lockstep |
+| [`gate-command-lint`](#gate-command-lint) | agent-guard | **shipped** | markdown, shell | reject vacuous, masked, or inverted verification commands in plan files |
+| [`mechanism-sections`](#mechanism-sections) | hygiene | **shipped** | markdown | require (inferred) or (verified: <target>) evidence tags in root cause sections |
+| [`citation-anchors`](#citation-anchors) | hygiene | **shipped** | markdown, any | verify path:line@sha citations against quoted text and git history |
 <!-- /generated -->
 
 ### Finding Codes
@@ -181,6 +184,23 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `sandbox-config/sandbox-config-unreadable` | Sandbox Configuration Unreadable |
 | `scope-confinement/file-in-forbidden-scope` | File In Forbidden Scope |
 | `scope-confinement/file-outside-authorized-scope` | File Outside Authorized Scope |
+| `scope-confinement/planned-file-in-forbidden-scope` | Planned File In Forbidden Scope |
+| `scope-confinement/planned-file-outside-authorized-scope` | Planned File Outside Authorized Scope |
+| `scope-confinement/plan-without-declared-outputs` | Plan Without Declared Outputs |
+| `gate-command-lint/pipeline-exit-masked` | Pipeline Exit Masked |
+| `gate-command-lint/pre-existing-path-test` | Pre Existing Path Test |
+| `gate-command-lint/prose-negation-detected` | Prose Negation Detected |
+| `gate-command-lint/unfailable-command` | Unfailable Command |
+| `gate-command-lint/no-gates-declared` | No Gates Declared |
+| `mechanism-sections/untagged-mechanism-claim` | Untagged Mechanism Claim |
+| `mechanism-sections/evidence-target-not-found` | Evidence Target Not Found |
+| `mechanism-sections/empty-designated-section` | Empty Designated Section |
+| `citation-anchors/commit-unresolvable` | Commit Unresolvable |
+| `citation-anchors/file-not-found` | File Not Found |
+| `citation-anchors/line-out-of-bounds` | Line Out Of Bounds |
+| `citation-anchors/text-mismatch` | Text Mismatch |
+| `citation-anchors/unanchored-citation` | Unanchored Citation |
+| `citation-anchors/tracker-title-mismatch` | Tracker Title Mismatch |
 | `suppression-delta/suppression-added` | Suppression Added |
 | `provenance-tags/table-numerics-unprovenanced` | Unprovenanced Table Numerics |
 | `provenance-tags/mechanism-claim-without-evidence` | Mechanism Claim Without Evidence |
@@ -920,7 +940,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Files exempted via `exempt_paths`.
   - Modifications when `allowed_paths` is empty and no `forbidden_paths` are matched.
 - **Lifting directive:** `allow-scope: <path-or-directory/> <reason>` (a directory prefix is written with its slash).
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `allowed_paths`, `forbidden_paths`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `allowed_paths`, `forbidden_paths`, `check_plans`, `plan_paths`, `require_declared_outputs`.
 
 #### `suppression-delta`
 - **Rule:** Rejects net increases in compiler, linter, or type checker suppression annotations unless explicitly authorized. The sites come from the language packs (`ParsedFileFacts::escape_hatches`), so a marker inside a string literal or an ordinary comment is not one. The count is a delta: each changed file's head side is compared with its base side, and a site that merely moved, or that was already there as often, is not new.
@@ -947,6 +967,17 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Lifting directive:** `allow-suppression: <rule-or-path> <reason>` (the suppressed rule, such as `dead_code`, or the file's path or name).
 - **Default:** on, severity `warning` (see [Default Severity by Gate](#default-severity-by-gate)).
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `max_increase`, `allowed_suppressions`.
+
+#### `gate-command-lint`
+- **Rule:** Inspects verification commands declared in plan files (`plan_paths`) to prevent vacuous, masked, or unfailable commands from marking plan steps complete.
+- **Languages:** Markdown, shell.
+- **What it catches:**
+  - Piped verification commands where the exit status is swallowed by downstream filters (e.g. `| grep`, `| tail`, `| head`) without an explicit `set -o pipefail` in the command.
+  - Commands using `test -f` or `test -e` on paths that already exist on the base commit.
+  - Commands accompanied by prose negation ("expected to fail", "should fail") rather than explicit command negation (`! cmd`).
+  - Commands ending with unfailable constructs like `|| true`, `|| exit 0`, or `|| :`.
+  - Plan files with no verification gates declared.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `plan_paths`, `allow_pipeline_without_pipefail`.
 
 ---
 
@@ -1227,6 +1258,27 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Lifting directive:** `allow-pr-checklist: test|docs|bench <reason>` (the claim the finding names).
 - **Default:** off, severity `error`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`.
+
+#### `mechanism-sections`
+- **Rule:** Requires evidence tags (`(inferred)` or `(verified: <test or artifact>)`) for claims in designated root cause or mechanism sections (`section_headings`). Evidence targets must resolve in the repository.
+- **Languages:** Markdown.
+- **What it catches:**
+  - Untagged claims in designated sections (`untagged-mechanism-claim`).
+  - Evidence targets (`(verified: path)`) that do not exist in the repository (`evidence-target-not-found`).
+  - Empty designated sections (`empty-designated-section`).
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `diff_only`, `section_headings`.
+
+#### `citation-anchors`
+- **Rule:** Verifies line-anchored citations formatted as `path:line@commit "<quoted text>"` against git history and quoted text.
+- **Languages:** Markdown, any.
+- **What it catches:**
+  - Citations quoting text that does not match the actual line content at that commit (`text-mismatch`).
+  - Citations referencing lines beyond the cited file length (`line-out-of-bounds`).
+  - Citations referencing files absent in the cited commit (`file-not-found`).
+  - Citations referencing unresolvable commit hashes (`commit-unresolvable`).
+  - Unanchored citations (`path:line` without commit or quoted text) per `unanchored_citations` mode (`unanchored-citation`).
+  - Mismatches in optional issue/PR tracker titles (`tracker-title-mismatch`).
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `diff_only`, `unanchored_citations`, `verify_tracker_titles`, `require_online`.
 
 ---
 

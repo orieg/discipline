@@ -9395,6 +9395,58 @@ proptest! {
             Ok(every_read_is_none && all_counted && drained && named)
         },
     ),
+    (
+        "citation-anchors: extracts anchored and unanchored citations discriminating correctly",
+        || {
+            use crate::guards::citation_anchors::{extract_anchored_citations, extract_unanchored_citations};
+            let text = "As defined in src/lib.rs:42@abcdef1 \"core_metric()\", it works. Also see src/util.rs:10 for details.\n";
+            let anchored = extract_anchored_citations(text);
+            let unanchored = extract_unanchored_citations(text);
+            Ok(anchored.len() == 1
+                && anchored[0].path == "src/lib.rs"
+                && anchored[0].line == 42
+                && anchored[0].commit == "abcdef1"
+                && anchored[0].quoted_text == "core_metric()"
+                && unanchored.len() == 1
+                && unanchored[0].path == "src/util.rs"
+                && unanchored[0].line == 10)
+        },
+    ),
+    (
+        "gate-command-lint: extracts declared gates from fences and list items",
+        || {
+            use crate::guards::gate_command_lint::extract_declared_gates;
+            let text = "# Plan\n\n```bash gate\ncargo test\n```\n\n- Gate: pytest tests/\n";
+            let gates = extract_declared_gates(text);
+            Ok(gates.len() == 2
+                && gates[0].command == "cargo test"
+                && gates[1].command == "pytest tests/")
+        },
+    ),
+    (
+        "scope-confinement: extracts planned outputs from front-matter and list sections",
+        || {
+            use crate::guards::scope_confinement::extract_planned_outputs;
+            let text = "# Plan\n\nOutputs:\n- `src/core.rs`\n- `docs/index.md`\n";
+            let outputs = extract_planned_outputs(text);
+            Ok(outputs.len() == 2
+                && outputs[0].1 == "src/core.rs"
+                && outputs[1].1 == "docs/index.md")
+        },
+    ),
+    (
+        "mechanism-sections: extracts claims only from designated sections with tags",
+        || {
+            use crate::guards::mechanism_sections::parse_designated_sections;
+            let text = "## Root cause\n- (inferred) Cache eviction was delayed.\n- (verified: tests/cache.rs) Re-indexing failed.\n\n## Next steps\n- Fix the cache.\n";
+            let sections = parse_designated_sections(text, &["root cause".to_string()]);
+            Ok(sections.len() == 1
+                && sections[0].heading_title.eq_ignore_ascii_case("root cause")
+                && sections[0].claims.len() == 2
+                && sections[0].claims[0].text.contains("(inferred)")
+                && sections[0].claims[1].text.contains("(verified: tests/cache.rs)"))
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {
