@@ -1,7 +1,6 @@
 //! Each agent's end-of-turn hook payload and the answer that refused the stop, recorded
 //! from a live run (docs/ROADMAP.md, Phase 17 Step 0). These tests pin the fields a
-//! stop-time check would read, so a re-recorded fixture that moves one fails here first.
-//! Nothing in `src/` reads these fields yet.
+//! stop-time check reads (`src/transcript.rs`, Phase 17 Step 2b).
 
 use serde_json::Value;
 
@@ -132,4 +131,34 @@ fn opencode_turn_ends_with_text_a_stop_step_and_execution_succeeded() {
         text(&reprompt, "/result/payload/text")
     );
     assert_eq!(text(&reprompt, "/result/type"), "user");
+}
+
+#[test]
+fn transcript_readers_parse_recorded_stop_fixtures() {
+    use discipline::hook::Agent;
+    use discipline::transcript::read_final_turn;
+    use std::path::Path;
+
+    let copilot_fixture = format!(
+        "{}/tests/fixtures/stop/copilot/transcript_last_message.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let c_turn = read_final_turn(Agent::Copilot, Path::new(&copilot_fixture)).unwrap();
+    assert_eq!(c_turn.message.as_deref(), Some(ANNOUNCED));
+    assert!(!c_turn.tool_call_followed);
+
+    let agy_msg_fixture = format!(
+        "{}/tests/fixtures/stop/agy/transcript_last_message.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let a_turn = read_final_turn(Agent::Agy, Path::new(&agy_msg_fixture)).unwrap();
+    assert_eq!(a_turn.message.as_deref(), Some(ANNOUNCED));
+    assert!(!a_turn.tool_call_followed);
+
+    let agy_tool_fixture = format!(
+        "{}/tests/fixtures/stop/agy/transcript_tool_call_message.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let a_tool = read_final_turn(Agent::Agy, Path::new(&agy_tool_fixture)).unwrap();
+    assert!(a_tool.tool_call_followed);
 }
