@@ -1348,11 +1348,13 @@ pub enum Installed {
 }
 
 /// Whether `hook install` may rewrite an existing file: `upgrade` one a release provably
-/// generated, and with `force` also one it cannot tell from an edited file.
+/// generated, `enforce` one to switch from observe to enforcing mode, and with `force`
+/// also one it cannot tell from an edited file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Refresh {
     pub upgrade: bool,
     pub force: bool,
+    pub enforce: bool,
 }
 
 impl From<bool> for Refresh {
@@ -1361,6 +1363,7 @@ impl From<bool> for Refresh {
         Refresh {
             upgrade,
             force: false,
+            enforce: false,
         }
     }
 }
@@ -1410,7 +1413,7 @@ fn replace_unproven(
     how: Refresh,
     snippet: Option<String>,
 ) -> Result<Installed> {
-    if !how.upgrade {
+    if !how.upgrade && !how.enforce {
         return Ok(Installed::Differs(path, why));
     }
     let diff = crate::hookfile::unified_diff(
@@ -1534,8 +1537,9 @@ fn refresh_generated(
 /// For an existing generated file that has a mode: `was` is the mode read back from it
 /// (`None` when it cannot be read, which the caller allows only with `observe`), and
 /// `write` gives this release's content in a mode. The file keeps its mode; `observe` can
-/// only turn observe mode on. It is rewritten only with `how.upgrade`, and when `unproven`
-/// says why it is not provably a release's output, only as [`replace_unproven`] allows.
+/// only turn observe mode on, while `how.enforce` switches to enforcing mode. It is
+/// rewritten only with `how.upgrade` or `how.enforce`, and when `unproven` says why it is
+/// not provably a release's output, only as [`replace_unproven`] allows.
 fn refresh_in_mode(
     path: PathBuf,
     existing: &str,
@@ -1545,7 +1549,12 @@ fn refresh_in_mode(
     unproven: Option<Unproven>,
     write: impl Fn(bool) -> Result<String>,
 ) -> Result<Installed> {
-    let content = write(observe || was == Some(true))?;
+    let target_observe = if how.enforce {
+        false
+    } else {
+        observe || was == Some(true)
+    };
+    let content = write(target_observe)?;
     if existing == content {
         return Ok(Installed::AlreadyPresent(path));
     }
@@ -1554,7 +1563,7 @@ fn refresh_in_mode(
     if let Some(why) = unproven {
         return replace_unproven(path, existing, &content, why, how, None);
     }
-    if !how.upgrade {
+    if !how.upgrade && !how.enforce {
         // This release's own file in the other mode is not an earlier release's.
         return Ok(match was {
             Some(mode) if existing == write(mode)? => Installed::ModeDiffers(path),
@@ -1961,7 +1970,12 @@ fn refresh_json(
         return Ok(Installed::Refused(path, write(observe, timeout)?));
     }
     // Merged by hand: what to merge is written in the file's own mode.
-    let content = write(observe || existing.contains(" --observe"), timeout)?;
+    let target_observe = if how.enforce {
+        false
+    } else {
+        observe || existing.contains(" --observe")
+    };
+    let content = write(target_observe, timeout)?;
     refresh_merged(agent, path, existing, &content, how, user)
 }
 
@@ -1975,14 +1989,14 @@ fn is_our_command(agent: Agent, cmd: &str, user: bool) -> bool {
 }
 
 /// For an existing hook file that runs discipline and has content of its own, `content`
-/// being this release's file in that file's mode. Without `how.upgrade` it is left as it
-/// is. With it, this release's entries are merged in ([`crate::hookfile::merge_json`]):
-/// when that changes nothing the file is current; otherwise its discipline entries were
-/// written by an earlier release or edited, which cannot be told apart, and it is
-/// rewritten only with `how.force` ([`replace_unproven`]). Everything that is not
-/// discipline's is kept either way. A file nothing can be merged into by rule (not strict
-/// JSON, Aider's YAML) is refused with the snippet when it lacks a hook command this
-/// release writes, and otherwise left as it is.
+/// being this release's file in that file's mode. Without `how.upgrade` or `how.enforce`
+/// it is left as it is. With it, this release's entries are merged in
+/// ([`crate::hookfile::merge_json`]): when that changes nothing the file is current;
+/// otherwise its discipline entries were written by an earlier release or edited, which
+/// cannot be told apart, and it is rewritten only with `how.force` ([`replace_unproven`]).
+/// Everything that is not discipline's is kept either way. A file nothing can be merged
+/// into by rule (not strict JSON, Aider's YAML) is refused with the snippet when it lacks
+/// a hook command this release writes, and otherwise left as it is.
 fn refresh_merged(
     agent: Agent,
     path: PathBuf,
@@ -1991,7 +2005,7 @@ fn refresh_merged(
     how: Refresh,
     user: bool,
 ) -> Result<Installed> {
-    if !how.upgrade {
+    if !how.upgrade && !how.enforce {
         return Ok(Installed::AlreadyPresent(path));
     }
     let lacks = lacks_a_generated_command(existing, content);
@@ -2709,6 +2723,7 @@ pub fn run_cli(args: crate::cli::HookArgs) -> Result<bool> {
             let how = crate::hook::Refresh {
                 upgrade: a.upgrade,
                 force: a.force,
+                enforce: a.enforce,
             };
             let mut results = vec![if a.user {
                 crate::hook::install_user(a.agent, a.observe, how, a.timeout)?
@@ -2788,10 +2803,14 @@ pub fn run_cli(args: crate::cli::HookArgs) -> Result<bool> {
                             a.agent.id(),
                             mode_of(&p)
                         );
-                        // `hook install` only turns observe mode on; `--upgrade` keeps it.
-                        if !a.upgrade && !a.observe && mode_of(&p) == ", in observe mode" {
+                        // `hook install` only turns observe mode on; `--upgrade` keeps it; `--enforce` switches to enforcing.
+                        if !a.upgrade
+                            && !a.observe
+                            && !a.enforce
+                            && mode_of(&p) == ", in observe mode"
+                        {
                             println!(
-                                "{} {} is in observe mode and this command asked for enforcing mode; it was not changed. `hook install` only turns observe mode on: to enforce, delete the file and run this command again",
+                                "{} {} is in observe mode and this command asked for enforcing mode; it was not changed. `hook install` only turns observe mode on: to enforce, run this command again with `--enforce`",
                                 style::yellow("note:"),
                                 p.display()
                             );

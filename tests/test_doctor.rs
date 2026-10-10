@@ -1657,6 +1657,7 @@ fn doctor_reports_hook_mode_truthfully() {
             .as_str()
             .expect("must have remediation");
         assert!(rem.contains("discipline hook install"), "{agent}: {rem}");
+        assert!(rem.contains("--enforce"), "{agent}: {rem}");
 
         let pretool = findings
             .iter()
@@ -1681,11 +1682,14 @@ fn doctor_reports_hook_mode_truthfully() {
             strict.stdout
         );
 
-        std::fs::remove_file(repo.path().join(rel)).unwrap();
-
-        // 2. Enforcing mode: Pass, pretool says "refuses"
-        let install_enf = repo.run(&["hook", "install", "--agent", agent], &[]);
+        // 2. Enforcing mode: switch with --enforce, Pass, pretool says "refuses"
+        let install_enf = repo.run(&["hook", "install", "--agent", agent, "--enforce"], &[]);
         assert_eq!(install_enf.code, 0, "{agent}: {}", install_enf.stderr);
+        assert!(
+            install_enf.stdout.contains("enforcing mode"),
+            "{agent}: {}",
+            install_enf.stdout
+        );
 
         let run = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
         let v: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();

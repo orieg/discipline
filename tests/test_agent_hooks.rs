@@ -2187,3 +2187,104 @@ fn the_opencode_enforcing_plugin_refuses_a_call_it_could_not_check() {
         "{notice}"
     );
 }
+
+/// Issue 699: `hook install --agent <agent> --enforce` switches a file generated in
+/// observe mode to enforcing mode, keeps an already enforcing file, and refuses an
+/// edited file unless `--force` is given.
+#[test]
+fn install_enforce_switches_observe_file_to_enforcing() {
+    let repo = Repo::new();
+    let agents = [
+        ("claude-code", ".claude/settings.json"),
+        ("copilot", ".github/hooks/discipline.json"),
+        ("agy", ".agents/hooks.json"),
+        ("opencode", ".opencode/plugins/discipline.js"),
+        ("qwen", ".qwen/settings.json"),
+    ];
+
+    for (agent, rel) in agents {
+        // 1. Install in observe mode
+        let obs = repo.run(&["hook", "install", "--agent", agent, "--observe"], &[]);
+        assert_eq!(obs.code, 0, "{agent}: {}", obs.stderr);
+        let obs_text = std::fs::read_to_string(repo.path().join(rel)).unwrap();
+        assert!(
+            obs_text.contains(" --observe")
+                || obs_text.contains(discipline::hook::OPENCODE_OBSERVE_NEVER_BLOCKS),
+            "{agent} must be in observe mode"
+        );
+
+        // 2. Switch to enforcing with --enforce
+        let enf = repo.run(&["hook", "install", "--agent", agent, "--enforce"], &[]);
+        assert_eq!(enf.code, 0, "{agent}: {}", enf.stderr);
+        assert!(
+            enf.stdout.contains("upgraded") && enf.stdout.contains("enforcing mode"),
+            "{agent}: {}",
+            enf.stdout
+        );
+        let enf_text = std::fs::read_to_string(repo.path().join(rel)).unwrap();
+        assert!(
+            !enf_text.contains(" --observe")
+                && !enf_text.contains(discipline::hook::OPENCODE_OBSERVE_NEVER_BLOCKS),
+            "{agent} must now be in enforcing mode"
+        );
+
+        // 3. Running --enforce again on already enforcing file reports already runs in enforcing mode
+        let again = repo.run(&["hook", "install", "--agent", agent, "--enforce"], &[]);
+        assert_eq!(again.code, 0, "{agent}: {}", again.stderr);
+        assert!(
+            again.stdout.contains("already runs") && again.stdout.contains("enforcing mode"),
+            "{agent}: {}",
+            again.stdout
+        );
+
+        // 4. Control: edited file is refused without --force
+        let edited = if agent == "opencode" {
+            format!("{enf_text}\n// local edit\n")
+        } else {
+            let check = format!("discipline hook run --agent {agent}");
+            enf_text.replace(&check, &format!("test -f .skip || {check}"))
+        };
+        std::fs::write(repo.path().join(rel), &edited).unwrap();
+        let refused = repo.run(&["hook", "install", "--agent", agent, "--enforce"], &[]);
+        assert_eq!(refused.code, 1, "{agent}: {}", refused.stdout);
+        assert!(
+            refused.stdout.contains("refused:"),
+            "{agent}: {}",
+            refused.stdout
+        );
+
+        // 5. Control: edited file is overwritten with --enforce --force
+        let forced = repo.run(
+            &["hook", "install", "--agent", agent, "--enforce", "--force"],
+            &[],
+        );
+        assert_eq!(forced.code, 0, "{agent}: {}", forced.stderr);
+        assert!(
+            forced.stdout.contains("overwrote")
+                || forced.stdout.contains("replaced the discipline entries"),
+            "{agent}: {}",
+            forced.stdout
+        );
+
+        std::fs::remove_file(repo.path().join(rel)).unwrap();
+    }
+
+    // 6. Control: --observe and --enforce conflict
+    let conflict = repo.run(
+        &[
+            "hook",
+            "install",
+            "--agent",
+            "claude-code",
+            "--observe",
+            "--enforce",
+        ],
+        &[],
+    );
+    assert_eq!(conflict.code, 2, "{}", conflict.stdout);
+    assert!(
+        conflict.stderr.contains("cannot be used with") || conflict.stderr.contains("conflict"),
+        "{}",
+        conflict.stderr
+    );
+}

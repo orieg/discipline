@@ -8276,9 +8276,12 @@ smoke_cost::set_contains
             std::fs::create_dir_all(path.parent().unwrap())?;
             std::fs::write(&path, &obs)?;
             let f = multi_agent_findings(&dir);
-            let mode = f.iter().find(|x| x.id == "hook-mode").map(|x| x.status);
+            let obs_f = f.iter().find(|x| x.id == "hook-mode").unwrap();
             let pre = f.iter().find(|x| x.id == "pretool-hook").unwrap();
-            let obs_ok = mode == Some(Status::Warn) && !pre.summary.contains("refuses") && pre.summary.contains("logs");
+            let obs_ok = obs_f.status == Status::Warn
+                && obs_f.remediation.as_ref().is_some_and(|r| r.contains("--enforce"))
+                && !pre.summary.contains("refuses")
+                && pre.summary.contains("logs");
 
             let (_, enf) = config_for_opts(Agent::ClaudeCode, false, None);
             std::fs::write(&path, &enf)?;

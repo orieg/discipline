@@ -288,7 +288,7 @@ pub fn multi_agent_findings(root: &Path) -> Vec<Finding> {
                     Status::Warn,
                     format!("`{rel}` is in observe mode: it logs what it would block without blocking"),
                 )
-                .fix(format!("To switch to enforcing, delete `{rel}` and run `discipline hook install --agent {agent_id}`.")),
+                .fix(format!("To switch to enforcing, run `discipline hook install --agent {agent_id} --enforce`.")),
                 Some(false) => Finding::new(
                     "hook-mode",
                     Status::Pass,
