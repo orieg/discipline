@@ -695,8 +695,26 @@ fn python_collection_hook(hook: Node, src: &[u8], sites: &mut Vec<Site>) {
     let Some(body) = hook.child_by_field_name("body") else {
         return;
     };
-    let is_items = |n: Node| n.kind() == "identifier" && text(n, src) == "items";
+    let items_name = hook
+        .child_by_field_name("parameters")
+        .and_then(|p| {
+            let mut c = p.walk();
+            let x = p.named_children(&mut c).find_map(|child| {
+                let n = text(child, src).trim().to_string();
+                if n == "items" || n.ends_with("items") || n.ends_with("_items") {
+                    Some(n)
+                } else {
+                    None
+                }
+            });
+            x
+        })
+        .unwrap_or_else(|| "items".to_string());
+    let is_items = |n: Node| {
+        n.kind() == "identifier" && (text(n, src) == items_name || text(n, src) == "items")
+    };
     let mut removals: Vec<(Node, &str)> = Vec::new();
+    let mut unconditional_clear: Vec<(Node, &str)> = Vec::new();
     let mut selects = false;
     for node in preorder(body, &[]) {
         match node.kind() {
@@ -711,7 +729,12 @@ fn python_collection_hook(hook: Node, src: &[u8], sites: &mut Vec<Site>) {
                     && left.child_by_field_name("value").is_some_and(is_items)
                     && operands(left).iter().any(|c| c.kind() == "slice");
                 if slice_of_items && !python_is_reorder(right, src) {
-                    removals.push((node, "assigns `items[:]` a new list"));
+                    let r_text = text(right, src).trim();
+                    if r_text == "[]" || r_text == "list()" {
+                        unconditional_clear.push((node, "assigns `items[:]` an empty list"));
+                    } else {
+                        removals.push((node, "assigns `items[:]` a new list"));
+                    }
                 }
             }
             "delete_statement" => {
@@ -735,7 +758,10 @@ fn python_collection_hook(hook: Node, src: &[u8], sites: &mut Vec<Site>) {
                     .unwrap_or("");
                 let on_items = function.child_by_field_name("object").is_some_and(is_items);
                 match name {
-                    "remove" | "pop" | "clear" if on_items => {
+                    "clear" if on_items => {
+                        unconditional_clear.push((node, "clears all tests in `items`"));
+                    }
+                    "remove" | "pop" if on_items => {
                         removals.push((node, "removes from `items`"));
                     }
                     "pytest_deselected" => removals.push((node, "calls `pytest_deselected`")),
@@ -757,17 +783,24 @@ fn python_collection_hook(hook: Node, src: &[u8], sites: &mut Vec<Site>) {
             _ => {}
         }
     }
-    if selects {
-        return;
+    if !selects {
+        for (node, how) in removals {
+            sites.push(Site {
+                form: Form::PytestItemsRemoved,
+                line: line(node),
+                subject: PYTEST_COLLECTION_HOOK.to_string(),
+                what: format!(
+                    "`{PYTEST_COLLECTION_HOOK}` {how} and reads no marker, keyword or option"
+                ),
+            });
+        }
     }
-    for (node, how) in removals {
+    for (node, how) in unconditional_clear {
         sites.push(Site {
             form: Form::PytestItemsRemoved,
             line: line(node),
             subject: PYTEST_COLLECTION_HOOK.to_string(),
-            what: format!(
-                "`{PYTEST_COLLECTION_HOOK}` {how} and reads no marker, keyword or option"
-            ),
+            what: format!("`{PYTEST_COLLECTION_HOOK}` {how} unconditionally"),
         });
     }
 }
