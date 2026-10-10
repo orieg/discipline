@@ -22,7 +22,7 @@ Discipline employs a 5-layer configuration hierarchy. With zero configuration, e
 | **2. Repository configuration** | `discipline.toml` | ↑ | Durable, peer-reviewed repository policy. |
 | **3. Inline TOML override** | `--config-override`, `DISCIPLINE_CONFIG_OVERRIDE`, action input `config_override` | ↑ | Per-workflow tuning without modifying files. |
 | **4. Gate switches** | `--enable` / `--disable`, `DISCIPLINE_ENABLE` / `DISCIPLINE_DISABLE`, action inputs `enable` / `disable` | ↑ | Command-line switches (comma- or newline-separated). |
-| **5. Secret denylist** | `DISCIPLINE_HOSTNAME_DENYLIST` (legacy fallback `DOCS_HOSTNAME_DENYLIST`), `DISCIPLINE_TERM_DENYLIST`, action inputs `hostname_denylist` / `term_denylist` | Highest | Sensitive hostnames and private terms that must not appear even in repository config. |
+| **5. Secret denylist** | `DISCIPLINE_HOSTNAME_DENYLIST` (legacy fallback `DOCS_HOSTNAME_DENYLIST`), `DISCIPLINE_TERM_DENYLIST`, action input `hostname_denylist` | Highest | Sensitive hostnames and private terms that must not appear even in repository config. |
 
 Two `check` switches apply after layer 5: `--directive-sources` (`DISCIPLINE_DIRECTIVE_SOURCES`, action input `directive_sources`) replaces `directives.sources`, and `--fail-on-overrides` can only turn `fail_on_overrides` on.
 
@@ -434,7 +434,6 @@ The action runs on `pull_request`, `merge_group` and `push` events (the base is 
 | `disable` | *(none)* | Gate ids to force off (comma or newline separated), e.g. "time-estimates, pii". |
 | `config_override` | *(none)* | Inline TOML merged over discipline.toml: tables merge, lists append, scalars replace. |
 | `hostname_denylist` | *(none)* | Hostnames the pii gate must reject (comma or newline separated). Pass a secret; matches are never echoed. |
-| `term_denylist` | *(none)* | Words or phrases the pii gate must reject (comma or newline separated). Pass a secret; matches are never echoed. |
 | `fail_on_warnings` | `false` | Treat warnings as failures. |
 | `fail_on_overrides` | `false` | Treat applied overrides as failures (requires human sign-off). |
 | `advisory` | `false` | Advisory mode: run all checks and emit reports, but exit code 0 even if violations occur. |

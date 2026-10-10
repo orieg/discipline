@@ -24,7 +24,6 @@
       "pr_body",
       "pr_title",
       "suite",
-      "term_denylist",
       "test_base_report",
       "test_head_report",
       "test_report",
