@@ -117,6 +117,12 @@ pub fn roles(
         roles.js_exit = true;
         roles.why = format!("a set-up file that `{config}` names");
     }
+    if let Some(conftest) = configured.pytest_plugins.get(path) {
+        roles.pytest_hooks = true;
+        roles.python_exit = true;
+        roles.unittest = true;
+        roles.why = format!("a pytest plugin that `{conftest}` names");
+    }
     if let Some(own_main) = configured.rust_targets.get(path) {
         roles.rust_exit = true;
         roles.why = if *own_main {
@@ -124,6 +130,10 @@ pub fn roles(
         } else {
             "the root of a Cargo test target".to_string()
         };
+    }
+    if let Some(target) = configured.rust_modules.get(path) {
+        roles.rust_exit = true;
+        roles.why = format!("a module of Cargo test target `{target}`");
     }
     if !roles.any()
         && crate::ast::extension(path) == Some("py")
@@ -445,6 +455,7 @@ pub fn harness_tampering(ctx: &Context) -> Result<GateOutcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     fn configured(js: &[(&str, &str)], rust: &[(&str, bool)]) -> ConfiguredHarness {
         ConfiguredHarness {
@@ -456,6 +467,8 @@ mod tests {
                 .iter()
                 .map(|(file, own_main)| (file.to_string(), *own_main))
                 .collect(),
+            rust_modules: BTreeMap::new(),
+            pytest_plugins: BTreeMap::new(),
             unread: Vec::new(),
         }
     }
@@ -514,6 +527,21 @@ mod tests {
             .why
             .contains("harness = false"));
         assert!(!roles_of("tools/setup.js", &named).any());
+
+        let mut with_extensions = named;
+        with_extensions.pytest_plugins.insert(
+            "tests/plugins/tamper.py".to_string(),
+            "conftest.py".to_string(),
+        );
+        with_extensions
+            .rust_modules
+            .insert("tests/common/mod.rs".to_string(), "tests/it.rs".to_string());
+        let plugin = roles_of("tests/plugins/tamper.py", &with_extensions);
+        assert!(plugin.pytest_hooks && plugin.python_exit && plugin.unittest);
+        assert!(plugin.why.contains("conftest.py"));
+        let rust_mod = roles_of("tests/common/mod.rs", &with_extensions);
+        assert!(rust_mod.rust_exit);
+        assert!(rust_mod.why.contains("tests/it.rs"));
     }
 
     fn site(form: Form, subject: &str, line: usize) -> Site {

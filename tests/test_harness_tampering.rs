@@ -92,6 +92,38 @@ const EXACT_FORMS: &[Case] = &[
         expect: &[("conftest.py", "    setattr(report, \"outcome\", \"passed\")", PYTEST, "error")],
     },
     Case {
+        name: "pytest: a hookwrapper calls force_result",
+        files: &[(
+            "conftest.py",
+            "import pytest\n\n\n@pytest.hookimpl(hookwrapper=True)\ndef pytest_runtest_makereport(item, call):\n    outcome = yield\n    outcome.force_result(None)\n",
+        )],
+        expect: &[("conftest.py", "    outcome.force_result(None)", PYTEST, "error")],
+    },
+    Case {
+        name: "pytest: sessionfinish assigns exitstatus",
+        files: &[(
+            "conftest.py",
+            "def pytest_sessionfinish(session, exitstatus):\n    session.exitstatus = 0\n",
+        )],
+        expect: &[("conftest.py", "    session.exitstatus = 0", PYTEST, "error")],
+    },
+    Case {
+        name: "pytest: a plugin module named by conftest.py defines a report hook",
+        files: &[
+            ("conftest.py", "pytest_plugins = ['tamper_mod']\n"),
+            (
+                "tamper_mod.py",
+                "def pytest_runtest_logreport(report):\n    report.outcome = \"passed\"\n",
+            ),
+        ],
+        expect: &[(
+            "tamper_mod.py",
+            "    report.outcome = \"passed\"",
+            PYTEST,
+            "error",
+        )],
+    },
+    Case {
         name: "pytest: the collection hook empties items",
         files: &[(
             "conftest.py",
@@ -252,6 +284,21 @@ const EXACT_FORMS: &[Case] = &[
         ],
         expect: &[("tests/it.rs", "    process::exit(0);", EXIT_ZERO, "warning")],
     },
+    Case {
+        name: "exit: a module of a Cargo test target",
+        files: &[
+            ("Cargo.toml", CARGO_PACKAGE),
+            (
+                "tests/it.rs",
+                "mod common;\n\n#[test]\nfn it() {\n    common::exit();\n}\n",
+            ),
+            (
+                "tests/common/mod.rs",
+                "pub fn exit() {\n    std::process::exit(0);\n}\n",
+            ),
+        ],
+        expect: &[("tests/common/mod.rs", "    std::process::exit(0);", EXIT_ZERO, "warning")],
+    },
 ];
 
 /// The enumerated negative controls: each is a near miss of a form above and must
@@ -355,6 +402,22 @@ const NEGATIVE_CONTROLS: &[Case] = &[
         files: &[(
             "conftest.py",
             "def make_report(rep):\n    rep.outcome = \"passed\"\n    return rep\n",
+        )],
+        expect: &[],
+    },
+    Case {
+        name: "pytest: force_result called outside a report hook",
+        files: &[(
+            "conftest.py",
+            "def helper(res):\n    res.force_result(None)\n",
+        )],
+        expect: &[],
+    },
+    Case {
+        name: "pytest: sessionfinish only reads exitstatus",
+        files: &[(
+            "conftest.py",
+            "def pytest_sessionfinish(session, exitstatus):\n    if session.exitstatus != 0:\n        print(\"failed\")\n",
         )],
         expect: &[],
     },
@@ -562,6 +625,18 @@ const NEGATIVE_CONTROLS: &[Case] = &[
         ],
         expect: &[],
     },
+    Case {
+        name: "exit: a module not reached from any Cargo test target",
+        files: &[
+            ("Cargo.toml", CARGO_PACKAGE),
+            ("tests/it.rs", "#[test]\nfn it() {}\n"),
+            (
+                "tests/common/mod.rs",
+                "pub fn exit() {\n    std::process::exit(0);\n}\n",
+            ),
+        ],
+        expect: &[],
+    },
 ];
 
 fn enabled() -> String {
@@ -719,8 +794,8 @@ fn each_exact_form_is_reported_at_its_severity_and_no_near_miss_is() {
 /// dropped from it without this test saying so.
 #[test]
 fn the_negative_controls_are_enumerated() {
-    assert_eq!(EXACT_FORMS.len(), 23);
-    assert_eq!(NEGATIVE_CONTROLS.len(), 35);
+    assert_eq!(EXACT_FORMS.len(), 27);
+    assert_eq!(NEGATIVE_CONTROLS.len(), 38);
     assert!(NEGATIVE_CONTROLS.iter().all(|c| c.expect.is_empty()));
     assert!(EXACT_FORMS.iter().all(|c| !c.expect.is_empty()));
     let mut names: Vec<&str> = EXACT_FORMS
@@ -793,7 +868,7 @@ fn the_notes_name_the_examined_harness_files_and_the_pattern_version() {
     assert_eq!(run.outcome(GATE)["examined"], 2);
     assert_eq!(
         notes(&run),
-        vec!["pattern version 1; examined 2 harness file(s): pkg/conftest.py, pkg/p_test.go"]
+        vec!["pattern version 2; examined 2 harness file(s): pkg/conftest.py, pkg/p_test.go"]
     );
 
     let none = repo_with("");
@@ -803,7 +878,7 @@ fn the_notes_name_the_examined_harness_files_and_the_pattern_version() {
     assert_eq!(run.outcome(GATE)["examined"], 0);
     assert_eq!(
         notes(&run),
-        vec!["pattern version 1; no harness file among the changed files"]
+        vec!["pattern version 2; no harness file among the changed files"]
     );
 }
 
@@ -1130,7 +1205,7 @@ fn a_harness_file_that_does_not_parse_is_named_never_passed_in_silence() {
     );
     assert_eq!(run.outcome(GATE)["examined"], 1);
     assert!(
-        notes.contains(&"pattern version 1; examined 1 harness file(s): conftest.py".to_string()),
+        notes.contains(&"pattern version 2; examined 1 harness file(s): conftest.py".to_string()),
         "{notes:?}"
     );
 }
