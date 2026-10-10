@@ -381,9 +381,16 @@ fn js_num(n: Node) -> bool {
 }
 
 /// JS/TS: `expect(x).toBeLessThan(n)` and the other matchers with a numeric argument,
-/// chai `below` / `above` / `most` / `least`, `toBeCloseTo(x, digits)`, and comparisons
-/// inside an `assert(...)` / `expect(...)` call.
-pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
+/// chai `below` / `above` / `most` / `least`, `toBeCloseTo(x, digits)`, comparisons
+/// inside an `assert(...)` / `expect(...)` call, and Deno standard assertions
+/// `assertLess` / `assertLessOrEqual` / `assertGreater` / `assertGreaterOrEqual` /
+/// `assertAlmostEquals`.
+pub fn javascript(
+    root: Node,
+    src: &str,
+    tests: &mut [TestFn],
+    std_asserts: &[(String, &'static str)],
+) {
     if tests.is_empty() {
         return;
     }
@@ -399,11 +406,9 @@ pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
         walk(node, &mut |n| {
             match n.kind() {
                 "call_expression" => {
-                    let method = n
-                        .child_by_field_name("function")
-                        .filter(|f| f.kind() == "member_expression")
-                        .and_then(|f| f.child_by_field_name("property"))
-                        .map_or("", |p| text(p, src));
+                    let Some(func) = n.child_by_field_name("function") else {
+                        return true;
+                    };
                     let args: Vec<Node> = n
                         .child_by_field_name("arguments")
                         .map(|a| {
@@ -411,27 +416,50 @@ pub fn javascript(root: Node, src: &str, tests: &mut [TestFn]) {
                             a.named_children(&mut c).collect()
                         })
                         .unwrap_or_default();
-                    let (idx, up) = match method {
-                        "toBeLessThan"
-                        | "toBeLessThanOrEqual"
-                        | "lessThan"
-                        | "below"
-                        | "most"
-                        | "lte"
-                        | "lt" => (0, true),
-                        "toBeGreaterThan"
-                        | "toBeGreaterThanOrEqual"
-                        | "greaterThan"
-                        | "above"
-                        | "least"
-                        | "gte"
-                        | "gt" => (0, false),
-                        "toBeCloseTo" => (1, false),
-                        "closeTo" | "approximately" => (1, true),
-                        _ => return true,
+                    let target: Option<(usize, bool)> = match func.kind() {
+                        "member_expression" => {
+                            let method = func
+                                .child_by_field_name("property")
+                                .map_or("", |p| text(p, src));
+                            match method {
+                                "toBeLessThan"
+                                | "toBeLessThanOrEqual"
+                                | "lessThan"
+                                | "below"
+                                | "most"
+                                | "lte"
+                                | "lt" => Some((0, true)),
+                                "toBeGreaterThan"
+                                | "toBeGreaterThanOrEqual"
+                                | "greaterThan"
+                                | "above"
+                                | "least"
+                                | "gte"
+                                | "gt" => Some((0, false)),
+                                "toBeCloseTo" => Some((1, false)),
+                                "closeTo" | "approximately" => Some((1, true)),
+                                _ => None,
+                            }
+                        }
+                        "identifier" => {
+                            let name = text(func, src);
+                            if std_asserts.iter().any(|(bound, _)| bound == name) {
+                                match name {
+                                    "assertAlmostEquals" => Some((2, true)),
+                                    "assertGreater" | "assertGreaterOrEqual" => Some((1, false)),
+                                    "assertLess" | "assertLessOrEqual" => Some((1, true)),
+                                    _ => None,
+                                }
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
                     };
-                    if let Some(v) = args.get(idx).filter(|v| js_num(**v)) {
-                        record(records, node, *v, src, up);
+                    if let Some((idx, up)) = target {
+                        if let Some(v) = args.get(idx).filter(|v| js_num(**v)) {
+                            record(records, node, *v, src, up);
+                        }
                     }
                 }
                 "binary_expression" => {
@@ -710,6 +738,38 @@ mod tests {
                 src
             ),
             pairs(&[("200", true), ("0.9", false), ("2", false), ("50", true)])
+        );
+    }
+
+    #[test]
+    fn javascript_deno_standard_assertions() {
+        let src = r#"
+import { assertAlmostEquals, assertGreater, assertGreaterOrEqual, assertLess, assertLessOrEqual } from "jsr:@std/assert";
+import { assertLess as localLess } from "./local.js";
+
+test("deno bounds", () => {
+  assertLess(ms, 200);
+  assertLessOrEqual(t, 150);
+  assertGreater(r, 0.9);
+  assertGreaterOrEqual(n, 1);
+  assertAlmostEquals(v, 1.23, 1e-4);
+  assertAlmostEquals(w, 2.0);
+  localLess(x, 50);
+});
+"#;
+        assert_eq!(
+            bounds(
+                &crate::ast::javascript::JavaScriptPack,
+                "src/x.test.js",
+                src
+            ),
+            pairs(&[
+                ("200", true),
+                ("150", true),
+                ("0.9", false),
+                ("1", false),
+                ("1e-4", true)
+            ])
         );
     }
 

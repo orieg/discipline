@@ -73,9 +73,26 @@ impl LanguagePack for JavaScriptPack {
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers(root);
         JS_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
-        super::bounds::javascript(root, src, &mut extractor.facts.tests);
-        super::expectations::javascript(root, src, &mut extractor.facts.tests);
-        super::caught_assertions::javascript(root, &anc, src, &mut extractor.facts.tests, vocab);
+        super::bounds::javascript(
+            root,
+            src,
+            &mut extractor.facts.tests,
+            &extractor.std_asserts,
+        );
+        super::expectations::javascript(
+            root,
+            src,
+            &mut extractor.facts.tests,
+            &extractor.std_asserts,
+        );
+        super::caught_assertions::javascript(
+            root,
+            &anc,
+            src,
+            &mut extractor.facts.tests,
+            vocab,
+            &extractor.std_asserts,
+        );
         super::expected_exceptions::javascript(root, &anc, src, &mut extractor.facts.tests);
         extractor.facts.prose =
             super::prose::extract(root, src, &["comment", "string", "template_string"]);
@@ -239,6 +256,31 @@ pub(super) fn is_std_assert_module(module: &str) -> bool {
         && (module.contains("/assert/") || module.contains("/testing/asserts"))
 }
 
+pub(super) const DENO_STD_ASSERTS: &[&str] = &[
+    "assert",
+    "assertAlmostEquals",
+    "assertArrayIncludes",
+    "assertEquals",
+    "assertExists",
+    "assertFalse",
+    "assertGreater",
+    "assertGreaterOrEqual",
+    "assertInstanceOf",
+    "assertIsError",
+    "assertLess",
+    "assertLessOrEqual",
+    "assertMatch",
+    "assertNotEquals",
+    "assertNotInstanceOf",
+    "assertNotMatch",
+    "assertNotStrictEquals",
+    "assertObjectMatch",
+    "assertRejects",
+    "assertStrictEquals",
+    "assertStringIncludes",
+    "assertThrows",
+];
+
 /// The names the file imports from Deno's standard assertion module, each with the
 /// `node:assert` call the pack counts it as: `assertEquals(a, b)` is counted, and read
 /// for a tautology, as `assert.equal(a, b)` is. A function of the module with no such
@@ -252,7 +294,9 @@ fn std_assert_names<'t>(
 ) -> Vec<(String, &'static str)> {
     super::expected_exceptions::js_bindings(root, anc, src)
         .into_iter()
-        .filter(|(bound, module)| bound.starts_with("assert") && is_std_assert_module(module))
+        .filter(|(bound, module)| {
+            DENO_STD_ASSERTS.contains(&bound.as_str()) && is_std_assert_module(module)
+        })
         .map(|(bound, _)| {
             let counted_as = match bound.as_str() {
                 "assert" => "assert",

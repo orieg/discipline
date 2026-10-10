@@ -370,7 +370,7 @@ fn swallowing_handler<'a>(handlers: &[(Node<'a>, Reach, bool)]) -> Option<Node<'
 /// What a reader of handlers looks for in the body of one: the kinds of the nodes that
 /// begin another function or class, the kind of a handler's body, and whether a node
 /// fails the test when it runs.
-struct FailsIn {
+struct FailsIn<F = fn(Node, &str, &AssertVocabulary) -> bool> {
     /// A node of one of these kinds is not read: what fails in it fails when it is
     /// called, and not in the handler it is written in.
     scopes: &'static [&'static str],
@@ -379,10 +379,10 @@ struct FailsIn {
     /// Whether a body that is itself of one of `scopes` is read: the function a handler
     /// is, where a handler can be one.
     own_scope: bool,
-    fails: fn(Node, &str, &AssertVocabulary) -> bool,
+    fails: F,
 }
 
-impl FailsIn {
+impl<F: Fn(Node, &str, &AssertVocabulary) -> bool> FailsIn<F> {
     /// Whether a node under `body` fails the test, outside the scopes inside it: the
     /// body walked, as it was before the nodes that fail were listed ([`Failing`]).
     fn walked(&self, body: Node, src: &str, vocab: &AssertVocabulary) -> bool {
@@ -408,9 +408,9 @@ impl FailsIn {
 /// 9.0e9 instructions, and 3.2 to 3.6 times that for twice as many. The nodes that fail
 /// are listed once, each under the scope that holds it, and a body asks whether one of
 /// them stands between where it begins and where it ends.
-struct Failing<'t> {
+struct Failing<'t, F = fn(Node, &str, &AssertVocabulary) -> bool> {
     root: Node<'t>,
-    of: FailsIn,
+    of: FailsIn<F>,
     listed: std::cell::OnceCell<FailingListed>,
 }
 
@@ -423,8 +423,8 @@ struct FailingListed {
     bodies: std::collections::HashMap<usize, (usize, usize, usize)>,
 }
 
-impl<'t> Failing<'t> {
-    fn new(root: Node<'t>, of: FailsIn) -> Self {
+impl<'t, F: Fn(Node, &str, &AssertVocabulary) -> bool> Failing<'t, F> {
+    fn new(root: Node<'t>, of: FailsIn<F>) -> Self {
         Self {
             root,
             of,
@@ -1847,7 +1847,12 @@ fn js_finally_returns(try_stmt: Node) -> Option<Node> {
     find_child_by_kind(block, "return_statement").map(|_| finally)
 }
 
-fn js_is_assertion(call: Node, src: &str, vocab: &AssertVocabulary) -> bool {
+fn js_is_assertion(
+    call: Node,
+    src: &str,
+    vocab: &AssertVocabulary,
+    std_asserts: &[(String, &'static str)],
+) -> bool {
     let callee = js_callee(call, src);
     if configured(callee, vocab) {
         return true;
@@ -1855,7 +1860,8 @@ fn js_is_assertion(call: Node, src: &str, vocab: &AssertVocabulary) -> bool {
     let is_assert = callee == "expect"
         || callee.starts_with("expect(")
         || callee == "assert"
-        || callee.starts_with("assert.");
+        || callee.starts_with("assert.")
+        || std_asserts.iter().any(|(bound, _)| bound == callee);
     let is_expect_chain = {
         let mut cur = call;
         while cur.kind() == "member_expression" {
@@ -1876,7 +1882,12 @@ fn js_is_assertion(call: Node, src: &str, vocab: &AssertVocabulary) -> bool {
 /// Whether a node in a handler rethrows, asserts or fails the test. `done(err)` and
 /// `reject(..)` fail it: the runner's callback with an argument, and the promise the
 /// test returns.
-fn js_fails(n: Node, src: &str, vocab: &AssertVocabulary) -> bool {
+fn js_fails(
+    n: Node,
+    src: &str,
+    vocab: &AssertVocabulary,
+    std_asserts: &[(String, &'static str)],
+) -> bool {
     if n.kind() == "throw_statement" {
         return true;
     }
@@ -1897,33 +1908,25 @@ fn js_fails(n: Node, src: &str, vocab: &AssertVocabulary) -> bool {
         || callee == "reject"
         || (callee == "done" && has_argument)
         || configured(callee, vocab)
+        || std_asserts.iter().any(|(bound, _)| bound == callee)
 }
-
-/// A handler body is a block, or the expression an arrow function returns, which may be
-/// a function itself.
-const JS_FAILS: FailsIn = FailsIn {
-    scopes: JS_FUNCTIONS,
-    block: "statement_block",
-    own_scope: true,
-    fails: js_fails,
-};
 
 /// Whether a handler body neither rethrows, nor asserts, nor fails the test
 /// ([`js_fails`]), outside the functions written in it.
-fn js_handler_swallows<'t>(
+fn js_handler_swallows<'t, F: Fn(Node, &str, &AssertVocabulary) -> bool>(
     body: Node<'t>,
     src: &str,
     vocab: &AssertVocabulary,
-    failing: &Failing<'t>,
+    failing: &Failing<'t, F>,
 ) -> bool {
     !failing.under(body, src, vocab)
 }
 
-fn js_catch_body_swallows<'t>(
+fn js_catch_body_swallows<'t, F: Fn(Node, &str, &AssertVocabulary) -> bool>(
     catch_clause: Node<'t>,
     src: &str,
     vocab: &AssertVocabulary,
-    failing: &Failing<'t>,
+    failing: &Failing<'t, F>,
 ) -> bool {
     let Some(body) = catch_clause
         .child_by_field_name("body")
@@ -1941,14 +1944,19 @@ fn js_catch_body_swallows<'t>(
 /// once for each `.catch(name)`.
 type JsDeclared<'t, 's> = std::collections::HashMap<&'s str, Option<Node<'t>>>;
 
-fn js_promise_catch<'t, 's>(
+struct JsPromiseCatch<'a, 't, 's> {
+    declared: &'a mut JsDeclared<'t, 's>,
+    handed: &'a mut Option<(usize, usize)>,
+    std_asserts: &'a [(String, &'static str)],
+}
+
+fn js_promise_catch<'t, 's, F: Fn(Node, &str, &AssertVocabulary) -> bool>(
     call: Node<'t>,
     src: &'s str,
     caught: &mut Caught,
     vocab: &AssertVocabulary,
-    declared: &mut JsDeclared<'t, 's>,
-    handed: &mut Option<(usize, usize)>,
-    failing: &Failing<'t>,
+    promise: &mut JsPromiseCatch<'_, 't, 's>,
+    failing: &Failing<'t, F>,
 ) {
     let Some(function) = call.child_by_field_name("function") else {
         return;
@@ -1965,7 +1973,9 @@ fn js_promise_catch<'t, 's>(
     // still stands, so handing them over again changes nothing. A chain of `.catch()`
     // calls was walked once for each of them: 400 links, in a file of 21 kB, cost
     // 2.7e10 instructions.
-    if let (Some(chain), Some((from, to))) = (function.child_by_field_name("object"), *handed) {
+    if let (Some(chain), Some((from, to))) =
+        (function.child_by_field_name("object"), *promise.handed)
+    {
         super::ancestry::count(1);
         // A node of no width at either end of those bytes is not inside the chain.
         if chain.start_byte() < chain.end_byte()
@@ -1984,7 +1994,8 @@ fn js_promise_catch<'t, 's>(
         }
         Some(h) if h.kind() == "identifier" => {
             let name = text(h, src);
-            *declared
+            *promise
+                .declared
                 .entry(name)
                 .or_insert_with(|| js_declared_function_body(failing.root, name, src))
         }
@@ -2009,7 +2020,7 @@ fn js_promise_catch<'t, 's>(
     // a chain that holds one is not kept as handed over.
     let mut every_one_has_width = true;
     walk(chain, &mut |n| {
-        if n.kind() == "call_expression" && js_is_assertion(n, src, vocab) {
+        if n.kind() == "call_expression" && js_is_assertion(n, src, vocab, promise.std_asserts) {
             every_one_has_width &= n.start_byte() < n.end_byte();
             caught.attribute(CaughtAssertion {
                 line: n.start_position().row + 1,
@@ -2022,7 +2033,7 @@ fn js_promise_catch<'t, 's>(
         true
     });
     if every_one_has_width {
-        *handed = Some((chain.start_byte(), chain.end_byte()));
+        *promise.handed = Some((chain.start_byte(), chain.end_byte()));
     }
 }
 
@@ -2032,26 +2043,33 @@ pub fn javascript<'t>(
     src: &str,
     tests: &mut [TestFn],
     vocab: &AssertVocabulary,
+    std_asserts: &[(String, &'static str)],
 ) {
     if tests.is_empty() {
         return;
     }
     let mut caught = Caught::new(tests, root);
     let mut declared = JsDeclared::new();
-    let failing = Failing::new(root, JS_FAILS);
+    let fails = |n: Node, src: &str, vocab: &AssertVocabulary| js_fails(n, src, vocab, std_asserts);
+    let failing = Failing::new(
+        root,
+        FailsIn {
+            scopes: JS_FUNCTIONS,
+            block: "statement_block",
+            own_scope: true,
+            fails,
+        },
+    );
     // The bytes of the last promise chain whose assertions were all handed over.
     let mut handed = None;
+    let mut promise = JsPromiseCatch {
+        declared: &mut declared,
+        handed: &mut handed,
+        std_asserts,
+    };
     walk(root, &mut |node| {
         if node.kind() == "call_expression" {
-            js_promise_catch(
-                node,
-                src,
-                &mut caught,
-                vocab,
-                &mut declared,
-                &mut handed,
-                &failing,
-            );
+            js_promise_catch(node, src, &mut caught, vocab, &mut promise, &failing);
             return true;
         }
         if node.kind() != "try_statement" {
@@ -2078,7 +2096,7 @@ pub fn javascript<'t>(
             {
                 return false;
             }
-            if n.kind() == "call_expression" && js_is_assertion(n, src, vocab) {
+            if n.kind() == "call_expression" && js_is_assertion(n, src, vocab, std_asserts) {
                 caught.attribute(CaughtAssertion {
                     line: n.start_position().row + 1,
                     span: site(n).1,
@@ -4493,6 +4511,36 @@ test('normal', () => {
             neg_caught.is_empty(),
             "expected no caught assertions, got {neg_caught:?}"
         );
+    }
+
+    #[test]
+    fn javascript_deno_standard_assertions_caught_and_handler() {
+        let src = r#"
+import { assertEquals, assertLess } from "jsr:@std/assert";
+import { assertEquals as localEq } from "./local.js";
+
+test("caught deno assert", () => {
+    try {
+        assertEquals(a, 1);
+    } catch {}
+});
+
+test("deno assert in handler prevents swallowing", () => {
+    try {
+        f();
+    } catch (e) {
+        assertEquals(e.message, "err");
+    }
+});
+
+test("local assert caught is not std", () => {
+    try {
+        localEq(a, 1);
+    } catch {}
+});
+"#;
+        let caught = caught_lines(&crate::ast::javascript::JavaScriptPack, "test.ts", src);
+        assert_eq!(caught, vec![(7, 8)]);
     }
 
     #[test]
