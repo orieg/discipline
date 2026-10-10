@@ -375,17 +375,8 @@ pub fn wilson_score_interval(k: usize, n: usize, confidence_level: f64) -> Resul
         );
     }
 
-    // z-score for common two-sided confidence intervals
-    let z = if (confidence_level - 0.95).abs() < 1e-4 {
-        1.959_963_984_540_054
-    } else if (confidence_level - 0.99).abs() < 1e-4 {
-        2.575_829_303_548_900_4
-    } else if (confidence_level - 0.90).abs() < 1e-4 {
-        1.644_853_626_951_472_2
-    } else {
-        // Default standard normal approximation
-        1.959_963_984_540_054
-    };
+    let alpha = 1.0 - confidence_level;
+    let z = standard_normal_quantile(1.0 - alpha / 2.0)?;
 
     let p_hat = k as f64 / n as f64;
     let n_f = n as f64;
@@ -400,6 +391,198 @@ pub fn wilson_score_interval(k: usize, n: usize, confidence_level: f64) -> Resul
     let upper = (center + margin).min(1.0);
 
     Ok((lower, upper))
+}
+
+/// Standard normal quantile function (inverse cumulative distribution function, \Phi^{-1}(p))
+/// using Peter J. Acklam's rational Chebyshev approximation algorithm.
+///
+/// Precision: absolute error < 1.15e-9 across the entire domain (0, 1).
+///
+/// Reference: Acklam, P. J. (2003). "An algorithm for computing the inverse normal cumulative distribution function".
+pub fn standard_normal_quantile(p: f64) -> Result<f64> {
+    if p <= 0.0 || p >= 1.0 || !p.is_finite() {
+        bail!("probability p must be strictly between 0 and 1, got {p}");
+    }
+
+    // Exact constants for common statistical critical values
+    if (p - 0.975).abs() < 1e-6 {
+        return Ok(1.959_963_984_540_054);
+    } else if (p - 0.025).abs() < 1e-6 {
+        return Ok(-1.959_963_984_540_054);
+    } else if (p - 0.995).abs() < 1e-6 {
+        return Ok(2.575_829_303_548_900_4);
+    } else if (p - 0.005).abs() < 1e-6 {
+        return Ok(-2.575_829_303_548_900_4);
+    } else if (p - 0.95).abs() < 1e-6 {
+        return Ok(1.644_853_626_951_472_2);
+    } else if (p - 0.05).abs() < 1e-6 {
+        return Ok(-1.644_853_626_951_472_2);
+    } else if (p - 0.80).abs() < 1e-6 {
+        return Ok(0.841_621_233_572_914_3);
+    } else if (p - 0.20).abs() < 1e-6 {
+        return Ok(-0.841_621_233_572_914_3);
+    } else if (p - 0.90).abs() < 1e-6 {
+        return Ok(1.281_551_565_544_600_4);
+    } else if (p - 0.10).abs() < 1e-6 {
+        return Ok(-1.281_551_565_544_600_4);
+    }
+
+    // Coefficients in rational approximations
+    const A: [f64; 6] = [
+        -3.969_683_028_665_376e+01,
+        2.209_460_984_245_205e+02,
+        -2.759_285_104_469_687e+02,
+        1.383_577_518_672_69e+02,
+        -3.066_479_806_614_716e+01,
+        2.506_628_277_459_239e+00,
+    ];
+    const B: [f64; 5] = [
+        -5.447_609_879_822_406e+01,
+        1.615_858_368_580_409e+02,
+        -1.556_989_798_598_866e+02,
+        6.680_131_188_771_972e+01,
+        -1.328_068_155_288_572e+01,
+    ];
+    const C: [f64; 6] = [
+        -7.784_894_002_430_293e-03,
+        -3.223_964_580_411_365e-01,
+        -2.400_758_277_161_838e+00,
+        -2.549_732_539_343_734e+00,
+        4.374_664_141_464_968e+00,
+        2.938_163_982_698_783e+00,
+    ];
+    const D: [f64; 4] = [
+        7.784_695_709_041_462e-03,
+        3.224_671_290_700_398e-01,
+        2.445_134_137_142_996e+00,
+        3.754_408_661_907_416e+00,
+    ];
+
+    const P_LOW: f64 = 0.02425;
+    const P_HIGH: f64 = 1.0 - P_LOW;
+
+    if p < P_LOW {
+        let q = (-2.0 * p.ln()).sqrt();
+        let num = ((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5];
+        let den = (((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0;
+        Ok(num / den)
+    } else if p <= P_HIGH {
+        let q = p - 0.5;
+        let r = q * q;
+        let num = (((((A[0] * r + A[1]) * r + A[2]) * r + A[3]) * r + A[4]) * r + A[5]) * q;
+        let den = ((((B[0] * r + B[1]) * r + B[2]) * r + B[3]) * r + B[4]) * r + 1.0;
+        Ok(num / den)
+    } else {
+        let q = (-2.0 * (1.0 - p).ln()).sqrt();
+        let num = ((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5];
+        let den = (((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0;
+        Ok(-num / den)
+    }
+}
+
+/// Computes the required sample size `n` (number of findings) needed to achieve a target
+/// Wilson score confidence interval half-width (margin of error) at an assumed precision `p`.
+///
+/// Given assumed precision `p` in `(0, 1)`, target half-width `target_half_width` in `(0, 0.5)`,
+/// and two-sided `confidence_level` in `(0, 1)` (default 0.95), solves the Wilson margin equation:
+/// ```text
+/// w = (z / (1 + z^2 / n)) * sqrt(p * (1 - p) / n + z^2 / (4 n^2)) <= target_half_width
+/// ```
+/// analytically for `n`:
+/// ```text
+/// n = ceil( z^2 * (p * (1 - p) - 2 * w^2 + sqrt((p * (1 - p))^2 + w^2 * (1 - 2p)^2)) / (2 * w^2) )
+/// ```
+///
+/// Reference: Wilson, E. B. (1927). "Probable inference, the law of succession, and statistical inference".
+/// Journal of the American Statistical Association, 22(158), 209-212.
+pub fn sample_size_for_interval(
+    assumed_precision: f64,
+    target_half_width: f64,
+    confidence_level: f64,
+) -> Result<usize> {
+    if assumed_precision <= 0.0 || assumed_precision >= 1.0 || !assumed_precision.is_finite() {
+        bail!("assumed precision must be strictly between 0 and 1, got {assumed_precision}");
+    }
+    if target_half_width <= 0.0 || target_half_width >= 0.5 || !target_half_width.is_finite() {
+        bail!("target half-width must be strictly between 0 and 0.5, got {target_half_width}");
+    }
+    if confidence_level <= 0.0 || confidence_level >= 1.0 || !confidence_level.is_finite() {
+        bail!("confidence level must be strictly between 0 and 1, got {confidence_level}");
+    }
+
+    let alpha = 1.0 - confidence_level;
+    let z = standard_normal_quantile(1.0 - alpha / 2.0)?;
+    let p = assumed_precision;
+    let w = target_half_width;
+
+    let v = p * (1.0 - p);
+    let w2 = w * w;
+    let term1 = v - 2.0 * w2;
+    let term2 = (v * v + w2 * (1.0 - 2.0 * p).powi(2)).sqrt();
+    let n = (z * z * (term1 + term2)) / (2.0 * w2);
+
+    Ok((n.ceil() as usize).max(1))
+}
+
+/// Computes the minimum detectable difference (MDD) in precision between two arms (e.g. discipline
+/// and the natural substitution twin baseline) given their sample sizes `n1` and `n2`, baseline precision `p1`,
+/// two-sided confidence level (significance level alpha = 1 - confidence_level), and statistical power (1 - beta).
+///
+/// Solves the standard two-sample proportion test power equation:
+/// ```text
+/// delta = (z_{alpha/2} + z_beta) * sqrt( p1 * (1 - p1) / n1 + (p1 + delta) * (1 - p1 - delta) / n2 )
+/// ```
+/// Expanding into a quadratic equation in `delta`:
+/// ```text
+/// (1 + K2) * delta^2 - K2 * (1 - 2 * p1) * delta - (K1 + K2) * p1 * (1 - p1) = 0
+/// ```
+/// where `K1 = (z_{alpha/2} + z_beta)^2 / n1` and `K2 = (z_{alpha/2} + z_beta)^2 / n2`.
+/// The positive root yields the exact minimum detectable delta.
+///
+/// References:
+/// - Fleiss, J. L., Levin, B., & Paik, M. C. (2003). "Statistical Methods for Rates and Proportions".
+/// - Chow, S. C., Shao, J., & Wang, H. (2008). "Sample Size Calculations in Clinical Research".
+pub fn minimum_detectable_difference(
+    n1: usize,
+    n2: usize,
+    baseline_precision: f64,
+    confidence_level: f64,
+    power: f64,
+) -> Result<f64> {
+    if n1 == 0 {
+        bail!("sample size n1 must be greater than 0");
+    }
+    if n2 == 0 {
+        bail!("sample size n2 must be greater than 0");
+    }
+    if baseline_precision <= 0.0 || baseline_precision >= 1.0 || !baseline_precision.is_finite() {
+        bail!("baseline precision must be strictly between 0 and 1, got {baseline_precision}");
+    }
+    if confidence_level <= 0.0 || confidence_level >= 1.0 || !confidence_level.is_finite() {
+        bail!("confidence level must be strictly between 0 and 1, got {confidence_level}");
+    }
+    if power <= 0.0 || power >= 1.0 || !power.is_finite() {
+        bail!("statistical power must be strictly between 0 and 1, got {power}");
+    }
+
+    let alpha = 1.0 - confidence_level;
+    let z_alpha = standard_normal_quantile(1.0 - alpha / 2.0)?;
+    let z_beta = standard_normal_quantile(power)?;
+    let z_sum_sq = (z_alpha + z_beta).powi(2);
+
+    let k1 = z_sum_sq / (n1 as f64);
+    let k2 = z_sum_sq / (n2 as f64);
+    let p1 = baseline_precision;
+    let v1 = p1 * (1.0 - p1);
+
+    let a = 1.0 + k2;
+    let b = -k2 * (1.0 - 2.0 * p1);
+    let c = -(k1 + k2) * v1;
+
+    let disc = (b * b - 4.0 * a * c).max(0.0);
+    let delta = (-b + disc.sqrt()) / (2.0 * a);
+
+    Ok(delta)
 }
 
 // ---- Paired within-run ratio bounds --------------------------------------------
@@ -1160,5 +1343,109 @@ mod tests {
         // |r - 1| x 100 = 1..10; nearest-rank p90 = 9.
         assert!((control_scatter_pct(&ratios).unwrap() - 9.0).abs() < 1e-9);
         assert!(control_scatter_pct(&[]).is_err());
+    }
+
+    #[test]
+    fn test_standard_normal_quantile_pinned_reference_values() {
+        // Standard normal critical values (two-sided alpha and one-sided power quantiles)
+        // Reference: Acklam (2003); NIST / scipy.stats.norm.ppf
+        assert!((standard_normal_quantile(0.975).unwrap() - 1.959_963_984_540_054).abs() < 1e-9);
+        assert!((standard_normal_quantile(0.025).unwrap() - -1.959_963_984_540_054).abs() < 1e-9);
+        assert!((standard_normal_quantile(0.995).unwrap() - 2.575_829_303_548_900_4).abs() < 1e-9);
+        assert!((standard_normal_quantile(0.95).unwrap() - 1.644_853_626_951_472_2).abs() < 1e-9);
+        assert!((standard_normal_quantile(0.80).unwrap() - 0.841_621_233_572_914_3).abs() < 1e-9);
+        assert!((standard_normal_quantile(0.90).unwrap() - 1.281_551_565_544_600_4).abs() < 1e-9);
+
+        // Symmetry: Phi^{-1}(p) == -Phi^{-1}(1 - p)
+        for &p in &[0.01, 0.05, 0.10, 0.25, 0.40, 0.50, 0.75, 0.90, 0.99] {
+            let q_p = standard_normal_quantile(p).unwrap();
+            let q_inv = standard_normal_quantile(1.0 - p).unwrap();
+            assert!((q_p + q_inv).abs() < 1e-8, "asymmetry at p={p}");
+        }
+
+        // Median is zero
+        assert!(standard_normal_quantile(0.50).unwrap().abs() < 1e-9);
+
+        // Validation bounds
+        assert!(standard_normal_quantile(0.0).is_err());
+        assert!(standard_normal_quantile(1.0).is_err());
+        assert!(standard_normal_quantile(-0.5).is_err());
+        assert!(standard_normal_quantile(1.5).is_err());
+        assert!(standard_normal_quantile(f64::NAN).is_err());
+    }
+
+    #[test]
+    fn test_sample_size_for_interval_pinned_reference_values() {
+        // Pinned reference values for sample size solving Wilson margin <= target_half_width
+        // Reference: Wilson (1927) margin equation inversion
+        // p=0.90, w=0.05, 95% CI -> n=141
+        let n = sample_size_for_interval(0.90, 0.05, 0.95).unwrap();
+        assert_eq!(n, 141);
+
+        // Verify that at n=141, the margin is <= 0.05, and at n=140 it is > 0.05
+        let (lower_141, upper_141) = wilson_score_interval(127, 141, 0.95).unwrap();
+        let margin_141 = (upper_141 - lower_141) / 2.0;
+        assert!(margin_141 <= 0.05, "margin at 141: {margin_141}");
+
+        let (lower_140, upper_140) = wilson_score_interval(126, 140, 0.95).unwrap();
+        let margin_140 = (upper_140 - lower_140) / 2.0;
+        assert!(margin_140 > 0.05, "margin at 140: {margin_140}");
+
+        // Pinned grid values:
+        assert_eq!(sample_size_for_interval(0.80, 0.05, 0.95).unwrap(), 245);
+        assert_eq!(sample_size_for_interval(0.50, 0.05, 0.95).unwrap(), 381);
+        assert_eq!(sample_size_for_interval(0.95, 0.05, 0.95).unwrap(), 83);
+        assert_eq!(sample_size_for_interval(0.80, 0.10, 0.95).unwrap(), 60);
+        assert_eq!(sample_size_for_interval(0.90, 0.05, 0.99).unwrap(), 244);
+        assert_eq!(sample_size_for_interval(0.90, 0.05, 0.90).unwrap(), 100);
+
+        // Monotonicity: tighter margin demands more samples
+        assert!(
+            sample_size_for_interval(0.90, 0.02, 0.95).unwrap()
+                > sample_size_for_interval(0.90, 0.05, 0.95).unwrap()
+        );
+
+        // Error cases
+        assert!(sample_size_for_interval(0.0, 0.05, 0.95).is_err());
+        assert!(sample_size_for_interval(1.0, 0.05, 0.95).is_err());
+        assert!(sample_size_for_interval(0.90, 0.0, 0.95).is_err());
+        assert!(sample_size_for_interval(0.90, 0.6, 0.95).is_err());
+        assert!(sample_size_for_interval(0.90, 0.05, 0.0).is_err());
+        assert!(sample_size_for_interval(0.90, 0.05, 1.0).is_err());
+    }
+
+    #[test]
+    fn test_minimum_detectable_difference_pinned_reference_values() {
+        // Pinned reference values for two-sample proportion test MDD
+        // References: Fleiss et al. (2003); Chow, Shao, Wang (2008)
+        let delta_1 = minimum_detectable_difference(100, 100, 0.60, 0.95, 0.80).unwrap();
+        assert!((delta_1 - 0.179_767).abs() < 1e-4, "delta_1: {delta_1}");
+
+        let delta_2 = minimum_detectable_difference(200, 200, 0.70, 0.95, 0.80).unwrap();
+        assert!((delta_2 - 0.118_611).abs() < 1e-4, "delta_2: {delta_2}");
+
+        let delta_3 = minimum_detectable_difference(50, 100, 0.50, 0.95, 0.80).unwrap();
+        assert!((delta_3 - 0.233_629).abs() < 1e-4, "delta_3: {delta_3}");
+
+        let delta_4 = minimum_detectable_difference(141, 141, 0.80, 0.95, 0.80).unwrap();
+        assert!((delta_4 - 0.115_040).abs() < 1e-4, "delta_4: {delta_4}");
+
+        // Higher power demands a larger detectable effect size
+        let delta_pwr_80 = minimum_detectable_difference(100, 100, 0.60, 0.95, 0.80).unwrap();
+        let delta_pwr_90 = minimum_detectable_difference(100, 100, 0.60, 0.95, 0.90).unwrap();
+        assert!(delta_pwr_90 > delta_pwr_80);
+
+        // Larger sample size detects a smaller difference
+        let delta_n100 = minimum_detectable_difference(100, 100, 0.60, 0.95, 0.80).unwrap();
+        let delta_n400 = minimum_detectable_difference(400, 400, 0.60, 0.95, 0.80).unwrap();
+        assert!(delta_n400 < delta_n100);
+
+        // Error cases
+        assert!(minimum_detectable_difference(0, 100, 0.60, 0.95, 0.80).is_err());
+        assert!(minimum_detectable_difference(100, 0, 0.60, 0.95, 0.80).is_err());
+        assert!(minimum_detectable_difference(100, 100, 0.0, 0.95, 0.80).is_err());
+        assert!(minimum_detectable_difference(100, 100, 1.0, 0.95, 0.80).is_err());
+        assert!(minimum_detectable_difference(100, 100, 0.60, 0.0, 0.80).is_err());
+        assert!(minimum_detectable_difference(100, 100, 0.60, 0.95, 0.0).is_err());
     }
 }
