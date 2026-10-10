@@ -22,9 +22,10 @@ use super::gitattributes::{wildmatch, GitAttributes};
 use super::go_build::{go_build_constraint, go_build_constraint_line, GoBuild};
 use super::go_work::{parse_go_work, GoWork};
 use super::runner_config::{
-    deno_entry_is_glob, imports_node_test, jest_setup_files, parse_conftest, parse_deno_config,
-    parse_vitest_config, plain_semver_major, read_jest_scripts, script_setup_files,
-    scripts_run_node_test, ConftestIgnores, DenoTest, SetupFiles, VitestConfig,
+    deno_entry_is_glob, imports_node_test, jest_setup_files, parse_conftest,
+    parse_conftest_plugins, parse_deno_config, parse_vitest_config, plain_semver_major,
+    read_jest_scripts, script_setup_files, scripts_run_node_test, ConftestIgnores, DenoTest,
+    SetupFiles, VitestConfig,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use tree_sitter::Node;
@@ -3921,6 +3922,12 @@ pub struct ConfiguredHarness {
     /// The root file of each Cargo test target `cargo test` runs, with whether the
     /// target sets `harness = false` (its `main` is then the whole test run).
     pub rust_targets: BTreeMap<String, bool>,
+    /// The Rust modules reached from a Cargo test target through `mod` declarations,
+    /// with the root target that reaches them.
+    pub rust_modules: BTreeMap<String, String>,
+    /// Each Python file a `conftest.py` names in `pytest_plugins`, with the `conftest.py`
+    /// that names it.
+    pub pytest_plugins: BTreeMap<String, String>,
     /// The configurations whose list could not be read.
     pub unread: Vec<UnreadHarnessConfig>,
 }
@@ -3972,6 +3979,28 @@ impl ConfiguredHarness {
                         dir: dir.to_string(),
                         extensions: &["rs"],
                     }),
+                }
+                continue;
+            }
+            if name == "conftest.py" {
+                if let Some(src) = reader(path) {
+                    for plugin in parse_conftest_plugins(&src) {
+                        let rel = plugin.replace('.', "/");
+                        let candidates = [
+                            join_dir(dir, &format!("{rel}.py")),
+                            join_dir(dir, &format!("{rel}/__init__.py")),
+                            format!("{rel}.py"),
+                            format!("{rel}/__init__.py"),
+                        ];
+                        for cand in candidates {
+                            if let Some(clean) = clean_relative(&cand) {
+                                if known.contains(clean.as_str()) {
+                                    harness.pytest_plugins.insert(clean, path.clone());
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 }
                 continue;
             }
@@ -4049,6 +4078,20 @@ impl ConfiguredHarness {
             });
             if auto && !harness.rust_targets.contains_key(path) {
                 harness.rust_targets.insert(path.clone(), false);
+            }
+        }
+        let rust_files: HashSet<&str> = tracked
+            .iter()
+            .filter(|p| p.ends_with(".rs"))
+            .map(String::as_str)
+            .collect();
+        let target_roots: Vec<String> = harness.rust_targets.keys().cloned().collect();
+        for target in target_roots {
+            let modules = follow_rust_modules(vec![target.clone()], &rust_files, &mut reader, true);
+            for reached in modules.reached {
+                if reached != target {
+                    harness.rust_modules.insert(reached, target.clone());
+                }
             }
         }
         harness
@@ -4343,6 +4386,32 @@ mod tests {
         assert_eq!(
             (broken.unread[0].dir.as_str(), broken.unread[0].extensions),
             ("svc", &["rs"][..])
+        );
+    }
+
+    #[test]
+    fn conftest_plugins_and_rust_test_modules_are_harness_files() {
+        let package = "[package]\nname = \"p\"\nversion = \"0.1.0\"\n";
+        let harness = configured_harness(&[
+            ("Cargo.toml", package),
+            ("tests/it.rs", "mod helper;\n"),
+            ("tests/helper.rs", "pub fn help() {}\n"),
+            ("conftest.py", "pytest_plugins = ['tamper_mod']\n"),
+            ("tamper_mod.py", "def pytest_runtest_makereport(): pass\n"),
+        ]);
+        assert_eq!(
+            harness
+                .pytest_plugins
+                .get("tamper_mod.py")
+                .map(String::as_str),
+            Some("conftest.py")
+        );
+        assert_eq!(
+            harness
+                .rust_modules
+                .get("tests/helper.rs")
+                .map(String::as_str),
+            Some("tests/it.rs")
         );
     }
 

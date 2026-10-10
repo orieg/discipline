@@ -8,8 +8,9 @@
 //!
 //! - Go: a `TestMain` that never calls `m.Run()`, or calls it, drops the result and
 //!   ends in an `os.Exit` that does not carry it ([`go_test_file`]).
-//! - pytest: a report hook that assigns a report's `outcome`, and a collection hook
-//!   that removes items and reads no marker, keyword or option ([`python`]).
+//! - pytest: a report hook that assigns a report's `outcome` or calls `force_result`,
+//!   a collection hook that removes items and reads no marker, keyword or option, and
+//!   `pytest_sessionfinish` assigning `session.exitstatus` ([`python`]).
 //! - `unittest`: `addFailure`, `addError` or `wasSuccessful` assigned, or overridden in
 //!   a `TestResult` subclass by a body that does nothing ([`python`]).
 //! - An exit with status zero that no condition guards: `sys.exit(0)`, `os._exit(0)`
@@ -21,7 +22,7 @@ use tree_sitter::Node;
 
 /// The version of the forms read here. It is written into the gate's notes, and
 /// changes whenever a form is added, removed or read differently.
-pub const PATTERN_VERSION: u32 = 1;
+pub const PATTERN_VERSION: u32 = 2;
 
 /// One form of tampering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -30,7 +31,8 @@ pub enum Form {
     GoRunNeverCalled,
     /// A Go `TestMain` that calls `m.Run()`, drops its result, and exits.
     GoResultDiscarded,
-    /// A pytest report hook assigns a report's `outcome`.
+    /// A pytest report hook assigns a report's `outcome`, calls `force_result`, or
+    /// `pytest_sessionfinish` assigns `session.exitstatus`.
     PytestOutcomeAssigned,
     /// A pytest collection hook removes items and reads no marker, keyword or option.
     PytestItemsRemoved,
@@ -865,9 +867,9 @@ fn python_result_subclass(class: Node, src: &[u8], sites: &mut Vec<Site>) {
 /// Reads a Python file the runner loads, for the forms `checks` names.
 ///
 /// Not reported, each a way round the reader:
-/// - a report replaced instead of assigned to (`force_result`, a hook that returns its
-///   own report), and any other field of a report (`longrepr`, `wasxfail`);
-/// - an exit status set in another hook (`session.exitstatus = 0`);
+/// - a hook that returns its own report, and any other field of a report (`longrepr`,
+///   `wasxfail`);
+/// - an exit status set in another hook (outside `pytest_sessionfinish`);
 /// - tests removed by a skip marker added to every item, or by a collection hook that
 ///   reads a marker it does not use;
 /// - a result method replaced through `mock.patch`, or an override that calls another
@@ -899,20 +901,53 @@ pub fn python(src: &str, checks: PythonChecks) -> Result<Scan, String> {
             if name == PYTEST_COLLECTION_HOOK {
                 python_collection_hook(*hook, bytes, &mut scan.sites);
             }
-            let (true, Some(body)) = (
-                PYTEST_REPORT_HOOKS.contains(&name),
-                hook.child_by_field_name("body"),
-            ) else {
-                continue;
-            };
-            for (attribute, node) in python_assigned_attributes(body, bytes) {
-                if attribute == "outcome" {
-                    scan.sites.push(Site {
-                        form: Form::PytestOutcomeAssigned,
-                        line: line(node),
-                        subject: name.to_string(),
-                        what: format!("`{name}` assigns the `outcome` of a test report"),
-                    });
+            if PYTEST_REPORT_HOOKS.contains(&name) {
+                if let Some(body) = hook.child_by_field_name("body") {
+                    for (attribute, node) in python_assigned_attributes(body, bytes) {
+                        if attribute == "outcome" {
+                            scan.sites.push(Site {
+                                form: Form::PytestOutcomeAssigned,
+                                line: line(node),
+                                subject: name.to_string(),
+                                what: format!("`{name}` assigns the `outcome` of a test report"),
+                            });
+                        }
+                    }
+                    for node in preorder(body, &[]) {
+                        if node.kind() == "call" {
+                            if let Some(function) = node
+                                .child_by_field_name("function")
+                                .filter(|f| f.kind() == "attribute")
+                            {
+                                if let Some(attr) = function.child_by_field_name("attribute") {
+                                    if text(attr, bytes) == "force_result" {
+                                        scan.sites.push(Site {
+                                            form: Form::PytestOutcomeAssigned,
+                                            line: line(node),
+                                            subject: name.to_string(),
+                                            what: format!(
+                                                "`{name}` calls `force_result` on a test report outcome"
+                                            ),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if name == "pytest_sessionfinish" {
+                if let Some(body) = hook.child_by_field_name("body") {
+                    for (attribute, node) in python_assigned_attributes(body, bytes) {
+                        if attribute == "exitstatus" {
+                            scan.sites.push(Site {
+                                form: Form::PytestOutcomeAssigned,
+                                line: line(node),
+                                subject: name.to_string(),
+                                what: format!("`{name}` assigns `session.exitstatus`"),
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -1268,6 +1303,10 @@ mod tests {
             "def pytest_runtest_logreport(report):\n    setattr(report, \"outcome\", \"passed\")\n",
             "def pytest_runtest_logreport(report):\n    report.outcome, report.longrepr = \"passed\", None\n",
             "class Plugin:\n    def pytest_runtest_makereport(self, item, call):\n        result = (yield).get_result()\n        result.outcome = \"passed\"\n",
+            "import pytest\n\n@pytest.hookimpl(hookwrapper=True)\ndef pytest_runtest_makereport(item, call):\n    outcome = yield\n    outcome.force_result(None)\n",
+            "def pytest_runtest_logreport(report):\n    res = yield\n    res.force_result(report)\n",
+            "def pytest_sessionfinish(session, exitstatus):\n    session.exitstatus = 0\n",
+            "def pytest_sessionfinish(session):\n    setattr(session, \"exitstatus\", 0)\n",
         ] {
             assert_eq!(py(src), vec![Form::PytestOutcomeAssigned], "{src}");
         }
@@ -1281,6 +1320,8 @@ mod tests {
             "def pytest_runtest_makereport(item, call):\n    outcome = yield\n    summary = outcome.get_result().outcome\n    item.outcome_seen = summary\n",
             // The same assignment outside a report hook is not the form.
             "def helper(rep):\n    rep.outcome = \"passed\"\n",
+            "def pytest_sessionfinish(session, exitstatus):\n    if session.exitstatus != 0:\n        print('failed')\n",
+            "def helper():\n    mock.force_result(123)\n",
         ] {
             assert_eq!(py(src), Vec::<Form>::new(), "{src}");
         }

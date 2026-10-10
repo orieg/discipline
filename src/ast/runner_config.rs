@@ -878,6 +878,73 @@ pub fn parse_conftest(source: &str) -> ConftestIgnores {
     }
 }
 
+/// Reads the plugin modules named by `pytest_plugins` in a `conftest.py`.
+pub fn parse_conftest_plugins(source: &str) -> Vec<String> {
+    if !source.contains("pytest_plugins") {
+        return Vec::new();
+    }
+    if crate::ast::scanner_limits::python_indent_nesting(source).is_err() {
+        return Vec::new();
+    }
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_python::LANGUAGE.into())
+        .is_err()
+    {
+        return Vec::new();
+    }
+    let Ok(tree) = crate::ast::source_text::parse(&mut parser, source) else {
+        return Vec::new();
+    };
+    let root = tree.root_node();
+    let src = source.as_bytes();
+    if root.has_error() {
+        return Vec::new();
+    }
+    let mut plugins = Vec::new();
+    let mut cursor = root.walk();
+    for statement in root.named_children(&mut cursor) {
+        if statement.kind() != "expression_statement" {
+            continue;
+        }
+        let Some(assignment) = statement
+            .named_child(0)
+            .filter(|n| n.kind() == "assignment")
+        else {
+            continue;
+        };
+        let (Some(left), Some(right)) = (
+            assignment.child_by_field_name("left"),
+            assignment.child_by_field_name("right"),
+        ) else {
+            continue;
+        };
+        if left.kind() != "identifier" || text(left, src) != "pytest_plugins" {
+            continue;
+        }
+        match right.kind() {
+            "string" => {
+                if let Some(val) = python_string(right, src) {
+                    plugins.push(val);
+                }
+            }
+            "list" | "tuple" => {
+                let mut inner = right.walk();
+                for item in right.named_children(&mut inner) {
+                    if item.kind() == "comment" {
+                        continue;
+                    }
+                    if let Some(val) = python_string(item, src) {
+                        plugins.push(val);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    plugins
+}
+
 /// The files a Jest or Vitest configuration has the runner load around the tests: set-up
 /// files, and global set-up and tear-down modules.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1496,6 +1563,24 @@ export default { test: { include: ['a/**'] } };
         ] {
             assert_eq!(parse_conftest(source), ConftestIgnores::Dynamic, "{source}");
         }
+    }
+
+    #[test]
+    fn conftest_plugins_are_read_when_literal() {
+        assert_eq!(
+            parse_conftest_plugins("pytest_plugins = ['a', 'pkg.b']\n"),
+            vec!["a".to_string(), "pkg.b".to_string()]
+        );
+        assert_eq!(
+            parse_conftest_plugins("pytest_plugins = ('single',)\n"),
+            vec!["single".to_string()]
+        );
+        assert_eq!(
+            parse_conftest_plugins("pytest_plugins = \"single\"\n"),
+            vec!["single".to_string()]
+        );
+        assert!(parse_conftest_plugins("# empty\n").is_empty());
+        assert!(parse_conftest_plugins("other = ['a']\n").is_empty());
     }
 
     fn deno_excludes(config: &str) -> Vec<(String, bool)> {
