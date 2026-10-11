@@ -633,14 +633,6 @@ pub fn org_settings(org: &serde_json::Value) -> Vec<Finding> {
     vec![base, two_factor, visibility]
 }
 
-/// The host of a webhook URL, without scheme, credentials, port or path.
-fn url_host(url: &str) -> String {
-    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let host = authority.rsplit('@').next().unwrap_or("");
-    host.split(':').next().unwrap_or("").to_string()
-}
-
 /// `webhooks`: a webhook with no secret, or with TLS verification off, delivers events a
 /// forged sender can imitate or a network can read (OpenSSF Scorecard Webhooks). GitHub shows
 /// whether a secret is set; GitLab returns no secret token, only `enable_ssl_verification`;
@@ -653,7 +645,7 @@ pub fn webhooks_finding(kind: ForgeKind, hooks: &[serde_json::Value]) -> Finding
         h.pointer("/config/url")
             .or_else(|| h.get("url"))
             .and_then(|u| u.as_str())
-            .map(url_host)
+            .map(crate::forge::host_of)
             .unwrap_or_default()
     };
     let weak: Vec<&serde_json::Value> = match kind {

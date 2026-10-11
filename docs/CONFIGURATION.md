@@ -1584,6 +1584,21 @@ Discipline produces multi-target reports from a single execution run:
 | **SARIF** | `--report-sarif <path>` | OASIS SARIF v2.1.0 report for GitHub Code Scanning, VS Code, and security dashboards. |
 | **JUnit XML** | `--report-junit <path>` (written to `junit.xml` by default in GitLab CI) | Standard test results XML for CI test summary dashboards and flaky test tracking. |
 
+### Embedding Discipline
+
+The supported way to integrate Discipline into higher-level workflows, automated platforms, and custom agents is via the static binary and its structured outputs:
+- **CLI Invocations:**
+  - `discipline check --format json` (or `--json-out <path>`): Full machine-readable report conforming to `discipline.report.schema.json`.
+  - `discipline check --report-sarif <path>`: SARIF 2.1.0 report for security consoles and IDE extensions.
+  - `discipline check --report-junit <path>`: JUnit XML testsuite report for CI summary widgets.
+  - `discipline check --report-gitlab <path>`: GitLab Code Quality JSON.
+  - `discipline mcp`: Model Context Protocol server over stdio for AI agent environments.
+- **Exit Codes:**
+  - `0`: All gates passed (no violations exceeding configured severity thresholds).
+  - `1`: Violations found (or policy refusal / overrides under `fail_on_overrides`).
+  - `2`: Gate could not check (broken environment, missing base ref, syntax budget exhausted, or forge unreachable). On exit 2 under `--format json`, the report contains a `could_not_check` object naming the `reason`, `gate`, and error.
+- **Network Isolation:** Setting `DISCIPLINE_NO_NETWORK=1` guarantees all outbound network calls are forbidden (failing closed if remote forge access is required for a feature).
+
 ### Policy Refusals
 
 A refusal is a decision of the run's policy that no gate owns. The JSON report is its canonical record: `policy_failures` lists the refusals that fail the run, and a gate's `notes` name each hidden directive that was not read. The SARIF, JUnit and GitLab code-quality reports carry one entry per refusal as a projection of that record: a rule id, where the refusal is, and fixed wording. The projection is lossy: counts, the checked head, reviewers' logins and the name of a hidden directive are in the JSON and text reports only, and a directive's subject and reason are in no refusal entry.

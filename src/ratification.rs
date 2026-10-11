@@ -497,15 +497,6 @@ fn unlinked_closing(
     out
 }
 
-fn forge_name(kind: ForgeKind) -> &'static str {
-    match kind {
-        ForgeKind::GitHub => "GitHub",
-        ForgeKind::GitLab => "GitLab",
-        ForgeKind::Gitea => "Gitea",
-        ForgeKind::Forgejo => "Forgejo",
-    }
-}
-
 /// When pull request `number` was opened.
 pub fn pull_created_at(api: &dyn ForgeApi, forge: &Forge, number: u64) -> Result<i64, ForgeError> {
     let path = match forge.kind {
@@ -678,7 +669,7 @@ pub fn judge(
         format!(
             "its body names {}, but {} did not link {it} to this pull request (link {it} {}, then re-run)",
             unlinked.join(", "),
-            forge_name(forge.kind),
+            forge.kind.display_name(),
             match forge.kind {
                 ForgeKind::GitHub => "in the pull request's Development sidebar",
                 _ => "from the merge request",
