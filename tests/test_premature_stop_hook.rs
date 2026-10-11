@@ -534,4 +534,21 @@ fn copilot_and_agy_missing_or_unreadable_transcript_skipped_in_observe_mode() {
             run.stderr
         );
     }
+
+    // Non-existent transcriptPath in observe mode
+    for (agent, dir) in [("copilot", "copilot"), ("agy", "agy")] {
+        let payload = recorded(&format!("{dir}/stop.json"), |v| {
+            v["transcriptPath"] = "/path/that/does/not/exist/transcript.json".into();
+        });
+        let run = hook(&repo, &["--agent", agent], &payload);
+        assert_eq!(run.code, 0, "{agent}: {}", run.stderr);
+        let expected_stdout = if agent == "agy" { "{}\n" } else { "" };
+        assert_eq!(run.stdout, expected_stdout, "{agent}");
+        assert!(
+            run.stderr
+                .contains("could not read transcript '/path/that/does/not/exist/transcript.json'"),
+            "{agent}: {}",
+            run.stderr
+        );
+    }
 }
