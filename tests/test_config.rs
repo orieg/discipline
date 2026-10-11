@@ -1,6 +1,8 @@
 mod common;
 use common::CONFIG_HEAD;
-use discipline::config::{split_list, DisciplineConfig, Overrides, Severity, GATES};
+use discipline::config::{
+    split_list, split_phrase_list, DisciplineConfig, Overrides, Severity, GATES,
+};
 use std::path::Path;
 
 #[test]
@@ -132,6 +134,19 @@ fn override_layers_merge_tables_append_lists_and_replace_scalars() {
 fn split_list_accepts_commas_spaces_and_newlines() {
     assert_eq!(split_list("a, b\nc  d,,"), vec!["a", "b", "c", "d"]);
     assert!(split_list(" \n").is_empty());
+}
+
+#[test]
+fn split_phrase_list_preserves_spaces_within_phrases() {
+    assert_eq!(
+        split_phrase_list("Project Falcon, Secret Algorithm\nConfidential Code"),
+        vec!["Project Falcon", "Secret Algorithm", "Confidential Code"]
+    );
+    assert_eq!(
+        split_phrase_list("  one term  ,  second term  "),
+        vec!["one term", "second term"]
+    );
+    assert!(split_phrase_list(" \n\r ").is_empty());
 }
 
 #[test]

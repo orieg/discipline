@@ -161,7 +161,7 @@ pub fn pii_rules(settings: &PiiGate) -> Result<Vec<PiiRule>> {
         let flags = if case_sensitive { "" } else { "(?i)" };
         rules.push(PiiRule {
             re: Regex::new(&format!(
-                r"{flags}(?:^|[^A-Za-z0-9-]){pattern}(?:$|[^A-Za-z0-9-])"
+                r"{flags}(?:^|[^A-Za-z0-9]){pattern}(?:$|[^A-Za-z0-9])"
             ))?,
             label: "denylisted term",
             user_group: false,
@@ -258,6 +258,22 @@ struct PiiScanOptions<'a> {
     added_lines: Option<&'a std::collections::BTreeSet<usize>>,
 }
 
+fn mask_denylisted_path<'a>(
+    label: &'a str,
+    rules: &[PiiRule],
+    buffer: &'a mut Option<String>,
+) -> &'a str {
+    for r in rules {
+        if (r.label == "denylisted hostname" || r.label == "denylisted term")
+            && r.re.is_match(label)
+        {
+            let current = buffer.take().unwrap_or_else(|| label.to_string());
+            *buffer = Some(r.re.replace_all(&current, "*****").to_string());
+        }
+    }
+    buffer.as_deref().unwrap_or(label)
+}
+
 fn scan_json(opts: &PiiScanOptions<'_>, text: &str, out: &mut GateOutcome) -> bool {
     let Ok(val) = serde_json::from_str::<serde_json::Value>(text) else {
         return false;
@@ -327,20 +343,13 @@ fn scan_json(opts: &PiiScanOptions<'_>, text: &str, out: &mut GateOutcome) -> bo
                         (false, s) => format!("{} `{s}`", rule.label),
                         _ => format!("{} (match not echoed)", rule.label),
                     };
-                    let is_denylisted_path = opts.rules.iter().any(|r| {
-                        (r.label == "denylisted hostname" || r.label == "denylisted term")
-                            && r.re.is_match(opts.label)
-                    });
-                    let (rep_file, rep_line) = if is_denylisted_path {
-                        (None, None)
-                    } else {
-                        (Some(opts.label), Some(line_num))
-                    };
+                    let mut masked_buf = None;
+                    let rep_file = mask_denylisted_path(opts.label, opts.rules, &mut masked_buf);
                     out.push(
                         opts.settings.severity(),
                         &crate::findings::HOST_OR_PII_LEAK,
-                        rep_file,
-                        rep_line,
+                        Some(rep_file),
+                        Some(line_num),
                         format!("Found a {detail}."),
                         "Replace it with a placeholder such as `<home>` or `<host>`. A line that must \
                          keep it can carry `discipline:allow(pii)` or `docs-lint: allow`.",
@@ -511,20 +520,13 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
                 (false, Some(m)) => format!("{} `{m}`", rule.label),
                 _ => format!("{} (match not echoed)", rule.label),
             };
-            let is_denylisted_path = rules.iter().any(|r| {
-                (r.label == "denylisted hostname" || r.label == "denylisted term")
-                    && r.re.is_match(label)
-            });
-            let (rep_file, rep_line) = if is_denylisted_path {
-                (None, None)
-            } else {
-                (Some(label), Some(idx + 1))
-            };
+            let mut masked_buf = None;
+            let rep_file = mask_denylisted_path(label, &rules, &mut masked_buf);
             out.push(
                 settings.severity(),
                 &crate::findings::HOST_OR_PII_LEAK,
-                rep_file,
-                rep_line,
+                Some(rep_file),
+                Some(idx + 1),
                 format!("Found a {detail}."),
                 "Replace it with a placeholder such as `<home>` or `<host>`. A line that must \
                  keep it can carry `discipline:allow(pii)` or `docs-lint: allow`.",
@@ -1095,5 +1097,34 @@ mod tests {
         assert!(out_masked.violations[0]
             .message
             .contains("(match not echoed)"));
+    }
+
+    #[test]
+    fn test_denylisted_term_matches_kebab_case_paths_and_branches() {
+        let settings = PiiGate {
+            term_denylist: vec!["secret".to_string(), "Project Falcon".to_string()],
+            ..Default::default()
+        };
+        let rules = pii_rules(&settings).unwrap();
+        let term_rule = rules.iter().find(|r| r.label == "denylisted term").unwrap();
+
+        // Kebab-case branch names and paths must match
+        assert!(term_rule.re.is_match("feat/my-secret-branch"));
+        assert!(term_rule.re.is_match("src/secret-component.rs"));
+        assert!(term_rule.re.is_match("src/my_secret_token.rs"));
+
+        // Multi-word phrase matching
+        let falcon_rule = rules
+            .iter()
+            .filter(|r| r.label == "denylisted term")
+            .nth(1)
+            .unwrap();
+        assert!(falcon_rule.re.is_match("release/Project Falcon"));
+        assert!(falcon_rule.re.is_match("feat: start Project   Falcon now"));
+
+        // Boundary controls: substring within a larger word must not match
+        assert!(!term_rule.re.is_match("notasecret"));
+        assert!(!term_rule.re.is_match("secrets"));
+        assert!(!term_rule.re.is_match("secretary"));
     }
 }

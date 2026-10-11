@@ -40,22 +40,26 @@ fn shape_label(shape: &BodyShape) -> String {
     }
 }
 
-/// Judge one file's functions, head against base. Functions pair by name and order:
-/// the n-th `f` on the head side is the n-th `f` on the base side.
+/// Judge one file's functions, head against base. Functions pair by enclosing type, name and order:
+/// the n-th `f` on the head side is the n-th `f` on the base side within the same type.
 pub fn judge(base: &[FunctionFacts], head: &[FunctionFacts]) -> Vec<Finding> {
-    let mut by_name: HashMap<&str, Vec<&FunctionFacts>> = HashMap::new();
+    let mut by_key: HashMap<(Option<&str>, &str), Vec<&FunctionFacts>> = HashMap::new();
     for f in base {
-        by_name.entry(f.name.as_str()).or_default().push(f);
+        by_key
+            .entry((f.type_name.as_deref(), f.name.as_str()))
+            .or_default()
+            .push(f);
     }
-    let mut taken: HashMap<&str, usize> = HashMap::new();
+    let mut taken: HashMap<(Option<&str>, &str), usize> = HashMap::new();
     let mut found = Vec::new();
     for h in head {
         let is_eq = crate::ast::functions::is_equality_name(&h.name);
         if h.is_test && !is_eq {
             continue;
         }
-        let idx = taken.entry(h.name.as_str()).or_default();
-        let b = by_name.get(h.name.as_str()).and_then(|v| v.get(*idx));
+        let key = (h.type_name.as_deref(), h.name.as_str());
+        let idx = taken.entry(key).or_default();
+        let b = by_key.get(&key).and_then(|v| v.get(*idx));
         *idx += 1;
         match b {
             None => {
@@ -346,5 +350,32 @@ mod tests {
         assert_eq!(got.len(), 1, "{got:?}");
         assert_eq!(got[0].kind.title, "Equality Method Made Constant");
         assert_eq!(got[0].name, "__eq__");
+    }
+
+    #[test]
+    fn methods_on_different_types_do_not_cross_pair() {
+        let mut base_user = f("__eq__", 1, BodyShape::Substantive, false);
+        base_user.type_name = Some("User".into());
+        let base = vec![base_user];
+
+        let mut head_user = f("__eq__", 1, BodyShape::Substantive, false);
+        head_user.type_name = Some("User".into());
+
+        let mut head_account = f(
+            "__eq__",
+            10,
+            BodyShape::Trivial("return True".into()),
+            false,
+        );
+        head_account.type_name = Some("Account".into());
+
+        let head = vec![head_user, head_account];
+        let got = judge(&base, &head);
+        assert_eq!(
+            got.len(),
+            1,
+            "Account::__eq__ must be detected as added equality constant: {got:?}"
+        );
+        assert_eq!(got[0].type_name.as_deref(), Some("Account"));
     }
 }

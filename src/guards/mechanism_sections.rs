@@ -136,15 +136,38 @@ fn target_exists(target: &str, ctx: &Context) -> Result<bool> {
     let clean = target
         .trim()
         .trim_matches(|c| matches!(c, '`' | '"' | '\'' | '(' | ')'));
-    let file_part = clean.split("::").next().unwrap_or(clean);
 
-    if ctx.git.head_bytes(file_part)?.is_some() || ctx.git.root().join(file_part).exists() {
-        return Ok(true);
+    // Reject absolute paths, parent directory traversal, and empty targets:
+    if clean.is_empty() || clean.starts_with('/') || clean.contains("..") || clean == "." {
+        return Ok(false);
     }
-    if ctx.git.head_bytes(clean)?.is_some() || ctx.git.root().join(clean).exists() {
-        return Ok(true);
+
+    let (file_part, symbol_part) = match clean.split_once("::") {
+        Some((f, s)) => (f.trim(), Some(s.trim())),
+        None => (clean, None),
+    };
+
+    // Must resolve to a tracked or head file (not just a directory):
+    let content = match ctx.git.head_content(file_part)? {
+        Some(c) => c,
+        None => {
+            let disk_path = ctx.git.root().join(file_part);
+            if disk_path.is_file() {
+                std::fs::read_to_string(&disk_path).unwrap_or_default()
+            } else {
+                return Ok(false);
+            }
+        }
+    };
+
+    // If a symbol/test was named after '::', it must exist in the file content:
+    if let Some(symbol) = symbol_part {
+        if !symbol.is_empty() && !content.contains(symbol) {
+            return Ok(false);
+        }
     }
-    Ok(false)
+
+    Ok(true)
 }
 
 fn truncate_claim(text: &str) -> String {
@@ -359,5 +382,45 @@ Another paragraph with no evidence tags.
             .notes
             .iter()
             .any(|n| n.contains("no designated mechanism/cause sections found")));
+    }
+
+    #[test]
+    fn test_target_exists_traversal_and_symbol_checks() {
+        // 1. Directory traversal rejected
+        let traversal = "## Mechanism\n- Bug was in worker loop. (verified: ../secret.rs)\n";
+        let out_trav = eval(traversal, &[]);
+        assert_eq!(out_trav.violations.len(), 1);
+        assert_eq!(
+            out_trav.violations[0].code,
+            "mechanism-sections/evidence-target-not-found"
+        );
+
+        // 2. Directory '.' rejected
+        let dot_target = "## Mechanism\n- Bug was in worker loop. (verified: .)\n";
+        let out_dot = eval(dot_target, &[]);
+        assert_eq!(out_dot.violations.len(), 1);
+        assert_eq!(
+            out_dot.violations[0].code,
+            "mechanism-sections/evidence-target-not-found"
+        );
+
+        // 3. Symbol in file exists vs missing
+        let valid_symbol =
+            "## Mechanism\n- Bug was in worker loop. (verified: src/worker.rs::process_item)\n";
+        let out_valid_sym = eval(valid_symbol, &[("src/worker.rs", "fn process_item() {}")]);
+        assert!(
+            out_valid_sym.violations.is_empty(),
+            "{:?}",
+            out_valid_sym.violations
+        );
+
+        let missing_symbol =
+            "## Mechanism\n- Bug was in worker loop. (verified: src/worker.rs::non_existent)\n";
+        let out_missing_sym = eval(missing_symbol, &[("src/worker.rs", "fn process_item() {}")]);
+        assert_eq!(out_missing_sym.violations.len(), 1);
+        assert_eq!(
+            out_missing_sym.violations[0].code,
+            "mechanism-sections/evidence-target-not-found"
+        );
     }
 }

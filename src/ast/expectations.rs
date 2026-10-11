@@ -434,7 +434,16 @@ pub fn javascript(
         if node.kind() != "expression_statement" {
             return true;
         }
-        let head = text(node, src).trim_start();
+        let mut curr = node;
+        while let Some(child) = match curr.kind() {
+            "expression_statement" => curr.named_child(0),
+            "await_expression" => curr.named_child(0),
+            "parenthesized_expression" => curr.named_child(0),
+            _ => None,
+        } {
+            curr = child;
+        }
+        let head = text(curr, src).trim_start();
         if !(head.starts_with("expect") || head.starts_with("assert")) {
             return true;
         }

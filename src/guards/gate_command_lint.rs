@@ -88,6 +88,22 @@ pub fn extract_declared_gates(content: &str) -> Vec<DeclaredGate> {
     gates
 }
 
+fn strip_shell_comments(cmd: &str) -> String {
+    cmd.lines()
+        .map(|l| {
+            if let Some((code, _comment)) = l.split_once('#') {
+                let single_quotes = code.chars().filter(|c| *c == '\'').count();
+                let double_quotes = code.chars().filter(|c| *c == '"').count();
+                if single_quotes % 2 == 0 && double_quotes % 2 == 0 {
+                    return code.trim_end();
+                }
+            }
+            l
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Evaluates plan files against gate-command-lint invariants.
 pub fn evaluate_gate_command_lint(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.gate_command_lint;
@@ -111,7 +127,10 @@ pub fn evaluate_gate_command_lint(ctx: &Context) -> Result<GateOutcome> {
         return Ok(out);
     }
 
-    let unfailable_re = regex::Regex::new(r"(?:\|\|\s*(?:true|exit\s+0|:)\s*(?:;|\s*$))").unwrap();
+    let unfailable_re = regex::Regex::new(
+        r"(?:\|\||;)\s*(?:true|exit\s+0|:)\s*(?:;|\s*$)|^\s*(?:true|exit\s+0|:)\s*(?:;|\s*$)",
+    )
+    .unwrap();
     let pipefail_re =
         regex::Regex::new(r"set\s+(?:-[a-zA-Z0-9]*o\s+pipefail|-[a-zA-Z0-9]*pipefail)").unwrap();
     let downstream_pipe_re =
@@ -143,9 +162,10 @@ pub fn evaluate_gate_command_lint(ctx: &Context) -> Result<GateOutcome> {
 
         for gate in declared_gates {
             out.examined += 1;
+            let stripped_cmd = strip_shell_comments(&gate.command);
 
             // 1. Unfailable command
-            if unfailable_re.is_match(&gate.command) {
+            if unfailable_re.is_match(&stripped_cmd) {
                 out.add_violation(
                     ctx.overridable(settings.severity),
                     &crate::findings::UNFAILABLE_COMMAND,
@@ -158,8 +178,8 @@ pub fn evaluate_gate_command_lint(ctx: &Context) -> Result<GateOutcome> {
 
             // 2. Pipeline exit status masking
             if !settings.allow_pipeline_without_pipefail
-                && downstream_pipe_re.is_match(&gate.command)
-                && !pipefail_re.is_match(&gate.command)
+                && downstream_pipe_re.is_match(&stripped_cmd)
+                && !pipefail_re.is_match(&stripped_cmd)
             {
                 out.add_violation(
                     ctx.overridable(settings.severity),
@@ -357,5 +377,23 @@ enabled = true
         let codes: Vec<_> = out.violations.iter().map(|v| v.code.as_str()).collect();
         assert!(codes.contains(&"gate-command-lint/unfailable-command"));
         assert!(codes.contains(&"gate-command-lint/pipeline-exit-masked"));
+    }
+
+    #[test]
+    fn test_unfailable_evasion_variants() {
+        for cmd in &[
+            "- Gate: cargo test || true # with comment\n",
+            "- Gate: cargo test ; true\n",
+            "- Gate: cargo test ; exit 0\n",
+            "- Gate: true\n",
+            "- Gate: :\n",
+        ] {
+            let out = eval(cmd, &[]);
+            let codes: Vec<_> = out.violations.iter().map(|v| v.code.as_str()).collect();
+            assert!(
+                codes.contains(&"gate-command-lint/unfailable-command"),
+                "command `{cmd}` must trigger unfailable-command: {codes:?}"
+            );
+        }
     }
 }
