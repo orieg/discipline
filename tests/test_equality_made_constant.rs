@@ -117,6 +117,63 @@ fn positive_control_real_class_in_test_path() {
     assert_eq!(got[0].2, 2);
 }
 
+#[test]
+fn positive_control_mock_import_does_not_carve_out_real_class() {
+    let r = repo();
+    r.write(
+        "tests/test_user.py",
+        "from unittest.mock import Mock\n\nclass RealAccount:\n    def __eq__(self, other):\n        return True\n\ndef test_account():\n    assert len(str(RealAccount())) > 0\n",
+    );
+    r.commit("test: add real account in test file importing mock");
+    let run = r.check(&[]);
+    let got = reported(&run);
+    assert_eq!(run.code, 0);
+    assert_eq!(
+        got.len(),
+        1,
+        "real class in test file with mock import must not be carved out: {got:?}"
+    );
+    assert_eq!(got[0].0, CODE);
+}
+
+#[test]
+fn positive_control_comment_at_generated_does_not_carve_out() {
+    let r = repo();
+    r.write(
+        "src/user.rs",
+        "pub struct User;\nimpl PartialEq for User {\n    // @Generated\n    fn eq(&self, _other: &Self) -> bool {\n        true\n    }\n}\n",
+    );
+    r.commit("feat: add user with comment @Generated");
+    let run = r.check(&[]);
+    let got = reported(&run);
+    assert_eq!(run.code, 0);
+    assert_eq!(
+        got.len(),
+        1,
+        "comment @Generated must not carve out equality: {got:?}"
+    );
+    assert_eq!(got[0].0, CODE);
+}
+
+#[test]
+fn positive_control_double_precision_not_carved_out_as_double() {
+    let r = repo();
+    r.write(
+        "src/math.rs",
+        "pub struct DoublePrecision;\nimpl PartialEq for DoublePrecision {\n    fn eq(&self, _other: &Self) -> bool {\n        true\n    }\n}\n",
+    );
+    r.commit("feat: add DoublePrecision with constant eq");
+    let run = r.check(&[]);
+    let got = reported(&run);
+    assert_eq!(run.code, 0);
+    assert_eq!(
+        got.len(),
+        1,
+        "DoublePrecision must not be carved out as a test double: {got:?}"
+    );
+    assert_eq!(got[0].0, CODE);
+}
+
 // ---------------------------------------------------------------------------
 // Negative Controls & Carve-outs
 // ---------------------------------------------------------------------------

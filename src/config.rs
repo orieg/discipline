@@ -2880,6 +2880,15 @@ pub fn split_list(raw: &str) -> Vec<String> {
         .collect()
 }
 
+/// Parse a comma- or newline-separated list of phrases, preserving whitespace within each phrase.
+pub fn split_phrase_list(raw: &str) -> Vec<String> {
+    raw.split([',', '\n', '\r'])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 pub const SHORTER_IS_STRICTER: &[&str] = &[
     "exempt_paths",
     "allow_patterns",

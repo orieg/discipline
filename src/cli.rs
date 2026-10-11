@@ -1,5 +1,6 @@
 use crate::config::{
-    split_list, DisciplineConfig, Overrides, HOSTNAME_DENYLIST_ENV, TERM_DENYLIST_ENV,
+    split_list, split_phrase_list, DisciplineConfig, Overrides, HOSTNAME_DENYLIST_ENV,
+    TERM_DENYLIST_ENV,
 };
 use crate::style;
 use anyhow::{bail, Context as _, Result};
@@ -739,7 +740,7 @@ pub fn build_overrides(
             .map(|v| split_list(&v))
             .unwrap_or_default(),
         term_denylist: std::env::var(TERM_DENYLIST_ENV)
-            .map(|v| split_list(&v))
+            .map(|v| split_phrase_list(&v))
             .unwrap_or_default(),
         directive_sources: extra_directive_sources,
         fail_on_overrides: extra_fail_on_overrides,

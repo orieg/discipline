@@ -187,12 +187,53 @@ fn enclosing_type<'t>(node: Node<'t>, anc: &Ancestry<'t>, src: &str) -> Option<(
 
 fn is_test_double_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    lower.contains("stub")
-        || lower.contains("fake")
-        || lower.contains("mock")
-        || lower.contains("dummy")
-        || lower.contains("double")
-        || lower.contains("spy")
+    let is_camel_or_delim = |target_title: &str, target_lower: &str| -> bool {
+        if lower == target_lower {
+            return true;
+        }
+        // Prefix with boundary: MockUser, mock_user
+        if let Some(rest) = name.strip_prefix(target_title) {
+            if rest.is_empty() || rest.starts_with(|c: char| c.is_ascii_uppercase() || c == '_') {
+                return true;
+            }
+        }
+        if let Some(rest) = lower.strip_prefix(target_lower) {
+            if rest.starts_with('_') || rest.starts_with('-') {
+                return true;
+            }
+        }
+        // Suffix with boundary: UserMock, user_mock
+        if let Some(prefix) = name.strip_suffix(target_title) {
+            if prefix.is_empty()
+                || prefix.ends_with(|c: char| {
+                    c.is_ascii_lowercase() || c.is_ascii_uppercase() || c == '_'
+                })
+            {
+                return true;
+            }
+        }
+        if let Some(prefix) = lower.strip_suffix(target_lower) {
+            if prefix.ends_with('_') || prefix.ends_with('-') {
+                return true;
+            }
+        }
+        // Infix: my_mock_client
+        if lower.contains(&format!("_{target_lower}_"))
+            || lower.contains(&format!("-{target_lower}-"))
+        {
+            return true;
+        }
+        false
+    };
+
+    is_camel_or_delim("Stub", "stub")
+        || is_camel_or_delim("Fake", "fake")
+        || is_camel_or_delim("Mock", "mock")
+        || is_camel_or_delim("Dummy", "dummy")
+        || is_camel_or_delim("Spy", "spy")
+        || lower.ends_with("double")
+        || lower.contains("testdouble")
+        || lower.contains("test_double")
 }
 
 fn has_mock_framework_markers(src: &str) -> bool {
@@ -204,6 +245,55 @@ fn has_mock_framework_markers(src: &str) -> bool {
         || src.contains("mockall")
         || src.contains("mockito::")
         || src.contains("gomock")
+}
+
+fn has_ast_generated_annotation<'a>(node: Node<'a>, anc: &Ancestry<'a>, src: &str) -> bool {
+    let check = |n: Node| -> bool {
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            match child.kind() {
+                "attribute_item" | "inner_attribute_item" => {
+                    let t = text(child, src);
+                    if t.contains("automatically_derived") || t.contains("Generated") {
+                        return true;
+                    }
+                }
+                "modifiers" => {
+                    let mut mod_cursor = child.walk();
+                    for mod_child in child.children(&mut mod_cursor) {
+                        if matches!(mod_child.kind(), "annotation" | "marker_annotation") {
+                            let t = text(mod_child, src);
+                            if t.contains("Generated")
+                                || t.contains("EqualsAndHashCode")
+                                || t.contains("Data")
+                                || t.contains("Value")
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                "decorator" => {
+                    let t = text(child, src);
+                    if t.contains("generated") || t.contains("Generated") {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    };
+
+    if check(node) {
+        return true;
+    }
+    if let Some(parent) = anc.parent(node) {
+        if check(parent) {
+            return true;
+        }
+    }
+    false
 }
 
 fn check_equality_carved_out<'t>(
@@ -234,7 +324,7 @@ fn check_equality_carved_out<'t>(
             }
         }
     }
-    if has_mock_framework_markers(src) && (is_test || is_test_double_name(type_name)) {
+    if has_mock_framework_markers(src) && is_test_double_name(type_name) {
         return true;
     }
 
@@ -263,13 +353,7 @@ fn check_equality_carved_out<'t>(
             }
         }
         let p_text = text(p, src);
-        if p_text.contains("@EqualsAndHashCode")
-            || p_text.contains("@Data")
-            || p_text.contains("@Value")
-            || p_text.contains("@Generated")
-            || p_text.contains("#[automatically_derived]")
-            || (p_text.contains("#[derive(") && p_text.contains("PartialEq"))
-        {
+        if p_text.contains("#[derive(") && p_text.contains("PartialEq") {
             return true;
         }
         if let Some(modifiers) = p.child_by_field_name("modifiers") {
@@ -280,16 +364,7 @@ fn check_equality_carved_out<'t>(
         }
     }
 
-    if let Some(above) = anc.parent(node) {
-        if above.kind() == "decorated_definition" {
-            let above_text = text(above, src);
-            if above_text.contains("@generated") || above_text.contains("@Generated") {
-                return true;
-            }
-        }
-    }
-    let fn_text = text(node, src);
-    if fn_text.contains("#[automatically_derived]") || fn_text.contains("@Generated") {
+    if has_ast_generated_annotation(node, anc, src) {
         return true;
     }
 

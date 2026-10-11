@@ -634,22 +634,70 @@ fn premature_stop(
         let m = payload.last_assistant_message.as_deref()?;
         (Some(m.to_string()), false)
     } else if matches!(agent, Agent::Copilot | Agent::Agy) {
+        let is_observe = observe || config.mode == crate::config::StopMode::Observe;
+        let counter = payload
+            .session
+            .as_deref()
+            .or(payload.conversation.as_deref())
+            .and_then(|s| {
+                let repo = crate::gitctx::discover_repository(dir).ok()?;
+                crate::turn::counter_path(repo.path(), s)
+            });
+        let so_far = counter
+            .as_deref()
+            .map(crate::turn::refused_so_far)
+            .unwrap_or(0);
+        let let_through =
+            if payload.stop_hook_active || payload.execution_num.is_some_and(|n| n > 0) {
+                Some("the agent's loop guard")
+            } else if so_far >= config.max_per_session {
+                Some("this session's cap (hooks.premature-stop.max_per_session)")
+            } else {
+                None
+            };
+
         let Some(tpath) = payload.transcript_path.as_deref() else {
-            let mut out = translate_event(agent, Event::Stop, 0, "", "");
-            out.stderr =
-                "discipline: no transcript path in stop payload; premature stop check skipped\n"
-                    .to_string();
-            return Some(out);
+            if is_observe {
+                let mut out = translate_event(agent, Event::Stop, 0, "", "");
+                out.stderr =
+                    "discipline: no transcript path in stop payload; premature stop check skipped\n"
+                        .to_string();
+                return Some(out);
+            } else if let Some(why) = let_through {
+                let mut out = translate_event(agent, Event::Stop, 0, "", "");
+                out.stderr = format!(
+                    "discipline: this stop was let through at {why}, but no transcript path was in stop payload.\n"
+                );
+                return Some(out);
+            } else {
+                let msg = "discipline: premature stop check could not verify turn: no transcript path in stop payload";
+                return Some(refusal_for(agent, msg));
+            }
         };
         match crate::transcript::read_final_turn(agent, tpath) {
             Ok(turn) => (turn.message, turn.tool_call_followed),
             Err(e) => {
-                let mut out = translate_event(agent, Event::Stop, 0, "", "");
-                out.stderr = format!(
-                    "discipline: could not read transcript '{}': {e}\n",
-                    tpath.display()
-                );
-                return Some(out);
+                if is_observe {
+                    let mut out = translate_event(agent, Event::Stop, 0, "", "");
+                    out.stderr = format!(
+                        "discipline: could not read transcript '{}': {e}\n",
+                        tpath.display()
+                    );
+                    return Some(out);
+                } else if let Some(why) = let_through {
+                    let mut out = translate_event(agent, Event::Stop, 0, "", "");
+                    out.stderr = format!(
+                        "discipline: this stop was let through at {why}, but could not read transcript '{}': {e}\n",
+                        tpath.display()
+                    );
+                    return Some(out);
+                } else {
+                    let msg = format!(
+                        "discipline: premature stop check could not verify turn: could not read transcript '{}': {e}",
+                        tpath.display()
+                    );
+                    return Some(refusal_for(agent, &msg));
+                }
             }
         }
     } else {
