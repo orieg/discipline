@@ -507,7 +507,8 @@ fn copilot_and_agy_missing_or_unreadable_transcript_refused_in_refuse_mode() {
             run.stdout
         );
         assert!(
-            run.stdout.contains("could not read transcript '/path/that/does/not/exist/transcript.json'"),
+            run.stdout
+                .contains("could not read transcript '/path/that/does/not/exist/transcript.json'"),
             "{agent} expected reason in stdout: {}",
             run.stdout
         );

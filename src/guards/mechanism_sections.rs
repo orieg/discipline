@@ -408,7 +408,11 @@ Another paragraph with no evidence tags.
         let valid_symbol =
             "## Mechanism\n- Bug was in worker loop. (verified: src/worker.rs::process_item)\n";
         let out_valid_sym = eval(valid_symbol, &[("src/worker.rs", "fn process_item() {}")]);
-        assert!(out_valid_sym.violations.is_empty(), "{:?}", out_valid_sym.violations);
+        assert!(
+            out_valid_sym.violations.is_empty(),
+            "{:?}",
+            out_valid_sym.violations
+        );
 
         let missing_symbol =
             "## Mechanism\n- Bug was in worker loop. (verified: src/worker.rs::non_existent)\n";

@@ -647,13 +647,14 @@ fn premature_stop(
             .as_deref()
             .map(crate::turn::refused_so_far)
             .unwrap_or(0);
-        let let_through = if payload.stop_hook_active || payload.execution_num.is_some_and(|n| n > 0) {
-            Some("the agent's loop guard")
-        } else if so_far >= config.max_per_session {
-            Some("this session's cap (hooks.premature-stop.max_per_session)")
-        } else {
-            None
-        };
+        let let_through =
+            if payload.stop_hook_active || payload.execution_num.is_some_and(|n| n > 0) {
+                Some("the agent's loop guard")
+            } else if so_far >= config.max_per_session {
+                Some("this session's cap (hooks.premature-stop.max_per_session)")
+            } else {
+                None
+            };
 
         let Some(tpath) = payload.transcript_path.as_deref() else {
             if is_observe {

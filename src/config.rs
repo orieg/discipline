@@ -2882,7 +2882,7 @@ pub fn split_list(raw: &str) -> Vec<String> {
 
 /// Parse a comma- or newline-separated list of phrases, preserving whitespace within each phrase.
 pub fn split_phrase_list(raw: &str) -> Vec<String> {
-    raw.split(|c: char| c == ',' || c == '\n' || c == '\r')
+    raw.split([',', '\n', '\r'])
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)

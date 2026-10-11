@@ -11,9 +11,8 @@ use std::sync::LazyLock;
 
 pub const GATE: &str = "citation-anchors";
 
-static VALID_ANCHOR_TAIL: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r#"^@[0-9a-fA-F]{4,40}\s+["'][^"']+["']"#).unwrap()
-});
+static VALID_ANCHOR_TAIL: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r#"^@[0-9a-fA-F]{4,40}\s+["'][^"']+["']"#).unwrap());
 
 #[derive(Debug, Clone)]
 pub struct AnchoredCitation {
@@ -257,38 +256,42 @@ pub fn evaluate_citation_anchors(ctx: &Context) -> Result<GateOutcome> {
                     .max(1);
 
                 let no_network = std::env::var("DISCIPLINE_NO_NETWORK").is_ok();
-                if no_network || ctx.forge.is_none() {
-                    if settings.require_online {
-                        return Err(anyhow::anyhow!(
-                            "forge connection required to verify tracker titles but network is disabled or forge unavailable"
-                        ));
-                    } else {
-                        out.notes.push(format!(
-                            "tracker reference #{num} title check skipped (offline/no network)"
-                        ));
-                        out.examined += 1;
+                let access = match ctx.forge.as_ref() {
+                    Some(a) if !no_network => a,
+                    _ => {
+                        if settings.require_online {
+                            return Err(anyhow::anyhow!(
+                                "forge connection required to verify tracker titles but network is disabled or forge unavailable"
+                            ));
+                        } else {
+                            out.notes.push(format!(
+                                "tracker reference #{num} title check skipped (offline/no network)"
+                            ));
+                            out.examined += 1;
+                            continue;
+                        }
                     }
-                } else {
-                    let access = ctx.forge.as_ref().unwrap();
-                    let forge = (access.identify)().map_err(|e| {
-                        anyhow::anyhow!("citation-anchors cannot identify the forge: {e}")
-                    })?;
-                    let api_path = match forge.kind {
-                        crate::forge::ForgeKind::GitLab => format!(
-                            "projects/{}/issues/{num}",
-                            crate::forge::gitlab_project_id(&forge.repo)
-                        ),
-                        _ => format!("repos/{}/issues/{num}", forge.repo),
-                    };
-                    out.examined += 1;
-                    match access.api.fetch(&forge, &api_path) {
-                        Ok(issue_json) => {
-                            let actual_title = issue_json
-                                .get("title")
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("");
-                            if actual_title != expected_title {
-                                out.add_violation(
+                };
+
+                let forge = (access.identify)().map_err(|e| {
+                    anyhow::anyhow!("citation-anchors cannot identify the forge: {e}")
+                })?;
+                let api_path = match forge.kind {
+                    crate::forge::ForgeKind::GitLab => format!(
+                        "projects/{}/issues/{num}",
+                        crate::forge::gitlab_project_id(&forge.repo)
+                    ),
+                    _ => format!("repos/{}/issues/{num}", forge.repo),
+                };
+                out.examined += 1;
+                match access.api.fetch(&forge, &api_path) {
+                    Ok(issue_json) => {
+                        let actual_title = issue_json
+                            .get("title")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("");
+                        if actual_title != expected_title {
+                            out.add_violation(
                                     settings.severity,
                                     &crate::findings::TRACKER_TITLE_MISMATCH,
                                     &path,
@@ -298,23 +301,22 @@ pub fn evaluate_citation_anchors(ctx: &Context) -> Result<GateOutcome> {
                                     ),
                                     "update the cited tracker title to match the forge issue title",
                                 );
-                            }
                         }
-                        Err(e) if e.kind == crate::forge::ForgeErrorKind::NotFound => {
-                            out.add_violation(
-                                settings.severity,
-                                &crate::findings::TRACKER_TITLE_MISMATCH,
-                                &path,
-                                line_num,
-                                format!("tracker reference #{num} does not exist on forge"),
-                                "verify the issue number exists on the host forge",
-                            );
-                        }
-                        Err(e) => {
-                            return Err(anyhow::anyhow!(
-                                "failed to fetch issue #{num} from forge: {e}"
-                            ));
-                        }
+                    }
+                    Err(e) if e.kind == crate::forge::ForgeErrorKind::NotFound => {
+                        out.add_violation(
+                            settings.severity,
+                            &crate::findings::TRACKER_TITLE_MISMATCH,
+                            &path,
+                            line_num,
+                            format!("tracker reference #{num} does not exist on forge"),
+                            "verify the issue number exists on the host forge",
+                        );
+                    }
+                    Err(e) => {
+                        return Err(anyhow::anyhow!(
+                            "failed to fetch issue #{num} from forge: {e}"
+                        ));
                     }
                 }
             }

@@ -361,7 +361,12 @@ mod tests {
         let mut head_user = f("__eq__", 1, BodyShape::Substantive, false);
         head_user.type_name = Some("User".into());
 
-        let mut head_account = f("__eq__", 10, BodyShape::Trivial("return True".into()), false);
+        let mut head_account = f(
+            "__eq__",
+            10,
+            BodyShape::Trivial("return True".into()),
+            false,
+        );
         head_account.type_name = Some("Account".into());
 
         let head = vec![head_user, head_account];

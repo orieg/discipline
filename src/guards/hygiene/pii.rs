@@ -1114,7 +1114,11 @@ mod tests {
         assert!(term_rule.re.is_match("src/my_secret_token.rs"));
 
         // Multi-word phrase matching
-        let falcon_rule = rules.iter().filter(|r| r.label == "denylisted term").nth(1).unwrap();
+        let falcon_rule = rules
+            .iter()
+            .filter(|r| r.label == "denylisted term")
+            .nth(1)
+            .unwrap();
         assert!(falcon_rule.re.is_match("release/Project Falcon"));
         assert!(falcon_rule.re.is_match("feat: start Project   Falcon now"));
 
