@@ -47,13 +47,14 @@ pub struct LockFinding {
 
 /// Host and path prefix of a URL, without scheme, credentials, query or fragment.
 fn host_of(url: &str) -> String {
-    let rest = url.split_once("://").map_or(url, |(_, r)| r);
-    let rest = rest.rsplit_once('@').map_or(rest, |(_, r)| r);
-    let rest = rest.split(['?', '#']).next().unwrap_or(rest);
-    let host = rest.split('/').next().unwrap_or(rest).to_ascii_lowercase();
+    let host = crate::forge::host_of(url);
     // crates.io's git index is identified by its path, not by `github.com` alone.
-    if host == "github.com" && rest.starts_with("github.com/rust-lang/crates.io-index") {
-        return "github.com/rust-lang/crates.io-index".to_string();
+    if host == "github.com" {
+        let rest = url.split_once("://").map_or(url, |(_, r)| r);
+        let rest = rest.rsplit_once('@').map_or(rest, |(_, r)| r);
+        if rest.starts_with("github.com/rust-lang/crates.io-index") {
+            return "github.com/rust-lang/crates.io-index".to_string();
+        }
     }
     host
 }

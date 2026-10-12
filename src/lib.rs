@@ -1,5 +1,22 @@
 #![recursion_limit = "256"]
 
+//! Universal CI/CD gatekeeper and AI coding agent diff sentinel.
+//!
+//! # Embedding Discipline
+//!
+//! The supported integration interface for Discipline is the command-line binary
+//! (`discipline`) and its structured machine-readable outputs:
+//! - JSON report (`--format json`, `discipline.report.schema.json`)
+//! - SARIF 2.1.0 (`--format sarif`, `discipline.sarif`)
+//! - JUnit XML (`--format junit`, `junit.xml`)
+//! - GitLab Code Quality (`--format gitlab`, `gl-codequality.json`)
+//! - MCP server (`discipline mcp`, Model Context Protocol over stdio)
+//!
+//! The Rust modules in this crate are internal implementation details exposed for
+//! binary composition and integration tests; they carry no Rust API stability guarantee.
+//! Public API stability applies strictly to the CLI flags, configuration schema, finding
+//! codes, and output schemas as documented in `docs/ARCHITECTURE.md` §3.2.
+
 pub mod ast;
 pub mod audit;
 pub mod audit_html;

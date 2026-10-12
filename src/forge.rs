@@ -54,6 +54,15 @@ impl ForgeKind {
         }
     }
 
+    pub fn display_name(self) -> &'static str {
+        match self {
+            ForgeKind::GitHub => "GitHub",
+            ForgeKind::GitLab => "GitLab",
+            ForgeKind::Gitea => "Gitea",
+            ForgeKind::Forgejo => "Forgejo",
+        }
+    }
+
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "github" => Some(ForgeKind::GitHub),
@@ -82,10 +91,10 @@ impl Forge {
     }
 }
 
-/// The lower-cased host of a URL (`https://host:port/path` → `host`).
+/// The lower-cased host of a URL (`https://user:pass@host:port/path` → `host`).
 pub fn host_of(url: &str) -> String {
-    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
-    rest.split(['/', ':'])
+    let auth = authority_of(url);
+    auth.split(':')
         .next()
         .unwrap_or_default()
         .to_ascii_lowercase()
@@ -1184,9 +1193,9 @@ pub fn clean_url(url: &str) -> Result<String, String> {
 }
 
 /// `host[:port]` of a URL, lower-cased, without credentials.
-fn authority_of(url: &str) -> String {
+pub(crate) fn authority_of(url: &str) -> String {
     let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
-    let authority = rest.split('/').next().unwrap_or_default();
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
     authority
         .rsplit_once('@')
         .map_or(authority, |(_, h)| h)
@@ -2821,6 +2830,18 @@ mod tests {
             authority_of("https://u:p@Git.Example.com:8443/a"),
             "git.example.com:8443"
         );
+        assert_eq!(
+            host_of("https://u:p@Git.Example.com:8443/a"),
+            "git.example.com"
+        );
+        assert_eq!(
+            host_of("https://user:pass@github.com/orieg/discipline?tab=readme#install"),
+            "github.com"
+        );
+        assert_eq!(ForgeKind::GitHub.display_name(), "GitHub");
+        assert_eq!(ForgeKind::GitLab.display_name(), "GitLab");
+        assert_eq!(ForgeKind::Gitea.display_name(), "Gitea");
+        assert_eq!(ForgeKind::Forgejo.display_name(), "Forgejo");
         assert_ne!(
             authority_of("http://127.0.0.1:1/a"),
             authority_of("http://127.0.0.1:2/a")
