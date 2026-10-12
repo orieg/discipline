@@ -282,6 +282,35 @@ class A {
 }
 
 #[test]
+fn kotlin_reads_bracketed_suppress_annotations() {
+    check(
+        "src/m.kt",
+        "\
+@file:[Suppress(\"F1\") Suppress(\"F2\")]
+package p
+@[Suppress(\"B1\") SuppressWarnings(\"B2\")]
+val b = 2
+@[Deprecated Suppress(\"x\")]
+val d = 1
+@[Suppress Deprecated]
+val s = 3
+@get:[Suppress(\"G1\") Suppress(\"G2\")]
+val p = 4
+",
+        &[
+            r#"1 lint "F1" "@file:Suppress(\"F1\")""#,
+            r#"1 lint "F2" "@file:Suppress(\"F2\")""#,
+            r#"3 lint "B1" "@Suppress(\"B1\")""#,
+            r#"3 lint "B2" "@SuppressWarnings(\"B2\")""#,
+            r#"5 lint "x" "@Suppress(\"x\")""#,
+            r#"7 lint "all" "@Suppress""#,
+            r#"9 lint "G1" "@get:Suppress(\"G1\")""#,
+            r#"9 lint "G2" "@get:Suppress(\"G2\")""#,
+        ],
+    );
+}
+
+#[test]
 fn kotlin_reads_no_suppression_from_a_comment_a_string_or_another_annotation() {
     check(
         "src/m.kt",
@@ -693,6 +722,8 @@ class A:
         assert z  # pylint: disable=a # NOQA
         w = 1  # note #noqa:E1 # more
         v = 2  # noqa # noqa: E2
+        # ruff: NOQA
+        # ruff: NOQA: F841
 ",
         &[
             r##"1 lint "all" "# NOQA""##,
@@ -708,6 +739,8 @@ class A:
             r##"10 lint "all" "# NOQA""##,
             r##"11 lint "E1 # more" "#noqa:E1 # more""##,
             r##"12 lint "all" "# noqa # noqa: E2""##,
+            r##"13 lint "all" "# ruff: NOQA""##,
+            r##"14 lint "F841" "# ruff: NOQA: F841""##,
         ],
     );
 }

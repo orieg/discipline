@@ -251,51 +251,147 @@ fn last_segment(name: Node) -> Node {
 }
 
 impl AnnotationSuppressions {
-    fn site(&self, node: Node, src: &[u8]) -> Option<EscapeHatchSite> {
+    fn site(&self, node: Node, src: &[u8]) -> Vec<EscapeHatchSite> {
         let text_of = |n: Node| n.utf8_text(src).unwrap_or("");
-        let name = match self.name {
-            AnnotationName::LastSegment => node
-                .child_by_field_name("name")
-                .map(last_segment)
-                .map_or("", text_of),
-            AnnotationName::UserTypeLast => first_of_kind(node, "user_type")
-                .and_then(|user_type| {
-                    let mut cursor = user_type.walk();
-                    let last = user_type
-                        .named_children(&mut cursor)
-                        .filter(|child| child.kind() == "identifier")
-                        .last();
-                    last
-                })
-                .map_or("", text_of),
-        };
-        if !self.names.contains(&name) {
-            return None;
-        }
-        let text = text_of(node);
-        let rule = match self.rule {
-            AnnotationRule::Arguments {
-                trimmed,
-                empty_is_all,
-            } => node
-                .child_by_field_name("arguments")
-                .map(|arguments| {
-                    let mut inner = text_of(arguments).trim_matches(['(', ')']);
-                    if trimmed {
-                        inner = inner.trim();
+        match self.name {
+            AnnotationName::LastSegment => {
+                let name = node
+                    .child_by_field_name("name")
+                    .map(last_segment)
+                    .map_or("", text_of);
+                if !self.names.contains(&name) {
+                    return Vec::new();
+                }
+                let text = text_of(node);
+                let rule = match self.rule {
+                    AnnotationRule::Arguments {
+                        trimmed,
+                        empty_is_all,
+                    } => node
+                        .child_by_field_name("arguments")
+                        .map(|arguments| {
+                            let mut inner = text_of(arguments).trim_matches(['(', ')']);
+                            if trimmed {
+                                inner = inner.trim();
+                            }
+                            inner.trim_matches('"')
+                        })
+                        .filter(|rule| !(empty_is_all && rule.is_empty())),
+                    AnnotationRule::AfterParen => text
+                        .split_once('(')
+                        .map(|(_, rest)| rest.trim_end_matches(')').trim().trim_matches('"')),
+                };
+                vec![EscapeHatchSite::LinterDisable {
+                    line: node.start_position().row + 1,
+                    rule: rule.unwrap_or("all").to_string(),
+                    snippet: text.to_string(),
+                }]
+            }
+            AnnotationName::UserTypeLast => {
+                let node_text = text_of(node);
+                let is_bracketed = node_text.contains('[');
+                let mut out = Vec::new();
+
+                let entries: Vec<Node> = {
+                    let mut cursor = node.walk();
+                    node.named_children(&mut cursor)
+                        .filter(|c| c.kind() == "constructor_invocation" || c.kind() == "user_type")
+                        .collect()
+                };
+
+                if !is_bracketed || entries.is_empty() {
+                    let name = first_of_kind(node, "user_type")
+                        .and_then(|user_type| {
+                            let mut cursor = user_type.walk();
+                            user_type
+                                .named_children(&mut cursor)
+                                .filter(|child| child.kind() == "identifier")
+                                .last()
+                        })
+                        .map_or("", text_of);
+                    if self.names.contains(&name) {
+                        let rule = match self.rule {
+                            AnnotationRule::Arguments {
+                                trimmed,
+                                empty_is_all,
+                            } => node
+                                .child_by_field_name("arguments")
+                                .map(|arguments| {
+                                    let mut inner = text_of(arguments).trim_matches(['(', ')']);
+                                    if trimmed {
+                                        inner = inner.trim();
+                                    }
+                                    inner.trim_matches('"')
+                                })
+                                .filter(|rule| !(empty_is_all && rule.is_empty())),
+                            AnnotationRule::AfterParen => {
+                                node_text.split_once('(').map(|(_, rest)| {
+                                    rest.trim_end_matches(')').trim().trim_matches('"')
+                                })
+                            }
+                        };
+                        out.push(EscapeHatchSite::LinterDisable {
+                            line: node.start_position().row + 1,
+                            rule: rule.unwrap_or("all").to_string(),
+                            snippet: node_text.to_string(),
+                        });
                     }
-                    inner.trim_matches('"')
-                })
-                .filter(|rule| !(empty_is_all && rule.is_empty())),
-            AnnotationRule::AfterParen => text
-                .split_once('(')
-                .map(|(_, rest)| rest.trim_end_matches(')').trim().trim_matches('"')),
-        };
-        Some(EscapeHatchSite::LinterDisable {
-            line: node.start_position().row + 1,
-            rule: rule.unwrap_or("all").to_string(),
-            snippet: text.to_string(),
-        })
+                } else {
+                    let target_prefix = if node.kind() == "file_annotation" {
+                        "@file:".to_string()
+                    } else if let Some(target) = first_of_kind(node, "use_site_target") {
+                        format!("@{}", text_of(target))
+                    } else {
+                        "@".to_string()
+                    };
+                    for entry in entries {
+                        let user_type_node = if entry.kind() == "user_type" {
+                            Some(entry)
+                        } else {
+                            first_of_kind(entry, "user_type")
+                        };
+                        let name = user_type_node
+                            .and_then(|ut| {
+                                let mut cursor = ut.walk();
+                                ut.named_children(&mut cursor)
+                                    .filter(|child| child.kind() == "identifier")
+                                    .last()
+                            })
+                            .map_or("", text_of);
+                        if !self.names.contains(&name) {
+                            continue;
+                        }
+                        let entry_text = text_of(entry);
+                        let rule = match self.rule {
+                            AnnotationRule::Arguments {
+                                trimmed,
+                                empty_is_all,
+                            } => entry
+                                .child_by_field_name("arguments")
+                                .map(|arguments| {
+                                    let mut inner = text_of(arguments).trim_matches(['(', ')']);
+                                    if trimmed {
+                                        inner = inner.trim();
+                                    }
+                                    inner.trim_matches('"')
+                                })
+                                .filter(|rule| !(empty_is_all && rule.is_empty())),
+                            AnnotationRule::AfterParen => {
+                                entry_text.split_once('(').map(|(_, rest)| {
+                                    rest.trim_end_matches(')').trim().trim_matches('"')
+                                })
+                            }
+                        };
+                        out.push(EscapeHatchSite::LinterDisable {
+                            line: entry.start_position().row + 1,
+                            rule: rule.unwrap_or("all").to_string(),
+                            snippet: format!("{target_prefix}{entry_text}"),
+                        });
+                    }
+                }
+                out
+            }
+        }
     }
 }
 

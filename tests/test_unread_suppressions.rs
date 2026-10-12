@@ -187,6 +187,35 @@ fn kotlin_qualified_and_file_annotation_added_is_reported_and_lifted() {
 }
 
 #[test]
+fn kotlin_bracket_annotation_added_is_reported_and_lifted() {
+    reported_then_lifted(&Added {
+        path: "src/main/kotlin/A.kt",
+        base: KOTLIN,
+        after_line: 1,
+        line: "@[Deprecated Suppress(\"UNCHECKED_CAST\")]",
+        snippets: &["@Suppress(\"UNCHECKED_CAST\")"],
+        subject: "UNCHECKED_CAST",
+    });
+    reported_then_lifted(&Added {
+        path: "src/main/kotlin/A.kt",
+        base: KOTLIN,
+        after_line: 1,
+        line: "@[Suppress(\"UNCHECKED_CAST\") SuppressWarnings(\"rawtypes\")]",
+        snippets: &[
+            "@Suppress(\"UNCHECKED_CAST\")",
+            "@SuppressWarnings(\"rawtypes\")",
+        ],
+        subject: "src/main/kotlin/A.kt",
+    });
+    not_reported(
+        "src/main/kotlin/A.kt",
+        KOTLIN,
+        1,
+        "@[Deprecated NotSuppress(\"x\")]",
+    );
+}
+
+#[test]
 fn kotlin_comment_suppression_added_is_reported_and_lifted() {
     reported_then_lifted(&Added {
         path: "src/main/kotlin/A.kt",
@@ -259,6 +288,8 @@ fn python_spelling_added_is_reported_and_lifted() {
         ("# NoQA: F401", "F401"),
         ("# type:ignore", "mypy"),
         ("# pylint: disable-next=unused-variable", "unused-variable"),
+        ("# ruff: NOQA", "pkg/a.py"),
+        ("# ruff: NOQA: F401", "F401"),
     ];
     for (comment, subject) in cases {
         reported_then_lifted(&Added {
@@ -277,6 +308,7 @@ fn python_spelling_added_is_reported_and_lifted() {
         4,
         "    # pylint: disable-nxt=unused-variable",
     );
+    not_reported("pkg/a.py", PYTHON, 4, "    # RUFF: NOQA");
     not_reported("pkg/a.py", PYTHON, 4, "    y = \"# NOQA\"");
 }
 

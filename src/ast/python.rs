@@ -299,10 +299,12 @@ const PY_SUPPRESSIONS: Suppressions = Suppressions {
                 }),
             )
         },
+        // ruff: `# ruff:` must be lowercase, but `noqa` is case-insensitive
+        // (`# ruff: noqa`, `# ruff: NOQA`).
         CommentRule::opens(
-            &["ruff: noqa"],
+            &["ruff: noqa", "ruff: NOQA"],
             Reports::Rest(RuleText {
-                after: &["ruff: noqa:"],
+                after: &["ruff: noqa:", "ruff: NOQA:"],
                 then: &[],
                 first_word: false,
                 empty_is_all: false,
