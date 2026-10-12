@@ -816,7 +816,13 @@ impl<'a> JsExtractor<'a> {
         above: Option<&'static str>,
         calls: &mut Vec<String>,
     ) {
-        if JS_FUNCTION_KINDS.contains(&node.kind()) && above == Some("variable_declarator") {
+        if JS_FUNCTION_KINDS.contains(&node.kind())
+            && (above == Some("variable_declarator")
+                || matches!(
+                    node.kind(),
+                    "function_declaration" | "generator_function_declaration"
+                ))
+        {
             return;
         }
         if node.kind() == "call_expression" {
@@ -839,6 +845,7 @@ impl<'a> JsExtractor<'a> {
                 if let Some(n) = node.child_by_field_name("name") {
                     out.push((self.text(n).to_string(), node));
                 }
+                return;
             }
             "variable_declarator" => {
                 if let (Some(n), Some(v)) = (
@@ -850,6 +857,7 @@ impl<'a> JsExtractor<'a> {
                         "arrow_function" | "function_expression" | "function"
                     ) {
                         out.push((self.text(n).to_string(), v));
+                        return;
                     }
                 }
             }
@@ -957,14 +965,12 @@ impl<'a> JsExtractor<'a> {
                 ) {
                     out.push((format!("{c}.{}", self.text(n)), body));
                 }
-                // A class declared inside the method is found under its own name.
-                class = None;
+                return;
             }
             _ => {}
         }
         let mut cursor = node.walk();
-        let children: Vec<Node<'t>> = node.children(&mut cursor).collect();
-        for child in children {
+        for child in node.children(&mut cursor) {
             self.class_methods(child, class, out);
         }
     }
@@ -1928,6 +1934,62 @@ test('wrapper cycle', () => { ping(1); });
             steps_of("tests/m.test.js", &holding(200)),
         );
         assert!(many < 5 * few, "{few} steps for 50 links, {many} for 200");
+    }
+
+    /// Issue 672: nested function declarations cost steps in proportion to their depth.
+    /// Before this fix, `named_functions` recursed into nested function bodies and
+    /// re-scanned them in `resolve_same_file_helpers`, producing quadratic work.
+    #[test]
+    fn nested_functions_cost_steps_in_proportion_to_their_depth() {
+        let steps_of = |path: &str, src: &str| -> u64 {
+            crate::deep_stack::on_deep_stack(|| {
+                let (facts, counted) = crate::ast::ancestry::steps(|| {
+                    JavaScriptPack.extract(path, src, &AssertVocabulary::default())
+                });
+                facts.unwrap();
+                counted
+            })
+            .unwrap()
+        };
+        let nested = |n: usize| {
+            let mut s = String::new();
+            for i in 0..n {
+                s.push_str(&format!("function f{i}() {{ "));
+            }
+            s.push_str("return 1;");
+            for _ in 0..n {
+                s.push_str(" }");
+            }
+            s
+        };
+        let (few, many) = (
+            steps_of("src/m.js", &nested(40)),
+            steps_of("src/m.js", &nested(160)),
+        );
+        assert!(many < 5 * few, "{few} steps for depth 40, {many} for 160");
+        let facts = JavaScriptPack
+            .extract("src/m.js", &nested(160), &AssertVocabulary::default())
+            .unwrap();
+        assert_eq!(facts.test_helpers.len(), 1);
+    }
+
+    #[test]
+    fn nested_function_declarations_do_not_count_as_top_level_same_file_helpers() {
+        let src = r#"
+function outer() {
+  function inner() {
+    expect(1).toBe(1);
+  }
+}
+test("outer test", () => {
+  outer();
+});
+"#;
+        let facts = JavaScriptPack
+            .extract("test/outer.test.js", src, &AssertVocabulary::default())
+            .unwrap();
+        assert_eq!(facts.tests.len(), 1);
+        assert!(facts.tests[0].is_vacuous());
     }
 
     #[test]
