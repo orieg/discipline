@@ -275,6 +275,7 @@ mod head_rules_cache_tests {
             test_head_report: None,
             test_report: None,
             forge: None,
+            cli_disabled_gates: &[],
         }
     }
 

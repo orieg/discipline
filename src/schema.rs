@@ -279,7 +279,7 @@ pub fn generate_schema() -> Value {
             "ConfigIntegrityGate": gate_table(json!({
                 "compare_effective": {
                     "type": "boolean",
-                    "description": "Whether command-line --enable, --disable and --config-override switches are included when diffing base and head configuration (default false: only committed or staged repository configuration changes are compared)"
+                    "description": "Whether command-line --enable and --disable switches are included when diffing base and head configuration (default false: only committed or staged repository configuration changes are compared)"
                 }
             })),
             "AssertionGate": gate_table(json!({

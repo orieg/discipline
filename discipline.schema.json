@@ -532,7 +532,7 @@
       "additionalProperties": false,
       "properties": {
         "compare_effective": {
-          "description": "Whether command-line --enable, --disable and --config-override switches are included when diffing base and head configuration (default false: only committed or staged repository configuration changes are compared)",
+          "description": "Whether command-line --enable and --disable switches are included when diffing base and head configuration (default false: only committed or staged repository configuration changes are compared)",
           "type": "boolean"
         },
         "enabled": {

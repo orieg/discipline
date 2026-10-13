@@ -759,6 +759,12 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
 
     let forge_api = discipline::forge::HttpApi::from_env();
     let identify_forge = || discipline::forge::detect_for(&git);
+    let cli_disabled_gates: Vec<String> = args
+        .config
+        .disable
+        .iter()
+        .flat_map(|s| discipline::config::split_list(s))
+        .collect();
     let ctx = Context {
         config: &config,
         head_config: head_config.as_ref(),
@@ -783,6 +789,7 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
             identify: &identify_forge,
             pull: detect_pull_context_from_ci(),
         }),
+        cli_disabled_gates: &cli_disabled_gates,
     };
     let mut summary = run_checks(&config, args.suite, &ctx)?;
     discipline::guards::note_head_values(&mut summary, &head_values);

@@ -794,6 +794,8 @@ pub struct Context<'a> {
     /// The forge, for the gates that read facts from it (`issue-link` with
     /// `verify_references`). `None` where a run has no forge to ask (a baseline write).
     pub forge: Option<ForgeAccess<'a>>,
+    /// Gate names disabled on the command line via `--disable`.
+    pub cli_disabled_gates: &'a [String],
 }
 
 /// A gate's way to the forge: the API client, how the forge is identified, and the pull
@@ -2062,6 +2064,7 @@ pub(crate) mod test_support {
             test_head_report: None,
             test_report: None,
             forge: None,
+            cli_disabled_gates: &[],
         }
     }
 }

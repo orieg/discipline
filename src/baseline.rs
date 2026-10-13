@@ -797,6 +797,7 @@ pub fn run_cli(mut args: crate::cli::BaselineArgs) -> Result<bool> {
         test_head_report: None,
         test_report: None,
         forge: None,
+        cli_disabled_gates: &[],
     };
 
     let summary = run_checks(&config, args.suite, &ctx)?;
