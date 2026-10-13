@@ -1,0 +1,6 @@
+# OSV-Scanner configuration for OpenSSF Scorecard.
+# Each ignored entry requires an explicit id and reason.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0449"
+reason = "unsafe-libyaml is an unmaintained informational advisory (not a CVE/vulnerability) inherited through serde_yaml"
