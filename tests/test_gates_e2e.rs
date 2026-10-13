@@ -15100,6 +15100,191 @@ exempt_paths = ["["]
     );
 }
 
+#[test]
+fn unsafe_budget_unparseable_head_emits_note_and_does_not_abort() {
+    const UNFINISHED: &str = "(>\u{fffd}t(0(.t();}";
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "t"
+
+[gates.unsafe-budget]
+enabled = true
+
+[gates.unsafe-safety-comment]
+enabled = false
+
+[gates.assertion-reduction]
+enabled = false
+
+[gates.vacuous-tests]
+enabled = false
+
+[gates.ignored-tests]
+enabled = false
+
+[gates.deletion-rationale]
+enabled = false
+"#,
+    );
+    repo.commit("chore: enable unsafe budget and disable stop-on-parse gates");
+
+    repo.write("src/broken.rs", UNFINISHED);
+    repo.commit("feat: broken syntax");
+    let run = repo.check(&[]);
+    assert_ne!(
+        run.code, 2,
+        "must not exit 2\nstdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    let notes = run.outcome("unsafe-budget")["notes"]
+        .as_array()
+        .expect("notes array")
+        .iter()
+        .map(|n| n.as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.starts_with("`src/broken.rs`: not analysed, the head side does not parse")),
+        "unsafe-budget notes must note unparseable head: {notes:?}"
+    );
+}
+
+#[test]
+fn unsafe_budget_unparseable_base_emits_note_and_judges_unsafe_as_new() {
+    const UNFINISHED: &str = "(>\u{fffd}t(0(.t();}";
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "t"
+
+[gates.unsafe-budget]
+enabled = true
+allow_increase = false
+
+[gates.unsafe-safety-comment]
+enabled = false
+
+[gates.assertion-reduction]
+enabled = false
+
+[gates.vacuous-tests]
+enabled = false
+
+[gates.ignored-tests]
+enabled = false
+
+[gates.deletion-rationale]
+enabled = false
+"#,
+    );
+    repo.write("src/lib.rs", UNFINISHED);
+    repo.commit("chore: base with broken syntax");
+
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "src/lib.rs",
+        "pub fn fixed(p: *const u8) -> u8 {\n    // SAFETY: test\n    unsafe { *p }\n}\n",
+    );
+    repo.commit("feat: fix syntax and add unsafe block");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.code, 1,
+        "must report violation because base unsafe is treated as 0\nstdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    let notes = run.outcome("unsafe-budget")["notes"]
+        .as_array()
+        .expect("notes array")
+        .iter()
+        .map(|n| n.as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        notes.iter().any(|n| n.contains(
+            "the base side does not parse; every head-side unsafe block is judged as new"
+        )),
+        "unsafe-budget notes must contain base unparseable note: {notes:?}"
+    );
+    assert!(
+        !run.titles("unsafe-budget").is_empty(),
+        "unsafe-budget must report violation"
+    );
+
+    repo.commit("feat: fix syntax and add unsafe block with waiver\n\ndiscipline:allow(unsafe-budget): FFI pointer dereference");
+    let run_ov = repo.check(&[]);
+    assert_eq!(
+        run_ov.code, 0,
+        "waiver must allow the increase\nstdout: {}\nstderr: {}",
+        run_ov.stdout, run_ov.stderr
+    );
+}
+
+#[test]
+fn stub_bodies_unparseable_base_emits_note_and_judges_functions_as_new() {
+    const UNFINISHED: &str = "(>\u{fffd}t(0(.t();}";
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "discipline.toml",
+        r#"[meta]
+version = 1
+name = "t"
+
+[gates.stub-bodies]
+enabled = true
+severity = "error"
+
+[gates.unsafe-safety-comment]
+enabled = false
+
+[gates.assertion-reduction]
+enabled = false
+
+[gates.vacuous-tests]
+enabled = false
+
+[gates.ignored-tests]
+enabled = false
+
+[gates.deletion-rationale]
+enabled = false
+"#,
+    );
+    repo.write("src/lib.rs", UNFINISHED);
+    repo.commit("chore: base with broken syntax");
+
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write("src/lib.rs", "pub fn stubbed() -> u32 {\n    todo!()\n}\n");
+    repo.commit("feat: fix syntax and add stub body");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.code, 1,
+        "stub-bodies must report error\nstdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    let notes = run.outcome("stub-bodies")["notes"]
+        .as_array()
+        .expect("notes array")
+        .iter()
+        .map(|n| n.as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        notes.iter().any(|n| n
+            .contains("the base side does not parse; every head-side function is judged as new")),
+        "stub-bodies notes must contain base unparseable note: {notes:?}"
+    );
+    assert!(
+        !run.titles("stub-bodies").is_empty(),
+        "stub-bodies must report violation"
+    );
+}
+
 // ---- msrv ------------------------------------------------------------------
 
 #[test]

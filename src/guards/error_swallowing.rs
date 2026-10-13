@@ -158,10 +158,16 @@ pub fn error_swallowing(ctx: &Context) -> Result<GateOutcome> {
             }
         };
         let base = match ctx.git.base_content(&file.old_path)? {
-            Some(src) => pack
-                .extract(&file.old_path, &src, &vocab)
-                .map(|f| sites_of(f, constant_fallbacks))
-                .unwrap_or_default(),
+            Some(src) => match pack.extract(&file.old_path, &src, &vocab) {
+                Ok(f) => sites_of(f, constant_fallbacks),
+                Err(_) => {
+                    out.notes.push(format!(
+                        "`{}`: the base side does not parse; every head-side handler is judged as new",
+                        file.path
+                    ));
+                    Vec::new()
+                }
+            },
             None => Vec::new(),
         };
         out.examined += head.len();

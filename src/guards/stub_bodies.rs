@@ -172,10 +172,16 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
             }
         };
         let base = match ctx.git.base_content(&file.old_path)? {
-            Some(src) => pack
-                .extract(&file.old_path, &src, &vocab)
-                .map(|f| f.functions)
-                .unwrap_or_default(),
+            Some(src) => match pack.extract(&file.old_path, &src, &vocab) {
+                Ok(f) => f.functions,
+                Err(_) => {
+                    out.notes.push(format!(
+                        "`{}`: the base side does not parse; every head-side function is judged as new",
+                        file.path
+                    ));
+                    Vec::new()
+                }
+            },
             None => Vec::new(),
         };
         // A file added in test scope by its name only, with no test that checks.

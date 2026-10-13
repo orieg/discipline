@@ -146,6 +146,7 @@ fn each_gate_that_reads_what_it_can_notes_the_file() {
     for gate in NEED_EVERY_FILE {
         config.push_str(&format!("[gates.{gate}]\nenabled = false\n"));
     }
+    config.push_str("[gates.unsafe-budget]\nenabled = true\n");
     let repo = Repo::new();
     repo.git(&["checkout", "-q", "main"]);
     repo.write("discipline.toml", &config);
@@ -163,7 +164,12 @@ fn each_gate_that_reads_what_it_can_notes_the_file() {
     assert!(run.json()["could_not_check"].is_null(), "{}", run.stdout);
 
     let could_not = |path: &str| format!("could not parse `{path}`: {UNFINISHED_WHY}");
-    for gate in ["stub-bodies", "error-swallowing", "suppression-delta"] {
+    for gate in [
+        "stub-bodies",
+        "error-swallowing",
+        "suppression-delta",
+        "unsafe-budget",
+    ] {
         for path in ["src/stuck.rs", "tests/prop.rs"] {
             let expected = format!(
                 "`{path}`: not analysed, the head side does not parse ({})",
