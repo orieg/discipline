@@ -155,3 +155,47 @@ fn a_publish_step_without_an_exchanged_token_is_reported() {
         "{defects:?}"
     );
 }
+
+#[test]
+fn cargo_publish_precedes_latest_mark_and_tag_movement_in_promote() {
+    let workflow = release_workflow();
+    let jobs = workflow["jobs"].as_mapping().expect("release.yml has jobs");
+    let promote = &jobs[&Value::String("promote".to_string())];
+    let steps = promote["steps"].as_sequence().expect("promote has steps");
+
+    let publish_idx = steps
+        .iter()
+        .position(|s| {
+            s["run"]
+                .as_str()
+                .is_some_and(|r| r.contains("cargo publish"))
+        })
+        .expect("promote must have a cargo publish step");
+
+    let latest_idx = steps
+        .iter()
+        .position(|s| {
+            s["name"]
+                .as_str()
+                .is_some_and(|n| n.contains("Mark the release latest"))
+        })
+        .expect("promote must have Mark the release latest step");
+
+    let tags_idx = steps
+        .iter()
+        .position(|s| {
+            s["name"]
+                .as_str()
+                .is_some_and(|n| n.contains("Move the floating container tags"))
+        })
+        .expect("promote must have Move the floating container tags step");
+
+    assert!(
+        publish_idx < latest_idx,
+        "cargo publish (step {publish_idx}) must precede Mark the release latest (step {latest_idx})"
+    );
+    assert!(
+        publish_idx < tags_idx,
+        "cargo publish (step {publish_idx}) must precede Move the floating container tags (step {tags_idx})"
+    );
+}
