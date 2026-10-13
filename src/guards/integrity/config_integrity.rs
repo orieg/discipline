@@ -14,6 +14,12 @@ fn base_config_source(ctx: &Context) -> Result<Option<String>> {
     ctx.base_config_text()
 }
 
+/// The head-side configuration source. A `--config` pointing at a file the head does not
+/// have still compares against the head `discipline.toml`.
+fn head_config_source(ctx: &Context) -> Result<Option<String>> {
+    ctx.head_config_text()
+}
+
 /// Whether the base side runs this gate. The change under review cannot switch off the
 /// gate that judges its configuration: `enabled = false` takes effect once it has merged.
 ///
@@ -84,7 +90,20 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
     } else if let Some(base_src) = base_config_source(ctx)? {
         match DisciplineConfig::from_toml_str(&base_src) {
             Ok(base) => {
-                let head = ctx.head_config.unwrap_or(ctx.config);
+                let unoverridden_head: DisciplineConfig;
+                let head = if settings.compare_effective {
+                    ctx.head_config.unwrap_or(ctx.config)
+                } else if let Some(head_src) = head_config_source(ctx)? {
+                    match DisciplineConfig::from_toml_str(&head_src) {
+                        Ok(cfg) => {
+                            unoverridden_head = cfg;
+                            &unoverridden_head
+                        }
+                        Err(_) => ctx.head_config.unwrap_or(ctx.config),
+                    }
+                } else {
+                    ctx.head_config.unwrap_or(ctx.config)
+                };
                 severity = stricter(severity, base.gates.config_integrity.severity());
                 if !settings.enabled() {
                     out.notes.push(

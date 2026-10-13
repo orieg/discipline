@@ -863,6 +863,23 @@ impl Context<'_> {
         })
     }
 
+    /// The head side's configuration source text. A `--config` outside the repository has
+    /// no tree, so only the in-tree configuration is read.
+    pub fn head_config_text(&self) -> Result<Option<String>> {
+        let own = if crate::gitctx::config_in_tree(self.config_path) {
+            self.git.head_content(self.config_path)?
+        } else {
+            None
+        };
+        Ok(match own {
+            Some(s) => Some(s),
+            None if self.config_path != "discipline.toml" => {
+                self.git.head_content("discipline.toml")?
+            }
+            None => None,
+        })
+    }
+
     /// Under `discipline replay`, a file the configuration names that neither side of the
     /// replayed change has predates the configuration, so the part of a gate that reads it
     /// does not apply to that change. Outside replay (or when either side has the file) a

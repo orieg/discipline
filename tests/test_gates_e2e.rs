@@ -2151,7 +2151,7 @@ fn a_change_cannot_disable_or_demote_the_gate_that_judges_its_config() {
     let notes = run.outcome("config-integrity")["notes"].to_string();
     assert!(notes.contains("evaluated anyway"), "{notes}");
 
-    // `--disable` on the command line takes the same path.
+    // `--disable` on the command line does not count as a configuration weakening by default (`compare_effective = false`).
     let repo = repo_with_base_config(CONFIG_HEAD);
     repo.write(
         "discipline.toml",
@@ -2160,7 +2160,50 @@ fn a_change_cannot_disable_or_demote_the_gate_that_judges_its_config() {
     repo.commit("chore: tune");
     let run = repo.check(&["--disable", "config-integrity"]);
     assert_eq!(run.code, 1);
+    assert_eq!(run.violations("config-integrity").len(), 1);
+    assert_eq!(
+        run.violations("config-integrity")[0]["message"],
+        "[vacuous-tests] `enabled` changed from true to false."
+    );
+
+    // `--disable` on an untouched tree produces no config-integrity violation by default.
+    let repo = repo_with_base_config(CONFIG_HEAD);
+    repo.write("src/lib.rs", "pub fn answer() -> u32 { 42 }\n");
+    repo.commit("feat: answer");
+    let run = repo.check(&["--disable", "vacuous-tests"]);
+    assert_eq!(
+        run.code, 0,
+        "stdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    assert!(run.violations("config-integrity").is_empty());
+
+    // With `compare_effective = true`, CLI switches are counted as configuration changes.
+    let repo = repo_with_base_config(&format!(
+        "{CONFIG_HEAD}[gates.config-integrity]\ncompare_effective = true\n"
+    ));
+    repo.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}[gates.config-integrity]\ncompare_effective = true\n[gates.vacuous-tests]\nenabled = false\n"),
+    );
+    repo.commit("chore: tune");
+    let run = repo.check(&["--disable", "config-integrity"]);
+    assert_eq!(run.code, 1);
     assert_eq!(run.violations("config-integrity").len(), 2);
+
+    // And `--disable` on an untouched tree triggers config-integrity when `compare_effective = true`.
+    let repo = repo_with_base_config(&format!(
+        "{CONFIG_HEAD}[gates.config-integrity]\ncompare_effective = true\n"
+    ));
+    repo.write("src/lib.rs", "pub fn answer() -> u32 { 42 }\n");
+    repo.commit("feat: answer");
+    let run = repo.check(&["--disable", "vacuous-tests"]);
+    assert_eq!(run.code, 1);
+    assert_eq!(run.violations("config-integrity").len(), 1);
+    assert_eq!(
+        run.violations("config-integrity")[0]["message"],
+        "[vacuous-tests] `enabled` changed from true to false."
+    );
 
     // Demoting the gate to `note` does not demote the report of that demotion.
     let repo = repo_with_base_config(CONFIG_HEAD);

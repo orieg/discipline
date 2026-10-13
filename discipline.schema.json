@@ -528,6 +528,26 @@
       },
       "type": "object"
     },
+    "ConfigIntegrityGate": {
+      "additionalProperties": false,
+      "properties": {
+        "compare_effective": {
+          "description": "Whether command-line --enable, --disable and --config-override switches are included when diffing base and head configuration (default false: only committed or staged repository configuration changes are compared)",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
     "DeletionGate": {
       "additionalProperties": false,
       "properties": {
@@ -1736,7 +1756,7 @@
         "config-integrity": {
           "allOf": [
             {
-              "$ref": "#/$defs/BasicGate"
+              "$ref": "#/$defs/ConfigIntegrityGate"
             }
           ],
           "description": "a change cannot weaken its own discipline.toml without a token"

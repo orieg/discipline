@@ -167,6 +167,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
         "verify_static_floor_with_report",
         Direction::LooserWhenFalse,
     ),
+    ("compare_effective", Direction::LooserWhenFalse),
     ("require_online", Direction::LooserWhenFalse),
     ("verify_references", Direction::LooserWhenFalse),
     ("require_open_issue", Direction::LooserWhenFalse),

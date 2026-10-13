@@ -1337,7 +1337,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - `Baseline Contains New Findings`: the grandfathering baseline grows, or swaps a fingerprint one for one (subject `baseline`).
   - A baseline named by an absolute `--baseline-file` inside the repository is compared, and reported, under its repository-relative path. One outside the repository is on neither side of the change, as a `--config` outside it is: nothing is compared, and a note says so, naming the file by its file name alone (its directory is the runner's).
   - `Baseline Migration Mixed With Other Changes`: a fingerprint-version migration (`discipline baseline --migrate`) in a change that also touches other files (subject `baseline`). On its own, a migration that does not grow the baseline and keeps each entry's gate and path is accepted without a directive.
-- **Self-protection:** the gate runs whenever the **base** configuration enables it, whatever the head configuration or `--disable` says, and reports at the stricter of the base and head severity. Every gate option has a declared loosening direction in `src/guards/integrity/directions.rs::KEY_DIRECTIONS`; a unit test fails when an option is added without one.
+- **Self-protection:** the gate runs whenever the **base** configuration enables it, whatever the head configuration or `--disable` says, and reports at the stricter of the base and head severity. Every gate option has a declared loosening direction in `src/guards/integrity/directions.rs::KEY_DIRECTIONS`; a unit test fails when an option is added without one. Command-line invocation switches (`--enable`, `--disable`, `--config-override`) represent operator execution flags and are excluded from the `config-integrity` diff by default (`compare_effective = false`). Setting `compare_effective = true` includes CLI switches in the comparison, reporting any gate disabled via CLI arguments as a configuration weakening.
 - **What it does NOT catch:**
   - Deleting `discipline.toml`: the run falls back to built-in defaults, and only options the base file set stricter than those defaults are reported.
   - Which field of an edited `groups`, `rules`, `commands` or `citation_measurement_jobs` entry loosened it: the finding reports one lost entry, without naming the field. An edit that tightens a field outside the lists above (a raised `min_count` in a `commands` entry) is reported the same way.
@@ -1357,7 +1357,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Tightening edits (enabling gates, adding denylists, raising severity) — tightening is permitted freely.
   - Workflow-level switches (`disable:` in GitHub Actions steps) — protected by `ci-integrity`.
 - **Lifting directive:** `allow-gate-weakening: <subject> <reason>` in PR description or commit message; the subject is the gate id, or `directives`, `tests`, `languages`, `meta` or `baseline` for those tables.
-- **Config keys:** `enabled`, `severity`, `exempt_paths`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `compare_effective`.
 
 #### `build-hooks`
 - **Rule:** Code that runs unasked when a package is installed or built, and the configuration that decides where packages come from, cannot change without a directive. `ci-integrity` closes the workflow files; this gate closes the other place an agent can run a command on every install.
