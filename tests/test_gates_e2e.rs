@@ -20152,3 +20152,202 @@ enabled = true
     assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
     assert!(run_pass.violations("mechanism-sections").is_empty());
 }
+
+#[test]
+fn test_floor_uncommitted_report_fallback_static_and_fail_closed_e2e() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        r#"
+[meta]
+version = 1
+name = "repo"
+[gates.test-floor]
+enabled = true
+test_report = "target/junit.xml"
+"#,
+    );
+    repo.write(
+        "tests/test_pkg.py",
+        "def test_one(): pass\ndef test_two(): pass\n",
+    );
+    // Base ref: test_pkg.py has 2 tests; target/junit.xml is uncommitted (absent in base ref).
+    repo.commit("feat: initial python tests with uncommitted report configured");
+
+    // Case 1: Head has target/junit.xml on disk, and code still has 2 tests.
+    // Default fallback = "static" falls back to static AST count and passes with note.
+    repo.write(
+        "target/junit.xml",
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="unit">
+    <testcase classname="pkg" name="test_one"/>
+    <testcase classname="pkg" name="test_two"/>
+  </testsuite>
+</testsuites>
+"#,
+    );
+    repo.write(
+        "tests/test_pkg.py",
+        "def test_one(): pass\ndef test_two(): pass\n# added comment\n",
+    );
+    repo.commit("test: touch test file and have uncommitted test_report on disk");
+
+    let run_default = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_default.code, 0,
+        "stdout: {}\nstderr: {}",
+        run_default.stdout, run_default.stderr
+    );
+    let notes = notes_of(&run_default, "test-floor");
+    assert!(
+        notes.iter().any(|n| n.contains("base test report not present in base ref; falling back to static AST test-count comparison")),
+        "Expected fallback note in: {notes:?}"
+    );
+
+    // Negative control: under default "static" fallback, deleting a test in code fails!
+    repo.write("tests/test_pkg.py", "def test_one(): pass\n");
+    repo.commit("test: delete test_two in code");
+    let run_dropped = repo.check(&["--base", "HEAD~2"]);
+    assert_eq!(run_dropped.code, 1, "Must fail when static AST count drops");
+    let violations = run_dropped.violations("test-floor");
+    assert_eq!(violations[0]["code"], "test-floor/test-count-below-floor");
+
+    // Case 2: When configured as uncommitted_report_fallback = "fail-closed", fails closed with exit 2
+    repo.write(
+        "discipline.toml",
+        r#"
+[meta]
+version = 1
+name = "repo"
+[gates.test-floor]
+enabled = true
+test_report = "target/junit.xml"
+uncommitted_report_fallback = "fail-closed"
+"#,
+    );
+    repo.write(
+        "tests/test_pkg.py",
+        "def test_one(): pass\ndef test_two(): pass\n",
+    );
+    repo.commit("feat: configure uncommitted_report_fallback = fail-closed\n\nallow-gate-weakening: test-floor test fail-closed");
+    let run_fail_closed = repo.check(&["--base", "HEAD~3"]);
+    assert_eq!(
+        run_fail_closed.code, 2,
+        "Must exit 2 with fail-closed when base report is missing: {}{}",
+        run_fail_closed.stdout, run_fail_closed.stderr
+    );
+    assert!(
+        run_fail_closed
+            .stderr
+            .contains("no base report or floor is configured")
+            || run_fail_closed
+                .stdout
+                .contains("no base report or floor is configured"),
+        "Diagnostic must explain missing base report"
+    );
+}
+
+#[test]
+fn test_floor_dual_verification_stale_committed_report_e2e() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        r#"
+[meta]
+version = 1
+name = "repo"
+[gates.test-floor]
+enabled = true
+test_report = "reports/junit.xml"
+"#,
+    );
+    repo.write(
+        "reports/junit.xml",
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="unit">
+    <testcase classname="pkg" name="test_one"/>
+    <testcase classname="pkg" name="test_two"/>
+  </testsuite>
+</testsuites>
+"#,
+    );
+    repo.write(
+        "tests/test_mod.rs",
+        "#[test]\nfn test_one() {}\n#[test]\nfn test_two() {}\n",
+    );
+    repo.commit("feat: base ref with report and 2 tests in code");
+
+    // Negative control: report is committed and unchanged (still claims 2 passing tests),
+    // but test_two is deleted in code (static tests drop from 2 to 1).
+    repo.write("tests/test_mod.rs", "#[test]\nfn test_one() {}\n");
+    repo.commit("refactor: delete test_two from code without updating report");
+    let run_stale = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_stale.code, 1,
+        "Must fail when code tests drop despite report: {}",
+        run_stale.stdout
+    );
+    let violations = run_stale.violations("test-floor");
+    assert!(
+        violations.iter().any(|v| {
+            v["code"] == "test-floor/test-count-below-floor"
+                && v["message"].as_str().unwrap().contains(
+                    "despite runtime test report; the test report may be stale or unregenerated",
+                )
+        }),
+        "Expected stale report message in: {violations:?}"
+    );
+
+    // Positive control 1: Waived with allow-test-shrink
+    repo.commit("fix: justify deletion\n\nallow-test-shrink: test_two deleted in refactoring\nremoves: test_two deleted in refactoring");
+    let run_waived = repo.check(&["--base", "HEAD~2"]);
+    assert_eq!(
+        run_waived.code, 0,
+        "allow-test-shrink must waive static drop: {}",
+        run_waived.stdout
+    );
+    assert!(run_waived.violations("test-floor").is_empty());
+
+    // Positive control 2: Disabled via verify_static_floor_with_report = false
+    let repo2 = Repo::new();
+    repo2.write(
+        "discipline.toml",
+        r#"
+[meta]
+version = 1
+name = "repo"
+[gates.test-floor]
+enabled = true
+test_report = "reports/junit.xml"
+verify_static_floor_with_report = false
+"#,
+    );
+    repo2.write(
+        "reports/junit.xml",
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="unit">
+    <testcase classname="pkg" name="test_one"/>
+    <testcase classname="pkg" name="test_two"/>
+  </testsuite>
+</testsuites>
+"#,
+    );
+    repo2.write(
+        "tests/test_mod.rs",
+        "#[test]\nfn test_one() {}\n#[test]\nfn test_two() {}\n",
+    );
+    repo2.commit("feat: base ref with verify_static_floor_with_report = false");
+
+    repo2.write("tests/test_mod.rs", "#[test]\nfn test_one() {}\n");
+    repo2.commit("refactor: delete test_two in code with verify_static_floor_with_report disabled\n\nremoves: test_two deleted in refactoring");
+    let run_disabled = repo2.check(&["--base", "HEAD~1"]);
+    assert_eq!(
+        run_disabled.code, 0,
+        "Should pass when verify_static_floor_with_report = false: {}",
+        run_disabled.stdout
+    );
+    assert!(run_disabled.violations("test-floor").is_empty());
+}

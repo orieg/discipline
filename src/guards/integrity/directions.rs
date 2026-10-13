@@ -163,6 +163,10 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("check_plans", Direction::LooserWhenFalse),
     ("require_declared_outputs", Direction::LooserWhenFalse),
     ("verify_tracker_titles", Direction::LooserWhenFalse),
+    (
+        "verify_static_floor_with_report",
+        Direction::LooserWhenFalse,
+    ),
     ("require_online", Direction::LooserWhenFalse),
     ("verify_references", Direction::LooserWhenFalse),
     ("require_open_issue", Direction::LooserWhenFalse),
@@ -182,6 +186,10 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     (
         "ratification_valid_from",
         Direction::Ordered(&["pull-created", "path-last-changed", "any"]),
+    ),
+    (
+        "uncommitted_report_fallback",
+        Direction::Ordered(&["fail-closed", "static"]),
     ),
     ("ratification_max_age_days", Direction::Cap),
     ("accept_edited", Direction::StrictMode("never")),

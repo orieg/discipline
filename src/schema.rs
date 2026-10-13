@@ -482,7 +482,9 @@ pub fn generate_schema() -> Value {
                 "constant_file": { "type": "string", "description": "File containing a floor constant" },
                 "constant_name": { "type": "string", "description": "Name of the floor constant in constant_file" },
                 "required_suites": { "$ref": "#/$defs/StringListOrReset", "description": "Required test suite files that must exist" },
-                "test_command": { "type": "string", "description": "Custom command to list or count tests; run for at most 600 seconds with stdout captured up to 25 MiB, and a timeout or a listing cut off is exit 2" }
+                "test_command": { "type": "string", "description": "Custom command to list or count tests; run for at most 600 seconds with stdout captured up to 25 MiB, and a timeout or a listing cut off is exit 2" },
+                "uncommitted_report_fallback": { "type": "string", "enum": ["static", "fail-closed"], "description": "When test_report is absent from the base ref and no base_report is provided, fall back to static AST test-count comparison (static, default) or fail closed with exit 2 (fail-closed)" },
+                "verify_static_floor_with_report": { "type": "boolean", "description": "When using a test report without test_command, verify that workspace static AST test count did not decrease, preventing stale or unregenerated reports from masking test deletions in code (default: true)" }
             })),
             "CiIntegrityGate": gate_table(json!({
                 "workflows": { "$ref": "#/$defs/StringListOrReset", "description": "Workflow file patterns to inspect; an action.yml / action.yaml outside a workflow directory is read as a composite action (its nested uses: only)" },
