@@ -65,7 +65,7 @@ bzip2-rs = { version = "0.1.2", default-features = false }
 # Pure-Rust xz and zstd decoders for `.tar.xz`, `.tar.zst`, `.deb` and `.rpm` payloads
 # read by `archive-contents` (both MIT, no C library).
 lzma-rs = { version = "0.3", default-features = false }
-ruzstd = { version = "0.9", default-features = false, features = ["std"] }
+ruzstd = { version = "0.9.1", default-features = false, features = ["std"] }
 fancy-regex = "0.19.2"
 # Inline `sourceMappingURL=data:...;base64,` maps (archive-contents content scan).
 # Already in the tree through ureq.
