@@ -344,6 +344,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.suppression-delta.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.suppression-delta.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.suppression-delta.max_increase` | integer | `0` | Maximum net increase in suppression annotations permitted (default: 0) |
+| `gates.suppression-delta.quote_line` | boolean | `false` | When true, quote the source line containing the suppression in the finding's remediation (default: false) |
 | `gates.suppression-delta.severity` | string | `"warning"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.test-budget.corpus_dirs` | list | *(3 entries)* | Corpus directory patterns to monitor for seed file shrink |
 | `gates.test-budget.enabled` | boolean | `true` | Whether this gate is active |

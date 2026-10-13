@@ -2279,6 +2279,10 @@ pub struct SuppressionDeltaGate {
     pub exempt_paths: Vec<String>,
     pub max_increase: usize,
     pub allowed_suppressions: Vec<String>,
+    /// When true, quote the source line containing the suppression in the finding's
+    /// remediation message. Defaults to `false` to preserve the locations-only contract
+    /// and prevent secret or source leakage.
+    pub quote_line: bool,
 }
 
 impl Default for SuppressionDeltaGate {
@@ -2289,6 +2293,7 @@ impl Default for SuppressionDeltaGate {
             exempt_paths: Vec::new(),
             max_increase: 0,
             allowed_suppressions: Vec::new(),
+            quote_line: false,
         }
     }
 }

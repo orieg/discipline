@@ -778,6 +778,7 @@
       "gates.suppression-delta.exempt_paths.items",
       "gates.suppression-delta.exempt_paths.reset",
       "gates.suppression-delta.max_increase",
+      "gates.suppression-delta.quote_line",
       "gates.suppression-delta.severity",
       "gates.test-budget",
       "gates.test-budget.corpus_dirs",

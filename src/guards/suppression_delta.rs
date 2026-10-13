@@ -254,21 +254,75 @@ pub fn evaluate_suppression_delta(ctx: &Context) -> Result<GateOutcome> {
 
     if unwaived.len() > settings.max_increase {
         for (path, site, pat) in &unwaived {
-            out.add_violation(
-                ctx.overridable(settings.severity),
-&crate::findings::SUPPRESSION_ADDED,
-                path,
-                site.line,
-                format!("new {} suppression `{pat}` introduced without override", site.kind),
+            let kind_label = suppression_kind_label(pat, site);
+            let remediation = if settings.quote_line {
+                let sanitized_snippet = crate::report::scrub_override_directives(&site.snippet);
                 format!(
                     "line contains suppression annotation `{}`: `{}`; use `discipline:allow(suppression-delta): <rule-or-path> <reason>` to waive",
-                    pat, site.snippet
+                    kind_label, sanitized_snippet
+                )
+            } else {
+                format!(
+                    "line contains suppression annotation `{}`; use `discipline:allow(suppression-delta): <rule-or-path> <reason>` to waive",
+                    kind_label
+                )
+            };
+            out.add_violation(
+                ctx.overridable(settings.severity),
+                &crate::findings::SUPPRESSION_ADDED,
+                path,
+                site.line,
+                format!(
+                    "new {} suppression `{kind_label}` introduced without override",
+                    site.kind
                 ),
+                remediation,
             );
         }
     }
 
     Ok(out)
+}
+
+/// A human-readable label for the suppression kind and rule (e.g. `allow(clippy::x)`,
+/// `noqa: F401`), reported by default instead of quoting the raw source line.
+pub fn suppression_kind_label(pat: &str, site: &Site) -> String {
+    if site.rule.is_empty() {
+        return pat.to_string();
+    }
+    if pat.starts_with("#[allow(") || pat.starts_with("#![allow(") {
+        format!("allow({})", site.rule)
+    } else if pat.starts_with("#[expect(") || pat.starts_with("#![expect(") {
+        format!("expect({})", site.rule)
+    } else if pat.contains("SuppressWarnings") || site.snippet.contains("SuppressWarnings") {
+        format!("SuppressWarnings({})", site.rule)
+    } else if pat.contains("Suppress") || site.snippet.contains("Suppress") {
+        format!("Suppress({})", site.rule)
+    } else if pat.contains("nowarn") || site.snippet.contains("nowarn") {
+        format!("nowarn({})", site.rule)
+    } else if pat == "# noqa" {
+        if site.rule == "noqa" {
+            "# noqa".to_string()
+        } else if site.rule.starts_with("noqa:") {
+            site.rule.clone()
+        } else {
+            format!("noqa: {}", site.rule)
+        }
+    } else if pat == "# type: ignore" {
+        if site.rule == "type-ignore" || site.rule == "type: ignore" {
+            "# type: ignore".to_string()
+        } else {
+            format!("type: ignore[{}]", site.rule)
+        }
+    } else if pat.contains("diagnostic ignored") || pat.contains("pragma warning") {
+        format!("{pat} {}", site.rule)
+    } else if pat.contains("NOLINT") || pat.contains("nolint") || pat.contains("lint:ignore") {
+        format!("{pat}({})", site.rule)
+    } else if pat.contains(&site.rule) {
+        pat.to_string()
+    } else {
+        format!("{pat} {}", site.rule)
+    }
 }
 
 pub fn extract_suppression_rules(snippet: &str, pat: &str) -> Vec<String> {
@@ -483,5 +537,70 @@ mod tests {
         let cpp_rules = extract_suppression_rules("// NOLINT(readability-something)", "// NOLINT");
         assert!(cpp_rules.contains(&"NOLINT".to_string()));
         assert!(cpp_rules.contains(&"readability-something".to_string()));
+    }
+
+    #[test]
+    fn test_suppression_kind_label() {
+        use super::{suppression_kind_label, Site};
+        let site = |rule: &str, snippet: &str| Site {
+            line: 1,
+            kind: "linter-disable",
+            rule: rule.into(),
+            snippet: snippet.into(),
+        };
+
+        assert_eq!(
+            suppression_kind_label("#[allow(", &site("clippy::all", "#[allow(clippy::all)]")),
+            "allow(clippy::all)"
+        );
+        assert_eq!(
+            suppression_kind_label("#[expect(", &site("dead_code", "#[expect(dead_code)]")),
+            "expect(dead_code)"
+        );
+        assert_eq!(
+            suppression_kind_label(
+                "@SuppressWarnings",
+                &site("unchecked", "@SuppressWarnings(\"unchecked\")")
+            ),
+            "SuppressWarnings(unchecked)"
+        );
+        assert_eq!(
+            suppression_kind_label("# noqa", &site("E501", "x = 1 # noqa: E501")),
+            "noqa: E501"
+        );
+        assert_eq!(
+            suppression_kind_label("# noqa", &site("noqa", "x = 1 # noqa")),
+            "# noqa"
+        );
+        assert_eq!(
+            suppression_kind_label(
+                "# type: ignore",
+                &site("attr-defined", "y = 1 # type: ignore[attr-defined]")
+            ),
+            "type: ignore[attr-defined]"
+        );
+        assert_eq!(
+            suppression_kind_label("// NOLINT", &site("readability", "// NOLINT(readability)")),
+            "// NOLINT(readability)"
+        );
+    }
+
+    #[test]
+    fn test_quote_line_config_controls_line_text_in_remediation() {
+        // Default: quote_line = false -> does not quote snippet in remediation
+        let default_run = evaluate("").unwrap();
+        assert_eq!(default_run.violations.len(), 1);
+        let rem_default = default_run.violations[0].remediation.as_deref().unwrap();
+        assert!(rem_default.contains("allow(dead_code)"));
+        assert!(!rem_default.contains("#[allow(dead_code)]"));
+
+        // Opt-in: quote_line = true -> quotes snippet in remediation
+        let quoted_run = evaluate("quote_line = true").unwrap();
+        assert_eq!(quoted_run.violations.len(), 1);
+        let rem_quoted = quoted_run.violations[0].remediation.as_deref().unwrap();
+        assert!(rem_quoted.contains("allow(dead_code)"));
+        // The source snippet `#[allow(dead_code)]` is quoted; `scrub_override_directives`
+        // redacts `allow(` to prevent agent directive instruction bypasses.
+        assert!(rem_quoted.contains("dead_code)]"));
     }
 }
