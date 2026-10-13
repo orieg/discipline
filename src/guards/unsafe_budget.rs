@@ -41,39 +41,54 @@ pub fn evaluate_unsafe_budget(ctx: &Context) -> Result<GateOutcome> {
             continue;
         }
 
-        files_examined += 1;
-
-        // Base facts
-        let base_sites = if let Some(bytes) = ctx.git.base_bytes(&file.old_path)? {
-            if let Some(pack) = registry.find_pack(&file.old_path) {
-                let src = String::from_utf8_lossy(&bytes);
-                pack.extract(&file.old_path, &src, &vocab)?
-                    .unsafe_sites
-                    .len()
-            } else {
-                0
-            }
-        } else {
-            0
-        };
-        base_unsafe_count += base_sites;
-
         // Head facts
         let head_sites = match file.kind {
             ChangeKind::Deleted => Vec::new(),
             _ => {
-                if let Some(bytes) = ctx.git.head_bytes(&file.path)? {
-                    if let Some(pack) = registry.find_pack(&file.path) {
-                        let src = String::from_utf8_lossy(&bytes);
-                        pack.extract(&file.path, &src, &vocab)?.unsafe_sites
-                    } else {
-                        Vec::new()
+                let Some(head_src) = ctx.git.head_content(&file.path)? else {
+                    out.notes.push(super::unread_note(&file.path));
+                    continue;
+                };
+                if let Some(pack) = registry.find_pack(&file.path) {
+                    match pack.extract(&file.path, &head_src, &vocab) {
+                        Ok(f) => f.unsafe_sites,
+                        Err(e) => {
+                            out.notes.push(format!(
+                                "`{}`: not analysed, the head side does not parse ({e})",
+                                file.path
+                            ));
+                            continue;
+                        }
                     }
                 } else {
                     Vec::new()
                 }
             }
         };
+
+        files_examined += 1;
+
+        // Base facts
+        let base_sites = match ctx.git.base_content(&file.old_path)? {
+            Some(base_src) => {
+                if let Some(pack) = registry.find_pack(&file.old_path) {
+                    match pack.extract(&file.old_path, &base_src, &vocab) {
+                        Ok(f) => f.unsafe_sites.len(),
+                        Err(_) => {
+                            out.notes.push(format!(
+                                "`{}`: the base side does not parse; every head-side unsafe block is judged as new",
+                                file.path
+                            ));
+                            0
+                        }
+                    }
+                } else {
+                    0
+                }
+            }
+            None => 0,
+        };
+        base_unsafe_count += base_sites;
 
         if head_sites.len() > base_sites {
             for site in &head_sites {
