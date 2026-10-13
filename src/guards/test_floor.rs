@@ -374,6 +374,7 @@ fn check_required_suites(ctx: &Context, out: &mut GateOutcome) {
 struct TestReports {
     head: Option<Vec<TestCaseReport>>,
     base: Option<Vec<TestCaseReport>>,
+    base_uncommitted: bool,
 }
 
 /// Locates and parses the head and base test reports the identity ratchet compares.
@@ -418,6 +419,7 @@ fn resolve_test_reports(ctx: &Context, out: &mut GateOutcome) -> Result<TestRepo
 
     let mut head_cases_opt: Option<Vec<TestCaseReport>> = None;
     let mut base_cases_opt: Option<Vec<TestCaseReport>> = None;
+    let mut base_uncommitted = false;
 
     if let Some(h_path) = head_report_path {
         let full_head = if Path::new(h_path).is_absolute() {
@@ -464,6 +466,7 @@ fn resolve_test_reports(ctx: &Context, out: &mut GateOutcome) -> Result<TestRepo
                         base_cases_opt = Some(parsed_base);
                     }
                     Ok(None) => {
+                        base_uncommitted = true;
                         out.notes.push(format!(
                             "test-floor: test report '{configured_report}' not present in base ref; identity ratchet will be enforced on subsequent changes"
                         ));
@@ -479,6 +482,7 @@ fn resolve_test_reports(ctx: &Context, out: &mut GateOutcome) -> Result<TestRepo
     Ok(TestReports {
         head: head_cases_opt,
         base: base_cases_opt,
+        base_uncommitted,
     })
 }
 
@@ -640,7 +644,7 @@ fn compare_with_floor(
         {
             verify_static_floor_did_not_drop(ctx, filter, sides, out)?;
         }
-    } else if measured.head_static.is_none() {
+    } else if reports.base_uncommitted {
         match ctx.config.gates.test_floor.uncommitted_report_fallback {
             UncommittedReportFallback::Static => {
                 let head = count_workspace_ast_tests(ctx, filter, sides.head()?)?;
@@ -668,6 +672,12 @@ fn compare_with_floor(
                 );
             }
         }
+    } else if measured.head_static.is_none() {
+        bail!(
+            "test-floor: a runtime test report supplies the test count, but no base report or floor is configured to \
+             compare it against; provide `base_report`, set `min_tests` (or `constant_file` + `constant_name`), \
+             or remove the report to use the static ratchet"
+        );
     } else {
         compare_with_base_static_count(ctx, filter, sides, measured, out)?;
     }
