@@ -98,6 +98,17 @@ fn nested_sources() -> Vec<Nested> {
             ),
             line: 3,
         },
+        Nested {
+            name: "256 nested Ruby suites",
+            path: "spec/deep_spec.rb",
+            text: nest(
+                256,
+                |i| format!("describe 'd{i}' do\n"),
+                "it 'hollow' do\nend\n",
+                "end\n",
+            ),
+            line: 257,
+        },
     ]
 }
 
@@ -206,6 +217,11 @@ fn the_same_test_without_the_nesting_is_the_same_finding() {
             "deep_test.go",
             "package m\n\nfunc TestHollow(t *testing.T) {\n\tx := g(1)\n\t_ = x\n}\n".to_string(),
             3,
+        ),
+        (
+            "spec/deep_spec.rb",
+            "describe 'd0' do\nit 'hollow' do\nend\nend\n".to_string(),
+            2,
         ),
     ];
     for (path, text, line) in shallow {
