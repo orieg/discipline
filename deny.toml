@@ -7,7 +7,9 @@ all-features = true
 [advisories]
 yanked = "deny"
 # Individual ignores only, each with a reason, so a *new* advisory still fails.
-ignore = []
+ignore = [
+    { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml is an unmaintained informational advisory inherited through serde_yaml" },
+]
 
 [licenses]
 confidence-threshold = 0.9
