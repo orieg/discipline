@@ -6,6 +6,7 @@
 //! - Required test suite files must exist on disk unless explicitly excused.
 //! - Fails closed if the base floor cannot be resolved when configured.
 
+use crate::config::UncommittedReportFallback;
 use crate::escape::unescape_xml;
 use crate::guards::{exempt_filter, Context, GateOutcome};
 use crate::tokens;
@@ -615,7 +616,14 @@ fn compare_with_floor(
     out: &mut GateOutcome,
 ) -> Result<()> {
     if let Some(floor) = explicit_floor {
-        compare_with_configured_floor(ctx, sides, floor, measured.count, out)
+        compare_with_configured_floor(ctx, sides, floor, measured.count, out)?;
+        if ctx.config.gates.test_floor.verify_static_floor_with_report
+            && reports.head.is_some()
+            && ctx.config.gates.test_floor.test_command.is_none()
+            && ctx.git.has_base()
+        {
+            verify_static_floor_did_not_drop(ctx, filter, sides, out)?;
+        }
     } else if let Some(base_cases) = reports.base.as_deref() {
         compare_with_base_report(
             ctx,
@@ -624,16 +632,91 @@ fn compare_with_floor(
             reports.head.as_deref(),
             measured.count,
             out,
-        )
+        )?;
+        if ctx.config.gates.test_floor.verify_static_floor_with_report
+            && reports.head.is_some()
+            && ctx.config.gates.test_floor.test_command.is_none()
+            && ctx.git.has_base()
+        {
+            verify_static_floor_did_not_drop(ctx, filter, sides, out)?;
+        }
     } else if measured.head_static.is_none() {
-        bail!(
-            "test-floor: a runtime test report supplies the test count, but no base report or floor is configured to \
-             compare it against; provide `base_report`, set `min_tests` (or `constant_file` + `constant_name`), \
-             or remove the report to use the static ratchet"
-        );
+        match ctx.config.gates.test_floor.uncommitted_report_fallback {
+            UncommittedReportFallback::Static => {
+                let head = count_workspace_ast_tests(ctx, filter, sides.head()?)?;
+                for note in head.notes("head") {
+                    if !out.notes.contains(&note) {
+                        out.notes.push(note);
+                    }
+                }
+                out.notes.push(
+                    "test-floor: base test report not present in base ref; falling back to static AST test-count comparison"
+                        .to_string(),
+                );
+                out.examined = head.running;
+                let measured_static = MeasuredCount {
+                    count: head.running,
+                    head_static: Some(head),
+                };
+                compare_with_base_static_count(ctx, filter, sides, &measured_static, out)?;
+            }
+            UncommittedReportFallback::FailClosed => {
+                bail!(
+                    "test-floor: a runtime test report supplies the test count, but no base report or floor is configured to \
+                     compare it against; provide `base_report`, set `min_tests` (or `constant_file` + `constant_name`), \
+                     or remove the report to use the static ratchet"
+                );
+            }
+        }
     } else {
-        compare_with_base_static_count(ctx, filter, sides, measured, out)
+        compare_with_base_static_count(ctx, filter, sides, measured, out)?;
     }
+    Ok(())
+}
+
+/// Verifies that workspace static AST test count did not decrease below the base ref count,
+/// preventing a stale or unregenerated runtime test report from masking test deletions in code.
+fn verify_static_floor_did_not_drop(
+    ctx: &Context,
+    filter: &crate::guards::PathFilter,
+    sides: &SideVocabularies,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    let settings = &ctx.config.gates.test_floor;
+    let base = count_base_workspace_ast_tests(ctx, filter, sides.base()?)?;
+    for note in base.notes("base") {
+        if !out.notes.contains(&note) {
+            out.notes.push(note);
+        }
+    }
+    let base_count = base.running;
+    if base_count == 0 {
+        return Ok(());
+    }
+
+    let head = count_workspace_ast_tests(ctx, filter, sides.head()?)?;
+    for note in head.notes("head") {
+        if !out.notes.contains(&note) {
+            out.notes.push(note);
+        }
+    }
+    let head_count = head.running;
+
+    if head_count + settings.tolerance < base_count {
+        let ov = find_test_floor_override(ctx, sides, &crate::findings::TEST_COUNT_BELOW_FLOOR)?;
+        out.lift_or_push(
+            ov,
+            ctx.overridable(settings.severity),
+            &crate::findings::TEST_COUNT_BELOW_FLOOR,
+            (None, None),
+            format!(
+                "Workspace static test count ({head_count}) dropped below base ref count ({base_count}) [tolerance: {}] despite runtime test report; the test report may be stale or unregenerated.",
+                settings.tolerance
+            ),
+            "Restore deleted tests or provide an allow-test-shrink: <reason> directive in the PR description.",
+        );
+    }
+    Ok(())
 }
 
 /// Reports a measured count below the configured floor.

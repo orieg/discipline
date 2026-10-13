@@ -365,6 +365,8 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.test-floor.test_command` | string | *(unset)* | Custom command to list or count tests; run for at most 600 seconds with stdout captured up to 25 MiB, and a timeout or a listing cut off is exit 2 |
 | `gates.test-floor.test_report` | string | *(unset)* | JUnit XML report of the test run, read from the working tree for the head side and from the base ref for the base side; switches on the test-identity ratchet |
 | `gates.test-floor.tolerance` | integer | `0` | Allowed test count decrease below floor or base before violation (default: 0) |
+| `gates.test-floor.uncommitted_report_fallback` | string | `"static"` | When test_report is absent from the base ref and no base_report is provided, fall back to static AST test-count comparison (static, default) or fail closed with exit 2 (fail-closed) |
+| `gates.test-floor.verify_static_floor_with_report` | boolean | `true` | When using a test report without test_command, verify that workspace static AST test count did not decrease, preventing stale or unregenerated reports from masking test deletions in code (default: true) |
 | `gates.time-estimates.allow_patterns` | list | `[]` | Regex patterns permitted as operational exceptions; matched per line and across soft-wrapped lines of a paragraph, exempting only the matched text |
 | `gates.time-estimates.diff_only` | boolean | `false` | When true, scans only modified lines in the git diff rather than all tracked files |
 | `gates.time-estimates.enabled` | boolean | `true` | Whether this gate is active |

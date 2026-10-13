@@ -1917,6 +1917,18 @@ impl Default for IssueLinkGate {
     }
 }
 
+/// What `test-floor` does when `test_report` is configured but absent from the base ref
+/// (e.g. build-output directories suggested by `discipline init`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum UncommittedReportFallback {
+    /// Fall back to static AST test-count comparison between head and base.
+    #[default]
+    Static,
+    /// Fail closed with exit 2, requiring `base_report`, `--test-base-report`, or `min_tests`.
+    FailClosed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TestFloorGate {
@@ -1933,6 +1945,14 @@ pub struct TestFloorGate {
     pub test_report: Option<String>,
     pub base_report: Option<String>,
     pub head_report: Option<String>,
+    /// When `test_report` is absent from the base ref and no `base_report` is provided,
+    /// fall back to static AST test-count comparison (`"static"`, default) or fail closed
+    /// with exit 2 (`"fail-closed"`).
+    pub uncommitted_report_fallback: UncommittedReportFallback,
+    /// When using a test report without `test_command`, verify that workspace static AST
+    /// test count did not decrease, preventing stale or unregenerated reports from masking
+    /// test deletions in code (default: true).
+    pub verify_static_floor_with_report: bool,
 }
 
 impl Default for TestFloorGate {
@@ -1950,6 +1970,8 @@ impl Default for TestFloorGate {
             test_report: None,
             base_report: None,
             head_report: None,
+            uncommitted_report_fallback: UncommittedReportFallback::default(),
+            verify_static_floor_with_report: true,
         }
     }
 }

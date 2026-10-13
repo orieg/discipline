@@ -811,6 +811,8 @@
       "gates.test-floor.test_command",
       "gates.test-floor.test_report",
       "gates.test-floor.tolerance",
+      "gates.test-floor.uncommitted_report_fallback",
+      "gates.test-floor.verify_static_floor_with_report",
       "gates.time-estimates",
       "gates.time-estimates.allow_patterns",
       "gates.time-estimates.allow_patterns.items",
