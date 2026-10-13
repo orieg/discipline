@@ -769,7 +769,7 @@ pub struct Gates {
     pub time_estimates: TimeEstimateGate,
     pub pii: PiiGate,
     pub agent_scratch: ScratchGate,
-    pub config_integrity: BasicGate,
+    pub config_integrity: ConfigIntegrityGate,
     pub toolchain_config: BasicGate,
     pub sandbox_config: BasicGate,
     pub stub_bodies: BasicGate,
@@ -874,6 +874,7 @@ macro_rules! impl_gate_settings {
 }
 impl_gate_settings!(
     BasicGate,
+    ConfigIntegrityGate,
     ErrorSwallowingGate,
     HarnessTamperingGate,
     InstructionSmugglingGate,
@@ -947,6 +948,27 @@ impl Default for BasicGate {
             enabled: true,
             severity: Severity::Error,
             exempt_paths: Vec::new(),
+        }
+    }
+}
+
+/// `config-integrity`: guards discipline.toml against stealth weakenings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ConfigIntegrityGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub compare_effective: bool,
+}
+
+impl Default for ConfigIntegrityGate {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            compare_effective: false,
         }
     }
 }

@@ -66,6 +66,22 @@ fn stricter(a: Severity, b: Severity) -> Severity {
     }
 }
 
+fn head_src_disables_gate(ctx: &Context, gate: &str) -> Result<bool> {
+    if let Some(src) = ctx.head_config_text()? {
+        if let Ok(val) = toml::from_str::<toml::Value>(&src) {
+            if let Some(enabled) = val
+                .get("gates")
+                .and_then(|g| g.get(gate))
+                .and_then(|t| t.get("enabled"))
+                .and_then(|e| e.as_bool())
+            {
+                return Ok(!enabled);
+            }
+        }
+    }
+    Ok(false)
+}
+
 pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
     const GATE: &str = "config-integrity";
     let settings = &ctx.config.gates.config_integrity;
@@ -103,6 +119,14 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                     .map(|t| t.len())
                     .unwrap_or(0);
                 for w in weakenings {
+                    if !settings.compare_effective
+                        && w.key == "enabled"
+                        && w.after.as_deref() == Some("false")
+                        && ctx.cli_disabled_gates.iter().any(|g| g == &w.gate)
+                        && !head_src_disables_gate(ctx, &w.gate).unwrap_or(false)
+                    {
+                        continue;
+                    }
                     let record = ctx.find_override(
                         GATE,
                         &crate::findings::GATE_WEAKENED,

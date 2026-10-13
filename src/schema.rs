@@ -48,6 +48,7 @@ pub fn generate_schema() -> Value {
             "pii" => "#/$defs/PiiGate",
             "agent-scratch" => "#/$defs/ScratchGate",
             "golden-output" => "#/$defs/GoldenGate",
+            "config-integrity" => "#/$defs/ConfigIntegrityGate",
             "toolchain-config" => "#/$defs/BasicGate",
             "sandbox-config" => "#/$defs/BasicGate",
             "stub-bodies" => "#/$defs/BasicGate",
@@ -275,6 +276,12 @@ pub fn generate_schema() -> Value {
                 }
             },
             "BasicGate": gate_table(json!({})),
+            "ConfigIntegrityGate": gate_table(json!({
+                "compare_effective": {
+                    "type": "boolean",
+                    "description": "Whether command-line --enable and --disable switches are included when diffing base and head configuration (default false: only committed or staged repository configuration changes are compared)"
+                }
+            })),
             "AssertionGate": gate_table(json!({
                 "extra_assert_macros": { "$ref": "#/$defs/StringListOrReset", "description": "Additional macro names treated as assertions (a trailing `!` is optional)" },
                 "assert_helper_fns": { "$ref": "#/$defs/StringListOrReset", "description": "Function names (final `::`/`.` segment) whose call counts as one assertion, not a strong one; a same-file body's own assertions replace that credit" },

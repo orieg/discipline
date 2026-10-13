@@ -178,6 +178,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.commit-provenance.required_trailers` | list | `[]` | Trailer keys every commit in the change must carry |
 | `gates.commit-provenance.review_trailer` | string | `"Reviewed-by"` | Trailer an agent-produced commit must carry, naming someone other than its author (default: Reviewed-by). An empty name is the deprecated spelling of require_agent_review = false |
 | `gates.commit-provenance.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.config-integrity.compare_effective` | boolean | `false` | Whether command-line --enable and --disable switches are included when diffing base and head configuration (default false: only committed or staged repository configuration changes are compared) |
 | `gates.config-integrity.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.config-integrity.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.config-integrity.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |

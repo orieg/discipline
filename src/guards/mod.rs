@@ -794,6 +794,8 @@ pub struct Context<'a> {
     /// The forge, for the gates that read facts from it (`issue-link` with
     /// `verify_references`). `None` where a run has no forge to ask (a baseline write).
     pub forge: Option<ForgeAccess<'a>>,
+    /// Gate names disabled on the command line via `--disable`.
+    pub cli_disabled_gates: &'a [String],
 }
 
 /// A gate's way to the forge: the API client, how the forge is identified, and the pull
@@ -858,6 +860,23 @@ impl Context<'_> {
             Some(s) => Some(s),
             None if self.config_path != "discipline.toml" => {
                 self.git.base_content("discipline.toml")?
+            }
+            None => None,
+        })
+    }
+
+    /// The head side's configuration source text. A `--config` outside the repository has
+    /// no tree, so only the in-tree configuration is read.
+    pub fn head_config_text(&self) -> Result<Option<String>> {
+        let own = if crate::gitctx::config_in_tree(self.config_path) {
+            self.git.head_content(self.config_path)?
+        } else {
+            None
+        };
+        Ok(match own {
+            Some(s) => Some(s),
+            None if self.config_path != "discipline.toml" => {
+                self.git.head_content("discipline.toml")?
             }
             None => None,
         })
@@ -2045,6 +2064,7 @@ pub(crate) mod test_support {
             test_head_report: None,
             test_report: None,
             forge: None,
+            cli_disabled_gates: &[],
         }
     }
 }

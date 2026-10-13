@@ -472,6 +472,7 @@
       "gates.commit-provenance.review_trailer",
       "gates.commit-provenance.severity",
       "gates.config-integrity",
+      "gates.config-integrity.compare_effective",
       "gates.config-integrity.enabled",
       "gates.config-integrity.exempt_paths",
       "gates.config-integrity.exempt_paths.items",
