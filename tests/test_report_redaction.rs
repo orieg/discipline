@@ -38,6 +38,7 @@ const SENTINEL_FINE_GRAINED: &str = concat!(
 );
 const SENTINEL_ABIA_KEY: &str = concat!("ABIA", "SENTINEL01234567");
 const SENTINEL_BEARER: &str = "SENTINELbearer0123456789";
+const SENTINEL_SUPPRESSION: &str = "SENTINEL_SUPPRESSION_SECRET_XYZ987";
 const SENTINEL_PRIVATE_KEY_HEADER: &str =
     concat!("-----", "BEGIN SENTINELPGP PRIVATE KEY", "-----");
 
@@ -145,17 +146,28 @@ fn test_cross_format_redaction_pins_sentinel_exclusion() {
     }
     assert_eq!(pii_outcome.violations.len(), 8);
 
+    // 3. Suppression finding with locations-only contract (quote_line = false by default)
+    let mut suppression_outcome = GateOutcome::new("suppression-delta");
+    suppression_outcome.push(
+        Severity::Warning,
+        &discipline::findings::SUPPRESSION_ADDED,
+        Some("src/suppressed.rs"),
+        Some(2),
+        "new linter-disable suppression `allow(dead_code)` introduced without override".to_string(),
+        "line contains suppression annotation `allow(dead_code)`; use `discipline:allow(suppression-delta): <rule-or-path> <reason>` to waive",
+    );
+
     // Assemble summary
     let summary = CheckSummary {
         schema_version: discipline::output_schema::REPORT_SCHEMA_VERSION,
         could_not_check: None,
         base: "origin/main".to_string(),
         errors: 12,
-        warnings: 0,
+        warnings: 1,
         notes: 0,
         overrides: 0,
         baselined: 0,
-        outcomes: vec![shell_outcome, pii_outcome],
+        outcomes: vec![shell_outcome, pii_outcome, suppression_outcome],
         planned_gates: Vec::new(),
         policy_failures: Vec::new(),
         refused_hidden_directives: Vec::new(),
@@ -176,6 +188,7 @@ fn test_cross_format_redaction_pins_sentinel_exclusion() {
         SENTINEL_FINE_GRAINED,
         SENTINEL_ABIA_KEY,
         SENTINEL_BEARER,
+        SENTINEL_SUPPRESSION,
         SENTINEL_PRIVATE_KEY_HEADER,
     ];
 
@@ -239,6 +252,10 @@ fn test_live_repository_cross_format_redaction_pins_sentinel_exclusion() {
         "config/api.yaml",
         &format!("Authorization: Bearer {SENTINEL_BEARER}\n"),
     );
+    repo.write(
+        "test.py",
+        &format!("y = 1  # type: ignore  # {SENTINEL_SUPPRESSION}\n"),
+    );
 
     repo.commit("feat: add service configs");
 
@@ -254,6 +271,7 @@ fn test_live_repository_cross_format_redaction_pins_sentinel_exclusion() {
         SENTINEL_FINE_GRAINED,
         SENTINEL_ABIA_KEY,
         SENTINEL_BEARER,
+        SENTINEL_SUPPRESSION,
         SENTINEL_PRIVATE_KEY_HEADER,
     ];
 
@@ -382,4 +400,58 @@ fn a_policy_refusal_reaches_sarif_junit_and_gitlab_without_the_text_it_quotes() 
             OutputFormat::AgentPrompt => assert!(!quotes, "{rendered}"),
         }
     }
+}
+
+#[test]
+fn suppression_delta_default_locations_only_excludes_source_line_and_quote_line_restores_it() {
+    let repo = Repo::new();
+    const SENTINEL: &str = "SENTINEL_SUPPRESSION_SECRET_12345";
+    repo.write("test.py", &format!("y = 1  # type: ignore  # {SENTINEL}\n"));
+    repo.commit("feat: add type ignore with secret");
+
+    // 1. Default (quote_line = false): finding is reported, but sentinel line is absent from all outputs
+    let run_default = repo.run(&["check", "--format", "json", "--base", "main"], &[]);
+    assert_eq!(run_default.code, 0); // warning by default
+    assert!(
+        !run_default.stdout.contains(SENTINEL),
+        "default quote_line = false leaked sentinel: {}",
+        run_default.stdout
+    );
+    let report: serde_json::Value = serde_json::from_str(&run_default.stdout).unwrap();
+    let supp = report["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["gate"] == "suppression-delta")
+        .unwrap();
+    let rem = supp["violations"][0]["remediation"].as_str().unwrap();
+    assert!(
+        rem.contains("type: ignore"),
+        "expected suppression kind in remediation: {rem}"
+    );
+    assert!(
+        !rem.contains(SENTINEL),
+        "remediation must not quote line text: {rem}"
+    );
+
+    // 2. Opt-in quote_line = true: finding quotes the source line
+    let run_quoted = repo.run(
+        &[
+            "check",
+            "--format",
+            "json",
+            "--base",
+            "main",
+            "--config-override",
+            "[gates.suppression-delta]\nquote_line = true",
+        ],
+        &[],
+    );
+    assert!(
+        run_quoted.stdout.contains(SENTINEL),
+        "quote_line = true must quote the source line containing the sentinel. code={}, stdout:\n{}\nstderr:\n{}",
+        run_quoted.code,
+        run_quoted.stdout,
+        run_quoted.stderr
+    );
 }

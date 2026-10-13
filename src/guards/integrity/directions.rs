@@ -220,6 +220,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     // entries (judged with their entry: an edited entry counts as a lost one unless
     // `ENTRY_SHAPES` finds it only tightened).
     ("redact_lan_ips", Direction::Neutral),
+    ("quote_line", Direction::Neutral),
     ("unanchored_citations", Direction::Neutral),
     ("timeout_seconds", Direction::Neutral),
     ("strip_components", Direction::Neutral),

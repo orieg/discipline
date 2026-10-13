@@ -568,7 +568,8 @@ pub fn generate_schema() -> Value {
             })),
             "SuppressionDeltaGate": gate_table(json!({
                 "max_increase": { "type": "integer", "description": "Maximum net increase in suppression annotations permitted (default: 0)" },
-                "allowed_suppressions": { "$ref": "#/$defs/StringListOrReset", "description": "Specific suppression patterns explicitly permitted by policy" }
+                "allowed_suppressions": { "$ref": "#/$defs/StringListOrReset", "description": "Specific suppression patterns explicitly permitted by policy" },
+                "quote_line": { "type": "boolean", "description": "When true, quote the source line containing the suppression in the finding's remediation (default: false)" }
             })),
             "PrChecklistGate": gate_table(json!({})),
             "UnsafeBudgetGate": gate_table(json!({

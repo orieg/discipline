@@ -9,7 +9,7 @@ use common::Repo;
 
 const BLOCKING: &[&str] = &[
     "--config-override",
-    "[gates.suppression-delta]\nseverity = \"error\"",
+    "[gates.suppression-delta]\nseverity = \"error\"\nquote_line = true",
 ];
 const GATE: &str = "suppression-delta";
 
@@ -354,4 +354,25 @@ fn python_noqa_after_other_comment_text_is_its_own_site() {
         .collect();
     assert_eq!(kinds.len(), 1, "{kinds:?}");
     assert!(kinds[0].contains("linter-disable"), "{kinds:?}");
+}
+
+#[test]
+fn default_locations_only_does_not_quote_line() {
+    let repo = Repo::new();
+    repo.commit_base("src/main/java/A.java", JAVA, "chore: base file");
+    repo.write(
+        "src/main/java/A.java",
+        &with_line(JAVA, 1, "@java.lang.SuppressWarnings(\"unchecked\")"),
+    );
+    repo.commit("chore: change");
+    let run = repo.check(&[
+        "--config-override",
+        "[gates.suppression-delta]\nseverity = \"error\"",
+    ]);
+    assert_eq!(run.code, 1);
+    let violations = run.violations(GATE);
+    assert_eq!(violations.len(), 1);
+    let rem = violations[0]["remediation"].as_str().unwrap();
+    assert!(rem.contains("SuppressWarnings(unchecked)"));
+    assert!(!rem.contains("@java.lang.SuppressWarnings(\"unchecked\")"));
 }

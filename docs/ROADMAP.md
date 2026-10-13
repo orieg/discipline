@@ -525,6 +525,7 @@ Default enablement and severity are part of the compatibility contract (`docs/AR
 
 | Release | Gate | Old default | New default | Direction | Reason | Restore previous behaviour |
 |---|---|---|---|---|---|---|
+| v0.20.0 | `suppression-delta` | Findings quoted the full source line containing the suppression annotation | Findings report location and suppression kind only (`quote_line = false`); opt-in `quote_line = true` restores quoted line | stricter | Enforces locations-only report contract to prevent source and secret leakage | `[gates.suppression-delta]` `quote_line = true` |
 | v0.20.0 | `citation-anchors` | (new gate) | off, `error` | none (off) | Verifies `path:line@sha` citations against quoted text and git history. Off because git-anchored citation conventions are repository-specific. | n/a |
 | v0.20.0 | `gate-command-lint` | (new gate) | off, `error` | none (off) | Rejects vacuous, masked, or inverted verification commands in plan files. Off because plan file conventions are repository-specific. | n/a |
 | v0.20.0 | `mechanism-sections` | (new gate) | off, `error` | none (off) | Requires `(inferred)` or `(verified: <target>)` evidence tags in root cause sections. Off because root-cause documentation is repository-specific. | n/a |
@@ -559,6 +560,7 @@ A change to what a gate reports, an exit code, or an output, with an unchanged d
 
 | Release | Area | Change | Direction | Migration |
 |---|---|---|---|---|
+| v0.20.0 | `suppression-delta` (locations-only contract and `quote_line` option) | Findings report location and suppression kind (`allow` + lint name) by default without quoting source lines; opt-in `quote_line = true` restores quoted annotation with directive scrubbing (#481) | stricter | Configure `quote_line = true` under `[gates.suppression-delta]` if downstream parsers depend on quoted lines |
 | v0.20.0 | `stub-bodies` (equality made constant) | Added `stub-bodies/equality-made-constant` detection for functions returning constant values matching equality comparison sites, with carve-outs for mock/stub/fake test doubles. Keyed function pairing by type and name to prevent cross-type method pairing within the same file (#736) | stricter | Ensure functions implement real logic, or annotate test doubles with mock/stub/fake naming |
 | v0.20.0 | `harness-tampering` (pytest `force_result`, `exitstatus`, plugins, Cargo modules) | Catches pytest `force_result`, `report.failed = False` in `pytest_runtest_makereport`, tampering with `exitstatus`, dynamic plugin registration, and Cargo test target module tampering (`[[test]]` path remapping or harness disabling) (#735) | stricter | Remove harness tampering or add `allow-harness-tampering: <path> <reason>` |
 | v0.20.0 | `bench-regression` (sample size and minimum detectable difference) | Added numerical bounds in `src/guards/perf/bounds.rs`: `standard_normal_quantile`, `sample_size_for_interval`, and `minimum_detectable_difference` bounds under statistical power constraints with `p1 + delta <= 1.0` validation (#734) | additive | none |

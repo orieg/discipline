@@ -973,7 +973,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Suppressions inside explicitly exempted file paths, and files whose head side does not parse (named in the notes; a base side that does not parse makes every head-side site count as new).
 - **Lifting directive:** `allow-suppression: <rule-or-path> <reason>` (the suppressed rule, such as `dead_code`, or the file's path or name).
 - **Default:** on, severity `warning` (see [Default Severity by Gate](#default-severity-by-gate)).
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `max_increase`, `allowed_suppressions`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `max_increase`, `allowed_suppressions`, `quote_line` (default `false`: reports location and suppression kind; opt-in `true` restores quoted annotations).
 
 #### `gate-command-lint`
 - **Rule:** Inspects verification commands declared in plan files (`plan_paths`) to prevent vacuous, masked, or unfailable commands from marking plan steps complete.

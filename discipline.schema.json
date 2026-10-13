@@ -1342,6 +1342,10 @@
           "description": "Maximum net increase in suppression annotations permitted (default: 0)",
           "type": "integer"
         },
+        "quote_line": {
+          "description": "When true, quote the source line containing the suppression in the finding's remediation (default: false)",
+          "type": "boolean"
+        },
         "severity": {
           "$ref": "#/$defs/Severity"
         }
