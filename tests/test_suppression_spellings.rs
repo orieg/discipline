@@ -84,6 +84,8 @@ fn javascript_reads_no_suppression_from_a_string_or_another_comment() {
 // @ts-check
 // x @ts-ignore
 // x eslint-disable
+// do not write istanbul ignore here
+/* see c8 ignore */
 const s = \"// eslint-disable\";
 const t = `/* @ts-ignore */`;
 const u = '// istanbul ignore next';
@@ -93,23 +95,23 @@ const u = '// istanbul ignore next';
     );
 }
 
-/// A coverage marker counts anywhere in a comment, and the first rule a comment
-/// matches is the one reported.
+/// A coverage marker must open the comment body (matching `istanbul-lib-instrument`
+/// and `v8-to-istanbul`), and the first rule a comment matches is the one reported.
 #[test]
 fn javascript_coverage_marker_counts_anywhere_in_a_comment() {
     check(
         "src/m.js",
         "\
-// do not write istanbul ignore here
-/* see c8 ignore */
+// istanbul ignore if
+/* c8 ignore start */
 // @ts-ignore eslint-disable istanbul ignore
 // eslint-disable istanbul ignore
 //// eslint-disable-line a
 // eslint-disable-lineeslint-disable-line b
 ",
         &[
-            r#"1 lint "coverage" "// do not write istanbul ignore here""#,
-            r#"2 lint "coverage" "/* see c8 ignore */""#,
+            r#"1 lint "coverage" "// istanbul ignore if""#,
+            r#"2 lint "coverage" "/* c8 ignore start */""#,
             r#"3 type "typescript" "// @ts-ignore eslint-disable istanbul ignore""#,
             r#"4 lint "istanbul ignore" "// eslint-disable istanbul ignore""#,
             r#"5 lint "a" "//// eslint-disable-line a""#,

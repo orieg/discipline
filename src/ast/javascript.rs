@@ -440,8 +440,7 @@ const JS_FUNCTION_KINDS: &[&str] = &[
     "class_declaration",
 ];
 
-/// The comments that suppress the TypeScript checker, ESLint or a coverage tool. A
-/// coverage marker counts anywhere in the comment.
+/// The comments that suppress the TypeScript checker, ESLint or a coverage tool.
 const JS_SUPPRESSIONS: Suppressions = Suppressions {
     rules: &[
         CommentRule::opens(
@@ -461,10 +460,7 @@ const JS_SUPPRESSIONS: Suppressions = Suppressions {
                 empty_is_all: true,
             }),
         ),
-        CommentRule {
-            anywhere: true,
-            ..CommentRule::opens(&["istanbul ignore", "c8 ignore"], Reports::Rule("coverage"))
-        },
+        CommentRule::opens(&["istanbul ignore", "c8 ignore"], Reports::Rule("coverage")),
     ],
     ..Suppressions::SLASH_COMMENTS
 };
