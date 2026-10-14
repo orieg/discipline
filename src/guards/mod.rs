@@ -5,6 +5,7 @@ pub mod archive_presets;
 pub mod build_flags;
 pub mod build_hooks;
 pub mod ci_exposure;
+pub(crate) mod ci_expr;
 pub mod ci_gitlab;
 pub mod ci_integrity;
 pub mod ci_skip_set;

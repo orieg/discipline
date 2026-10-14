@@ -1420,38 +1420,32 @@ pub fn read_replay(path: &std::path::Path) -> Result<Vec<ReplayCase>> {
 }
 
 pub fn parse_replay(text: &str) -> Result<Vec<ReplayCase>> {
-    let v: serde_json::Value = serde_json::from_str(text)?;
-    if v.get("schema_version").and_then(|n| n.as_u64()).is_none() {
+    #[derive(serde::Deserialize)]
+    struct ReplayReport {
+        schema_version: Option<u64>,
+        cases_detail: Vec<crate::replay::Case>,
+    }
+
+    let report: ReplayReport = serde_json::from_str(text).context("not a valid replay report")?;
+    if report.schema_version.is_none() {
         bail!("no `schema_version`");
     }
-    let cases = v
-        .get("cases_detail")
-        .and_then(|c| c.as_array())
-        .ok_or_else(|| anyhow!("no `cases_detail` list"))?;
-    let s = |c: &serde_json::Value, k: &str| {
-        c.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string()
-    };
-    cases
-        .iter()
-        .map(|c| {
-            let sha = s(c, "sha");
-            if sha.is_empty() {
-                bail!("a case has no `sha`");
-            }
-            let overrides = c
-                .get("overrides")
-                .and_then(|o| o.as_array())
-                .ok_or_else(|| anyhow!("case {sha} has no `overrides` list"))?
-                .iter()
-                .map(|o| (s(o, "gate"), s(o, "directive"), s(o, "source")))
-                .collect();
-            Ok(ReplayCase {
-                judged: matches!(s(c, "verdict").as_str(), "passed" | "blocked"),
-                sha,
-                overrides,
-            })
-        })
-        .collect()
+    let mut cases = Vec::with_capacity(report.cases_detail.len());
+    for c in report.cases_detail {
+        if c.sha.is_empty() {
+            bail!("a case has no `sha`");
+        }
+        cases.push(ReplayCase {
+            judged: matches!(c.verdict.as_ref(), "passed" | "blocked"),
+            sha: c.sha,
+            overrides: c
+                .overrides
+                .into_iter()
+                .map(|o| (o.gate, o.directive, o.source))
+                .collect(),
+        });
+    }
+    Ok(cases)
 }
 
 /// Whether the replayed check of each waiver's change applied it. A directive matches an

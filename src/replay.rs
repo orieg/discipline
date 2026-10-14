@@ -23,103 +23,126 @@ use std::path::PathBuf;
 const CONFIG_NAME: &str = "discipline.toml";
 
 /// One replayed change.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Case {
     pub sha: String,
     /// The pull request number, from the forge or from a `(#N)` the subject ends with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr: Option<u64>,
+    #[serde(default)]
     pub subject: String,
     /// `passed`, `blocked` or `could_not_check`.
-    pub verdict: &'static str,
+    pub verdict: std::borrow::Cow<'static, str>,
     /// Gates with an `error` finding.
+    #[serde(default)]
     pub blocking_gates: Vec<String>,
     /// Gates whose overrides `fail_on_overrides` refused, since `actor` is not in
     /// `allowed_override_actors`. Each blocks the change as an error finding does.
+    #[serde(default)]
     pub refused_overrides: Vec<String>,
     /// Overrides the change's check applied, in report order: those that lifted a
     /// finding. Refused ones are in `refused_overrides` too.
     pub overrides: Vec<CaseOverride>,
     /// The login the change was checked as: its merged pull request's author, or none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor: Option<String>,
     /// Gates with a `warning` finding.
+    #[serde(default)]
     pub warning_gates: Vec<String>,
     /// Every error and warning of the change's report, by code and location.
+    #[serde(default)]
     pub findings: Vec<CaseFinding>,
     /// Where the directives came from: `pull request body`, or why they did not.
+    #[serde(default)]
     pub directives_from: String,
     /// Parts of gates skipped because the configuration names a file this change does
     /// not have yet (the configuration is newer than the change).
+    #[serde(default)]
     pub skipped_checks: Vec<SkippedCheck>,
     /// Why it could not be checked: the child report's `could_not_check.reason`, or
     /// `forge` when its merged pull request could not be read.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<Reason>,
     /// The child's stderr when it could not check.
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub detail: String,
 }
 
 /// One error or warning of a replayed change. Its message is never carried: a finding
 /// can echo secret material, and the code with its location says what blocked.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CaseFinding {
     /// `gate/code`, as in the check report.
     pub code: String,
     /// `error` or `warning`.
     pub severity: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<u64>,
 }
 
 /// One override a replayed change's check applied. Its reason is never carried: it is
 /// free text the change's author wrote, and can echo secret material or a name.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CaseOverride {
     pub gate: String,
     /// The finding the override lifted (`gate/code`), when the child report records it.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     pub directive: String,
     /// What the override covers: a path, test or dependency the finding named.
+    #[serde(default)]
     pub subject: String,
     /// Where the directive was read, as the check report's text output names it
     /// (`PR body`, `commit <sha>`, `merged pull request #N body`, `inline <file>:<line>`).
     /// Replay hands a change's merged pull-request body to its check as the PR body.
     pub source: String,
     /// The directive was inside an HTML comment.
+    #[serde(default)]
     pub hidden: bool,
 }
 
 /// Part of a gate a replayed change skipped: its configuration names a file the change
 /// does not have (see [`crate::guards::PREDATES_CONFIG_NOTE`]).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SkippedCheck {
     pub gate: String,
     /// What was skipped, e.g. ``group `versions` ``.
     pub what: String,
 }
 
-#[derive(Debug, Default, serde::Serialize)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Summary {
     /// [`crate::output_schema::REPLAY_SCHEMA_VERSION`].
     pub schema_version: u32,
+    #[serde(default)]
     pub cases: usize,
+    #[serde(default)]
     pub passed: usize,
+    #[serde(default)]
     pub blocked: usize,
+    #[serde(default)]
     pub could_not_check: usize,
     /// Gate id → the changes it blocked (`#N`, else the short sha).
+    #[serde(default)]
     pub errors_by_gate: BTreeMap<String, Vec<String>>,
     /// Gate id → the changes whose overrides of that gate were refused.
+    #[serde(default)]
     pub refused_overrides_by_gate: BTreeMap<String, Vec<String>>,
     /// Gate id → the changes whose check applied an override of that gate.
+    #[serde(default)]
     pub overrides_by_gate: BTreeMap<String, Vec<String>>,
     /// Gate id → the number of changes with a warning from it.
+    #[serde(default)]
     pub warnings_by_gate: BTreeMap<String, usize>,
     /// The reason code a change could not be checked for → the changes (`#N`, else the
     /// short sha).
+    #[serde(default)]
     pub could_not_check_by_reason: BTreeMap<String, Vec<String>>,
     /// Gate id → the changes that skipped part of it because the configuration is newer
     /// than the change.
+    #[serde(default)]
     pub skipped_by_gate: BTreeMap<String, Vec<String>>,
     pub cases_detail: Vec<Case>,
 }
@@ -141,7 +164,7 @@ impl Summary {
             ..Default::default()
         };
         for c in &cases {
-            match c.verdict {
+            match c.verdict.as_ref() {
                 "passed" => s.passed += 1,
                 "blocked" => s.blocked += 1,
                 _ => {
@@ -779,7 +802,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
             sha: c.id().to_string(),
             pr: pr.or_else(|| pr_from_subject(&subject)),
             subject,
-            verdict,
+            verdict: verdict.into(),
             blocking_gates: blocking,
             refused_overrides: refused,
             overrides,
@@ -821,7 +844,7 @@ mod tests {
             sha: "abcdef0123456789".into(),
             pr: None,
             subject: SUBJECT_WITH_AN_ESCAPE.into(),
-            verdict: "could_not_check",
+            verdict: "could_not_check".into(),
             blocking_gates: Vec::new(),
             refused_overrides: Vec::new(),
             overrides: Vec::new(),
@@ -965,11 +988,11 @@ mod tests {
 
     #[test]
     fn the_summary_counts_verdicts_and_names_blocked_changes_per_gate() {
-        let case = |pr, verdict, e: &[&str], w: &[&str]| Case {
+        let case = |pr, verdict: &'static str, e: &[&str], w: &[&str]| Case {
             sha: "0123456789abcdef".into(),
             pr,
             subject: "s".into(),
-            verdict,
+            verdict: verdict.into(),
             blocking_gates: e.iter().map(|s| s.to_string()).collect(),
             refused_overrides: Vec::new(),
             overrides: Vec::new(),
@@ -1091,5 +1114,50 @@ mod tests {
         assert_eq!(out.matches("\"code\"").count(), 1, "{out}");
         assert!(read_overrides(2, &parse_report(json)).is_empty());
         assert!(read_overrides(0, &parse_report("not json")).is_empty());
+    }
+
+    #[test]
+    fn replay_types_roundtrip_serialize_and_deserialize() {
+        let case = Case {
+            sha: "abc1234567890".into(),
+            pr: Some(42),
+            subject: "feat: add feature".into(),
+            verdict: "passed".into(),
+            blocking_gates: vec!["g1".into()],
+            refused_overrides: Vec::new(),
+            overrides: vec![CaseOverride {
+                gate: "g1".into(),
+                code: Some("g1/code".into()),
+                directive: "allow-g1".into(),
+                subject: "sub".into(),
+                source: "PR body".into(),
+                hidden: false,
+            }],
+            actor: Some("alice".into()),
+            warning_gates: vec!["w1".into()],
+            findings: vec![CaseFinding {
+                code: "g1/code".into(),
+                severity: "warning".into(),
+                file: Some("src/lib.rs".into()),
+                line: Some(10),
+            }],
+            directives_from: "pull request body".into(),
+            skipped_checks: vec![SkippedCheck {
+                gate: "g2".into(),
+                what: "group x".into(),
+            }],
+            reason: Some(Reason::Configuration),
+            detail: "some detail".into(),
+        };
+        let summary = Summary::from_cases(vec![case.clone()]);
+        let json = serde_json::to_string(&summary).unwrap();
+        let parsed: Summary = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.cases, 1);
+        assert_eq!(parsed.cases_detail.len(), 1);
+        assert_eq!(parsed.cases_detail[0].sha, case.sha);
+        assert_eq!(parsed.cases_detail[0].verdict, "passed");
+        assert_eq!(parsed.cases_detail[0].overrides.len(), 1);
+        assert_eq!(parsed.cases_detail[0].findings.len(), 1);
+        assert_eq!(parsed.cases_detail[0].skipped_checks.len(), 1);
     }
 }
