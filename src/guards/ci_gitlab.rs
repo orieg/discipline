@@ -150,29 +150,21 @@ fn is_manual(job: &Value) -> bool {
     job.get("when").and_then(|w| w.as_str()) == Some("manual")
 }
 
-fn masks_exit_code(line: &str) -> bool {
-    line.contains("|| true") || line.contains("|| :") || line.contains("set +e")
+fn masks_exit_code(lines: &[String]) -> bool {
+    let run = lines.join("\n");
+    lines
+        .iter()
+        .any(|l| l.contains("|| true") || l.contains("|| :"))
+        || (lines.iter().any(|l| l.contains("set +e"))
+            && !super::ci_integrity::set_e_status_checked(&run))
 }
 
-const VERIFICATION_WORDS: &[&str] = &[
-    "test",
-    "lint",
-    "gate",
-    "check",
-    "clippy",
-    "audit",
-    "verify",
-    "discipline",
-    "pytest",
-    "sast",
-    "scan",
-];
+const GITLAB_EXTRA_VERIFICATION_WORDS: &[&str] = &["pytest", "sast", "scan"];
 
 /// A job that verifies something, by its name or by what its script runs.
 fn is_verification_job(name: &str, job: &Value) -> bool {
     let has_word = |text: &str| {
-        let t = text.to_ascii_lowercase();
-        VERIFICATION_WORDS.iter().any(|w| t.contains(w))
+        super::ci_integrity::has_verification_word(text, GITLAB_EXTRA_VERIFICATION_WORDS)
     };
     has_word(name) || script_lines(job).iter().any(|l| has_word(l))
 }
@@ -258,9 +250,7 @@ pub fn diff_gitlab_ci_with(
         }
         let base_lines = b.map(script_lines).unwrap_or_default();
         let head_lines = script_lines(h);
-        if head_lines.iter().any(|l| masks_exit_code(l))
-            && !base_lines.iter().any(|l| masks_exit_code(l))
-        {
+        if masks_exit_code(&head_lines) && !masks_exit_code(&base_lines) {
             found.push(GitlabWeakening {
                 kind: &crate::findings::EXIT_CODE_MASKED,
                 job: name.clone(),
@@ -374,6 +364,15 @@ mod tests {
         assert_eq!(
             titles(&template),
             vec![("Command Exit Code Masked", ".tmpl".to_string())]
+        );
+        let checked_set_e = BASE.replace(
+            "    - cargo test --locked\n",
+            "    - set +e\n    - cargo test --locked\n    - rc=$?\n    - set -e\n    - '[ \"$rc\" -eq 0 ]'\n",
+        );
+        assert!(
+            titles(&checked_set_e).is_empty(),
+            "{:?}",
+            titles(&checked_set_e)
         );
         let comment = BASE.replace(
             "    - cargo test --locked\n",
