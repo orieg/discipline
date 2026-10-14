@@ -1832,6 +1832,15 @@ const OPENCODE_DRIVER: &str = r#"
 let behaviour = "exit-0"
 const ran = []
 const stdins = []
+const armedTimeouts = []
+const realSetTimeout = globalThis.setTimeout
+globalThis.setTimeout = (fn, ms, ...rest) => {
+  if (ms >= 30_000) {
+    armedTimeouts.push(ms)
+    if (behaviour === "hangs") return realSetTimeout(fn, 1, ...rest)
+  }
+  return realSetTimeout(fn, ms, ...rest)
+}
 function shell(strings, ...args) {
   ran.push(strings.join("<arg>"))
   stdins.push(args[0])
@@ -1846,9 +1855,11 @@ function shell(strings, ...args) {
     nothrow: () => pending,
     quiet: () => pending,
     then: (ok, err) =>
-      (behaviour === "rejects"
-        ? Promise.reject(new Error("command not found: discipline"))
-        : Promise.resolve(result)
+      (behaviour === "hangs"
+        ? new Promise(() => {})
+        : behaviour === "rejects"
+          ? Promise.reject(new Error("command not found: discipline"))
+          : Promise.resolve(result)
       ).then(ok, err),
   }
   return pending
@@ -1879,7 +1890,7 @@ const events = {
   }),
 }
 const emit = (e) => new Promise((done) => {
-  const timer = setTimeout(done, 1000)
+  const timer = setTimeout(done, 50)
   consumed = () => { clearTimeout(timer); done() }
   if (waiting) { const deliver = waiting; waiting = null; deliver({ value: e, done: false }) }
   else queued.push(e)
@@ -1911,16 +1922,25 @@ const handlers = {
   "v2 edit pre-tool": () => v2["execute.before"](structuredClone(editCall)),
 }
 const outcome = {}
+const hangOutcome = {}
 const commands = {}
+const timeouts = {}
 const sent = {}
-for (behaviour of ["exit-0", "exit-1", "throws", "rejects"]) {
+const driverSafety = () => new Promise((_, reject) => realSetTimeout(() => reject(new Error("driver safety timeout: shell call had no timeout")), 50))
+for (behaviour of ["exit-0", "exit-1", "throws", "rejects", "hangs"]) {
   for (const [name, call] of Object.entries(handlers)) {
     ran.length = 0
     stdins.length = 0
+    armedTimeouts.length = 0
     let threw = false
-    try { await call() } catch { threw = true }
-    outcome[behaviour + " " + name] = threw
+    try { await Promise.race([call(), driverSafety()]) } catch { threw = true }
+    if (behaviour === "hangs") {
+      hangOutcome["hangs " + name] = threw
+    } else {
+      outcome[behaviour + " " + name] = threw
+    }
     commands[behaviour + " " + name] = ran.slice()
+    timeouts[behaviour + " " + name] = armedTimeouts.slice()
     // What each command read on stdin: the template passes it as a `Response`.
     sent[behaviour + " " + name] = await Promise.all(
       stdins.filter((a) => a !== undefined).map((a) => (a instanceof Response ? a.clone().text() : String(a))))
@@ -1964,7 +1984,9 @@ console.log(JSON.stringify({
   registeredNotices,
   unregisteredNotices: notices.slice(registeredNotices),
   outcome,
+  hangOutcome,
   commands,
+  timeouts,
   sent,
   ranForARead: ran.length,
 }))
@@ -2056,6 +2078,19 @@ fn run_opencode_plugin(observe: bool, test: &str) -> Option<serde_json::Value> {
         let ran = ran.as_array().unwrap();
         assert_eq!(ran.len(), 1, "{key}: {ran:?}");
         assert!(ran[0].as_str().unwrap().contains(want), "{key}: {ran:?}");
+        if !key.starts_with("throws ") {
+            let want_ms = if key.ends_with("post-edit") {
+                120_000
+            } else {
+                30_000
+            };
+            assert_eq!(
+                v["timeouts"][key],
+                serde_json::json!([want_ms]),
+                "{key} timeout: {}",
+                v["timeouts"][key]
+            );
+        }
         // Every command of the 2.x block is given its stdin. `hook run` reads stdin to
         // its end, and an OpenCode 2.x server's own stdin never ends (RUN, 2.0.22
         // `--standalone`: the check after a write did not return).
@@ -2099,7 +2134,7 @@ fn run_opencode_plugin(observe: bool, test: &str) -> Option<serde_json::Value> {
 }
 
 /// Issue 570: an observe-mode OpenCode plugin never refuses a call. Whatever the command
-/// does (exit 0, exit 1, cannot be run), no handler of either block throws, and the 2.x
+/// does (exit 0, exit 1, cannot be run, hangs), no handler of either block throws, and the 2.x
 /// `setup` that could register nothing stays silent.
 #[test]
 fn the_opencode_observe_plugin_never_throws_whatever_the_command_does() {
@@ -2117,6 +2152,17 @@ fn the_opencode_observe_plugin_never_throws_whatever_the_command_does() {
         .map(|(key, _)| key)
         .collect();
     assert!(threw.is_empty(), "observe mode threw from: {threw:?}");
+    let hang_outcome = v["hangOutcome"].as_object().unwrap();
+    assert_eq!(hang_outcome.len(), 9, "{v}");
+    let hang_threw: Vec<&String> = hang_outcome
+        .iter()
+        .filter(|(_, threw)| threw.as_bool() != Some(false))
+        .map(|(key, _)| key)
+        .collect();
+    assert!(
+        hang_threw.is_empty(),
+        "observe mode threw on timeout from: {hang_threw:?}"
+    );
     assert_eq!(v["unregisteredNotices"], serde_json::json!([]), "{v}");
 }
 
@@ -2157,9 +2203,9 @@ fn the_opencode_2x_plugin_takes_the_lease_once_per_session_from_the_event_stream
 }
 
 /// Issue 570: an enforcing OpenCode plugin stays fail-closed. The pre-tool handler of
-/// either block lets a call through on exit 0 only: exit 1 and a command that cannot be
-/// run both throw. A 2.x `setup` that found no `tool.hook` says so once on stderr and
-/// does not throw.
+/// either block lets a call through on exit 0 only: exit 1, a command that cannot be
+/// run, and a command that times out all throw. A 2.x `setup` that found no `tool.hook`
+/// says so once on stderr and does not throw.
 #[test]
 fn the_opencode_enforcing_plugin_refuses_a_call_it_could_not_check() {
     let Some(v) = run_opencode_plugin(
@@ -2178,6 +2224,8 @@ fn the_opencode_enforcing_plugin_refuses_a_call_it_could_not_check() {
             let key = format!("{behaviour} {block} pre-tool");
             assert_eq!(v["outcome"][&key], threw, "{key}: {v}");
         }
+        let hang_key = format!("hangs {block} pre-tool");
+        assert_eq!(v["hangOutcome"][&hang_key], true, "{hang_key}: {v}");
     }
     let notices = v["unregisteredNotices"].as_array().unwrap();
     assert_eq!(notices.len(), 1, "{v}");

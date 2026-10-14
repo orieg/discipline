@@ -1284,7 +1284,9 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
     // The pre-tool command reading `stdin`: enforcing, a non-zero exit refuses the call.
     let pre_call = |indent: usize, stdin: &str| -> String {
         let pad = " ".repeat(indent);
-        let run = format!("await $`{pre} < ${{{stdin}}}`.cwd(directory).nothrow().quiet()");
+        let run = format!(
+            "await withTimeout($`{pre} < ${{{stdin}}}`.cwd(directory).nothrow().quiet(), HOOK_TIMEOUT_MS)"
+        );
         if observe {
             return format!("{pad}{run}\n");
         }
@@ -1306,7 +1308,7 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
         format!(
             "    if (event.type !== \"session.created\") return
     const start = new Response(JSON.stringify({{ input: {{ sessionID: event.properties?.sessionID }}, cwd: event.properties?.info?.directory ?? directory }}))
-    await $`{start} < ${{start}}`.nothrow().quiet()
+    await withTimeout($`{start} < ${{start}}`.nothrow().quiet(), HOOK_TIMEOUT_MS)
 "
         ),
     );
@@ -1323,7 +1325,7 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
         4,
         format!(
             "    if (!EDIT_TOOLS.includes(input.tool)) return
-    const r = await $`{cmd}`.cwd(directory).nothrow().quiet()
+    const r = await withTimeout($`{cmd}`.cwd(directory).nothrow().quiet(), CHECK_TIMEOUT_MS)
     if (r.exitCode !== 0) {{
       output.output += \"\\n\\n\" + r.stdout.toString() + r.stderr.toString()
     }}
@@ -1342,7 +1344,7 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
               input: {{ sessionID }},
               cwd: e.location?.directory ?? directory
             }}))
-            await $`{start} < ${{start}}`.nothrow().quiet()
+            await withTimeout($`{start} < ${{start}}`.nothrow().quiet(), HOOK_TIMEOUT_MS)
           }} catch {{}}
 "
     );
@@ -1366,7 +1368,7 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
             "      const toolName = call.tool ?? call.input?.tool
       if (!EDIT_TOOLS.includes(toolName)) return
       const none = new Response(\"\")
-      const r = await $`{cmd} < ${{none}}`.cwd(directory).nothrow().quiet()
+      const r = await withTimeout($`{cmd} < ${{none}}`.cwd(directory).nothrow().quiet(), CHECK_TIMEOUT_MS)
       if (r.exitCode !== 0) {{
         if (call.result) {{
           call.result.output = (call.result.output ?? \"\") + \"\\n\\n\" + r.stdout.toString() + r.stderr.toString()
@@ -1396,6 +1398,17 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
 const EDIT_TOOLS = [\"edit\", \"write\", \"apply_patch\"]
 // OpenCode 2.x names its shell tool `shell`; 1.x named it `bash`.
 const SHELL_TOOLS = [\"bash\", \"shell\"]
+const HOOK_TIMEOUT_MS = 30_000
+const CHECK_TIMEOUT_MS = 120_000
+
+const withTimeout = (p, ms) => {{
+  let timer
+  const limit = new Promise((_, reject) => {{
+    timer = setTimeout(() => reject(new Error(`discipline hook timed out after ${{ms / 1000}}s`)), ms)
+    timer?.unref?.()
+  }})
+  return Promise.race([Promise.resolve(p), limit]).finally(() => clearTimeout(timer))
+}}
 
 export const Discipline = async ({{ $, directory }}) => ({{
   // A new session takes this worktree's lease; it never blocks the session.
@@ -4397,6 +4410,21 @@ mod tests {
             ] {
                 assert_eq!(text.matches(&run).count(), 1, "observe={observe}: {run:?}");
             }
+            assert_eq!(
+                text.matches("await withTimeout($`").count(),
+                6,
+                "observe={observe}: every shell call runs with a timeout\n{text}"
+            );
+            assert_eq!(
+                text.matches(", HOOK_TIMEOUT_MS)").count(),
+                4,
+                "observe={observe}: session-start and pre-tool use HOOK_TIMEOUT_MS"
+            );
+            assert_eq!(
+                text.matches(", CHECK_TIMEOUT_MS)").count(),
+                2,
+                "observe={observe}: post-edit check uses CHECK_TIMEOUT_MS"
+            );
         }
     }
 
@@ -4429,13 +4457,13 @@ mod tests {
     #[test]
     fn the_opencode_enforcing_plugin_refuses_on_a_non_zero_exit_and_reports_no_registration() {
         let (_, enforcing) = config_for_mode(Agent::Opencode, false);
-        let v1 = "    const r = await $`discipline hook run --agent opencode --event pre-tool < ${call}`.cwd(directory).nothrow().quiet()
+        let v1 = "    const r = await withTimeout($`discipline hook run --agent opencode --event pre-tool < ${call}`.cwd(directory).nothrow().quiet(), HOOK_TIMEOUT_MS)
     if (r.exitCode !== 0) {
       throw new Error(r.stdout.toString() + r.stderr.toString())
     }
   },
 ";
-        let v2 = "      const r = await $`discipline hook run --agent opencode --event pre-tool < ${payload}`.cwd(directory).nothrow().quiet()
+        let v2 = "      const r = await withTimeout($`discipline hook run --agent opencode --event pre-tool < ${payload}`.cwd(directory).nothrow().quiet(), HOOK_TIMEOUT_MS)
       if (r.exitCode !== 0) {
         throw new Error(r.stdout.toString() + r.stderr.toString())
       }

@@ -1,5 +1,5 @@
 // Written by `discipline hook install --agent opencode`.
-// discipline-hook-file: mode=observe sha256=3e1a3edae9fadeddf4cc58432c7c68ef9e2509e7d84a6d41064853b79e8a937a
+// discipline-hook-file: mode=observe sha256=5608dd663291f270cd4176fc72a53cb978277183536453c75e387e17559df91f
 // When a session is created, takes this worktree's lease for it. Before an edit tool, refuses an edit outside this session's worktree (the tool call
 // is sent on stdin; a refusal throws, and the model reads the reason). After it, runs
 // the discipline check and, when it fails, appends the report to the tool's output so
@@ -10,6 +10,17 @@ import { $ } from "bun"
 const EDIT_TOOLS = ["edit", "write", "apply_patch"]
 // OpenCode 2.x names its shell tool `shell`; 1.x named it `bash`.
 const SHELL_TOOLS = ["bash", "shell"]
+const HOOK_TIMEOUT_MS = 30_000
+const CHECK_TIMEOUT_MS = 120_000
+
+const withTimeout = (p, ms) => {
+  let timer
+  const limit = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`discipline hook timed out after ${ms / 1000}s`)), ms)
+    timer?.unref?.()
+  })
+  return Promise.race([Promise.resolve(p), limit]).finally(() => clearTimeout(timer))
+}
 
 export const Discipline = async ({ $, directory }) => ({
   // A new session takes this worktree's lease; it never blocks the session.
@@ -17,20 +28,20 @@ export const Discipline = async ({ $, directory }) => ({
     try {
       if (event.type !== "session.created") return
       const start = new Response(JSON.stringify({ input: { sessionID: event.properties?.sessionID }, cwd: event.properties?.info?.directory ?? directory }))
-      await $`discipline hook run --agent opencode --event session-start < ${start}`.nothrow().quiet()
+      await withTimeout($`discipline hook run --agent opencode --event session-start < ${start}`.nothrow().quiet(), HOOK_TIMEOUT_MS)
     } catch {}
   },
   "tool.execute.before": async (input, output) => {
     try {
       if (!EDIT_TOOLS.includes(input.tool) && input.tool !== "bash") return
       const call = new Response(JSON.stringify({ input, output, cwd: directory }))
-      await $`discipline hook run --agent opencode --event pre-tool --observe < ${call}`.cwd(directory).nothrow().quiet()
+      await withTimeout($`discipline hook run --agent opencode --event pre-tool --observe < ${call}`.cwd(directory).nothrow().quiet(), HOOK_TIMEOUT_MS)
     } catch {}
   },
   "tool.execute.after": async (input, output) => {
     try {
       if (!EDIT_TOOLS.includes(input.tool)) return
-      const r = await $`discipline hook run --agent opencode --observe`.cwd(directory).nothrow().quiet()
+      const r = await withTimeout($`discipline hook run --agent opencode --observe`.cwd(directory).nothrow().quiet(), CHECK_TIMEOUT_MS)
       if (r.exitCode !== 0) {
         output.output += "\n\n" + r.stdout.toString() + r.stderr.toString()
       }
@@ -61,7 +72,7 @@ export default {
               input: { sessionID },
               cwd: e.location?.directory ?? directory
             }))
-            await $`discipline hook run --agent opencode --event session-start < ${start}`.nothrow().quiet()
+            await withTimeout($`discipline hook run --agent opencode --event session-start < ${start}`.nothrow().quiet(), HOOK_TIMEOUT_MS)
           } catch {}
         }
       })().catch(() => {})
@@ -76,7 +87,7 @@ export default {
           output: { args: call.input ?? {} },
           cwd: directory
         }))
-        await $`discipline hook run --agent opencode --event pre-tool --observe < ${payload}`.cwd(directory).nothrow().quiet()
+        await withTimeout($`discipline hook run --agent opencode --event pre-tool --observe < ${payload}`.cwd(directory).nothrow().quiet(), HOOK_TIMEOUT_MS)
       } catch {}
     })
 
@@ -85,7 +96,7 @@ export default {
         const toolName = call.tool ?? call.input?.tool
         if (!EDIT_TOOLS.includes(toolName)) return
         const none = new Response("")
-        const r = await $`discipline hook run --agent opencode --observe < ${none}`.cwd(directory).nothrow().quiet()
+        const r = await withTimeout($`discipline hook run --agent opencode --observe < ${none}`.cwd(directory).nothrow().quiet(), CHECK_TIMEOUT_MS)
         if (r.exitCode !== 0) {
           if (call.result) {
             call.result.output = (call.result.output ?? "") + "\n\n" + r.stdout.toString() + r.stderr.toString()
