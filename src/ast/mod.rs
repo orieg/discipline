@@ -743,6 +743,7 @@ impl ParsedFileFacts {
     /// effective assertions of the one helper of this file with that last name segment,
     /// its own callees counted in (`tracked_helper`), or the least over several helpers
     /// of that name. `None` when the file has no helper of that name.
+    #[cfg(test)]
     pub fn least_helper_named(&self, method: &str) -> Option<usize> {
         self.least_helper(method).map(|h| h.effective_asserts())
     }
@@ -750,6 +751,7 @@ impl ParsedFileFacts {
     /// The helper a call of a method named `method` on some receiver stands for: of the
     /// helpers of this file with that last name segment, callees counted in, the one
     /// that checks least, because which one the receiver runs is not known here.
+    #[cfg(test)]
     fn least_helper(&self, method: &str) -> Option<TestHelperFacts> {
         if self.tracked_helpers.len() == self.test_helpers.len() {
             return (0..self.test_helpers.len())

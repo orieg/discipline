@@ -617,6 +617,26 @@ fn is_reporting_step(step: &serde_yaml::Value) -> bool {
         .is_some_and(|w| REPORTING_VERBS.contains(&w.to_ascii_lowercase().as_str()))
 }
 
+/// Common words in a job or step name that mark it as verifying something.
+pub(crate) const VERIFICATION_WORDS: &[&str] = &[
+    "test",
+    "lint",
+    "gate",
+    "check",
+    "clippy",
+    "audit",
+    "verify",
+    "discipline",
+];
+
+pub(crate) fn has_verification_word(text: &str, extra: &[&str]) -> bool {
+    let lower = text.to_ascii_lowercase();
+    VERIFICATION_WORDS
+        .iter()
+        .chain(extra.iter())
+        .any(|w| lower.contains(w))
+}
+
 fn is_verification_step(step: &serde_yaml::Value) -> bool {
     let raw_run = step.get("run").and_then(|r| r.as_str()).map(str::to_string);
     if !markers_in(step, raw_run).is_empty() {
@@ -628,12 +648,9 @@ fn is_verification_step(step: &serde_yaml::Value) -> bool {
     }
     if let Some(name) = step.get("name").and_then(|n| n.as_str()) {
         let n = name.to_ascii_lowercase();
-        if n.contains("test")
-            || n.contains("lint")
-            || n.contains("clippy")
-            || n.contains("gate")
-            || n.contains("check")
-            || n.contains("discipline")
+        if ["test", "lint", "clippy", "gate", "check", "discipline"]
+            .iter()
+            .any(|w| n.contains(w))
         {
             return true;
         }
@@ -642,16 +659,7 @@ fn is_verification_step(step: &serde_yaml::Value) -> bool {
 }
 
 fn is_verification_job(job_id: &str, job: &serde_yaml::Value) -> bool {
-    let lower_id = job_id.to_ascii_lowercase();
-    if lower_id.contains("test")
-        || lower_id.contains("lint")
-        || lower_id.contains("gate")
-        || lower_id.contains("check")
-        || lower_id.contains("clippy")
-        || lower_id.contains("audit")
-        || lower_id.contains("verify")
-        || lower_id.contains("ci")
-    {
+    if has_verification_word(job_id, &["ci"]) {
         return true;
     }
     if let Some(steps) = job.get("steps").and_then(|s| s.as_sequence()) {
