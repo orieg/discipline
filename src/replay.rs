@@ -27,7 +27,7 @@ const CONFIG_NAME: &str = "discipline.toml";
 pub struct Case {
     pub sha: String,
     /// The pull request number, from the forge or from a `(#N)` the subject ends with.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub pr: Option<u64>,
     #[serde(default)]
     pub subject: String,
@@ -44,7 +44,7 @@ pub struct Case {
     /// finding. Refused ones are in `refused_overrides` too.
     pub overrides: Vec<CaseOverride>,
     /// The login the change was checked as: its merged pull request's author, or none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub actor: Option<String>,
     /// Gates with a `warning` finding.
     #[serde(default)]
@@ -76,9 +76,9 @@ pub struct CaseFinding {
     pub code: String,
     /// `error` or `warning`.
     pub severity: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub file: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub line: Option<u64>,
 }
 
