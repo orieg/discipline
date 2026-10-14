@@ -9,9 +9,9 @@
 //! The set of reasons is open: a new kind of failure may get a new reason in a minor
 //! release. A failure that has a reason keeps it (docs/ARCHITECTURE.md §3.2).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Reason {
     /// `discipline.toml`, `--config`, `--config-override` or a `DISCIPLINE_*` setting is
@@ -32,6 +32,7 @@ pub enum Reason {
     /// A gate could not run, for a reason no narrower tag names.
     Gate,
     /// Anything else.
+    #[serde(other)]
     Internal,
 }
 
@@ -177,6 +178,14 @@ mod tests {
                 serde_json::to_value(r).unwrap(),
                 serde_json::json!(r.as_str())
             );
+            assert_eq!(
+                serde_json::from_str::<Reason>(&format!("\"{}\"", r.as_str())).unwrap(),
+                *r
+            );
         }
+        assert_eq!(
+            serde_json::from_str::<Reason>("\"unknown-future-reason\"").unwrap(),
+            Reason::Internal
+        );
     }
 }

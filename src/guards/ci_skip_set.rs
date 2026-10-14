@@ -375,113 +375,7 @@ fn ancestors(job: &str, needs: &HashMap<String, HashSet<String>>) -> Vec<String>
 // `if:` uses. Anything outside it is reported, never approximated.
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq)]
-enum Tok {
-    LParen,
-    RParen,
-    Comma,
-    Dot,
-    And,
-    Or,
-    Not,
-    Eq,
-    Ne,
-    Str(String),
-    Num(f64),
-    Ident(String),
-}
-
-fn lex(src: &str) -> Result<Vec<Tok>, String> {
-    let chars: Vec<char> = src.chars().collect();
-    let mut i = 0;
-    let mut out = Vec::new();
-    while i < chars.len() {
-        let c = chars[i];
-        match c {
-            ' ' | '\t' | '\n' | '\r' => i += 1,
-            '(' => {
-                out.push(Tok::LParen);
-                i += 1;
-            }
-            ')' => {
-                out.push(Tok::RParen);
-                i += 1;
-            }
-            ',' => {
-                out.push(Tok::Comma);
-                i += 1;
-            }
-            '.' => {
-                out.push(Tok::Dot);
-                i += 1;
-            }
-            '&' if chars.get(i + 1) == Some(&'&') => {
-                out.push(Tok::And);
-                i += 2;
-            }
-            '|' if chars.get(i + 1) == Some(&'|') => {
-                out.push(Tok::Or);
-                i += 2;
-            }
-            '=' if chars.get(i + 1) == Some(&'=') => {
-                out.push(Tok::Eq);
-                i += 2;
-            }
-            '!' if chars.get(i + 1) == Some(&'=') => {
-                out.push(Tok::Ne);
-                i += 2;
-            }
-            '!' => {
-                out.push(Tok::Not);
-                i += 1;
-            }
-            '\'' => {
-                let mut s = String::new();
-                i += 1;
-                loop {
-                    match chars.get(i) {
-                        None => return Err("unterminated string literal".into()),
-                        Some('\'') if chars.get(i + 1) == Some(&'\'') => {
-                            s.push('\'');
-                            i += 2;
-                        }
-                        Some('\'') => {
-                            i += 1;
-                            break;
-                        }
-                        Some(ch) => {
-                            s.push(*ch);
-                            i += 1;
-                        }
-                    }
-                }
-                out.push(Tok::Str(s));
-            }
-            c if c.is_ascii_digit() => {
-                let start = i;
-                while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
-                    i += 1;
-                }
-                let text: String = chars[start..i].iter().collect();
-                let n = text
-                    .parse::<f64>()
-                    .map_err(|_| format!("number literal `{text}`"))?;
-                out.push(Tok::Num(n));
-            }
-            c if c.is_ascii_alphabetic() || c == '_' => {
-                let start = i;
-                while i < chars.len()
-                    && (chars[i].is_ascii_alphanumeric() || chars[i] == '_' || chars[i] == '-')
-                {
-                    i += 1;
-                }
-                out.push(Tok::Ident(chars[start..i].iter().collect()));
-            }
-            other => return Err(format!("operator or character `{other}`")),
-        }
-    }
-    Ok(out)
-}
+use super::ci_expr::{lex_strict as lex, Tok};
 
 #[derive(Debug, Clone)]
 enum Expr {
@@ -660,11 +554,41 @@ impl Parser {
                     return Ok(Expr::Call(id, args));
                 }
                 let mut path = vec![id];
-                while self.peek() == Some(&Tok::Dot) {
-                    self.pos += 1;
-                    match self.next() {
-                        Some(Tok::Ident(seg)) => path.push(seg),
-                        _ => return Err(format!("malformed property path `{}`", path.join("."))),
+                loop {
+                    match self.peek() {
+                        Some(Tok::Dot) => {
+                            self.pos += 1;
+                            match self.next() {
+                                Some(Tok::Ident(seg)) => path.push(seg),
+                                _ => {
+                                    return Err(format!(
+                                        "malformed property path `{}`",
+                                        path.join(".")
+                                    ))
+                                }
+                            }
+                        }
+                        Some(Tok::LBracket) => {
+                            self.pos += 1;
+                            match self.next() {
+                                Some(Tok::Str(seg)) | Some(Tok::Ident(seg)) => {
+                                    if self.next() != Some(Tok::RBracket) {
+                                        return Err(format!(
+                                            "malformed property path `{}`",
+                                            path.join(".")
+                                        ));
+                                    }
+                                    path.push(seg);
+                                }
+                                _ => {
+                                    return Err(format!(
+                                        "malformed property path `{}`",
+                                        path.join(".")
+                                    ))
+                                }
+                            }
+                        }
+                        _ => break,
                     }
                 }
                 Ok(Expr::Path(path))
@@ -1646,6 +1570,10 @@ jobs:
         let gh = github("pull_request");
         let eval = |src: &str| -> (bool, Vec<String>) { eval_standalone(src, &gh) };
         assert_eq!(eval("github.event_name == 'PULL_REQUEST'"), (true, vec![]));
+        assert_eq!(
+            eval("github['event_name'] == 'PULL_REQUEST'"),
+            (true, vec![])
+        );
         assert_eq!(eval("!(github.event_name == 'push')"), (true, vec![]));
         assert_eq!(eval("github.event_name == 'push' && true"), (false, vec![]));
         assert_eq!(eval("contains('|a|b|', '|B|')"), (true, vec![]));
