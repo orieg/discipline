@@ -700,74 +700,43 @@ impl ParsedFileFacts {
     /// with a method of the same name, overloads) the one with the fewest checks counts,
     /// because which one runs is not known here.
     pub fn resolve_tracked_helpers(&mut self) {
-        self.tracked_helpers = (0..self.test_helpers.len())
-            .map(|i| self.tracked_helper(i, &mut Vec::new()))
-            .collect();
+        self.tracked_helpers = HelperGraph::new(self).resolve_all();
     }
 
-    fn tracked_helper(&self, at: usize, path: &mut Vec<usize>) -> TestHelperFacts {
-        let mut out = self.test_helpers[at].clone();
-        if path.len() + 1 >= HELPER_DEPTH {
-            return out;
-        }
-        path.push(at);
-        for call in self.helper_calls.get(at).into_iter().flatten() {
-            let Some(callee) = self.called_helper(call, path) else {
-                continue;
-            };
-            out.total_asserts += callee.total_asserts;
-            out.strong_asserts += callee.strong_asserts;
-            out.tautologies += callee.tautologies;
-            out.fatal_asserts += callee.fatal_asserts;
-            out.equality_exits += callee.equality_exits;
-        }
-        path.pop();
-        out
-    }
-
-    /// The helper `call` runs, with its own callees counted in; `None` when it names no
-    /// helper of this file, or only helpers already on `path`.
-    fn called_helper(&self, call: &str, path: &mut Vec<usize>) -> Option<TestHelperFacts> {
-        if call.contains('|') {
-            // A callee chosen at the call (`a|b`): only what every choice checks is sure.
-            let mut sure: Option<TestHelperFacts> = None;
-            for choice in call.split('|') {
-                let f = self.called_helper(choice, path)?;
-                sure = Some(match sure {
-                    None => f,
-                    Some(mut s) => {
-                        s.total_asserts = s.total_asserts.min(f.total_asserts);
-                        s.strong_asserts = s.strong_asserts.min(f.strong_asserts);
-                        s.tautologies = s.tautologies.min(f.tautologies);
-                        s.fatal_asserts = s.fatal_asserts.min(f.fatal_asserts);
-                        s.equality_exits = s.equality_exits.min(f.equality_exits);
-                        s
-                    }
-                });
-            }
-            return sure;
-        }
-        let named = |exact: bool| -> Vec<usize> {
-            (0..self.test_helpers.len())
-                .filter(|i| {
-                    let name = &self.test_helpers[*i].name;
-                    if exact {
-                        call == name
-                    } else {
-                        helper_call_matches(call, helper_leaf(name))
-                    }
-                })
-                .collect()
+    /// What a call of a method named `method` on some receiver is sure to check, for
+    /// every helper leaf name in this file: the effective assertions of the least-checking
+    /// helper with that last name segment, its own callees counted in.
+    pub(crate) fn least_helpers_by_leaf(&self) -> std::collections::HashMap<&str, usize> {
+        let resolved;
+        let tracked = if self.tracked_helpers.len() == self.test_helpers.len() {
+            &self.tracked_helpers
+        } else {
+            resolved = HelperGraph::new(self).resolve_all();
+            &resolved
         };
-        let mut candidates = named(true);
-        if candidates.is_empty() {
-            candidates = named(false);
+        let mut by_leaf: std::collections::HashMap<&str, (usize, (usize, usize, usize))> =
+            std::collections::HashMap::with_capacity(tracked.len());
+        for (i, h) in self.test_helpers.iter().enumerate() {
+            ancestry::count(1);
+            let leaf = helper_leaf(&h.name);
+            let t = &tracked[i];
+            let key = HelperGraph::helper_key(t);
+            match by_leaf.get_mut(leaf) {
+                Some((checks, best_key)) => {
+                    if key < *best_key {
+                        *checks = key.0;
+                        *best_key = key;
+                    }
+                }
+                None => {
+                    by_leaf.insert(leaf, (key.0, key));
+                }
+            }
         }
-        candidates.retain(|i| !path.contains(i));
-        candidates
+        by_leaf
             .into_iter()
-            .map(|i| self.tracked_helper(i, path))
-            .min_by_key(|h| (h.effective_asserts(), h.strong_asserts, h.fatal_asserts))
+            .map(|(leaf, (checks, _))| (leaf, checks))
+            .collect()
     }
 
     /// What a call of a method named `method` on some receiver is sure to check: the
@@ -782,10 +751,23 @@ impl ParsedFileFacts {
     /// helpers of this file with that last name segment, callees counted in, the one
     /// that checks least, because which one the receiver runs is not known here.
     fn least_helper(&self, method: &str) -> Option<TestHelperFacts> {
+        if self.tracked_helpers.len() == self.test_helpers.len() {
+            return (0..self.test_helpers.len())
+                .filter(|&i| {
+                    ancestry::count(1);
+                    helper_leaf(&self.test_helpers[i].name) == method
+                })
+                .map(|i| self.tracked_helpers[i].clone())
+                .min_by_key(HelperGraph::helper_key);
+        }
+        let graph = HelperGraph::new(self);
         (0..self.test_helpers.len())
-            .filter(|i| helper_leaf(&self.test_helpers[*i].name) == method)
-            .map(|i| self.tracked_helper(i, &mut Vec::new()))
-            .min_by_key(|h| (h.effective_asserts(), h.strong_asserts, h.fatal_asserts))
+            .filter(|&i| {
+                ancestry::count(1);
+                helper_leaf(&self.test_helpers[i].name) == method
+            })
+            .map(|i| graph.resolve_one(i))
+            .min_by_key(HelperGraph::helper_key)
     }
 
     /// Fills each test's [`HelperReach`]: which of its calls name a helper of this file,
@@ -798,6 +780,10 @@ impl ParsedFileFacts {
     /// `configured` (`assert_helper_fns`) that the pack did not resolve is already one
     /// assertion of the test and stands for one less.
     pub fn resolve_helper_reach(&mut self, configured: &[String]) {
+        if self.tracked_helpers.len() != self.test_helpers.len() {
+            self.resolve_tracked_helpers();
+        }
+        let index = TrackedHelperIndex::new(&self.test_helpers, &self.tracked_helpers);
         let mut tests = std::mem::take(&mut self.tests);
         for test in &mut tests {
             let mut counted: Vec<(&str, (usize, usize, usize))> = test
@@ -812,10 +798,11 @@ impl ParsedFileFacts {
             let direct = test.direct_calls.iter().map(|c| (c, false));
             let on_receiver = test.helper_reach.receiver_calls.iter().map(|c| (c, true));
             for (call, receiver) in direct.chain(on_receiver) {
+                ancestry::count(1);
                 let helper = if receiver {
-                    self.least_helper(call)
+                    index.least_helper(call)
                 } else {
-                    self.called_helper(call, &mut Vec::new())
+                    index.called_helper(call)
                 };
                 let Some(helper) = helper else {
                     continue;
@@ -847,6 +834,273 @@ impl ParsedFileFacts {
             reach.names = names;
         }
         self.tests = tests;
+    }
+}
+
+/// Pre-indexed lookup over resolved `tracked_helpers` for top-level (`path = []`) helper
+/// and receiver-call resolution.
+struct TrackedHelperIndex<'a> {
+    tracked: &'a [TestHelperFacts],
+    min_by_name: std::collections::HashMap<&'a str, usize>,
+    min_by_leaf: std::collections::HashMap<&'a str, usize>,
+}
+
+impl<'a> TrackedHelperIndex<'a> {
+    fn new(helpers: &'a [TestHelperFacts], tracked: &'a [TestHelperFacts]) -> Self {
+        let mut min_by_name: std::collections::HashMap<&'a str, usize> =
+            std::collections::HashMap::with_capacity(helpers.len());
+        let mut min_by_leaf: std::collections::HashMap<&'a str, usize> =
+            std::collections::HashMap::with_capacity(helpers.len());
+        for (i, h) in helpers.iter().enumerate() {
+            ancestry::count(1);
+            let key = HelperGraph::helper_key(&tracked[i]);
+            min_by_name
+                .entry(h.name.as_str())
+                .and_modify(|best| {
+                    if key < HelperGraph::helper_key(&tracked[*best]) {
+                        *best = i;
+                    }
+                })
+                .or_insert(i);
+            min_by_leaf
+                .entry(helper_leaf(&h.name))
+                .and_modify(|best| {
+                    if key < HelperGraph::helper_key(&tracked[*best]) {
+                        *best = i;
+                    }
+                })
+                .or_insert(i);
+        }
+        Self {
+            tracked,
+            min_by_name,
+            min_by_leaf,
+        }
+    }
+
+    fn least_helper(&self, method: &str) -> Option<TestHelperFacts> {
+        self.min_by_leaf
+            .get(method)
+            .map(|&i| self.tracked[i].clone())
+    }
+
+    fn called_helper(&self, call: &str) -> Option<TestHelperFacts> {
+        if call.contains('|') {
+            let mut sure: Option<TestHelperFacts> = None;
+            for choice in call.split('|') {
+                let f = self.called_helper(choice)?;
+                sure = Some(HelperGraph::min_choices(sure, f));
+            }
+            return sure;
+        }
+        self.min_by_name
+            .get(call)
+            .or_else(|| self.min_by_leaf.get(helper_leaf(call)))
+            .map(|&i| self.tracked[i].clone())
+    }
+}
+
+/// Pre-indexed same-file helper graph that evaluates `tracked_helper` up to
+/// [`HELPER_DEPTH`] (`3`) without rescanning `0..test_helpers.len()` on each call site.
+struct HelperGraph<'a> {
+    facts: &'a ParsedFileFacts,
+    by_name_d2: std::collections::HashMap<&'a str, Vec<usize>>,
+    by_leaf_d2: std::collections::HashMap<&'a str, Vec<usize>>,
+    depth1_unconstrained: Vec<TestHelperFacts>,
+    used_at_depth2: Vec<Vec<usize>>,
+    dependents_of_d2: Vec<Vec<usize>>,
+    by_name_d1: std::collections::HashMap<&'a str, Vec<usize>>,
+    by_leaf_d1: std::collections::HashMap<&'a str, Vec<usize>>,
+}
+
+impl<'a> HelperGraph<'a> {
+    fn helper_key(h: &TestHelperFacts) -> (usize, usize, usize) {
+        (h.effective_asserts(), h.strong_asserts, h.fatal_asserts)
+    }
+
+    fn add_callee(out: &mut TestHelperFacts, callee: &TestHelperFacts) {
+        out.total_asserts += callee.total_asserts;
+        out.strong_asserts += callee.strong_asserts;
+        out.tautologies += callee.tautologies;
+        out.fatal_asserts += callee.fatal_asserts;
+        out.equality_exits += callee.equality_exits;
+    }
+
+    fn min_choices(sure: Option<TestHelperFacts>, f: TestHelperFacts) -> TestHelperFacts {
+        match sure {
+            None => f,
+            Some(mut s) => {
+                s.total_asserts = s.total_asserts.min(f.total_asserts);
+                s.strong_asserts = s.strong_asserts.min(f.strong_asserts);
+                s.tautologies = s.tautologies.min(f.tautologies);
+                s.fatal_asserts = s.fatal_asserts.min(f.fatal_asserts);
+                s.equality_exits = s.equality_exits.min(f.equality_exits);
+                s
+            }
+        }
+    }
+
+    fn new(facts: &'a ParsedFileFacts) -> Self {
+        let n = facts.test_helpers.len();
+        let mut by_name_d2: std::collections::HashMap<&'a str, Vec<usize>> =
+            std::collections::HashMap::with_capacity(n);
+        let mut by_leaf_d2: std::collections::HashMap<&'a str, Vec<usize>> =
+            std::collections::HashMap::with_capacity(n);
+        for (i, h) in facts.test_helpers.iter().enumerate() {
+            ancestry::count(1);
+            by_name_d2.entry(h.name.as_str()).or_default().push(i);
+            by_leaf_d2.entry(helper_leaf(&h.name)).or_default().push(i);
+        }
+        let mut by_name_d1 = by_name_d2.clone();
+        let mut by_leaf_d1 = by_leaf_d2.clone();
+        for list in by_name_d2.values_mut() {
+            list.sort_by_key(|&j| Self::helper_key(&facts.test_helpers[j]));
+        }
+        for list in by_leaf_d2.values_mut() {
+            list.sort_by_key(|&j| Self::helper_key(&facts.test_helpers[j]));
+        }
+        let mut depth1_unconstrained = Vec::with_capacity(n);
+        let mut used_at_depth2 = Vec::with_capacity(n);
+        let mut dependents_of_d2 = vec![Vec::new(); n];
+        for i in 0..n {
+            ancestry::count(1);
+            let (h, used) = Self::eval_d1(facts, &by_name_d2, &by_leaf_d2, i, usize::MAX);
+            for &u in &used {
+                if !dependents_of_d2[u].contains(&i) {
+                    dependents_of_d2[u].push(i);
+                }
+            }
+            used_at_depth2.push(used);
+            depth1_unconstrained.push(h);
+        }
+        for list in by_name_d1.values_mut() {
+            list.sort_by_key(|&i| Self::helper_key(&depth1_unconstrained[i]));
+        }
+        for list in by_leaf_d1.values_mut() {
+            list.sort_by_key(|&i| Self::helper_key(&depth1_unconstrained[i]));
+        }
+        Self {
+            facts,
+            by_name_d2,
+            by_leaf_d2,
+            depth1_unconstrained,
+            used_at_depth2,
+            dependents_of_d2,
+            by_name_d1,
+            by_leaf_d1,
+        }
+    }
+
+    fn eval_d1(
+        facts: &ParsedFileFacts,
+        by_name_d2: &std::collections::HashMap<&str, Vec<usize>>,
+        by_leaf_d2: &std::collections::HashMap<&str, Vec<usize>>,
+        i: usize,
+        p0: usize,
+    ) -> (TestHelperFacts, Vec<usize>) {
+        let mut out = facts.test_helpers[i].clone();
+        let mut used = Vec::new();
+        for call in facts.helper_calls.get(i).into_iter().flatten() {
+            ancestry::count(1);
+            let mut sure: Option<TestHelperFacts> = None;
+            let mut all_matched = true;
+            for choice in call.split('|') {
+                let candidates = by_name_d2
+                    .get(choice)
+                    .or_else(|| by_leaf_d2.get(helper_leaf(choice)));
+                let winner =
+                    candidates.and_then(|list| list.iter().copied().find(|&j| j != p0 && j != i));
+                match winner {
+                    Some(j) => {
+                        if !used.contains(&j) {
+                            used.push(j);
+                        }
+                        sure = Some(Self::min_choices(sure, facts.test_helpers[j].clone()));
+                    }
+                    None => {
+                        all_matched = false;
+                        break;
+                    }
+                }
+            }
+            if all_matched {
+                if let Some(callee) = sure {
+                    Self::add_callee(&mut out, &callee);
+                }
+            }
+        }
+        (out, used)
+    }
+
+    fn called_at_d0(&self, call: &str, at: usize) -> Option<TestHelperFacts> {
+        if call.contains('|') {
+            let mut sure: Option<TestHelperFacts> = None;
+            for choice in call.split('|') {
+                let f = self.called_at_d0(choice, at)?;
+                sure = Some(Self::min_choices(sure, f));
+            }
+            return sure;
+        }
+        let (exact, list) = if let Some(list) = self.by_name_d1.get(call) {
+            (true, list)
+        } else {
+            let list = self.by_leaf_d1.get(helper_leaf(call))?;
+            (false, list)
+        };
+        let mut best: Option<((usize, usize, usize, usize), TestHelperFacts)> = list
+            .iter()
+            .copied()
+            .find(|&i| {
+                ancestry::count(1);
+                i != at && !self.used_at_depth2[i].contains(&at)
+            })
+            .map(|i| {
+                let h = self.depth1_unconstrained[i].clone();
+                let k = Self::helper_key(&h);
+                ((k.0, k.1, k.2, i), h)
+            });
+        if let Some(deps) = self.dependents_of_d2.get(at) {
+            let leaf = helper_leaf(call);
+            for &i in deps {
+                if i == at {
+                    continue;
+                }
+                let name = self.facts.test_helpers[i].name.as_str();
+                let matches = if exact {
+                    name == call
+                } else {
+                    helper_leaf(name) == leaf
+                };
+                if !matches {
+                    continue;
+                }
+                ancestry::count(1);
+                let (h, _) = Self::eval_d1(self.facts, &self.by_name_d2, &self.by_leaf_d2, i, at);
+                let k = Self::helper_key(&h);
+                let key = (k.0, k.1, k.2, i);
+                if best.as_ref().is_none_or(|(bk, _)| key < *bk) {
+                    best = Some((key, h));
+                }
+            }
+        }
+        best.map(|(_, h)| h)
+    }
+
+    fn resolve_one(&self, at: usize) -> TestHelperFacts {
+        let mut out = self.facts.test_helpers[at].clone();
+        for call in self.facts.helper_calls.get(at).into_iter().flatten() {
+            ancestry::count(1);
+            if let Some(callee) = self.called_at_d0(call, at) {
+                Self::add_callee(&mut out, &callee);
+            }
+        }
+        out
+    }
+
+    fn resolve_all(&self) -> Vec<TestHelperFacts> {
+        (0..self.facts.test_helpers.len())
+            .map(|at| self.resolve_one(at))
+            .collect()
     }
 }
 

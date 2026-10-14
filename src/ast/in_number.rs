@@ -345,6 +345,103 @@ fn calls_placed_in_their_tests_cost_steps_in_proportion_to_the_tests() {
     });
     assert_eq!(many.tests.len(), 160);
     assert!(many.tests.iter().all(|t| t.method_checks == 1));
+    // Many methods in the file as well as many receiver calls in its tests, including
+    // methods of the same name across types and helpers that call other methods.
+    let (_, many) = in_proportion("methods and receiver calls", "src/sync.rs", |n| {
+        let types = lines(n / 4, |k| {
+            format!(
+                "struct S{k};\nimpl S{k} {{\n    fn check(&self) {{\n        assert_eq!(self.get(), {k});\n    }}\n    fn get(&self) -> usize {{\n        {k}\n    }}\n}}\n"
+            )
+        });
+        let helpers = lines(n, |i| {
+            format!(
+                "impl S0 {{\n    fn step_{i}(&self) {{\n        self.check();\n        assert!(self.get() == {i});\n    }}\n}}\n"
+            )
+        });
+        let tests = lines(n, |i| {
+            format!(
+                "#[test]\nfn t{i}() {{\n    let v = make({i});\n    v.step_{i}();\n    v.check();\n    let _ = v.get();\n}}\n"
+            )
+        });
+        format!("{types}{helpers}{tests}")
+    });
+    assert_eq!(many.tests.len(), 160);
+    assert!(many.tests.iter().all(|t| t.method_checks == 3));
+}
+
+/// Resolving tracked helpers and each test's helper reach across a file with many
+/// methods and tests costs steps in proportion to their number, and preserves the
+/// least-checking helper resolution across overloads and call chains.
+#[test]
+fn resolving_helpers_and_reach_costs_steps_in_proportion_to_their_number() {
+    let resolve = |n: usize| -> (ParsedFileFacts, u64) {
+        let types = lines(n / 4, |k| {
+            format!(
+                "struct S{k};\nimpl S{k} {{\n    fn verify(&self) {{\n        assert_eq!(self.get(), {k});\n    }}\n    fn get(&self) -> usize {{\n        {k}\n    }}\n}}\n"
+            )
+        });
+        let helpers = lines(n, |i| {
+            format!("fn check_{i}(v: &S0) {{\n    v.verify();\n    assert_eq!(v.get(), {i});\n}}\n")
+        });
+        let tests = lines(n, |i| {
+            format!(
+                "#[test]\nfn t{i}() {{\n    let v = S0;\n    check_{i}(&v);\n    v.verify();\n}}\n"
+            )
+        });
+        let src = format!("{types}{helpers}{tests}");
+        let registry = default_registry();
+        let pack = registry.find_pack("src/sync.rs").expect("rust pack");
+        ancestry::steps(|| {
+            let mut facts = pack
+                .extract("src/sync.rs", &src, &AssertVocabulary::default())
+                .expect("parsed");
+            facts.resolve_tracked_helpers();
+            facts.resolve_helper_reach(&[]);
+            facts
+        })
+    };
+    let ((_, few), (many_facts, many)) = (resolve(40), resolve(160));
+    assert!(few > 0, "resolve helpers: nothing was counted");
+    assert!(
+        many < 5 * few,
+        "resolve helpers: {few} steps for 40, {many} for 160"
+    );
+    assert_eq!(many_facts.tests.len(), 160);
+    assert!(many_facts.tests.iter().all(|t| {
+        t.effective_asserts() == 1
+            && t.strong_asserts == 1
+            && t.method_checks == 1
+            && t.helper_reach.total == 2
+            && t.helper_reach.strong == 2
+    }));
+}
+
+/// The indexed helper graph resolves three-level chains, mutual recursion (`a -> b -> a`),
+/// overloaded method leaves (`S0::leaf` vs `S1::leaf`), and conditional callees (`a|b`)
+/// to the exact same counts as a direct recursive walk from each helper.
+#[test]
+fn resolved_helpers_match_recursive_walk_across_cycles_and_overloads() {
+    let src = "struct S0;\nstruct S1;\nimpl S0 {\n    fn leaf(&self) {\n        assert!(self.ok());\n    }\n    fn mid(&self) {\n        self.leaf();\n        self.cycle_a();\n    }\n    fn cycle_a(&self, x: usize) {\n        assert_eq!(x, 1);\n        self.cycle_b(x);\n    }\n    fn cycle_b(&self, x: usize) {\n        assert_eq!(x, 2);\n        self.cycle_a(x);\n    }\n}\nimpl S1 {\n    fn leaf(&self, x: usize) {\n        assert_eq!(x, 2);\n        assert_eq!(x, 4);\n    }\n}\nfn top(v: &S0, c: bool, x: usize) {\n    v.mid();\n    (if c { a } else { b })(x);\n}\nfn a(x: usize) {\n    assert_eq!(x, 10);\n    assert_eq!(x, 20);\n}\nfn b(x: usize) {\n    assert!(x > 0);\n}\n";
+    let (mut facts, _) = read("src/m.rs", src);
+    facts.resolve_tracked_helpers();
+    let got: Vec<(&str, usize, usize)> = facts
+        .tracked_helpers
+        .iter()
+        .map(|h| (h.name.as_str(), h.effective_asserts(), h.strong_asserts))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("leaf", 1, 0),
+            ("mid", 3, 2),
+            ("cycle_a", 2, 2),
+            ("cycle_b", 2, 2),
+            ("leaf", 2, 2),
+            ("top", 3, 1),
+            ("a", 2, 2),
+            ("b", 1, 0),
+        ]
+    );
 }
 
 /// The retry marker of each test of `src`, a Python test file.

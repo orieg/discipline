@@ -463,20 +463,21 @@ pub fn count<'t>(
                 .map(|child| (child, depth + 1, node.id())),
         );
     }
-    let helper_checks_in_a_loop = |name: &str| {
-        let mut named = (0..helpers.len())
-            .filter(|at| helper_leaf(&facts.test_helpers[*at].name) == name)
-            .peekable();
-        named.peek().is_some() && named.all(|at| helper_loops[at])
-    };
-    // Of several helpers of one name, the one with the fewest such exits counts.
-    let exits_of = |name: &str| {
-        (0..helpers.len())
-            .filter(|at| helper_leaf(&facts.test_helpers[*at].name) == name)
-            .map(|at| equality_exits[at])
-            .min()
-            .unwrap_or(0)
-    };
+    let mut by_leaf: std::collections::HashMap<&str, (bool, usize)> =
+        std::collections::HashMap::with_capacity(helpers.len());
+    for at in 0..helpers.len() {
+        let leaf = helper_leaf(&facts.test_helpers[at].name);
+        let loops = helper_loops[at];
+        let exits = equality_exits[at];
+        by_leaf
+            .entry(leaf)
+            .and_modify(|(all_loop, min_exits)| {
+                *all_loop &= loops;
+                *min_exits = (*min_exits).min(exits);
+            })
+            .or_insert((loops, exits));
+    }
+    looped_sites.sort_unstable();
     let reach: Vec<(usize, usize)> = facts
         .tests
         .iter()
@@ -489,10 +490,12 @@ pub fn count<'t>(
                 .map(|(call, _)| helper_leaf(call));
             let (mut looped, mut exits) = (0, 0);
             for name in checking {
-                if looped_sites.contains(&(at, name)) || helper_checks_in_a_loop(name) {
+                let (helper_loops_all, min_exits) =
+                    by_leaf.get(name).copied().unwrap_or((false, 0));
+                if looped_sites.binary_search(&(at, name)).is_ok() || helper_loops_all {
                     looped += 1;
                 }
-                exits += exits_of(name);
+                exits += min_exits;
             }
             (looped, exits)
         })

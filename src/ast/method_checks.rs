@@ -179,6 +179,7 @@ pub fn count<'t>(
     }
     let mut credits: Vec<(usize, usize)> = Vec::new();
     let mut sites: Vec<(usize, &str)> = Vec::new();
+    let helpers_by_leaf = facts.least_helpers_by_leaf();
     // The innermost test of each line, by table: reading every test for each call cost
     // the tests for each call of the file.
     let test_at = super::innermost_tests_by_line(&facts.tests, root.end_position().row + 1);
@@ -190,7 +191,7 @@ pub fn count<'t>(
         if let Some(method) = receiver_method(node, src, spec) {
             called.push((method, line));
         } else if let Some(method) = bare_method(node, anc, src, spec) {
-            if facts.least_helper_named(method).is_some() {
+            if helpers_by_leaf.contains_key(method) {
                 called.push((method, line));
             }
         }
@@ -208,7 +209,7 @@ pub fn count<'t>(
                     .iter()
                     .any(|call| helper_leaf(call) == method);
                 if !counted {
-                    let checks = facts.least_helper_named(method).unwrap_or(0);
+                    let checks = helpers_by_leaf.get(method).copied().unwrap_or(0);
                     if checks > 0 {
                         credits.push((at, checks));
                     }

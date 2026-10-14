@@ -598,9 +598,9 @@ pub struct WeakenedCrateHelper {
 /// the one with the fewest checks.
 #[cfg(feature = "lang-rust")]
 fn helper_with_reach(facts: &ParsedFileFacts, test_code: &[bool], at: usize) -> TestHelperFacts {
-    fn reach(
-        facts: &ParsedFileFacts,
-        test_code: &[bool],
+    fn reach<'a>(
+        facts: &'a ParsedFileFacts,
+        by_leaf: &std::collections::HashMap<&'a str, Vec<usize>>,
         at: usize,
         way: &mut Vec<usize>,
     ) -> (usize, usize, usize) {
@@ -616,23 +616,34 @@ fn helper_with_reach(facts: &ParsedFileFacts, test_code: &[bool], at: usize) -> 
         way.push(at);
         let calls = facts.helper_calls.get(at).into_iter().flatten();
         for call in calls.flat_map(|c| c.split('|')) {
-            let named = (0..facts.test_helpers.len()).filter(|&i| {
-                let is_code = test_code.get(i).copied().unwrap_or(false);
-                is_code && !way.contains(&i) && call_names_helper(call, &facts.test_helpers[i].name)
-            });
-            let fewest = named.min_by_key(|&i| {
-                let h = &facts.test_helpers[i];
-                (h.effective_asserts(), h.strong_asserts)
-            });
+            let leaf = crate::ast::helper_leaf(call);
+            let fewest = by_leaf
+                .get(leaf)
+                .and_then(|list| list.iter().copied().find(|i| !way.contains(i)));
             if let Some(i) = fewest {
-                let more = reach(facts, test_code, i, way);
+                let more = reach(facts, by_leaf, i, way);
                 held = (held.0 + more.0, held.1 + more.1, held.2 + more.2);
             }
         }
         way.pop();
         held
     }
-    let held = reach(facts, test_code, at, &mut Vec::new());
+    let mut by_leaf: std::collections::HashMap<&str, Vec<usize>> = std::collections::HashMap::new();
+    for (i, h) in facts.test_helpers.iter().enumerate() {
+        if test_code.get(i).copied().unwrap_or(false) {
+            by_leaf
+                .entry(crate::ast::helper_leaf(&h.name))
+                .or_default()
+                .push(i);
+        }
+    }
+    for list in by_leaf.values_mut() {
+        list.sort_by_key(|&i| {
+            let h = &facts.test_helpers[i];
+            (h.effective_asserts(), h.strong_asserts)
+        });
+    }
+    let held = reach(facts, &by_leaf, at, &mut Vec::new());
     let mut helper = facts.test_helpers[at].clone();
     helper.total_asserts = held.0 + helper.tautologies;
     helper.strong_asserts = held.1;
@@ -733,11 +744,16 @@ pub fn weakened_crate_helpers(
     let mut out = Vec::new();
     for ff in candidates {
         let (old, new) = (ff.file.old_path.as_str(), ff.file.path.as_str());
+        let base_helper_lines: std::collections::HashSet<usize> = ff
+            .base
+            .as_ref()
+            .map(|b| b.test_helpers.iter().map(|h| h.line).collect())
+            .unwrap_or_default();
         let test_only: Vec<usize> = sides[0]
             .modules
             .module_fns(old)?
             .into_iter()
-            .filter(|f| f.test_only)
+            .filter(|f| f.test_only && base_helper_lines.contains(&f.line))
             .map(|f| f.line)
             .collect();
         if test_only.is_empty() {
@@ -779,9 +795,15 @@ pub fn weakened_crate_helpers(
                 let Some(head) = head else {
                     continue;
                 };
+                if !test_only.contains(&base.test_helpers[bi].line) {
+                    continue;
+                }
                 let b = helper_with_reach(base, &base_code, bi);
+                if !is_helper(&b) {
+                    continue;
+                }
                 let h = helper_with_reach(head, &head_code, hi);
-                if !is_helper(&b) || !lost(&b, Some(&h)) {
+                if !lost(&b, Some(&h)) {
                     continue;
                 }
                 // Its own body and its calls are as they were: a helper it calls lost.
@@ -794,6 +816,9 @@ pub fn weakened_crate_helpers(
                 }
             }
             for bi in paired.left {
+                if !test_only.contains(&base.test_helpers[bi].line) {
+                    continue;
+                }
                 let b = helper_with_reach(base, &base_code, bi);
                 let shown = ff.base.as_ref();
                 if is_helper(&b) && !shown.is_some_and(|own| reached_by_own_tests(own, &b.name)) {
