@@ -463,12 +463,22 @@ pub fn count<'t>(
                 .map(|child| (child, depth + 1, node.id())),
         );
     }
+    let mut by_name: std::collections::HashMap<&str, (bool, usize)> =
+        std::collections::HashMap::with_capacity(helpers.len());
     let mut by_leaf: std::collections::HashMap<&str, (bool, usize)> =
         std::collections::HashMap::with_capacity(helpers.len());
     for at in 0..helpers.len() {
-        let leaf = helper_leaf(&facts.test_helpers[at].name);
+        let full = facts.test_helpers[at].name.as_str();
+        let leaf = helper_leaf(full);
         let loops = helper_loops[at];
         let exits = equality_exits[at];
+        by_name
+            .entry(full)
+            .and_modify(|(all_loop, min_exits)| {
+                *all_loop &= loops;
+                *min_exits = (*min_exits).min(exits);
+            })
+            .or_insert((loops, exits));
         by_leaf
             .entry(leaf)
             .and_modify(|(all_loop, min_exits)| {
@@ -487,12 +497,16 @@ pub fn count<'t>(
             let checking = calls
                 .zip(&test.helper_reach.counted)
                 .filter(|(call, checks)| checks.0 > 0 && !call.contains('|'))
-                .map(|(call, _)| helper_leaf(call));
+                .map(|(call, _)| call.as_str());
             let (mut looped, mut exits) = (0, 0);
-            for name in checking {
-                let (helper_loops_all, min_exits) =
-                    by_leaf.get(name).copied().unwrap_or((false, 0));
-                if looped_sites.binary_search(&(at, name)).is_ok() || helper_loops_all {
+            for call in checking {
+                let leaf = helper_leaf(call);
+                let (helper_loops_all, min_exits) = super::scoped_call_names(&test.name, call)
+                    .iter()
+                    .find_map(|cand| by_name.get(cand.as_str()).copied())
+                    .or_else(|| by_leaf.get(leaf).copied())
+                    .unwrap_or((false, 0));
+                if looped_sites.binary_search(&(at, leaf)).is_ok() || helper_loops_all {
                     looped += 1;
                 }
                 exits += min_exits;

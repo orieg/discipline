@@ -257,12 +257,17 @@ fn match_in_file(
             }
         });
     }
-    // (2) Renamed in place: the most similar name first.
-    let mut renames: Vec<(usize, usize, f64)> = Vec::new();
+    // (2) Renamed in place: same module first, then most similar name.
+    fn module_prefix(name: &str) -> &str {
+        name.rsplit_once("::").map_or("", |(m, _)| m)
+    }
+    let mut renames: Vec<(usize, usize, bool, f64)> = Vec::new();
     for &bi in &base_left {
         let b = &base.tracked[bi];
+        let b_mod = module_prefix(&b.name);
         for hi in (0..head.tracked.len()).filter(|&hi| !head_taken[hi]) {
             let h = &head.tracked[hi];
+            let same_mod = b_mod == module_prefix(&h.name);
             let sim = name_similarity(
                 crate::ast::helper_leaf(&b.name),
                 crate::ast::helper_leaf(&h.name),
@@ -272,12 +277,17 @@ fn match_in_file(
                 && b.end_line.saturating_sub(b.line) == h.end_line.saturating_sub(h.line)
                 && base.calls_of(bi) == head.calls_of(hi);
             if sim >= RENAME_NAME_SIMILARITY_THRESHOLD || same_body {
-                renames.push((bi, hi, if same_body { sim + 1.0 } else { sim }));
+                renames.push((bi, hi, same_mod, if same_body { sim + 1.0 } else { sim }));
             }
         }
     }
-    renames.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)).then(a.1.cmp(&b.1)));
-    for (bi, hi, _) in renames {
+    renames.sort_by(|a, b| {
+        b.2.cmp(&a.2)
+            .then_with(|| b.3.total_cmp(&a.3))
+            .then(a.0.cmp(&b.0))
+            .then(a.1.cmp(&b.1))
+    });
+    for (bi, hi, _, _) in renames {
         if base_left.contains(&bi) && !head_taken[hi] {
             head_taken[hi] = true;
             base_left.retain(|&left| left != bi);
@@ -464,7 +474,7 @@ pub(super) fn leave_helpers_shown_by_tests<'a>(
         if !helpers.iter().any(|hp| hp.path == path && lost(hp)) {
             continue;
         }
-        let mut calls: Vec<&str> = Vec::new();
+        let mut calls: Vec<(&str, &str)> = Vec::new();
         for p in pairs.iter().filter(|p| p.path == path) {
             let (b, h) = (p.base, p.head);
             let drops = h.effective_asserts() < b.effective_asserts()
@@ -484,20 +494,31 @@ pub(super) fn leave_helpers_shown_by_tests<'a>(
                 && moved.strong == 0
             {
                 let both = b.direct_calls.iter().chain(&h.direct_calls);
-                calls.extend(both.flat_map(|c| c.split('|')));
+                calls.extend(
+                    both.flat_map(|c| c.split('|'))
+                        .map(|c| (h.name.as_str(), c)),
+                );
             }
         }
         // Every helper of the file those calls reach, on either side of the change.
         let mut reached: Vec<&str> = Vec::new();
-        while let Some(call) = calls.pop() {
+        while let Some((caller, call)) = calls.pop() {
+            let cands = crate::ast::scoped_call_names(caller, call);
             for facts in [ff.base.as_ref(), ff.head.as_ref()].into_iter().flatten() {
+                let exact = facts.test_helpers.iter().any(|h| cands.contains(&h.name));
                 for (at, helper) in facts.test_helpers.iter().enumerate() {
-                    if call_names_helper(call, &helper.name)
-                        && !reached.contains(&helper.name.as_str())
-                    {
+                    let matches = if exact {
+                        cands.contains(&helper.name)
+                    } else {
+                        call_names_helper(call, &helper.name)
+                    };
+                    if matches && !reached.contains(&helper.name.as_str()) {
                         reached.push(&helper.name);
                         let own = facts.helper_calls.get(at).into_iter().flatten();
-                        calls.extend(own.flat_map(|c| c.split('|')));
+                        calls.extend(
+                            own.flat_map(|c| c.split('|'))
+                                .map(|c| (helper.name.as_str(), c)),
+                        );
                     }
                 }
             }

@@ -779,6 +779,10 @@ fn attribute_to_weakened_helpers(
         let (mut lost_total, mut lost_strong, mut lost_fatal) = (0, 0, 0);
         let mut weakened_helper_names = Vec::new();
         for call in &h.direct_calls {
+            let cands = crate::ast::scoped_call_names(&h.name, call);
+            let exact = helpers
+                .iter()
+                .any(|hp| hp.path == p.path && cands.contains(&hp.base.name));
             let weakened = helpers.iter().find_map(|hp| {
                 let head_helper = hp.head?;
                 let lost = hp
@@ -789,19 +793,21 @@ fn attribute_to_weakened_helpers(
                     .base
                     .strong_asserts
                     .saturating_sub(head_helper.strong_asserts);
-                (hp.path == p.path
-                    && call_names_helper(call, &hp.base.name)
-                    && (lost > 0 || lost_strength > 0))
-                    .then(|| {
-                        (
-                            hp.base.name.as_str(),
-                            lost,
-                            lost_strength,
-                            hp.base
-                                .fatal_asserts
-                                .saturating_sub(head_helper.fatal_asserts),
-                        )
-                    })
+                let name_matches = if exact {
+                    cands.contains(&hp.base.name)
+                } else {
+                    call_names_helper(call, &hp.base.name)
+                };
+                (hp.path == p.path && name_matches && (lost > 0 || lost_strength > 0)).then(|| {
+                    (
+                        hp.base.name.as_str(),
+                        lost,
+                        lost_strength,
+                        hp.base
+                            .fatal_asserts
+                            .saturating_sub(head_helper.fatal_asserts),
+                    )
+                })
             });
             if let Some((name, lost, lost_strength, lost_fatality)) = weakened {
                 lost_total += lost;
@@ -2715,5 +2721,309 @@ mod tests {
         held.helper_checks = 1;
         held.helper_reach.equality_exits = 1;
         assert_eq!(weakened(&head(2, 1, 1), &held), 1);
+    }
+
+    #[test]
+    fn new_module_inserted_beside_unchanged_module_reports_no_finding() {
+        let unchanged_mod = r#"
+#[cfg(test)]
+mod bytes_reader_forms_tests {
+    fn fixture(n: u64) {
+        assert_eq!(n, 1);
+        assert_eq!(n + 1, 2);
+    }
+
+    #[test]
+    fn bytes_readers_match_in_root_leaf_state_with_single_entry_buckets() {
+        fixture(1);
+        assert_eq!(10, 10);
+    }
+
+    #[test]
+    fn bytes_detached_rejects_foreign_map_for_every_key() {
+        fixture(1);
+        fixture(1);
+        fixture(1);
+        assert_eq!(20, 20);
+    }
+}
+"#;
+        let inserted_mod = r#"
+#[cfg(all(test, not(miri)))]
+mod blob_reader_forms_tests {
+    fn fixture(n: u64) -> u64 {
+        Some(n).expect("fixture value")
+    }
+
+    #[test]
+    fn blob_readers_match_in_root_leaf_state_with_single_entry_buckets() {
+        let v = fixture(1);
+        assert_eq!(v, 1);
+    }
+}
+"#;
+        let head = format!("{unchanged_mod}\n{inserted_mod}");
+        let files = change_facts(&[("src/sync.rs", unchanged_mod, &head)]);
+        let (pairs, _, added) = match_tests(&files);
+        let helpers = crate::guards::agent_diff::pair_helpers(&files, &pairs);
+        let settings = crate::config::AssertionGate::default();
+        let out =
+            evaluate_assertion_reduction(&pairs, &added, &helpers, &settings, &[], false).unwrap();
+        assert!(
+            out.violations.is_empty(),
+            "inserting a sibling module beside an unchanged module must not report findings: {:?}",
+            out.violations
+        );
+    }
+
+    #[test]
+    fn unchanged_module_moved_within_file_reports_no_finding() {
+        let mod_blob = r#"
+#[cfg(all(test, not(miri)))]
+mod blob_reader_forms_tests {
+    fn fixture(n: u64) -> u64 {
+        Some(n).expect("fixture value")
+    }
+
+    #[test]
+    fn blob_readers_match() {
+        let v = fixture(1);
+        assert_eq!(v, 1);
+    }
+}
+"#;
+        let mod_bytes = r#"
+#[cfg(test)]
+mod bytes_reader_forms_tests {
+    fn fixture(n: u64) {
+        assert_eq!(n, 1);
+        assert_eq!(n + 1, 2);
+    }
+
+    #[test]
+    fn bytes_readers_match() {
+        fixture(1);
+        assert_eq!(10, 10);
+    }
+}
+"#;
+        let base = format!("{mod_blob}\n{mod_bytes}");
+        let head = format!("{mod_bytes}\n{mod_blob}");
+        let files = change_facts(&[("src/sync.rs", &base, &head)]);
+        let (pairs, _, added) = match_tests(&files);
+        let helpers = crate::guards::agent_diff::pair_helpers(&files, &pairs);
+        let settings = crate::config::AssertionGate::default();
+        let out =
+            evaluate_assertion_reduction(&pairs, &added, &helpers, &settings, &[], false).unwrap();
+        assert!(
+            out.violations.is_empty(),
+            "moving an unchanged module within a file must not report findings: {:?}",
+            out.violations
+        );
+    }
+
+    #[test]
+    fn test_with_assertion_removed_beside_inserted_module_is_reported() {
+        let base = r#"
+#[cfg(test)]
+mod bytes_reader_forms_tests {
+    fn fixture(n: u64) -> u64 {
+        n + 1
+    }
+
+    #[test]
+    fn bytes_readers_match() {
+        let v = fixture(1);
+        assert_eq!(v, 2);
+        assert_eq!(v + 1, 3);
+    }
+
+    #[test]
+    fn bytes_unchanged() {
+        let v = fixture(1);
+        assert_eq!(v, 2);
+    }
+}
+"#;
+        let head = r#"
+#[cfg(test)]
+mod bytes_reader_forms_tests {
+    fn fixture(n: u64) -> u64 {
+        n + 1
+    }
+
+    #[test]
+    fn bytes_readers_match() {
+        let v = fixture(1);
+        assert_eq!(v, 2);
+    }
+
+    #[test]
+    fn bytes_unchanged() {
+        let v = fixture(1);
+        assert_eq!(v, 2);
+    }
+}
+
+#[cfg(test)]
+mod blob_reader_forms_tests {
+    fn fixture(n: u64) {
+        assert_eq!(n, 1);
+        assert_eq!(n + 1, 2);
+    }
+
+    #[test]
+    fn blob_readers_match() {
+        fixture(1);
+        assert_eq!(10, 10);
+    }
+}
+"#;
+        let files = change_facts(&[("src/sync.rs", base, head)]);
+        let (pairs, _, added) = match_tests(&files);
+        let helpers = crate::guards::agent_diff::pair_helpers(&files, &pairs);
+        let settings = crate::config::AssertionGate::default();
+        let out =
+            evaluate_assertion_reduction(&pairs, &added, &helpers, &settings, &[], false).unwrap();
+        assert_eq!(
+            out.violations.len(),
+            1,
+            "a test with one assertion removed beside an inserted module must still be reported: {:?}",
+            out.violations
+        );
+        assert!(
+            out.violations[0]
+                .message
+                .contains("bytes_reader_forms_tests::bytes_readers_match"),
+            "unexpected violation message: {}",
+            out.violations[0].message
+        );
+        assert!(
+            out.violations[0]
+                .message
+                .contains("effective assertions dropped from 2 to 1"),
+            "unexpected violation message: {}",
+            out.violations[0].message
+        );
+    }
+
+    #[test]
+    fn two_modules_with_identically_named_functions_pair_by_full_path() {
+        let base = r#"
+#[cfg(test)]
+mod outer_a {
+    pub mod inner {
+        pub fn fixture(n: u64) {
+            assert_eq!(n, 1);
+            assert_eq!(n + 1, 2);
+        }
+
+        #[test]
+        fn works() {
+            fixture(1);
+            assert_eq!(10, 10);
+        }
+    }
+}
+
+#[cfg(test)]
+mod outer_b {
+    pub mod inner {
+        pub fn fixture(n: u64) {
+            assert_eq!(n, 1);
+        }
+
+        #[test]
+        fn works() {
+            fixture(1);
+        }
+    }
+}
+"#;
+        // Swap module order and rename `outer_a::inner::works` to `works_extended` while
+        // adding a third module `outer_c::inner` that defines `fn works` with 1 assert.
+        let head = r#"
+#[cfg(test)]
+mod outer_b {
+    pub mod inner {
+        pub fn fixture(n: u64) {
+            assert_eq!(n, 1);
+        }
+
+        #[test]
+        fn works() {
+            fixture(1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod outer_a {
+    pub mod inner {
+        pub fn fixture(n: u64) {
+            assert_eq!(n, 1);
+            assert_eq!(n + 1, 2);
+            assert_eq!(n + 2, 3);
+        }
+
+        #[test]
+        fn works_extended() {
+            fixture(1);
+            assert_eq!(10, 10);
+        }
+    }
+}
+
+#[cfg(test)]
+mod outer_c {
+    pub mod inner {
+        #[test]
+        fn works() {
+            assert_eq!(1, 1);
+        }
+    }
+}
+"#;
+        let files = change_facts(&[("tests/common/mod.rs", base, head)]);
+        let (pairs, removed, added) = match_tests(&files);
+        assert!(removed.is_empty(), "expected no removed tests");
+        assert_eq!(added.len(), 1, "expected outer_c::inner::works as added");
+        assert_eq!(added[0].test.name, "outer_c::inner::works");
+
+        let helpers = crate::guards::agent_diff::match_helpers(&files);
+        let paired_helpers: Vec<_> = helpers
+            .iter()
+            .map(|hp| {
+                (
+                    hp.base.name.as_str(),
+                    hp.base.effective_asserts(),
+                    hp.head.map(|h| (h.name.as_str(), h.effective_asserts())),
+                )
+            })
+            .collect();
+        assert_eq!(
+            paired_helpers,
+            vec![
+                (
+                    "outer_a::inner::fixture",
+                    2,
+                    Some(("outer_a::inner::fixture", 3))
+                ),
+                (
+                    "outer_b::inner::fixture",
+                    1,
+                    Some(("outer_b::inner::fixture", 1))
+                ),
+            ]
+        );
+
+        let settings = crate::config::AssertionGate::default();
+        let out =
+            evaluate_assertion_reduction(&pairs, &added, &helpers, &settings, &[], false).unwrap();
+        assert!(
+            out.violations.is_empty(),
+            "pairing by full module path must produce no false reductions: {:?}",
+            out.violations
+        );
     }
 }

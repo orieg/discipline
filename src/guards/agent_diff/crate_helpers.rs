@@ -451,7 +451,12 @@ impl<'a> Side<'a> {
     fn callers(&mut self, file: &str, line: usize, name: &str) -> Result<Callers> {
         let mut found = Callers::default();
         let mut seen = vec![(file.to_string(), line)];
-        let mut queue = vec![(file.to_string(), line, name.to_string(), 1usize)];
+        let mut queue = vec![(
+            file.to_string(),
+            line,
+            crate::ast::helper_leaf(name).to_string(),
+            1usize,
+        )];
         while let Some((file, line, name, depth)) = queue.pop() {
             for path in self.modules.files() {
                 let Some(text) = self.modules.file_text(&path)? else {
@@ -538,6 +543,7 @@ impl<'a> Side<'a> {
         callers: &[(String, String)],
         name: &str,
     ) -> Result<Option<(String, TestHelperFacts)>> {
+        let leaf = crate::ast::helper_leaf(name);
         let mut targets: Vec<crate::ast::rust_modules::CrateFn> = Vec::new();
         for (path, caller) in callers {
             let fns = self.modules.module_fns(path)?;
@@ -547,12 +553,12 @@ impl<'a> Side<'a> {
             };
             for site in self.modules.test_calls(path, f.line)? {
                 match site.target {
-                    Some(target) if target.name == name => {
+                    Some(target) if target.name == leaf => {
                         if !targets.contains(&target) {
                             targets.push(target);
                         }
                     }
-                    None if site.leaf == name => return Ok(None),
+                    None if site.leaf == leaf => return Ok(None),
                     _ => {}
                 }
             }
@@ -600,6 +606,7 @@ pub struct WeakenedCrateHelper {
 fn helper_with_reach(facts: &ParsedFileFacts, test_code: &[bool], at: usize) -> TestHelperFacts {
     fn reach<'a>(
         facts: &'a ParsedFileFacts,
+        by_name: &std::collections::HashMap<&'a str, Vec<usize>>,
         by_leaf: &std::collections::HashMap<&'a str, Vec<usize>>,
         at: usize,
         way: &mut Vec<usize>,
@@ -616,34 +623,51 @@ fn helper_with_reach(facts: &ParsedFileFacts, test_code: &[bool], at: usize) -> 
         way.push(at);
         let calls = facts.helper_calls.get(at).into_iter().flatten();
         for call in calls.flat_map(|c| c.split('|')) {
-            let leaf = crate::ast::helper_leaf(call);
-            let fewest = by_leaf
-                .get(leaf)
-                .and_then(|list| list.iter().copied().find(|i| !way.contains(i)));
+            let scoped = crate::ast::scoped_call_names(&own.name, call)
+                .into_iter()
+                .find_map(|cand| {
+                    by_name
+                        .get(cand.as_str())
+                        .and_then(|list| list.iter().copied().find(|i| !way.contains(i)))
+                });
+            let fewest = scoped.or_else(|| {
+                let leaf = crate::ast::helper_leaf(call);
+                by_leaf
+                    .get(leaf)
+                    .and_then(|list| list.iter().copied().find(|i| !way.contains(i)))
+            });
             if let Some(i) = fewest {
-                let more = reach(facts, by_leaf, i, way);
+                let more = reach(facts, by_name, by_leaf, i, way);
                 held = (held.0 + more.0, held.1 + more.1, held.2 + more.2);
             }
         }
         way.pop();
         held
     }
+    let mut by_name: std::collections::HashMap<&str, Vec<usize>> = std::collections::HashMap::new();
     let mut by_leaf: std::collections::HashMap<&str, Vec<usize>> = std::collections::HashMap::new();
     for (i, h) in facts.test_helpers.iter().enumerate() {
         if test_code.get(i).copied().unwrap_or(false) {
+            by_name.entry(h.name.as_str()).or_default().push(i);
             by_leaf
                 .entry(crate::ast::helper_leaf(&h.name))
                 .or_default()
                 .push(i);
         }
     }
-    for list in by_leaf.values_mut() {
+    let sort_list = |list: &mut Vec<usize>| {
         list.sort_by_key(|&i| {
             let h = &facts.test_helpers[i];
             (h.effective_asserts(), h.strong_asserts)
         });
+    };
+    for list in by_name.values_mut() {
+        sort_list(list);
     }
-    let held = reach(facts, &by_leaf, at, &mut Vec::new());
+    for list in by_leaf.values_mut() {
+        sort_list(list);
+    }
+    let held = reach(facts, &by_name, &by_leaf, at, &mut Vec::new());
     let mut helper = facts.test_helpers[at].clone();
     helper.total_asserts = held.0 + helper.tautologies;
     helper.strong_asserts = held.1;
@@ -665,16 +689,26 @@ fn lost(base: &TestHelperFacts, head: Option<&TestHelperFacts>) -> bool {
 /// counted the helper's checks into such a test.
 #[cfg(feature = "lang-rust")]
 fn reached_by_own_tests(facts: &ParsedFileFacts, name: &str) -> bool {
-    let mut calls: Vec<&str> = Vec::new();
+    let mut calls: Vec<(&str, &str)> = Vec::new();
     for test in &facts.tests {
         let own = test.direct_calls.iter();
         let own = own.chain(&test.helper_reach.receiver_calls);
-        calls.extend(own.flat_map(|c| c.split('|')));
+        calls.extend(
+            own.flat_map(|c| c.split('|'))
+                .map(|c| (test.name.as_str(), c)),
+        );
     }
     let mut seen: Vec<usize> = Vec::new();
-    while let Some(call) = calls.pop() {
+    while let Some((caller, call)) = calls.pop() {
+        let cands = crate::ast::scoped_call_names(caller, call);
+        let exact = facts.test_helpers.iter().any(|h| cands.contains(&h.name));
         for (at, helper) in facts.test_helpers.iter().enumerate() {
-            if !call_names_helper(call, &helper.name) || seen.contains(&at) {
+            let matches = if exact {
+                cands.contains(&helper.name)
+            } else {
+                call_names_helper(call, &helper.name)
+            };
+            if !matches || seen.contains(&at) {
                 continue;
             }
             if helper.name == name {
@@ -682,7 +716,10 @@ fn reached_by_own_tests(facts: &ParsedFileFacts, name: &str) -> bool {
             }
             seen.push(at);
             let own = facts.helper_calls.get(at).into_iter().flatten();
-            calls.extend(own.flat_map(|c| c.split('|')));
+            calls.extend(
+                own.flat_map(|c| c.split('|'))
+                    .map(|c| (helper.name.as_str(), c)),
+            );
         }
     }
     false
@@ -882,9 +919,13 @@ pub fn weakened_crate_helpers(
                 Some((path, h)) => (path, Some(h)),
                 None => {
                     // A helper of that name that is new in another changed file.
+                    let b_leaf = crate::ast::helper_leaf(&b.name);
                     let named = |facts: Option<&'_ ParsedFileFacts>| {
                         let helpers = facts.map(tracked_helpers_of).unwrap_or_default();
-                        helpers.iter().find(|h| h.name == b.name).cloned()
+                        helpers
+                            .iter()
+                            .find(|h| crate::ast::helper_leaf(&h.name) == b_leaf)
+                            .cloned()
                     };
                     let new_elsewhere = files.iter().find_map(|other| {
                         let elsewhere =

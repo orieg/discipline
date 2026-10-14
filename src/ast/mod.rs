@@ -804,7 +804,7 @@ impl ParsedFileFacts {
                 let helper = if receiver {
                     index.least_helper(call)
                 } else {
-                    index.called_helper(call)
+                    index.called_helper(&test.name, call)
                 };
                 let Some(helper) = helper else {
                     continue;
@@ -886,17 +886,18 @@ impl<'a> TrackedHelperIndex<'a> {
             .map(|&i| self.tracked[i].clone())
     }
 
-    fn called_helper(&self, call: &str) -> Option<TestHelperFacts> {
+    fn called_helper(&self, caller: &str, call: &str) -> Option<TestHelperFacts> {
         if call.contains('|') {
             let mut sure: Option<TestHelperFacts> = None;
             for choice in call.split('|') {
-                let f = self.called_helper(choice)?;
+                let f = self.called_helper(caller, choice)?;
                 sure = Some(HelperGraph::min_choices(sure, f));
             }
             return sure;
         }
-        self.min_by_name
-            .get(call)
+        scoped_call_names(caller, call)
+            .iter()
+            .find_map(|cand| self.min_by_name.get(cand.as_str()))
             .or_else(|| self.min_by_leaf.get(helper_leaf(call)))
             .map(|&i| self.tracked[i].clone())
     }
@@ -1001,14 +1002,16 @@ impl<'a> HelperGraph<'a> {
         p0: usize,
     ) -> (TestHelperFacts, Vec<usize>) {
         let mut out = facts.test_helpers[i].clone();
+        let caller = facts.test_helpers[i].name.as_str();
         let mut used = Vec::new();
         for call in facts.helper_calls.get(i).into_iter().flatten() {
             ancestry::count(1);
             let mut sure: Option<TestHelperFacts> = None;
             let mut all_matched = true;
             for choice in call.split('|') {
-                let candidates = by_name_d2
-                    .get(choice)
+                let candidates = scoped_call_names(caller, choice)
+                    .into_iter()
+                    .find_map(|cand| by_name_d2.get(cand.as_str()))
                     .or_else(|| by_leaf_d2.get(helper_leaf(choice)));
                 let winner =
                     candidates.and_then(|list| list.iter().copied().find(|&j| j != p0 && j != i));
@@ -1043,11 +1046,15 @@ impl<'a> HelperGraph<'a> {
             }
             return sure;
         }
-        let (exact, list) = if let Some(list) = self.by_name_d1.get(call) {
-            (true, list)
+        let caller = self.facts.test_helpers[at].name.as_str();
+        let scoped_match = scoped_call_names(caller, call)
+            .into_iter()
+            .find_map(|cand| self.by_name_d1.get_key_value(cand.as_str()));
+        let (exact_name, list) = if let Some((&matched_name, list)) = scoped_match {
+            (Some(matched_name), list)
         } else {
             let list = self.by_leaf_d1.get(helper_leaf(call))?;
-            (false, list)
+            (None, list)
         };
         let mut best: Option<((usize, usize, usize, usize), TestHelperFacts)> = list
             .iter()
@@ -1068,10 +1075,9 @@ impl<'a> HelperGraph<'a> {
                     continue;
                 }
                 let name = self.facts.test_helpers[i].name.as_str();
-                let matches = if exact {
-                    name == call
-                } else {
-                    helper_leaf(name) == leaf
+                let matches = match exact_name {
+                    Some(target) => name == target,
+                    None => helper_leaf(name) == leaf,
                 };
                 if !matches {
                     continue;
@@ -1352,6 +1358,19 @@ pub fn helper_leaf(name: &str) -> &str {
     name.rsplit('.').next().unwrap_or(name)
 }
 
+/// Candidate helper names for `call` made inside `caller_name`, walking from the
+/// caller's innermost enclosing `::` module outward to bare `call`.
+pub(crate) fn scoped_call_names(caller_name: &str, call: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut prefix = caller_name;
+    while let Some((mod_path, _)) = prefix.rsplit_once("::") {
+        out.push(format!("{mod_path}::{call}"));
+        prefix = mod_path;
+    }
+    out.push(call.to_string());
+    out
+}
+
 /// How many calls deep a test's same-file helpers are followed: a C or C++ test `main`
 /// drives check functions that call one `require`-style helper that aborts, and a
 /// script's `self_test` calls a function that calls the validator that raises.
@@ -1390,6 +1409,67 @@ pub fn helper_through_wrappers(
         HELPER_DEPTH - 1,
         0,
     )
+}
+
+/// Like [`helper_through_wrappers`], resolving `name` against `caller`'s module hierarchy
+/// first (`mod_a::inner::helper`, `mod_a::helper`, `helper`) before falling back to a
+/// unique leaf match in `helpers` when no enclosing module defines it.
+pub fn scoped_helper_through_wrappers(
+    caller: &str,
+    name: &str,
+    helpers: &std::collections::HashMap<String, HelperFacts>,
+) -> Option<HelperFacts> {
+    resolve_scoped_wrapper(caller, name, helpers, &mut Vec::new(), 0)
+}
+
+fn resolve_scoped_wrapper(
+    caller: &str,
+    name: &str,
+    helpers: &std::collections::HashMap<String, HelperFacts>,
+    path: &mut Vec<String>,
+    hops: usize,
+) -> Option<HelperFacts> {
+    if name.contains('|') {
+        let mut sure: Option<HelperFacts> = None;
+        for choice in name.split('|') {
+            let f = resolve_scoped_wrapper(caller, choice, helpers, path, hops)?;
+            sure = Some(match sure {
+                None => f,
+                Some(s) => HelperFacts {
+                    total_asserts: s.total_asserts.min(f.total_asserts),
+                    strong_asserts: s.strong_asserts.min(f.strong_asserts),
+                    tautologies: s.tautologies.min(f.tautologies),
+                    fatal_asserts: s.fatal_asserts.min(f.fatal_asserts),
+                    wraps: None,
+                },
+            });
+        }
+        return sure;
+    }
+    let (key, own) = scoped_call_names(caller, name)
+        .into_iter()
+        .find_map(|cand| helpers.get_key_value(&cand))?;
+    if path.iter().any(|p| p == key) {
+        return None;
+    }
+    let mut out = HelperFacts {
+        total_asserts: own.total_asserts,
+        strong_asserts: own.strong_asserts,
+        tautologies: own.tautologies,
+        fatal_asserts: own.fatal_asserts,
+        wraps: None,
+    };
+    if let (Some(callee), true) = (&own.wraps, hops < WRAPPER_DEPTH) {
+        path.push(key.clone());
+        if let Some(sub) = resolve_scoped_wrapper(key, callee, helpers, path, hops + 1) {
+            out.total_asserts += sub.total_asserts;
+            out.strong_asserts += sub.strong_asserts;
+            out.tautologies += sub.tautologies;
+            out.fatal_asserts += sub.fatal_asserts;
+        }
+        path.pop();
+    }
+    Some(out)
 }
 
 fn resolve_helper(
