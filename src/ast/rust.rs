@@ -313,7 +313,13 @@ impl<'a> Extractor<'a> {
                     self.facts.tests.push(test);
                     self.test_calls.push(direct_calls);
                 } else if let Some(name_node) = node.child_by_field_name("name") {
-                    let fn_name = self.text(name_node).to_string();
+                    let fn_name = self.text(name_node);
+                    let qualified = mods
+                        .iter()
+                        .map(String::as_str)
+                        .chain(std::iter::once(fn_name))
+                        .collect::<Vec<_>>()
+                        .join("::");
                     let mut helper_test = TestFn::default();
                     let is_fallible_return = node
                         .child_by_field_name("return_type")
@@ -367,11 +373,22 @@ impl<'a> Extractor<'a> {
                             )
                         }),
                     );
-                    self.helpers.insert(fn_name.clone(), facts);
+                    self.helpers
+                        .entry(qualified.clone())
+                        .and_modify(|prev| {
+                            let prev_eff = prev.total_asserts.saturating_sub(prev.tautologies);
+                            let facts_eff = facts.total_asserts.saturating_sub(facts.tautologies);
+                            if (facts_eff, facts.strong_asserts, facts.fatal_asserts)
+                                < (prev_eff, prev.strong_asserts, prev.fatal_asserts)
+                            {
+                                *prev = facts.clone();
+                            }
+                        })
+                        .or_insert(facts);
                     let line = node.start_position().row + 1;
                     let end_line = node.end_position().row + 1;
                     self.facts.push_helper(
-                        super::TestHelperFacts::from_scan(fn_name, line, end_line, &helper_test),
+                        super::TestHelperFacts::from_scan(qualified, line, end_line, &helper_test),
                         dummy_calls,
                     );
                 }
@@ -437,8 +454,9 @@ impl<'a> Extractor<'a> {
     fn resolve_same_file_helpers(&mut self) {
         for (i, test) in self.facts.tests.iter_mut().enumerate() {
             if let Some(calls) = self.test_calls.get(i) {
+                let caller = test.name.clone();
                 super::resolve_test_same_file_helpers(test, calls, self.vocab, |call| {
-                    super::helper_through_wrappers(call, &self.helpers)
+                    super::scoped_helper_through_wrappers(&caller, call, &self.helpers)
                 });
             }
         }

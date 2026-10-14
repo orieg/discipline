@@ -118,35 +118,46 @@ pub fn match_tests(files: &[FileFacts]) -> (Vec<TestPair<'_>>, Vec<Located<'_>>,
             }
         }
 
-        // 2. Name similarity pairing within file for renames
+        // 2. Name similarity pairing within file for renames (same module first, then cross-module)
         let mut unmatched_head: Vec<(usize, &TestFn)> = head_tests
             .iter()
             .enumerate()
             .filter(|(i, _)| !taken[*i])
             .collect();
 
-        let mut still_unmatched_base = Vec::new();
-        for b in unmatched_base {
-            let best = unmatched_head
-                .iter()
-                .enumerate()
-                .map(|(idx, &(orig_i, h))| (idx, orig_i, h, name_similarity(&b.name, &h.name)))
-                .filter(|&(_, _, _, sim)| sim >= RENAME_NAME_SIMILARITY_THRESHOLD)
-                .max_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal));
-
-            if let Some((idx, orig_i, h, _sim)) = best {
-                taken[orig_i] = true;
-                unmatched_head.remove(idx);
-                pairs.push(TestPair {
-                    path: &ff.file.path,
-                    base: b,
-                    head: h,
-                    forced: false,
-                });
-            } else {
-                still_unmatched_base.push(b);
-            }
+        fn test_module(name: &str) -> &str {
+            name.rsplit_once("::").map_or("", |(m, _)| m)
         }
+
+        let mut remaining_base = unmatched_base;
+        for same_mod_only in [true, false] {
+            let mut next_unmatched_base = Vec::new();
+            for b in remaining_base {
+                let b_mod = test_module(&b.name);
+                let best = unmatched_head
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &(_, h))| !same_mod_only || test_module(&h.name) == b_mod)
+                    .map(|(idx, &(orig_i, h))| (idx, orig_i, h, name_similarity(&b.name, &h.name)))
+                    .filter(|&(_, _, _, sim)| sim >= RENAME_NAME_SIMILARITY_THRESHOLD)
+                    .max_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal));
+
+                if let Some((idx, orig_i, h, _sim)) = best {
+                    taken[orig_i] = true;
+                    unmatched_head.remove(idx);
+                    pairs.push(TestPair {
+                        path: &ff.file.path,
+                        base: b,
+                        head: h,
+                        forced: false,
+                    });
+                } else {
+                    next_unmatched_base.push(b);
+                }
+            }
+            remaining_base = next_unmatched_base;
+        }
+        let still_unmatched_base = remaining_base;
 
         file_unmatched.push(FileUnmatched {
             path: &ff.file.path,
@@ -192,18 +203,21 @@ pub fn match_tests(files: &[FileFacts]) -> (Vec<TestPair<'_>>, Vec<Located<'_>>,
         }
     }
 
-    // 4. Forced 1-to-1 pairing within file for remaining tests
+    // 4. Forced 1-to-1 pairing within file for remaining tests (preferring same module)
     for fu in &mut file_unmatched {
         while !fu.base.is_empty() && !fu.head.is_empty() {
-            let mut best_pair: Option<(usize, usize, f64)> = None;
+            let mut best_pair: Option<(usize, usize, (bool, f64))> = None;
             for (b_idx, b) in fu.base.iter().enumerate() {
+                let b_mod = b.name.rsplit_once("::").map_or("", |(m, _)| m);
                 for (h_idx, &(_, h)) in fu.head.iter().enumerate() {
-                    let sim = name_similarity(&b.name, &h.name);
+                    let h_mod = h.name.rsplit_once("::").map_or("", |(m, _)| m);
+                    let score = (b_mod == h_mod, name_similarity(&b.name, &h.name));
                     match best_pair {
-                        None => best_pair = Some((b_idx, h_idx, sim)),
-                        Some((_, _, best_sim)) => {
-                            if sim > best_sim {
-                                best_pair = Some((b_idx, h_idx, sim));
+                        None => best_pair = Some((b_idx, h_idx, score)),
+                        Some((_, _, best_score)) => {
+                            if (score.0, score.1.to_bits()) > (best_score.0, best_score.1.to_bits())
+                            {
+                                best_pair = Some((b_idx, h_idx, score));
                             }
                         }
                     }
