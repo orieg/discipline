@@ -93,6 +93,7 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel. Phase 8 Tier 0 a
 | [`gate-command-lint`](GATES.md#gate-command-lint) | agent-guard | markdown, shell | reject vacuous, masked, or inverted verification commands in plan files |
 | [`mechanism-sections`](GATES.md#mechanism-sections) | hygiene | markdown | require (inferred) or (verified: <target>) evidence tags in root cause sections |
 | [`citation-anchors`](GATES.md#citation-anchors) | hygiene | markdown, any | verify path:line@sha citations against quoted text and git history |
+| [`claim-labels`](GATES.md#claim-labels) | hygiene | markdown, any | require RUN or READ labels on verification claims in PR bodies, commits, and Markdown |
 <!-- /generated -->
 
 ---

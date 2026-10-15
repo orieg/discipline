@@ -9539,6 +9539,24 @@ proptest! {
                 && sections[0].claims[1].text.contains("(verified: tests/cache.rs)"))
         },
     ),
+    (
+        "claim-labels: distinguishes unlabeled claims, placeholder markers, and same-paragraph RUN/READ markers",
+        || {
+            use crate::guards::claim_labels::{
+                claim_label_patterns, extract_prose_units, is_label_placeholder,
+            };
+            let units = extract_prose_units(
+                "First paragraph (RUN: cargo test).\n\nSecond paragraph: all unit tests passed.\n",
+            );
+            let patterns = claim_label_patterns();
+            Ok(units.len() == 2
+                && !patterns.is_empty()
+                && is_label_placeholder("<command>")
+                && is_label_placeholder("file:line")
+                && !is_label_placeholder("cargo test")
+                && !is_label_placeholder("src/lib.rs:10"))
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

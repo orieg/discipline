@@ -62,6 +62,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`gate-command-lint`](#gate-command-lint) | agent-guard | **shipped** | markdown, shell | reject vacuous, masked, or inverted verification commands in plan files |
 | [`mechanism-sections`](#mechanism-sections) | hygiene | **shipped** | markdown | require (inferred) or (verified: <target>) evidence tags in root cause sections |
 | [`citation-anchors`](#citation-anchors) | hygiene | **shipped** | markdown, any | verify path:line@sha citations against quoted text and git history |
+| [`claim-labels`](#claim-labels) | hygiene | **shipped** | markdown, any | require RUN or READ labels on verification claims in PR bodies, commits, and Markdown |
 <!-- /generated -->
 
 ### Finding Codes
@@ -346,6 +347,9 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `archive-contents/source-map-shipped` | Source Map Shipped |
 | `manifest-sync/manifest-drift` | Manifest Synchronization Drift |
 | `version-lockstep/version-mismatch` | Version Declaration Lockstep Mismatch |
+| `claim-labels/claim-without-label` | Verification Claim Without Label |
+| `claim-labels/label-placeholder` | Verification Label Placeholder |
+| `claim-labels/read-label-unresolvable` | Unresolvable Read Label |
 | `engine/could-not-run` | Check Could Not Run |
 <!-- /generated -->
 
@@ -1286,6 +1290,19 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Unanchored citations (`path:line` without commit or quoted text) per `unanchored_citations` mode (`unanchored-citation`).
   - Mismatches in optional issue/PR tracker titles (`tracker-title-mismatch`).
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `diff_only`, `unanchored_citations`, `verify_tracker_titles`, `require_online`.
+
+#### `claim-labels`
+- **Rule:** Requires an explicit `RUN` or `READ` verification marker in the same paragraph or bullet item as any verification claim in pull-request bodies, commit messages, and added Markdown lines (`*.md`). Structured markers (`(RUN: <command>)`, `(READ: <path[:line]>)`) and bare markers (`(RUN)`, `(READ)`, `[RUN]`, `[READ]`, `` `RUN` ``, `` `READ` ``) are recognized. <!-- discipline:allow(claim-labels) -->
+- **Boundary:** It catches omission, not deceit. An author who avoids the listed phrases, or writes `(RUN: cargo test)` without running it, passes. The gate makes the honest path the easy one and gives a reviewer something to check; it does not show that the claim is true.
+- **Languages:** Markdown, commit messages, PR bodies.
+- **What it catches:**
+  - Verification claims matching the built-in or configured `extra_patterns` without a `RUN` or `READ` marker in the same prose paragraph or bullet item (`claim-without-label`).
+  - Placeholder markers such as `(RUN: TODO)` or `(READ: path/to/file)` (`label-placeholder`). <!-- discipline:allow(claim-labels) -->
+  - Structured `(READ: path[:line])` markers whose file does not exist in `HEAD`, escapes the repository root, or cites a line number past the end of the file (`read-label-unresolvable`). <!-- discipline:allow(claim-labels) -->
+- **Notes:** When a `(RUN: <command>)` marker names a command not vouched for by `[gates.command]`, a recorded session file under `<common git dir>/discipline/sessions/`, or the built-in test runner list (when neither is present), the gate emits an informational note rather than a finding. <!-- discipline:allow(claim-labels) -->
+- **Lifting directive:** `allow-claim-label: <subject> <reason>` (or `discipline:allow(claim-labels)` in Markdown).
+- **Default:** off, severity `warning`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `diff_only`, `extra_patterns`, `allow_patterns`.
 
 ---
 

@@ -84,6 +84,7 @@ pub fn generate_schema() -> Value {
             "gate-command-lint" => "#/$defs/GateCommandLintGate",
             "mechanism-sections" => "#/$defs/MechanismSectionsGate",
             "citation-anchors" => "#/$defs/CitationAnchorsGate",
+            "claim-labels" => "#/$defs/ClaimLabelsGate",
             _ => "#/$defs/BasicGate",
         };
         let desc = gate_info(g.id).map(|info| info.summary).unwrap_or("");
@@ -672,6 +673,11 @@ pub fn generate_schema() -> Value {
                 "unanchored_citations": { "type": "string", "enum": ["ignore", "warn", "reject"], "description": "How unanchored path:line citations are handled" },
                 "verify_tracker_titles": { "type": "boolean", "description": "Whether to verify claimed issue or pull request titles via forge API" },
                 "require_online": { "type": "boolean", "description": "Whether offline operation fails closed when verifying tracker titles" }
+            })),
+            "ClaimLabelsGate": gate_table(json!({
+                "diff_only": { "type": "boolean", "description": "Whether to inspect changed lines only rather than the whole file" },
+                "extra_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Additional regex patterns treated as verification claims" },
+                "allow_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Regex patterns that exempt a matching line from verification claim inspection" }
             }))
         }
     })
