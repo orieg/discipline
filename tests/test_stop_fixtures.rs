@@ -18,11 +18,12 @@ fn text<'a>(v: &'a Value, pointer: &str) -> &'a str {
 
 const ANNOUNCED: &str = "Now let me run the tests.";
 
-/// Claude Code and Qwen Code hand the hook the final message itself, with the flag that
-/// marks a stop a hook already continued and the session's background work.
+/// Claude Code, Qwen Code and Codex CLI hand the hook the final message itself, with the
+/// flag that marks a stop a hook already continued; Claude Code and Qwen Code also list
+/// the session's background work, while Codex CLI names the turn id.
 #[test]
 fn claude_code_and_qwen_payloads_carry_the_last_message_and_the_loop_flag() {
-    for agent in ["claude-code", "qwen"] {
+    for agent in ["claude-code", "qwen", "codex"] {
         let first = fixture(&format!("{agent}/stop.json"));
         assert_eq!(text(&first, "/hook_event_name"), "Stop", "{agent}");
         assert_eq!(
@@ -31,7 +32,12 @@ fn claude_code_and_qwen_payloads_carry_the_last_message_and_the_loop_flag() {
             "{agent}"
         );
         assert_eq!(first["stop_hook_active"], false, "{agent}");
-        assert!(first["background_tasks"].is_array(), "{agent}");
+        if agent == "codex" {
+            assert!(first.get("background_tasks").is_none(), "{agent}");
+            text(&first, "/turn_id");
+        } else {
+            assert!(first["background_tasks"].is_array(), "{agent}");
+        }
         text(&first, "/transcript_path");
         text(&first, "/session_id");
 

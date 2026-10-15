@@ -1,0 +1,11 @@
+{
+  "cwd": "/work/repo",
+  "hook_event_name": "Stop",
+  "last_assistant_message": "Now let me run the tests.",
+  "model": "model",
+  "permission_mode": "bypassPermissions",
+  "session_id": "00000000-0000-0000-0000-000000000000",
+  "stop_hook_active": false,
+  "transcript_path": "/home/user/.agent/transcript",
+  "turn_id": "00000000-0000-0000-0000-000000000000"
+}

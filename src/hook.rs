@@ -30,8 +30,9 @@
 //!   blocks per conversation (under the git directory) and lets the third through.
 //!   Docs: antigravity.google/docs/hooks.
 //! * Qwen Code: `PostToolUse` / `Stop` in `.qwen/settings.json`, Claude Code's
-//!   contract (exit 2, stderr, `stop_hook_active`). Docs:
-//!   qwenlm.github.io/qwen-code-docs/en/users/features/hooks.
+//!   contract (exit 2, stderr, `stop_hook_active`; in 0.25.2, `Stop` delivers
+//!   plain-text stderr on exit 2 to the model while `PostToolUse` records the block).
+//!   Docs: qwenlm.github.io/qwen-code-docs/en/users/features/hooks.
 //! * OpenCode: no command hook; `.opencode/plugins/discipline.js` runs this command
 //!   after an edit tool and appends a failure to the tool's output (exit 1, the report
 //!   on stdout, as for Aider). Docs: opencode.ai/docs/plugins.
@@ -1437,7 +1438,7 @@ pub fn config_for_opts(
                 + "\n",
         ),
         // Qwen Code's contract is Claude Code's (recorded live:
-        // tests/fixtures/pretool/qwen/); its tools are `write_file`, `edit`
+        // tests/fixtures/pretool/qwen/, tests/fixtures/stop/qwen/); its tools are `write_file`, `edit`
         // and `run_shell_command`.
         Agent::Qwen => (
             QWEN_SETTINGS,
@@ -4038,7 +4039,7 @@ mod tests {
 
     #[test]
     fn payload_reads_the_final_message_the_session_and_background_work() {
-        for agent in ["claude-code", "qwen"] {
+        for agent in ["claude-code", "qwen", "codex"] {
             let raw = std::fs::read_to_string(format!(
                 "{}/tests/fixtures/stop/{agent}/stop.json",
                 env!("CARGO_MANIFEST_DIR")
@@ -4054,6 +4055,20 @@ mod tests {
                 p.session.as_deref(),
                 Some("00000000-0000-0000-0000-000000000000")
             );
+        }
+        // Recorded PostToolUse payloads from live Codex CLI 0.162.1 (apply_patch) and
+        // Qwen Code 0.25.2 (edit) enforcing sessions (paths and ids replaced): neither
+        // is misread as a Stop or a stop_hook_active continuation.
+        for raw in [
+            r#"{"cwd":"/w","hook_event_name":"PostToolUse","model":"m","permission_mode":"bypassPermissions","session_id":"s-1","tool_input":{"command":"*** Begin Patch\n*** Update File: tests/a.rs\n@@\n*** End Patch"},"tool_name":"apply_patch","tool_response":"Exit code: 0\n","tool_use_id":"u-1","transcript_path":"/t","turn_id":"t-1"}"#,
+            r#"{"cwd":"/w","duration_ms":19,"hook_event_name":"PostToolUse","permission_mode":"yolo","prompt_id":"p-1","session_id":"s-2","timestamp":"2026-10-15T00:00:00.000Z","tool_call_id":"c-1","tool_input":{"file_path":"/w/tests/a.rs","new_string":"fn adds() {}\n","old_string":"fn adds() {\n    assert_eq!(1, 1);\n}"},"tool_name":"edit","tool_response":{"llmContent":"updated"},"tool_use_id":"u-2","transcript_path":"/t"}"#,
+        ] {
+            let p = parse_payload(raw);
+            assert!(
+                !p.stop && !p.stop_hook_active && !p.background_work,
+                "{p:?}"
+            );
+            assert_eq!(p.cwd.as_deref(), Some(Path::new("/w")));
         }
         for key in ["background_tasks", "session_crons", "crons"] {
             let listed = parse_payload(&format!(r#"{{"hook_event_name":"Stop","{key}":[{{}}]}}"#));

@@ -1,0 +1,4 @@
+{
+  "exit_code": 2,
+  "stderr": "discipline [turn/announced-action-not-taken]: you ended your turn after announcing an action and did not take it: `Now let me run the tests.`. Do it now, or say in one sentence why you cannot.\n"
+}
