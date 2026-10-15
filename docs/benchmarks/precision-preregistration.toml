@@ -1,0 +1,229 @@
+# Pre-registration for the public agent-PR precision benchmark (#482 Part B1 & B2).
+#
+# Locked before evaluation data collection. Any modification to floors, population
+# rules, or adjudication rules after evaluation data is inspected relabels affected
+# verdicts `INTERMEDIATE_amended_threshold_redesign` and requires a fresh evaluation band.
+
+[study]
+id = "agent-pr-precision-v1"
+status = "locked-pre-data"
+novelty_tier_claimed = "Characterisation"
+tier_justification = """
+Measures empirical precision and 95% Wilson score confidence intervals of shipped
+diff gates on a defined population of merged agent-authored pull requests in public
+repositories, compared against a naive file-path substitution twin. Claims a measured
+property of existing detectors on a bounded population rather than a causal mechanism
+or closed-form theoretical law.
+"""
+discipline_version = "0.20.3"
+configuration_mode = "default-with-test-entrypoints"
+primary_unit_of_analysis = "blocking-finding-error-severity"
+secondary_unit_of_analysis = "per-pull-request-block-rate"
+recall_claimed = false
+
+[population]
+visibility = "public-only"
+exclude_private_repositories = true
+exclude_named_consumer_repositories = true
+pull_request_state = "merged-only"
+band_separation = "disjoint-by-repository"
+pilot_repos = [
+  "astral-sh/uv",
+  "pydantic/pydantic",
+  "biomejs/biome",
+]
+evaluation_repos = [
+  "ruff-sh/ruff",
+  "denoland/deno",
+  "BurntSushi/ripgrep",
+  "tokio-rs/tokio",
+  "fastapi/fastapi",
+  "vitejs/vite",
+  "golang/go",
+  "junit-team/junit5",
+]
+agent_bot_logins = [
+  "copilot-swe-agent[bot]",
+  "Copilot",
+  "devin-ai-integration[bot]",
+  "sweep-ai[bot]",
+  "dependabot[bot]",
+  "renovate[bot]",
+  "claude[bot]",
+  "openhands-agent[bot]",
+  "codex-agent[bot]",
+]
+agent_coauthor_trailers = [
+  "Co-authored-by: Claude",
+  "Co-authored-by: GitHub Copilot",
+  "Co-authored-by: Cursor",
+  "Co-authored-by: OpenHands",
+  "Co-authored-by: Devin",
+  "Co-authored-by: Aider",
+  "Co-authored-by: Qwen",
+  "Co-authored-by: Gemini",
+]
+
+[adjudication]
+independent_raters = 2
+agreement_metric = "cohens_kappa"
+min_acceptable_kappa = 0.75
+blind_to_source_tool = true
+hash_contributor_and_rater_identities = true
+disagreement_resolution_rule = """
+All disagreements between Rater 1 and Rater 2 are adjudicated in a third pass by a
+designated tie-breaker reading the diff and finding location without seeing either
+rater's individual label; if the tie-breaker cannot establish whether the finding
+is a true defect from the diff and repository context alone, the final label is
+`cannot-tell`, which counts in the denominator (not as a true positive) under
+conservative precision scoring.
+"""
+
+[[adjudication.labels]]
+id = "true-positive"
+counts_as_success = true
+counts_in_denominator = true
+definition = """
+The flagged location in the pull request diff exhibits the code, test, workflow,
+or configuration defect described by the gate's rule, and a maintainer reviewing
+the change would want the defect repaired or explicitly waived before merge.
+"""
+worked_example = """
+An agent pull request modifies an existing test `test_parse_header` and deletes
+two `assert_eq!` statements while keeping the function body compiling; `assertion-reduction`
+flags `tests/header.rs:42` (`assertion-reduction/assertions-reduced`).
+"""
+
+[[adjudication.labels]]
+id = "false-positive"
+counts_as_success = false
+counts_in_denominator = true
+definition = """
+The flagged location does not exhibit the defect described by the gate's rule
+(for example, an equivalent assertion refactor that preserves verification strength,
+a benign identifier matching a heuristic pattern, or a parser misattribution).
+"""
+worked_example = """
+An agent pull request moves an unchanged test module lower in the same file without
+altering any test body or assertion; if a gate flags the moved tests as reduced,
+the finding is a `false-positive`.
+"""
+
+[[adjudication.labels]]
+id = "cannot-tell"
+counts_as_success = false
+counts_in_denominator = true
+definition = """
+The diff and surrounding file context at the head and base commits are insufficient
+to determine whether the change is a genuine defect without executing external tools
+or consulting private context unavailable in the public repository. Counted in the
+denominator as a non-success so ambiguity never inflates reported precision.
+"""
+worked_example = """
+A pull request removes a test function and replaces it in another crate not included
+in the local diff context where equivalence cannot be verified from the repository tree.
+"""
+
+[twin_baseline]
+id = "naive-sensitive-path-filter"
+rule = """
+Flag any agent-authored pull request that modifies an existing test file, a CI
+workflow file (`.github/workflows/**`, `.gitlab-ci.yml`, `.gitea/workflows/**`,
+`.forgejo/workflows/**`), or a linter/test-runner configuration file.
+"""
+winning_regime = """
+Recall and operational simplicity: zero AST parsing required, guaranteed 100% recall
+on any test-file or workflow-file erosion within those paths, and wins whenever a
+team prefers reviewing every agent touch to tests or CI over maintaining language-specific
+structural parsers.
+"""
+
+[power_and_bounds]
+confidence_level = 0.95
+statistical_power = 0.80
+target_half_width = 0.05
+insufficient_n_verdict = "insufficient-n"
+amendment_verdict = "INTERMEDIATE_amended_threshold_redesign"
+
+# Pinned values computed via `src/guards/perf/bounds.rs`:
+# - `sample_size_for_interval(0.95, 0.05, 0.95)` -> 83 findings (at assumed precision)
+# - `sample_size_for_interval(0.90, 0.05, 0.95)` -> 141 findings (at 0.90 floor; required_n so Wilson lower bound >= 0.90 at p=0.95)
+# - `sample_size_for_interval(0.88, 0.05, 0.95)` -> 164 findings (at assumed precision)
+# - `sample_size_for_interval(0.80, 0.05, 0.95)` -> 245 findings (at 0.80 floor; required_n so Wilson lower bound >= 0.80 at p=0.88)
+# - `minimum_detectable_difference(141, 141, 0.55, 0.95, 0.80)` -> 0.15894491346884432
+# - `minimum_detectable_difference(245, 245, 0.55, 0.95, 0.80)` -> 0.12241601541985098
+structural_assumed_precision = 0.95
+structural_assumed_precision_n = 83
+structural_required_n = 141
+heuristic_assumed_precision = 0.88
+heuristic_assumed_precision_n = 164
+heuristic_required_n = 245
+twin_assumed_baseline_precision = 0.55
+mdd_structural_vs_twin = 0.15894491346884432
+mdd_heuristic_vs_twin = 0.12241601541985098
+
+[[gate_floors]]
+class = "structural-ast-and-deterministic"
+precision_floor = 0.90
+assumed_precision = 0.95
+required_n = 141
+rationale = """
+Deterministic AST, manifest, lockfile, and workflow diff gates inspect syntax trees
+and structured configuration keys; blocking precision must clear a 0.90 Wilson 95%
+lower bound to avoid eroding developer trust in CI enforcement. Requiring n=141
+(sample_size_for_interval at the 0.90 floor) ensures that at assumed precision 0.95
+(k=134), the asymmetric Wilson 95% lower bound (0.9009) strictly clears 0.90.
+"""
+gates = [
+  "agents-md",
+  "assertion-reduction",
+  "vacuous-tests",
+  "ignored-tests",
+  "unsafe-safety-comment",
+  "deletion-rationale",
+  "agent-scratch",
+  "shell-secrets",
+  "issue-link",
+  "citation-metadata",
+  "config-integrity",
+  "stub-bodies",
+  "harness-tampering",
+  "error-swallowing",
+  "build-hooks",
+  "toolchain-config",
+  "sandbox-config",
+  "scope-confinement",
+  "suppression-delta",
+  "ci-integrity",
+  "ci-skip-set",
+  "test-floor",
+  "golden-output",
+  "dependency-delta",
+  "test-budget",
+  "pr-checklist",
+  "archive-contents",
+  "manifest-sync",
+  "version-lockstep",
+]
+
+[[gate_floors]]
+class = "heuristic-and-prose"
+precision_floor = 0.80
+assumed_precision = 0.88
+required_n = 245
+rationale = """
+Prose, regex-corpus, and secret/PII pattern gates operate over natural-language
+markdown, comments, and free-form strings where domain terminology creates higher
+inherent ambiguity; blocking precision must clear a 0.80 Wilson 95% lower bound.
+Requiring n=245 (sample_size_for_interval at the 0.80 floor) ensures that at assumed
+precision 0.88 (k=216), the Wilson 95% lower bound (0.8333) strictly clears 0.80.
+"""
+gates = [
+  "time-estimates",
+  "pii",
+  "instruction-smuggling",
+  "provenance-tags",
+  "gate-command-lint",
+  "mechanism-sections",
+  "citation-anchors",
+]
