@@ -196,6 +196,79 @@ pub static PRESETS: &[PresetDefinition] = &[
         snapshot_ignore: &[],
         description: "Go vulnerability database inspection",
     },
+    PresetDefinition {
+        id: "cargo-resolve-locked",
+        category: "supply-chain",
+        default_command: "cargo metadata --locked --format-version 1",
+        default_timeout_seconds: 120,
+        zero_items_pattern: None,
+        forbid_output: &[
+            "no matching package named",
+            "failed to select a version for",
+            "needs to be updated but --locked was passed",
+        ],
+        canary_command: None,
+        canary_expected_diagnostic: Some("failed to select a version for"),
+        policy_files: &["Cargo.toml", "Cargo.lock"],
+        snapshot: None,
+        snapshot_ignore: &[],
+        description: "Cargo manifest and lockfile resolution without executing build scripts",
+    },
+    PresetDefinition {
+        id: "npm-resolve-locked",
+        category: "supply-chain",
+        default_command: "npm ci --ignore-scripts --dry-run",
+        default_timeout_seconds: 120,
+        zero_items_pattern: None,
+        forbid_output: &[
+            "ETARGET",
+            "E404",
+            "No matching version found for",
+            "can only install packages when your package.json and package-lock.json",
+        ],
+        canary_command: None,
+        canary_expected_diagnostic: Some("No matching version found for"),
+        policy_files: &["package.json", "package-lock.json"],
+        snapshot: None,
+        snapshot_ignore: &[],
+        description: "Node.js npm lockfile resolution dry-run with install scripts disabled",
+    },
+    PresetDefinition {
+        id: "uv-resolve-locked",
+        category: "supply-chain",
+        default_command: "uv lock --check",
+        default_timeout_seconds: 120,
+        zero_items_pattern: None,
+        forbid_output: &[
+            "No solution found when resolving dependencies",
+            "was not found in the package registry",
+            "The lockfile at `uv.lock` needs to be updated",
+        ],
+        canary_command: None,
+        canary_expected_diagnostic: Some("was not found in the package registry"),
+        policy_files: &["pyproject.toml", "uv.lock"],
+        snapshot: None,
+        snapshot_ignore: &[],
+        description: "Python uv manifest and lockfile consistency and resolution check",
+    },
+    PresetDefinition {
+        id: "go-resolve-locked",
+        category: "supply-chain",
+        default_command: "go mod verify",
+        default_timeout_seconds: 120,
+        zero_items_pattern: None,
+        forbid_output: &[
+            "unknown revision",
+            "no matching versions for query",
+            "SECURITY ERROR",
+        ],
+        canary_command: None,
+        canary_expected_diagnostic: Some("no matching versions for query"),
+        policy_files: &["go.mod", "go.sum"],
+        snapshot: None,
+        snapshot_ignore: &[],
+        description: "Go module lockfile and checksum verification",
+    },
     // 5. Deterministic Concurrency Testing
     PresetDefinition {
         id: "loom",
@@ -305,6 +378,14 @@ pub fn resolve_preset(id: &str) -> Option<&'static PresetDefinition> {
     PRESETS.iter().find(|p| p.id == id)
 }
 
+/// Whether `id` is one of the package-manager lockfile resolution presets (#704).
+pub fn is_resolve_locked_preset(id: &str) -> bool {
+    matches!(
+        id,
+        "cargo-resolve-locked" | "npm-resolve-locked" | "uv-resolve-locked" | "go-resolve-locked"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,6 +405,10 @@ mod tests {
             "pip-audit",
             "npm-audit",
             "govulncheck",
+            "cargo-resolve-locked",
+            "npm-resolve-locked",
+            "uv-resolve-locked",
+            "go-resolve-locked",
             "loom",
             "miri",
             "cargo-public-api",
@@ -385,6 +470,21 @@ mod tests {
         let cargo_deny = resolve_preset("cargo-deny").unwrap();
         assert_eq!(cargo_deny.category, "supply-chain");
         assert_eq!(cargo_deny.policy_files, &["deny.toml"]);
+
+        for id in [
+            "cargo-resolve-locked",
+            "npm-resolve-locked",
+            "uv-resolve-locked",
+            "go-resolve-locked",
+        ] {
+            let p = resolve_preset(id).unwrap();
+            assert_eq!(p.category, "supply-chain");
+            assert!(is_resolve_locked_preset(id));
+            assert!(!p.forbid_output.is_empty());
+            assert!(p.canary_expected_diagnostic.is_some());
+            assert_eq!(p.policy_files.len(), 2);
+        }
+        assert!(!is_resolve_locked_preset("cargo-deny"));
     }
     /// `forbid_output`, `zero_items_pattern` and `canary_expected_diagnostic` are regular
     /// expressions with no literal fallback (#600). Every built-in default must compile,

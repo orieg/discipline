@@ -1601,7 +1601,7 @@ The supported way to integrate Discipline into higher-level workflows, automated
   - `0`: All gates passed (no violations exceeding configured severity thresholds).
   - `1`: Violations found (or policy refusal / overrides under `fail_on_overrides`).
   - `2`: Gate could not check (broken environment, missing base ref, syntax budget exhausted, or forge unreachable). On exit 2 under `--format json`, the report contains a `could_not_check` object naming the `reason`, `gate`, and error.
-- **Network Isolation:** Setting `DISCIPLINE_NO_NETWORK=1` guarantees all outbound network calls are forbidden (failing closed if remote forge access is required for a feature).
+- **Network Isolation:** Setting `DISCIPLINE_NO_NETWORK=1` guarantees all outbound network calls by `discipline` itself are forbidden (failing closed if remote forge access is required for a feature); it does not restrict child processes spawned by `[gates.command]` presets.
 
 ### Policy Refusals
 

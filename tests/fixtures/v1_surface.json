@@ -1462,6 +1462,29 @@
       "policy/max-inline-overrides-exceeded",
       "policy/max-overrides-exceeded"
     ],
+    "presets": [
+      "api-snapshot",
+      "base-tests",
+      "cargo-deny",
+      "cargo-mutants",
+      "cargo-public-api",
+      "cargo-resolve-locked",
+      "cargo-semver-checks",
+      "cobertura",
+      "go-resolve-locked",
+      "govulncheck",
+      "lcov",
+      "loom",
+      "miri",
+      "mutmut",
+      "npm-audit",
+      "npm-resolve-locked",
+      "pip-audit",
+      "pit",
+      "sanitizers",
+      "stryker",
+      "uv-resolve-locked"
+    ],
     "turn_checks": [
       "turn/announced-action-not-taken",
       "turn/tool-call-written-as-text"

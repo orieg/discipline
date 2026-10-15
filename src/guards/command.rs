@@ -583,6 +583,7 @@ fn get_base_min_count(ctx: &Context, name: &str) -> Result<Option<u64>> {
 struct ResolvedCommand {
     name: String,
     is_base_tests: bool,
+    is_resolve_locked: bool,
     command: String,
     timeout_seconds: u64,
     count_pattern: Option<String>,
@@ -965,10 +966,15 @@ fn resolve_table_command(
         let policy_files = policy_files_for(preset_def, snapshot.as_ref());
 
         let is_base = gate.preset.as_deref() == Some("base-tests");
+        let is_resolve_locked = gate
+            .preset
+            .as_deref()
+            .is_some_and(presets::is_resolve_locked_preset);
         refuse_snapshot_on_base_tests("`[gates.command]`", is_base, snapshot.as_ref())?;
         resolved.push(ResolvedCommand {
             name: gate.preset.clone().unwrap_or_else(|| "default".to_string()),
             is_base_tests: is_base,
+            is_resolve_locked,
             command: cmd,
             timeout_seconds: timeout,
             count_pattern: gate.count_pattern.clone(),
@@ -1082,6 +1088,11 @@ fn resolve_entry_commands(
         let policy_files = policy_files_for(preset_def, snapshot.as_ref());
 
         let is_base = entry.preset.as_deref() == Some("base-tests") || entry.name == "base-tests";
+        let is_resolve_locked = entry
+            .preset
+            .as_deref()
+            .is_some_and(presets::is_resolve_locked_preset)
+            || presets::is_resolve_locked_preset(&entry.name);
         refuse_snapshot_on_base_tests(
             &format!("command entry `{}`", entry.name),
             is_base,
@@ -1090,6 +1101,7 @@ fn resolve_entry_commands(
         resolved.push(ResolvedCommand {
             name: entry.name.clone(),
             is_base_tests: is_base,
+            is_resolve_locked,
             command: effective_cmd,
             timeout_seconds: timeout,
             count_pattern: entry
@@ -1267,6 +1279,64 @@ fn check_canary(
     Ok(())
 }
 
+/// Whether `output` from a `resolve-locked` package-manager command indicates that the
+/// package registry could not be reached (a network or service outage rather than a
+/// missing version), which must stop the check with exit 2 and no finding (#704).
+pub fn is_registry_unreachable(output: &str) -> bool {
+    static OUTAGE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"(?i)(?:failed to download|unable to get packages from source|spurious network error|couldn't resolve host|could not resolve host|connection refused|network is unreachable|operation timed out|temporary failure in name resolution|\bENOTFOUND\b|\bECONNREFUSED\b|\bECONNRESET\b|\bETIMEDOUT\b|\bEAI_AGAIN\b|network request to .* failed|client error \(connect\)|dns error|dial tcp|no such host|tls handshake timeout|502 bad gateway|503 service unavailable|504 gateway timeout)",
+        )
+        .unwrap()
+    });
+    OUTAGE.is_match(output)
+}
+
+/// Extracts the dependency name or `name@version` specifier from a `resolve-locked`
+/// package-manager diagnostic when a version or package does not exist (#704).
+/// Matches only package-identifier characters so arbitrary output text is never echoed.
+pub fn extract_unresolved_dependency(output: &str) -> Option<String> {
+    static PATTERNS: std::sync::LazyLock<Vec<regex::Regex>> = std::sync::LazyLock::new(|| {
+        vec![
+            // Cargo: `error: no matching package named `foo` found` or
+            // `error: failed to select a version for the requirement `foo = "^99.0.0"`` or
+            // `error: failed to select a version for `foo`.`
+            regex::Regex::new(r"no matching package named `([A-Za-z0-9._-]+)`").unwrap(),
+            regex::Regex::new(
+                r"failed to select a version for (?:the requirement )?`([A-Za-z0-9._-]+)",
+            )
+            .unwrap(),
+            // npm: `No matching version found for pkg@99.0.0.` or `'pkg@^99.0.0' is not in this registry`
+            regex::Regex::new(r"No matching version found for (@?[A-Za-z0-9._/-]+@[A-Za-z0-9._+-]+)")
+                .unwrap(),
+            regex::Regex::new(r"'(@?[A-Za-z0-9._/-]+(?:@[A-Za-z0-9.^~>=<*+-]+)?)' is not in this registry")
+                .unwrap(),
+            // uv: `Because pkg==99.0.0 was not found in the package registry` or `Because there is no version of pkg`
+            regex::Regex::new(
+                r"Because ([A-Za-z0-9._-]+(?:==[A-Za-z0-9._+-]+)?) was not found in the package registry",
+            )
+            .unwrap(),
+            regex::Regex::new(r"Because there is no version of ([A-Za-z0-9._-]+)").unwrap(),
+            // Go: `go: example.com/pkg@v99.0.0: ... unknown revision` or `no matching versions for query`
+            regex::Regex::new(
+                r"go:\s+([A-Za-z0-9._/-]+@[A-Za-z0-9._+-]+):[^\n]*(?:unknown revision|no matching versions for query)",
+            )
+            .unwrap(),
+        ]
+    });
+    for re in PATTERNS.iter() {
+        if let Some(caps) = re.captures(output) {
+            if let Some(m) = caps.get(1) {
+                let dep = m.as_str().trim_end_matches('.');
+                if !dep.is_empty() && dep.len() <= 128 {
+                    return Some(dep.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Judges a run by its exit status and its output patterns. Returns the count
 /// `count_pattern` read from the output, when it read one.
 fn check_run_output(
@@ -1276,6 +1346,25 @@ fn check_run_output(
 ) -> Result<Option<u64>> {
     let combined_output = format!("{}\n{}", run_res.stdout, run_res.stderr);
 
+    if item.is_resolve_locked
+        && !run_res.status.success()
+        && is_registry_unreachable(&combined_output)
+    {
+        return Err(tag(
+            Reason::Gate,
+            anyhow!(
+                "command `{}` could not reach the package registry",
+                item.name
+            ),
+        ));
+    }
+
+    let unresolved_dep = if item.is_resolve_locked {
+        extract_unresolved_dependency(&combined_output).map(|d| crate::report::text::agent_span(&d))
+    } else {
+        None
+    };
+
     // Check exit status
     if !run_res.status.success() {
         let code_str = run_res
@@ -1283,12 +1372,19 @@ fn check_run_output(
             .code()
             .map(|c| c.to_string())
             .unwrap_or_else(|| "signal".to_string());
-        command_violations.push(Violation::new(
-            &crate::findings::COMMAND_FAILED,
-            format!(
+        let message = match &unresolved_dep {
+            Some(dep) => format!(
+                "Command `{}` failed with exit status {code_str}: unresolved dependency {dep}.",
+                item.name
+            ),
+            None => format!(
                 "Command `{}` failed with exit status {code_str}.",
                 item.name
             ),
+        };
+        command_violations.push(Violation::new(
+            &crate::findings::COMMAND_FAILED,
+            message,
             "Fix errors reported by the command execution.",
         ));
     }
@@ -1298,13 +1394,20 @@ fn check_run_output(
         // Checked with the configuration before any gate runs; compiled the same way
         // here so a caller that skips that check gets the error, not a literal match.
         if output_pattern(pattern, &entry_key(None, "forbid_output"))?.is_match(&combined_output) {
+            let message = match &unresolved_dep {
+                Some(dep) => format!(
+                    "Command `{}` produced forbidden output matching pattern `{pattern}` for dependency {dep}.",
+                    item.name
+                ),
+                None => format!(
+                    "Command `{}` produced forbidden output matching pattern `{pattern}`.",
+                    item.name
+                ),
+            };
             command_violations.push(
                 Violation::new(
                     &crate::findings::FORBIDDEN_OUTPUT,
-                    format!(
-                        "Command `{}` produced forbidden output matching pattern `{pattern}`.",
-                        item.name
-                    ),
+                    message,
                     "Eliminate forbidden output patterns from verification command execution.",
                 )
                 .about(pattern),

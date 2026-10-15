@@ -20579,3 +20579,168 @@ verify_static_floor_with_report = false
     );
     assert!(run_disabled.violations("test-floor").is_empty());
 }
+
+#[test]
+fn command_presets_resolve_locked_e2e() {
+    let cases = [
+        (
+            "cargo-resolve-locked",
+            "error: failed to select a version for the requirement `serde = \"^99.0.0\"`",
+            "`serde`",
+            "error: failed to download from `https://index.crates.io/config.json`",
+        ),
+        (
+            "npm-resolve-locked",
+            "npm error notarget No matching version found for left-pad@99.0.0.",
+            "`left-pad@99.0.0`",
+            "npm error code ENOTFOUND",
+        ),
+        (
+            "uv-resolve-locked",
+            "Because httpx==99.0.0 was not found in the package registry and your project depends on httpx==99.0.0",
+            "`httpx==99.0.0`",
+            "error: Failed to download `httpx==0.27.0`",
+        ),
+        (
+            "go-resolve-locked",
+            "go: example.com/mod@v99.0.0: no matching versions for query \"v99.0.0\"",
+            "`example.com/mod@v99.0.0`",
+            "go: example.com/mod@v1.0.0: Get \"https://proxy.golang.org/...\": dial tcp: lookup proxy.golang.org: no such host",
+        ),
+    ];
+
+    let bin_dir = tempfile::tempdir().unwrap();
+    let write_script = |name: &str, body: &str| -> String {
+        let p = bin_dir.path().join(name);
+        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        p.to_str().unwrap().to_string()
+    };
+
+    for (preset, not_found_out, expected_dep_span, unreachable_out) in cases {
+        let pass_cmd = write_script(&format!("{preset}-pass.sh"), "echo ok; exit 0");
+        let missing_ver_cmd = write_script(
+            &format!("{preset}-missing.sh"),
+            &format!("echo '{not_found_out}' >&2; exit 1"),
+        );
+        let outage_cmd = write_script(
+            &format!("{preset}-outage.sh"),
+            &format!("echo '{unreachable_out}' >&2; exit 1"),
+        );
+
+        let repo = Repo::new();
+        repo.commit_base_files(
+            &[(
+                "discipline.toml",
+                &format!(
+                    r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.command]
+preset = "{preset}"
+canary_command = "{missing_ver_cmd}"
+"#
+                ),
+            )],
+            "base: configure resolve-locked preset with negative-control canary",
+        );
+
+        // 1. Pass: stand-in executable exits 0, canary fails with expected diagnostic.
+        let run_pass = repo.run(
+            &["check", "--base", "main", "--format", "json"],
+            &[("DISCIPLINE_COMMAND", &pass_cmd)],
+        );
+        assert_eq!(
+            run_pass.code, 0,
+            "{preset} pass failed: {}\n{}",
+            run_pass.stdout, run_pass.stderr
+        );
+
+        // 2. Version not found: exit 1, finding names the unresolved dependency.
+        let run_not_found = repo.run(
+            &["check", "--base", "main", "--format", "json"],
+            &[("DISCIPLINE_COMMAND", &missing_ver_cmd)],
+        );
+        assert_eq!(run_not_found.code, 1, "{preset} version-not-found");
+        let violations = run_not_found.violations("command");
+        assert!(
+            violations.len() >= 2,
+            "{preset} expected command-failed and forbidden-output: {violations:?}"
+        );
+        for v in &violations {
+            let msg = v["message"].as_str().unwrap_or("");
+            assert!(
+                msg.contains(expected_dep_span),
+                "{preset} violation message did not name {expected_dep_span}: {msg}"
+            );
+        }
+
+        // 3. Registry unreachable: exit 2 (could not check), zero findings.
+        let run_outage = repo.run(
+            &["check", "--base", "main", "--format", "json"],
+            &[("DISCIPLINE_COMMAND", &outage_cmd)],
+        );
+        assert_eq!(
+            run_outage.code, 2,
+            "{preset} registry-unreachable must exit 2: {}\n{}",
+            run_outage.stdout, run_outage.stderr
+        );
+        let outage_json = run_outage.json();
+        assert_eq!(outage_json["could_not_check"]["reason"], "gate");
+        assert_eq!(outage_json["errors"], 0);
+
+        // 4. Tool missing: exit 2 (tool-missing).
+        let run_missing_tool = repo.run(
+            &["check", "--base", "main", "--format", "json"],
+            &[(
+                "DISCIPLINE_COMMAND",
+                "/nonexistent/path/to/missing-package-manager",
+            )],
+        );
+        assert_eq!(run_missing_tool.code, 2, "{preset} tool-missing");
+        assert_eq!(
+            run_missing_tool.json()["could_not_check"]["reason"],
+            "tool-missing"
+        );
+
+        // 5. Canary negative control: if canary_command succeeds instead of failing with
+        // the preset's expected diagnostic, both canary findings are reported.
+        let bad_canary_repo = Repo::new();
+        bad_canary_repo.commit_base_files(
+            &[(
+                "discipline.toml",
+                &format!(
+                    r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.command]
+preset = "{preset}"
+canary_command = "{pass_cmd}"
+"#
+                ),
+            )],
+            "base: broken canary that exits 0",
+        );
+        let run_bad_canary = bad_canary_repo.run(
+            &["check", "--base", "main", "--format", "json"],
+            &[("DISCIPLINE_COMMAND", &pass_cmd)],
+        );
+        assert_eq!(run_bad_canary.code, 1, "{preset} broken canary");
+        let canary_violations = run_bad_canary.violations("command");
+        let canary_codes: Vec<&str> = canary_violations
+            .iter()
+            .filter_map(|v| v["code"].as_str())
+            .collect();
+        assert!(
+            canary_codes.contains(&"command/canary-command-succeeded")
+                && canary_codes.contains(&"command/canary-diagnostic-missing"),
+            "{preset} canary codes: {canary_codes:?}"
+        );
+    }
+}
