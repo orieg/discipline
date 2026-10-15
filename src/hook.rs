@@ -1577,16 +1577,15 @@ pub const OPENCODE_OBSERVE_NEVER_BLOCKS: &str =
 /// `discipline`, a release that does not know the arguments and any other error let the
 /// call through. The plugin writes nothing to the observation log, which the binary owns.
 ///
-/// The `export default` block is for OpenCode 2.x (RUN with 2.0.22: `setup` is called,
-/// the named export is not; `execute.before` and `execute.after` fired for `shell`,
+/// The `export default` block is for OpenCode 2.x (RUN with 2.0.22 and 2.0.28: `setup` is
+/// called, the named export is not; `execute.before` and `execute.after` fired for `shell`,
 /// `write` and `edit`, each call as recorded in
 /// `tests/fixtures/pretool/opencode/calls_v2.json`). Its session lease reads the event
 /// stream, in a loop detached from `setup` whose errors go nowhere in either mode: the
 /// lease never blocks a session. Its commands are each given their stdin, the check an
 /// empty one: `hook run` reads stdin to its end, and a 2.x server's own stdin does not
-/// end. Its registrations are optional calls, so an API without `tool.hook` registers
-/// nothing; enforcing, `setup` then says so on stderr (it does not throw: the API it
-/// would be refusing to load on is one this template was not verified against).
+/// end. In enforcing mode, an API without `tool.hook` throws from `setup` so the plugin
+/// fails closed rather than leaving tool calls unchecked.
 fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
     // A handler body, as written when enforcing; in observe mode, inside `try`/`catch`.
     let guard = |indent: usize, body: String| -> String {
@@ -1685,9 +1684,14 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
       if (!EDIT_TOOLS.includes(toolName)) return
       const none = new Response(\"\")
       const r = await withTimeout($`{cmd} < ${{none}}`.cwd(directory).nothrow().quiet(), CHECK_TIMEOUT_MS)
-      if (r.exitCode !== 0) {{
-        if (call.result) {{
-          call.result.output = (call.result.output ?? \"\") + \"\\n\\n\" + r.stdout.toString() + r.stderr.toString()
+      if (r.exitCode !== 0 && call.result) {{
+        const report = \"\\n\\n\" + r.stdout.toString() + r.stderr.toString()
+        if (Array.isArray(call.result.content)) {{
+          const part = call.result.content.find((c) => c?.type === \"text\" && typeof c.text === \"string\")
+          if (part) part.text += report
+          else call.result.content.push({{ type: \"text\", text: report.trimStart() }})
+        }} else if (typeof call.result.output === \"string\") {{
+          call.result.output += report
         }}
       }}
 "

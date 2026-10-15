@@ -1,5 +1,5 @@
 // Written by `discipline hook install --agent opencode`.
-// discipline-hook-file: mode=observe sha256=5608dd663291f270cd4176fc72a53cb978277183536453c75e387e17559df91f
+// discipline-hook-file: mode=observe sha256=0ab3f4de7c96c13dbc33c92d1b7167c70916890896dac0a71b1c18908293325a
 // When a session is created, takes this worktree's lease for it. Before an edit tool, refuses an edit outside this session's worktree (the tool call
 // is sent on stdin; a refusal throws, and the model reads the reason). After it, runs
 // the discipline check and, when it fails, appends the report to the tool's output so
@@ -97,9 +97,14 @@ export default {
         if (!EDIT_TOOLS.includes(toolName)) return
         const none = new Response("")
         const r = await withTimeout($`discipline hook run --agent opencode --observe < ${none}`.cwd(directory).nothrow().quiet(), CHECK_TIMEOUT_MS)
-        if (r.exitCode !== 0) {
-          if (call.result) {
-            call.result.output = (call.result.output ?? "") + "\n\n" + r.stdout.toString() + r.stderr.toString()
+        if (r.exitCode !== 0 && call.result) {
+          const report = "\n\n" + r.stdout.toString() + r.stderr.toString()
+          if (Array.isArray(call.result.content)) {
+            const part = call.result.content.find((c) => c?.type === "text" && typeof c.text === "string")
+            if (part) part.text += report
+            else call.result.content.push({ type: "text", text: report.trimStart() })
+          } else if (typeof call.result.output === "string") {
+            call.result.output += report
           }
         }
       } catch {}
