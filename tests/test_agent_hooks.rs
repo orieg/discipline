@@ -1929,14 +1929,21 @@ try { plugin.default.setup({}) } catch { setupThrew = true }
 console.error = realError
 
 const { readFileSync } = await import("node:fs")
-const [shellCall, writeCall, editCall] = JSON.parse(readFileSync("calls.json", "utf8")).calls
+const parsedCalls = JSON.parse(readFileSync("calls.json", "utf8"))
+const [shellCall, writeCall, editCall] = parsedCalls.calls
+const afterWriteCall = parsedCalls.after_write
+const afterWriteResult = {}
 const handlers = {
   "v1 session": () => v1.event({ event: { type: "session.created", properties: { sessionID: "s" } } }),
   "v1 pre-tool": () => v1["tool.execute.before"]({ tool: "edit", sessionID: "s" }, { args: { filePath: "a.rs" } }),
   "v1 post-edit": () => v1["tool.execute.after"]({ tool: "edit" }, { output: "" }),
   "v2 session": () => emit({ type: "session.execution.started", data: { sessionID: "s " + behaviour } }),
   "v2 pre-tool": () => v2["execute.before"]({ tool: "edit", sessionID: "s", input: { filePath: "a.rs" } }),
-  "v2 post-edit": () => v2["execute.after"]({ tool: "edit", result: { output: "" } }),
+  "v2 post-edit": async () => {
+    const c = structuredClone(afterWriteCall)
+    await v2["execute.after"](c)
+    afterWriteResult[behaviour] = c.result
+  },
   "v2 shell pre-tool": () => v2["execute.before"](structuredClone(shellCall)),
   "v2 write pre-tool": () => v2["execute.before"](structuredClone(writeCall)),
   "v2 edit pre-tool": () => v2["execute.before"](structuredClone(editCall)),
@@ -1991,6 +1998,9 @@ for (const stdin of stdins) v2Leases.push(JSON.parse(await stdin.text()))
 const v2LeaseCommands = ran.slice()
 
 behaviour = "exit-1"
+const legacyAfterCall = { tool: "edit", result: { output: "" } }
+await v2["execute.after"](legacyAfterCall)
+const legacyAfterOutput = legacyAfterCall.result.output
 ran.length = 0
 await v1["tool.execute.before"]({ tool: "read" }, { args: {} })
 await v2["execute.before"]({ tool: "read", input: {} })
@@ -2003,6 +2013,8 @@ console.log(JSON.stringify({
   setupThrew,
   registeredNotices,
   unregisteredNotices: notices.slice(registeredNotices),
+  afterWriteResult,
+  legacyAfterOutput,
   outcome,
   hangOutcome,
   commands,
@@ -2150,6 +2162,37 @@ fn run_opencode_plugin(observe: bool, test: &str) -> Option<serde_json::Value> {
         assert!(sent["cwd"].as_str().is_some_and(|c| !c.is_empty()), "{key}");
     }
     assert_eq!(v["sent"]["exit-0 v2 post-edit"][0], "", "{v}");
+    // OpenCode 2.0.28 `execute.after` (RUN): `call.result.output` is an object metadata
+    // record and `call.result.content` holds the model-visible text blocks. When the
+    // check exits non-zero, the report is appended to `content[0].text` while leaving
+    // the object-valued `output` intact.
+    let expected_meta = serde_json::json!({
+        "operation": "write",
+        "target": "/work/repo/a.txt",
+        "resource": "a.txt",
+        "existed": false
+    });
+    assert_eq!(
+        v["afterWriteResult"]["exit-0"]["output"], expected_meta,
+        "{v}"
+    );
+    assert_eq!(
+        v["afterWriteResult"]["exit-0"]["content"][0]["text"], "Created file successfully: a.txt",
+        "{v}"
+    );
+    assert_eq!(
+        v["afterWriteResult"]["exit-1"]["output"], expected_meta,
+        "{v}"
+    );
+    assert_eq!(
+        v["afterWriteResult"]["exit-1"]["content"][0]["text"],
+        "Created file successfully: a.txt\n\nrefused: outside this worktree",
+        "{v}"
+    );
+    assert_eq!(
+        v["legacyAfterOutput"], "\n\nrefused: outside this worktree",
+        "{v}"
+    );
     Some(v)
 }
 

@@ -1,8 +1,8 @@
 {
-  "agent": "OpenCode 2.0.22",
-  "event": "tool.hook(\"execute.before\") (plugin)",
-  "observed": "RUN 2026-10-08",
-  "note": "The call object each handler received, ids zeroed. The generated plugin maps it to {input: {tool, sessionID}, output: {args: call.input}, cwd}; shell_v2.json, write_v2.json and edit_v2.json are that mapping. The model chose relative paths for write and edit; the tools take absolute ones too.",
+  "agent": "OpenCode 2.0.22 / 2.0.28",
+  "event": "tool.hook(\"execute.before\") and tool.hook(\"execute.after\") (plugin)",
+  "observed": "RUN 2026-10-08, RUN 2026-10-15",
+  "note": "The call object each handler received, ids zeroed. The generated plugin maps execute.before to {input: {tool, sessionID}, output: {args: call.input}, cwd}; shell_v2.json, write_v2.json and edit_v2.json are that mapping. In execute.after (recorded on 2.0.28), call.result carries an object-valued .output and a .content array of {type: 'text', text} items that populate state.output.",
   "calls": [
     {
       "tool": "shell",
@@ -37,5 +37,31 @@
         "newString": "hey"
       }
     }
-  ]
+  ],
+  "after_write": {
+    "tool": "write",
+    "sessionID": "00000000-0000-0000-0000-000000000000",
+    "agent": "build",
+    "messageID": "00000000-0000-0000-0000-000000000000",
+    "id": "00000000-0000-0000-0000-000000000000",
+    "input": {
+      "content": "hello",
+      "path": "a.txt"
+    },
+    "status": "completed",
+    "result": {
+      "output": {
+        "operation": "write",
+        "target": "/work/repo/a.txt",
+        "resource": "a.txt",
+        "existed": false
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Created file successfully: a.txt"
+        }
+      ]
+    }
+  }
 }
