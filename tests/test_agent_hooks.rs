@@ -1747,6 +1747,26 @@ fn claude_code_bootstrap_pins_release_digests() {
     );
 }
 
+#[test]
+fn committed_claude_code_bootstrap_is_pinned_and_stamped() {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(discipline::hook::CLAUDE_BOOTSTRAP);
+    let script = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        script.contains(discipline::hook::PINNED_HEADER),
+        "committed bootstrap must be pinned via --pin-sums: {script}"
+    );
+    assert!(
+        !script.contains("SHA256SUMS\""),
+        "pinned bootstrap must not fetch SHA256SUMS from the same release URL: {script}"
+    );
+    assert_eq!(
+        discipline::hookfile::stamp_state(&script),
+        discipline::hookfile::Stamp::Unedited,
+        "committed bootstrap must carry a valid content digest stamp"
+    );
+}
+
 /// #476: on a shallow clone with committed changes where origin/main does not exist,
 /// hook run reports could_not_check, never a pass.
 #[test]
