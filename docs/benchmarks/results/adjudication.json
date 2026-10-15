@@ -1,0 +1,2736 @@
+{
+  "study_id": "agent-pr-precision-v1",
+  "blind_to_source_tool": true,
+  "hash_contributor_and_rater_identities": true,
+  "rater_1_id": "sha256:9852adf21a2dc8c4",
+  "rater_2_id": "sha256:e84e7db6e259c027",
+  "tie_breaker_id": "sha256:9633f381741ffcd9",
+  "total_items": 340,
+  "exact_agreement_count": 334,
+  "disagreement_count": 6,
+  "cohens_kappa": 0.963184,
+  "min_acceptable_kappa": 0.75,
+  "kappa_passed": true,
+  "adjudications": [
+    {
+      "item_id": "ITEM-0001",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0002",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0003",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0004",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0005",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0006",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0007",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0008",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0009",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0010",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0011",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "cannot-tell",
+      "agreed": false,
+      "tie_breaker_label": "cannot-tell",
+      "final_label": "cannot-tell"
+    },
+    {
+      "item_id": "ITEM-0012",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0013",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0014",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0015",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0016",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0017",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0018",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0019",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0020",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0021",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "true-positive",
+      "agreed": false,
+      "tie_breaker_label": "cannot-tell",
+      "final_label": "cannot-tell"
+    },
+    {
+      "item_id": "ITEM-0022",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0023",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0024",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0025",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0026",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0027",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0028",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0029",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0030",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0031",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0032",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0033",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0034",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0035",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0036",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0037",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0038",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0039",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0040",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0041",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0042",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0043",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0044",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0045",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0046",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0047",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0048",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0049",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0050",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0051",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0052",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0053",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0054",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0055",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0056",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0057",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0058",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0059",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0060",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0061",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0062",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0063",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0064",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0065",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0066",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0067",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0068",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0069",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0070",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0071",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0072",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "true-positive",
+      "agreed": false,
+      "tie_breaker_label": "false-positive",
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0073",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0074",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0075",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0076",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0077",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0078",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0079",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0080",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0081",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0082",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0083",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0084",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0085",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0086",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0087",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0088",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0089",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0090",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0091",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0092",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0093",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0094",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0095",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0096",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0097",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0098",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0099",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0100",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0101",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0102",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0103",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0104",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0105",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0106",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0107",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0108",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0109",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0110",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0111",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0112",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0113",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0114",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0115",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0116",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0117",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0118",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0119",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0120",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0121",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0122",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0123",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0124",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0125",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0126",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0127",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0128",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0129",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0130",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0131",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0132",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0133",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0134",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0135",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0136",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0137",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0138",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0139",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0140",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0141",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "true-positive",
+      "agreed": false,
+      "tie_breaker_label": "cannot-tell",
+      "final_label": "cannot-tell"
+    },
+    {
+      "item_id": "ITEM-0142",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0143",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0144",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0145",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0146",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0147",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0148",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0149",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0150",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0151",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0152",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0153",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0154",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0155",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0156",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0157",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0158",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0159",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0160",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0161",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0162",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0163",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0164",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0165",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0166",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0167",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0168",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0169",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0170",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0171",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0172",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0173",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0174",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0175",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0176",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0177",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0178",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0179",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0180",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0181",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0182",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0183",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0184",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0185",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0186",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0187",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0188",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0189",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0190",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0191",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0192",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0193",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0194",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0195",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0196",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0197",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0198",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0199",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0200",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0201",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0202",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0203",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0204",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0205",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0206",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0207",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0208",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0209",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0210",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0211",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0212",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0213",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0214",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0215",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0216",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0217",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "cannot-tell",
+      "agreed": false,
+      "tie_breaker_label": "cannot-tell",
+      "final_label": "cannot-tell"
+    },
+    {
+      "item_id": "ITEM-0218",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0219",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0220",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0221",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0222",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0223",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0224",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0225",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0226",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0227",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0228",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0229",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0230",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0231",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0232",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0233",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0234",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0235",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0236",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0237",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0238",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0239",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0240",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0241",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0242",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0243",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0244",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0245",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0246",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0247",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0248",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0249",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0250",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0251",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0252",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0253",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0254",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0255",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0256",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0257",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0258",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0259",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0260",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0261",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0262",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0263",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0264",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0265",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0266",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0267",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0268",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0269",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0270",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0271",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0272",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0273",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0274",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0275",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0276",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0277",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0278",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0279",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0280",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0281",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0282",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0283",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0284",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0285",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0286",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0287",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0288",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0289",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0290",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0291",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0292",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0293",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0294",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0295",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0296",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0297",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0298",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0299",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0300",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0301",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0302",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0303",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0304",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0305",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0306",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0307",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0308",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0309",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0310",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0311",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0312",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0313",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0314",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0315",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0316",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0317",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0318",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0319",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0320",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0321",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0322",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0323",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0324",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0325",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "true-positive",
+      "agreed": false,
+      "tie_breaker_label": "true-positive",
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0326",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0327",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0328",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0329",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0330",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0331",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0332",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0333",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0334",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0335",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0336",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0337",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0338",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0339",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0340",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    }
+  ]
+}

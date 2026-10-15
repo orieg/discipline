@@ -1,0 +1,623 @@
+{
+  "study_id": "agent-pr-precision-v1",
+  "discipline_version": "0.21.1",
+  "evaluated_commit": "b9cf939b79dc914b5158c3b9bd1393ff9f6d735b",
+  "host": "Apple M-series macOS 15 arm64",
+  "confidence_level": 0.95,
+  "cohens_kappa": 0.963184,
+  "pull_request_block_rates": {
+    "total_pull_requests": 233,
+    "discipline": {
+      "blocked": 58,
+      "n": 233,
+      "point_estimate": 0.248927,
+      "wilson_95_ci": [
+        0.197781,
+        0.308217
+      ]
+    },
+    "naive_sensitive_path_filter": {
+      "blocked": 130,
+      "n": 233,
+      "point_estimate": 0.55794,
+      "wilson_95_ci": [
+        0.493744,
+        0.620256
+      ]
+    }
+  },
+  "class_results": [
+    {
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 119,
+      "false_positives": 23,
+      "cannot_tell": 2,
+      "k": 119,
+      "n": 144,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 0.826389,
+      "wilson_95_ci": [
+        0.756266,
+        0.879551
+      ],
+      "verdict": "REJECTED"
+    },
+    {
+      "class": "heuristic-and-prose",
+      "true_positives": 3,
+      "false_positives": 43,
+      "cannot_tell": 0,
+      "k": 3,
+      "n": 46,
+      "required_n": 245,
+      "precision_floor": 0.8,
+      "point_estimate": 0.065217,
+      "wilson_95_ci": [
+        0.022428,
+        0.175027
+      ],
+      "verdict": "insufficient-n"
+    }
+  ],
+  "twin_baseline_result": {
+    "id": "naive-sensitive-path-filter",
+    "true_positives": 9,
+    "false_positives": 139,
+    "cannot_tell": 2,
+    "k": 9,
+    "n": 150,
+    "required_n": 141,
+    "precision_floor": 0.9,
+    "point_estimate": 0.06,
+    "wilson_95_ci": [
+      0.031884,
+      0.11009
+    ],
+    "verdict": "REJECTED",
+    "observed_mdd_vs_structural": 0.156046,
+    "observed_precision_delta_structural_vs_twin": 0.766389
+  },
+  "per_gate_results": [
+    {
+      "gate": "agent-scratch",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "agents-md",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "archive-contents",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "assertion-reduction",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 4,
+      "false_positives": 1,
+      "cannot_tell": 0,
+      "k": 4,
+      "n": 5,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 0.8,
+      "wilson_95_ci": [
+        0.375535,
+        0.963776
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "build-hooks",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "ci-integrity",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 66,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 66,
+      "n": 66,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 1.0,
+      "wilson_95_ci": [
+        0.944997,
+        1.0
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "ci-skip-set",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "citation-anchors",
+      "class": "heuristic-and-prose",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 245,
+      "precision_floor": 0.8,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "citation-metadata",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "config-integrity",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "deletion-rationale",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 3,
+      "false_positives": 2,
+      "cannot_tell": 0,
+      "k": 3,
+      "n": 5,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 0.6,
+      "wilson_95_ci": [
+        0.230724,
+        0.882379
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "dependency-delta",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 20,
+      "false_positives": 7,
+      "cannot_tell": 0,
+      "k": 20,
+      "n": 27,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 0.740741,
+      "wilson_95_ci": [
+        0.553214,
+        0.868296
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "error-swallowing",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 11,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 11,
+      "n": 11,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 1.0,
+      "wilson_95_ci": [
+        0.741167,
+        1.0
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "gate-command-lint",
+      "class": "heuristic-and-prose",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 245,
+      "precision_floor": 0.8,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "golden-output",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 13,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 13,
+      "n": 13,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 1.0,
+      "wilson_95_ci": [
+        0.771905,
+        1.0
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "harness-tampering",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "ignored-tests",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "instruction-smuggling",
+      "class": "heuristic-and-prose",
+      "true_positives": 3,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 3,
+      "n": 3,
+      "required_n": 245,
+      "precision_floor": 0.8,
+      "point_estimate": 1.0,
+      "wilson_95_ci": [
+        0.438503,
+        1.0
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "issue-link",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "manifest-sync",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "mechanism-sections",
+      "class": "heuristic-and-prose",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 245,
+      "precision_floor": 0.8,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "pii",
+      "class": "heuristic-and-prose",
+      "true_positives": 0,
+      "false_positives": 43,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 43,
+      "required_n": 245,
+      "precision_floor": 0.8,
+      "point_estimate": 0.0,
+      "wilson_95_ci": [
+        0.0,
+        0.08201
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "pr-checklist",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "provenance-tags",
+      "class": "heuristic-and-prose",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 245,
+      "precision_floor": 0.8,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "sandbox-config",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "scope-confinement",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "shell-secrets",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "stub-bodies",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 1,
+      "false_positives": 6,
+      "cannot_tell": 0,
+      "k": 1,
+      "n": 7,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 0.142857,
+      "wilson_95_ci": [
+        0.02568,
+        0.513128
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "suppression-delta",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "test-budget",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "test-floor",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 2,
+      "k": 0,
+      "n": 2,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 0.0,
+      "wilson_95_ci": [
+        0.0,
+        0.65762
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "time-estimates",
+      "class": "heuristic-and-prose",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 245,
+      "precision_floor": 0.8,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "toolchain-config",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 1,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 1,
+      "n": 1,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 1.0,
+      "wilson_95_ci": [
+        0.206549,
+        1.0
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "unsafe-safety-comment",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "vacuous-tests",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 7,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 7,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 0.0,
+      "wilson_95_ci": [
+        0.0,
+        0.35433
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "version-lockstep",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    }
+  ]
+}
