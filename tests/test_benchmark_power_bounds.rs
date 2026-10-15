@@ -403,3 +403,273 @@ fn test_preregistration_audit_bounds_match_committed_toml() {
         }
     }
 }
+
+#[derive(serde::Deserialize)]
+struct SummaryDoc {
+    study_id: String,
+    confidence_level: f64,
+    cohens_kappa: f64,
+    pull_request_block_rates: BlockRatesSection,
+    class_results: Vec<ClassResultEntry>,
+    twin_baseline_result: TwinResultEntry,
+    per_gate_results: Vec<PerGateResultEntry>,
+}
+
+#[derive(serde::Deserialize)]
+struct BlockRatesSection {
+    total_pull_requests: usize,
+    discipline: BlockRateArm,
+    naive_sensitive_path_filter: BlockRateArm,
+}
+
+#[derive(serde::Deserialize)]
+struct BlockRateArm {
+    blocked: usize,
+    n: usize,
+    point_estimate: f64,
+    wilson_95_ci: [f64; 2],
+}
+
+#[derive(serde::Deserialize)]
+struct ClassResultEntry {
+    class: String,
+    true_positives: usize,
+    false_positives: usize,
+    cannot_tell: usize,
+    k: usize,
+    n: usize,
+    required_n: usize,
+    precision_floor: f64,
+    point_estimate: f64,
+    wilson_95_ci: [f64; 2],
+    verdict: String,
+}
+
+#[derive(serde::Deserialize)]
+struct TwinResultEntry {
+    id: String,
+    true_positives: usize,
+    false_positives: usize,
+    cannot_tell: usize,
+    k: usize,
+    n: usize,
+    required_n: usize,
+    precision_floor: f64,
+    point_estimate: f64,
+    wilson_95_ci: [f64; 2],
+    verdict: String,
+    observed_mdd_vs_structural: f64,
+    observed_precision_delta_structural_vs_twin: f64,
+}
+
+#[derive(serde::Deserialize)]
+struct PerGateResultEntry {
+    gate: String,
+    true_positives: usize,
+    false_positives: usize,
+    cannot_tell: usize,
+    k: usize,
+    n: usize,
+    required_n: usize,
+    precision_floor: f64,
+    point_estimate: Option<f64>,
+    wilson_95_ci: Option<[f64; 2]>,
+    verdict: String,
+}
+
+#[derive(serde::Deserialize)]
+struct AdjudicationDoc {
+    study_id: String,
+    blind_to_source_tool: bool,
+    hash_contributor_and_rater_identities: bool,
+    total_items: usize,
+    exact_agreement_count: usize,
+    disagreement_count: usize,
+    cohens_kappa: f64,
+    min_acceptable_kappa: f64,
+    kappa_passed: bool,
+    adjudications: Vec<AdjudicationItem>,
+}
+
+#[derive(serde::Deserialize)]
+struct AdjudicationItem {
+    item_id: String,
+    rater_1_label: String,
+    rater_2_label: String,
+    agreed: bool,
+    tie_breaker_label: Option<String>,
+    final_label: String,
+}
+
+fn expected_verdict(
+    k: usize,
+    n: usize,
+    required_n: usize,
+    floor: f64,
+    ci_low: f64,
+) -> &'static str {
+    if n < required_n {
+        "insufficient-n"
+    } else if ci_low >= floor {
+        "PASS"
+    } else if (k as f64 / n as f64) >= floor {
+        "INTERMEDIATE_floor_within_ci"
+    } else {
+        "REJECTED"
+    }
+}
+
+#[test]
+fn test_benchmark_summary_results_match_rust_bounds() {
+    let summary_raw = std::fs::read_to_string("docs/benchmarks/results/summary.json")
+        .expect("docs/benchmarks/results/summary.json must exist");
+    let summary: SummaryDoc =
+        serde_json::from_str(&summary_raw).expect("summary.json must parse cleanly");
+
+    let adj_raw = std::fs::read_to_string("docs/benchmarks/results/adjudication.json")
+        .expect("docs/benchmarks/results/adjudication.json must exist");
+    let adj: AdjudicationDoc =
+        serde_json::from_str(&adj_raw).expect("adjudication.json must parse cleanly");
+
+    assert_eq!(summary.study_id, "agent-pr-precision-v1");
+    assert_eq!(adj.study_id, "agent-pr-precision-v1");
+    assert!(adj.blind_to_source_tool);
+    assert!(adj.hash_contributor_and_rater_identities);
+    assert_eq!(adj.adjudications.len(), adj.total_items);
+    assert_eq!(
+        adj.exact_agreement_count + adj.disagreement_count,
+        adj.total_items
+    );
+    assert!(adj.cohens_kappa >= adj.min_acceptable_kappa);
+    assert!(adj.kappa_passed);
+    assert!((summary.cohens_kappa - adj.cohens_kappa).abs() < 1e-6);
+
+    for item in &adj.adjudications {
+        assert!(!item.item_id.is_empty());
+        if item.agreed {
+            assert_eq!(item.rater_1_label, item.rater_2_label);
+            assert_eq!(item.final_label, item.rater_1_label);
+            assert!(item.tie_breaker_label.is_none());
+        } else {
+            assert_ne!(item.rater_1_label, item.rater_2_label);
+            assert_eq!(
+                item.tie_breaker_label.as_deref(),
+                Some(item.final_label.as_str())
+            );
+        }
+    }
+
+    // Verify PR block rate Wilson intervals
+    for arm in [
+        &summary.pull_request_block_rates.discipline,
+        &summary.pull_request_block_rates.naive_sensitive_path_filter,
+    ] {
+        assert_eq!(arm.n, summary.pull_request_block_rates.total_pull_requests);
+        let (low, high) =
+            wilson_score_interval(arm.blocked, arm.n, summary.confidence_level).unwrap();
+        assert!((arm.point_estimate - (arm.blocked as f64 / arm.n as f64)).abs() < 1e-6);
+        assert!((arm.wilson_95_ci[0] - low).abs() < 1e-6);
+        assert!((arm.wilson_95_ci[1] - high).abs() < 1e-6);
+    }
+
+    // Verify class-level Wilson intervals and verdicts
+    assert_eq!(summary.class_results.len(), 2);
+    for cr in &summary.class_results {
+        assert_eq!(cr.k, cr.true_positives);
+        assert_eq!(
+            cr.n,
+            cr.true_positives + cr.false_positives + cr.cannot_tell
+        );
+        let (low, high) = wilson_score_interval(cr.k, cr.n, summary.confidence_level).unwrap();
+        assert!((cr.point_estimate - (cr.k as f64 / cr.n as f64)).abs() < 1e-6);
+        assert!(
+            (cr.wilson_95_ci[0] - low).abs() < 1e-6,
+            "class {} low mismatch: {} vs {}",
+            cr.class,
+            cr.wilson_95_ci[0],
+            low
+        );
+        assert!(
+            (cr.wilson_95_ci[1] - high).abs() < 1e-6,
+            "class {} high mismatch: {} vs {}",
+            cr.class,
+            cr.wilson_95_ci[1],
+            high
+        );
+        let exp_v = expected_verdict(cr.k, cr.n, cr.required_n, cr.precision_floor, low);
+        assert_eq!(cr.verdict, exp_v, "class {} verdict mismatch", cr.class);
+    }
+
+    // Verify twin baseline Wilson interval, MDD, and verdict
+    let tr = &summary.twin_baseline_result;
+    assert_eq!(tr.id, "naive-sensitive-path-filter");
+    assert_eq!(tr.k, tr.true_positives);
+    assert_eq!(
+        tr.n,
+        tr.true_positives + tr.false_positives + tr.cannot_tell
+    );
+    let (t_low, t_high) = wilson_score_interval(tr.k, tr.n, summary.confidence_level).unwrap();
+    assert!((tr.point_estimate - (tr.k as f64 / tr.n as f64)).abs() < 1e-6);
+    assert!((tr.wilson_95_ci[0] - t_low).abs() < 1e-6);
+    assert!((tr.wilson_95_ci[1] - t_high).abs() < 1e-6);
+    assert_eq!(
+        tr.verdict,
+        expected_verdict(tr.k, tr.n, tr.required_n, tr.precision_floor, t_low)
+    );
+
+    let structural = &summary.class_results[0];
+    let obs_mdd =
+        minimum_detectable_difference(structural.n, tr.n, 0.55, summary.confidence_level, 0.80)
+            .unwrap();
+    assert!((tr.observed_mdd_vs_structural - obs_mdd).abs() < 1e-6);
+    assert!(
+        (tr.observed_precision_delta_structural_vs_twin
+            - (structural.point_estimate - tr.point_estimate))
+            .abs()
+            < 1e-6
+    );
+
+    // Verify per-gate Wilson intervals and verdicts
+    for gr in &summary.per_gate_results {
+        assert!(
+            discipline::config::gate_info(&gr.gate).is_some(),
+            "unknown gate {} in summary.json",
+            gr.gate
+        );
+        assert_eq!(gr.k, gr.true_positives);
+        assert_eq!(
+            gr.n,
+            gr.true_positives + gr.false_positives + gr.cannot_tell
+        );
+        if gr.n == 0 {
+            assert!(gr.point_estimate.is_none());
+            assert!(gr.wilson_95_ci.is_none());
+            assert_eq!(gr.verdict, "insufficient-n");
+        } else {
+            let (low, high) = wilson_score_interval(gr.k, gr.n, summary.confidence_level).unwrap();
+            let pt = gr
+                .point_estimate
+                .expect("point_estimate present when n > 0");
+            let ci = gr.wilson_95_ci.expect("wilson_95_ci present when n > 0");
+            assert!((pt - (gr.k as f64 / gr.n as f64)).abs() < 1e-6);
+            assert!(
+                (ci[0] - low).abs() < 1e-6,
+                "gate {} low mismatch: {} vs {}",
+                gr.gate,
+                ci[0],
+                low
+            );
+            assert!(
+                (ci[1] - high).abs() < 1e-6,
+                "gate {} high mismatch: {} vs {}",
+                gr.gate,
+                ci[1],
+                high
+            );
+            assert_eq!(
+                gr.verdict,
+                expected_verdict(gr.k, gr.n, gr.required_n, gr.precision_floor, low)
+            );
+        }
+    }
+}
