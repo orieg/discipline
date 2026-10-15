@@ -307,8 +307,10 @@ pub struct HookRunArgs {
 pub enum HookEvent {
     /// After an edit or at the end of a turn: check the change so far
     Check,
-    /// Before a tool runs: refuse an edit outside this session's worktree
+    /// Before a tool runs: refuse an edit outside this session's worktree or a repeated loop call
     PreTool,
+    /// After a tool runs: record a passing verification command on the current working-tree digest
+    PostTool,
     /// When a session starts: take this worktree's lease for it (never blocks)
     SessionStart,
 }

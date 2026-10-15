@@ -1397,6 +1397,7 @@ const GLOB_LIST_KEYS: &[&str] = &[
     "required_paths",
     "constant_fallback_paths",
     "plan_paths",
+    "verify_paths",
 ];
 
 /// One step of the way to a configured value: a table key or an array index.
@@ -1463,7 +1464,7 @@ fn invalid_globs(
     }
 }
 
-/// Every glob list that does not compile in `[tests]` or in the table of an enabled gate
+/// Every glob list that does not compile in `[tests]`, `[hooks]`, or in the table of an enabled gate
 /// among `gate_ids`, in the order the run reports them.
 fn unusable_globs(
     config: &DisciplineConfig,
@@ -1477,6 +1478,9 @@ fn unusable_globs(
     let mut found = Vec::new();
     if let Some(tests) = value.get("tests") {
         invalid_globs(tests, "tests", &mut key_path(&["tests"]), &mut found);
+    }
+    if let Some(hooks) = value.get("hooks") {
+        invalid_globs(hooks, "hooks", &mut key_path(&["hooks"]), &mut found);
     }
     for (path, key, glob, e) in found.drain(..) {
         let error = crate::could_not_check::tag(
@@ -2187,8 +2191,9 @@ mod tests {
         "forbid_output",
         "forbidden_patterns",
         "snapshot_ignore",
-        // Command-line arguments.
+        // Command-line arguments and command strings.
         "args",
+        "commands",
         // Literal files or directories.
         "citation_source_paths",
         "required_suites",
@@ -2345,7 +2350,7 @@ mod tests {
     /// How many string lists hold neither globs nor patterns (`NOT_GLOB_LISTS` without
     /// the pattern keys). A list added there changes this count, which is where its
     /// author says whether its entries are regular expressions.
-    const LISTS_OF_NEITHER_GLOBS_NOR_PATTERNS: usize = 35;
+    const LISTS_OF_NEITHER_GLOBS_NOR_PATTERNS: usize = 36;
 
     /// Every string and string-list property of the configuration schema:
     /// `(name, is a list, description)`.

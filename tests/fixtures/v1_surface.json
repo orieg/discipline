@@ -280,6 +280,7 @@
       "hook run --agent=opencode",
       "hook run --agent=qwen",
       "hook run --event=check",
+      "hook run --event=post-tool",
       "hook run --event=pre-tool",
       "hook run --event=session-start"
     ],
@@ -886,6 +887,22 @@
       "hooks.premature-stop.max_per_session",
       "hooks.premature-stop.mode",
       "hooks.premature-stop.tool_call_as_text",
+      "hooks.tool-loop",
+      "hooks.tool-loop.enabled",
+      "hooks.tool-loop.max_identical_calls",
+      "hooks.tool-loop.max_identical_shell_calls",
+      "hooks.tool-loop.mode",
+      "hooks.verified-stop",
+      "hooks.verified-stop.commands",
+      "hooks.verified-stop.commands.items",
+      "hooks.verified-stop.commands.reset",
+      "hooks.verified-stop.enabled",
+      "hooks.verified-stop.max_per_session",
+      "hooks.verified-stop.mode",
+      "hooks.verified-stop.run_at_stop",
+      "hooks.verified-stop.verify_paths",
+      "hooks.verified-stop.verify_paths.items",
+      "hooks.verified-stop.verify_paths.reset",
       "languages",
       "languages.c",
       "languages.c.function_macros",
@@ -1487,7 +1504,8 @@
     ],
     "turn_checks": [
       "turn/announced-action-not-taken",
-      "turn/tool-call-written-as-text"
+      "turn/tool-call-written-as-text",
+      "turn/unverified-dirty-tree"
     ]
   }
 }

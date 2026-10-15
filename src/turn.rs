@@ -27,6 +27,9 @@ pub enum TurnKind {
     AnnouncedAction,
     /// The final message ends in tool-call markup written out as text, so no call ran.
     ToolCallAsText,
+    /// The turn ended on a changed working tree with no passing verification record for
+    /// the current working-tree digest (`#700`).
+    UnverifiedDirtyTree,
 }
 
 /// The first segment of every code here. Neither a gate id nor `policy`
@@ -34,13 +37,18 @@ pub enum TurnKind {
 pub const NAMESPACE: &str = "turn";
 
 impl TurnKind {
-    pub const ALL: [TurnKind; 2] = [TurnKind::AnnouncedAction, TurnKind::ToolCallAsText];
+    pub const ALL: [TurnKind; 3] = [
+        TurnKind::AnnouncedAction,
+        TurnKind::ToolCallAsText,
+        TurnKind::UnverifiedDirtyTree,
+    ];
 
     /// The stable code, frozen once released (docs/ARCHITECTURE.md §3.2).
     pub fn code(self) -> &'static str {
         match self {
             TurnKind::AnnouncedAction => "turn/announced-action-not-taken",
             TurnKind::ToolCallAsText => "turn/tool-call-written-as-text",
+            TurnKind::UnverifiedDirtyTree => "turn/unverified-dirty-tree",
         }
     }
 }
@@ -67,6 +75,11 @@ impl Verdict {
             TurnKind::ToolCallAsText => format!(
                 "discipline [{}]: your last message contains a tool call written out as text, so it did not run. Make the call with the tool, or say in one sentence why you cannot.\n",
                 self.kind.code()
+            ),
+            TurnKind::UnverifiedDirtyTree => format!(
+                "discipline [{}]: you ended your turn on a changed working tree with no passing verification run for this tree (`{}`). Run the verification command and confirm it passes before ending your turn.\n",
+                self.kind.code(),
+                self.sentence
             ),
         }
     }
@@ -271,6 +284,7 @@ mod tests {
             let kind = verdict.as_ref().map(|v| match v.kind {
                 TurnKind::AnnouncedAction => "announced_action",
                 TurnKind::ToolCallAsText => "tool_call_as_text",
+                TurnKind::UnverifiedDirtyTree => "unverified_dirty_tree",
             });
             if verdict.is_some() != expected || (expected && kind != c.kind.as_deref()) {
                 wrong.push(format!(

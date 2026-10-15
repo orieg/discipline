@@ -501,7 +501,7 @@ impl Default for DirectivesConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DisciplineConfig {
     #[serde(default)]
@@ -659,6 +659,10 @@ pub fn apply_key_aliases(value: &mut Value, aliases: &[KeyAlias]) -> Result<Vec<
 pub struct HooksConfig {
     #[serde(rename = "premature-stop")]
     pub premature_stop: PrematureStopConfig,
+    #[serde(rename = "verified-stop")]
+    pub verified_stop: VerifiedStopConfig,
+    #[serde(rename = "tool-loop")]
+    pub tool_loop: ToolLoopConfig,
 }
 
 /// At the end of a turn: a final message that announces an action the agent did not
@@ -685,7 +689,63 @@ impl Default for PrematureStopConfig {
     }
 }
 
-/// What a matched end of turn does.
+/// At the end of a turn: require that a configured verification command has passed on the
+/// current working-tree digest when in-scope files have changed (`#700`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct VerifiedStopConfig {
+    pub enabled: bool,
+    pub mode: StopMode,
+    /// Most stops refused in one session; the next one is let through.
+    pub max_per_session: u32,
+    /// Also run the base ref's verification commands at Stop when no witness record
+    /// exists for the current working-tree digest.
+    pub run_at_stop: bool,
+    /// Path globs whose changes require a passing verification run (empty = all non-doc paths).
+    pub verify_paths: Vec<String>,
+    /// Vouched verification commands (empty = use `[gates.command]` / `[gates.test-floor]`
+    /// commands from the base ref, or the standard test runner defaults).
+    pub commands: Vec<String>,
+}
+
+impl Default for VerifiedStopConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: StopMode::Observe,
+            max_per_session: 3,
+            run_at_stop: false,
+            verify_paths: Vec::new(),
+            commands: Vec::new(),
+        }
+    }
+}
+
+/// Before a tool call runs: refuse identical consecutive tool calls made without any
+/// working-tree change in between (`#701`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ToolLoopConfig {
+    pub enabled: bool,
+    pub mode: StopMode,
+    /// Most identical consecutive non-shell tool calls allowed before refusing.
+    pub max_identical_calls: u32,
+    /// Most identical consecutive shell tool calls allowed before refusing.
+    pub max_identical_shell_calls: u32,
+}
+
+impl Default for ToolLoopConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: StopMode::Observe,
+            max_identical_calls: 3,
+            max_identical_shell_calls: 6,
+        }
+    }
+}
+
+/// What a matched end of turn or pre-tool loop check does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum StopMode {

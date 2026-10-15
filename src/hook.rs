@@ -466,11 +466,17 @@ pub fn run_with(
         Some(b) => CheckSide::Base(b),
         None => CheckSide::Default,
     };
+    if event == Event::Edit {
+        witness_post_tool(agent, &dir, &base, stdin);
+    }
     let run = run_check(&dir, &base)?;
     let reason = could_not_check_reason(&run);
     // A change that passed, at the end of a turn: the turn itself is judged, when the
     // base ref's configuration asks for it. A change with findings is already an answer.
     if run.code == 0 && event == Event::Stop {
+        if let Some(out) = verified_stop(agent, &dir, &base, &payload, observe) {
+            return Ok(out);
+        }
         if let Some(out) = premature_stop(agent, &dir, &base, &payload, observe) {
             return Ok(out);
         }
@@ -555,11 +561,12 @@ fn refusal_for(agent: Agent, text: &str) -> HookOutput {
     }
 }
 
-/// `[hooks.premature-stop]` of the configuration on the base side of the change: the
-/// merge base of `HEAD` with the base the check measures against. `None` when that
-/// cannot be established (no base, no `discipline.toml` there, one that does not load):
-/// the check is opt-in, so what cannot be shown to be switched on is off.
-fn base_premature_stop(dir: &Path, side: &CheckSide) -> Option<crate::config::PrematureStopConfig> {
+/// The configuration on the base side of the change: the merge base of `HEAD` with the
+/// base the check measures against. `None` when that cannot be established.
+pub(crate) fn base_discipline_config(
+    dir: &Path,
+    side: &CheckSide,
+) -> Option<crate::config::DisciplineConfig> {
     let repo = crate::gitctx::discover_repository(dir).ok()?;
     let head = repo.head().ok()?.peel_to_commit().ok()?.id();
     let named = match side {
@@ -587,7 +594,316 @@ fn base_premature_stop(dir: &Path, side: &CheckSide) -> Option<crate::config::Pr
         &crate::config::Overrides::default(),
     )
     .ok()
-    .map(|c| c.hooks.premature_stop)
+}
+
+/// `[hooks.premature-stop]` of the configuration on the base side of the change: the
+/// merge base of `HEAD` with the base the check measures against. `None` when that
+/// cannot be established (no base, no `discipline.toml` there, one that does not load):
+/// the check is opt-in, so what cannot be shown to be switched on is off.
+fn base_premature_stop(dir: &Path, side: &CheckSide) -> Option<crate::config::PrematureStopConfig> {
+    base_discipline_config(dir, side).map(|c| c.hooks.premature_stop)
+}
+
+fn side_base_name(side: &CheckSide) -> Option<&str> {
+    match side {
+        CheckSide::Base(b) => Some(b.as_str()),
+        CheckSide::Default => None,
+    }
+}
+
+/// Extracts `(exit_code, combined_output)` from a post-tool hook payload.
+fn parse_post_tool_outcome(v: &serde_json::Value) -> (Option<i32>, String) {
+    let mut exit_code: Option<i32> = None;
+    for ptr in [
+        "/tool_response/exit_code",
+        "/tool_response/exitCode",
+        "/tool_response/code",
+        "/tool_result/exit_code",
+        "/tool_result/exitCode",
+        "/tool_result/code",
+        "/toolResult/exitCode",
+        "/toolResult/exit_code",
+        "/toolResult/code",
+        "/output/exitCode",
+        "/output/exit_code",
+        "/output/metadata/exit",
+        "/output/metadata/exitCode",
+        "/exit_code",
+        "/exitCode",
+        "/code",
+    ] {
+        if let Some(n) = v.pointer(ptr).and_then(|x| x.as_i64()) {
+            exit_code = Some(n as i32);
+            break;
+        }
+    }
+    if exit_code.is_none() {
+        if let Some(res_type) = v.pointer("/toolResult/resultType").and_then(|x| x.as_str()) {
+            exit_code = Some(if res_type == "success" { 0 } else { 1 });
+        }
+    }
+    for err_ptr in [
+        "/tool_response/is_error",
+        "/tool_response/interrupted",
+        "/tool_result/is_error",
+        "/is_error",
+        "/error",
+    ] {
+        if v.pointer(err_ptr).and_then(|x| x.as_bool()) == Some(true) {
+            exit_code = Some(1);
+        }
+    }
+    if exit_code.is_none()
+        && ["/tool_response", "/tool_result", "/toolResult", "/output"]
+            .iter()
+            .any(|p| v.pointer(p).is_some())
+    {
+        exit_code = Some(0);
+    }
+
+    let mut output = String::new();
+    for ptr in [
+        "/tool_response/stdout",
+        "/tool_response/stderr",
+        "/tool_response/output",
+        "/tool_result/stdout",
+        "/tool_result/stderr",
+        "/tool_result/output",
+        "/toolResult/textResultForLlm",
+        "/toolResult/output",
+        "/output/output",
+        "/stdout",
+        "/stderr",
+    ] {
+        if let Some(s) = v.pointer(ptr).and_then(|x| x.as_str()) {
+            if !output.is_empty() {
+                output.push('\n');
+            }
+            output.push_str(s);
+        }
+    }
+    if let Some(s) = v.pointer("/tool_response").and_then(|x| x.as_str()) {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(s);
+    }
+    (exit_code, output)
+}
+
+/// Witness a completed post-tool call: when it is a vouched verification command that
+/// exited 0 with non-vacuous output, record a [`crate::session::VerificationRecord`] on
+/// the current working-tree digest.
+fn witness_post_tool(agent: Agent, dir: &Path, side: &CheckSide, stdin: &str) {
+    let Some(call) = crate::pretool::parse(agent, stdin) else {
+        return;
+    };
+    let Some(cmd) = call.command.as_deref() else {
+        return;
+    };
+    let Some(session) = call.session.as_deref() else {
+        return;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(stdin) else {
+        return;
+    };
+    let (exit_code, output) = parse_post_tool_outcome(&v);
+    if exit_code != Some(0) || crate::session::output_is_vacuous(&output) {
+        return;
+    }
+    let base_cfg = base_discipline_config(dir, side).unwrap_or_default();
+    let vouched = crate::session::vouched_commands(&base_cfg);
+    let Some(command_id) = crate::session::matches_vouched_command(cmd, &vouched) else {
+        return;
+    };
+    let Ok(Some(digest)) = crate::session::tree_digest(
+        dir,
+        side_base_name(side),
+        &base_cfg.hooks.verified_stop.verify_paths,
+    ) else {
+        return;
+    };
+    let Ok(store) = crate::session::SessionStore::open(dir) else {
+        return;
+    };
+    let now = crate::lease::now();
+    if let Err(err) = store.update(session, agent.id(), now, |state| {
+        state.record_verification(crate::session::VerificationRecord {
+            tree_digest: digest,
+            command_id,
+            exit: 0,
+            at: now,
+        });
+    }) {
+        eprintln!("discipline: cannot update session verification record: {err}");
+    }
+}
+
+/// `hook run --event post-tool`: witness a completed tool call and record a passing
+/// verification run for the current working-tree digest without running `discipline check`.
+pub fn post_tool_with(
+    agent: Agent,
+    base: Option<String>,
+    stdin: &str,
+    if_configured: bool,
+) -> HookOutput {
+    let pass = HookOutput {
+        stdout: String::new(),
+        stderr: String::new(),
+        code: 0,
+    };
+    let payload = parse_payload(stdin);
+    let dir = payload
+        .cwd
+        .filter(|d| d.is_dir())
+        .unwrap_or_else(|| PathBuf::from("."));
+    if if_configured && !configured(&dir) {
+        return pass;
+    }
+    let side = match base {
+        Some(b) => CheckSide::Base(b),
+        None => CheckSide::Default,
+    };
+    witness_post_tool(agent, &dir, &side, stdin);
+    pass
+}
+
+/// `[hooks.verified-stop]` (`#700`): at the end of a turn, once the change check has
+/// passed, check that a vouched verification command has passed on the current
+/// working-tree digest when in-scope files have changed.
+fn verified_stop(
+    agent: Agent,
+    dir: &Path,
+    side: &CheckSide,
+    payload: &Payload,
+    observe: bool,
+) -> Option<HookOutput> {
+    if payload.background_work {
+        return None;
+    }
+    let base_cfg = base_discipline_config(dir, side)?;
+    let config = &base_cfg.hooks.verified_stop;
+    if !config.enabled {
+        return None;
+    }
+    let digest = match crate::session::tree_digest(dir, side_base_name(side), &config.verify_paths)
+    {
+        Ok(None) => return None,
+        Ok(Some(d)) => d,
+        Err(_) => "unreadable-tree".to_string(),
+    };
+
+    let now = crate::lease::now();
+    let session_id = payload
+        .session
+        .as_deref()
+        .or(payload.conversation.as_deref());
+    let store = crate::session::SessionStore::open(dir).ok();
+    let session_state = session_id
+        .zip(store.as_ref())
+        .and_then(|(s, st)| st.load(s, agent.id(), now));
+
+    if session_state
+        .as_ref()
+        .is_some_and(|s| s.has_verified(&digest))
+    {
+        return None;
+    }
+
+    let vouched = crate::session::vouched_commands(&base_cfg);
+    if config.run_at_stop && digest != "unreadable-tree" && !vouched.is_empty() {
+        let mut all_passed = true;
+        for cmd in &vouched {
+            match crate::guards::command::run_command_bounded("verified-stop", cmd, 300, dir) {
+                Ok(res)
+                    if res.status.success()
+                        && !crate::session::output_is_vacuous(&format!(
+                            "{}\n{}",
+                            res.stdout, res.stderr
+                        )) => {}
+                _ => {
+                    all_passed = false;
+                    break;
+                }
+            }
+        }
+        if all_passed {
+            if let Some((s, st)) = session_id.zip(store.as_ref()) {
+                let first_cmd = vouched[0].clone();
+                if let Err(err) = st.update(s, agent.id(), now, |state| {
+                    state.record_verification(crate::session::VerificationRecord {
+                        tree_digest: digest,
+                        command_id: first_cmd,
+                        exit: 0,
+                        at: now,
+                    });
+                }) {
+                    eprintln!("discipline: cannot update session verification record: {err}");
+                }
+            }
+            return None;
+        }
+    }
+
+    let code = crate::turn::TurnKind::UnverifiedDirtyTree.code();
+    let expected_cmd = vouched.first().map(String::as_str).unwrap_or("cargo test");
+    let mut out = translate_event(agent, Event::Stop, 0, "", "");
+    if observe || config.mode == crate::config::StopMode::Observe {
+        let logged = append_observation(
+            dir,
+            &serde_json::json!({
+                "time": now,
+                "agent": agent.id(),
+                "event": "stop",
+                "verdict": "unverified-dirty-tree",
+                "reason": "no passing verification for this tree",
+                "codes": [code],
+            }),
+        );
+        out.stderr = format!(
+            "discipline (observe mode, not enforced): would block: no passing verification for this tree ({code}).{}\n",
+            logged
+                .map(|p| format!(" Logged to {}.", p.display()))
+                .unwrap_or_default()
+        );
+        return Some(out);
+    }
+
+    let so_far = session_state.as_ref().map(|s| s.stop_refusals).unwrap_or(0);
+    let let_through = if payload.stop_hook_active || payload.execution_num.is_some_and(|n| n > 0) {
+        Some("the agent's loop guard")
+    } else if so_far >= config.max_per_session {
+        Some("this session's cap (hooks.verified-stop.max_per_session)")
+    } else {
+        match session_id.zip(store.as_ref()) {
+            Some((s, st)) => {
+                if st
+                    .update(s, agent.id(), now, |state| {
+                        state.stop_refusals = state.stop_refusals.saturating_add(1);
+                    })
+                    .ok()
+                    .flatten()
+                    .is_none()
+                {
+                    Some("a cap that could not be recorded")
+                } else {
+                    None
+                }
+            }
+            None => Some("a cap that could not be recorded"),
+        }
+    };
+    if let Some(why) = let_through {
+        out.stderr = format!(
+            "discipline: this stop was let through at {why}, but the turn ended on {code}.\n"
+        );
+        return Some(out);
+    }
+    let verdict = crate::turn::Verdict {
+        kind: crate::turn::TurnKind::UnverifiedDirtyTree,
+        sentence: expected_cmd.to_string(),
+    };
+    Some(refusal_for(agent, &verdict.refusal()))
 }
 
 /// Appends one line to `<git dir>/discipline/hook-observe.log` and returns its path.
@@ -2840,6 +3156,8 @@ pub fn run_cli(args: crate::cli::HookArgs) -> Result<bool> {
             }
             let out = if a.event == crate::cli::HookEvent::PreTool {
                 crate::pretool::run_with(a.agent, &stdin, a.observe, a.if_configured)
+            } else if a.event == crate::cli::HookEvent::PostTool {
+                crate::hook::post_tool_with(a.agent, a.base, &stdin, a.if_configured)
             } else if a.event == crate::cli::HookEvent::SessionStart {
                 crate::pretool::session_start_with(a.agent, &stdin, a.if_configured)
             } else {

@@ -1,0 +1,440 @@
+//! End-to-end tests for session-scoped agent hooks:
+//! - `[hooks.verified-stop]` (`#700`): dirty working tree requires a passing verification
+//!   record for the current tree digest before ending the turn.
+//! - `[hooks.tool-loop]` (`#701`): consecutive identical tool calls without any working-tree
+//!   change in between are refused after exceeding `max_identical_calls` /
+//!   `max_identical_shell_calls`.
+
+mod common;
+
+use common::{Repo, Run};
+use serde_json::{json, Value};
+use std::io::Write;
+use std::process::Stdio;
+
+fn hook(repo: &Repo, args: &[&str], stdin: &str) -> Run {
+    let mut cmd = common::discipline_cmd(repo.path());
+    cmd.args(["hook", "run"])
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    Run {
+        code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
+fn recorded_stop(rel: &str, edit: impl FnOnce(&mut Value)) -> String {
+    let path = format!("{}/tests/fixtures/stop/{rel}", env!("CARGO_MANIFEST_DIR"));
+    let mut v: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    edit(&mut v);
+    v.to_string()
+}
+
+fn recorded_pretool(rel: &str, edit: impl FnOnce(&mut Value)) -> String {
+    let path = format!(
+        "{}/tests/fixtures/pretool/{rel}",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let mut v: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    edit(&mut v);
+    v.to_string()
+}
+
+fn observe_log(repo: &Repo) -> String {
+    std::fs::read_to_string(repo.file(".git/discipline/hook-observe.log")).unwrap_or_default()
+}
+
+#[test]
+fn verified_stop_blocks_dirty_tree_until_vouched_command_passes_and_invalidates_on_edit() {
+    let repo = Repo::new();
+    repo.commit_base(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n\n[hooks.verified-stop]\nenabled = true\nmode = \"refuse\"\ncommands = [\"cargo test\"]\n",
+        "chore: enable verified-stop",
+    );
+    repo.commit_base(
+        "src/lib.rs",
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
+        "feat: init",
+    );
+
+    let stop_payload = recorded_stop("claude-code/stop.json", |v| {
+        v["cwd"] = repo.path().display().to_string().into();
+        v["session_id"] = "sess-700".into();
+        v["last_assistant_message"] = "All done.".into();
+    });
+
+    // 1. Clean tree passes.
+    let run = hook(&repo, &["--agent", "claude-code"], &stop_payload);
+    assert_eq!(run.code, 0, "clean tree must pass: {}", run.stderr);
+
+    // 2. Docs-only change passes.
+    repo.write("README.md", "# Updated docs\n");
+    let run = hook(&repo, &["--agent", "claude-code"], &stop_payload);
+    assert_eq!(run.code, 0, "docs-only change must pass: {}", run.stderr);
+
+    // 3. Source change without verification is refused.
+    repo.write(
+        "src/lib.rs",
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }\npub fn double(x: i32) -> i32 { x * 2 }\n",
+    );
+    let run = hook(&repo, &["--agent", "claude-code"], &stop_payload);
+    assert_eq!(run.code, 2, "unverified dirty tree must be refused");
+    assert!(
+        run.stderr.contains("[turn/unverified-dirty-tree]") && run.stderr.contains("`cargo test`"),
+        "unexpected stderr: {}",
+        run.stderr
+    );
+
+    // 4. Spoof / partial / failing / vacuous commands do not satisfy verification.
+    for (idx, (bad_cmd, exit_code, stdout)) in [
+        ("cargo test --no-run", 0, "Executable unittests"),
+        ("cargo test -- --list", 0, "1 test"),
+        (
+            "cargo test some_filter",
+            0,
+            "running 1 test\ntest result: ok. 1 passed; 0 failed\n",
+        ),
+        ("true", 0, ""),
+        (
+            "cargo test || true",
+            0,
+            "running 1 test\ntest result: ok. 1 passed; 0 failed\n",
+        ),
+        (
+            "cargo test",
+            1,
+            "running 1 test\ntest result: FAILED. 0 passed; 1 failed\n",
+        ),
+        (
+            "cargo test",
+            0,
+            "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored\n",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let sess = format!("sess-700-check-{idx}");
+        let post_payload = json!({
+            "cwd": repo.path().display().to_string(),
+            "session_id": sess,
+            "tool_name": "Bash",
+            "tool_input": { "command": bad_cmd },
+            "tool_response": {
+                "exit_code": exit_code,
+                "stdout": stdout,
+                "stderr": ""
+            }
+        })
+        .to_string();
+        let w = hook(
+            &repo,
+            &["--agent", "claude-code", "--event", "post-tool"],
+            &post_payload,
+        );
+        assert_eq!(w.code, 0);
+
+        let check_stop = recorded_stop("claude-code/stop.json", |v| {
+            v["cwd"] = repo.path().display().to_string().into();
+            v["session_id"] = sess.into();
+            v["last_assistant_message"] = "All done.".into();
+        });
+        let r = hook(&repo, &["--agent", "claude-code"], &check_stop);
+        assert_eq!(
+            r.code, 2,
+            "command `{bad_cmd}` (exit {exit_code}) must not satisfy verified-stop"
+        );
+    }
+
+    // 5. Witnessing a passing `cargo test` on the current tree allows Stop to pass.
+    let good_post = json!({
+        "cwd": repo.path().display().to_string(),
+        "session_id": "sess-700",
+        "tool_name": "Bash",
+        "tool_input": { "command": "cargo test" },
+        "tool_response": {
+            "exit_code": 0,
+            "stdout": "running 2 tests\ntest result: ok. 2 passed; 0 failed\n",
+            "stderr": ""
+        }
+    })
+    .to_string();
+    let w = hook(
+        &repo,
+        &["--agent", "claude-code", "--event", "post-tool"],
+        &good_post,
+    );
+    assert_eq!(w.code, 0);
+
+    let run = hook(&repo, &["--agent", "claude-code"], &stop_payload);
+    assert_eq!(
+        run.code, 0,
+        "stop must pass after witnessed verification: {}",
+        run.stderr
+    );
+
+    // 6. Modifying the working tree (e.g. via a shell edit) changes the tree digest and
+    // invalidates the previous verification record.
+    repo.write(
+        "src/lib.rs",
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }\npub fn triple(x: i32) -> i32 { x * 3 }\n",
+    );
+    let run = hook(&repo, &["--agent", "claude-code"], &stop_payload);
+    assert_eq!(
+        run.code, 2,
+        "edit after verification must invalidate prior record"
+    );
+    assert!(run.stderr.contains("[turn/unverified-dirty-tree]"));
+}
+
+#[test]
+fn verified_stop_observe_mode_corrupt_session_recovery_and_loop_guards() {
+    let repo = Repo::new();
+    repo.commit_base(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n\n[hooks.verified-stop]\nenabled = true\nmode = \"refuse\"\nmax_per_session = 2\ncommands = [\"cargo test\"]\n",
+        "chore: enable verified-stop",
+    );
+    repo.commit_base("src/lib.rs", "pub fn f() -> i32 { 1 }\n", "feat: init");
+    repo.write("src/lib.rs", "pub fn f() -> i32 { 2 }\n");
+
+    let stop_payload = recorded_stop("claude-code/stop.json", |v| {
+        v["cwd"] = repo.path().display().to_string().into();
+        v["session_id"] = "sess-cap".into();
+        v["last_assistant_message"] = "Done.".into();
+    });
+
+    // Observe flag logs without blocking.
+    let obs = hook(
+        &repo,
+        &["--agent", "claude-code", "--observe"],
+        &stop_payload,
+    );
+    assert_eq!(obs.code, 0);
+    assert!(
+        obs.stderr
+            .contains("would block: no passing verification for this tree"),
+        "{}",
+        obs.stderr
+    );
+    let log = observe_log(&repo);
+    assert!(
+        log.contains("\"verdict\":\"unverified-dirty-tree\""),
+        "{log}"
+    );
+
+    // Corrupt session file does not grant a pass.
+    let sessions_dir = repo.file(".git/discipline/sessions");
+    std::fs::create_dir_all(&sessions_dir).unwrap();
+    std::fs::write(sessions_dir.join("sess-cap.json"), "{corrupt json").unwrap();
+
+    // Refusals 1 and 2 are blocked; refusal 3 hits max_per_session = 2 and is let through.
+    let r1 = hook(&repo, &["--agent", "claude-code"], &stop_payload);
+    assert_eq!(r1.code, 2);
+    let r2 = hook(&repo, &["--agent", "claude-code"], &stop_payload);
+    assert_eq!(r2.code, 2);
+    let r3 = hook(&repo, &["--agent", "claude-code"], &stop_payload);
+    assert_eq!(
+        r3.code, 0,
+        "3rd stop must be let through at max_per_session"
+    );
+    assert!(
+        r3.stderr.contains("hooks.verified-stop.max_per_session"),
+        "{}",
+        r3.stderr
+    );
+
+    // `stop_hook_active: true` is let through immediately.
+    let continued = recorded_stop("claude-code/stop_continued.json", |v| {
+        v["cwd"] = repo.path().display().to_string().into();
+        v["session_id"] = "sess-fresh".into();
+        v["last_assistant_message"] = "Done.".into();
+    });
+    let rc = hook(&repo, &["--agent", "claude-code"], &continued);
+    assert_eq!(rc.code, 0);
+    assert!(rc.stderr.contains("loop guard"), "{}", rc.stderr);
+}
+
+#[test]
+fn tool_loop_allows_up_to_cap_then_refuses_and_resets_on_input_or_tree_change() {
+    let repo = Repo::new();
+    repo.commit_base(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n\n[hooks.tool-loop]\nenabled = true\nmode = \"refuse\"\nmax_identical_calls = 3\nmax_identical_shell_calls = 5\n",
+        "chore: enable tool-loop",
+    );
+    repo.commit_base("a.txt", "hello\n", "feat: add a.txt");
+
+    let read_call = recorded_pretool("claude-code/read.json", |v| {
+        v["cwd"] = repo.path().display().to_string().into();
+        v["session_id"] = "sess-loop".into();
+        v["tool_input"] = json!({
+            "file_path": repo.file("a.txt").display().to_string(),
+            "offset": 0
+        });
+    });
+    // Same logical input with reversed key order.
+    let read_call_reordered = recorded_pretool("claude-code/read.json", |v| {
+        v["cwd"] = repo.path().display().to_string().into();
+        v["session_id"] = "sess-loop".into();
+        v["tool_input"] = json!({
+            "offset": 0,
+            "file_path": repo.file("a.txt").display().to_string()
+        });
+    });
+
+    // Calls 1, 2, 3 are allowed.
+    for i in 1..=3 {
+        let payload = if i == 2 {
+            &read_call_reordered
+        } else {
+            &read_call
+        };
+        let r = hook(
+            &repo,
+            &["--agent", "claude-code", "--event", "pre-tool"],
+            payload,
+        );
+        assert_eq!(r.code, 0, "call {i} must be allowed: {}", r.stderr);
+    }
+
+    // Call 4 with identical input and unchanged tree is refused.
+    let r4 = hook(
+        &repo,
+        &["--agent", "claude-code", "--event", "pre-tool"],
+        &read_call,
+    );
+    assert_eq!(r4.code, 2, "4th identical call must be refused");
+    assert!(
+        r4.stderr.contains("discipline [hooks.tool-loop]: `Read`: the same call was made 4 times in a row with no change in between; it is refused"),
+        "unexpected stderr: {}",
+        r4.stderr
+    );
+
+    // Changing the working tree resets the consecutive counter.
+    repo.write("a.txt", "hello world\n");
+    let after_edit = hook(
+        &repo,
+        &["--agent", "claude-code", "--event", "pre-tool"],
+        &read_call,
+    );
+    assert_eq!(
+        after_edit.code, 0,
+        "tree change must reset consecutive call counter: {}",
+        after_edit.stderr
+    );
+
+    // Changing the tool arguments also resets the counter.
+    for _ in 0..2 {
+        let r = hook(
+            &repo,
+            &["--agent", "claude-code", "--event", "pre-tool"],
+            &read_call,
+        );
+        assert_eq!(r.code, 0);
+    }
+    let different_arg = recorded_pretool("claude-code/read.json", |v| {
+        v["cwd"] = repo.path().display().to_string().into();
+        v["session_id"] = "sess-loop".into();
+        v["tool_input"] = json!({
+            "file_path": repo.file("a.txt").display().to_string(),
+            "offset": 10
+        });
+    });
+    let r_diff = hook(
+        &repo,
+        &["--agent", "claude-code", "--event", "pre-tool"],
+        &different_arg,
+    );
+    assert_eq!(r_diff.code, 0, "different argument must reset counter");
+}
+
+#[test]
+fn tool_loop_shell_cap_secret_non_retention_and_read_fail_open() {
+    let repo = Repo::new();
+    repo.commit_base(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n\n[hooks.tool-loop]\nenabled = true\nmode = \"refuse\"\nmax_identical_calls = 2\nmax_identical_shell_calls = 4\n",
+        "chore: enable tool-loop",
+    );
+
+    let secret = "SUPER_SECRET_TOKEN_VALUE_999";
+    let shell_call = json!({
+        "cwd": repo.path().display().to_string(),
+        "session_id": "sess-shell",
+        "tool_name": "Bash",
+        "tool_input": {
+            "command": format!("echo {secret}")
+        }
+    })
+    .to_string();
+
+    // Shell calls use max_identical_shell_calls (4), so calls 1..=4 pass and call 5 is refused.
+    for i in 1..=4 {
+        let r = hook(
+            &repo,
+            &["--agent", "claude-code", "--event", "pre-tool"],
+            &shell_call,
+        );
+        assert_eq!(r.code, 0, "shell call {i} must pass: {}", r.stderr);
+    }
+    let r5 = hook(
+        &repo,
+        &["--agent", "claude-code", "--event", "pre-tool"],
+        &shell_call,
+    );
+    assert_eq!(r5.code, 2, "5th identical shell call must be refused");
+    assert!(!r5.stderr.contains(secret), "stderr leaked secret");
+
+    // Observe mode also never writes raw arguments to hook-observe.log.
+    let r6_obs = hook(
+        &repo,
+        &["--agent", "claude-code", "--event", "pre-tool", "--observe"],
+        &shell_call,
+    );
+    assert_eq!(r6_obs.code, 0);
+    let session_json =
+        std::fs::read_to_string(repo.file(".git/discipline/sessions/sess-shell.json")).unwrap();
+    assert!(
+        !session_json.contains(secret),
+        "session file must never contain raw tool arguments: {session_json}"
+    );
+    let obs_log = observe_log(&repo);
+    assert!(
+        !obs_log.contains(secret),
+        "hook-observe.log must never contain raw tool arguments: {obs_log}"
+    );
+
+    // A truncated/unparseable read tool payload fails open, while an unparseable edit/unknown payload is refused.
+    let truncated_read = r#"{"tool_name":"Read","tool_input":{"file_path":"/tmp/x"#;
+    let r_read = hook(
+        &repo,
+        &["--agent", "claude-code", "--event", "pre-tool"],
+        truncated_read,
+    );
+    assert_eq!(
+        r_read.code, 0,
+        "truncated read payload must fail open: {}",
+        r_read.stderr
+    );
+
+    let truncated_write = r#"{"tool_name":"Write","tool_input":{"file_path":"/tmp/x"#;
+    let r_write = hook(
+        &repo,
+        &["--agent", "claude-code", "--event", "pre-tool"],
+        truncated_write,
+    );
+    assert_eq!(r_write.code, 2, "truncated write payload must fail closed");
+}
