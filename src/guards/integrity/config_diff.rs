@@ -385,6 +385,56 @@ pub fn diff_configs_under(
         found.push(stop("tool_call_as_text", Change::Changed).values(true, false));
     }
 
+    // [hooks.verified-stop]: unverified dirty-tree stop guard switched off or weakened.
+    let (b, h) = (&base.hooks.verified_stop, &head.hooks.verified_stop);
+    let vstop = |key: &str, change: Change| Weakening::new("hooks.verified-stop", key, change);
+    if b.enabled && !h.enabled {
+        found.push(vstop("enabled", Change::Changed).values(true, false));
+    }
+    if b.mode == StopMode::Refuse && h.mode == StopMode::Observe {
+        found.push(vstop("mode", Change::Changed).values("refuse", "observe"));
+    }
+    if h.max_per_session < b.max_per_session {
+        found.push(
+            vstop("max_per_session", Change::Decreased)
+                .values(b.max_per_session, h.max_per_session),
+        );
+    }
+    if b.run_at_stop && !h.run_at_stop {
+        found.push(vstop("run_at_stop", Change::Changed).values(true, false));
+    }
+    for (key, bl, hl) in [
+        ("verify_paths", &b.verify_paths, &h.verify_paths),
+        ("commands", &b.commands, &h.commands),
+    ] {
+        let lost = bl.iter().filter(|x| !hl.contains(x)).count();
+        if lost > 0 {
+            found.push(vstop(key, Change::Lost).count(lost));
+        }
+    }
+
+    // [hooks.tool-loop]: consecutive identical tool-call limiter switched off or loosened.
+    let (b, h) = (&base.hooks.tool_loop, &head.hooks.tool_loop);
+    let tloop = |key: &str, change: Change| Weakening::new("hooks.tool-loop", key, change);
+    if b.enabled && !h.enabled {
+        found.push(tloop("enabled", Change::Changed).values(true, false));
+    }
+    if b.mode == StopMode::Refuse && h.mode == StopMode::Observe {
+        found.push(tloop("mode", Change::Changed).values("refuse", "observe"));
+    }
+    if h.max_identical_calls > b.max_identical_calls {
+        found.push(
+            tloop("max_identical_calls", Change::Increased)
+                .values(b.max_identical_calls, h.max_identical_calls),
+        );
+    }
+    if h.max_identical_shell_calls > b.max_identical_shell_calls {
+        found.push(
+            tloop("max_identical_shell_calls", Change::Increased)
+                .values(b.max_identical_shell_calls, h.max_identical_shell_calls),
+        );
+    }
+
     // [meta]: advisory mode exits 0 whatever the gates found.
     if base.meta.mode == RunMode::Enforcing && head.meta.mode == RunMode::Advisory {
         found.push(Weakening::new("meta", "mode", Change::Changed).values("enforcing", "advisory"));
@@ -1333,43 +1383,83 @@ mod tests {
 
     #[test]
     fn every_hooks_option_is_judged_and_each_loosening_is_reported() {
-        // `diff_configs` reads [hooks.premature-stop] field by field; a new option must
+        // `diff_configs` reads [hooks.*] field by field; a new option must
         // be added there and here.
-        const JUDGED: &[&str] = &["enabled", "mode", "max_per_session", "tool_call_as_text"];
+        const JUDGED_PREMATURE: &[&str] =
+            &["enabled", "mode", "max_per_session", "tool_call_as_text"];
+        const JUDGED_VERIFIED: &[&str] = &[
+            "enabled",
+            "mode",
+            "max_per_session",
+            "run_at_stop",
+            "verify_paths",
+            "commands",
+        ];
+        const JUDGED_LOOP: &[&str] = &[
+            "enabled",
+            "mode",
+            "max_identical_calls",
+            "max_identical_shell_calls",
+        ];
         let schema = crate::schema::generate_schema();
         let hooks = schema["properties"]["hooks"]["properties"]
             .as_object()
             .unwrap();
-        assert_eq!(hooks.keys().collect::<Vec<_>>(), ["premature-stop"]);
-        let props = hooks["premature-stop"]["properties"].as_object().unwrap();
-        let unjudged: Vec<_> = props
-            .keys()
-            .filter(|k| !JUDGED.contains(&k.as_str()))
-            .collect();
-        assert!(
-            unjudged.is_empty(),
-            "judge these in diff_configs: {unjudged:?}"
+        assert_eq!(
+            hooks.keys().collect::<Vec<_>>(),
+            ["premature-stop", "tool-loop", "verified-stop"]
         );
-        assert_eq!(props.len(), JUDGED.len());
+        for (table, judged) in [
+            ("premature-stop", JUDGED_PREMATURE),
+            ("verified-stop", JUDGED_VERIFIED),
+            ("tool-loop", JUDGED_LOOP),
+        ] {
+            let props = hooks[table]["properties"].as_object().unwrap();
+            let unjudged: Vec<_> = props
+                .keys()
+                .filter(|k| !judged.contains(&k.as_str()))
+                .collect();
+            assert!(
+                unjudged.is_empty(),
+                "judge these in diff_configs ({table}): {unjudged:?}"
+            );
+            assert_eq!(props.len(), judged.len(), "{table}");
+        }
 
         let cfg = |body: &str| {
-            DisciplineConfig::from_toml_str(&format!(
-                "[meta]\nversion = 1\nname = \"t\"\n[hooks.premature-stop]\n{body}"
-            ))
-            .unwrap()
+            DisciplineConfig::from_toml_str(&format!("[meta]\nversion = 1\nname = \"t\"\n{body}"))
+                .unwrap()
         };
-        let strict = cfg("enabled = true\nmode = \"refuse\"\nmax_per_session = 3\n");
+        let strict = cfg(
+            "[hooks.premature-stop]\nenabled = true\nmode = \"refuse\"\nmax_per_session = 3\n\
+             [hooks.verified-stop]\nenabled = true\nmode = \"refuse\"\nmax_per_session = 3\nrun_at_stop = true\nverify_paths = [\"src/**\"]\ncommands = [\"cargo test\"]\n\
+             [hooks.tool-loop]\nenabled = true\nmode = \"refuse\"\nmax_identical_calls = 3\nmax_identical_shell_calls = 6\n",
+        );
         let loose = cfg(
-            "enabled = false\nmode = \"observe\"\nmax_per_session = 1\ntool_call_as_text = false\n",
+            "[hooks.premature-stop]\nenabled = false\nmode = \"observe\"\nmax_per_session = 1\ntool_call_as_text = false\n\
+             [hooks.verified-stop]\nenabled = false\nmode = \"observe\"\nmax_per_session = 1\nrun_at_stop = false\nverify_paths = []\ncommands = []\n\
+             [hooks.tool-loop]\nenabled = false\nmode = \"observe\"\nmax_identical_calls = 5\nmax_identical_shell_calls = 10\n",
         );
         let keys = |base: &DisciplineConfig, head: &DisciplineConfig| -> Vec<String> {
             diff_configs(base, head)
                 .unwrap()
                 .iter()
-                .map(|w| w.key().to_string())
+                .map(|w| format!("{}.{}", w.gate, w.key))
                 .collect()
         };
-        assert_eq!(keys(&strict, &loose), JUDGED);
+        let mut expected: Vec<String> = JUDGED_PREMATURE
+            .iter()
+            .map(|k| format!("hooks.premature-stop.{k}"))
+            .chain(
+                JUDGED_VERIFIED
+                    .iter()
+                    .map(|k| format!("hooks.verified-stop.{k}")),
+            )
+            .chain(JUDGED_LOOP.iter().map(|k| format!("hooks.tool-loop.{k}")))
+            .collect();
+        let actual = keys(&strict, &loose);
+        assert_eq!(actual, expected);
+        expected.clear();
         // The other direction tightens: nothing is reported.
         assert!(keys(&loose, &strict).is_empty());
     }

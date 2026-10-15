@@ -695,7 +695,9 @@ The hook event: `pre\-tool` checks the tool call on stdin before it runs (an edi
 .IP \(bu 2
 check: After an edit or at the end of a turn: check the change so far
 .IP \(bu 2
-pre\-tool: Before a tool runs: refuse an edit outside this session\*(Aqs worktree
+pre\-tool: Before a tool runs: refuse an edit outside this session\*(Aqs worktree or a repeated loop call
+.IP \(bu 2
+post\-tool: After a tool runs: record a passing verification command on the current working\-tree digest
 .IP \(bu 2
 session\-start: When a session starts: take this worktree\*(Aqs lease for it (never blocks)
 .RE

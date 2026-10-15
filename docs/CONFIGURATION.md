@@ -408,6 +408,16 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `hooks.premature-stop.max_per_session` | integer | `3` | Most stops refused in one session; the next one is let through (default: 3) |
 | `hooks.premature-stop.mode` | string | `"observe"` | observe logs a match to the hook's observation log and lets the stop through; refuse refuses the stop and hands the agent the reason (default: observe) |
 | `hooks.premature-stop.tool_call_as_text` | boolean | `true` | Also judge a final message that ends in a tool call written out as text (default: true) |
+| `hooks.tool-loop.enabled` | boolean | `false` | Track consecutive identical tool calls and refuse loops when enabled (default: false) |
+| `hooks.tool-loop.max_identical_calls` | integer | `3` | Most identical consecutive non-shell tool calls allowed with no working-tree change in between before refusing (default: 3) |
+| `hooks.tool-loop.max_identical_shell_calls` | integer | `6` | Most identical consecutive shell tool calls allowed with no working-tree change in between before refusing (default: 6) |
+| `hooks.tool-loop.mode` | string | `"observe"` | observe logs a repeated loop call to the hook's observation log and lets the call through; refuse refuses the call (default: observe) |
+| `hooks.verified-stop.commands` | list | `[]` | Vouched verification commands matched by exact argv equality (default: [], falls back to [gates.command] / [gates.test-floor] on the base ref or standard test runner defaults) |
+| `hooks.verified-stop.enabled` | boolean | `false` | Check that a configured verification command passed on the current working-tree digest before ending the turn (default: false) |
+| `hooks.verified-stop.max_per_session` | integer | `3` | Most stops refused in one session; the next one is let through (default: 3) |
+| `hooks.verified-stop.mode` | string | `"observe"` | observe logs an unverified stop to the hook's observation log and lets the stop through; refuse refuses the stop and hands the agent the reason (default: observe) |
+| `hooks.verified-stop.run_at_stop` | boolean | `false` | Run the base ref's verification commands at Stop when no passing witness record exists for the current working-tree digest (default: false) |
+| `hooks.verified-stop.verify_paths` | list | `[]` | Path globs whose changes require a passing verification run (default: [], all non-documentation paths) |
 | `languages.c.function_macros` | list | `[]` | Macros that expand to a function head, e.g. MYEXT_METHOD(Class, name) { ... } (default: []) |
 | `languages.c.macros` | list | `[]` | Macros blanked with their arguments: statement or declaration macros written without a semicolon, list entries without a comma, attribute-like prefixes (default: []) |
 | `meta.description` | string | *(per entry)* | Optional short description of the project |
@@ -1206,6 +1216,33 @@ It is a check of the hook only. `discipline check`, CI and every report are unch
 - **`mode = "refuse"`**: exit 2 with one line on stderr, which the agent hands to the model: ``discipline [turn/announced-action-not-taken]: you ended your turn after announcing an action and did not take it: `Now let me run the tests.`. Do it now, or say in one sentence why you cannot.`` The sentence is the model's own, quoted on one line with its backticks removed. For a tool call written as text the code is `turn/tool-call-written-as-text`.
 - **It cannot loop.** A stop the agent marks as already continued (`stop_hook_active`) is never refused, so a turn is refused at most once, and a session is refused at most `max_per_session` times (counted in `<git dir>/discipline/turn-<session>`, never tracked). A stop let through at either limit says so on stderr with the code. A model that answers the refusal with a reason ends its turn on that answer. Run live with this check set to `refuse` (Claude Code 2.1.282, Qwen Code 0.25.0): each model was refused once and ended its next turn on a reason or on finished work. In the Qwen Code session the stop after a refusal did not carry `stop_hook_active` once the model had called a tool in between, so there the session cap is the bound, not the flag.
 - **Start in observe mode.** On recorded sessions the matcher flagged 8 endings as announcements and 7 were (docs/ROADMAP.md, Phase 17, with the interval and how it was measured): enough to log, not enough to recommend refusing without first reading what the log shows for your model.
+
+**A turn that ends on an unverified dirty tree (opt-in).** With `[hooks.verified-stop]` enabled, `hook run` refuses to end a turn when source files under `verify_paths` changed since `HEAD` and no vouched verification command has passed against the current tree digest:
+
+```toml
+[hooks.verified-stop]
+enabled = true                        # default: false
+mode = "refuse"                       # default: "observe"
+verify_paths = ["src/**", "tests/**"] # default: [] (all non-doc paths)
+commands = ["cargo test"]             # default: [] (derived from enabled [commands.*] gates)
+run_at_stop = true                    # default: false
+max_per_session = 3
+```
+
+- **Witnessed runs (`--event post-tool`).** When an agent runs a command that matches `[hooks.verified-stop].commands` (or an enabled `[commands.<id>]` gate's command when `commands` is empty) and exits 0 without vacuous zero-test output (`0 passed; 0 failed`, `no tests ran`), `discipline hook run --event post-tool` records the passing run and the SHA-256 digest of the working tree in `<common git dir>/discipline/sessions/<session>.json` (`0600` permissions, flock-locked, capped at 64 records, storing digests only and never raw output or arguments). Any subsequent edit changes the tree digest and invalidates the earlier record.
+- **Stop check.** At turn end, if no tracked or untracked file matching `verify_paths` changed (by default, documentation-only edits to `.md`, `.mdx`, `.rst`, and `docs/**` are excluded when `verify_paths` is empty), the stop passes. Otherwise, if the current tree digest is already recorded in the session store, the stop passes immediately. If not, and `run_at_stop = true`, the hook executes the vouched commands directly against the tree and records the result; if `run_at_stop = false` (or a command fails), the stop is refused (`turn/unverified-dirty-tree`) up to `max_per_session` times (`stop_hook_active` is respected so a turn is refused at most once).
+
+**Refusing consecutive identical tool calls (`[hooks.tool-loop]`).** An agent stuck in a retry loop sometimes invokes the exact same tool call (`Read`, `View`, `Grep`, or an identical shell command) over and over without changing the working tree in between. `[hooks.tool-loop]` tracks the SHA-256 digest of the canonicalized `(tool_name, tool_input)` pair alongside the full working-tree digest in `<common git dir>/discipline/sessions/<session>.json`:
+
+```toml
+[hooks.tool-loop]
+enabled = true                  # default: false
+mode = "refuse"                 # default: "observe"
+max_identical_calls = 3         # non-shell tool calls (Read, Grep, etc.)
+max_identical_shell_calls = 6   # identical shell commands
+```
+
+When the consecutive count for the same call digest and unchanged tree digest exceeds the threshold, `hook run --event pre-tool` denies the call (`discipline [hooks.tool-loop]: <tool>: the same call was made N times in a row with no change in between; it is refused. Read the earlier output or change approach`). Any change to the working tree or to the tool's arguments resets the counter.
 
 **Observe mode, for rolling a hook out.** `discipline hook install --agent <name> --observe` writes every check command as `discipline hook run --agent <name> --observe`, and the pre-tool entry as `discipline hook run --agent <name> --event pre-tool --observe`; the session-start entry has no observe form and takes the lease as usual. The check runs as usual but never blocks: the agent gets its pass, and what would have blocked (the codes of the blocking findings, not the warnings beside them, or the reason a check could not run) is said on stderr, marked "observe mode, not enforced", and appended to `<git dir>/discipline/hook-observe.log`, one JSON line per event (`time`, `agent`, `event`, `verdict`, `reason`, `codes`; a refused pre-tool call is logged with `event: "pre-tool"`, `verdict: "deny"` and its reason, without `codes`). Read the log to see what enforcing would have stopped, then switch to enforcing: run `discipline hook install --agent <name> --enforce` (for the user-level file, with `--user`). A file a release provably generated in observe mode is rewritten to enforcing mode; a file edited by hand is refused unless `--force` is given. Without `--enforce`, `hook install` never turns observe mode off in an existing file, with or without `--upgrade`; it says so when it finds one. In a JSON hook file, removing ` --observe` from every command by hand gives the same result; in the OpenCode plugin it does not, because the observe-mode plugin differs in more than its commands, so reinstall it with `--enforce`. Observe mode is never enforcement: CI still gates the change, and `discipline doctor` reports `hook-mode` as a warning until the hook is switched to enforcing.
 

@@ -227,6 +227,67 @@ pub fn generate_schema() -> Value {
                                 "description": "Also judge a final message that ends in a tool call written out as text (default: true)"
                             }
                         }
+                    },
+                    "verified-stop": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "description": "At the end of a turn, require a passing verification run on the current working-tree digest when in-scope files have changed (#700). Read from the base ref's configuration",
+                        "properties": {
+                            "enabled": {
+                                "type": "boolean",
+                                "description": "Check that a configured verification command passed on the current working-tree digest before ending the turn (default: false)"
+                            },
+                            "mode": {
+                                "type": "string",
+                                "enum": ["observe", "refuse"],
+                                "default": "observe",
+                                "description": "observe logs an unverified stop to the hook's observation log and lets the stop through; refuse refuses the stop and hands the agent the reason (default: observe)"
+                            },
+                            "max_per_session": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "description": "Most stops refused in one session; the next one is let through (default: 3)"
+                            },
+                            "run_at_stop": {
+                                "type": "boolean",
+                                "description": "Run the base ref's verification commands at Stop when no passing witness record exists for the current working-tree digest (default: false)"
+                            },
+                            "verify_paths": {
+                                "$ref": "#/$defs/StringListOrReset",
+                                "description": "Path globs whose changes require a passing verification run (default: [], all non-documentation paths)"
+                            },
+                            "commands": {
+                                "$ref": "#/$defs/StringListOrReset",
+                                "description": "Vouched verification commands matched by exact argv equality (default: [], falls back to [gates.command] / [gates.test-floor] on the base ref or standard test runner defaults)"
+                            }
+                        }
+                    },
+                    "tool-loop": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "description": "Before a tool call runs, refuse identical consecutive tool calls made without any working-tree change in between (#701)",
+                        "properties": {
+                            "enabled": {
+                                "type": "boolean",
+                                "description": "Track consecutive identical tool calls and refuse loops when enabled (default: false)"
+                            },
+                            "mode": {
+                                "type": "string",
+                                "enum": ["observe", "refuse"],
+                                "default": "observe",
+                                "description": "observe logs a repeated loop call to the hook's observation log and lets the call through; refuse refuses the call (default: observe)"
+                            },
+                            "max_identical_calls": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "description": "Most identical consecutive non-shell tool calls allowed with no working-tree change in between before refusing (default: 3)"
+                            },
+                            "max_identical_shell_calls": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "description": "Most identical consecutive shell tool calls allowed with no working-tree change in between before refusing (default: 6)"
+                            }
+                        }
                     }
                 }
             },

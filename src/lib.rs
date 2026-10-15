@@ -52,6 +52,7 @@ pub mod report;
 pub mod review_threads;
 pub mod schema;
 pub mod selftest;
+pub mod session;
 pub mod style;
 pub mod tokens;
 pub mod transcript;

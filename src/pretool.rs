@@ -397,6 +397,172 @@ fn silent_pass() -> HookOutput {
 }
 
 /// `run`, and with `if_configured` a silent pass unless the payload's directory (else
+/// Whether a truncated or malformed JSON payload unambiguously names a read-only tool
+/// and no edit or shell tool.
+fn unparsed_read_only_tool(raw: &str) -> Option<String> {
+    const READ_TOOLS: &[&str] = &[
+        "Read",
+        "Glob",
+        "Grep",
+        "LS",
+        "view",
+        "view_file",
+        "read_file",
+        "read",
+        "list_dir",
+        "grep_search",
+        "find_by_name",
+    ];
+    const WRITE_OR_SHELL_MARKERS: &[&str] = &[
+        "Write",
+        "Edit",
+        "MultiEdit",
+        "NotebookEdit",
+        "apply_patch",
+        "write_file",
+        "edit",
+        "replace",
+        "create",
+        "str_replace_editor",
+        "write",
+        "TargetFile",
+        "Bash",
+        "bash",
+        "run_shell_command",
+        "run_command",
+        "shell",
+    ];
+    if WRITE_OR_SHELL_MARKERS
+        .iter()
+        .any(|m| raw.contains(&format!("\"{m}\"")))
+    {
+        return None;
+    }
+    READ_TOOLS
+        .iter()
+        .find(|t| raw.contains(&format!("\"{t}\"")))
+        .map(|t| (*t).to_string())
+}
+
+/// Computes the canonical SHA-256 digest of `(tool_name, tool_input)` for `raw` without
+/// keeping any raw argument text.
+pub fn call_input_digest(agent: Agent, raw: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let (tool, args) = match agent {
+        Agent::ClaudeCode | Agent::Codex | Agent::Qwen => (
+            s(&v, "/tool_name")?,
+            v.get("tool_input")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        ),
+        Agent::Copilot => {
+            let tool = s(&v, "/toolName")?;
+            let args = match v.get("toolArgs") {
+                Some(serde_json::Value::String(text)) => serde_json::from_str(text)
+                    .unwrap_or_else(|_| serde_json::Value::String(text.clone())),
+                Some(other) => other.clone(),
+                None => serde_json::Value::Null,
+            };
+            (tool, args)
+        }
+        Agent::Agy => (
+            s(&v, "/toolCall/name")?,
+            v.pointer("/toolCall/args")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        ),
+        Agent::Opencode => (
+            s(&v, "/input/tool")?,
+            v.pointer("/output/args")
+                .or_else(|| v.pointer("/input/args"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        ),
+        Agent::Cursor | Agent::Aider => return None,
+    };
+    Some(crate::session::tool_input_digest(&tool, &args))
+}
+
+/// Resolves `[hooks.tool-loop]` configuration for `cwd`, preferring the base ref's
+/// configuration when enabled there so a session cannot disable or loosen it in the
+/// working tree.
+fn resolve_tool_loop_config(
+    cwd: &Path,
+    root: Option<&Path>,
+) -> Option<crate::config::ToolLoopConfig> {
+    if let Some(base_cfg) =
+        crate::hook::base_discipline_config(cwd, &crate::hook::CheckSide::Default)
+    {
+        if base_cfg.hooks.tool_loop.enabled {
+            return Some(base_cfg.hooks.tool_loop);
+        }
+    }
+    let cfg_path = root?.join("discipline.toml");
+    if cfg_path.is_file() {
+        if let Ok(c) = crate::config::DisciplineConfig::load_from_file(&cfg_path) {
+            if c.hooks.tool_loop.enabled {
+                return Some(c.hooks.tool_loop);
+            }
+        }
+    }
+    None
+}
+
+/// Checks `[hooks.tool-loop]` (`#701`): updates consecutive identical tool-call count in
+/// the session store and returns `Some((Verdict::Deny, effective_observe))` when the
+/// call exceeds the configured cap with no working-tree change in between.
+fn check_tool_loop(
+    agent: Agent,
+    call: &ToolCall,
+    stdin: &str,
+    cwd: &Path,
+    root: Option<&Path>,
+    observe: bool,
+) -> Option<(Verdict, bool)> {
+    let cfg = resolve_tool_loop_config(cwd, root)?;
+    if !cfg.enabled {
+        return None;
+    }
+    let session = call.session.as_deref()?;
+    let input_digest = call_input_digest(agent, stdin)?;
+    let all_paths = ["**".to_string()];
+    let current_tree = crate::session::tree_digest(cwd, None, &all_paths)
+        .ok()
+        .flatten();
+    let store = crate::session::SessionStore::open(cwd).ok()?;
+    let now = crate::lease::now();
+    let consecutive = store
+        .update(session, agent.id(), now, |state| {
+            if state.last_call_digest.as_deref() == Some(input_digest.as_str())
+                && state.last_tree_digest == current_tree
+            {
+                state.consecutive_calls = state.consecutive_calls.saturating_add(1);
+            } else {
+                state.last_call_digest = Some(input_digest);
+                state.last_tree_digest = current_tree;
+                state.consecutive_calls = 1;
+            }
+            state.consecutive_calls
+        })
+        .ok()??;
+    let threshold = if call.command.is_some() {
+        cfg.max_identical_shell_calls
+    } else {
+        cfg.max_identical_calls
+    };
+    if consecutive > threshold {
+        let reason = format!(
+            "discipline [hooks.tool-loop]: {}: the same call was made {} times in a row with no change in between; it is refused. Read the earlier output or change approach",
+            q(&call.tool),
+            consecutive
+        );
+        let effective_observe = observe || cfg.mode == crate::config::StopMode::Observe;
+        return Some((Verdict::Deny(reason), effective_observe));
+    }
+    None
+}
+
+/// `run`, and with `if_configured` a silent pass unless the payload's directory (else
 /// the working directory) is in a git repository with a `discipline.toml` at its root:
 /// the guard of a user-level hook, which runs in every folder the agent opens.
 pub fn run_with(agent: Agent, stdin: &str, observe: bool, if_configured: bool) -> HookOutput {
@@ -404,9 +570,11 @@ pub fn run_with(agent: Agent, stdin: &str, observe: bool, if_configured: bool) -
         return silent_pass();
     }
     let Some(call) = parse(agent, stdin) else {
-        // Cursor and Aider have no pre-tool event; a payload that is not JSON cannot
-        // name an edit.
-        let verdict = if matches!(agent, Agent::Cursor | Agent::Aider) {
+        // Cursor and Aider have no pre-tool event; a read-only tool call whose JSON was
+        // truncated fails open, while an unparseable edit/shell/unknown payload is refused.
+        let verdict = if matches!(agent, Agent::Cursor | Agent::Aider)
+            || unparsed_read_only_tool(stdin).is_some()
+        {
             Verdict::Allow
         } else {
             Verdict::Deny(
@@ -421,6 +589,23 @@ pub fn run_with(agent: Agent, stdin: &str, observe: bool, if_configured: bool) -
         .filter(|d| d.is_dir())
         .unwrap_or_else(|| PathBuf::from("."));
     let cwd = cwd.canonicalize().unwrap_or(cwd);
+
+    // Non-edit, non-shell read tool calls never fail closed on lease or session store errors.
+    if !call.edits && call.command.is_none() {
+        let root = crate::lease::open(&cwd).ok().map(|(store, here)| {
+            if let Err(err) = store.touch(&here.key, call.session.as_deref(), crate::lease::now()) {
+                eprintln!("discipline: cannot refresh lease: {err}");
+            }
+            here.root
+        });
+        if let Some((verdict, effective_observe)) =
+            check_tool_loop(agent, &call, stdin, &cwd, root.as_deref(), observe)
+        {
+            return finish(agent, &verdict, effective_observe, root.as_deref());
+        }
+        return finish(agent, &Verdict::Allow, observe, root.as_deref());
+    }
+
     let decided = (|| -> anyhow::Result<(Verdict, Option<PathBuf>)> {
         if crate::gitctx::discover_repository(&cwd).is_err() {
             // Not in a repository: there is no worktree to protect.
@@ -430,9 +615,6 @@ pub fn run_with(agent: Agent, stdin: &str, observe: bool, if_configured: bool) -
         let (store, here) = crate::lease::open(&cwd)?;
         let now = crate::lease::now();
         store.touch(&here.key, call.session.as_deref(), now)?;
-        if !call.edits && call.command.is_none() {
-            return Ok((Verdict::Allow, Some(here.root)));
-        }
         let leases: Vec<(String, Lease)> = store
             .list()?
             .into_iter()
@@ -467,6 +649,13 @@ pub fn run_with(agent: Agent, stdin: &str, observe: bool, if_configured: bool) -
         };
         (v, None)
     });
+    if verdict == Verdict::Allow {
+        if let Some((loop_verdict, effective_observe)) =
+            check_tool_loop(agent, &call, stdin, &cwd, root.as_deref(), observe)
+        {
+            return finish(agent, &loop_verdict, effective_observe, root.as_deref());
+        }
+    }
     finish(agent, &verdict, observe, root.as_deref())
 }
 
@@ -628,6 +817,10 @@ mod shell_tree {
         crate::ast::source_text::parse_within_budget(&mut parser, text.0.as_bytes())
             .map_err(|_| "discipline could not parse this shell command, so it is refused")
     }
+}
+
+pub(crate) fn parse_shell_tree(cmd: &str) -> Result<tree_sitter::Tree, &'static str> {
+    shell_tree::parse(&shell_tree::ascii_copy_with_unchanged_offsets(cmd))
 }
 
 /// Whether `node` starts or ends inside a character of `cmd`. The tree comes from the
