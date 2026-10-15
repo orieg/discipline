@@ -161,6 +161,9 @@ fn registries(out: &mut BTreeMap<&'static str, BTreeSet<String>>) {
             .or_default()
             .insert(f.to_string());
     }
+    for p in discipline::guards::presets::PRESETS {
+        out.entry("presets").or_default().insert(p.id.to_string());
+    }
 }
 
 fn mcp(out: &mut BTreeMap<&'static str, BTreeSet<String>>) {

@@ -8356,6 +8356,54 @@ smoke_cost::set_contains
         },
     ),
     (
+        "presets: resolve-locked presets classify missing versions vs unreachable registries (#704)",
+        || {
+            use crate::guards::command::{extract_unresolved_dependency, is_registry_unreachable};
+            use crate::guards::presets::{is_resolve_locked_preset, resolve_preset};
+
+            let cargo = resolve_preset("cargo-resolve-locked").expect("cargo-resolve-locked");
+            let npm = resolve_preset("npm-resolve-locked").expect("npm-resolve-locked");
+            let uv = resolve_preset("uv-resolve-locked").expect("uv-resolve-locked");
+            let go = resolve_preset("go-resolve-locked").expect("go-resolve-locked");
+
+            let defs_ok = is_resolve_locked_preset(cargo.id)
+                && is_resolve_locked_preset(npm.id)
+                && is_resolve_locked_preset(uv.id)
+                && is_resolve_locked_preset(go.id)
+                && cargo.default_command == "cargo metadata --locked --format-version 1"
+                && npm.default_command == "npm ci --ignore-scripts --dry-run"
+                && uv.default_command == "uv lock --check"
+                && go.default_command == "go mod verify";
+
+            let deps_ok = extract_unresolved_dependency(
+                "error: failed to select a version for the requirement `serde = \"^99.0.0\"`",
+            )
+            .as_deref()
+                == Some("serde")
+                && extract_unresolved_dependency(
+                    "npm error notarget No matching version found for left-pad@99.0.0.",
+                )
+                .as_deref()
+                    == Some("left-pad@99.0.0")
+                && extract_unresolved_dependency(
+                    "Because httpx==99.0.0 was not found in the package registry",
+                )
+                .as_deref()
+                    == Some("httpx==99.0.0")
+                && extract_unresolved_dependency(
+                    "go: example.com/pkg@v99.0.0: reading go.mod: unknown revision v99.0.0",
+                )
+                .as_deref()
+                    == Some("example.com/pkg@v99.0.0");
+
+            let outage_ok = is_registry_unreachable("error: failed to download from https://index.crates.io/")
+                && is_registry_unreachable("npm error code ENOTFOUND")
+                && !is_registry_unreachable("No matching version found for pkg@99.0.0");
+
+            Ok(defs_ok && deps_ok && outage_ok)
+        },
+    ),
+    (
         "archive-contents: detects missing required paths and forbidden entry leaks",
         || {
             use crate::guards::archive_contents::read_archive_entries;
