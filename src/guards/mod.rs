@@ -11,6 +11,7 @@ pub mod ci_integrity;
 pub mod ci_skip_set;
 pub mod citation_anchors;
 pub mod citation_metadata;
+pub mod claim_labels;
 pub mod claim_registry;
 pub mod command;
 pub mod commit_provenance;
@@ -1067,6 +1068,7 @@ pub fn run_checks(
             "gate-command-lint" => gate_command_lint::evaluate_gate_command_lint(ctx),
             "mechanism-sections" => mechanism_sections::evaluate_mechanism_sections(ctx),
             "citation-anchors" => citation_anchors::evaluate_citation_anchors(ctx),
+            "claim-labels" => claim_labels::evaluate_claim_labels(ctx),
             "assertion-reduction"
             | "vacuous-tests"
             | "ignored-tests"
@@ -1195,6 +1197,8 @@ pub fn run_checks(
             "sanitizers"
         } else if note.contains("allow-vacuous-test") {
             "vacuous-tests"
+        } else if note.contains("allow-claim-label") {
+            "claim-labels"
         } else if note.contains("allow-nul") || note.contains("allow-corrupt") {
             "assertion-reduction"
         } else {
@@ -1234,6 +1238,7 @@ pub fn run_checks(
                         | "msrv"
                         | "miri"
                         | "sanitizers"
+                        | "claim-labels"
                 ) {
                     o.notes.push(note.clone());
                 }

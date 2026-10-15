@@ -142,6 +142,12 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.citation-metadata.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.citation-metadata.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.citation-metadata.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.claim-labels.allow_patterns` | list | `[]` | Regex patterns that exempt a matching line from verification claim inspection |
+| `gates.claim-labels.diff_only` | boolean | `true` | Whether to inspect changed lines only rather than the whole file |
+| `gates.claim-labels.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.claim-labels.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.claim-labels.extra_patterns` | list | `[]` | Additional regex patterns treated as verification claims |
+| `gates.claim-labels.severity` | string | `"warning"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.command.allow_zero` | boolean | `false` | Whether zero items selected is allowed |
 | `gates.command.canary_command` | string | *(unset)* | Optional negative-control canary command |
 | `gates.command.canary_expected_diagnostic` | string | *(unset)* | Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text |
@@ -833,6 +839,7 @@ Where a gate's subject is a keyword (`allow-unsafe`, `allow-msrv`, `allow-miri`,
 | `allow-miri:` / `discipline:allow(miri)` / `allow(miri)` | `miri` | Test name or unsupported Miri operation |
 | `allow-sanitizers:` / `discipline:allow(sanitizers)` / `allow(sanitizers)` | `sanitizers` | Test or binary name with memory check rationale |
 | `allow-vacuous-test:` / `discipline:allow(vacuous-tests)` / `allow(vacuous-tests)` | `vacuous-tests` | Name of the new test the vacuous-tests finding is on |
+| `allow-claim-label:` / `discipline:allow(claim-labels)` / `allow(claim-labels)` | `claim-labels` | Source identifier (`pr-body`, `commit:<sha>`, or Markdown file path) |
 
 ### Inline Line Exemptions
 

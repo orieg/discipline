@@ -443,6 +443,11 @@ findings! {
     // version-lockstep
     VERSION_MISMATCH = ["version-lockstep"], "version-mismatch", "Version Declaration Lockstep Mismatch", Same;
 
+    // claim-labels
+    CLAIM_WITHOUT_LABEL = ["claim-labels"], "claim-without-label", "Verification Claim Without Label", Same;
+    LABEL_PLACEHOLDER = ["claim-labels"], "label-placeholder", "Verification Label Placeholder", Same;
+    READ_LABEL_UNRESOLVABLE = ["claim-labels"], "read-label-unresolvable", "Unresolvable Read Label", Same;
+
     // A run that could not complete (the pseudo-gate `engine`, reported only in `--json-out`).
     ENGINE_COULD_NOT_RUN = ["engine"], "could-not-run", "Check Could Not Run", Message;
 }

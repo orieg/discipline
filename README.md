@@ -225,6 +225,7 @@ Fourteen tree-sitter language packs (Rust, Python, JavaScript / TypeScript, Java
 | [`gate-command-lint`](docs/GATES.md#gate-command-lint) | agent-guard | markdown, shell | reject vacuous, masked, or inverted verification commands in plan files |
 | [`mechanism-sections`](docs/GATES.md#mechanism-sections) | hygiene | markdown | require (inferred) or (verified: <target>) evidence tags in root cause sections |
 | [`citation-anchors`](docs/GATES.md#citation-anchors) | hygiene | markdown, any | verify path:line@sha citations against quoted text and git history |
+| [`claim-labels`](docs/GATES.md#claim-labels) | hygiene | markdown, any | require RUN or READ labels on verification claims in PR bodies, commits, and Markdown |
 <!-- /generated -->
 
 ## Auditing What Got Through

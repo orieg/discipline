@@ -8259,7 +8259,7 @@ fn override_record_audit_trail_and_step_outputs() {
     ));
     assert!(
         run.stdout.contains(
-            "gates:  25 passed, 0 failed, 19 disabled, 1 not evaluated (22 items examined)"
+            "gates:  25 passed, 0 failed, 20 disabled, 1 not evaluated (22 items examined)"
         ),
         "{}",
         run.stdout
@@ -8281,7 +8281,7 @@ fn override_record_audit_trail_and_step_outputs() {
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
         step_summary.contains(
-            "**Summary:** 25 passed, 0 failed, 19 disabled, 1 not evaluated (22 items examined)"
+            "**Summary:** 25 passed, 0 failed, 20 disabled, 1 not evaluated (22 items examined)"
         ),
         "{step_summary}"
     );
@@ -20743,4 +20743,110 @@ canary_command = "{pass_cmd}"
             "{preset} canary codes: {canary_codes:?}"
         );
     }
+}
+
+#[test]
+fn claim_labels_e2e_verifies_run_read_markers_and_overrides() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            (
+                "discipline.toml",
+                r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.claim-labels]
+enabled = true
+severity = "error"
+"#,
+            ),
+            ("src/lib.rs", "pub fn answer() -> u32 {\n    42\n}\n"),
+        ],
+        "base: enable claim-labels",
+    );
+
+    // 1. Negative control: unlabeled claim in PR body, placeholder in commit message,
+    // and unresolvable READ in added Markdown line.
+    repo.write(
+        "docs/notes.md",
+        "# Notes\n\nWe verified by running `cargo test` (READ: src/lib.rs:99) that the fix works.\n",
+    );
+    repo.commit("docs: add notes\n\nVerified with `cargo test` (RUN: TODO) on clean tree.");
+    let run_fail = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[(
+            "PR_BODY",
+            "## Summary\n\nWe ran `cargo test` and confirmed that all tests pass.\n",
+        )],
+    );
+    assert_eq!(
+        run_fail.code, 1,
+        "expected claim-labels failure: {}\n{}",
+        run_fail.stdout, run_fail.stderr
+    );
+    let violations = run_fail.violations("claim-labels");
+    let codes: Vec<&str> = violations
+        .iter()
+        .filter_map(|v| v["code"].as_str())
+        .collect();
+    assert!(
+        codes.contains(&"claim-labels/claim-without-label"),
+        "expected claim-without-label in {codes:?}"
+    );
+    assert!(
+        codes.contains(&"claim-labels/label-placeholder"),
+        "expected label-placeholder in {codes:?}"
+    );
+    assert!(
+        codes.contains(&"claim-labels/read-label-unresolvable"),
+        "expected read-label-unresolvable in {codes:?}"
+    );
+
+    // 2. Positive control: valid RUN and READ markers in the same paragraph pass,
+    // and session state notes when a `(RUN: <cmd>)` was not observed by a hook.
+    let sessions_dir = repo.dir.path().join(".git/discipline/sessions");
+    std::fs::create_dir_all(&sessions_dir).unwrap();
+    std::fs::write(
+        sessions_dir.join("test-session.json"),
+        r#"{"commands":[{"command":"cargo clippy","passed":true}]}"#,
+    )
+    .unwrap();
+
+    repo.write(
+        "docs/notes.md",
+        "# Notes\n\nWe verified by running `cargo test` (READ: src/lib.rs:2) that the fix works.\n",
+    );
+    repo.commit("docs: fix notes");
+    let head_commits = repo.git_output(&["log", "--format=%H", "main..HEAD"]);
+    let first_sha = head_commits.lines().last().unwrap().trim();
+    let short_sha = &first_sha[..7];
+
+    let pr_body_good = format!(
+        "## Summary\n\nWe ran `cargo test` (`RUN: cargo test`) and confirmed that all tests pass.\n\nallow-claim-label: {short_sha} earlier commit message fixed in follow-up\n"
+    );
+    let run_pass = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[("PR_BODY", &pr_body_good)],
+    );
+    assert_eq!(
+        run_pass.code, 0,
+        "expected pass with valid labels and override: {}\n{}",
+        run_pass.stdout, run_pass.stderr
+    );
+    let outcome = run_pass.outcome("claim-labels");
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 0);
+    assert_eq!(outcome["overrides"].as_array().unwrap().len(), 2);
+    let notes: Vec<&str> = outcome["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|n| n.as_str())
+        .collect();
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("not recorded in active hook session state")),
+        "expected unvouched command note in {notes:?}"
+    );
 }

@@ -420,6 +420,14 @@ pub const GATES: &[GateInfo] = &[
         available: true,
         delta_only: false,
     },
+    GateInfo {
+        id: "claim-labels",
+        suite: Suite::Hygiene,
+        summary: "require RUN or READ labels on verification claims in PR bodies, commits, and Markdown",
+        languages: "markdown, any",
+        available: true,
+        delta_only: false,
+    },
 ];
 
 pub fn gate_info(id: &str) -> Option<&'static GateInfo> {
@@ -865,6 +873,7 @@ pub struct Gates {
     pub gate_command_lint: GateCommandLintGate,
     pub mechanism_sections: MechanismSectionsGate,
     pub citation_anchors: CitationAnchorsGate,
+    pub claim_labels: ClaimLabelsGate,
 }
 
 /// `error-swallowing`: the shared keys plus the paths where a numeric fallback in an
@@ -973,7 +982,8 @@ impl_gate_settings!(
     SanitizersGate,
     GateCommandLintGate,
     MechanismSectionsGate,
-    CitationAnchorsGate
+    CitationAnchorsGate,
+    ClaimLabelsGate
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2595,6 +2605,30 @@ impl Default for CitationAnchorsGate {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ClaimLabelsGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub diff_only: bool,
+    pub extra_patterns: Vec<String>,
+    pub allow_patterns: Vec<String>,
+}
+
+impl Default for ClaimLabelsGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Warning,
+            exempt_paths: Vec::new(),
+            diff_only: true,
+            extra_patterns: Vec::new(),
+            allow_patterns: Vec::new(),
+        }
+    }
+}
+
 impl Gates {
     pub fn settings(&self, id: &str) -> Option<&dyn GateSettings> {
         Some(match id {
@@ -2643,6 +2677,7 @@ impl Gates {
             "gate-command-lint" => &self.gate_command_lint,
             "mechanism-sections" => &self.mechanism_sections,
             "citation-anchors" => &self.citation_anchors,
+            "claim-labels" => &self.claim_labels,
             _ => return None,
         })
     }

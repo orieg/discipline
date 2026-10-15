@@ -535,11 +535,19 @@ pub static DIRECTIVE_SPECS: &[DirectiveSpec] = &[
         subject_kind: DirectiveSubjectKind::TestName,
         subject_doc: "Name of the new test the vacuous-tests finding is on",
     },
+    DirectiveSpec {
+        canonical: "allow-claim-label",
+        deprecated: None,
+        gate: "claim-labels",
+        subject_kind: DirectiveSubjectKind::FilePath,
+        subject_doc:
+            "File path (every finding in the file), `path:line` (that line only), or `<PR body>` / commit SHA",
+    },
 ];
 
-/// The 46 named directives recognized by discipline (36 canonical + 10 deprecated aliases).
+/// The 47 named directives recognized by discipline (37 canonical + 10 deprecated aliases).
 pub const KNOWN_DIRECTIVES: &[&str] = &[
-    // 36 Canonical
+    // 37 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-case-drop",
@@ -576,6 +584,7 @@ pub const KNOWN_DIRECTIVES: &[&str] = &[
     "allow-sanitizers",
     "allow-vacuous-test",
     "allow-harness-tampering",
+    "allow-claim-label",
     // 10 Deprecated aliases
     "deletes",
     "allow-floor-drop",
@@ -788,6 +797,12 @@ pub const ALLOW_VACUOUS_TEST: &[&str] = &[
     "allow(vacuous-tests)",
 ];
 
+pub const ALLOW_CLAIM_LABEL: &[&str] = &[
+    "allow-claim-label",
+    "discipline:allow(claim-labels)",
+    "allow(claim-labels)",
+];
+
 /// Returns the slice of aliases accepted for a given directive name.
 pub fn names_for_directive(name: &str) -> &'static [&'static str] {
     let lower = name.to_ascii_lowercase();
@@ -828,6 +843,7 @@ pub fn names_for_directive(name: &str) -> &'static [&'static str] {
         "allow-miri" => ALLOW_MIRI,
         "allow-sanitizers" => ALLOW_SANITIZERS,
         "allow-vacuous-test" => ALLOW_VACUOUS_TEST,
+        "allow-claim-label" => ALLOW_CLAIM_LABEL,
         _ => &[],
     }
 }
@@ -842,7 +858,7 @@ pub fn spec_for_directive(name: &str) -> Option<&'static DirectiveSpec> {
 }
 
 pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
-    // 36 Canonical
+    // 37 Canonical
     "removes",
     "allow-assertion-drop",
     "allow-case-drop",
@@ -879,6 +895,7 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow-sanitizers",
     "allow-vacuous-test",
     "allow-harness-tampering",
+    "allow-claim-label",
     // 10 Deprecated aliases
     "deletes",
     "allow-floor-drop",
@@ -959,6 +976,8 @@ pub const ALL_DIRECTIVE_NAMES: &[&str] = &[
     "allow(miri)",
     "discipline:allow(sanitizers)",
     "allow(sanitizers)",
+    "discipline:allow(claim-labels)",
+    "allow(claim-labels)",
 ];
 
 const PLACEHOLDERS: &[&str] = &[
