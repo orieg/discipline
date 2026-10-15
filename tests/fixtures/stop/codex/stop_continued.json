@@ -1,0 +1,11 @@
+{
+  "cwd": "/work/repo",
+  "hook_event_name": "Stop",
+  "last_assistant_message": "`cargo test` completed successfully: 0 unit tests and 0 doc tests ran.",
+  "model": "model",
+  "permission_mode": "bypassPermissions",
+  "session_id": "00000000-0000-0000-0000-000000000000",
+  "stop_hook_active": true,
+  "transcript_path": "/home/user/.agent/transcript",
+  "turn_id": "00000000-0000-0000-0000-000000000000"
+}

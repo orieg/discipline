@@ -95,8 +95,7 @@ fn refuse_mode_refuses_the_recorded_stop_once_in_each_agents_shape() {
     for (agent, dir) in [
         ("claude-code", "claude-code"),
         ("qwen", "qwen"),
-        // Codex sends Claude Code's payload (READ: its hook input schema).
-        ("codex", "claude-code"),
+        ("codex", "codex"),
     ] {
         let repo = repo_with("enabled = true\nmode = \"refuse\"\n");
         let run = hook(&repo, &["--agent", agent], &stop(dir));
