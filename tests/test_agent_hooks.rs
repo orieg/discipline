@@ -2013,6 +2013,11 @@ stdins.length = 0
 await v1["tool.execute.after"]({ tool: "bash", sessionID: "s", callID: "c-2" }, { output: "2 passed", metadata: { exit: 0 } })
 const keptArgsWitness = JSON.parse(await stdins[0].text())
 behaviour = "exit-1"
+// A failing check after an edit whose result has neither a text part nor a string output.
+const droppedNotices = []
+console.error = (...words) => droppedNotices.push(words.join(" "))
+await v2["execute.after"]({ tool: "write", result: { output: { operation: "write" } } }).catch(() => {})
+console.error = realError
 ran.length = 0
 await v1["tool.execute.before"]({ tool: "read" }, { args: {} })
 await v2["execute.before"]({ tool: "read", input: {} })
@@ -2034,6 +2039,7 @@ console.log(JSON.stringify({
   sent,
   ranForARead: ran.length,
   keptArgsWitness,
+  droppedNotices,
 }))
 "#;
 
@@ -2271,6 +2277,7 @@ fn the_opencode_observe_plugin_never_throws_whatever_the_command_does() {
         "observe mode threw on timeout from: {hang_threw:?}"
     );
     assert_eq!(v["unregisteredNotices"], serde_json::json!([]), "{v}");
+    assert_eq!(v["droppedNotices"], serde_json::json!([]), "{v}");
 }
 
 /// On OpenCode 2.x a session takes its worktree's lease once, in either mode: on
@@ -2349,6 +2356,14 @@ fn the_opencode_enforcing_plugin_refuses_a_call_it_could_not_check() {
     assert!(
         notice.starts_with("discipline: ") && notice.contains("pre-tool check was not registered"),
         "{notice}"
+    );
+    // A failed check whose report has no text to join is said on stderr, not dropped.
+    let dropped = v["droppedNotices"].as_array().unwrap();
+    assert_eq!(dropped.len(), 1, "{v}");
+    let dropped = dropped[0].as_str().unwrap();
+    assert!(
+        dropped.starts_with("discipline: ") && dropped.contains("refused: outside this worktree"),
+        "{dropped}"
     );
 }
 

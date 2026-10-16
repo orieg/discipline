@@ -1710,8 +1710,14 @@ pub const OPENCODE_OBSERVE_NEVER_BLOCKS: &str =
 /// stream, in a loop detached from `setup` whose errors go nowhere in either mode: the
 /// lease never blocks a session. Its commands are each given their stdin, the check an
 /// empty one: `hook run` reads stdin to its end, and a 2.x server's own stdin does not
-/// end. In enforcing mode, an API without `tool.hook` throws from `setup` so the plugin
-/// fails closed rather than leaving tool calls unchecked.
+/// end. In enforcing mode, an API without `tool.hook` is said once on stderr
+/// (`console.error`); `setup` does not throw, so the plugin loads and checks no tool call
+/// there (CI still gates the change).
+///
+/// `withTimeout` stops waiting for a command; it does not kill it. Bun's `$` returns a
+/// `ShellPromise`, whose methods (`cwd`, `env`, `quiet`, `nothrow`, `text` and the like)
+/// give no handle to the child process, so a command that outlives its timeout runs on
+/// until it exits by itself.
 fn opencode_plugin(cmd: &str, pre: &str, start: &str, post: &str, observe: bool) -> String {
     // A handler body, as written when enforcing; in observe mode, inside `try`/`catch`.
     let guard = |indent: usize, body: String| -> String {
@@ -1848,6 +1854,16 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, post: &str, observe: bool)
       }}
 "
     );
+    // Enforcing only (an observe-mode check exits 0): a result with neither a text part
+    // nor a string output has nowhere for the report to go, so it is said on stderr
+    // rather than dropped.
+    let dropped = if observe {
+        ""
+    } else {
+        " else {
+          console.error(\"discipline: the check after this edit failed, and its tool result has no text the report could be added to:\" + report)
+        }"
+    };
     let v2_after = v2_witness
         + &guard(
         6,
@@ -1864,7 +1880,7 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, post: &str, observe: bool)
           else call.result.content.push({{ type: \"text\", text: report.trimStart() }})
         }} else if (typeof call.result.output === \"string\") {{
           call.result.output += report
-        }}
+        }}{dropped}
       }}
 "
         ),
@@ -1895,6 +1911,8 @@ const SHELL_ARGS = new Map()
 const HOOK_TIMEOUT_MS = 30_000
 const CHECK_TIMEOUT_MS = 120_000
 
+// Stops waiting for `p` after `ms`. It cannot kill the command: Bun's `$` gives no handle
+// to the child process, so a command that outlives the timeout runs on until it exits.
 const withTimeout = (p, ms) => {{
   let timer
   const limit = new Promise((_, reject) => {{
@@ -5109,6 +5127,13 @@ mod tests {
 }
 ";
         assert!(enforcing.ends_with(notice), "{enforcing}");
-        assert_eq!(enforcing.matches("console.error").count(), 1);
+        // The notice above, and the report of a failed check that has no text to join.
+        assert_eq!(enforcing.matches("console.error").count(), 2);
+        assert_eq!(
+            enforcing
+                .matches("console.error(\"discipline: the check after this edit failed")
+                .count(),
+            1
+        );
     }
 }

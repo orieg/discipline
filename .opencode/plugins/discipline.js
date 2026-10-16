@@ -1,5 +1,5 @@
 // Written by `discipline hook install --agent opencode`.
-// discipline-hook-file: mode=observe sha256=8e97412afae117fe1df66765981d20cd4b8137d501187b7d748d74b9b64b8ccf
+// discipline-hook-file: mode=observe sha256=848c47c423ee11a0a433e0fbdbcf2facdf7e57842751436577865931381cbddf
 // When a session is created, takes this worktree's lease for it. Before an edit tool, refuses an edit outside this session's worktree (the tool call
 // is sent on stdin; a refusal throws, and the model reads the reason). After it, runs
 // the discipline check and, when it fails, appends the report to the tool's output so
@@ -15,6 +15,8 @@ const SHELL_ARGS = new Map()
 const HOOK_TIMEOUT_MS = 30_000
 const CHECK_TIMEOUT_MS = 120_000
 
+// Stops waiting for `p` after `ms`. It cannot kill the command: Bun's `$` gives no handle
+// to the child process, so a command that outlives the timeout runs on until it exits.
 const withTimeout = (p, ms) => {
   let timer
   const limit = new Promise((_, reject) => {
