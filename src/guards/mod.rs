@@ -355,8 +355,9 @@ fn holds_no_checking_test(tests: usize) -> String {
 /// test that checks anything ([`holds_a_checking_test`]). `None` for every other file.
 ///
 /// The file is one the change adds, whose path a pack's convention reads as test code,
-/// that `[tests] paths` does not declare and that no build tool makes test code by
-/// construction ([`crate::ast::functions::test_by_construction`]): a name or a
+/// that `[tests] paths` does not declare, that no build tool makes test code by
+/// construction ([`crate::ast::functions::test_by_construction`]), and that is not a
+/// test's input file ([`crate::ast::functions::test_fixture_path`]): a name or a
 /// directory cannot say whether `TestDataBuilder.cs`, `app/test_runner.py` or
 /// `tests/support/helpers.py` is test code, and the tests it holds can. A file
 /// [`replaced_production_file`] pairs is one of these whatever the build tool says.
@@ -395,6 +396,7 @@ pub fn test_scope_by_name_only(
         || !pack.is_test_path(&file.path)
         || declared(&file.path)
         || crate::ast::functions::test_by_construction(&file.path)
+        || crate::ast::functions::test_fixture_path(&file.path)
     {
         return None;
     }
