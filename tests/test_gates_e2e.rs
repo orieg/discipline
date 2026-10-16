@@ -20381,6 +20381,31 @@ enabled = true
     assert!(run_pass.violations("mechanism-sections").is_empty());
 }
 
+/// An untagged claim whose 57th byte falls inside a multi-byte character is a finding in
+/// a normal report, never a panic (exit 101) while the message is truncated.
+#[test]
+fn mechanism_sections_non_ascii_claim_is_reported_not_a_crash() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"repo\"\n[gates.mechanism-sections]\nenabled = true\n",
+    );
+    let claim = format!("{}été and the rest of the sentence", "a".repeat(56));
+    repo.write(
+        "docs/incident.md",
+        &format!("# Incident\n\n## Root cause\n\n{claim}\n"),
+    );
+    repo.commit("docs: untagged non-ASCII root cause claim");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let codes: Vec<String> = run
+        .violations("mechanism-sections")
+        .into_iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(codes, vec!["mechanism-sections/untagged-mechanism-claim"]);
+}
+
 #[test]
 fn test_floor_uncommitted_report_fallback_static_and_fail_closed_e2e() {
     let repo = Repo::new();

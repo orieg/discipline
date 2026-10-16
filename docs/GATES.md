@@ -1274,9 +1274,14 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Rule:** Requires evidence tags (`(inferred)` or `(verified: <test or artifact>)`) for claims in designated root cause or mechanism sections (`section_headings`). Evidence targets must resolve in the repository.
 - **Languages:** Markdown.
 - **What it catches:**
-  - Untagged claims in designated sections (`untagged-mechanism-claim`).
-  - Evidence targets (`(verified: path)`) that do not exist in the repository (`evidence-target-not-found`).
+  - Untagged claims in designated sections (`untagged-mechanism-claim`). A heading is designated when its words start with one of `section_headings`, case ignored and after leading numbering or emphasis: `## Root cause (summary)`, `## 2. Root cause` and `### Mechanism: lock ordering` are in scope; `## Causes of delay` is not one of `Cause`.
+  - Evidence targets (`(verified: path)` or `(verified: path::symbol)`) that are not tracked at head, or whose named symbol is not in the file (`evidence-target-not-found`). A file present on disk but never added to the index does not count.
   - Empty designated sections (`empty-designated-section`).
+- **What it does NOT catch:**
+  - Whether a cited test or artifact supports the claim: a tracked path, and a symbol present as text in it, is all that is checked.
+  - Whether an `(inferred)` claim is reasonable; the tag only marks that it was not verified.
+  - Claims in sections whose heading does not start with a designated heading, in fenced code blocks (`` ``` `` or `~~~`), or in documents other than `*.md`.
+  - A symbol after `::` matched as a substring: `src/a.rs::run` resolves when the file contains `run_all`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `diff_only`, `section_headings`.
 
 #### `citation-anchors`

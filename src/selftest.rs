@@ -9527,16 +9527,30 @@ proptest! {
         },
     ),
     (
-        "mechanism-sections: extracts claims only from designated sections with tags",
+        "mechanism-sections: an untagged claim and an untracked evidence target are reported; tagged claims, fenced text and other sections are not",
         || {
-            use crate::guards::mechanism_sections::parse_designated_sections;
-            let text = "## Root cause\n- (inferred) Cache eviction was delayed.\n- (verified: tests/cache.rs) Re-indexing failed.\n\n## Next steps\n- Fix the cache.\n";
-            let sections = parse_designated_sections(text, &["root cause".to_string()]);
-            Ok(sections.len() == 1
-                && sections[0].heading_title.eq_ignore_ascii_case("root cause")
-                && sections[0].claims.len() == 2
-                && sections[0].claims[0].text.contains("(inferred)")
-                && sections[0].claims[1].text.contains("(verified: tests/cache.rs)"))
+            use crate::guards::mechanism_sections::judge_document;
+            let headings = vec!["Root cause".to_string()];
+            // Only `tests/cache.rs` is tracked.
+            let tracked = |t: &str| Ok(t == "tests/cache.rs");
+            // Positive control: a heading that starts with the designated one, an untagged
+            // claim, and a claim citing a file that is not tracked.
+            let bad = judge_document(
+                "## Root cause (summary)\n- Cache eviction was delayed.\n- Re-indexing failed. (verified: tests/missing.rs)\n",
+                &headings,
+                tracked,
+            )?;
+            let codes: Vec<&str> = bad.findings.iter().map(|f| f.kind.code).collect();
+            // Negative control: both claims tagged, an untagged line inside a `~~~` fence,
+            // and an untagged claim under a heading that is not designated.
+            let good = judge_document(
+                "## Root cause\n- (inferred) Cache eviction was delayed.\n- Re-indexing failed. (verified: tests/cache.rs)\n\n~~~\nuntagged log line\n~~~\n\n## Next steps\n- Fix the cache.\n",
+                &headings,
+                tracked,
+            )?;
+            Ok(codes == ["untagged-mechanism-claim", "evidence-target-not-found"]
+                && good.findings.is_empty()
+                && good.claims == 2)
         },
     ),
     (
