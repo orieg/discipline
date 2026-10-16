@@ -15101,7 +15101,7 @@ exempt_paths = ["["]
 }
 
 #[test]
-fn unsafe_budget_unparseable_head_emits_note_and_does_not_abort() {
+fn unsafe_budget_unparseable_head_is_could_not_check() {
     const UNFINISHED: &str = "(>\u{fffd}t(0(.t();}";
     let repo = Repo::new();
     repo.write(
@@ -15134,22 +15134,20 @@ enabled = false
     repo.write("src/broken.rs", UNFINISHED);
     repo.commit("feat: broken syntax");
     let run = repo.check(&[]);
-    assert_ne!(
+    // Fail closed: the head side's `unsafe` sites cannot be counted, so the gate could
+    // not check the change (a note and a skip would pass an added `unsafe` block).
+    assert_eq!(
         run.code, 2,
-        "must not exit 2\nstdout: {}\nstderr: {}",
+        "stdout: {}\nstderr: {}",
         run.stdout, run.stderr
     );
-    let notes = run.outcome("unsafe-budget")["notes"]
-        .as_array()
-        .expect("notes array")
-        .iter()
-        .map(|n| n.as_str().unwrap().to_string())
-        .collect::<Vec<_>>();
+    let (reason, gate) = run.could_not_check();
+    assert_eq!(reason, "gate");
+    assert_eq!(gate.as_deref(), Some("unsafe-budget"));
+    let detail = run.json()["could_not_check"]["detail"].to_string();
     assert!(
-        notes
-            .iter()
-            .any(|n| n.starts_with("`src/broken.rs`: not analysed, the head side does not parse")),
-        "unsafe-budget notes must note unparseable head: {notes:?}"
+        detail.contains("could not parse `src/broken.rs`"),
+        "{detail}"
     );
 }
 
