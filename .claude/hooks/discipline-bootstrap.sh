@@ -1,6 +1,6 @@
 #!/bin/bash
 # Written by `discipline hook install --agent claude-code`.
-# discipline-hook-file: sums=pinned sha256=186785956f05595ccbdca0600914ca2f9192223924783db74b9fcbfdd63ef074
+# discipline-hook-file: sums=pinned sha256=c0ce461ac4dcf6d72fcdd8c8f431b81d32123556bb8bfb0dc1570fefa92f9f47
 # A Claude Code cloud session starts on a fresh VM without discipline. This installs
 # the pinned release, checksum-verified, so the hooks in .claude/settings.json can
 # check the change. Locally it does nothing: install discipline yourself.
@@ -13,7 +13,7 @@ set -u
 [ "${CLAUDE_CODE_REMOTE:-}" = "true" ] || exit 0
 command -v discipline >/dev/null 2>&1 && exit 0
 
-version="v0.20.3"
+version="v0.22.0"
 say() { echo "discipline bootstrap: $*" >&2; }
 case "$(uname -m)" in
   x86_64|amd64) arch="x86_64" ;;
@@ -29,8 +29,8 @@ if ! curl -fsSL --retry 3 -o "${dir}/${asset}" "${base}/${asset}"; then
   exit 0
 fi
 case "${arch}" in
-  x86_64) want="ef606ccc8ece18586813c1b25831cec4af3b33c3baa03daa3b5d721135107dea" ;;
-  aarch64) want="a97d3ba65f602147549232cf5b6a8b131a9748ce55d270002f2def0a77e9aa26" ;;
+  x86_64) want="22dbab4c6710c926f27759ba5cc2381f9252b3ca62967b77ad0b668b4d12cdc3" ;;
+  aarch64) want="9a54a3cc31af6c78d4aae4e6921789bbe9507036ea836ee2fb92db0cac7be2ff" ;;
 esac
 got="$(sha256sum "${dir}/${asset}" | awk '{ print $1 }')"
 if [ -z "${want}" ] || [ "${want}" != "${got}" ]; then
