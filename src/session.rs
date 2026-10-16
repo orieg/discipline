@@ -11,8 +11,10 @@
 //!   tool inputs and working-tree states are persisted.
 //! - Corrupt or unreadable session files recover to an empty [`SessionState`] (never
 //!   granting an unearned verification pass and never blocking read-only tools).
-//! - Concurrent updates serialize under `<sessions dir>/.lock` (`create_new`, stale lock
-//!   recovery after 30 seconds) and write via temporary file + atomic rename.
+//! - Concurrent updates serialize under `<sessions dir>/.lock`: a lock file created with
+//!   `create_new` (not an advisory `flock`), retried every 25 ms up to 200 times, and
+//!   removed as stale once it is more than 30 seconds old. An update writes a temporary
+//!   file created `0600` on Unix and renames it over the session file.
 
 use crate::report::gitlab::sha256_hex;
 use anyhow::{bail, Context, Result};
@@ -141,11 +143,7 @@ impl SessionStore {
             .with_context(|| format!("cannot create {}", self.dir.display()))?;
         let path = self.dir.join(".lock");
         for _ in 0..LOCK_ATTEMPTS {
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
+            match open_owner_only(&path) {
                 Ok(_) => return Ok(Lock(path)),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     let stale = std::fs::metadata(&path)
@@ -240,11 +238,41 @@ impl SessionStore {
         state.updated_at = now;
         let out = f(&mut state);
         let tmp = self.dir.join(format!(".{key}.tmp"));
-        std::fs::write(&tmp, serde_json::to_string_pretty(&state)? + "\n")
-            .with_context(|| format!("cannot write {}", tmp.display()))?;
+        write_owner_only(
+            &tmp,
+            (serde_json::to_string_pretty(&state)? + "\n").as_bytes(),
+        )
+        .with_context(|| format!("cannot write {}", tmp.display()))?;
         std::fs::rename(&tmp, &path).with_context(|| format!("cannot write {}", path.display()))?;
         Ok(Some(out))
     }
+}
+
+/// Creates `path` for writing (`create_new`: an existing file is an error), readable by
+/// its owner only (`0600` on Unix; elsewhere the platform's default).
+fn open_owner_only(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        opts.mode(0o600);
+    }
+    opts.open(path)
+}
+
+/// Writes `bytes` to `path` with [`open_owner_only`]. A file left from an earlier write
+/// is removed first, so the mode is the one this call creates it with, not that file's.
+fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    let mut f = open_owner_only(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()
 }
 
 /// Whether `rel` is a documentation-only path excluded when `verify_paths` is empty.
@@ -712,6 +740,36 @@ mod tests {
         assert_eq!(
             vouched_commands(&base, mixed.path(), Some("main")),
             vec!["pytest".to_string(), "go test ./...".to_string()]
+        );
+    }
+
+    /// Audit M3: a session file is readable by its owner only.
+    #[cfg(unix)]
+    #[test]
+    fn session_files_are_written_owner_only() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SessionStore {
+            dir: tmp.path().join("sessions"),
+        };
+        store
+            .update("s1", "claude-code", 100, |s| s.consecutive_calls = 1)
+            .unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&store.path_for("s1")), 0o600);
+        // A file that already exists with a wider mode is replaced by an owner-only one.
+        std::fs::set_permissions(store.path_for("s1"), std::fs::Permissions::from_mode(0o644))
+            .unwrap();
+        store
+            .update("s1", "claude-code", 101, |s| s.consecutive_calls = 2)
+            .unwrap();
+        assert_eq!(mode(&store.path_for("s1")), 0o600);
+        assert_eq!(
+            store
+                .load("s1", "claude-code", 102)
+                .unwrap()
+                .consecutive_calls,
+            2
         );
     }
 
