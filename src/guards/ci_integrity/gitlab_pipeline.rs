@@ -118,6 +118,11 @@ pub(super) fn evaluate_gitlab_file(ctx: &Context, path: &str, out: &mut GateOutc
             "discipline-version",
         );
     }
+    for job in super::ci_gitlab::unparsed_script_jobs(&base_docs, &head_docs) {
+        out.notes.push(format!(
+            "`{path}`: the script of job `{job}` does not parse as shell, so whether it masks its exit code is not fully verified"
+        ));
+    }
     match super::ci_gitlab::diff_gitlab_ci_with(&base_docs, &head_docs) {
         Ok(found) => {
             for w in found {
