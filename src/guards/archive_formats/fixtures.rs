@@ -39,7 +39,7 @@ pub fn zstd(bytes: &[u8]) -> Vec<u8> {
 /// A zip holding `entries`, deflated.
 pub fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let options = zip::write::FileOptions::default();
+    let options = zip::write::SimpleFileOptions::default();
     for (name, data) in entries {
         writer
             .start_file(*name, options)

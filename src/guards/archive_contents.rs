@@ -733,7 +733,7 @@ mod tests {
 
         let f = File::create(&zip_path).unwrap();
         let mut zip = zip::ZipWriter::new(f);
-        let options = zip::write::FileOptions::default();
+        let options = zip::write::SimpleFileOptions::default();
 
         zip.start_file("pkg/example_ext.h", options).unwrap();
         zip.write_all(b"#define EXAMPLE_EXT_VERSION 2.6.0").unwrap();
@@ -852,8 +852,8 @@ mod tests {
         let path = dir.path().join("pkg.zip");
         let f = File::create(&path).unwrap();
         let mut zip = zip::ZipWriter::new(f);
-        let stored =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
         zip.start_file("dist/cli.js.map", stored).unwrap();
         zip.write_all(LEAKING_MAP.as_bytes()).unwrap();
         zip.finish().unwrap();
