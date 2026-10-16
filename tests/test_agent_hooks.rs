@@ -4,7 +4,9 @@
 mod common;
 
 use common::{Repo, CONFIG_HEAD};
-use discipline::hook::{config_for_mode, guarded, guarded_pretool, Agent};
+use discipline::hook::{
+    config_for_mode, guarded, guarded_posttool, guarded_pretool, Agent, STALE_BINARY,
+};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -720,6 +722,12 @@ fn copilot_installs_at_user_level_with_the_guard() {
         guarded_pretool(
             "discipline hook run --agent copilot --event session-start --if-configured"
         ),
+        "{v}"
+    );
+    // The post-tool witness also passes when the installed release predates it.
+    assert_eq!(
+        v["hooks"]["postToolUse"][1]["bash"],
+        guarded_posttool("discipline hook run --agent copilot --event post-tool --if-configured"),
         "{v}"
     );
     assert!(!repo.file(".github/hooks/discipline.json").exists());
@@ -2547,7 +2555,11 @@ fn installed_hooks_send_shell_calls_to_the_post_tool_witness() {
                 c.ends_with(&format!(
                     "discipline hook run --agent {} --event post-tool",
                     agent.id()
-                )) && c.starts_with("command -v discipline"),
+                )) && c
+                    == &guarded_posttool(&format!(
+                        "discipline hook run --agent {} --event post-tool",
+                        agent.id()
+                    )),
                 "{agent:?}: {c}"
             );
             // The change check after a tool still runs for edits, not for shell calls.
@@ -2596,11 +2608,11 @@ fn the_installed_claude_code_hook_witnesses_a_passing_test_run() {
         }
     })
     .to_string();
-    // The wired command is the missing-binary guard and then this `hook run`; the run is
-    // given to the binary as its arguments, as `sh` would after the guard passes.
+    // The wired command is the missing-binary and release guards and then this `hook run`;
+    // the run is given to the binary as its arguments, as `sh` would after they pass.
     let run = command
-        .strip_prefix(&guarded_pretool(""))
-        .expect("the post-tool entry is behind the missing-binary guard");
+        .strip_prefix(&guarded_posttool(""))
+        .expect("the post-tool entry is behind the missing-binary and release guards");
     let args: Vec<&str> = run
         .strip_prefix("discipline ")
         .expect("the guard runs discipline")
@@ -2622,4 +2634,96 @@ fn the_installed_claude_code_hook_witnesses_a_passing_test_run() {
 
     let after = hook(&repo, &["hook", "run", "--agent", "claude-code"], &stop);
     assert_eq!(after.code, 0, "witnessed: {}", after.stderr);
+}
+
+/// A release before v0.22.0 on `PATH` rejects `--event post-tool` with a usage error and
+/// exit 2, which Claude Code reports as a blocking error after every shell call. The
+/// post-tool entry `hook install` writes says so in one line and passes instead, without
+/// running the witness; with a release that has the event (this one, or a stand-in that
+/// lists it), the witness runs and its exit code is the entry's.
+#[cfg(unix)]
+#[test]
+fn the_post_tool_entry_passes_with_a_release_that_predates_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = Repo::new();
+    let fake = |dir: &std::path::Path, events: &str| {
+        let log = dir.join("calls.log");
+        // What clap does in a release without the event: `--help` lists the others, the
+        // event itself is a usage error with exit 2.
+        let script = format!(
+            "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$*\" in\n  *--help*) echo '  [possible values: {events}]'; exit 0 ;;\n  *--event\\ post-tool*) case '{events}' in *post-tool*) exit 0 ;; esac; echo \"error: invalid value 'post-tool' for '--event <EVENT>'\" >&2; exit 2 ;;\nesac\n",
+            log = log.display()
+        );
+        let bin = dir.join("discipline");
+        std::fs::write(&bin, script).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        log
+    };
+    let old_dir = tempfile::tempdir().unwrap();
+    let old_log = fake(old_dir.path(), "check, pre-tool, session-start");
+    let new_dir = tempfile::tempdir().unwrap();
+    let new_log = fake(new_dir.path(), "check, pre-tool, session-start, post-tool");
+    // This release's own `--help` passes the probe the entry runs.
+    let help = repo.run(&["hook", "run", "--help"], &[]);
+    assert_eq!(help.code, 0, "{}", help.stderr);
+    assert!(help.stdout.contains("post-tool"), "{}", help.stdout);
+    let sh = |cmd: &str, path: &std::path::Path| {
+        common::script_command("/bin/sh")
+            .args(["-c", cmd])
+            .current_dir(repo.path())
+            .env("PATH", format!("{}:/usr/bin:/bin", path.display()))
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    for (agent, file) in [
+        (Agent::ClaudeCode, ".claude/settings.json"),
+        (Agent::Codex, ".codex/hooks.json"),
+        (Agent::Qwen, ".qwen/settings.json"),
+        (Agent::Copilot, ".github/hooks/discipline.json"),
+        (Agent::Agy, ".agents/hooks.json"),
+    ] {
+        let installed = repo.run(&["hook", "install", "--agent", agent.id()], &[]);
+        assert_eq!(installed.code, 0, "{agent:?}: {}", installed.stderr);
+        let text = std::fs::read_to_string(repo.file(file)).unwrap();
+        let (_, command) = post_tool_handlers(agent, &text)
+            .into_iter()
+            .find(|(_, c)| c.contains("--event post-tool"))
+            .expect("a post-tool entry");
+
+        let _ = std::fs::remove_file(&old_log);
+        let old = sh(&command, old_dir.path());
+        assert_eq!(old.status.code(), Some(0), "{agent:?}: {old:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&old.stderr),
+            format!("{STALE_BINARY}\n"),
+            "{agent:?}"
+        );
+        assert!(old.stdout.is_empty(), "{agent:?}: {old:?}");
+        // Only the probe ran: the witness was never handed an argument the release rejects.
+        let calls = std::fs::read_to_string(&old_log).unwrap();
+        assert!(!calls.contains("post-tool"), "{agent:?}: {calls}");
+        // Control: without the guard, that release fails the call as observed live.
+        let bare = sh(
+            &format!(
+                "discipline hook run --agent {} --event post-tool",
+                agent.id()
+            ),
+            old_dir.path(),
+        );
+        assert_eq!(bare.status.code(), Some(2), "{agent:?}: {bare:?}");
+
+        let _ = std::fs::remove_file(&new_log);
+        let new = sh(&command, new_dir.path());
+        assert_eq!(new.status.code(), Some(0), "{agent:?}: {new:?}");
+        assert!(new.stderr.is_empty(), "{agent:?}: {new:?}");
+        let calls = std::fs::read_to_string(&new_log).unwrap();
+        assert!(
+            calls.contains(&format!(
+                "hook run --agent {} --event post-tool",
+                agent.id()
+            )),
+            "{agent:?}: {calls}"
+        );
+    }
 }
