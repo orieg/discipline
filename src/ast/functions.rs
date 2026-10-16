@@ -1083,6 +1083,25 @@ pub fn test_by_construction(path: &str) -> bool {
         || (["java", "kt", "kts", "scala"].contains(&ext) && in_test_source_set(path))
 }
 
+/// Whether `path` is a test's input file: below a `fixtures` directory that is itself
+/// below a test directory (`test`, `tests`, `__tests__`), as in
+/// `crates/lint/resources/test/fixtures/rule/case.py`. A linter, parser or formatter
+/// keeps the code its tests read there, stubs included; the file is neither a test
+/// nor shipped. A `fixtures` directory outside a test directory (`app/fixtures/x.py`)
+/// is not one.
+pub fn test_fixture_path(path: &str) -> bool {
+    let mut dirs: Vec<&str> = path.split('/').collect();
+    dirs.pop();
+    dirs.iter().enumerate().any(|(i, dir)| {
+        dir.eq_ignore_ascii_case("fixtures")
+            && dirs[..i].iter().any(|d| {
+                ["test", "tests", "__tests__"]
+                    .iter()
+                    .any(|t| d.eq_ignore_ascii_case(t))
+            })
+    })
+}
+
 /// A Go `_test.go` file.
 pub fn go_test_file(path: &str) -> bool {
     path.to_ascii_lowercase().ends_with("_test.go")
@@ -1272,6 +1291,28 @@ mod tests {
             "src/test",
         ] {
             assert!(!test_by_construction(path), "{path}");
+        }
+    }
+
+    #[test]
+    fn a_test_fixture_is_a_file_below_fixtures_inside_a_test_directory() {
+        for path in [
+            "crates/ruff_linter/resources/test/fixtures/airflow/AIR304.py",
+            "tests/fixtures/a.py",
+            "pkg/__tests__/fixtures/deep/x.ts",
+            "Test/Fixtures/x.cs",
+        ] {
+            assert!(test_fixture_path(path), "{path}");
+        }
+        for path in [
+            "app/fixtures/x.py",
+            "fixtures/tests/x.py",
+            "tests/helpers/x.py",
+            "tests/fixtures",
+            "src/testfixtures/x.py",
+            "tests/my_fixtures/x.py",
+        ] {
+            assert!(!test_fixture_path(path), "{path}");
         }
     }
 

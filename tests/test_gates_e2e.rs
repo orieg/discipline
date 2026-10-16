@@ -553,6 +553,63 @@ fn vacuous_tests_fire_on_empty_and_tautological_tests_only() {
 }
 
 #[test]
+fn vacuous_tests_read_expect_poll_and_soft_as_assertion_receivers() {
+    // vitejs/vite playground specs: `await expect.poll(fn).toBe(..)`, split across lines.
+    let repo = Repo::new();
+    repo.write(
+        "playground/deps/__tests__/deps.spec.ts",
+        "import { expect, test } from 'vitest'\n\
+         \n\
+         test('poll', async () => {\n  await expect.poll(() => page.textContent('.a')).toBe('ok')\n})\n\
+         \n\
+         test('poll split', async () => {\n  await expect\n    .poll(() => logs())\n    .toContain('done')\n})\n\
+         \n\
+         test('soft', () => {\n  expect.soft(total()).toEqual(3)\n})\n\
+         \n\
+         test('ghost', async () => {\n  await expect.poll(() => page.textContent('.a'))\n})\n",
+    );
+    repo.commit("test: add");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    // Only the poll that never reaches a matcher is vacuous.
+    let lines: Vec<_> = run.outcome("vacuous-tests")["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["line"].as_u64())
+        .collect();
+    assert_eq!(lines, vec![Some(17)], "{}", run.stdout);
+}
+
+#[test]
+fn stub_bodies_reads_a_test_fixture_input_as_test_scope() {
+    // astral-sh/ruff: a linter's input file under `resources/test/fixtures/` holds the
+    // `pass` bodies the rule under test reads; it holds no test and is not shipped.
+    let src = "@dag(start_date=pendulum.now())\ndef my_dag():\n    pass\n\n\ndef not_airflow(start_date):\n    pass\n";
+    let fixture = "crates/lint/resources/test/fixtures/airflow/AIR304.py";
+    let repo = Repo::new();
+    repo.write(fixture, src);
+    repo.commit("test: add a fixture");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.titles("stub-bodies"),
+        Vec::<String>::new(),
+        "{}",
+        run.stdout
+    );
+
+    // Positive control: the same file added in test scope by its directory only, outside
+    // a fixtures directory, is still judged as production code.
+    let helper = "crates/lint/resources/test/helpers/airflow.py";
+    let repo = Repo::new();
+    repo.write(helper, src);
+    repo.commit("test: add a helper");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert_eq!(run.titles("stub-bodies").len(), 2, "{}", run.stdout);
+}
+
+#[test]
 fn vacuous_tests_are_lifted_per_test_by_allow_vacuous_test() {
     let repo = Repo::new();
     repo.write(
@@ -1604,6 +1661,99 @@ fn pii_fires_on_home_paths_and_lan_ips_without_echoing_the_user() {
         "[gates.pii]\nlan_ips = false\nallowed_users = [\"alice\"]",
     ]);
     assert!(relaxed.titles("pii").is_empty(), "{}", relaxed.stdout);
+}
+
+#[test]
+fn pii_reads_test_code_and_placeholder_secrets_without_opening_a_leak() {
+    // Assembled at run time so this file holds none of the shapes it tests.
+    let home = |user: &str| format!("/{}/{user}/project/", "Users");
+    let lan = ["192", "168", "1", "10"].join(".");
+    let header = format!("-----BEGIN {} KEY-----", "PRIVATE");
+    let bearer = |value: &str| format!("{}: Bearer {value}", "Authorization");
+    let repo = Repo::new();
+    // vitejs/vite, denoland/deno: test data inside test code.
+    repo.write(
+        "src/__tests__/utils.spec.ts",
+        &format!(
+            "import {{ expect, test }} from 'vitest'\n\
+             test('urls', () => {{\n  expect(url('{lan}')).toBe('http://{lan}:3000/')\n  expect(rel('{}')).toBe('.')\n}})\n",
+            home("dev")
+        ),
+    );
+    repo.write(
+        "src/error.rs",
+        &format!(
+            "pub fn f() {{}}\n\n#[cfg(test)]\nmod tests {{\n    #[test]\n    fn rel() {{\n        let from = \"file://{}\";\n        assert_eq!(from.len(), 23);\n    }}\n}}\n",
+            home("dev")
+        ),
+    );
+    // denoland/deno, fastapi/fastapi: a format name and a documented placeholder.
+    repo.write(
+        "src/pem.ts",
+        &format!("export const pemHeader = \"{header}\";\n"),
+    );
+    repo.write(
+        "app/http.py",
+        &format!(
+            "def scheme():\n    \"\"\"\n    {}\n    \"\"\"\n",
+            bearer("deadbeef12346")
+        ),
+    );
+    // Positive controls, in code that is not a test: each is still a leak.
+    repo.write(
+        "src/net.ts",
+        &format!(
+            "export const host = '{lan}'\nexport const root = '{}'\nexport const cache = '{}'\n",
+            home("dev"),
+            home("jsmith")
+        ),
+    );
+    repo.write(
+        "src/key.ts",
+        &format!("export const key = \"{header}\\nMIIEvQIBADANBgkqhkiG9w0B\";\n"),
+    );
+    repo.write(
+        "app/client.py",
+        &format!("HEADERS = \"{}\"\n", bearer("9f3kLm2QpX7vR4tZ")),
+    );
+    // A real-looking user name in test code is reported as before.
+    repo.write(
+        "tests/paths_test.py",
+        &format!(
+            "def test_root():\n    assert root() == '{}'\n",
+            home("jsmith")
+        ),
+    );
+    repo.commit("feat: add");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let mut found: Vec<(String, u64, String)> = run
+        .violations("pii")
+        .iter()
+        .map(|v| {
+            (
+                v["file"].as_str().unwrap().to_string(),
+                v["line"].as_u64().unwrap(),
+                v["severity"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    found.sort();
+    let row = |f: &str, l: u64, s: &str| (f.to_string(), l, s.to_string());
+    assert_eq!(
+        found,
+        vec![
+            row("app/client.py", 1, "error"),
+            row("src/__tests__/utils.spec.ts", 3, "warning"),
+            row("src/key.ts", 1, "error"),
+            row("src/net.ts", 1, "error"),
+            row("src/net.ts", 2, "error"),
+            row("src/net.ts", 3, "error"),
+            row("tests/paths_test.py", 2, "error"),
+        ],
+        "{}",
+        run.stdout
+    );
 }
 
 #[test]
@@ -10750,6 +10900,34 @@ tokio = { git = "https://github.com/tokio-rs/tokio.git", tag = "tokio-1.0.0" }
     let titles = run.titles("dependency-delta");
     assert!(titles.contains(&"Dependency Constraint Loosened".to_string()));
     assert!(titles.contains(&"Dependency Source Changed".to_string()));
+}
+
+#[test]
+fn dependency_delta_compares_a_dependency_within_its_own_section() {
+    // vitejs/vite plugin-legacy: `vite` is a peer range and a dev workspace link at once.
+    // A bump of another dependency must not read the dev link against the peer range.
+    let base = "{\n  \"name\": \"plugin\",\n  \"dependencies\": {\n    \"browserslist\": \"^4.28.8\"\n  },\n  \"peerDependencies\": {\n    \"vite\": \"^8.0.0\"\n  },\n  \"devDependencies\": {\n    \"vite\": \"workspace:*\",\n    \"lodash\": \"4.17.21\"\n  }\n}\n";
+    let repo = Repo::new();
+    repo.commit_base("package.json", base, "base: plugin");
+    repo.write("package.json", &base.replace("^4.28.8", "^4.28.9"));
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.titles("dependency-delta"),
+        Vec::<String>::new(),
+        "{}",
+        run.stdout
+    );
+
+    // Positive control: a pin loosened inside `devDependencies` is still reported.
+    let repo = Repo::new();
+    repo.commit_base("package.json", base, "base: plugin");
+    repo.write("package.json", &base.replace("\"4.17.21\"", "\"^4.17.21\""));
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert_eq!(
+        run.titles("dependency-delta"),
+        vec!["Dependency Constraint Loosened".to_string()]
+    );
 }
 
 #[test]

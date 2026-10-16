@@ -189,10 +189,32 @@ fn is_expect_chain_node(mut node: Node, src: &[u8]) -> bool {
     }
     if node.kind() == "call_expression" {
         if let Some(func) = node.child_by_field_name("function") {
-            return func.utf8_text(src).unwrap_or("") == "expect";
+            return is_expect_receiver(func, src);
         }
     }
     false
+}
+
+/// The members of `expect` that build an assertion receiver: `expect.poll(fn)` retries
+/// its matcher until it passes (Vitest, Playwright), `expect.soft(x)` records a failure
+/// and lets the test go on.
+const EXPECT_RECEIVER_MEMBERS: &[&str] = &["poll", "soft"];
+
+/// Whether a callee is `expect` or one of [`EXPECT_RECEIVER_MEMBERS`] on it, read from
+/// the syntax tree, so `expect\n  .poll(...)` across lines is the same callee.
+fn is_expect_receiver(func: Node, src: &[u8]) -> bool {
+    let is_expect = |n: Node| n.kind() == "identifier" && n.utf8_text(src) == Ok("expect");
+    match func.kind() {
+        "identifier" => is_expect(func),
+        "member_expression" => {
+            func.child_by_field_name("object").is_some_and(is_expect)
+                && func
+                    .child_by_field_name("property")
+                    .and_then(|p| p.utf8_text(src).ok())
+                    .is_some_and(|p| EXPECT_RECEIVER_MEMBERS.contains(&p))
+        }
+        _ => false,
+    }
 }
 
 /// The node kinds under a callee that are not the names of its chain.
@@ -2672,5 +2694,53 @@ Deno.test("steps", async (t) => {
             );
         }
         assert_eq!(asserts(""), 0);
+    }
+
+    #[test]
+    fn expect_poll_and_soft_receivers_are_assertions() {
+        // vitejs/vite playground specs: `expect.poll(fn)` retries the matcher (Vitest,
+        // Playwright); `expect.soft(x)` records a failure without stopping the test.
+        let src = r#"
+import { expect, test } from 'vitest'
+test('poll', async () => {
+  await expect.poll(() => page.textContent('.a')).toBe('ok')
+})
+test('poll split', async () => {
+  await expect
+    .poll(() => normalizeLogs(serverLogs))
+    .toContain('[console.error] done')
+})
+test('poll not', async () => {
+  await expect.poll(() => count()).not.toBe(0)
+})
+test('soft', () => {
+  expect.soft(total()).toEqual(3)
+})
+test('poll without matcher', async () => {
+  await expect.poll(() => page.textContent('.a'))
+})
+test('other receiver', async () => {
+  await retry.poll(() => page.textContent('.a')).toBe('ok')
+  await expect.other(() => 1).toBe(1)
+})
+"#;
+        let facts = JavaScriptPack
+            .extract("playground/a.spec.ts", src, &AssertVocabulary::default())
+            .unwrap();
+        let test = |name: &str| facts.tests.iter().find(|t| t.name == name).unwrap();
+        // Positive controls: each receiver carries one strong assertion.
+        for name in ["poll", "poll split", "poll not", "soft"] {
+            assert_eq!(
+                (test(name).total_asserts, test(name).strong_asserts),
+                (1, 1),
+                "{name}"
+            );
+            assert!(!test(name).is_vacuous(), "{name}");
+        }
+        // Negative controls: a poll with no matcher asserts nothing, and neither does a
+        // `.poll` or another member of a receiver that is not `expect`.
+        assert!(test("poll without matcher").is_vacuous());
+        assert_eq!(test("other receiver").total_asserts, 0);
+        assert!(test("other receiver").is_vacuous());
     }
 }
