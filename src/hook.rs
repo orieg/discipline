@@ -1463,8 +1463,9 @@ pub fn config_for_opts(
         agent.id()
     );
     let post = match agent {
+        // The plugin neither reads the witness's exit code nor throws on it.
         Agent::Opencode => post_run,
-        _ => guarded_pretool(&post_run),
+        _ => guarded_posttool(&post_run),
     };
     match agent {
         Agent::ClaudeCode => (
@@ -1679,6 +1680,27 @@ pub fn guarded(agent: Agent, run: &str) -> String {
 pub fn guarded_pretool(run: &str) -> String {
     format!("command -v discipline >/dev/null 2>&1 || {{ echo '{MISSING_BINARY}' >&2; exit 0; }}; {run}")
 }
+
+/// [`guarded_pretool`] for the post-tool witness, which also passes, with
+/// [`STALE_BINARY`] on stderr, when the `discipline` on `PATH` predates
+/// `--event post-tool` (v0.22.0). Such a release rejects the argument with a usage error
+/// and exit 2, which Claude Code reports as a blocking error after every shell call. The
+/// witness never blocks, so a release that cannot run it passes; the pre-tool, check and
+/// session-start entries keep their own behaviour.
+pub fn guarded_posttool(run: &str) -> String {
+    guarded_pretool(&format!("{}{run}", post_tool_probe()))
+}
+
+/// What [`guarded_posttool`] puts before the witness: `hook run --help` of a release
+/// that has the post-tool event lists it among `--event`'s values; an earlier one does
+/// not mention it.
+fn post_tool_probe() -> String {
+    format!("discipline hook run --help 2>/dev/null | grep -q post-tool || {{ echo '{STALE_BINARY}' >&2; exit 0; }}; ")
+}
+
+/// What [`guarded_posttool`] says when the `discipline` on `PATH` has no post-tool event.
+pub const STALE_BINARY: &str =
+    "discipline on PATH predates v0.22.0 (no --event post-tool); the post-tool hook did not run (https://orieg.github.io/discipline/)";
 
 /// What a guarded hook command says when `discipline` is not on `PATH`.
 pub const MISSING_BINARY: &str =
@@ -2341,13 +2363,18 @@ fn json_command(agent: Agent, cmd: &str, user: bool) -> Option<JsonCommand> {
         .strip_prefix(&guarded(agent, ""))
         .or_else(|| cmd.strip_prefix(&guarded_pretool("")))
         .unwrap_or(cmd);
+    // The release probe guards the post-tool witness only (v0.22.0 wrote it without one).
+    let (run, probed) = match run.strip_prefix(&post_tool_probe()) {
+        Some(rest) => (rest, true),
+        None => (run, false),
+    };
     let flag = " --if-configured";
     let run = match (user, run.matches(flag).count()) {
         (true, 1) => run.replacen(flag, "", 1),
         (false, 0) => run.to_string(),
         _ => return None,
     };
-    match run.strip_prefix(&format!("discipline hook run --agent {}", agent.id()))? {
+    let command = match run.strip_prefix(&format!("discipline hook run --agent {}", agent.id()))? {
         "" => Some(JsonCommand::Check { observe: false }),
         " --observe" => Some(JsonCommand::Check { observe: true }),
         " --event pre-tool" => Some(JsonCommand::PreTool { observe: false }),
@@ -2355,7 +2382,8 @@ fn json_command(agent: Agent, cmd: &str, user: bool) -> Option<JsonCommand> {
         " --event session-start" => Some(JsonCommand::SessionStart),
         " --event post-tool" => Some(JsonCommand::PostTool),
         _ => None,
-    }
+    }?;
+    (!probed || command == JsonCommand::PostTool).then_some(command)
 }
 
 /// Every entry under the event table `events` (`hooks`, or agy's `discipline`), when
@@ -2819,7 +2847,7 @@ pub fn user_config_for(
                         &guarded_pretool(
                             "discipline hook run --agent copilot --event session-start --if-configured",
                         ),
-                        &guarded_pretool(
+                        &guarded_posttool(
                             "discipline hook run --agent copilot --event post-tool --if-configured",
                         ),
                     )),
@@ -4009,7 +4037,12 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let bin = tempfile::tempdir().unwrap();
         let fake = bin.path().join("discipline");
-        std::fs::write(&fake, "#!/bin/sh\necho \"ran $*\"\n").unwrap();
+        // It lists the post-tool event in its `--help`, as this release does.
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ncase \"$*\" in *--help*) echo post-tool; exit 0 ;; esac\necho \"ran $*\"\n",
+        )
+        .unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
         let sh = |cmd: &str, path: &str| {
             std::process::Command::new("/bin/sh")
@@ -4837,6 +4870,41 @@ mod tests {
         assert_ne!(marked, claude);
         assert!(!is_generated_hook_file(rel, &marked), "{marked}");
         assert_eq!(generated_json_hooks(Agent::ClaudeCode, &marked), None);
+    }
+
+    /// The release probe before the post-tool witness: a file without it (v0.22.0) is
+    /// still a release's, so `--upgrade` rewrites it; the probe in front of any other
+    /// entry is not something a release writes, so that file is left alone.
+    #[test]
+    fn the_post_tool_release_probe_is_read_on_the_witness_only() {
+        for agent in JSON_AGENTS {
+            // Cursor's file has no post-tool entry.
+            if agent == Agent::Cursor {
+                continue;
+            }
+            for observe in [false, true] {
+                let (_, now) = config_for_opts(agent, observe, None);
+                assert!(generated_json_hooks(agent, &now).is_some(), "{now}");
+                let earlier = now.replace(&post_tool_probe(), "");
+                assert_ne!(earlier, now, "{agent:?}: the probe is in the file");
+                assert_eq!(
+                    generated_json_hooks(agent, &earlier).map(|g| g.observe),
+                    Some(observe),
+                    "{earlier}"
+                );
+                let pre = format!(
+                    "discipline hook run --agent {} --event pre-tool",
+                    agent.id()
+                );
+                let probed_pre = now.replacen(&pre, &format!("{}{pre}", post_tool_probe()), 1);
+                assert_ne!(probed_pre, now, "{agent:?}");
+                assert_eq!(
+                    generated_json_hooks(agent, &probed_pre),
+                    None,
+                    "{probed_pre}"
+                );
+            }
+        }
     }
 
     #[test]
