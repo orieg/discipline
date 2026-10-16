@@ -203,6 +203,7 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `citation-anchors/text-mismatch` | Text Mismatch |
 | `citation-anchors/unanchored-citation` | Unanchored Citation |
 | `citation-anchors/tracker-title-mismatch` | Tracker Title Mismatch |
+| `citation-anchors/quote-too-short` | Quoted Text Too Short |
 | `suppression-delta/suppression-added` | Suppression Added |
 | `provenance-tags/table-numerics-unprovenanced` | Unprovenanced Table Numerics |
 | `provenance-tags/mechanism-claim-without-evidence` | Mechanism Claim Without Evidence |
@@ -1292,9 +1293,14 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Citations referencing lines beyond the cited file length (`line-out-of-bounds`).
   - Citations referencing files absent in the cited commit (`file-not-found`).
   - Citations referencing unresolvable commit hashes (`commit-unresolvable`).
+  - Citations of a commit the base's history does not hold (`commit-unresolvable`): a commit this change made, or one only another branch or the object database holds. Evidence committed in one commit of a pull request and deleted in a later one would otherwise verify. The cited commit must be the base or one of its ancestors; a run without a base (whole tree) uses `HEAD`.
+  - Quoted text with fewer than `min_quote_chars` non-whitespace characters (default 8), matching or not (`quote-too-short`): a quote such as `"{"` is contained in almost any line, so it anchors nothing. `min_quote_chars = 0` turns the minimum off.
   - Unanchored citations (`path:line` without commit or quoted text) per `unanchored_citations` mode (`unanchored-citation`).
-  - Mismatches in optional issue/PR tracker titles (`tracker-title-mismatch`).
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `diff_only`, `unanchored_citations`, `verify_tracker_titles`, `require_online`.
+  - With `verify_tracker_titles`, a `#<n> ("<title>")` reference whose issue on the forge has another title, or does not exist (`tracker-title-mismatch`). The title is read from the forge's REST API. Offline (no forge, or `DISCIPLINE_NO_NETWORK` set to anything but `0` or `false`), each reference is a note, or with `require_online = true` the run cannot check (exit 2).
+- **What it does NOT catch:**
+  - Whether the cited line supports the claim made about it: the quote is checked against the line, not the prose around the citation.
+  - A quote containing a `"` or `'`, which the citation syntax cannot carry; such a citation is not recognised as anchored.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `diff_only`, `unanchored_citations`, `verify_tracker_titles`, `require_online`, `min_quote_chars`.
 
 #### `claim-labels`
 - **Rule:** Requires an explicit `RUN` or `READ` verification marker in the same paragraph or bullet item as any verification claim in pull-request bodies, commit messages, and added Markdown lines (`*.md`). Structured markers (`(RUN: <command>)`, `(READ: <path[:line]>)`) and bare markers (`(RUN)`, `(READ)`, `[RUN]`, `[READ]`, `` `RUN` ``, `` `READ` ``) are recognized. <!-- discipline:allow(claim-labels) -->

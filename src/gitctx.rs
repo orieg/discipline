@@ -1346,6 +1346,30 @@ impl GitCtx {
         }
     }
 
+    /// Whether the commit `full_hex` is the base or one of its ancestors: history the
+    /// change starts from, not a commit the change itself made. Without a base (a
+    /// whole-tree run) the anchor is `HEAD`; with neither, nothing is reachable. A commit
+    /// that is only in the object database (another branch, a dropped commit) is not.
+    pub fn is_reachable_from_base(&self, full_hex: &str) -> Result<bool> {
+        let Some(anchor) = self.base.or_else(|| {
+            self.repo
+                .head()
+                .ok()
+                .and_then(|h| h.peel_to_commit().ok())
+                .map(|c| c.id())
+        }) else {
+            return Ok(false);
+        };
+        let oid = Oid::from_str(full_hex)
+            .with_context(|| format!("`{full_hex}` is not a full object id"))?;
+        if oid == anchor {
+            return Ok(true);
+        }
+        self.repo
+            .graph_descendant_of(anchor, oid)
+            .with_context(|| format!("failed to walk history from the base to `{full_hex}`"))
+    }
+
     /// Whether history was truncated when the repository was cloned or fetched, so an
     /// object it does not hold may exist upstream.
     pub fn is_shallow(&self) -> bool {

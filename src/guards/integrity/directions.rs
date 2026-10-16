@@ -122,6 +122,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("figure_tolerance_pct", Direction::Tolerance),
     ("min_count", Direction::Floor),
     ("min_tests", Direction::Floor),
+    ("min_quote_chars", Direction::Floor),
     ("test_report", Direction::Evidence),
     ("base_report", Direction::Evidence),
     ("head_report", Direction::Evidence),

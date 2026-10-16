@@ -20210,9 +20210,12 @@ fn test_floor_test_command_runs_before_resolving_head_report() {
 #[test]
 fn citation_anchors_e2e_controls() {
     let repo = Repo::new();
-    repo.write("src/lib.rs", "pub fn core_metric() -> usize {\n    42\n}\n");
-    repo.commit("feat: initial metric");
-    let sha = repo.git_output(&["rev-parse", "HEAD"]);
+    // The cited commit is on the base branch: history the change starts from.
+    repo.commit_base_files(
+        &[("src/lib.rs", "pub fn core_metric() -> usize {\n    42\n}\n")],
+        "feat: initial metric",
+    );
+    let sha = repo.git_output(&["rev-parse", "main"]);
     let short_sha = &sha[..7];
 
     repo.write(
@@ -20242,15 +20245,68 @@ unanchored_citations = "ignore"
         .collect();
     assert_eq!(codes, vec!["citation-anchors/text-mismatch"]);
 
-    // Positive control: valid citation
+    // Negative control: a quote too short to identify the line, though it matches.
     repo.write(
         "docs/plan.md",
         &format!("# Verification\n\nSee src/lib.rs:2@{short_sha} \"42\"\n"),
+    );
+    repo.commit("docs: cite two characters");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let codes: Vec<String> = run
+        .violations("citation-anchors")
+        .into_iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(codes, vec!["citation-anchors/quote-too-short"]);
+
+    // Positive control: valid citation
+    repo.write(
+        "docs/plan.md",
+        &format!("# Verification\n\nSee src/lib.rs:1@{short_sha} \"pub fn core_metric()\"\n"),
     );
     repo.commit("docs: fix citation text");
     let run_pass = repo.check(&[]);
     assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
     assert!(run_pass.violations("citation-anchors").is_empty());
+}
+
+/// Evidence written in one commit of the change and deleted in a later one still sits in
+/// the object database; a citation of that commit is reported, not verified.
+#[test]
+fn citation_anchors_e2e_rejects_a_commit_only_this_change_holds() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"repo\"\n[gates.citation-anchors]\nenabled = true\nunanchored_citations = \"ignore\"\n",
+    );
+    repo.write("src/evidence.rs", "// fabricated evidence line\n");
+    repo.commit("test: add evidence");
+    let sha = repo.git_output(&["rev-parse", "HEAD"]);
+    repo.remove("src/evidence.rs");
+    repo.write(
+        "docs/plan.md",
+        &format!(
+            "# Verification\n\nSee src/evidence.rs:1@{} \"fabricated evidence line\"\n",
+            &sha[..10]
+        ),
+    );
+    repo.commit("docs: cite evidence, then drop it");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("citation-anchors");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(
+        violations[0]["code"].as_str(),
+        Some("citation-anchors/commit-unresolvable")
+    );
+    assert!(
+        violations[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not on the base's history"),
+        "{violations:?}"
+    );
 }
 
 // ---- gate-command-lint e2e -------------------------------------------------

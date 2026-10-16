@@ -9488,20 +9488,41 @@ proptest! {
         },
     ),
     (
-        "citation-anchors: extracts anchored and unanchored citations discriminating correctly",
+        "citation-anchors: a short quote, a commit the base does not hold and a mismatched quote are reported; a quote of the cited line at a base commit is not",
         || {
-            use crate::guards::citation_anchors::{extract_anchored_citations, extract_unanchored_citations};
-            let text = "As defined in src/lib.rs:42@abcdef1 \"core_metric()\", it works. Also see src/util.rs:10 for details.\n";
-            let anchored = extract_anchored_citations(text);
+            use crate::guards::citation_anchors::{
+                extract_anchored_citations, extract_unanchored_citations, judge_anchor, CitedCommit,
+            };
+            let text = "Verified at src/lib.rs:1@abcdef1 \"pub fn core_metric()\".\n\
+                        src/lib.rs:1@abcdef1 \"()\"\n\
+                        src/lib.rs:1@1234567 \"pub fn core_metric()\"\n\
+                        src/lib.rs:1@abcdef1 \"pub fn other_metric()\"\n\
+                        Also see src/util.rs:10 for details.\n";
+            let cited = extract_anchored_citations(text);
+            // `abcdef1` is on the base; `1234567` exists only in this change.
+            let resolve = |c: &str| {
+                Ok(if c == "abcdef1" {
+                    CitedCommit::OnBase("abcdef1".to_string())
+                } else {
+                    CitedCommit::NotOnBase(c.to_string())
+                })
+            };
+            let content = |_: &str, _: &str| Ok(Some("pub fn core_metric() -> usize {\n".to_string()));
+            let mut codes = Vec::new();
+            for c in &cited {
+                codes.push(judge_anchor(c, 8, resolve, content)?.map(|f| f.kind.code));
+            }
             let unanchored = extract_unanchored_citations(text);
-            Ok(anchored.len() == 1
-                && anchored[0].path == "src/lib.rs"
-                && anchored[0].line == 42
-                && anchored[0].commit == "abcdef1"
-                && anchored[0].quoted_text == "core_metric()"
+            // Negative control first, then the three positive controls.
+            Ok(codes
+                == [
+                    None,
+                    Some("quote-too-short"),
+                    Some("commit-unresolvable"),
+                    Some("text-mismatch"),
+                ]
                 && unanchored.len() == 1
-                && unanchored[0].path == "src/util.rs"
-                && unanchored[0].line == 10)
+                && unanchored[0].path == "src/util.rs")
         },
     ),
     (
