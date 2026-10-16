@@ -150,13 +150,39 @@ fn is_manual(job: &Value) -> bool {
     job.get("when").and_then(|w| w.as_str()) == Some("manual")
 }
 
-fn masks_exit_code(lines: &[String]) -> bool {
-    let run = lines.join("\n");
-    lines
+/// The job's scripts read as one bash script with `errexit` on (GitLab's bash runs
+/// `set -eo pipefail` first), by the analysis `gate-command-lint` shares.
+fn mask_analysis(lines: &[String]) -> super::shell_masking::Analysis {
+    super::shell_masking::analyze_ci_script(&lines.join("\n"))
+}
+
+fn masks_exit_code(lines: &[String]) -> Option<super::shell_masking::Mask> {
+    mask_analysis(lines).exit_masked().cloned()
+}
+
+/// Jobs of `head` whose script changed from `base` and does not parse as shell: whether
+/// they mask an exit code is not fully verified. A side that is not valid YAML gives
+/// none (the comparison reports it).
+pub fn unparsed_script_jobs(base: &[String], head: &[String]) -> Vec<String> {
+    let side = |docs: &[String]| {
+        let mut all = BTreeMap::new();
+        for doc in docs {
+            all.extend(jobs(doc).ok()?);
+        }
+        Some(all)
+    };
+    let (Some(base_jobs), Some(head_jobs)) = (side(base), side(head)) else {
+        return Vec::new();
+    };
+    head_jobs
         .iter()
-        .any(|l| l.contains("|| true") || l.contains("|| :"))
-        || (lines.iter().any(|l| l.contains("set +e"))
-            && !super::ci_integrity::set_e_status_checked(&run))
+        .filter(|(name, h)| {
+            let lines = script_lines(h);
+            base_jobs.get(*name).map(script_lines).as_ref() != Some(&lines)
+                && mask_analysis(&lines).unparsed
+        })
+        .map(|(name, _)| name.clone())
+        .collect()
 }
 
 const GITLAB_EXTRA_VERIFICATION_WORDS: &[&str] = &["pytest", "sast", "scan"];
@@ -250,12 +276,15 @@ pub fn diff_gitlab_ci_with(
         }
         let base_lines = b.map(script_lines).unwrap_or_default();
         let head_lines = script_lines(h);
-        if masks_exit_code(&head_lines) && !masks_exit_code(&base_lines) {
+        let head_mask = masks_exit_code(&head_lines);
+        if let (Some(mask), None) = (head_mask, masks_exit_code(&base_lines)) {
             found.push(GitlabWeakening {
                 kind: &crate::findings::EXIT_CODE_MASKED,
                 job: name.clone(),
                 message: format!(
-                    "Job '{name}' gained a script line that masks a command's exit code ('|| true', '|| :' or 'set +e')."
+                    "Job '{name}' gained a script line that masks a command's exit code (`{}`): {}.",
+                    mask.snippet,
+                    mask.kind.describe()
                 ),
                 subject: "|| true".to_string(),
             });
