@@ -9609,6 +9609,10 @@ proptest! {
                 && !patterns.is_empty()
                 && is_label_placeholder("<command>")
                 && is_label_placeholder("file:line")
+                && is_label_placeholder("x")
+                && is_label_placeholder("ok")
+                && is_label_placeholder("cargo test -p <crate>")
+                && !is_label_placeholder("go test ./...")
                 && !is_label_placeholder("cargo test")
                 && !is_label_placeholder("src/lib.rs:10"))
         },

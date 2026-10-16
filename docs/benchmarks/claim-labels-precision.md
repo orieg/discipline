@@ -2,6 +2,8 @@
 
 This document records the pre-registered phrase list, sample-size derivation, two-reader labelling protocol, and empirical precision measurement for the `claim-labels` gate (`#703`), executed before building the gate.
 
+**Limits (section 4):** the precision is in-sample (the patterns were shaped on this corpus), recall is not measured, and who `Reader B` was is not stated.
+
 ---
 
 ## 1. Pre-Registration (`B-12` Locked Before Sampling)
@@ -107,3 +109,14 @@ Executed against the `orieg/discipline` git history (`588` non-merge commits on 
 | 51 | `commit 4c2a24ec` | 27 | `verified-by-execution` | `- Verified locally` | `TP` / `TP` |
 | 52 | `commit 617da87d` | 17 | `verified-by-execution` | `Verified on` | `TP` / `TP` |
 | 53 | `commit 1bb42b5e` | 46 | `verified-by-execution` | `Verified against` | `TP` / `TP` |
+
+---
+
+## 4. Limits of This Study
+
+Read the **PASS** in section 3 with these limits; they are not resolved by anything in this document.
+
+- **In-sample.** The phrase patterns were measured on the same corpus they were shaped against. Class 2's clause-start anchoring is described above as excluding passive descriptions "by construction": it was written to keep out a known non-claim form, which is tuning, not a pre-registered rule applied blind. Section 1 says the list was locked before sampling, but the list, the sample and the gate landed in one squashed commit (`ea421c13`, `#761`), so the history cannot show the order. The interval in section 3 is an in-sample precision; precision on pull requests and commits the rules were not shaped on is unmeasured.
+- **Recall is not measured.** Only lines that matched the patterns were sampled. Verification claims phrased any other way ("the suite is green", "cargo test is clean") were never counted, so the share of claims the gate misses is unknown.
+- **Who the readers were is unstated.** `Reader A` is described as a rule-based rubric and `Reader B` as a hostile audit, by role only. Neither this document nor its commit history says whether `Reader B` was a person, a second scripted pass, or a language model, or whether the two were independent of the author of the patterns. Their `53 / 53` agreement is therefore not evidence of independent review.
+- **Label shape changed after the measurement.** This study measured which lines carry a claim, not which labels satisfy one. The label rules were tightened later (`docs/GATES.md`, `claim-labels`): a bare marker now needs content, a placeholder or one-word content no longer satisfies a claim, and a marker inside a code span does not count. Those rules were not measured on this corpus.
