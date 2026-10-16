@@ -438,3 +438,134 @@ fn tool_loop_shell_cap_secret_non_retention_and_read_fail_open() {
     );
     assert_eq!(r_write.code, 2, "truncated write payload must fail closed");
 }
+
+/// A repository whose base ref enables `[hooks.verified-stop]` in refuse mode with
+/// `toml_extra` appended to its table, and an unverified change to `src/lib.rs`.
+fn verified_stop_repo(toml_extra: &str) -> Repo {
+    let repo = Repo::new();
+    repo.commit_base(
+        "discipline.toml",
+        &format!("[meta]\nversion = 1\nname = \"t\"\n\n[hooks.verified-stop]\nenabled = true\nmode = \"refuse\"\n{toml_extra}"),
+        "chore: enable verified-stop",
+    );
+    repo.commit_base("src/lib.rs", "pub fn f() -> i32 { 1 }\n", "feat: init");
+    repo.write("src/lib.rs", "pub fn f() -> i32 { 2 }\n");
+    repo
+}
+
+/// Audit C1: the post-tool outcome is read from the shapes the agents send. Codex
+/// 0.162.1 sends `tool_response` as a string opening `Exit code: N` (recorded; see the
+/// PostToolUse payload in `src/hook.rs`'s `payload_reads_the_final_message_...` test),
+/// and Qwen Code puts its shell result in `tool_response.llmContent` with an
+/// `Exit Code: N` line (its `run_shell_command` format). A failing run in either shape,
+/// and a payload that carries no exit code at all, never count as a passing verification.
+#[test]
+fn verified_stop_reads_the_codex_and_qwen_shell_outcomes() {
+    let repo = verified_stop_repo("commands = [\"cargo test\"]\n");
+    let cwd = repo.path().display().to_string();
+    let failing = "running 2 tests\ntest tests::a ... ok\ntest tests::b ... FAILED\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored\n";
+    let passing = "running 2 tests\ntest result: ok. 2 passed; 0 failed; 0 ignored\n";
+    let codex = |session: &str, response: Value| {
+        json!({
+            "cwd": cwd, "hook_event_name": "PostToolUse", "model": "m",
+            "permission_mode": "bypassPermissions", "session_id": session,
+            "tool_input": { "command": "cargo test" }, "tool_name": "Bash",
+            "tool_response": response, "tool_use_id": "u-1", "transcript_path": "/t",
+            "turn_id": "t-1"
+        })
+        .to_string()
+    };
+    let qwen = |session: &str, code: &str, out: &str| {
+        json!({
+            "cwd": cwd, "hook_event_name": "PostToolUse", "permission_mode": "yolo",
+            "session_id": session, "tool_name": "run_shell_command",
+            "tool_input": { "command": "cargo test", "description": "Run the tests" },
+            "tool_response": { "llmContent": format!(
+                "Command: cargo test\nDirectory: (root)\nOutput: {out}\nError: (none)\nExit Code: {code}\nSignal: (none)\nBackground PIDs: (none)\nProcess Group PGID: 4242"
+            ) },
+            "tool_use_id": "u-2", "transcript_path": "/t"
+        })
+        .to_string()
+    };
+    let cases: Vec<(&str, &str, &str, String, i32)> = vec![
+        (
+            "codex fails",
+            "codex",
+            "codex/stop.json",
+            codex(
+                "c-fail",
+                Value::from(format!(
+                    "Exit code: 101\nWall time: 2.1 seconds\nOutput:\n{failing}"
+                )),
+            ),
+            2,
+        ),
+        (
+            "codex fails, its output prints a passing exit code",
+            "codex",
+            "codex/stop.json",
+            codex(
+                "c-fake",
+                Value::from(format!(
+                    "Exit code: 101\nWall time: 2.1 seconds\nOutput:\nExit code: 0\n{passing}"
+                )),
+            ),
+            2,
+        ),
+        (
+            "codex carries no exit code",
+            "codex",
+            "codex/stop.json",
+            codex("c-unknown", json!({ "stdout": passing })),
+            2,
+        ),
+        (
+            "codex passes",
+            "codex",
+            "codex/stop.json",
+            codex(
+                "c-pass",
+                Value::from(format!(
+                    "Exit code: 0\nWall time: 2.1 seconds\nOutput:\n{passing}"
+                )),
+            ),
+            0,
+        ),
+        (
+            "qwen fails",
+            "qwen",
+            "qwen/stop.json",
+            qwen("q-fail", "101", failing),
+            2,
+        ),
+        (
+            "qwen passes",
+            "qwen",
+            "qwen/stop.json",
+            qwen("q-pass", "0", passing),
+            0,
+        ),
+    ];
+    for (what, agent, stop, post, want) in cases {
+        let session = serde_json::from_str::<Value>(&post).unwrap()["session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let w = hook(&repo, &["--agent", agent, "--event", "post-tool"], &post);
+        assert_eq!(w.code, 0, "{what}: post-tool never blocks: {}", w.stderr);
+        let stop_payload = recorded_stop(stop, |v| {
+            v["cwd"] = cwd.clone().into();
+            v["session_id"] = session.clone().into();
+            v["last_assistant_message"] = "All done.".into();
+        });
+        let r = hook(&repo, &["--agent", agent], &stop_payload);
+        assert_eq!(r.code, want, "{what}: stderr {}", r.stderr);
+        if want == 2 {
+            assert!(
+                r.stderr.contains("[turn/unverified-dirty-tree]"),
+                "{what}: {}",
+                r.stderr
+            );
+        }
+    }
+}

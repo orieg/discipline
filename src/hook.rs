@@ -612,8 +612,55 @@ fn side_base_name(side: &CheckSide) -> Option<&str> {
     }
 }
 
+/// An exit code a shell tool states in its text result: Codex's `Exit code: N` (its whole
+/// `tool_response` string, recorded live with Codex CLI 0.162.1), Qwen Code's
+/// `Exit Code: N` line in `llmContent`, Copilot CLI's `<exited with exit code N>`.
+static TEXT_EXIT_CODE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"(?im)^\s*exit code:\s*(-?[0-9]+)\b|exited with exit code (-?[0-9]+)\b")
+        .expect("valid regex")
+});
+
+/// The exit code stated in `text`, when it states one. The command's own output is in the
+/// same text and can print a line of that form too, so every statement is read: a
+/// non-zero one is the result (the real one is among them), and 0 only when all say 0.
+fn text_exit_code(text: &str) -> Option<i32> {
+    let mut codes = TEXT_EXIT_CODE.captures_iter(text).filter_map(|c| {
+        c.get(1)
+            .or_else(|| c.get(2))
+            .and_then(|m| m.as_str().parse::<i32>().ok())
+    });
+    let first = codes.next()?;
+    if first != 0 {
+        return Some(first);
+    }
+    Some(codes.find(|c| *c != 0).unwrap_or(0))
+}
+
+/// The text of `v`: a string, or the `text` of each part of an array of parts.
+fn text_of(v: &serde_json::Value) -> Option<String> {
+    match v {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Array(parts) => {
+            let texts: Vec<&str> = parts
+                .iter()
+                .filter_map(|p| p.as_str().or_else(|| p.get("text")?.as_str()))
+                .collect();
+            (!texts.is_empty()).then(|| texts.join("\n"))
+        }
+        _ => None,
+    }
+}
+
 /// Extracts `(exit_code, combined_output)` from a post-tool hook payload.
-fn parse_post_tool_outcome(v: &serde_json::Value) -> (Option<i32>, String) {
+///
+/// The exit code is `None` unless the payload states one: a numeric exit-code field, an
+/// error flag or a result type other than success (a failure), an `Exit code: N`
+/// statement in the tool's text result, or, for Claude Code only, a `PostToolUse` event
+/// whose result was not interrupted (Claude Code's hooks reference: `PostToolUse` runs
+/// after a tool succeeds, and a failing tool reaches `PostToolUseFailure` instead; READ
+/// from its documentation, not recorded). A result that states none of these is not read
+/// as a pass, so it is never witnessed.
+fn parse_post_tool_outcome(agent: Agent, v: &serde_json::Value) -> (Option<i32>, String) {
     let mut exit_code: Option<i32> = None;
     for ptr in [
         "/tool_response/exit_code",
@@ -634,14 +681,63 @@ fn parse_post_tool_outcome(v: &serde_json::Value) -> (Option<i32>, String) {
         "/code",
     ] {
         if let Some(n) = v.pointer(ptr).and_then(|x| x.as_i64()) {
-            exit_code = Some(n as i32);
+            exit_code = Some(i32::try_from(n).unwrap_or(1));
             break;
         }
     }
-    if exit_code.is_none() {
-        if let Some(res_type) = v.pointer("/toolResult/resultType").and_then(|x| x.as_str()) {
-            exit_code = Some(if res_type == "success" { 0 } else { 1 });
+
+    let mut texts: Vec<String> = Vec::new();
+    for ptr in [
+        "/tool_response",
+        "/tool_response/stdout",
+        "/tool_response/stderr",
+        "/tool_response/output",
+        "/tool_response/llmContent",
+        "/tool_result",
+        "/tool_result/stdout",
+        "/tool_result/stderr",
+        "/tool_result/output",
+        "/toolResult/textResultForLlm",
+        "/toolResult/output",
+        "/output/output",
+        "/stdout",
+        "/stderr",
+    ] {
+        if let Some(t) = v.pointer(ptr).and_then(text_of) {
+            texts.push(t);
         }
+    }
+    let output = texts.join("\n");
+
+    if exit_code.is_none() {
+        // Where a stated code lives: the whole text result of Codex, Qwen Code's
+        // `llmContent`, Copilot CLI's text for the model.
+        exit_code = [
+            "/tool_response",
+            "/tool_response/llmContent",
+            "/tool_result",
+            "/toolResult/textResultForLlm",
+        ]
+        .iter()
+        .filter_map(|p| v.pointer(p).and_then(text_of))
+        .filter_map(|t| text_exit_code(&t))
+        .reduce(|a, b| if a != 0 { a } else { b });
+    }
+    if exit_code.is_none()
+        && agent == Agent::ClaudeCode
+        && v.get("hook_event_name").and_then(|e| e.as_str()) == Some("PostToolUse")
+        && v.pointer("/tool_response/interrupted")
+            .and_then(|i| i.as_bool())
+            == Some(false)
+    {
+        exit_code = Some(0);
+    }
+    // A result type other than success is a failure; success alone states no exit code.
+    if v.pointer("/toolResult/resultType")
+        .and_then(|x| x.as_str())
+        .is_some_and(|t| t != "success")
+    {
+        exit_code = Some(1);
     }
     for err_ptr in [
         "/tool_response/is_error",
@@ -653,41 +749,6 @@ fn parse_post_tool_outcome(v: &serde_json::Value) -> (Option<i32>, String) {
         if v.pointer(err_ptr).and_then(|x| x.as_bool()) == Some(true) {
             exit_code = Some(1);
         }
-    }
-    if exit_code.is_none()
-        && ["/tool_response", "/tool_result", "/toolResult", "/output"]
-            .iter()
-            .any(|p| v.pointer(p).is_some())
-    {
-        exit_code = Some(0);
-    }
-
-    let mut output = String::new();
-    for ptr in [
-        "/tool_response/stdout",
-        "/tool_response/stderr",
-        "/tool_response/output",
-        "/tool_result/stdout",
-        "/tool_result/stderr",
-        "/tool_result/output",
-        "/toolResult/textResultForLlm",
-        "/toolResult/output",
-        "/output/output",
-        "/stdout",
-        "/stderr",
-    ] {
-        if let Some(s) = v.pointer(ptr).and_then(|x| x.as_str()) {
-            if !output.is_empty() {
-                output.push('\n');
-            }
-            output.push_str(s);
-        }
-    }
-    if let Some(s) = v.pointer("/tool_response").and_then(|x| x.as_str()) {
-        if !output.is_empty() {
-            output.push('\n');
-        }
-        output.push_str(s);
     }
     (exit_code, output)
 }
@@ -708,7 +769,7 @@ fn witness_post_tool(agent: Agent, dir: &Path, side: &CheckSide, stdin: &str) {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(stdin) else {
         return;
     };
-    let (exit_code, output) = parse_post_tool_outcome(&v);
+    let (exit_code, output) = parse_post_tool_outcome(agent, &v);
     if exit_code != Some(0) || crate::session::output_is_vacuous(&output) {
         return;
     }
@@ -4076,6 +4137,91 @@ mod tests {
             let empty = parse_payload(&format!(r#"{{"hook_event_name":"Stop","{key}":[]}}"#));
             assert!(!empty.background_work, "{key}");
         }
+    }
+
+    /// Audit C1: an exit code is read only where a payload states one; a result without
+    /// one is unknown, never a pass.
+    #[test]
+    fn post_tool_outcome_reads_a_stated_exit_code_and_nothing_else() {
+        let outcome = |agent: Agent, raw: &str| {
+            parse_post_tool_outcome(agent, &serde_json::from_str(raw).unwrap()).0
+        };
+        // Recorded live (Codex CLI 0.162.1, Qwen Code 0.25.2; see the test above).
+        assert_eq!(
+            outcome(
+                Agent::Codex,
+                r#"{"hook_event_name":"PostToolUse","tool_name":"apply_patch","tool_response":"Exit code: 0\n"}"#
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            outcome(
+                Agent::Qwen,
+                r#"{"hook_event_name":"PostToolUse","tool_name":"edit","tool_response":{"llmContent":"updated"}}"#
+            ),
+            None
+        );
+        // A failing run whose own output prints a passing statement is still failing.
+        assert_eq!(
+            outcome(
+                Agent::Codex,
+                r#"{"tool_response":"Exit code: 101\nOutput:\nExit code: 0\n2 passed\n"}"#
+            ),
+            Some(101)
+        );
+        assert_eq!(
+            outcome(
+                Agent::Qwen,
+                r#"{"tool_response":{"llmContent":"Command: cargo test\nOutput: Exit Code: 0\nExit Code: 101\nSignal: (none)"}}"#
+            ),
+            Some(101)
+        );
+        assert_eq!(
+            outcome(
+                Agent::Copilot,
+                r#"{"toolName":"bash","toolResult":{"resultType":"success","textResultForLlm":"2 passed\n<exited with exit code 1>"}}"#
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            outcome(
+                Agent::Copilot,
+                r#"{"toolName":"bash","toolResult":{"resultType":"success","textResultForLlm":"2 passed"}}"#
+            ),
+            None
+        );
+        assert_eq!(
+            outcome(
+                Agent::Copilot,
+                r#"{"toolName":"bash","toolResult":{"resultType":"failure","textResultForLlm":"<exited with exit code 0>"}}"#
+            ),
+            Some(1)
+        );
+        // Claude Code's PostToolUse runs only after a tool succeeded.
+        let claude = r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_response":{"stdout":"2 passed","stderr":"","interrupted":false,"isImage":false}}"#;
+        assert_eq!(outcome(Agent::ClaudeCode, claude), Some(0));
+        assert_eq!(outcome(Agent::Codex, claude), None);
+        assert_eq!(
+            outcome(
+                Agent::ClaudeCode,
+                r#"{"tool_name":"Bash","tool_response":{"stdout":"2 passed","interrupted":false}}"#
+            ),
+            None
+        );
+        assert_eq!(
+            outcome(
+                Agent::ClaudeCode,
+                r#"{"hook_event_name":"PostToolUse","tool_response":{"stdout":"","interrupted":true}}"#
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            outcome(
+                Agent::Opencode,
+                r#"{"output":{"args":{"command":"cargo test"}}}"#
+            ),
+            None
+        );
     }
 
     #[test]
