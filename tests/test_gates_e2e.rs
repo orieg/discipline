@@ -553,6 +553,35 @@ fn vacuous_tests_fire_on_empty_and_tautological_tests_only() {
 }
 
 #[test]
+fn vacuous_tests_read_expect_poll_and_soft_as_assertion_receivers() {
+    // vitejs/vite playground specs: `await expect.poll(fn).toBe(..)`, split across lines.
+    let repo = Repo::new();
+    repo.write(
+        "playground/deps/__tests__/deps.spec.ts",
+        "import { expect, test } from 'vitest'\n\
+         \n\
+         test('poll', async () => {\n  await expect.poll(() => page.textContent('.a')).toBe('ok')\n})\n\
+         \n\
+         test('poll split', async () => {\n  await expect\n    .poll(() => logs())\n    .toContain('done')\n})\n\
+         \n\
+         test('soft', () => {\n  expect.soft(total()).toEqual(3)\n})\n\
+         \n\
+         test('ghost', async () => {\n  await expect.poll(() => page.textContent('.a'))\n})\n",
+    );
+    repo.commit("test: add");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    // Only the poll that never reaches a matcher is vacuous.
+    let lines: Vec<_> = run.outcome("vacuous-tests")["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["line"].as_u64())
+        .collect();
+    assert_eq!(lines, vec![Some(17)], "{}", run.stdout);
+}
+
+#[test]
 fn vacuous_tests_are_lifted_per_test_by_allow_vacuous_test() {
     let repo = Repo::new();
     repo.write(
