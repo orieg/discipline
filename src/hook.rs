@@ -931,41 +931,46 @@ fn verified_stop(
         return Some(out);
     }
 
-    let so_far = session_state.as_ref().map(|s| s.stop_refusals).unwrap_or(0);
-    let let_through = if payload.stop_hook_active || payload.execution_num.is_some_and(|n| n > 0) {
-        Some("the agent's loop guard")
-    } else if so_far >= config.max_per_session {
-        Some("this session's cap (hooks.verified-stop.max_per_session)")
-    } else {
-        match session_id.zip(store.as_ref()) {
-            Some((s, st)) => {
-                if st
-                    .update(s, agent.id(), now, |state| {
-                        state.stop_refusals = state.stop_refusals.saturating_add(1);
-                    })
-                    .ok()
-                    .flatten()
-                    .is_none()
-                {
-                    Some("a cap that could not be recorded")
-                } else {
-                    None
-                }
-            }
-            None => Some("a cap that could not be recorded"),
-        }
-    };
-    if let Some(why) = let_through {
+    // The agent's own loop guard is the bound that holds whatever happens to the session
+    // store: a stop this hook already continued is let through.
+    if payload.stop_hook_active || payload.execution_num.is_some_and(|n| n > 0) {
         out.stderr = format!(
-            "discipline: this stop was let through at {why}, but the turn ended on {code}.\n"
+            "discipline: this stop was let through at the agent's loop guard, but the turn ended on {code}.\n"
         );
         return Some(out);
     }
+    let so_far = session_state.as_ref().map(|s| s.stop_refusals).unwrap_or(0);
+    if so_far >= config.max_per_session {
+        out.stderr = format!(
+            "discipline: this stop was let through at this session's cap (hooks.verified-stop.max_per_session), but the turn ended on {code}.\n"
+        );
+        return Some(out);
+    }
+    // A refusal that cannot be counted is still a refusal: letting the stop through here
+    // would let an agent that holds the session lock (a file it can create) or sends no
+    // session id end every turn unverified.
+    let unrecorded = match (session_id, store.as_ref()) {
+        (None, _) => Some("the hook payload names no session id".to_string()),
+        (Some(_), None) => Some("the repository's session store cannot be opened".to_string()),
+        (Some(s), Some(st)) => match st.update(s, agent.id(), now, |state| {
+            state.stop_refusals = state.stop_refusals.saturating_add(1);
+        }) {
+            Ok(Some(())) => None,
+            Ok(None) => Some("the session id has no usable characters".to_string()),
+            Err(err) => Some(format!("{err:#}")),
+        },
+    };
     let verdict = crate::turn::Verdict {
         kind: crate::turn::TurnKind::UnverifiedDirtyTree,
         sentence: expected_cmd.to_string(),
     };
-    Some(refusal_for(agent, &verdict.refusal()))
+    let mut text = verdict.refusal();
+    if let Some(why) = unrecorded {
+        text.push_str(&format!(
+            "discipline: this refusal could not be recorded against the session's cap ({why}); the stop is refused, and the agent's own loop guard bounds it.\n"
+        ));
+    }
+    Some(refusal_for(agent, &text))
 }
 
 /// Appends one line to `<git dir>/discipline/hook-observe.log` and returns its path.

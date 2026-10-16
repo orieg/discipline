@@ -569,3 +569,60 @@ fn verified_stop_reads_the_codex_and_qwen_shell_outcomes() {
         }
     }
 }
+
+/// Audit M2: in refuse mode a stop whose refusal cannot be counted (the session lock is
+/// held, here by a file the agent could create itself, or the payload names no session)
+/// is refused, not let through. The agent's own loop guard still bounds it, and observe
+/// mode only logs.
+#[test]
+fn verified_stop_refuses_a_stop_whose_refusal_cannot_be_recorded() {
+    let repo = verified_stop_repo("commands = [\"cargo test\"]\n");
+    let cwd = repo.path().display().to_string();
+    let sessions = repo.file(".git/discipline/sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(sessions.join(".lock"), "").unwrap();
+
+    let held = recorded_stop("claude-code/stop.json", |v| {
+        v["cwd"] = cwd.clone().into();
+        v["session_id"] = "sess-lock".into();
+        v["last_assistant_message"] = "All done.".into();
+    });
+    let r = hook(&repo, &["--agent", "claude-code"], &held);
+    assert_eq!(
+        r.code, 2,
+        "a held session lock must not let the stop through: {}",
+        r.stderr
+    );
+    assert!(
+        r.stderr.contains("[turn/unverified-dirty-tree]")
+            && r.stderr.contains("could not be recorded"),
+        "{}",
+        r.stderr
+    );
+
+    let continued = recorded_stop("claude-code/stop_continued.json", |v| {
+        v["cwd"] = cwd.clone().into();
+        v["session_id"] = "sess-lock".into();
+        v["last_assistant_message"] = "All done.".into();
+    });
+    let rc = hook(&repo, &["--agent", "claude-code"], &continued);
+    assert_eq!(rc.code, 0, "the loop guard still bounds it: {}", rc.stderr);
+    assert!(rc.stderr.contains("loop guard"), "{}", rc.stderr);
+
+    let obs = hook(&repo, &["--agent", "claude-code", "--observe"], &held);
+    assert_eq!(obs.code, 0, "observe mode only logs: {}", obs.stderr);
+    std::fs::remove_file(sessions.join(".lock")).unwrap();
+
+    let anonymous = recorded_stop("claude-code/stop.json", |v| {
+        v["cwd"] = cwd.clone().into();
+        v.as_object_mut().unwrap().remove("session_id");
+        v["last_assistant_message"] = "All done.".into();
+    });
+    let r = hook(&repo, &["--agent", "claude-code"], &anonymous);
+    assert_eq!(
+        r.code, 2,
+        "a stop with no session id must be refused: {}",
+        r.stderr
+    );
+    assert!(r.stderr.contains("no session id"), "{}", r.stderr);
+}
