@@ -200,11 +200,23 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
             match &by_name.classify_path {
                 None => out.notes.push(by_name.note),
                 Some(classify_path) => {
-                    if let Some(production) = pack
+                    if let Some(mut production) = pack
                         .extract(classify_path, &head_src, &vocab)
                         .ok()
                         .filter(|facts| !judge(&base, &facts.functions).is_empty())
                     {
+                        // A test double (`FakeClock` in `tests/fakes.py`) keeps the
+                        // carve-out its real path gives it: judging the file as production
+                        // code is about stubs hidden under a test name, and a class named
+                        // and placed as a test double may compare equal to anything.
+                        for f in &mut production.functions {
+                            f.equality_carved_out |= head.functions.iter().any(|h| {
+                                h.equality_carved_out
+                                    && h.line == f.line
+                                    && h.name == f.name
+                                    && h.type_name == f.type_name
+                            });
+                        }
                         out.notes.push(by_name.note);
                         head = production;
                     }
@@ -375,17 +387,37 @@ mod tests {
     fn only_a_changed_production_equality_keeps_the_gate_severity() {
         let added = judge(
             &[],
-            &[f("__eq__", 1, BodyShape::Trivial("return True".into()), false)],
+            &[f(
+                "__eq__",
+                1,
+                BodyShape::Trivial("return True".into()),
+                false,
+            )],
         );
         assert!(added[0].capped_at_warning, "added: {added:?}");
         let in_test = judge(
             &[f("__eq__", 1, BodyShape::Substantive, true)],
-            &[f("__eq__", 1, BodyShape::Trivial("return True".into()), true)],
+            &[f(
+                "__eq__",
+                1,
+                BodyShape::Trivial("return True".into()),
+                true,
+            )],
         );
         assert!(in_test[0].capped_at_warning, "test code: {in_test:?}");
         let from_trivial = judge(
-            &[f("__eq__", 1, BodyShape::Trivial("return False".into()), false)],
-            &[f("__eq__", 1, BodyShape::Trivial("return True".into()), false)],
+            &[f(
+                "__eq__",
+                1,
+                BodyShape::Trivial("return False".into()),
+                false,
+            )],
+            &[f(
+                "__eq__",
+                1,
+                BodyShape::Trivial("return True".into()),
+                false,
+            )],
         );
         assert!(from_trivial[0].capped_at_warning, "{from_trivial:?}");
     }
