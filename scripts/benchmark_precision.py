@@ -543,7 +543,9 @@ def post_hoc_audit(results_dir: Path = RESULTS_DIR) -> dict[str, Any]:
             fp_by_gate_repo[key] = fp_by_gate_repo.get(key, 0) + 1
 
     clearing = wilson_floor_clearing_sizes(0.95, 0.90, 141)
-    r6 = lambda x: round(x, 6)  # noqa: E731
+    def r6(x: float) -> float:
+        return round(x, 6)
+
     lo_d, hi_d = newcombe_difference_ci(s_k, len(s_items), twin_k, len(twin))
     return {
         "study_id": "agent-pr-precision-v1",
