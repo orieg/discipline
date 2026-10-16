@@ -313,7 +313,7 @@ fn walk_zip(file: File, visit: &mut Visit<'_>) -> Result<()> {
     for i in 0..zip.len() {
         let (name, size) = {
             let raw = zip.by_index_raw(i)?;
-            (raw.name().replace('\\', "/"), raw.size())
+            (raw.name()?.replace('\\', "/"), raw.size())
         };
         let is_dir = name.ends_with('/');
         match zip.by_index(i) {
@@ -1238,8 +1238,8 @@ mod tests {
     /// A stored (uncompressed) zip of one 256-byte entry.
     fn stored_zip() -> Vec<u8> {
         let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        let options =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
         writer.start_file("data.bin", options).unwrap();
         std::io::Write::write_all(&mut writer, &[0u8; 256]).unwrap();
         writer.finish().unwrap().into_inner()

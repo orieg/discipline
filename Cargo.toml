@@ -60,7 +60,7 @@ globset = "0.4"
 serde_json = "1.0"
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
 tar = { version = "0.4", default-features = false }
-zip = { version = "0.6", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.3", default-features = false, features = ["deflate"] }
 bzip2-rs = { version = "0.1.2", default-features = false }
 # Pure-Rust xz and zstd decoders for `.tar.xz`, `.tar.zst`, `.deb` and `.rpm` payloads
 # read by `archive-contents` (both MIT, no C library).
