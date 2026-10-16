@@ -325,6 +325,11 @@
         "exempt_paths": {
           "$ref": "#/$defs/StringListOrReset"
         },
+        "min_quote_chars": {
+          "description": "Fewest non-whitespace characters a citation's quoted text must hold (default: 8); a shorter quote is reported",
+          "minimum": 0,
+          "type": "integer"
+        },
         "require_online": {
           "description": "Whether offline operation fails closed when verifying tracker titles",
           "type": "boolean"

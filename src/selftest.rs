@@ -9522,20 +9522,41 @@ proptest! {
         },
     ),
     (
-        "citation-anchors: extracts anchored and unanchored citations discriminating correctly",
+        "citation-anchors: a short quote, a commit the base does not hold and a mismatched quote are reported; a quote of the cited line at a base commit is not",
         || {
-            use crate::guards::citation_anchors::{extract_anchored_citations, extract_unanchored_citations};
-            let text = "As defined in src/lib.rs:42@abcdef1 \"core_metric()\", it works. Also see src/util.rs:10 for details.\n";
-            let anchored = extract_anchored_citations(text);
+            use crate::guards::citation_anchors::{
+                extract_anchored_citations, extract_unanchored_citations, judge_anchor, CitedCommit,
+            };
+            let text = "Verified at src/lib.rs:1@abcdef1 \"pub fn core_metric()\".\n\
+                        src/lib.rs:1@abcdef1 \"()\"\n\
+                        src/lib.rs:1@1234567 \"pub fn core_metric()\"\n\
+                        src/lib.rs:1@abcdef1 \"pub fn other_metric()\"\n\
+                        Also see src/util.rs:10 for details.\n";
+            let cited = extract_anchored_citations(text);
+            // `abcdef1` is on the base; `1234567` exists only in this change.
+            let resolve = |c: &str| {
+                Ok(if c == "abcdef1" {
+                    CitedCommit::OnBase("abcdef1".to_string())
+                } else {
+                    CitedCommit::NotOnBase(c.to_string())
+                })
+            };
+            let content = |_: &str, _: &str| Ok(Some("pub fn core_metric() -> usize {\n".to_string()));
+            let mut codes = Vec::new();
+            for c in &cited {
+                codes.push(judge_anchor(c, 8, resolve, content)?.map(|f| f.kind.code));
+            }
             let unanchored = extract_unanchored_citations(text);
-            Ok(anchored.len() == 1
-                && anchored[0].path == "src/lib.rs"
-                && anchored[0].line == 42
-                && anchored[0].commit == "abcdef1"
-                && anchored[0].quoted_text == "core_metric()"
+            // Negative control first, then the three positive controls.
+            Ok(codes
+                == [
+                    None,
+                    Some("quote-too-short"),
+                    Some("commit-unresolvable"),
+                    Some("text-mismatch"),
+                ]
                 && unanchored.len() == 1
-                && unanchored[0].path == "src/util.rs"
-                && unanchored[0].line == 10)
+                && unanchored[0].path == "src/util.rs")
         },
     ),
     (
@@ -9583,27 +9604,62 @@ proptest! {
         },
     ),
     (
-        "scope-confinement: extracts planned outputs from front-matter and list sections",
+        "scope-confinement: a planned output and a rename source in a forbidden path are reported; outputs and renames inside the scope are not",
         || {
-            use crate::guards::scope_confinement::extract_planned_outputs;
-            let text = "# Plan\n\nOutputs:\n- `src/core.rs`\n- `docs/index.md`\n";
-            let outputs = extract_planned_outputs(text);
-            Ok(outputs.len() == 2
-                && outputs[0].1 == "src/core.rs"
-                && outputs[1].1 == "docs/index.md")
+            use crate::gitctx::{ChangeKind, ChangedFile};
+            use crate::guards::scope_confinement::{changed_file_breaches, planned_output_breaches, ScopeRules};
+            let rules = ScopeRules::new(&[], &[], &["secure/**".to_string()])?;
+            // Plan mode. Positive control: one declared output is forbidden.
+            let bad_plan = planned_output_breaches(
+                "# Plan\n\nOutputs:\n- `src/core.rs`\n- `secure/policy.py`\n",
+                &rules,
+            );
+            // Negative control: every declared output is inside the scope.
+            let good_plan = planned_output_breaches(
+                "# Plan\n\nOutputs:\n- `src/core.rs`\n- `docs/index.md`\n",
+                &rules,
+            );
+            let moved = |from: &str, to: &str| ChangedFile {
+                path: to.to_string(),
+                old_path: from.to_string(),
+                kind: ChangeKind::Renamed,
+                added_lines: Default::default(),
+            };
+            // A rename out of the forbidden directory is judged at its source.
+            let out_of = changed_file_breaches(&moved("secure/policy.py", "src/policy.py"), &rules);
+            let inside = changed_file_breaches(&moved("src/a.py", "src/b.py"), &rules);
+            Ok(bad_plan == [(5, "secure/policy.py".to_string(), "forbidden")]
+                && good_plan.is_empty()
+                && out_of.len() == 1
+                && out_of[0].path == "secure/policy.py"
+                && inside.is_empty())
         },
     ),
     (
-        "mechanism-sections: extracts claims only from designated sections with tags",
+        "mechanism-sections: an untagged claim and an untracked evidence target are reported; tagged claims, fenced text and other sections are not",
         || {
-            use crate::guards::mechanism_sections::parse_designated_sections;
-            let text = "## Root cause\n- (inferred) Cache eviction was delayed.\n- (verified: tests/cache.rs) Re-indexing failed.\n\n## Next steps\n- Fix the cache.\n";
-            let sections = parse_designated_sections(text, &["root cause".to_string()]);
-            Ok(sections.len() == 1
-                && sections[0].heading_title.eq_ignore_ascii_case("root cause")
-                && sections[0].claims.len() == 2
-                && sections[0].claims[0].text.contains("(inferred)")
-                && sections[0].claims[1].text.contains("(verified: tests/cache.rs)"))
+            use crate::guards::mechanism_sections::judge_document;
+            let headings = vec!["Root cause".to_string()];
+            // Only `tests/cache.rs` is tracked.
+            let tracked = |t: &str| Ok(t == "tests/cache.rs");
+            // Positive control: a heading that starts with the designated one, an untagged
+            // claim, and a claim citing a file that is not tracked.
+            let bad = judge_document(
+                "## Root cause (summary)\n- Cache eviction was delayed.\n- Re-indexing failed. (verified: tests/missing.rs)\n",
+                &headings,
+                tracked,
+            )?;
+            let codes: Vec<&str> = bad.findings.iter().map(|f| f.kind.code).collect();
+            // Negative control: both claims tagged, an untagged line inside a `~~~` fence,
+            // and an untagged claim under a heading that is not designated.
+            let good = judge_document(
+                "## Root cause\n- (inferred) Cache eviction was delayed.\n- Re-indexing failed. (verified: tests/cache.rs)\n\n~~~\nuntagged log line\n~~~\n\n## Next steps\n- Fix the cache.\n",
+                &headings,
+                tracked,
+            )?;
+            Ok(codes == ["untagged-mechanism-claim", "evidence-target-not-found"]
+                && good.findings.is_empty()
+                && good.claims == 2)
         },
     ),
     (
@@ -9620,6 +9676,10 @@ proptest! {
                 && !patterns.is_empty()
                 && is_label_placeholder("<command>")
                 && is_label_placeholder("file:line")
+                && is_label_placeholder("x")
+                && is_label_placeholder("ok")
+                && is_label_placeholder("cargo test -p <crate>")
+                && !is_label_placeholder("go test ./...")
                 && !is_label_placeholder("cargo test")
                 && !is_label_placeholder("src/lib.rs:10"))
         },

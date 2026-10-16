@@ -672,7 +672,8 @@ pub fn generate_schema() -> Value {
                 "diff_only": { "type": "boolean", "description": "Whether to inspect changed files only rather than the whole tree" },
                 "unanchored_citations": { "type": "string", "enum": ["ignore", "warn", "reject"], "description": "How unanchored path:line citations are handled" },
                 "verify_tracker_titles": { "type": "boolean", "description": "Whether to verify claimed issue or pull request titles via forge API" },
-                "require_online": { "type": "boolean", "description": "Whether offline operation fails closed when verifying tracker titles" }
+                "require_online": { "type": "boolean", "description": "Whether offline operation fails closed when verifying tracker titles" },
+                "min_quote_chars": { "type": "integer", "minimum": 0, "description": "Fewest non-whitespace characters a citation's quoted text must hold (default: 8); a shorter quote is reported" }
             })),
             "ClaimLabelsGate": gate_table(json!({
                 "diff_only": { "type": "boolean", "description": "Whether to inspect changed lines only rather than the whole file" },

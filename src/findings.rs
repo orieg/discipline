@@ -264,6 +264,7 @@ findings! {
     TEXT_MISMATCH = ["citation-anchors"], "text-mismatch", "Text Mismatch", Same;
     UNANCHORED_CITATION = ["citation-anchors"], "unanchored-citation", "Unanchored Citation", Same;
     TRACKER_TITLE_MISMATCH = ["citation-anchors"], "tracker-title-mismatch", "Tracker Title Mismatch", Same;
+    QUOTE_TOO_SHORT = ["citation-anchors"], "quote-too-short", "Quoted Text Too Short", Same;
 
     // suppression-delta
     SUPPRESSION_ADDED = ["suppression-delta"], "suppression-added", "Suppression Added", Message;

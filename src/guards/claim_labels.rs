@@ -32,15 +32,57 @@ static STRUCTURED_MARKER_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"[\(\[]\s*`?(RUN|READ)\s*:\s*([^\)\]\r\n`]+?)`?\s*[\)\]]").expect("valid regex")
 });
 
-static BARE_MARKER_RE: LazyLock<Regex> = LazyLock::new(|| {
+/// A label written without brackets: `RUN` or `READ` (optionally in backticks or bold),
+/// then `:`, `—`, `–`, `--` or a spaced `-`, then the content to the end of the line.
+/// `(RUN)`, `` `RUN` `` alone, `RUN:` with nothing after it and `-- RUN` carry no
+/// content and are not labels.
+static BARE_LABEL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?:\(\s*`?(RUN|READ)`?\s*\)|\[\s*`?(RUN|READ)`?\s*\]|`(RUN|READ)`|\*\*(RUN|READ)\*\*|(?:^|[\s—–\-:;,\(\[])(RUN|READ)\s*:|(?:—|–|--)\s*(RUN|READ)\b)",
+        r"(?m)(?:^|[^\w`*])(?:\*\*|`)?(RUN|READ)(?:\*\*|`)?[ \t]*(?::|—|–|--|-[ \t])[ \t]*(\S.*)$",
     )
     .expect("valid regex")
 });
 
 static CODE_SPAN_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"`([^`]+)`").expect("valid regex"));
+
+static MARKER_WORD_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(?:RUN|READ)\b").expect("valid regex"));
+
+/// A template slot such as `<command>` or `<your path here>`.
+static ANGLE_SLOT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<[A-Za-z][A-Za-z0-9_ :/.\-]*>").expect("valid regex"));
+
+/// Fewest characters a label's content must hold, counting letters, digits and the path
+/// characters `/ . : _ -`: `x`, `ok` and `ls` are not a command, path or citation.
+pub const MIN_LABEL_CONTENT_CHARS: usize = 4;
+
+/// One-word contents that say a check happened without naming it.
+const FILLER_CONTENTS: &[&str] = &[
+    "done", "ok", "okay", "yes", "pass", "passed", "passes", "passing", "true", "it", "this",
+    "that", "see", "above", "below", "here", "same",
+];
+
+/// `line` with every code span that holds `RUN` or `READ` other than at its start blanked:
+/// a marker inside code (`` `echo RUN: x` ``) is text the code prints, not a label. A span
+/// that is the label itself (`` `RUN` ``, `` `RUN: cargo test` ``) is kept.
+fn mask_markers_in_code(line: &str) -> String {
+    CODE_SPAN_RE
+        .replace_all(line, |caps: &regex::Captures<'_>| {
+            let inner = caps[1].trim_start();
+            let starts_with_marker = ["RUN", "READ"].iter().any(|m| {
+                inner
+                    .strip_prefix(m)
+                    .is_some_and(|rest| rest.chars().next().is_none_or(|c| !c.is_alphanumeric()))
+            });
+            if !starts_with_marker && MARKER_WORD_RE.is_match(inner) {
+                " ".repeat(caps[0].len())
+            } else {
+                caps[0].to_string()
+            }
+        })
+        .into_owned()
+}
 
 static QUOTED_TEXT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#""[^"]*"|“[^”]*”"#).expect("valid regex"));
@@ -205,28 +247,46 @@ pub fn extract_prose_units(content: &str) -> Vec<ProseUnit> {
     units
 }
 
-/// Whether `target` inside `(RUN: <target>)` or `(READ: <target>)` is a placeholder.
+/// Whether the content of a `RUN` or `READ` label is a placeholder rather than a command,
+/// path or citation: empty, a known placeholder word, a template slot (`<command>`), a
+/// first word of fewer than two letters or digits, a single filler word (`done`, `ok`),
+/// or fewer than [`MIN_LABEL_CONTENT_CHARS`] meaningful characters in all.
 pub fn is_label_placeholder(target: &str) -> bool {
     let clean = target
         .trim()
-        .trim_matches(|c: char| matches!(c, '`' | '"' | '\''));
+        .trim_matches(|c: char| matches!(c, '`' | '"' | '\''))
+        .trim();
     if clean.is_empty() {
         return true;
     }
     if clean.starts_with('<') && clean.ends_with('>') {
         return true;
     }
-    if clean.contains("<command>")
-        || clean.contains("<cmd>")
-        || clean.contains("<path>")
-        || clean.contains("<file")
-        || clean.contains("<line>")
-        || clean.contains("<target>")
-    {
+    if clean.contains("<file") || ANGLE_SLOT_RE.is_match(clean) {
         return true;
     }
     let lower = clean.to_ascii_lowercase();
-    LABEL_PLACEHOLDERS.contains(&lower.as_str())
+    if LABEL_PLACEHOLDERS.contains(&lower.as_str()) || FILLER_CONTENTS.contains(&lower.as_str()) {
+        return true;
+    }
+    let first = clean
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_matches(|c: char| !c.is_alphanumeric() && !matches!(c, '/' | '.' | '_' | '-'));
+    if first.chars().filter(|c| c.is_alphanumeric()).count() < 2 {
+        return true;
+    }
+    let meaningful = clean
+        .chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, '/' | '.' | ':' | '_' | '-'))
+        .count();
+    meaningful < MIN_LABEL_CONTENT_CHARS
+}
+
+/// The content of a bare label: the text after the separator, up to a closing bracket.
+fn bare_label_content(rest: &str) -> &str {
+    rest.split([')', ']']).next().unwrap_or("").trim()
 }
 
 /// Strips inline code spans and quoted strings, and strips leading bullet markers so
@@ -384,8 +444,13 @@ fn inspect_source(target: &SourceTarget<'_>, env: &mut ScanEnv<'_>) -> Result<()
             continue;
         }
 
-        let unit_text: String = unit
+        // Markers inside code spans are not labels; the masked lines keep their numbers.
+        let masked: Vec<(usize, String)> = unit
             .lines
+            .iter()
+            .map(|(ln, l)| (*ln, mask_markers_in_code(l)))
+            .collect();
+        let unit_text: String = masked
             .iter()
             .map(|(_, l)| l.as_str())
             .collect::<Vec<_>>()
@@ -394,7 +459,7 @@ fn inspect_source(target: &SourceTarget<'_>, env: &mut ScanEnv<'_>) -> Result<()
         // 1. Collect structured and bare markers in this paragraph / list item.
         let mut has_valid_marker = false;
         let mut structured_markers = Vec::new();
-        for (ln, line) in &unit.lines {
+        for (ln, line) in &masked {
             for caps in STRUCTURED_MARKER_RE.captures_iter(line) {
                 let kind = if caps.get(1).unwrap().as_str().eq_ignore_ascii_case("RUN") {
                     StructuredMarkerKind::Run
@@ -486,19 +551,23 @@ fn inspect_source(target: &SourceTarget<'_>, env: &mut ScanEnv<'_>) -> Result<()
             }
         }
 
-        // Check bare `RUN` / `READ` markers if no structured marker already satisfied the unit.
+        // Check bare `RUN` / `READ` labels if no structured marker already satisfied the
+        // unit. A bare label counts only with real content after its separator.
         if !has_valid_marker && structured_markers.is_empty() {
-            if let Some(caps) = BARE_MARKER_RE.captures(&unit_text) {
+            let bare = BARE_LABEL_RE.captures_iter(&unit_text).find_map(|caps| {
+                let content = bare_label_content(caps.get(2).map_or("", |m| m.as_str()));
+                (!is_label_placeholder(content)).then(|| (caps[1].to_string(), content))
+            });
+            if let Some((word, content)) = bare {
                 has_valid_marker = true;
-                let matched_word = (1..=6)
-                    .find_map(|i| caps.get(i).map(|m| m.as_str()))
-                    .unwrap_or("");
-                if matched_word.eq_ignore_ascii_case("RUN") {
-                    let any_span_vouched = CODE_SPAN_RE.captures_iter(&unit_text).any(|c| {
-                        let span = c.get(1).map(|m| m.as_str()).unwrap_or("");
-                        matches_vouched_command(span, env.vouched_cmds).is_some()
-                    });
-                    if !any_span_vouched {
+                if word == "RUN" {
+                    let clean = content.trim_matches(|c: char| matches!(c, '`' | '"' | '\''));
+                    let vouched = matches_vouched_command(clean, env.vouched_cmds).is_some()
+                        || CODE_SPAN_RE.captures_iter(&unit_text).any(|c| {
+                            let span = c.get(1).map(|m| m.as_str()).unwrap_or("");
+                            matches_vouched_command(span, env.vouched_cmds).is_some()
+                        });
+                    if !vouched {
                         *env.unchecked_run_labels += 1;
                     }
                 }
@@ -924,6 +993,85 @@ zero regressions
             "unexpected findings: {:?}",
             out.violations
         );
+    }
+
+    #[test]
+    fn a_label_is_run_or_read_then_a_separator_then_real_content() {
+        let cfg = enabled_config();
+        let files = [("src/lib.rs", "pub fn a() {}\npub fn b() {}\n")];
+
+        // Forms that carry no command, path or citation leave the claim unlabelled.
+        let weak: Vec<&str> = [
+            "- All unit tests passed (RUN: x).",
+            "- All unit tests passed (RUN).",
+            "- All unit tests passed [READ].",
+            "- All unit tests passed `RUN`.",
+            "- All unit tests passed **RUN**.",
+            "- All unit tests passed RUN:",
+            "- All unit tests passed -- RUN",
+            "- All unit tests passed — RUN: ok",
+            // A marker inside a code span is code, not a label.
+            "- All unit tests passed, as in `echo RUN: cargo test`.",
+            "- All unit tests passed, as in `make (RUN: cargo test)`.",
+        ]
+        .into_iter()
+        .filter(|weak| {
+            let out = eval_pr(&cfg, &files, Some(weak), vec![]);
+            !out.violations
+                .iter()
+                .any(|v| v.code == "claim-labels/claim-without-label")
+        })
+        .collect::<Vec<_>>();
+        assert!(
+            weak.is_empty(),
+            "these forms satisfied the claim: {weak:#?}"
+        );
+
+        // Labels with a separator and real content hold.
+        for good in [
+            "- All unit tests passed (RUN: cargo test).",
+            "- All unit tests passed (RUN: go test ./...).",
+            "- All unit tests passed. RUN: cargo test --workspace",
+            "- All unit tests passed — RUN — `cargo test`",
+            "- All unit tests passed (`RUN`: `cargo test`).",
+            "- All unit tests passed (`RUN: cargo test`).",
+            "- All unit tests passed. **RUN**: cargo test",
+            "- All unit tests passed. READ - src/lib.rs:2",
+        ] {
+            let out = eval_pr(&cfg, &files, Some(good), vec![]);
+            assert!(
+                out.violations.is_empty(),
+                "`{good}` was not accepted: {:?}",
+                out.violations
+            );
+        }
+    }
+
+    #[test]
+    fn short_or_template_label_content_is_a_placeholder() {
+        for weak in [
+            "x",
+            "ok",
+            "ls",
+            "done",
+            "`y`",
+            "cargo test -p <crate>",
+            "<your command here>",
+            "a b c",
+        ] {
+            assert!(is_label_placeholder(weak), "`{weak}`");
+        }
+        for real in [
+            "cargo test",
+            "go test ./...",
+            "make",
+            "pytest",
+            "src/lib.rs:10",
+            "a.rs",
+            "./scripts/custom-check.sh",
+        ] {
+            assert!(!is_label_placeholder(real), "`{real}`");
+        }
     }
 
     #[test]

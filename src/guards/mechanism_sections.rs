@@ -2,10 +2,17 @@
 //!
 //! Requires `(inferred)` or `(verified: <target>)` evidence tags in root cause and mechanism sections.
 
+use crate::findings::FindingKind;
 use crate::guards::{Context, GateOutcome, PathFilter};
 use anyhow::Result;
+use std::sync::LazyLock;
 
 pub const GATE: &str = "mechanism-sections";
+
+static INFERRED_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?i)\(inferred\)").expect("valid regex"));
+static VERIFIED_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?i)\(verified:\s*([^)]+)\)").expect("valid regex"));
 
 #[derive(Debug, Clone)]
 pub struct SectionClaim {
@@ -19,15 +26,52 @@ pub struct DesignatedSection {
     pub claims: Vec<SectionClaim>,
 }
 
+/// The level and title of an ATX heading (`#` to `######` followed by a blank or the end
+/// of the line), or `None` for any other line. `#hashtag` is not a heading.
+fn atx_heading(trimmed: &str) -> Option<(usize, &str)> {
+    let level = trimmed.chars().take_while(|c| *c == '#').count();
+    if level == 0 || level > 6 {
+        return None;
+    }
+    let rest = &trimmed[level..];
+    if !(rest.is_empty() || rest.starts_with([' ', '\t'])) {
+        return None;
+    }
+    // An optional closing sequence (`## Title ##`) is not part of the title.
+    let title = rest.trim().trim_end_matches('#').trim_end();
+    Some((level, title))
+}
+
+/// Whether `title` names the designated heading `designated`: the same words, case
+/// ignored, optionally followed by more words or punctuation (`Root cause (summary)`,
+/// `Root cause analysis`, `Mechanism: lock ordering`), after leading numbering
+/// (`2.`, `2)`) and emphasis markers are set aside. `Causes` does not name `Cause`.
+pub fn heading_matches(title: &str, designated: &str) -> bool {
+    let designated = designated.trim().to_lowercase();
+    if designated.is_empty() {
+        return false;
+    }
+    let unnumbered = title
+        .trim_start_matches(|c: char| c.is_ascii_digit() || matches!(c, '.' | ')'))
+        .trim();
+    let plain =
+        unnumbered.trim_matches(|c: char| matches!(c, '*' | '_' | '`') || c.is_whitespace());
+    let lower = plain.to_lowercase();
+    lower
+        .strip_prefix(&designated)
+        .is_some_and(|rest| rest.chars().next().is_none_or(|c| !c.is_alphanumeric()))
+}
+
 /// Parses designated sections from a markdown document.
 pub fn parse_designated_sections(content: &str, headings: &[String]) -> Vec<DesignatedSection> {
     let mut sections = Vec::new();
-    let lines: Vec<&str> = content.lines().collect();
 
     let mut current_section: Option<DesignatedSection> = None;
     let mut current_level = 0;
     let mut current_paragraph: Option<(usize, Vec<String>)> = None;
-    let mut in_code_fence = false;
+    // The open fence's character (`` ` `` or `~`) and length: CommonMark closes a fence
+    // only with the same character, at least as many times, and nothing after it.
+    let mut fence: Option<(char, usize)> = None;
 
     let flush_paragraph = |para: &mut Option<(usize, Vec<String>)>,
                            claims: &mut Vec<SectionClaim>| {
@@ -39,23 +83,38 @@ pub fn parse_designated_sections(content: &str, headings: &[String]) -> Vec<Desi
         }
     };
 
-    for (idx, line) in lines.iter().enumerate() {
+    for (idx, line) in content.lines().enumerate() {
         let line_num = idx + 1;
         let trimmed = line.trim();
 
-        if trimmed.starts_with("```") {
-            in_code_fence = !in_code_fence;
-            continue;
+        if let Some(ch) = trimmed.chars().next().filter(|c| matches!(c, '`' | '~')) {
+            let count = trimmed.chars().take_while(|c| *c == ch).count();
+            if count >= 3 {
+                match fence {
+                    None => {
+                        // A fence ends the paragraph before it.
+                        if let Some(ref mut sec) = current_section {
+                            flush_paragraph(&mut current_paragraph, &mut sec.claims);
+                        }
+                        fence = Some((ch, count));
+                    }
+                    Some((open, open_count))
+                        if open == ch
+                            && count >= open_count
+                            && trimmed[count..].trim().is_empty() =>
+                    {
+                        fence = None;
+                    }
+                    Some(_) => {}
+                }
+                continue;
+            }
         }
-        if in_code_fence {
+        if fence.is_some() {
             continue;
         }
 
-        // Check if line is a markdown heading: #, ##, ###, etc.
-        if trimmed.starts_with('#') {
-            let level = trimmed.chars().take_while(|c| *c == '#').count();
-            let title = trimmed[level..].trim();
-
+        if let Some((level, title)) = atx_heading(trimmed) {
             if let Some(mut sec) = current_section.take() {
                 flush_paragraph(&mut current_paragraph, &mut sec.claims);
                 if level <= current_level {
@@ -67,7 +126,7 @@ pub fn parse_designated_sections(content: &str, headings: &[String]) -> Vec<Desi
             }
 
             // Check if this new heading matches one of the designated headings
-            let is_match = headings.iter().any(|h| h.eq_ignore_ascii_case(title));
+            let is_match = headings.iter().any(|h| heading_matches(title, h));
 
             if is_match {
                 if let Some(sec) = current_section.take() {
@@ -132,6 +191,9 @@ pub fn parse_designated_sections(content: &str, headings: &[String]) -> Vec<Desi
     sections
 }
 
+/// Whether a `(verified: <target>)` target resolves: a path tracked at head (in the
+/// index, so a file only on disk does not count) whose content, when the target names a
+/// symbol after `::`, contains that symbol.
 fn target_exists(target: &str, ctx: &Context) -> Result<bool> {
     let clean = target
         .trim()
@@ -147,17 +209,13 @@ fn target_exists(target: &str, ctx: &Context) -> Result<bool> {
         None => (clean, None),
     };
 
-    // Must resolve to a tracked or head file (not just a directory):
-    let content = match ctx.git.head_content(file_part)? {
-        Some(c) => c,
-        None => {
-            let disk_path = ctx.git.root().join(file_part);
-            if disk_path.is_file() {
-                std::fs::read_to_string(&disk_path).unwrap_or_default()
-            } else {
-                return Ok(false);
-            }
-        }
+    // An untracked file on disk is not evidence a reviewer can check out.
+    if !ctx.git.is_tracked(file_part)? {
+        return Ok(false);
+    }
+    // Tracked, but a directory, a deleted file or a binary is not readable evidence.
+    let Some(content) = ctx.git.head_content(file_part)? else {
+        return Ok(false);
     };
 
     // If a symbol/test was named after '::', it must exist in the file content:
@@ -170,12 +228,97 @@ fn target_exists(target: &str, ctx: &Context) -> Result<bool> {
     Ok(true)
 }
 
+/// At most 60 characters of `text`, cut on a character boundary.
 fn truncate_claim(text: &str) -> String {
-    if text.len() > 60 {
-        format!("{}...", &text[..57])
+    if text.chars().count() > 60 {
+        let head: String = text.chars().take(57).collect();
+        format!("{head}...")
     } else {
         text.to_string()
     }
+}
+
+/// One finding of [`judge_document`].
+#[derive(Debug, Clone)]
+pub struct MechanismFinding {
+    pub kind: &'static FindingKind,
+    pub line: usize,
+    pub message: String,
+    pub remediation: &'static str,
+}
+
+/// What [`judge_document`] found in one document.
+#[derive(Debug, Default)]
+pub struct DocumentVerdict {
+    /// Designated sections found.
+    pub sections: usize,
+    /// Claims examined.
+    pub claims: usize,
+    pub findings: Vec<MechanismFinding>,
+}
+
+/// Judges one Markdown document: every claim in a designated section must carry
+/// `(inferred)` or a `(verified: <target>)` whose target `target_exists` resolves.
+pub fn judge_document(
+    content: &str,
+    headings: &[String],
+    mut target_exists: impl FnMut(&str) -> Result<bool>,
+) -> Result<DocumentVerdict> {
+    let mut verdict = DocumentVerdict::default();
+    let sections = parse_designated_sections(content, headings);
+    verdict.sections = sections.len();
+
+    for section in sections {
+        if section.claims.is_empty() {
+            verdict.findings.push(MechanismFinding {
+                kind: &crate::findings::EMPTY_DESIGNATED_SECTION,
+                line: section.heading_line,
+                message: format!("designated section `{}` is empty", section.heading_title),
+                remediation: "provide substantive mechanism claims with evidence tags",
+            });
+            continue;
+        }
+
+        for claim in section.claims {
+            verdict.claims += 1;
+
+            let has_inferred = INFERRED_RE.is_match(&claim.text);
+            let verified_caps: Vec<_> = VERIFIED_RE.captures_iter(&claim.text).collect();
+
+            if !has_inferred && verified_caps.is_empty() {
+                verdict.findings.push(MechanismFinding {
+                    kind: &crate::findings::UNTAGGED_MECHANISM_CLAIM,
+                    line: claim.line_num,
+                    message: format!(
+                        "claim in `{}` section lacks evidence tag: \"{}\"",
+                        section.heading_title,
+                        truncate_claim(&claim.text)
+                    ),
+                    remediation:
+                        "append `(inferred)` or `(verified: <test or artifact>)` to the claim",
+                });
+                continue;
+            }
+
+            for cap in verified_caps {
+                if let Some(target_match) = cap.get(1) {
+                    let target = target_match.as_str().trim();
+                    if !target_exists(target)? {
+                        verdict.findings.push(MechanismFinding {
+                            kind: &crate::findings::EVIDENCE_TARGET_NOT_FOUND,
+                            line: claim.line_num,
+                            message: format!(
+                                "verification target `{target}` cited in `{}` is not a file tracked in the repository",
+                                section.heading_title
+                            ),
+                            remediation: "cite a tracked test file, test identifier, or artifact (`git add` it first)",
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(verdict)
 }
 
 /// Evaluates markdown documents for mechanism section evidence tags.
@@ -201,9 +344,6 @@ pub fn evaluate_mechanism_sections(ctx: &Context) -> Result<GateOutcome> {
     let exempt = PathFilter::new(&settings.exempt_paths)?;
     let mut designated_sections_found = 0;
 
-    let inferred_re = regex::Regex::new(r"(?i)\(inferred\)").unwrap();
-    let verified_re = regex::Regex::new(r"(?i)\(verified:\s*([^)]+)\)").unwrap();
-
     for path in files_to_check {
         if exempt.matches(&path) {
             continue;
@@ -213,63 +353,20 @@ pub fn evaluate_mechanism_sections(ctx: &Context) -> Result<GateOutcome> {
             continue;
         };
 
-        let sections = parse_designated_sections(&content, &settings.section_headings);
-        designated_sections_found += sections.len();
-
-        for section in sections {
-            if section.claims.is_empty() {
-                out.add_violation(
-                    ctx.overridable(settings.severity),
-                    &crate::findings::EMPTY_DESIGNATED_SECTION,
-                    &path,
-                    section.heading_line,
-                    format!("designated section `{}` is empty", section.heading_title),
-                    "provide substantive mechanism claims with evidence tags",
-                );
-                continue;
-            }
-
-            for claim in section.claims {
-                out.examined += 1;
-
-                let has_inferred = inferred_re.is_match(&claim.text);
-                let verified_caps: Vec<_> = verified_re.captures_iter(&claim.text).collect();
-
-                if !has_inferred && verified_caps.is_empty() {
-                    out.add_violation(
-                        ctx.overridable(settings.severity),
-                        &crate::findings::UNTAGGED_MECHANISM_CLAIM,
-                        &path,
-                        claim.line_num,
-                        format!(
-                            "claim in `{}` section lacks evidence tag: \"{}\"",
-                            section.heading_title,
-                            truncate_claim(&claim.text)
-                        ),
-                        "append `(inferred)` or `(verified: <test or artifact>)` to the claim",
-                    );
-                    continue;
-                }
-
-                for cap in verified_caps {
-                    if let Some(target_match) = cap.get(1) {
-                        let target = target_match.as_str().trim();
-                        if !target_exists(target, ctx)? {
-                            out.add_violation(
-                                ctx.overridable(settings.severity),
-                                &crate::findings::EVIDENCE_TARGET_NOT_FOUND,
-                                &path,
-                                claim.line_num,
-                                format!(
-                                    "verification target `{target}` cited in `{}` was not found in repository",
-                                    section.heading_title
-                                ),
-                                "cite an existing test file, test identifier, or tracked artifact",
-                            );
-                        }
-                    }
-                }
-            }
+        let verdict = judge_document(&content, &settings.section_headings, |target| {
+            target_exists(target, ctx)
+        })?;
+        designated_sections_found += verdict.sections;
+        out.examined += verdict.claims;
+        for f in verdict.findings {
+            out.add_violation(
+                ctx.overridable(settings.severity),
+                f.kind,
+                &path,
+                f.line,
+                f.message,
+                f.remediation,
+            );
         }
     }
 
@@ -382,6 +479,103 @@ Another paragraph with no evidence tags.
             .notes
             .iter()
             .any(|n| n.contains("no designated mechanism/cause sections found")));
+    }
+
+    /// 56 ASCII bytes then `été`: byte 57 falls inside the first `é`.
+    fn claim_with_multibyte_at_byte_57() -> String {
+        format!("{}été and the rest of the sentence", "a".repeat(56))
+    }
+
+    #[test]
+    fn truncate_claim_never_splits_a_multibyte_character() {
+        let text = claim_with_multibyte_at_byte_57();
+        assert!(
+            !text.is_char_boundary(57),
+            "the control must straddle byte 57"
+        );
+        let shown = truncate_claim(&text);
+        assert!(shown.ends_with("..."), "{shown}");
+        assert_eq!(shown.chars().count(), 60, "{shown}");
+        // Short text is returned whole.
+        assert_eq!(truncate_claim("été"), "été");
+    }
+
+    #[test]
+    fn an_untagged_non_ascii_claim_is_reported_not_a_crash() {
+        let doc = format!("## Root cause\n\n{}\n", claim_with_multibyte_at_byte_57());
+        let out = eval(&doc, &[]);
+        assert_eq!(out.violations.len(), 1, "{:?}", out.violations);
+        assert_eq!(
+            out.violations[0].code,
+            "mechanism-sections/untagged-mechanism-claim"
+        );
+    }
+
+    #[test]
+    fn a_tilde_fence_is_a_code_fence() {
+        let doc = "## Root cause\n\n~~~text\nraw log output with no tag\n~~~\n\n- Lock contention. (inferred)\n";
+        let out = eval(doc, &[]);
+        assert!(out.violations.is_empty(), "{:?}", out.violations);
+        assert_eq!(out.examined, 1);
+        // Control: the same lines outside a fence are an untagged claim.
+        let bare = "## Root cause\n\nraw log output with no tag\n\n- Lock contention. (inferred)\n";
+        assert_eq!(eval(bare, &[]).violations.len(), 1);
+    }
+
+    #[test]
+    fn a_heading_that_starts_with_a_designated_heading_stays_in_scope() {
+        for heading in [
+            "## Root cause (summary)",
+            "## Root cause analysis",
+            "## 2. Root cause",
+            "## **Root cause**",
+            "## Root cause ##",
+            "### Mechanism: lock ordering",
+        ] {
+            let doc = format!("{heading}\n\nThe pool starves under load.\n");
+            let out = eval(&doc, &[]);
+            assert_eq!(out.violations.len(), 1, "`{heading}`: {:?}", out.violations);
+        }
+        // Controls: a word that only starts with the same letters is out of scope, and
+        // `#Root cause` (no blank after the `#`) is not a heading.
+        for heading in [
+            "## Causes of delay",
+            "## Mechanisms overview",
+            "#Root cause",
+        ] {
+            let doc = format!("{heading}\n\nThe pool starves under load.\n");
+            let out = eval(&doc, &[]);
+            assert!(
+                out.violations.is_empty(),
+                "`{heading}`: {:?}",
+                out.violations
+            );
+        }
+    }
+
+    #[test]
+    fn a_verified_target_must_be_tracked_not_only_on_disk() {
+        let doc =
+            "## Mechanism\n- Fast path bypasses serialization. (verified: tests/untracked.rs)\n";
+        let config = DisciplineConfig::from_toml_str(
+            "[meta]\nversion = 1\nname = \"t\"\n[gates.mechanism-sections]\nenabled = true\n",
+        )
+        .unwrap();
+        let (_dir, git) =
+            crate::gitctx::test_support::repo_with_files(&[], &[("docs/postmortem.md", doc)]);
+        let untracked = git.root().join("tests/untracked.rs");
+        std::fs::create_dir_all(untracked.parent().unwrap()).unwrap();
+        std::fs::write(&untracked, "// on disk, never added\n").unwrap();
+        let out = evaluate_mechanism_sections(&crate::guards::test_support::context(&config, &git))
+            .unwrap();
+        assert_eq!(out.violations.len(), 1, "{:?}", out.violations);
+        assert_eq!(
+            out.violations[0].code,
+            "mechanism-sections/evidence-target-not-found"
+        );
+        // Control: the same file once tracked resolves.
+        let tracked = eval(doc, &[("tests/untracked.rs", "// tracked\n")]);
+        assert!(tracked.violations.is_empty(), "{:?}", tracked.violations);
     }
 
     #[test]

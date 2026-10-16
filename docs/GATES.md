@@ -203,6 +203,7 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `citation-anchors/text-mismatch` | Text Mismatch |
 | `citation-anchors/unanchored-citation` | Unanchored Citation |
 | `citation-anchors/tracker-title-mismatch` | Tracker Title Mismatch |
+| `citation-anchors/quote-too-short` | Quoted Text Too Short |
 | `suppression-delta/suppression-added` | Suppression Added |
 | `provenance-tags/table-numerics-unprovenanced` | Unprovenanced Table Numerics |
 | `provenance-tags/mechanism-claim-without-evidence` | Mechanism Claim Without Evidence |
@@ -946,8 +947,11 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Rule:** Agent modifications must remain strictly within configured authorized directory and file paths (`allowed_paths`) and never touch restricted paths (`forbidden_paths`).
 - **Languages:** Any.
 - **What it catches:**
-  - Modifications touching paths outside `allowed_paths`.
-  - Modifications touching paths matching `forbidden_paths` (e.g. security credentials, CI workflow definitions, release scripts).
+  - Modifications touching paths outside `allowed_paths` (`file-outside-authorized-scope`).
+  - Modifications touching paths matching `forbidden_paths` (e.g. security credentials, CI workflow definitions, release scripts) (`file-in-forbidden-scope`).
+  - Renames, judged at both ends: `git mv secure/policy.py src/` removes a file from `secure/`, so it is reported against `secure/policy.py` (the message names where it moved), as deleting it would be; a rename into a forbidden path is reported at its destination.
+  - Symlinks added, retargeted or removed inside a forbidden path, or outside `allowed_paths`. The link itself is the change; other gates read a symlink as its target and skip it.
+  - **Plan mode** (`check_plans = true`): each changed plan file matching `plan_paths` is read for the outputs it declares (an `outputs:` front-matter list, an `Outputs:` / `Produces:` / `Writes:` label or heading with its list, or `into` / `update` / `create` / `write to` followed by a path). A declared output inside `forbidden_paths` is `planned-file-in-forbidden-scope`, one outside `allowed_paths` is `planned-file-outside-authorized-scope`, both reported on the plan's line. With `require_declared_outputs = true`, a plan that declares no output is `plan-without-declared-outputs`; otherwise it is a note.
 - **Passing commit / PR body (accepted):**
   ```text
   allow-scope: deploy/ authorized infra migration across deploy scripts
@@ -955,6 +959,8 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it does NOT catch:**
   - Files exempted via `exempt_paths`.
   - Modifications when `allowed_paths` is empty and no `forbidden_paths` are matched.
+  - A write through a symlink that lives outside the forbidden path and points into it: the change is to the target file, which is judged at its own path only when the target itself changes in the diff.
+  - Plan outputs written in a form the extractor does not read (prose without a path-like token, a path with spaces).
 - **Lifting directive:** `allow-scope: <path-or-directory/> <reason>` (a directory prefix is written with its slash).
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `allowed_paths`, `forbidden_paths`, `check_plans`, `plan_paths`, `require_declared_outputs`.
 
@@ -1289,9 +1295,14 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Rule:** Requires evidence tags (`(inferred)` or `(verified: <test or artifact>)`) for claims in designated root cause or mechanism sections (`section_headings`). Evidence targets must resolve in the repository.
 - **Languages:** Markdown.
 - **What it catches:**
-  - Untagged claims in designated sections (`untagged-mechanism-claim`).
-  - Evidence targets (`(verified: path)`) that do not exist in the repository (`evidence-target-not-found`).
+  - Untagged claims in designated sections (`untagged-mechanism-claim`). A heading is designated when its words start with one of `section_headings`, case ignored and after leading numbering or emphasis: `## Root cause (summary)`, `## 2. Root cause` and `### Mechanism: lock ordering` are in scope; `## Causes of delay` is not one of `Cause`.
+  - Evidence targets (`(verified: path)` or `(verified: path::symbol)`) that are not tracked at head, or whose named symbol is not in the file (`evidence-target-not-found`). A file present on disk but never added to the index does not count.
   - Empty designated sections (`empty-designated-section`).
+- **What it does NOT catch:**
+  - Whether a cited test or artifact supports the claim: a tracked path, and a symbol present as text in it, is all that is checked.
+  - Whether an `(inferred)` claim is reasonable; the tag only marks that it was not verified.
+  - Claims in sections whose heading does not start with a designated heading, in fenced code blocks (`` ``` `` or `~~~`), or in documents other than `*.md`.
+  - A symbol after `::` matched as a substring: `src/a.rs::run` resolves when the file contains `run_all`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `diff_only`, `section_headings`.
 
 #### `citation-anchors`
@@ -1302,17 +1313,22 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Citations referencing lines beyond the cited file length (`line-out-of-bounds`).
   - Citations referencing files absent in the cited commit (`file-not-found`).
   - Citations referencing unresolvable commit hashes (`commit-unresolvable`).
+  - Citations of a commit the base's history does not hold (`commit-unresolvable`): a commit this change made, or one only another branch or the object database holds. Evidence committed in one commit of a pull request and deleted in a later one would otherwise verify. The cited commit must be the base or one of its ancestors; a run without a base (whole tree) uses `HEAD`.
+  - Quoted text with fewer than `min_quote_chars` non-whitespace characters (default 8), matching or not (`quote-too-short`): a quote such as `"{"` is contained in almost any line, so it anchors nothing. `min_quote_chars = 0` turns the minimum off.
   - Unanchored citations (`path:line` without commit or quoted text) per `unanchored_citations` mode (`unanchored-citation`).
-  - Mismatches in optional issue/PR tracker titles (`tracker-title-mismatch`).
-- **Config keys:** `enabled`, `severity`, `exempt_paths`, `diff_only`, `unanchored_citations`, `verify_tracker_titles`, `require_online`.
+  - With `verify_tracker_titles`, a `#<n> ("<title>")` reference whose issue on the forge has another title, or does not exist (`tracker-title-mismatch`). The title is read from the forge's REST API. Offline (no forge, or `DISCIPLINE_NO_NETWORK` set to anything but `0` or `false`), each reference is a note, or with `require_online = true` the run cannot check (exit 2).
+- **What it does NOT catch:**
+  - Whether the cited line supports the claim made about it: the quote is checked against the line, not the prose around the citation.
+  - A quote containing a `"` or `'`, which the citation syntax cannot carry; such a citation is not recognised as anchored.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `diff_only`, `unanchored_citations`, `verify_tracker_titles`, `require_online`, `min_quote_chars`.
 
 #### `claim-labels`
-- **Rule:** Requires an explicit `RUN` or `READ` verification marker in the same paragraph or bullet item as any verification claim in pull-request bodies, commit messages, and added Markdown lines (`*.md`). Structured markers (`(RUN: <command>)`, `(READ: <path[:line]>)`) and bare markers (`(RUN)`, `(READ)`, `[RUN]`, `[READ]`, `` `RUN` ``, `` `READ` ``) are recognized. <!-- discipline:allow(claim-labels) -->
+- **Rule:** Requires an explicit `RUN` or `READ` verification marker in the same paragraph or bullet item as any verification claim in pull-request bodies, commit messages, and added Markdown lines (`*.md`). A label is `RUN` or `READ`, then a separator, then content naming a command, path or citation: structured (`(RUN: <command>)`, `[READ: <path[:line]>]`) or bare (`RUN: cargo test`, `` `RUN`: `cargo test` ``, `**READ** — src/lib.rs:2`). The separator is `:`, `—`, `–`, `--` or a spaced `-`. The word alone (`(RUN)`, `[READ]`, `` `RUN` ``, `**RUN**`, `RUN:` with nothing after it, `-- RUN`) is not a label, and neither is content that is a placeholder: a template slot (`<command>`), a known placeholder (`TODO`, `path`, `n/a`), a single filler word (`done`, `ok`), a first word of fewer than two letters or digits, or fewer than four letters, digits and path characters (`/ . : _ -`) in all (`x`, `ls`). A marker inside a code span is code, not a label (`` `echo RUN: cargo test` ``); a span that starts with the marker (`` `RUN: cargo test` ``) is the label itself. <!-- discipline:allow(claim-labels) -->
 - **Boundary:** It catches omission, not deceit. An author who avoids the listed phrases, or writes `(RUN: cargo test)` without running it, passes. The gate makes the honest path the easy one and gives a reviewer something to check; it does not show that the claim is true.
 - **Languages:** Markdown, commit messages, PR bodies.
 - **What it catches:**
   - Verification claims matching the built-in or configured `extra_patterns` without a `RUN` or `READ` marker in the same prose paragraph or bullet item (`claim-without-label`).
-  - Placeholder markers such as `(RUN: TODO)` or `(READ: path/to/file)` (`label-placeholder`). <!-- discipline:allow(claim-labels) -->
+  - Placeholder markers such as `(RUN: TODO)`, `(RUN: x)` or `(READ: path/to/file)` (`label-placeholder`). A placeholder does not satisfy the claim beside it. <!-- discipline:allow(claim-labels) -->
   - Structured `(READ: path[:line])` markers whose file does not exist in `HEAD`, escapes the repository root, or cites a line number past the end of the file (`read-label-unresolvable`). <!-- discipline:allow(claim-labels) -->
 - **Notes:** When a `(RUN: <command>)` marker names a command not vouched for by `[gates.command]`, a recorded session file under `<common git dir>/discipline/sessions/`, or the built-in test runner list (when neither is present), the gate emits an informational note rather than a finding. <!-- discipline:allow(claim-labels) -->
 - **Lifting directive:** `allow-claim-label: <subject> <reason>` (or `discipline:allow(claim-labels)` in Markdown).

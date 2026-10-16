@@ -929,6 +929,18 @@ impl GitCtx {
     }
 
     pub fn changed_files(&self) -> Result<Vec<ChangedFile>> {
+        self.changed_files_with(false)
+    }
+
+    /// [`GitCtx::changed_files`] with symlinks added, changed or removed included (each
+    /// as its own path, not its target). For a gate that judges where a change lands,
+    /// such as `scope-confinement`: a link added under a forbidden directory changes that
+    /// directory. Gates that read file content keep using `changed_files`.
+    pub fn changed_files_including_symlinks(&self) -> Result<Vec<ChangedFile>> {
+        self.changed_files_with(true)
+    }
+
+    fn changed_files_with(&self, include_symlinks: bool) -> Result<Vec<ChangedFile>> {
         let tree = self.base_tree()?;
         let mut opts = DiffOptions::new();
         opts.context_lines(0);
@@ -956,8 +968,9 @@ impl GitCtx {
             }
             // A symlink (`CLAUDE.md -> AGENTS.md`) is its target, which is enumerated on
             // its own; `tracked_files` skips symlinks for the same reason.
-            if delta.new_file().mode() == git2::FileMode::Link
-                || delta.old_file().mode() == git2::FileMode::Link
+            if !include_symlinks
+                && (delta.new_file().mode() == git2::FileMode::Link
+                    || delta.old_file().mode() == git2::FileMode::Link)
             {
                 continue;
             }
@@ -1344,6 +1357,30 @@ impl GitCtx {
                 Err(anyhow::Error::new(e).context(format!("failed to look up object `{hex}`")))
             }
         }
+    }
+
+    /// Whether the commit `full_hex` is the base or one of its ancestors: history the
+    /// change starts from, not a commit the change itself made. Without a base (a
+    /// whole-tree run) the anchor is `HEAD`; with neither, nothing is reachable. A commit
+    /// that is only in the object database (another branch, a dropped commit) is not.
+    pub fn is_reachable_from_base(&self, full_hex: &str) -> Result<bool> {
+        let Some(anchor) = self.base.or_else(|| {
+            self.repo
+                .head()
+                .ok()
+                .and_then(|h| h.peel_to_commit().ok())
+                .map(|c| c.id())
+        }) else {
+            return Ok(false);
+        };
+        let oid = Oid::from_str(full_hex)
+            .with_context(|| format!("`{full_hex}` is not a full object id"))?;
+        if oid == anchor {
+            return Ok(true);
+        }
+        self.repo
+            .graph_descendant_of(anchor, oid)
+            .with_context(|| format!("failed to walk history from the base to `{full_hex}`"))
     }
 
     /// Whether history was truncated when the repository was cloned or fetched, so an
