@@ -2558,9 +2558,9 @@ fn installed_hooks_send_shell_calls_to_the_post_tool_witness() {
     }
 }
 
-/// Audit M1, end to end: the command `hook install` wires for Claude Code's `Bash`,
-/// run the way Claude Code runs it (through `sh`, with `discipline` on `PATH`), records a
-/// passing `cargo test`, and the stop that follows is let through.
+/// Audit M1, end to end: the command `hook install` wires for Claude Code's `Bash`
+/// (after its missing-binary guard) records a passing `cargo test` from Claude Code's
+/// `PostToolUse` payload, and the stop that follows is let through.
 #[test]
 fn the_installed_claude_code_hook_witnesses_a_passing_test_run() {
     let repo = Repo::new();
@@ -2596,33 +2596,29 @@ fn the_installed_claude_code_hook_witnesses_a_passing_test_run() {
         }
     })
     .to_string();
-    let bin_dir = common::discipline_bin().parent().unwrap();
-    let path = format!(
-        "{}:{}",
-        bin_dir.display(),
-        std::env::var("PATH").unwrap_or_default()
+    // The wired command is the missing-binary guard and then this `hook run`; the run is
+    // given to the binary as its arguments, as `sh` would after the guard passes.
+    let run = command
+        .strip_prefix(&guarded_pretool(""))
+        .expect("the post-tool entry is behind the missing-binary guard");
+    let args: Vec<&str> = run
+        .strip_prefix("discipline ")
+        .expect("the guard runs discipline")
+        .split(' ')
+        .collect();
+    assert_eq!(
+        args,
+        [
+            "hook",
+            "run",
+            "--agent",
+            "claude-code",
+            "--event",
+            "post-tool"
+        ]
     );
-    let mut child = common::script_command("sh")
-        .args(["-c", &command])
-        .env("PATH", path)
-        .current_dir(repo.path())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(post.as_bytes())
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let witnessed = hook(&repo, &args, &post);
+    assert_eq!(witnessed.code, 0, "{}", witnessed.stderr);
 
     let after = hook(&repo, &["hook", "run", "--agent", "claude-code"], &stop);
     assert_eq!(after.code, 0, "witnessed: {}", after.stderr);
