@@ -1947,6 +1947,10 @@ const handlers = {
   "v2 shell pre-tool": () => v2["execute.before"](structuredClone(shellCall)),
   "v2 write pre-tool": () => v2["execute.before"](structuredClone(writeCall)),
   "v2 edit pre-tool": () => v2["execute.before"](structuredClone(editCall)),
+  "v1 post-shell": () => v1["tool.execute.after"](
+    { tool: "bash", sessionID: "s", callID: "c-1", args: { command: "cargo test" } },
+    { output: "2 passed", metadata: { exit: 0 } }),
+  "v2 post-shell": () => v2["execute.after"]({ ...structuredClone(shellCall), result: { content: [{ type: "text", text: "2 passed" }] } }),
 }
 const outcome = {}
 const hangOutcome = {}
@@ -2001,6 +2005,14 @@ behaviour = "exit-1"
 const legacyAfterCall = { tool: "edit", result: { output: "" } }
 await v2["execute.after"](legacyAfterCall)
 const legacyAfterOutput = legacyAfterCall.result.output
+// 1.x: a shell call's arguments reach the witness from `tool.execute.before` when
+// `tool.execute.after` carries none.
+behaviour = "exit-0"
+await v1["tool.execute.before"]({ tool: "bash", sessionID: "s", callID: "c-2" }, { args: { command: "cargo test" } })
+stdins.length = 0
+await v1["tool.execute.after"]({ tool: "bash", sessionID: "s", callID: "c-2" }, { output: "2 passed", metadata: { exit: 0 } })
+const keptArgsWitness = JSON.parse(await stdins[0].text())
+behaviour = "exit-1"
 ran.length = 0
 await v1["tool.execute.before"]({ tool: "read" }, { args: {} })
 await v2["execute.before"]({ tool: "read", input: {} })
@@ -2021,6 +2033,7 @@ console.log(JSON.stringify({
   timeouts,
   sent,
   ranForARead: ran.length,
+  keptArgsWitness,
 }))
 "#;
 
@@ -2104,6 +2117,8 @@ fn run_opencode_plugin(observe: bool, test: &str) -> Option<serde_json::Value> {
             "--event session-start"
         } else if key.ends_with("pre-tool") {
             "--event pre-tool"
+        } else if key.ends_with("post-shell") {
+            "--event post-tool"
         } else {
             "discipline hook run --agent opencode"
         };
@@ -2134,6 +2149,35 @@ fn run_opencode_plugin(observe: bool, test: &str) -> Option<serde_json::Value> {
             assert_eq!(v["sent"][key].as_array().unwrap().len(), 1, "{key}: {v}");
         }
     }
+    // A shell call's result reaches the post-tool witness in the shape `hook run --event
+    // post-tool` reads (`pretool::parse` for the command, `output.*` for the outcome),
+    // and the shell tool runs neither the change check nor anything else.
+    for (key, args, out) in [
+        (
+            "exit-0 v1 post-shell",
+            serde_json::json!({"command": "cargo test"}),
+            "2 passed",
+        ),
+        (
+            "exit-0 v2 post-shell",
+            serde_json::json!({"command": "git -C ../probe-wt2 status"}),
+            "2 passed",
+        ),
+    ] {
+        let sent: serde_json::Value =
+            serde_json::from_str(v["sent"][key][0].as_str().unwrap()).unwrap();
+        assert!(
+            sent["input"]["tool"] == "bash" || sent["input"]["tool"] == "shell",
+            "{key}: {sent}"
+        );
+        assert_eq!(sent["output"]["args"], args, "{key}");
+        assert_eq!(sent["output"]["output"], out, "{key}");
+    }
+    assert_eq!(
+        v["keptArgsWitness"]["output"],
+        serde_json::json!({"args": {"command": "cargo test"}, "metadata": {"exit": 0}, "output": "2 passed"}),
+        "{v}"
+    );
     // The recorded 2.x calls reach the pre-tool check as the payload the parser reads:
     // the tool's own name, the session, and the call's `input` as the arguments.
     for (tool, args) in [
@@ -2208,7 +2252,7 @@ fn the_opencode_observe_plugin_never_throws_whatever_the_command_does() {
         return;
     };
     let outcome = v["outcome"].as_object().unwrap();
-    assert_eq!(outcome.len(), 36, "{v}");
+    assert_eq!(outcome.len(), 44, "{v}");
     let threw: Vec<&String> = outcome
         .iter()
         .filter(|(_, threw)| threw.as_bool() != Some(false))
@@ -2216,7 +2260,7 @@ fn the_opencode_observe_plugin_never_throws_whatever_the_command_does() {
         .collect();
     assert!(threw.is_empty(), "observe mode threw from: {threw:?}");
     let hang_outcome = v["hangOutcome"].as_object().unwrap();
-    assert_eq!(hang_outcome.len(), 9, "{v}");
+    assert_eq!(hang_outcome.len(), 11, "{v}");
     let hang_threw: Vec<&String> = hang_outcome
         .iter()
         .filter(|(_, threw)| threw.as_bool() != Some(false))
@@ -2289,6 +2333,15 @@ fn the_opencode_enforcing_plugin_refuses_a_call_it_could_not_check() {
         }
         let hang_key = format!("hangs {block} pre-tool");
         assert_eq!(v["hangOutcome"][&hang_key], true, "{hang_key}: {v}");
+    }
+    // The post-tool witness after a shell call never refuses one, even when enforcing.
+    for block in ["v1", "v2"] {
+        for behaviour in ["exit-0", "exit-1", "throws", "rejects"] {
+            let key = format!("{behaviour} {block} post-shell");
+            assert_eq!(v["outcome"][&key], false, "{key}: {v}");
+        }
+        let hang_key = format!("hangs {block} post-shell");
+        assert_eq!(v["hangOutcome"][&hang_key], false, "{hang_key}: {v}");
     }
     let notices = v["unregisteredNotices"].as_array().unwrap();
     assert_eq!(notices.len(), 1, "{v}");
@@ -2398,4 +2451,164 @@ fn install_enforce_switches_observe_file_to_enforcing() {
         "{}",
         conflict.stderr
     );
+}
+
+/// `(matcher, command)` of every handler under the after-a-tool event of a generated JSON
+/// hook file: `PostToolUse` groups (Claude Code, Codex, Qwen Code, agy) or Copilot CLI's
+/// `postToolUse` entries.
+fn post_tool_handlers(agent: Agent, text: &str) -> Vec<(String, String)> {
+    let v: serde_json::Value = serde_json::from_str(text).unwrap();
+    let events = if agent == Agent::Agy {
+        &v["discipline"]
+    } else {
+        &v["hooks"]
+    };
+    let list = events
+        .get("PostToolUse")
+        .or_else(|| events.get("postToolUse"))
+        .and_then(|l| l.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for item in list {
+        let matcher = item["matcher"].as_str().unwrap_or("").to_string();
+        match item["hooks"].as_array() {
+            Some(inner) => {
+                for h in inner {
+                    out.push((matcher.clone(), h["command"].as_str().unwrap().to_string()));
+                }
+            }
+            None => out.push((matcher, item["bash"].as_str().unwrap().to_string())),
+        }
+    }
+    out
+}
+
+/// Audit M1: the installed hooks route each agent's shell tool, by the name its recorded
+/// payloads carry (`tests/fixtures/pretool/`), to `hook run --event post-tool`, where a
+/// passing verification command is witnessed; edits still reach the check and nothing
+/// else. Without it `[hooks.verified-stop]` could only be satisfied by `run_at_stop`.
+#[test]
+fn installed_hooks_send_shell_calls_to_the_post_tool_witness() {
+    for (agent, shell, edit) in [
+        (Agent::ClaudeCode, "Bash", "Edit"),
+        (Agent::Codex, "Bash", "apply_patch"),
+        (Agent::Qwen, "run_shell_command", "write_file"),
+        (Agent::Copilot, "bash", "edit"),
+        (Agent::Agy, "run_command", "write_to_file"),
+    ] {
+        let recorded = std::fs::read_dir(format!(
+            "{}/tests/fixtures/pretool/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            agent.id()
+        ))
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+        assert!(
+            recorded.contains(&format!("\"{shell}\"")),
+            "{agent:?}: no recorded payload names `{shell}`"
+        );
+        for observe in [false, true] {
+            let (_, text) = config_for_mode(agent, observe);
+            let handlers = post_tool_handlers(agent, &text);
+            let matches = |m: &str, tool: &str| {
+                regex::Regex::new(&format!("^(?:{m})$"))
+                    .unwrap()
+                    .is_match(tool)
+            };
+            let witnesses: Vec<&(String, String)> = handlers
+                .iter()
+                .filter(|(_, c)| c.contains("--event post-tool"))
+                .collect();
+            assert_eq!(witnesses.len(), 1, "{agent:?}: {handlers:?}");
+            let (m, c) = witnesses[0];
+            assert!(
+                matches(m, shell) && !matches(m, edit),
+                "{agent:?}: `{m}` must match `{shell}` only"
+            );
+            assert!(
+                c.ends_with(&format!(
+                    "discipline hook run --agent {} --event post-tool",
+                    agent.id()
+                )) && c.starts_with("command -v discipline"),
+                "{agent:?}: {c}"
+            );
+            // The change check after a tool still runs for edits, not for shell calls.
+            for (m, c) in handlers.iter().filter(|(_, c)| !c.contains("--event")) {
+                assert!(matches(m, edit) && !matches(m, shell), "{agent:?}: {m} {c}");
+            }
+        }
+    }
+}
+
+/// Audit M1, end to end: the command `hook install` wires for Claude Code's `Bash`,
+/// run the way Claude Code runs it (through `sh`, with `discipline` on `PATH`), records a
+/// passing `cargo test`, and the stop that follows is let through.
+#[test]
+fn the_installed_claude_code_hook_witnesses_a_passing_test_run() {
+    let repo = Repo::new();
+    repo.commit_base(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}\n[hooks.verified-stop]\nenabled = true\nmode = \"refuse\"\ncommands = [\"cargo test\"]\n"),
+        "chore: enable verified-stop",
+    );
+    repo.write("src/lib.rs", "pub fn f() -> i32 { 2 }\n");
+    let installed = repo.run(&["hook", "install", "--agent", "claude-code"], &[]);
+    assert_eq!(installed.code, 0, "{}", installed.stderr);
+    let text = std::fs::read_to_string(repo.file(".claude/settings.json")).unwrap();
+    std::fs::remove_dir_all(repo.file(".claude")).unwrap();
+    let (_, command) = post_tool_handlers(Agent::ClaudeCode, &text)
+        .into_iter()
+        .find(|(m, _)| m.split('|').any(|t| t == "Bash"))
+        .expect("a PostToolUse group for Bash");
+    let cwd = repo.path().display().to_string();
+    let stop = serde_json::json!({
+        "cwd": cwd, "hook_event_name": "Stop", "session_id": "sess-m1",
+        "stop_hook_active": false, "last_assistant_message": "All done."
+    })
+    .to_string();
+    let before = hook(&repo, &["hook", "run", "--agent", "claude-code"], &stop);
+    assert_eq!(before.code, 2, "unverified: {}", before.stderr);
+
+    let post = serde_json::json!({
+        "cwd": cwd, "hook_event_name": "PostToolUse", "session_id": "sess-m1",
+        "tool_name": "Bash", "tool_input": { "command": "cargo test" },
+        "tool_response": {
+            "stdout": "running 2 tests\ntest result: ok. 2 passed; 0 failed\n",
+            "stderr": "", "interrupted": false, "isImage": false
+        }
+    })
+    .to_string();
+    let bin_dir = common::discipline_bin().parent().unwrap();
+    let path = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut child = common::script_command("sh")
+        .args(["-c", &command])
+        .env("PATH", path)
+        .current_dir(repo.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(post.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let after = hook(&repo, &["hook", "run", "--agent", "claude-code"], &stop);
+    assert_eq!(after.code, 0, "witnessed: {}", after.stderr);
 }

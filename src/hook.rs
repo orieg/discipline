@@ -40,6 +40,8 @@
 //! Every agent but Cursor and Aider also gets a session-start entry (`--event
 //! session-start`, the worktree's lease) and a pre-tool entry (`--event pre-tool`, which
 //! refuses an edit into another worktree before it runs); both are in `crate::pretool`.
+//! It also gets a post-tool entry after its shell tool (`--event post-tool`, which
+//! records a passing verification command for `[hooks.verified-stop]` and never blocks).
 //!
 //! `discipline hook install --agent <name>` writes that agent's configuration
 //! only where none exists. An existing file is never rewritten, except by `--upgrade`
@@ -774,6 +776,9 @@ fn witness_post_tool(agent: Agent, dir: &Path, side: &CheckSide, stdin: &str) {
         return;
     }
     let base_cfg = base_discipline_config(dir, side).unwrap_or_default();
+    if !base_cfg.hooks.verified_stop.enabled {
+        return;
+    }
     let vouched = crate::session::vouched_commands(&base_cfg, dir, side_base_name(side));
     let Some(command_id) = crate::session::matches_vouched_command(cmd, &vouched) else {
         return;
@@ -822,12 +827,29 @@ pub fn post_tool_with(
     if if_configured && !configured(&dir) {
         return pass;
     }
+    // Installed hooks run this after every shell command. Where the working tree's
+    // `discipline.toml` does not name the check, return before reading the base ref or
+    // the tree. Only the base ref's configuration switches the check on, so this can skip
+    // a record (a stricter stop), never grant one.
+    if !names_verified_stop(&dir) {
+        return pass;
+    }
     let side = match base {
         Some(b) => CheckSide::Base(b),
         None => CheckSide::Default,
     };
     witness_post_tool(agent, &dir, &side, stdin);
     pass
+}
+
+/// Whether the `discipline.toml` at the root of `dir`'s working tree mentions
+/// `verified-stop`.
+fn names_verified_stop(dir: &Path) -> bool {
+    crate::gitctx::discover_repository(dir)
+        .ok()
+        .and_then(|r| r.workdir().map(|w| w.join("discipline.toml")))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .is_some_and(|t| t.contains("verified-stop"))
 }
 
 /// The line a verified-stop refusal carries when no command can verify the tree.
@@ -1433,6 +1455,17 @@ pub fn config_for_opts(
         Agent::Opencode => start_run,
         _ => guarded_pretool(&start_run),
     };
+    // After a shell tool ran: record a passing verification command for
+    // `[hooks.verified-stop]`. It never blocks, so it has no observe form; with the
+    // check switched off it returns before reading the tree.
+    let post_run = format!(
+        "discipline hook run --agent {} --event post-tool",
+        agent.id()
+    );
+    let post = match agent {
+        Agent::Opencode => post_run,
+        _ => guarded_pretool(&post_run),
+    };
     match agent {
         Agent::ClaudeCode => (
             ".claude/settings.json",
@@ -1454,6 +1487,7 @@ pub fn config_for_opts(
                     hook_entry(&pre, None),
                 ),
                 ("Edit|Write|MultiEdit|NotebookEdit", hook_entry(&cmd, None)),
+                ("Bash", hook_entry(&post, None)),
             ),
         ),
         // Codex's contract is Claude Code's (recorded live:
@@ -1466,6 +1500,7 @@ pub fn config_for_opts(
                 serde_json::json!({ "hooks": [hook_entry(&start, None)] }),
                 ("apply_patch|Edit|Write|Bash", hook_entry(&pre, None)),
                 ("apply_patch|Edit|Write", hook_entry(&cmd, None)),
+                ("Bash", hook_entry(&post, None)),
             ),
         ),
         Agent::Cursor => (
@@ -1485,7 +1520,7 @@ pub fn config_for_opts(
         ),
         Agent::Copilot => (
             ".github/hooks/discipline.json",
-            copilot_hooks(&cmd, secs, Some((&pre, &start))),
+            copilot_hooks(&cmd, secs, Some((&pre, &start, &post))),
         ),
         Agent::Agy => (
             ".agents/hooks.json",
@@ -1506,6 +1541,12 @@ pub fn config_for_opts(
                         "matcher": ".*",
                         "hooks": [{ "type": "command", "command": pre, "timeout": 30 }]
                     }],
+                    // agy reads nothing a hook returns after a tool call; the shell
+                    // tool's result is only witnessed for `[hooks.verified-stop]`.
+                    "PostToolUse": [{
+                        "matcher": "run_command",
+                        "hooks": [{ "type": "command", "command": post, "timeout": 30 }]
+                    }],
                     "Stop": [{ "type": "command", "command": cmd, "timeout": secs }]
                 }
             }))
@@ -1524,11 +1565,12 @@ pub fn config_for_opts(
                     hook_entry(&pre, Some(30)),
                 ),
                 ("^(write_file|edit)$", hook_entry(&cmd, Some(secs))),
+                ("^(run_shell_command)$", hook_entry(&post, Some(30))),
             )),
         ),
         Agent::Opencode => (
             ".opencode/plugins/discipline.js",
-            opencode_plugin(&cmd, &pre, &start, observe),
+            opencode_plugin(&cmd, &pre, &start, &post, observe),
         ),
     }
 }
@@ -1592,18 +1634,22 @@ fn hook_entry(command: &str, timeout: Option<u32>) -> serde_json::Value {
 }
 
 /// The hook file of an agent whose contract is Claude Code's: one `SessionStart` group,
-/// the pre-tool handler and the check after an edit under their tool matchers, and the
-/// same check on `Stop`.
+/// the pre-tool handler, the check after an edit and the post-tool witness after a shell
+/// command under their tool matchers, and the same check on `Stop`.
 fn claude_shaped(
     session_start: serde_json::Value,
     (pre_matcher, pre): (&str, serde_json::Value),
     (post_matcher, check): (&str, serde_json::Value),
+    (shell_matcher, witness): (&str, serde_json::Value),
 ) -> String {
     serde_json::to_string_pretty(&serde_json::json!({
         "hooks": {
             "SessionStart": [session_start],
             "PreToolUse": [{ "matcher": pre_matcher, "hooks": [pre] }],
-            "PostToolUse": [{ "matcher": post_matcher, "hooks": [check.clone()] }],
+            "PostToolUse": [
+                { "matcher": post_matcher, "hooks": [check.clone()] },
+                { "matcher": shell_matcher, "hooks": [witness] }
+            ],
             "Stop": [{ "hooks": [check] }]
         }
     }))
@@ -1645,7 +1691,11 @@ pub const OPENCODE_OBSERVE_NEVER_BLOCKS: &str =
 
 /// The OpenCode plugin: when a session is created, take the worktree's lease; before an
 /// edit or shell tool, the pre-tool check; after an edit tool, run the hook and append a failure to the
-/// tool's output, which is the text the model reads.
+/// tool's output, which is the text the model reads; after a shell tool, hand its result
+/// to `hook run --event post-tool` (`post`), which records a passing verification command
+/// for `[hooks.verified-stop]`. That handler never throws, in either mode. 1.x gives
+/// `tool.execute.after` no arguments on some releases, so `tool.execute.before` keeps a
+/// shell call's arguments by `callID` for it.
 ///
 /// Enforcing, a pre-tool command that exits non-zero or cannot be run throws, which
 /// refuses the call. With `observe` no handler can throw: the pre-tool handlers have no
@@ -1662,7 +1712,7 @@ pub const OPENCODE_OBSERVE_NEVER_BLOCKS: &str =
 /// empty one: `hook run` reads stdin to its end, and a 2.x server's own stdin does not
 /// end. In enforcing mode, an API without `tool.hook` throws from `setup` so the plugin
 /// fails closed rather than leaving tool calls unchecked.
-fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
+fn opencode_plugin(cmd: &str, pre: &str, start: &str, post: &str, observe: bool) -> String {
     // A handler body, as written when enforcing; in observe mode, inside `try`/`catch`.
     let guard = |indent: usize, body: String| -> String {
         if !observe {
@@ -1707,22 +1757,44 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
         4,
         format!(
             "    if (!EDIT_TOOLS.includes(input.tool) && input.tool !== \"bash\") return
+    if (input.tool === \"bash\" && input.callID) {{
+      if (SHELL_ARGS.size > 256) SHELL_ARGS.clear()
+      SHELL_ARGS.set(input.callID, output?.args)
+    }}
     const call = new Response(JSON.stringify({{ input, output, cwd: directory }}))
 {}",
             pre_call(4, "call")
         ),
     );
-    let v1_after = guard(
-        4,
-        format!(
-            "    if (!EDIT_TOOLS.includes(input.tool)) return
+    // Not through `guard`: the witness never refuses a call, in either mode.
+    let v1_witness = format!(
+        "    if (SHELL_TOOLS.includes(input.tool)) {{
+      try {{
+        const args = input.args ?? SHELL_ARGS.get(input.callID) ?? {{}}
+        SHELL_ARGS.delete(input.callID)
+        const ran = new Response(JSON.stringify({{
+          input: {{ tool: input.tool, sessionID: input.sessionID }},
+          output: {{ args, metadata: output?.metadata, output: output?.output }},
+          cwd: directory
+        }}))
+        await withTimeout($`{post} < ${{ran}}`.cwd(directory).nothrow().quiet(), HOOK_TIMEOUT_MS)
+      }} catch {{}}
+      return
+    }}
+"
+    );
+    let v1_after = v1_witness
+        + &guard(
+            4,
+            format!(
+                "    if (!EDIT_TOOLS.includes(input.tool)) return
     const r = await withTimeout($`{cmd}`.cwd(directory).nothrow().quiet(), CHECK_TIMEOUT_MS)
     if (r.exitCode !== 0) {{
       output.output += \"\\n\\n\" + r.stdout.toString() + r.stderr.toString()
     }}
 "
-        ),
-    );
+            ),
+        );
     // Not through `guard`: the loop that awaits this is detached from `setup`, so in
     // either mode an error here has no caller to reach and must not end the loop.
     let v2_session = format!(
@@ -1753,7 +1825,31 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
             pre_call(6, "payload")
         ),
     );
-    let v2_after = guard(
+    // Not through `guard`: the witness never refuses a call, in either mode.
+    let v2_witness = format!(
+        "      const shellName = call.tool ?? call.input?.tool
+      if (SHELL_TOOLS.includes(shellName)) {{
+        try {{
+          const text = Array.isArray(call.result?.content)
+            ? call.result.content.filter((c) => typeof c?.text === \"string\").map((c) => c.text).join(\"\\n\")
+            : call.result?.output
+          const ran = new Response(JSON.stringify({{
+            input: {{ tool: shellName, sessionID: call.sessionID }},
+            output: {{
+              args: call.input ?? {{}},
+              metadata: call.result?.metadata,
+              output: typeof text === \"string\" ? text : undefined
+            }},
+            cwd: directory
+          }}))
+          await withTimeout($`{post} < ${{ran}}`.cwd(directory).nothrow().quiet(), HOOK_TIMEOUT_MS)
+        }} catch {{}}
+        return
+      }}
+"
+    );
+    let v2_after = v2_witness
+        + &guard(
         6,
         format!(
             "      const toolName = call.tool ?? call.input?.tool
@@ -1794,6 +1890,8 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
 const EDIT_TOOLS = [\"edit\", \"write\", \"apply_patch\"]
 // OpenCode 2.x names its shell tool `shell`; 1.x named it `bash`.
 const SHELL_TOOLS = [\"bash\", \"shell\"]
+// 1.x: a shell call's arguments, kept from `tool.execute.before` for `tool.execute.after`.
+const SHELL_ARGS = new Map()
 const HOOK_TIMEOUT_MS = 30_000
 const CHECK_TIMEOUT_MS = 120_000
 
@@ -2133,7 +2231,11 @@ pub fn opencode_plugin_mode(text: &str) -> Option<bool> {
     let run = format!("discipline hook run --agent {}", Agent::Opencode.id());
     let commands: Vec<bool> = text
         .lines()
-        .filter(|l| l.contains(&run) && !l.contains("--event session-start"))
+        .filter(|l| {
+            l.contains(&run)
+                && !l.contains("--event session-start")
+                && !l.contains("--event post-tool")
+        })
         .map(|l| l.contains(" --observe"))
         .collect();
     let observing = commands.iter().filter(|o| **o).count();
@@ -2191,6 +2293,8 @@ enum JsonCommand {
         observe: bool,
     },
     SessionStart,
+    /// `hook run --event post-tool` after a shell command, which never blocks.
+    PostTool,
     /// The Claude Code bootstrap, agy's missing-binary notice.
     Fixed,
 }
@@ -2231,6 +2335,7 @@ fn json_command(agent: Agent, cmd: &str, user: bool) -> Option<JsonCommand> {
         " --event pre-tool" => Some(JsonCommand::PreTool { observe: false }),
         " --event pre-tool --observe" => Some(JsonCommand::PreTool { observe: true }),
         " --event session-start" => Some(JsonCommand::SessionStart),
+        " --event post-tool" => Some(JsonCommand::PostTool),
         _ => None,
     }
 }
@@ -2385,7 +2490,7 @@ fn generated_json_against(
                 Some(observe)
             }
             JsonCommand::PreTool { observe } => Some(observe),
-            JsonCommand::SessionStart | JsonCommand::Fixed => None,
+            JsonCommand::SessionStart | JsonCommand::PostTool | JsonCommand::Fixed => None,
         };
         if !matches!(entry.command, JsonCommand::Check { .. }) && !fixed_timeouts.contains(&secs) {
             return None;
@@ -2621,8 +2726,9 @@ pub fn configured(dir: &Path) -> bool {
 }
 
 /// Copilot CLI's hook file running `cmd` after an edit and at the end of a turn, each
-/// with `timeout` seconds.
-fn copilot_hooks(cmd: &str, timeout: u32, pre: Option<(&str, &str)>) -> String {
+/// with `timeout` seconds; with `pre`, also the pre-tool check, the session-start lease
+/// and the post-tool witness after a `bash` call.
+fn copilot_hooks(cmd: &str, timeout: u32, pre: Option<(&str, &str, &str)>) -> String {
     let mut hooks = serde_json::json!({
         "postToolUse": [{
             "type": "command",
@@ -2634,7 +2740,15 @@ fn copilot_hooks(cmd: &str, timeout: u32, pre: Option<(&str, &str)>) -> String {
         }],
         "agentStop": [{ "type": "command", "bash": cmd, "timeoutSec": timeout }]
     });
-    if let Some((pre, start)) = pre {
+    if let Some((pre, start, post)) = pre {
+        if let Some(list) = hooks["postToolUse"].as_array_mut() {
+            list.push(serde_json::json!({
+                "type": "command",
+                "matcher": "bash",
+                "bash": post,
+                "timeoutSec": 30
+            }));
+        }
         hooks["sessionStart"] = serde_json::json!([{
             "type": "command",
             "bash": start,
@@ -2686,6 +2800,9 @@ pub fn user_config_for(
                         )),
                         &guarded_pretool(
                             "discipline hook run --agent copilot --event session-start --if-configured",
+                        ),
+                        &guarded_pretool(
+                            "discipline hook run --agent copilot --event post-tool --if-configured",
                         ),
                     )),
                 ),
@@ -4808,11 +4925,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".claude/settings.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let text = merged(
-            Agent::ClaudeCode,
-            "permissions",
-            serde_json::json!({"allow": ["Bash(cargo test)"]}),
-        );
+        let mut current = json(&config_for_mode(Agent::ClaudeCode, true).1);
+        current["permissions"] = serde_json::json!({"allow": ["Bash(cargo test)"]});
+        let text = pretty(&current);
         std::fs::write(&path, &text).unwrap();
         let up = install_with(Agent::ClaudeCode, dir.path(), true, true, None).unwrap();
         assert_eq!(up, Installed::AlreadyPresent(path.clone()));
@@ -4893,6 +5008,7 @@ mod tests {
                 "$`discipline hook run --agent opencode --event session-start < ${start}`"
                     .to_string(),
                 format!("$`discipline hook run --agent opencode --event pre-tool{flag} < ${{"),
+                "$`discipline hook run --agent opencode --event post-tool < ${ran}`".to_string(),
             ] {
                 assert_eq!(
                     text.matches(&run).count(),
@@ -4909,13 +5025,13 @@ mod tests {
             }
             assert_eq!(
                 text.matches("await withTimeout($`").count(),
-                6,
+                8,
                 "observe={observe}: every shell call runs with a timeout\n{text}"
             );
             assert_eq!(
                 text.matches(", HOOK_TIMEOUT_MS)").count(),
-                4,
-                "observe={observe}: session-start and pre-tool use HOOK_TIMEOUT_MS"
+                6,
+                "observe={observe}: session-start, pre-tool and post-tool use HOOK_TIMEOUT_MS"
             );
             assert_eq!(
                 text.matches(", CHECK_TIMEOUT_MS)").count(),
@@ -4942,9 +5058,10 @@ mod tests {
             1,
             "{observe}"
         );
-        // Six handlers (three per block), each one guarded.
-        assert_eq!(observe.matches(" try {\n").count(), 6, "{observe}");
-        assert_eq!(observe.matches(" } catch {}\n").count(), 6, "{observe}");
+        // Six handlers (three per block), each one guarded, and the post-tool witness of
+        // each block, which has its own `try` in either mode.
+        assert_eq!(observe.matches(" try {\n").count(), 8, "{observe}");
+        assert_eq!(observe.matches(" } catch {}\n").count(), 8, "{observe}");
         assert!(!observe.contains("console.error"), "{observe}");
     }
 
@@ -4968,16 +5085,22 @@ mod tests {
 ";
         assert_eq!(enforcing.matches(v1).count(), 1, "{enforcing}");
         assert_eq!(enforcing.matches(v2).count(), 1, "{enforcing}");
-        // The one `try` and the two `catch` are the 2.x session lease's, whose loop is
-        // detached from `setup`: nothing around a pre-tool or post-edit command.
+        // One `try` and two `catch` are the 2.x session lease's, whose loop is detached
+        // from `setup`; the others are the post-tool witness's, one per block, which
+        // records and never refuses. Nothing is around a pre-tool or post-edit command.
         let lease = &enforcing[enforcing.find("    const events = ").unwrap()
             ..enforcing
                 .find("    tool?.hook?.(\"execute.before\"")
                 .unwrap()];
         assert_eq!(lease.matches("try {").count(), 1, "{lease}");
         assert_eq!(lease.matches("catch").count(), 2, "{lease}");
-        assert_eq!(enforcing.matches("try {").count(), 1, "{enforcing}");
-        assert_eq!(enforcing.matches("catch").count(), 2, "{enforcing}");
+        assert_eq!(enforcing.matches("try {").count(), 3, "{enforcing}");
+        assert_eq!(enforcing.matches("catch").count(), 4, "{enforcing}");
+        for witness in enforcing.split("if (SHELL_TOOLS.includes(").skip(1) {
+            let body = &witness[..witness.find("      return\n").unwrap()];
+            assert!(body.contains("--event post-tool"), "{body}");
+            assert!(body.contains("} catch {}"), "{body}");
+        }
         assert!(!enforcing.contains(OPENCODE_OBSERVE_NEVER_BLOCKS));
         let notice = "    if (typeof tool?.hook !== \"function\") {
       console.error(\"discipline: this OpenCode offered the plugin no tool.hook; the pre-tool check was not registered and no tool call will be checked\")
