@@ -284,44 +284,211 @@ pub fn evaluate_suppression_delta(ctx: &Context) -> Result<GateOutcome> {
     Ok(out)
 }
 
-/// A human-readable label for the suppression kind and rule (e.g. `allow(clippy::x)`,
-/// `noqa: F401`), reported by default instead of quoting the raw source line.
-pub fn suppression_kind_label(pat: &str, site: &Site) -> String {
-    if site.rule.is_empty() {
-        return pat.to_string();
+/// The suppression patterns [`pattern_of`] names by a fixed string. Any other pattern is
+/// the site's own rule text, which a label never prints as it stands.
+const KNOWN_PATTERNS: &[&str] = &[
+    "#[allow(",
+    "#[expect(",
+    "#pragma GCC diagnostic ignored",
+    "#pragma clang diagnostic ignored",
+    "#pragma warning(disable)",
+    "# noqa",
+    "# type: ignore",
+    "# pylint: disable",
+    "// @ts-nocheck",
+    "// @ts-expect-error",
+    "// @ts-ignore",
+    "eslint-disable",
+    "// NOLINT",
+    "//nolint",
+    "#pragma warning disable",
+];
+
+/// The tool a site belongs to, named by a fixed string chosen from the site's pattern or
+/// from the marker words of its text: never the text itself.
+fn tool_label(pat: &str, site: &Site) -> &'static str {
+    if let Some(known) = KNOWN_PATTERNS.iter().find(|k| **k == pat) {
+        return known;
     }
-    if pat.starts_with("#[allow(") || pat.starts_with("#![allow(") {
-        format!("allow({})", site.rule)
-    } else if pat.starts_with("#[expect(") || pat.starts_with("#![expect(") {
-        format!("expect({})", site.rule)
-    } else if pat.contains("SuppressWarnings") || site.snippet.contains("SuppressWarnings") {
-        format!("SuppressWarnings({})", site.rule)
-    } else if pat.contains("Suppress") || site.snippet.contains("Suppress") {
-        format!("Suppress({})", site.rule)
-    } else if pat.contains("nowarn") || site.snippet.contains("nowarn") {
-        format!("nowarn({})", site.rule)
-    } else if pat == "# noqa" {
-        if site.rule == "noqa" {
-            "# noqa".to_string()
-        } else if site.rule.starts_with("noqa:") {
-            site.rule.clone()
-        } else {
-            format!("noqa: {}", site.rule)
+    const MARKERS: &[(&str, &str)] = &[
+        ("SuppressWarnings", "SuppressWarnings"),
+        ("SuppressMessage", "SuppressMessage"),
+        ("SuppressLint", "SuppressLint"),
+        ("Suppress", "Suppress"),
+        ("nowarn", "nowarn"),
+        ("rubocop", "rubocop:disable"),
+        ("swiftlint", "swiftlint:disable"),
+        ("scalastyle", "scalastyle:off"),
+        ("scalafix", "scalafix:off"),
+        ("noinspection", "noinspection"),
+        ("NOSONAR", "NOSONAR"),
+        ("nosonar", "NOSONAR"),
+        ("@unchecked", "@unchecked"),
+    ];
+    if site.rule == "coverage" {
+        return "coverage ignore";
+    }
+    MARKERS
+        .iter()
+        .find(|(word, _)| site.snippet.contains(word))
+        .map_or(site.kind, |(_, label)| label)
+}
+
+/// Whether `token` is spelled as a rule identifier: letters, digits and `_@/.:-`, with at
+/// least one letter or digit (`clippy::all`, `no-console`, `Style/Foo`, `E501`).
+fn is_rule_identifier(token: &str) -> bool {
+    token.chars().any(|c| c.is_ascii_alphanumeric())
+        && token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_@/.:-".contains(c))
+}
+
+/// A flake8 / ruff code (`E501`, `F401`, `PLR0913`, `ASYNC100`): one to six capitals,
+/// then one to four digits. In a `noqa` such codes may be separated by whitespace alone;
+/// every other rule list is separated by commas.
+fn is_noqa_code(token: &str) -> bool {
+    let digits = token.trim_start_matches(|c: char| c.is_ascii_uppercase());
+    let letters = token.len() - digits.len();
+    (1..=6).contains(&letters)
+        && (1..=4).contains(&digits.len())
+        && digits.chars().all(|c| c.is_ascii_digit())
+}
+
+/// The rule identifiers a site names, and nothing else: the description a tool lets
+/// follow its rules (`-- reason` for ESLint, `// reason` for `nolint`, `# reason` for
+/// `noqa`) and any free text are dropped. The list stops at the first word that is not
+/// spelled as an identifier, or that follows the previous identifier with no comma
+/// between them (in a `noqa`, `spaced_codes`, a flake8 code excepted); quotes, braces and
+/// brackets around the rules are ignored.
+pub fn rule_identifiers(rule: &str, spaced_codes: bool) -> Vec<String> {
+    let mut rest = rule;
+    for marker in ["--", "//", "/*", "*/", "#", ";"] {
+        if let Some(at) = rest.find(marker) {
+            rest = &rest[..at];
         }
-    } else if pat == "# type: ignore" {
-        if site.rule == "type-ignore" || site.rule == "type: ignore" {
+    }
+    let mut rest = rest.trim();
+    // Java's `value = "x"` and Scala's `Array("x")` wrap the rules.
+    if let Some(after) = rest.strip_prefix("value") {
+        if let Some(value) = after.trim_start().strip_prefix('=') {
+            rest = value;
+        }
+    }
+    if let Some(inner) = rest.strip_prefix("Array(") {
+        rest = inner;
+    }
+    // A named argument (`reason = "..."`, `Justification = "..."`, `cat=deprecation`)
+    // ends the rules: neither its name nor its value is one.
+    let named = rest.find('=');
+    if let Some(at) = named {
+        rest = &rest[..at];
+    }
+    let mut ids: Vec<String> = Vec::new();
+    let mut comma = true;
+    let mut token = String::new();
+    let wrapper = |c: char| "\"'{}()[]".contains(c);
+    for c in rest.chars().chain(std::iter::once(' ')) {
+        if c == ',' || c.is_whitespace() || wrapper(c) {
+            if !token.is_empty() {
+                let accepted = is_rule_identifier(&token)
+                    && (comma || ids.is_empty() || (spaced_codes && is_noqa_code(&token)));
+                if !accepted || ids.len() >= 16 {
+                    break;
+                }
+                ids.push(std::mem::take(&mut token));
+                comma = false;
+            }
+            if c == ',' {
+                comma = true;
+            }
+        } else {
+            token.push(c);
+        }
+    }
+    if named.is_some() {
+        ids.pop();
+    }
+    ids
+}
+
+/// The part of a site's rule that lists its rules, for the tools whose packs report the
+/// whole comment or directive as the rule: the words after `#pragma warning disable`,
+/// after `nolint:` / `lint:ignore` / `revive:disable`, inside `NOLINT(...)` and inside
+/// `SuppressMessage(...)`.
+fn rule_list<'r>(tool: &str, rule: &'r str) -> &'r str {
+    let r = rule.trim();
+    match tool {
+        "#pragma warning disable" => r.split_once("warning disable").map_or(r, |(_, rest)| rest),
+        "// NOLINT" => {
+            let after = r.trim_start_matches(|c: char| c.is_ascii_uppercase());
+            if after.len() == r.len() {
+                r
+            } else {
+                after
+                    .strip_prefix('(')
+                    .and_then(|inner| inner.split_once(')'))
+                    .map_or("", |(inner, _)| inner)
+            }
+        }
+        "//nolint" => ["nolint", "lint:ignore", "revive:disable"]
+            .iter()
+            .find_map(|word| r.strip_prefix(word))
+            .map_or(r, |rest| rest.trim_start_matches(':')),
+        "SuppressMessage" => r.split_once('(').map_or(r, |(_, inner)| inner),
+        _ => r,
+    }
+}
+
+/// A label for the suppression kind and rule (e.g. `allow(clippy::x)`, `noqa: F401`),
+/// reported by default instead of quoting the raw source line. It holds a fixed tool name
+/// and the [`rule_identifiers`] of the site, never the site's free text: a description
+/// after the rules (`-- token=...`) can hold anything.
+pub fn suppression_kind_label(pat: &str, site: &Site) -> String {
+    let tool = tool_label(pat, site);
+    if tool.starts_with("// @ts-") {
+        // The rule is the checker (`typescript`); the rest of the comment is free text.
+        return tool.to_string();
+    }
+    if tool == "# type: ignore" {
+        // The site's rule is the checker (`mypy`); the error codes are in the brackets.
+        let codes = site
+            .snippet
+            .split_once("ignore[")
+            .and_then(|(_, rest)| rest.split_once(']'))
+            .map(|(inner, _)| rule_identifiers(inner, false))
+            .unwrap_or_default();
+        return if codes.is_empty() {
             "# type: ignore".to_string()
         } else {
-            format!("type: ignore[{}]", site.rule)
+            format!("type: ignore[{}]", codes.join(", "))
+        };
+    }
+    let ids = rule_identifiers(rule_list(tool, &site.rule), tool == "# noqa");
+    if ids.is_empty() {
+        return tool.to_string();
+    }
+    let rule = ids.join(", ");
+    if tool.starts_with("#[allow(") {
+        format!("allow({rule})")
+    } else if tool.starts_with("#[expect(") {
+        format!("expect({rule})")
+    } else if matches!(
+        tool,
+        "SuppressWarnings" | "SuppressMessage" | "SuppressLint" | "Suppress" | "nowarn"
+    ) {
+        format!("{tool}({rule})")
+    } else if tool == "# noqa" {
+        if rule == "noqa" {
+            "# noqa".to_string()
+        } else {
+            format!("noqa: {rule}")
         }
-    } else if pat.contains("diagnostic ignored") || pat.contains("pragma warning") {
-        format!("{pat} {}", site.rule)
-    } else if pat.contains("NOLINT") || pat.contains("nolint") || pat.contains("lint:ignore") {
-        format!("{pat}({})", site.rule)
-    } else if pat.contains(&site.rule) {
-        pat.to_string()
+    } else if tool.contains("NOLINT") || tool.contains("nolint") {
+        format!("{tool}({rule})")
+    } else if tool == rule || tool.ends_with(&format!(" {rule}")) {
+        tool.to_string()
     } else {
-        format!("{pat} {}", site.rule)
+        format!("{tool} {rule}")
     }
 }
 
@@ -537,6 +704,28 @@ mod tests {
         let cpp_rules = extract_suppression_rules("// NOLINT(readability-something)", "// NOLINT");
         assert!(cpp_rules.contains(&"NOLINT".to_string()));
         assert!(cpp_rules.contains(&"readability-something".to_string()));
+    }
+
+    #[test]
+    fn rule_identifiers_stop_at_free_text() {
+        use super::rule_identifiers;
+        let ids = |r: &str| rule_identifiers(r, false);
+        assert_eq!(ids("no-console -- token=x"), ["no-console"]);
+        assert_eq!(ids("no-alert, no-eval -- why"), ["no-alert", "no-eval"]);
+        assert_eq!(ids("invalid-name because SECRET"), ["invalid-name"]);
+        assert_eq!(ids("clippy::x, reason = \"SECRET\""), ["clippy::x"]);
+        assert_eq!(ids("{\"a\", \"b\"}"), ["a", "b"]);
+        assert_eq!(ids("value = \"x\""), ["x"]);
+        assert_eq!(ids("Array(\"x\")"), ["x"]);
+        assert_eq!(ids("cat=deprecation"), Vec::<String>::new());
+        assert_eq!(ids("tok$en"), Vec::<String>::new());
+        assert_eq!(ids("E1 # more"), ["E1"]);
+        assert_eq!(
+            rule_identifiers("F401 E501 SECRETWORD42", true),
+            ["F401", "E501"]
+        );
+        assert_eq!(rule_identifiers("F401 FREETEXTSECRET42", true), ["F401"]);
+        assert_eq!(ids("F401 E501"), ["F401"]);
     }
 
     #[test]
