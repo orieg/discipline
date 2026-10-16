@@ -1664,6 +1664,99 @@ fn pii_fires_on_home_paths_and_lan_ips_without_echoing_the_user() {
 }
 
 #[test]
+fn pii_reads_test_code_and_placeholder_secrets_without_opening_a_leak() {
+    // Assembled at run time so this file holds none of the shapes it tests.
+    let home = |user: &str| format!("/{}/{user}/project/", "Users");
+    let lan = ["192", "168", "1", "10"].join(".");
+    let header = format!("-----BEGIN {} KEY-----", "PRIVATE");
+    let bearer = |value: &str| format!("{}: Bearer {value}", "Authorization");
+    let repo = Repo::new();
+    // vitejs/vite, denoland/deno: test data inside test code.
+    repo.write(
+        "src/__tests__/utils.spec.ts",
+        &format!(
+            "import {{ expect, test }} from 'vitest'\n\
+             test('urls', () => {{\n  expect(url('{lan}')).toBe('http://{lan}:3000/')\n  expect(rel('{}')).toBe('.')\n}})\n",
+            home("dev")
+        ),
+    );
+    repo.write(
+        "src/error.rs",
+        &format!(
+            "pub fn f() {{}}\n\n#[cfg(test)]\nmod tests {{\n    #[test]\n    fn rel() {{\n        let from = \"file://{}\";\n        assert_eq!(from.len(), 23);\n    }}\n}}\n",
+            home("dev")
+        ),
+    );
+    // denoland/deno, fastapi/fastapi: a format name and a documented placeholder.
+    repo.write(
+        "src/pem.ts",
+        &format!("export const pemHeader = \"{header}\";\n"),
+    );
+    repo.write(
+        "app/http.py",
+        &format!(
+            "def scheme():\n    \"\"\"\n    {}\n    \"\"\"\n",
+            bearer("deadbeef12346")
+        ),
+    );
+    // Positive controls, in code that is not a test: each is still a leak.
+    repo.write(
+        "src/net.ts",
+        &format!(
+            "export const host = '{lan}'\nexport const root = '{}'\nexport const cache = '{}'\n",
+            home("dev"),
+            home("jsmith")
+        ),
+    );
+    repo.write(
+        "src/key.ts",
+        &format!("export const key = \"{header}\\nMIIEvQIBADANBgkqhkiG9w0B\";\n"),
+    );
+    repo.write(
+        "app/client.py",
+        &format!("HEADERS = \"{}\"\n", bearer("9f3kLm2QpX7vR4tZ")),
+    );
+    // A real-looking user name in test code is reported as before.
+    repo.write(
+        "tests/paths_test.py",
+        &format!(
+            "def test_root():\n    assert root() == '{}'\n",
+            home("jsmith")
+        ),
+    );
+    repo.commit("feat: add");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let mut found: Vec<(String, u64, String)> = run
+        .violations("pii")
+        .iter()
+        .map(|v| {
+            (
+                v["file"].as_str().unwrap().to_string(),
+                v["line"].as_u64().unwrap(),
+                v["severity"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    found.sort();
+    let row = |f: &str, l: u64, s: &str| (f.to_string(), l, s.to_string());
+    assert_eq!(
+        found,
+        vec![
+            row("app/client.py", 1, "error"),
+            row("src/__tests__/utils.spec.ts", 3, "warning"),
+            row("src/key.ts", 1, "error"),
+            row("src/net.ts", 1, "error"),
+            row("src/net.ts", 2, "error"),
+            row("src/net.ts", 3, "error"),
+            row("tests/paths_test.py", 2, "error"),
+        ],
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
 fn hostname_denylist_comes_from_config_or_secret_env_and_is_never_echoed() {
     let repo = Repo::new();
     repo.write("docs/bench.md", "measured on Thunderbox, 8 cores\n");

@@ -454,7 +454,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - **Exact forms (gate severity, `error` by default):** `test-main-result-discarded`, `pytest-hook-masks-results`, `unittest-result-method-replaced`.
   - **Exit with status zero (`warning` at most):** `harness-exits-zero`, whatever the gate's severity is set to.
 - **`pii` / Workstation Hygiene:**
-  - Private RFC 1918 LAN IPs (`192.168.x.x`, `10.x.x.x`, `172.16.x.x`) are reported at the gate's severity (`error` by default) and echoed in the finding unless `redact_lan_ips = true`; `gates.pii.lan_ips = false` turns the rule off.
+  - Private RFC 1918 LAN IPs (`192.168.x.x`, `10.x.x.x`, `172.16.x.x`) are reported at the gate's severity (`error` by default) and echoed in the finding unless `redact_lan_ips = true`; in test code (a test path, or the lines of a test the language pack finds) they are reported as a warning that does not block. `gates.pii.lan_ips = false` turns the rule off.
 
 ---
 
@@ -1047,7 +1047,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Languages:** Any.
 - **What it catches:**
   - Local home directory paths: `/Users/<username>/...`, `/home/<username>/...`, `C:\Users\<username>\...`.
-  - Private IPv4 LAN addresses: `10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`.
+  - Private IPv4 LAN addresses: `10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`. In test code (a file whose path is test code by the shared convention or its pack's own, or the lines of a test the language pack finds, such as a Rust `#[test]` function in a production file) the finding is capped at warning: there an address is most often the data a test feeds an address parser or URL builder, and a host a test really reaches is still shown.
   - Whole-token matches of denylisted internal hostnames (`hostname_denylist`) and private terms (`term_denylist`, with optional `case:` / `case-sensitive:` prefix or multi-token phrases), scanned across file contents, added/renamed paths, commit messages, PR title, and branch name. Matches are never echoed in reports or logs.
   - With `secrets` (on by default): fixed-format credentials in every text file, from the one token table `shell-secrets` shares (`src/guards/token_formats.rs`). The report names the file, the line and the token class; the matched value is never echoed in any output format. The classes:
     - private-key headers (`-----BEGIN [<label> ]PRIVATE KEY-----`, including `PGP PRIVATE KEY BLOCK`);
@@ -1055,7 +1055,8 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
     - GitHub tokens (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`);
     - Slack tokens (`xoxb-`, `xoxa-`, `xoxp-`, `xoxr-`, `xoxs-`);
     - OpenAI and Anthropic API keys (`sk-`, `sk-proj-`, `sk-ant-api<nn>-`);
-    - a literal `Authorization: Bearer <value>` header. A variable reference or placeholder (`$TOKEN`, `${{ secrets.X }}`, `<token>`, `xxxxxxxx`, `changeme`) is not a hit.
+    - a literal `Authorization: Bearer <value>` header. A variable reference or placeholder (`$TOKEN`, `${{ secrets.X }}`, `<token>`, `xxxxxxxx`, `changeme`, a value that starts with a hexadecimal example word: `deadbeef`, `cafebabe`, `feedface`, `baadf00d`) is not a hit.
+    - A private-key header that is the whole of one string literal (`const pemHeader = "-----BEGIN PRIVATE KEY-----";`, a constant a PEM parser compares with) names the format and is not a hit. A header followed by anything inside its literal (a key body after `\n`), a header on its own line (a PEM file), and a literal that opens on the header are still reported. Limit: a key assembled by concatenating a lone header literal with its body is not reported, since the body has no fixed format.
   - References to personal maintainer agent configuration (`~/.claude/CLAUDE.md`, `$HOME/.gemini/NOTES.md`, `RESEARCH_DISCIPLINES.md`, `*_PLAYBOOK.md`) across tracked text files. With `agent_config_standard_paths` (default `true`), a reference to an agent tool's home directory itself or to a configuration entry the tool documents there (`settings.json`, `settings.local.json`, `config.json`, `config.toml`, `hooks/`, `hooks.json`, `plugins/`, `mcp.json`, `mcp_config.json`, `keybindings.json`) documents the tool and is not reported; instruction files, skills, agents, commands, rules, session history and any other file there still are. `agent_config_standard_paths = false` reports every `~/.<agent>` or `$HOME/.<agent>` path. <!-- discipline:allow(pii) -->
   - Leaks inside decoded JSON keys and string literals, including escaped slashes (`\/`).
 - **Failing diff example (rejected):**
@@ -1071,12 +1072,13 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   ```
 - **What it does NOT catch:**
   - Standard documentation placeholders: `runner`, `user`, `username`, `you`, `me`, `name`, `example`, `shared` (the default `allowed_users`).
+  - In test code (as above for LAN addresses), a home path whose user name is one tests conventionally write: `dev`, `developer`, `test`, `tester`, `testuser`, `test-user`, `test_user`, `foo`, `bar`, `baz`, `alice`, `bob`, `jdoe`, `john`, `jane`, `guest`, `demo`. Any other user name in test code, and every user name outside test code that `allowed_users` does not list, is reported.
   - Lines inside a function `[tests] functions` declares (Python and Rust files), and files under `[tests] paths`: declared test scope holds fixtures by definition.
   - **Decision (#404): the declared-test-scope exemption covers the fixed-format tokens too.** It is kept unchanged. A fixture holds token-shaped values by definition, and carving the token classes out of the exemption would make every detector test and example payload an inline-marker case. A live token committed inside a fixture is still caught where it matters: the forge's secret scanning (`discipline doctor` reports whether `secret-scanning` is on) and `shell-secrets`, which reads shell, Dockerfile and CI files regardless of test scope.
   - Secrets that have no fixed format: a password, a hex or base64 key, a bearer value inside a URL or a query string, a database connection string. Entropy-based detection is deliberately absent. It is not planned until a false-positive rate is measured on this repository and a replay corpus, because hashes, UUIDs, lockfile integrity strings and base64 test data all score high and a fail-closed gate pays for every false positive. The `secrets` key checks a token's format, nothing about how random it looks.
   - RFC 1918 CIDR network notations in routing documentation (`10.0.0.0/8`, `192.168.0.0/16`).
   - Binary files (non-text).
-  *(Note: Other test code is explicitly scanned because test fixtures are where paths and IPs frequently leak. Self-referential fixtures must use runtime assembly, inline `discipline:allow(pii)`, or `exempt_paths`).*
+  *(Note: Other test code is explicitly scanned because test fixtures are where paths and IPs frequently leak; only the placeholder user names above and the LAN warning cap read test code apart. Self-referential fixtures must use runtime assembly, inline `discipline:allow(pii)`, or `exempt_paths`).*
 - **Lifting directive:** `<!-- discipline:allow(pii) -->` or `docs-lint: allow` on the matching line.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `home_paths`, `lan_ips`, `redact_lan_ips`, `secrets`, `agent_config_refs`, `agent_config_standard_paths`, `allowed_users`, `hostname_denylist`, `term_denylist`, `extra_patterns`, `allow_patterns`, `scan_pr_body`, `diff_only`.
 

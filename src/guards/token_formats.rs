@@ -25,6 +25,12 @@ pub struct TokenClass {
     /// reference or a documented placeholder (`$TOKEN`, `${{ secrets.X }}`, `<token>`) is
     /// not a hit. `None`: the prefix itself is the evidence.
     pub value_group: Option<usize>,
+    /// Capture groups of an optional quote right before and right after the match. A
+    /// match that is the whole of one string literal (`"-----BEGIN PRIVATE KEY-----"`, a
+    /// constant a PEM parser or its test compares with) names the format and holds no
+    /// key; a header followed by anything inside its literal (`"...-----\nMIIE..."`)
+    /// or standing on its own line is still a hit. `None` for every other class.
+    pub alone_in_quotes: Option<(usize, usize)>,
 }
 
 /// Every fixed-format class, in the order `shell-secrets` reports them.
@@ -38,36 +44,42 @@ pub const TOKEN_CLASSES: &[TokenClass] = &[
         label: "GitHub token",
         pattern: r"\b(?:gh[pousr]_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_]{82})\b",
         value_group: None,
+        alone_in_quotes: None,
     },
     TokenClass {
         id: "aws-access-key",
         label: "AWS access key ID",
         pattern: r"\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b",
         value_group: None,
+        alone_in_quotes: None,
     },
     TokenClass {
         id: "slack-token",
         label: "Slack token",
         pattern: r"\bxox[baprs]-[0-9a-zA-Z-]{10,}\b",
         value_group: None,
+        alone_in_quotes: None,
     },
     TokenClass {
         id: "llm-api-token",
         label: "OpenAI or Anthropic API key",
         pattern: r"\bsk-(?:proj-|ant-api[0-9]{2}-)?[a-zA-Z0-9_-]{20,}\b",
         value_group: None,
+        alone_in_quotes: None,
     },
     TokenClass {
         id: "private-key",
         label: "private key header",
-        pattern: r"-----BEGIN (?:[A-Z0-9 _-]+)?PRIVATE KEY(?: BLOCK)?-----",
+        pattern: r#"(["'`]?)-----BEGIN (?:[A-Z0-9 _-]+)?PRIVATE KEY(?: BLOCK)?-----(["'`]?)"#,
         value_group: None,
+        alone_in_quotes: Some((1, 2)),
     },
     TokenClass {
         id: "literal-bearer",
         label: "literal Authorization Bearer token",
         pattern: r#"(?i)\bAuthorization:\s*Bearer\s+['"]?([A-Za-z0-9_\-\.]{12,})['"]?"#,
         value_group: Some(1),
+        alone_in_quotes: None,
     },
 ];
 
@@ -144,12 +156,26 @@ pub fn is_placeholder_or_var(val: &str) -> bool {
     {
         return true;
     }
-    false
+    // The hexadecimal words documentation writes for "some value" (`Bearer deadbeef12346`
+    // in a docstring): a provider's token does not start with one by chance.
+    HEX_PLACEHOLDER_WORDS
+        .iter()
+        .any(|word| lower.starts_with(word))
 }
 
+/// Hexadecimal words used as example values.
+const HEX_PLACEHOLDER_WORDS: &[&str] = &["deadbeef", "cafebabe", "feedface", "baadf00d"];
+
 /// Whether `caps`, a match of `class`, holds a literal credential: true unless the class
-/// names a value group and that value is a variable reference or placeholder.
+/// names a value group and that value is a variable reference or placeholder, or the
+/// match is alone in its string literal ([`TokenClass::alone_in_quotes`]).
 pub fn is_literal_hit(class: &TokenClass, caps: &Captures) -> bool {
+    if let Some((open, close)) = class.alone_in_quotes {
+        let quote = |g: usize| caps.get(g).map(|m| m.as_str()).filter(|q| !q.is_empty());
+        if quote(open).is_some() && quote(open) == quote(close) {
+            return false;
+        }
+    }
     match class.value_group {
         None => true,
         Some(g) => caps
@@ -295,6 +321,35 @@ mod tests {
         assert!(!hit("literal-bearer", "Authorization: Bearer changeme"));
         // Prose that mentions the scheme without a header.
         assert!(!hit("literal-bearer", "send the Bearer scheme in a header"));
+    }
+
+    #[test]
+    fn a_private_key_header_alone_in_its_string_names_the_format() {
+        let h = format!("{}BEGIN PRIVATE KEY{}", "-----", "-----");
+        // denoland/deno webcrypto tests: a constant the PEM parser compares with.
+        for q in ['"', '\'', '`'] {
+            assert!(
+                !hit("private-key", &format!("const pemHeader = {q}{h}{q};")),
+                "{q}"
+            );
+        }
+        // Positive controls: a key body inside the literal, a header on its own line, a
+        // literal that opens on the header and closes later, and mismatched quotes.
+        assert!(hit("private-key", &format!("key = \"{h}\\nMIIEvQIBADAN\"")));
+        assert!(hit("private-key", &h));
+        assert!(hit("private-key", &format!("key = \"\"\"{h}")));
+        assert!(hit("private-key", &format!("x = '{h}\"")));
+    }
+
+    #[test]
+    fn a_bearer_value_made_of_a_hex_example_word_is_a_placeholder() {
+        let header = |value: &str| format!("{}: Bearer {value}", "Authorization");
+        // fastapi/fastapi: the example header of a docstring.
+        assert!(!hit("literal-bearer", &header("deadbeef12346")));
+        assert!(!hit("literal-bearer", &header("CAFEBABE00000000")));
+        // Positive controls: the word inside a value, and an ordinary token.
+        assert!(hit("literal-bearer", &header("a1deadbeef12346")));
+        assert!(hit("literal-bearer", &header("9f3kLm2QpX7vR4tZ")));
     }
 
     #[test]

@@ -37,6 +37,86 @@ pub fn standard_agent_path(settings: &PiiGate, rule: &PiiRule, caps: &regex::Cap
         })
 }
 
+/// The user names tests and their fixtures write in a home path (`dev` in a macOS home
+/// path to a project, `test` in a Linux one). Inside test code such a path is test data, not someone's
+/// workstation; a test that holds any other user name is reported as before, and
+/// outside test code only `allowed_users` applies.
+pub const TEST_PLACEHOLDER_USERS: &[&str] = &[
+    "dev",
+    "developer",
+    "test",
+    "tester",
+    "testuser",
+    "test-user",
+    "test_user",
+    "foo",
+    "bar",
+    "baz",
+    "alice",
+    "bob",
+    "jdoe",
+    "john",
+    "jane",
+    "guest",
+    "demo",
+];
+
+/// Whether `user`, a home path's user name, is one of [`TEST_PLACEHOLDER_USERS`].
+pub fn is_test_placeholder_user(user: &str) -> bool {
+    TEST_PLACEHOLDER_USERS
+        .iter()
+        .any(|p| p.eq_ignore_ascii_case(user))
+}
+
+/// Which lines of a file are test code, for the two rules that read test data apart:
+/// the whole file when its path is test code by the shared convention or its pack's
+/// own, else the lines of each test its pack finds.
+struct TestCode {
+    whole_file: bool,
+    spans: Vec<(usize, usize)>,
+}
+
+impl TestCode {
+    fn read(
+        registry: &crate::ast::LanguageRegistry,
+        vocab: &crate::ast::AssertVocabulary,
+        path: &str,
+        text: &str,
+    ) -> Self {
+        let Some(pack) = registry.find_pack(path) else {
+            return Self {
+                whole_file: crate::ast::functions::test_path(path),
+                spans: Vec::new(),
+            };
+        };
+        if pack.is_test_path(path) {
+            return Self {
+                whole_file: true,
+                spans: Vec::new(),
+            };
+        }
+        // A file that does not parse has no test to read: each line is production code.
+        let spans = pack
+            .extract(path, text, vocab)
+            .map(|facts| {
+                facts
+                    .tests
+                    .iter()
+                    .map(|t| (t.line, t.end_line.max(t.line)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self {
+            whole_file: false,
+            spans,
+        }
+    }
+
+    fn holds(&self, line: usize) -> bool {
+        self.whole_file || self.spans.iter().any(|(a, b)| *a <= line && line <= *b)
+    }
+}
+
 pub struct PiiRule {
     pub re: Regex,
     pub label: &'static str,
@@ -446,6 +526,14 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
             return;
         }
         out.notes.extend(unparsed);
+        // Read only when a line holds a hit that test code reads apart: most files hold
+        // none, and the whole tree is swept by default.
+        let test_code = std::cell::OnceCell::new();
+        let in_test_code = |line: usize| {
+            test_code
+                .get_or_init(|| TestCode::read(&registry, &vocab, label, text))
+                .holds(line)
+        };
         for (idx, line) in text.lines().enumerate() {
             let line_num = idx + 1;
             if let Some(lines) = added_lines {
@@ -484,6 +572,7 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
                                 .allowed_users
                                 .iter()
                                 .any(|a| a.eq_ignore_ascii_case(u.as_str()))
+                                || (is_test_placeholder_user(u.as_str()) && in_test_code(line_num))
                         });
                     (!allowed_user && !standard_agent_path(settings, rule, &caps))
                         .then(|| (rule, caps.get(0).map(|m| m.as_str().to_string())))
@@ -522,12 +611,24 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
             };
             let mut masked_buf = None;
             let rep_file = mask_denylisted_path(label, &rules, &mut masked_buf);
+            // A LAN address in test code is most often the data a test feeds an address
+            // parser or a URL builder; a host a test really reaches is still shown, as a
+            // warning that does not block.
+            let test_lan = rule.label == "private LAN address" && in_test_code(line_num);
+            let severity = if test_lan {
+                settings.severity().capped_at_warning()
+            } else {
+                settings.severity()
+            };
             out.push(
-                settings.severity(),
+                severity,
                 &crate::findings::HOST_OR_PII_LEAK,
                 Some(rep_file),
                 Some(idx + 1),
-                format!("Found a {detail}."),
+                format!(
+                    "Found a {detail}{}.",
+                    if test_lan { " in test code" } else { "" }
+                ),
                 "Replace it with a placeholder such as `<home>` or `<host>`. A line that must \
                  keep it can carry `discipline:allow(pii)` or `docs-lint: allow`.",
             );
@@ -1033,6 +1134,33 @@ mod tests {
         let py_test_ip = format!("    fake_ip = \"{}.{}.1.20\"", "192", "168");
         assert!(rules.iter().any(|r| r.re.is_match(&py_test_path)));
         assert!(rules.iter().any(|r| r.re.is_match(&py_test_ip)));
+    }
+
+    #[test]
+    fn test_code_is_a_test_path_or_the_lines_of_a_test() {
+        let registry = crate::ast::default_registry();
+        let vocab = crate::ast::AssertVocabulary::default();
+        let rust = "pub fn f() -> u8 { 1 }\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {\n        assert_eq!(super::f(), 1);\n    }\n}\n";
+        let code = TestCode::read(&registry, &vocab, "src/lib.rs", rust);
+        // Positive control: the lines of the test; negative: the production function.
+        assert!((6..=8).all(|l| code.holds(l)));
+        assert!(!code.holds(1));
+        // A test path is test code whole; a file in no pack's language by the shared rule.
+        assert!(TestCode::read(&registry, &vocab, "src/__tests__/a.spec.ts", "").holds(1));
+        assert!(TestCode::read(&registry, &vocab, "tests/data/hosts.txt", "").holds(1));
+        assert!(!TestCode::read(&registry, &vocab, "docs/hosts.txt", "").holds(1));
+        // A file that does not parse holds no test.
+        assert!(!TestCode::read(&registry, &vocab, "src/lib.rs", "fn (").holds(1));
+    }
+
+    #[test]
+    fn only_conventional_test_user_names_are_placeholders() {
+        for user in ["dev", "Test", "alice", "jdoe"] {
+            assert!(is_test_placeholder_user(user), "{user}");
+        }
+        for user in ["jsmith", "someone", "devops", "tests1", ""] {
+            assert!(!is_test_placeholder_user(user), "{user}");
+        }
     }
 
     #[test]
