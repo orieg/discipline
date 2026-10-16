@@ -25,12 +25,14 @@ pub struct TokenClass {
     /// reference or a documented placeholder (`$TOKEN`, `${{ secrets.X }}`, `<token>`) is
     /// not a hit. `None`: the prefix itself is the evidence.
     pub value_group: Option<usize>,
-    /// Capture groups of an optional quote right before and right after the match. A
-    /// match that is the whole of one string literal (`"-----BEGIN PRIVATE KEY-----"`, a
+    /// Capture groups of an `=` right before an optional opening quote, that quote, and
+    /// an optional closing quote right after the match. A match that is the whole of one
+    /// string literal bound by `=` (`const pemHeader = "-----BEGIN PRIVATE KEY-----"`, a
     /// constant a PEM parser or its test compares with) names the format and holds no
-    /// key; a header followed by anything inside its literal (`"...-----\nMIIE..."`)
-    /// or standing on its own line is still a hit. `None` for every other class.
-    pub alone_in_quotes: Option<(usize, usize)>,
+    /// key. A header followed by anything inside its literal (`"...-----\nMIIE..."`), on
+    /// its own line, or written out alone (`echo "-----BEGIN ...-----" > key.pem`, the
+    /// first line of a key) is still a hit. `None` for every other class.
+    pub alone_in_quotes: Option<(usize, usize, usize)>,
 }
 
 /// Every fixed-format class, in the order `shell-secrets` reports them.
@@ -70,9 +72,9 @@ pub const TOKEN_CLASSES: &[TokenClass] = &[
     TokenClass {
         id: "private-key",
         label: "private key header",
-        pattern: r#"(["'`]?)-----BEGIN (?:[A-Z0-9 _-]+)?PRIVATE KEY(?: BLOCK)?-----(["'`]?)"#,
+        pattern: r#"(=\s*)?(["'`]?)-----BEGIN (?:[A-Z0-9 _-]+)?PRIVATE KEY(?: BLOCK)?-----(["'`]?)"#,
         value_group: None,
-        alone_in_quotes: Some((1, 2)),
+        alone_in_quotes: Some((1, 2, 3)),
     },
     TokenClass {
         id: "literal-bearer",
@@ -168,11 +170,11 @@ const HEX_PLACEHOLDER_WORDS: &[&str] = &["deadbeef", "cafebabe", "feedface", "ba
 
 /// Whether `caps`, a match of `class`, holds a literal credential: true unless the class
 /// names a value group and that value is a variable reference or placeholder, or the
-/// match is alone in its string literal ([`TokenClass::alone_in_quotes`]).
+/// match is alone in a string literal bound by `=` ([`TokenClass::alone_in_quotes`]).
 pub fn is_literal_hit(class: &TokenClass, caps: &Captures) -> bool {
-    if let Some((open, close)) = class.alone_in_quotes {
+    if let Some((bound, open, close)) = class.alone_in_quotes {
         let quote = |g: usize| caps.get(g).map(|m| m.as_str()).filter(|q| !q.is_empty());
-        if quote(open).is_some() && quote(open) == quote(close) {
+        if caps.get(bound).is_some() && quote(open).is_some() && quote(open) == quote(close) {
             return false;
         }
     }
@@ -333,12 +335,19 @@ mod tests {
                 "{q}"
             );
         }
+        assert!(!hit(
+            "private-key",
+            &format!("if (pem.slice(0, 27) === \"{h}\") {{")
+        ));
         // Positive controls: a key body inside the literal, a header on its own line, a
         // literal that opens on the header and closes later, and mismatched quotes.
         assert!(hit("private-key", &format!("key = \"{h}\\nMIIEvQIBADAN\"")));
         assert!(hit("private-key", &h));
         assert!(hit("private-key", &format!("key = \"\"\"{h}")));
         assert!(hit("private-key", &format!("x = '{h}\"")));
+        // Written out alone, it is the first line of a key (`shell-secrets` corpus).
+        assert!(hit("private-key", &format!("echo \"{h}\" > key.pem")));
+        assert!(hit("private-key", &format!("print('{h}')")));
     }
 
     #[test]
