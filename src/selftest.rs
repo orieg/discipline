@@ -9516,6 +9516,39 @@ proptest! {
         },
     ),
     (
+        "gate-command-lint: a masked or unfailable gate command is caught, a failing path is not",
+        || {
+            use crate::guards::gate_command_lint::analyze_gate_command;
+            let unfailable = |c: &str| analyze_gate_command(c).exit_masked().is_some();
+            let piped = |c: &str| analyze_gate_command(c).pipeline_masked().is_some();
+            // Positive controls: forms a trailing-`true` text match let through.
+            let caught = [
+                "cargo test || echo ok",
+                "cargo test || /bin/true",
+                "(cargo test || true)",
+                "cargo test || { true; }",
+                "cargo test || exit 00",
+                "cargo test || :",
+                "cargo test ; :",
+            ]
+            .iter()
+            .all(|c| unfailable(c))
+                && piped("echo \"set -o pipefail\"; cargo test | xargs echo");
+            // Negative controls: the failure still reaches the runner.
+            let passed = [
+                "cargo test",
+                "cargo test || exit 1",
+                "cargo test || { echo failed; exit 1; }",
+                "grep -q '|| true' notes.txt",
+            ]
+            .iter()
+            .all(|c| !unfailable(c))
+                && !piped("set -euo pipefail; cargo test | xargs echo");
+            let unparsed = analyze_gate_command("cargo test || (").unparsed;
+            Ok(caught && passed && unparsed)
+        },
+    ),
+    (
         "scope-confinement: extracts planned outputs from front-matter and list sections",
         || {
             use crate::guards::scope_confinement::extract_planned_outputs;
