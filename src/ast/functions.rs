@@ -68,13 +68,14 @@ pub fn extract<'t>(
     spec: &FunctionSpec,
 ) -> Vec<FunctionFacts> {
     let mut out = Vec::new();
+    let mut mock_imports = None;
     let mut stack = vec![(root, 0usize, root.id())];
     while let Some((node, depth, parent)) = stack.pop() {
         // The walk knows where it stands, so the predicates climb from here with no
         // descent from the root.
         anc.stand_at(depth, parent, node);
         if spec.function_kinds.contains(&node.kind()) {
-            if let Some(f) = describe(node, anc, src, path, spec) {
+            if let Some(f) = describe(node, anc, src, path, spec, &mut mock_imports) {
                 out.push(f);
             }
         }
@@ -94,6 +95,7 @@ fn describe<'t>(
     src: &str,
     path: &str,
     spec: &FunctionSpec,
+    mock_imports: &mut Option<bool>,
 ) -> Option<FunctionFacts> {
     if (spec.skip)(node, anc, src) {
         return None;
@@ -138,7 +140,15 @@ fn describe<'t>(
     let (type_name, equality_carved_out) = if is_equality_name(&name) {
         let type_info = enclosing_type(node, anc, src);
         let carved = if is_constant_true_shape(&shape) {
-            check_equality_carved_out(node, type_info.as_ref(), is_test, anc, src, path)
+            check_equality_carved_out(
+                node,
+                type_info.as_ref(),
+                is_test,
+                anc,
+                src,
+                path,
+                mock_imports,
+            )
         } else {
             false
         };
@@ -236,66 +246,173 @@ fn is_test_double_name(name: &str) -> bool {
         || lower.contains("test_double")
 }
 
-fn has_mock_framework_markers(src: &str) -> bool {
-    src.contains("unittest.mock")
-        || src.contains("pytest_mock")
-        || src.contains("from mock import")
-        || src.contains("import mock")
-        || src.contains("org.mockito")
-        || src.contains("mockall")
-        || src.contains("mockito::")
-        || src.contains("gomock")
-}
-
-fn has_ast_generated_annotation<'a>(node: Node<'a>, anc: &Ancestry<'a>, src: &str) -> bool {
-    let check = |n: Node| -> bool {
-        let mut cursor = n.walk();
-        for child in n.children(&mut cursor) {
-            match child.kind() {
-                "attribute_item" | "inner_attribute_item" => {
-                    let t = text(child, src);
-                    if t.contains("automatically_derived") || t.contains("Generated") {
-                        return true;
-                    }
-                }
-                "modifiers" => {
-                    let mut mod_cursor = child.walk();
-                    for mod_child in child.children(&mut mod_cursor) {
-                        if matches!(mod_child.kind(), "annotation" | "marker_annotation") {
-                            let t = text(mod_child, src);
-                            if t.contains("Generated")
-                                || t.contains("EqualsAndHashCode")
-                                || t.contains("Data")
-                                || t.contains("Value")
-                            {
-                                return true;
-                            }
-                        }
-                    }
-                }
-                "decorator" => {
-                    let t = text(child, src);
-                    if t.contains("generated") || t.contains("Generated") {
-                        return true;
-                    }
-                }
-                _ => {}
-            }
-        }
-        false
+/// Whether the file imports a mock framework through a real import statement: Python
+/// `import mock`, `import unittest.mock`, `from unittest import mock`, `from mock import
+/// Mock`, `import pytest_mock`; Java or Kotlin `import org.mockito...`; Rust `use mockall`
+/// or `use mockito`; Go `import ".../gomock"`. A comment or a string that names one is
+/// not an import and does not count.
+fn imports_a_mock_framework(root: Node, src: &str) -> bool {
+    let python_mock = |module: &str| {
+        ["mock", "unittest.mock", "pytest_mock"]
+            .iter()
+            .any(|m| module == *m || module.strip_prefix(m).is_some_and(|r| r.starts_with('.')))
     };
-
-    if check(node) {
-        return true;
-    }
-    if let Some(parent) = anc.parent(node) {
-        if check(parent) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        let found = match node.kind() {
+            "import_statement" => {
+                let mut cursor = node.walk();
+                let found = node.named_children(&mut cursor).any(|name| {
+                    let module = match name.kind() {
+                        "aliased_import" => name.child_by_field_name("name"),
+                        "dotted_name" => Some(name),
+                        _ => None,
+                    };
+                    module.is_some_and(|m| python_mock(text(m, src)))
+                });
+                found
+            }
+            "import_from_statement" => {
+                let module = node
+                    .child_by_field_name("module_name")
+                    .map(|m| text(m, src))
+                    .unwrap_or("");
+                let mut cursor = node.walk();
+                let found = python_mock(module)
+                    || node
+                        .children_by_field_name("name", &mut cursor)
+                        .filter_map(|name| match name.kind() {
+                            "aliased_import" => name.child_by_field_name("name"),
+                            _ => Some(name),
+                        })
+                        .any(|name| python_mock(&format!("{module}.{}", text(name, src))));
+                found
+            }
+            "import_declaration" | "import_header" => {
+                let mut cursor = node.walk();
+                let found = node.named_children(&mut cursor).any(|c| {
+                    matches!(c.kind(), "scoped_identifier" | "identifier")
+                        && (text(c, src) == "org.mockito"
+                            || text(c, src).starts_with("org.mockito."))
+                });
+                found
+            }
+            "use_declaration" => node.child_by_field_name("argument").is_some_and(|a| {
+                let path = text(a, src).trim_start_matches("::");
+                ["mockall", "mockito"].iter().any(|c| {
+                    path == *c || path.strip_prefix(c).is_some_and(|r| r.starts_with("::"))
+                })
+            }),
+            "import_spec" => node.child_by_field_name("path").is_some_and(|p| {
+                let path = text(p, src).trim_matches(['"', '`']);
+                path == "gomock" || path.ends_with("/gomock")
+            }),
+            _ => {
+                let mut cursor = node.walk();
+                stack.extend(node.named_children(&mut cursor));
+                false
+            }
+        };
+        if found {
             return true;
         }
     }
     false
 }
 
+/// Whether the Python class `class_node` subclasses a `unittest.mock` class
+/// (`class S(MagicMock)`, `class S(mock.Mock)`): each base, read as a syntax node.
+fn subclasses_a_mock(class_node: Node, src: &str) -> bool {
+    const MOCKS: &[&str] = &[
+        "Mock",
+        "MagicMock",
+        "AsyncMock",
+        "NonCallableMock",
+        "NonCallableMagicMock",
+    ];
+    let Some(bases) = class_node.child_by_field_name("superclasses") else {
+        return false;
+    };
+    let mut cursor = bases.walk();
+    let found = bases.named_children(&mut cursor).any(|base| {
+        let name = match base.kind() {
+            "identifier" => Some(base),
+            "attribute" => base.child_by_field_name("attribute"),
+            _ => None,
+        };
+        name.is_some_and(|n| MOCKS.contains(&text(n, src)))
+    });
+    found
+}
+
+/// Whether `node` carries a marker that a code generator emitted it: a Rust
+/// `#[automatically_derived]` attribute item placed before it, or a Java or Kotlin
+/// `@Generated` annotation (any package) among its modifiers. Read from attribute and
+/// annotation nodes; a comment that spells one is not a marker.
+fn has_generated_marker<'a>(node: Node<'a>, anc: &Ancestry<'a>, src: &str) -> bool {
+    // Rust attributes are the item's preceding siblings.
+    let mut prev = anc.prev_sibling(node);
+    while let Some(p) = prev {
+        match p.kind() {
+            "attribute_item" => {
+                let path = p
+                    .named_child(0)
+                    .filter(|a| a.kind() == "attribute")
+                    .and_then(|a| a.named_child(0))
+                    .map(|n| text(n, src));
+                if path == Some("automatically_derived") {
+                    return true;
+                }
+            }
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        prev = anc.prev_sibling(p);
+    }
+    let mut cursor = node.walk();
+    let modifiers: Vec<Node> = node
+        .children(&mut cursor)
+        .filter(|c| c.kind() == "modifiers")
+        .collect();
+    modifiers.into_iter().any(|m| {
+        let mut cursor = m.walk();
+        let found = m
+            .named_children(&mut cursor)
+            .filter(|a| matches!(a.kind(), "annotation" | "marker_annotation"))
+            .filter_map(|a| a.child_by_field_name("name"))
+            .any(|n| text(n, src).rsplit('.').next() == Some("Generated"));
+        found
+    })
+}
+
+/// A module named for test doubles (`fakes.py`, `mocks.ts`, `stubs.rb`, `doubles.go`):
+/// its classes are test doubles by name wherever the module sits.
+pub fn test_double_module(path: &str) -> bool {
+    let name = file_name(path).to_ascii_lowercase();
+    let stem = name.split('.').next().unwrap_or("");
+    [
+        "fakes",
+        "mocks",
+        "stubs",
+        "doubles",
+        "test_doubles",
+        "testdoubles",
+    ]
+    .contains(&stem)
+}
+
+/// Whether an equality method returning constant `true` is out of scope:
+/// - a test double (`FakeClock`, `StubToken`) in test code or in a test-double module;
+/// - a subclass of a `unittest.mock` class, or a test double in a file that imports a
+///   mock framework;
+/// - a method a code generator emitted (`#[automatically_derived]`, `@Generated` on the
+///   method or its type).
+///
+/// A hand-written method is never generated: `@dataclass`, a pydantic `BaseModel`,
+/// Lombok's `@EqualsAndHashCode` / `@Data` and a Java `record` all leave a hand-written
+/// equality method in place of the one they would generate, and Rust refuses a
+/// hand-written `impl PartialEq` beside `#[derive(PartialEq)]`. Those markers exempt
+/// nothing.
 fn check_equality_carved_out<'t>(
     node: Node<'t>,
     type_info: Option<&(String, Node<'t>)>,
@@ -303,72 +420,29 @@ fn check_equality_carved_out<'t>(
     anc: &Ancestry<'t>,
     src: &str,
     path: &str,
+    mock_imports: &mut Option<bool>,
 ) -> bool {
     let type_name = type_info.map(|(n, _)| n.as_str()).unwrap_or("");
     let parent_node = type_info.map(|(_, p)| *p);
 
-    // 1. Test-double carve-out in test paths:
-    if (is_test || test_path(path)) && is_test_double_name(type_name) {
+    // 1. Test-double carve-out in test code:
+    if (is_test || test_path(path) || test_double_module(path)) && is_test_double_name(type_name) {
         return true;
     }
 
-    // 2. Mock framework stubs (AST-level imports, base classes, decorators):
-    if let Some(p) = parent_node {
-        if let Some(bases) = p.child_by_field_name("superclasses") {
-            let b_text = text(bases, src);
-            if b_text.contains("Mock")
-                || b_text.contains("MagicMock")
-                || b_text.contains("AsyncMock")
-            {
-                return true;
-            }
-        }
+    // 2. Mock framework stubs (a mock base class, or a test double beside a mock import):
+    if parent_node.is_some_and(|p| subclasses_a_mock(p, src)) {
+        return true;
     }
-    if has_mock_framework_markers(src) && is_test_double_name(type_name) {
+    if is_test_double_name(type_name)
+        && *mock_imports.get_or_insert_with(|| imports_a_mock_framework(anc.root(), src))
+    {
         return true;
     }
 
-    // 3. Generated equality markers:
-    if let Some(p) = parent_node {
-        if p.kind() == "record_declaration" {
-            return true;
-        }
-        if let Some(bases) = p.child_by_field_name("superclasses") {
-            let b_text = text(bases, src);
-            if b_text.contains("BaseModel") {
-                return true;
-            }
-        }
-        if let Some(above) = anc.parent(p) {
-            if above.kind() == "decorated_definition" {
-                let above_text = text(above, src);
-                if above_text.contains("@dataclass")
-                    || above_text.contains("@attrs.define")
-                    || above_text.contains("@attr.s")
-                    || above_text.contains("@attr.define")
-                    || above_text.contains("@pydantic")
-                {
-                    return true;
-                }
-            }
-        }
-        let p_text = text(p, src);
-        if p_text.contains("#[derive(") && p_text.contains("PartialEq") {
-            return true;
-        }
-        if let Some(modifiers) = p.child_by_field_name("modifiers") {
-            let mod_text = text(modifiers, src);
-            if mod_text.contains("data") || mod_text.contains("case") {
-                return true;
-            }
-        }
-    }
-
-    if has_ast_generated_annotation(node, anc, src) {
-        return true;
-    }
-
-    false
+    // 3. Generated code:
+    has_generated_marker(node, anc, src)
+        || parent_node.is_some_and(|p| has_generated_marker(p, anc, src))
 }
 
 /// C and C++ name a function through its declarator: `static int *f(int a)` is a
@@ -510,27 +584,48 @@ pub fn is_equality_name(name: &str) -> bool {
         || name.ends_with(".Equals")
 }
 
-/// Whether `shape` represents a whole-body constant `true` return.
+/// Whether `shape` represents a whole-body constant `true` return: `true`, `True`,
+/// `YES`, Java's `Boolean.TRUE`, bare or after `return`, in any number of parentheses.
 pub fn is_constant_true_shape(shape: &BodyShape) -> bool {
     let BodyShape::Trivial(s) = shape else {
         return false;
     };
-    let s = s.trim().trim_end_matches(';').trim();
-    if s == "true" || s == "True" || s == "YES" {
-        return true;
-    }
-    if let Some(rest) = s.strip_prefix("return") {
-        let rest = rest.trim();
-        let unparenthesized = rest.trim_start_matches('(').trim_end_matches(')').trim();
-        if unparenthesized == "true"
-            || unparenthesized == "True"
-            || unparenthesized == "YES"
-            || unparenthesized == "Boolean.TRUE"
-        {
-            return true;
+    let s = strip_semicolon(s);
+    let value = match s.strip_prefix("return") {
+        Some(rest) if !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_') => rest.trim(),
+        _ => s,
+    };
+    matches!(
+        unparenthesize(value),
+        "true" | "True" | "YES" | "Boolean.TRUE" | "java.lang.Boolean.TRUE"
+    )
+}
+
+/// `t` without the parentheses that enclose the whole of it (`((true))` is `true`);
+/// `()` and `(a) == (b)` are left as they are.
+fn unparenthesize(t: &str) -> &str {
+    let mut t = t.trim();
+    while let Some(inner) = t.strip_prefix('(').and_then(|r| r.strip_suffix(')')) {
+        let mut depth = 0i32;
+        let balanced = inner.chars().all(|c| {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            depth >= 0
+        }) && depth == 0;
+        if !balanced || inner.trim().is_empty() {
+            break;
         }
+        t = inner.trim();
     }
-    false
+    t
+}
+
+/// Whether `t` is one of `constants`, alone or in parentheses.
+fn is_constant(t: &str, constants: &[&str]) -> bool {
+    constants.contains(&t) || constants.contains(&unparenthesize(t))
 }
 
 fn strip_semicolon(t: &str) -> &str {
@@ -539,8 +634,12 @@ fn strip_semicolon(t: &str) -> &str {
 
 fn trivial_return(t: &str, constants: &[&str]) -> Option<BodyShape> {
     let t = strip_semicolon(t);
-    let rest = t.strip_prefix("return")?.trim();
-    if rest.is_empty() || constants.contains(&rest) {
+    let rest = t.strip_prefix("return")?;
+    if rest.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+        return None;
+    }
+    let rest = rest.trim();
+    if rest.is_empty() || is_constant(rest, constants) {
         return Some(BodyShape::Trivial(t.to_string()));
     }
     None
@@ -567,7 +666,7 @@ pub fn classify_rust(t: &str) -> Option<BodyShape> {
         "\"\"",
         "()",
     ];
-    if TRIVIAL.contains(&t) {
+    if is_constant(t, TRIVIAL) {
         return Some(BodyShape::Trivial(t.to_string()));
     }
     trivial_return(t, TRIVIAL)
@@ -649,6 +748,8 @@ pub fn classify_jvm(t: &str) -> Option<BodyShape> {
             "\"\"",
             "default",
             "Optional.empty()",
+            "Boolean.TRUE",
+            "java.lang.Boolean.TRUE",
         ],
     )
 }
@@ -682,7 +783,7 @@ pub fn classify_kotlin(t: &str) -> Option<BodyShape> {
         "setOf()",
     ];
     // An expression body (`fun f() = null`) is a bare expression.
-    if TRIVIAL.contains(&t) {
+    if is_constant(t, TRIVIAL) {
         return Some(BodyShape::Trivial(t.to_string()));
     }
     trivial_return(t, TRIVIAL)
@@ -695,7 +796,7 @@ pub fn classify_php(t: &str) -> Option<BodyShape> {
     }
     const TRIVIAL: &[&str] = &["null", "[]", "0", "''", "\"\"", "false", "true"];
     // An arrow function's body is a bare expression.
-    if TRIVIAL.contains(&t) {
+    if is_constant(t, TRIVIAL) {
         return Some(BodyShape::Trivial(t.to_string()));
     }
     trivial_return(t, TRIVIAL)
@@ -714,7 +815,7 @@ pub fn classify_swift(t: &str) -> Option<BodyShape> {
     const TRIVIAL: &[&str] = &[
         "nil", "0", "0.0", "false", "true", "\"\"", "[]", "[:]", "()",
     ];
-    if TRIVIAL.contains(&t) {
+    if is_constant(t, TRIVIAL) {
         return Some(BodyShape::Trivial(t.to_string()));
     }
     trivial_return(t, TRIVIAL)
@@ -734,7 +835,7 @@ pub fn classify_scala(t: &str) -> Option<BodyShape> {
         "null", "None", "()", "0", "0L", "0.0", "false", "true", "\"\"", "Nil", "List()", "Map()",
         "Set()", "Seq()", "Vector()",
     ];
-    if TRIVIAL.contains(&t) {
+    if is_constant(t, TRIVIAL) {
         return Some(BodyShape::Trivial(t.to_string()));
     }
     trivial_return(t, TRIVIAL)
@@ -763,7 +864,7 @@ pub fn classify_ruby(t: &str) -> Option<BodyShape> {
     if t.starts_with("raise NotImplementedError") || t == "raise NotImplementedError" {
         return Some(BodyShape::Stub(t.to_string()));
     }
-    if ["nil", "[]", "{}", "0", "''", "\"\"", "false", "true"].contains(&t) {
+    if is_constant(t, &["nil", "[]", "{}", "0", "''", "\"\"", "false", "true"]) {
         return Some(BodyShape::Trivial(t.to_string()));
     }
     trivial_return(t, &["nil", "[]", "{}", "0", "false", "true"])
@@ -1227,6 +1328,62 @@ mod tests {
     fn is_test_file_with_no_own_convention_is_the_shared_rule() {
         assert!(is_test_file("benches/a.rs", None));
         assert!(!is_test_file("src/a.rs", None));
+    }
+
+    #[test]
+    fn constant_true_reads_parentheses_and_boolean_true() {
+        let t = |s: &str| BodyShape::Trivial(s.into());
+        for yes in [
+            "true",
+            "(true)",
+            "return (true);",
+            "return ((True))",
+            "return Boolean.TRUE;",
+            "return java.lang.Boolean.TRUE;",
+            "return(true)",
+        ] {
+            assert!(is_constant_true_shape(&t(yes)), "{yes}");
+        }
+        for no in [
+            "return (a) == (true)",
+            "return false",
+            "returnTrue",
+            "return ()",
+        ] {
+            assert!(!is_constant_true_shape(&t(no)), "{no}");
+        }
+        assert_eq!(
+            classify_jvm("return Boolean.TRUE;"),
+            Some(BodyShape::Trivial("return Boolean.TRUE".into()))
+        );
+        assert_eq!(
+            classify_jvm("return (true);"),
+            Some(BodyShape::Trivial("return (true)".into()))
+        );
+        assert_eq!(
+            classify_rust("(true)"),
+            Some(BodyShape::Trivial("(true)".into()))
+        );
+        assert_eq!(
+            classify_python("return ()"),
+            Some(BodyShape::Trivial("return ()".into()))
+        );
+        assert_eq!(classify_jvm("return (a) == (b);"), None);
+    }
+
+    #[test]
+    fn a_test_double_module_is_named_for_its_doubles() {
+        for yes in [
+            "tests/fakes.py",
+            "src/mocks.ts",
+            "lib/stubs.rb",
+            "doubles.go",
+        ] {
+            assert!(test_double_module(yes), "{yes}");
+        }
+        for no in ["src/fake.py", "src/mockingbird.py", "src/stubsystem.rs"] {
+            assert!(!test_double_module(no), "{no}");
+        }
     }
 
     #[test]

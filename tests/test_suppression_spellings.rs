@@ -120,6 +120,40 @@ fn javascript_coverage_marker_counts_anywhere_in_a_comment() {
     );
 }
 
+/// Vitest's default v8 provider reads `v8 ignore`, Node's test runner reads
+/// `node:coverage ignore` and `node:coverage disable`; like `istanbul` and `c8`, each
+/// must open the comment, and the same words mid-sentence or in a string are not a site.
+#[test]
+fn javascript_reads_the_v8_and_node_coverage_markers() {
+    check(
+        "src/m.ts",
+        "\
+/* v8 ignore next */
+// v8 ignore start
+/* node:coverage ignore next */
+// node:coverage disable
+/* v8 ignore if */
+",
+        &[
+            r#"1 lint "coverage" "/* v8 ignore next */""#,
+            r#"2 lint "coverage" "// v8 ignore start""#,
+            r#"3 lint "coverage" "/* node:coverage ignore next */""#,
+            r#"4 lint "coverage" "// node:coverage disable""#,
+            r#"5 lint "coverage" "/* v8 ignore if */""#,
+        ],
+    );
+    check(
+        "src/m.js",
+        "\
+// we do not write v8 ignore next here
+/* see node:coverage ignore next in the docs */
+const s = \"/* v8 ignore next */\";
+const t = `// node:coverage ignore next`;
+",
+        &[],
+    );
+}
+
 #[test]
 fn python_reads_its_type_and_linter_comments() {
     check(

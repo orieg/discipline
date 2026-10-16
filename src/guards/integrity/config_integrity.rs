@@ -66,20 +66,20 @@ fn stricter(a: Severity, b: Severity) -> Severity {
     }
 }
 
-fn head_src_disables_gate(ctx: &Context, gate: &str) -> Result<bool> {
-    if let Some(src) = ctx.head_config_text()? {
-        if let Ok(val) = toml::from_str::<toml::Value>(&src) {
-            if let Some(enabled) = val
-                .get("gates")
-                .and_then(|g| g.get(gate))
-                .and_then(|t| t.get("enabled"))
-                .and_then(|e| e.as_bool())
-            {
-                return Ok(!enabled);
-            }
-        }
-    }
-    Ok(false)
+/// Whether the change's own configuration file runs `gate`: the head side's file as
+/// written, parsed with the defaults applied and no command-line switch. A gate whose
+/// `enabled = true` table the change deletes falls back to its default, which may be off;
+/// that is the file's doing, not the command line's.
+///
+/// A head side with no configuration file runs every gate at its default. A read or parse
+/// error is returned, never taken for an answer: the caller would otherwise skip a
+/// weakening it could not rule out.
+fn head_file_enables_gate(ctx: &Context, gate: &str) -> Result<bool> {
+    let head = match ctx.head_config_text()? {
+        Some(src) => DisciplineConfig::from_toml_str(&src)?,
+        None => DisciplineConfig::default(),
+    };
+    Ok(head.gates.settings(gate).is_some_and(|s| s.enabled()))
 }
 
 pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
@@ -119,11 +119,14 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                     .map(|t| t.len())
                     .unwrap_or(0);
                 for w in weakenings {
+                    // A gate switched off by `--disable` alone is the operator's flag, not
+                    // the change's: skipped unless `compare_effective`. One the change's
+                    // own file also leaves off is reported, whatever the command line says.
                     if !settings.compare_effective
                         && w.key == "enabled"
                         && w.after.as_deref() == Some("false")
                         && ctx.cli_disabled_gates.iter().any(|g| g == &w.gate)
-                        && !head_src_disables_gate(ctx, &w.gate).unwrap_or(false)
+                        && head_file_enables_gate(ctx, &w.gate)?
                     {
                         continue;
                     }

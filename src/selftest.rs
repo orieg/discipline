@@ -1215,6 +1215,40 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "stub-bodies: an equality method made constant `true` is reported at gate severity, even beside a derive in a comment; a generated one is not",
+        || {
+            use crate::guards::stub_bodies::judge;
+            let v = AssertVocabulary::default();
+            let reg = crate::ast::default_registry();
+            let pack = reg
+                .find_pack("src/u.rs")
+                .ok_or_else(|| anyhow::anyhow!("no rust pack"))?;
+            let analyze = |src: &str, v: &AssertVocabulary| pack.extract("src/u.rs", src, v);
+            let real = analyze(
+                "pub struct U(u8);\nimpl PartialEq for U {\n    fn eq(&self, o: &Self) -> bool { self.0 == o.0 }\n}\n",
+                &v,
+            )?
+            .functions;
+            let constant = analyze(
+                "pub struct U(u8);\nimpl PartialEq for U {\n    // #[derive(PartialEq)]\n    fn eq(&self, _o: &Self) -> bool { true }\n}\n",
+                &v,
+            )?
+            .functions;
+            let generated = analyze(
+                "pub struct U(u8);\n#[automatically_derived]\nimpl PartialEq for U {\n    fn eq(&self, _o: &Self) -> bool { true }\n}\n",
+                &v,
+            )?
+            .functions;
+            let made = judge(&real, &constant);
+            Ok(made.len() == 1
+                && made[0].kind.code == crate::findings::EQUALITY_MADE_CONSTANT.code
+                && !made[0].capped_at_warning
+                && judge(&[], &constant).len() == 1
+                && judge(&[], &generated).is_empty()
+                && judge(&constant, &real).is_empty())
+        },
+    ),
+    (
         "harness-tampering: a TestMain that drops m.Run()'s result before os.Exit is read, os.Exit(m.Run()) is not",
         || {
             use crate::ast::harness::{go_test_file, Form};

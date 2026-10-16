@@ -89,10 +89,12 @@ fn positive_control_changed_equality_made_constant() {
     r.commit("fix: make equality return true");
     let run = r.check(&[]);
     let got = reported(&run);
-    assert_eq!(run.code, 0);
+    // An existing equality method whose comparison is replaced by `return True` blocks
+    // at the gate's severity, as it did when it was `body-replaced-by-stub`.
+    assert_eq!(run.code, 1, "{}", run.stdout);
     assert_eq!(got.len(), 1, "expected 1 finding, got: {got:?}");
     assert_eq!(got[0].0, CODE);
-    assert_eq!(got[0].1, "warning");
+    assert_eq!(got[0].1, "error");
     assert_eq!(got[0].2, 2);
 }
 
@@ -240,29 +242,27 @@ fn negative_control_mock_framework_stub() {
 }
 
 #[test]
-fn negative_control_generated_dataclass() {
+fn positive_control_hand_written_eq_in_a_dataclass() {
+    // A hand-written `__eq__` replaces the one `@dataclass` and pydantic generate: it is
+    // not generated, so it is judged.
     let r = repo();
     r.write(
         "src/point.py",
         "from dataclasses import dataclass\n\n@dataclass\nclass Point:\n    def __eq__(self, other):\n        return True\n",
     );
-    r.commit("feat: add dataclass");
-    let run = r.check(&[]);
-    let got = reported(&run);
-    assert!(got.is_empty(), "@dataclass must be carved out: {got:?}");
-}
-
-#[test]
-fn negative_control_generated_pydantic_basemodel() {
-    let r = repo();
     r.write(
         "src/model.py",
         "from pydantic import BaseModel\n\nclass Item(BaseModel):\n    def __eq__(self, other):\n        return True\n",
     );
-    r.commit("feat: add pydantic model");
+    r.commit("feat: add dataclass and pydantic model");
     let run = r.check(&[]);
     let got = reported(&run);
-    assert!(got.is_empty(), "BaseModel must be carved out: {got:?}");
+    assert_eq!(
+        got.len(),
+        2,
+        "hand-written equality is not generated: {got:?}"
+    );
+    assert!(got.iter().all(|g| g.0 == CODE), "{got:?}");
 }
 
 #[test]
@@ -433,4 +433,126 @@ fn negative_control_cpp_operator_equality() {
         got.is_empty(),
         "real cpp operator== must be silent: {got:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Carve-outs read from syntax nodes, never from source text
+// ---------------------------------------------------------------------------
+
+#[test]
+fn positive_control_derive_in_a_comment_does_not_carve_out() {
+    let r = repo();
+    r.write(
+        "src/user.rs",
+        "pub struct User;\nimpl PartialEq for User {\n    // was #[derive(PartialEq)]\n    fn eq(&self, _other: &Self) -> bool {\n        true\n    }\n}\n",
+    );
+    r.commit("feat: add user");
+    let got = reported(&r.check(&[]));
+    assert_eq!(got.len(), 1, "a comment is not an attribute: {got:?}");
+    assert_eq!(got[0].0, CODE);
+}
+
+#[test]
+fn positive_control_mock_import_in_a_comment_does_not_carve_out() {
+    let r = repo();
+    r.write(
+        "src/clock.py",
+        "# no need to import mock here\nclass FakeClock:\n    def __eq__(self, other):\n        return True\n",
+    );
+    r.commit("feat: add clock");
+    let got = reported(&r.check(&[]));
+    assert_eq!(got.len(), 1, "a comment is not an import: {got:?}");
+    assert_eq!(got[0].0, CODE);
+}
+
+#[test]
+fn negative_control_real_mock_import_carves_out_a_test_double() {
+    let r = repo();
+    r.write(
+        "src/clock.py",
+        "from unittest import mock\n\nclass FakeClock:\n    def __eq__(self, other):\n        return True\n",
+    );
+    r.commit("feat: add clock double");
+    let got = reported(&r.check(&[]));
+    assert!(got.is_empty(), "a real mock import carves out: {got:?}");
+}
+
+#[test]
+fn negative_control_test_double_in_a_fakes_module_under_tests() {
+    // `tests/fakes.py` holds no test, so the file is judged as production code for
+    // stubs; a class named and placed as a test double keeps its carve-out.
+    let r = repo();
+    r.write(
+        "tests/fakes.py",
+        "class FakeClock:\n    def __eq__(self, other):\n        return True\n",
+    );
+    r.write(
+        "src/doubles/fakes.py",
+        "class FakeStore:\n    def __eq__(self, other):\n        return True\n",
+    );
+    r.commit("test: add fakes");
+    let run = r.check(&[]);
+    let got = reported(&run);
+    assert!(
+        got.is_empty(),
+        "test doubles in test-double modules: {got:?}"
+    );
+}
+
+#[test]
+fn positive_control_java_boolean_true_and_parenthesised_true() {
+    let r = repo();
+    r.write(
+        "src/A.java",
+        "public class A {\n    public boolean equals(Object o) {\n        return Boolean.TRUE;\n    }\n}\n",
+    );
+    r.write(
+        "src/B.java",
+        "public class B {\n    public boolean equals(Object o) {\n        return (true);\n    }\n}\n",
+    );
+    r.write(
+        "src/c.py",
+        "class C:\n    def __eq__(self, other):\n        return (True)\n",
+    );
+    r.commit("feat: add equality forms");
+    let got = reported(&r.check(&[]));
+    let mut lines: Vec<u64> = got.iter().map(|g| g.2).collect();
+    lines.sort_unstable();
+    assert_eq!(lines, vec![2, 2, 2], "{got:?}");
+}
+
+#[test]
+fn positive_control_java_hand_written_equals_in_record_and_lombok() {
+    let r = repo();
+    r.write(
+        "src/Point.java",
+        "public record Point(int x, int y) {\n    public boolean equals(Object o) {\n        return true;\n    }\n}\n",
+    );
+    r.write(
+        "src/Account.java",
+        "import lombok.EqualsAndHashCode;\n\n@EqualsAndHashCode\npublic class Account {\n    int id;\n    public boolean equals(Object o) {\n        return true;\n    }\n}\n",
+    );
+    r.commit("feat: add hand-written equality");
+    let got = reported(&r.check(&[]));
+    assert_eq!(
+        got.len(),
+        2,
+        "hand-written equality is not generated: {got:?}"
+    );
+}
+
+#[test]
+fn negative_control_generated_markers_on_syntax_nodes() {
+    let r = repo();
+    r.write(
+        "src/Gen.java",
+        "public class Gen {\n    @javax.annotation.processing.Generated(\"protoc\")\n    public boolean equals(Object o) {\n        return true;\n    }\n}\n",
+    );
+    r.write(
+        "src/gen.rs",
+        "pub struct Gen;\n#[automatically_derived]\nimpl PartialEq for Gen {\n    fn eq(&self, _other: &Self) -> bool {\n        true\n    }\n}\n",
+    );
+    r.commit("feat: add generated equality");
+    let got = reported(&r.check(&[]));
+    assert!(got.is_empty(), "generator markers carve out: {got:?}");
 }
