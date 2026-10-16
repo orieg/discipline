@@ -171,6 +171,7 @@ pub fn analyze(script: &str, mode: ShellMode) -> Analysis {
         options: Vec::new(),
         masks: Vec::new(),
         functions: Vec::new(),
+        substitution_depth: 0,
     };
     a.collect_options(root);
     // Twice, so a condition function that calls one defined after it is recognised.
@@ -228,6 +229,8 @@ struct Analyzer<'s> {
     /// Names of the functions the script defines whose bodies are conditions only: a
     /// call to one is a test the script branches on, not a verification command.
     functions: Vec<String>,
+    /// How many command substitutions (`$(...)`, backquotes) enclose the node walked.
+    substitution_depth: usize,
 }
 
 fn named_children(node: Node<'_>) -> Vec<Node<'_>> {
@@ -356,6 +359,17 @@ impl<'s> Analyzer<'s> {
             i += 1;
         }
         change
+    }
+
+    /// Whether `node` prints a fallback value (`echo`, `printf`): inside a command
+    /// substitution, `X=$(git merge-base a b || echo "")` supplies a default that the
+    /// script reads, rather than masking a check. `|| true` and `|| exit 0` there
+    /// still mask.
+    fn supplies_a_value(&self, node: Node<'_>) -> bool {
+        node.kind() == "command"
+            && self
+                .name_and_args(node)
+                .is_some_and(|(name, _)| matches!(name.as_str(), "echo" | "printf"))
     }
 
     /// Records each function the script defines whose body is made of conditions only
@@ -506,6 +520,7 @@ impl<'s> Analyzer<'s> {
                     && self.cannot_fail(*r)
                     && !restored
                     && !self.only_conditions(*l)
+                    && !(self.substitution_depth > 0 && self.supplies_a_value(*r))
                 {
                     self.mask(MaskKind::OrUnfailable, node);
                 }
@@ -515,6 +530,14 @@ impl<'s> Analyzer<'s> {
                     self.walk(*r, false);
                 }
             }
+            return;
+        }
+        if node.kind() == "command_substitution" {
+            self.substitution_depth += 1;
+            for child in named_children(node) {
+                self.walk(child, false);
+            }
+            self.substitution_depth -= 1;
             return;
         }
         match node.kind() {
@@ -663,6 +686,8 @@ mod tests {
             "test -d target || echo none",
             "command -v cargo >/dev/null || echo 'no cargo'",
             "! [ -f x ] || echo present",
+            "BASE=$(git merge-base origin/main HEAD 2>/dev/null || echo \"\")",
+            "V=`git describe --tags || printf none`",
             "edited() { case \"$changed\" in *\" $1 \"*) return 0;; esac; return 1; }\ned() { edited \"$1\" && echo true || echo false; }",
         ] {
             assert!(ci(script).exit_masked().is_none(), "{script}");
@@ -674,6 +699,8 @@ mod tests {
             "t() { cargo test; } ; t && echo yes || echo no",
             "! cargo test || echo ok",
             "[ -f x ] && cargo test || echo skipped",
+            "OUT=$(cargo test || true)",
+            "OUT=$(cargo test || exit 0)",
         ] {
             assert!(ci(script).exit_masked().is_some(), "{script}");
         }
