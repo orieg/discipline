@@ -10753,6 +10753,34 @@ tokio = { git = "https://github.com/tokio-rs/tokio.git", tag = "tokio-1.0.0" }
 }
 
 #[test]
+fn dependency_delta_compares_a_dependency_within_its_own_section() {
+    // vitejs/vite plugin-legacy: `vite` is a peer range and a dev workspace link at once.
+    // A bump of another dependency must not read the dev link against the peer range.
+    let base = "{\n  \"name\": \"plugin\",\n  \"dependencies\": {\n    \"browserslist\": \"^4.28.8\"\n  },\n  \"peerDependencies\": {\n    \"vite\": \"^8.0.0\"\n  },\n  \"devDependencies\": {\n    \"vite\": \"workspace:*\",\n    \"lodash\": \"4.17.21\"\n  }\n}\n";
+    let repo = Repo::new();
+    repo.commit_base("package.json", base, "base: plugin");
+    repo.write("package.json", &base.replace("^4.28.8", "^4.28.9"));
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.titles("dependency-delta"),
+        Vec::<String>::new(),
+        "{}",
+        run.stdout
+    );
+
+    // Positive control: a pin loosened inside `devDependencies` is still reported.
+    let repo = Repo::new();
+    repo.commit_base("package.json", base, "base: plugin");
+    repo.write("package.json", &base.replace("\"4.17.21\"", "\"^4.17.21\""));
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    assert_eq!(
+        run.titles("dependency-delta"),
+        vec!["Dependency Constraint Loosened".to_string()]
+    );
+}
+
+#[test]
 fn dependency_delta_reports_lockfile_growth_in_notes() {
     let repo = Repo::new();
     repo.commit_base_files(
