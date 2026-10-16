@@ -2589,6 +2589,9 @@ pub struct CitationAnchorsGate {
     pub unanchored_citations: UnanchoredCitationsMode,
     pub verify_tracker_titles: bool,
     pub require_online: bool,
+    /// Fewest non-whitespace characters a quoted text must hold. A shorter quote is
+    /// contained in almost any line, so it anchors nothing and is reported.
+    pub min_quote_chars: usize,
 }
 
 impl Default for CitationAnchorsGate {
@@ -2601,6 +2604,7 @@ impl Default for CitationAnchorsGate {
             unanchored_citations: UnanchoredCitationsMode::Warn,
             verify_tracker_titles: false,
             require_online: false,
+            min_quote_chars: 8,
         }
     }
 }

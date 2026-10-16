@@ -465,6 +465,7 @@ struct TwinResultEntry {
 #[derive(serde::Deserialize)]
 struct PerGateResultEntry {
     gate: String,
+    class: String,
     true_positives: usize,
     false_positives: usize,
     cannot_tell: usize,
@@ -491,7 +492,7 @@ struct AdjudicationDoc {
     adjudications: Vec<AdjudicationItem>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Clone)]
 struct AdjudicationItem {
     item_id: String,
     rater_1_label: String,
@@ -499,6 +500,287 @@ struct AdjudicationItem {
     agreed: bool,
     tie_breaker_label: Option<String>,
     final_label: String,
+}
+
+#[derive(serde::Deserialize)]
+struct FindingsDoc {
+    items: Vec<FindingItem>,
+}
+
+#[derive(serde::Deserialize)]
+struct FindingItem {
+    item_id: String,
+    source_tool: String,
+    gate: String,
+}
+
+/// Final-label counts for one gate, class or the twin.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+struct LabelTally {
+    true_positives: usize,
+    false_positives: usize,
+    cannot_tell: usize,
+}
+
+impl LabelTally {
+    fn add(&mut self, label: &str) -> Result<(), String> {
+        match label {
+            "true-positive" => self.true_positives += 1,
+            "false-positive" => self.false_positives += 1,
+            "cannot-tell" => self.cannot_tell += 1,
+            other => return Err(format!("unknown final label {other}")),
+        }
+        Ok(())
+    }
+}
+
+/// Everything summary.json reports that follows from the item-level labels.
+struct RecomputedLabels {
+    per_gate: std::collections::BTreeMap<String, LabelTally>,
+    per_class: std::collections::BTreeMap<String, LabelTally>,
+    twin: LabelTally,
+    exact_agreement: usize,
+    cohens_kappa: f64,
+}
+
+/// Unweighted Cohen's kappa over nominal labels (Cohen 1960), the same definition as
+/// `cohens_kappa` in `scripts/benchmark_precision.py`.
+fn cohens_kappa(pairs: &[(&str, &str)]) -> f64 {
+    use std::collections::BTreeMap;
+    let n = pairs.len() as f64;
+    let mut a: BTreeMap<&str, f64> = BTreeMap::new();
+    let mut b: BTreeMap<&str, f64> = BTreeMap::new();
+    let mut agreed = 0.0;
+    for (x, y) in pairs {
+        *a.entry(x).or_default() += 1.0;
+        *b.entry(y).or_default() += 1.0;
+        if x == y {
+            agreed += 1.0;
+        }
+    }
+    let p_o = agreed / n;
+    let p_e: f64 = a
+        .iter()
+        .map(|(c, ca)| (ca / n) * (b.get(c).copied().unwrap_or(0.0) / n))
+        .sum();
+    (p_o - p_e) / (1.0 - p_e)
+}
+
+/// Joins each finding to its adjudication and tallies the final labels per gate, per
+/// gate class (from the locked pre-registration) and for the twin, and recomputes the
+/// raters' agreement from their individual labels.
+fn recompute_from_labels(
+    findings: &[FindingItem],
+    adjudications: &[AdjudicationItem],
+    gate_class: &std::collections::BTreeMap<String, String>,
+) -> Result<RecomputedLabels, String> {
+    let by_id: std::collections::BTreeMap<&str, &AdjudicationItem> = adjudications
+        .iter()
+        .map(|a| (a.item_id.as_str(), a))
+        .collect();
+    if by_id.len() != findings.len() || adjudications.len() != findings.len() {
+        return Err(format!(
+            "{} findings vs {} adjudications ({} distinct ids)",
+            findings.len(),
+            adjudications.len(),
+            by_id.len()
+        ));
+    }
+    let mut out = RecomputedLabels {
+        per_gate: Default::default(),
+        per_class: Default::default(),
+        twin: LabelTally::default(),
+        exact_agreement: 0,
+        cohens_kappa: 0.0,
+    };
+    for f in findings {
+        let adj = by_id
+            .get(f.item_id.as_str())
+            .ok_or_else(|| format!("{} has no adjudication", f.item_id))?;
+        match f.source_tool.as_str() {
+            "discipline" => {
+                let class = gate_class
+                    .get(&f.gate)
+                    .ok_or_else(|| format!("{}: gate {} has no class", f.item_id, f.gate))?;
+                out.per_gate
+                    .entry(f.gate.clone())
+                    .or_default()
+                    .add(&adj.final_label)?;
+                out.per_class
+                    .entry(class.clone())
+                    .or_default()
+                    .add(&adj.final_label)?;
+            }
+            "naive-sensitive-path-filter" => out.twin.add(&adj.final_label)?,
+            other => return Err(format!("{}: unknown source_tool {other}", f.item_id)),
+        }
+    }
+    let pairs: Vec<(&str, &str)> = adjudications
+        .iter()
+        .map(|a| (a.rater_1_label.as_str(), a.rater_2_label.as_str()))
+        .collect();
+    out.exact_agreement = pairs.iter().filter(|(x, y)| x == y).count();
+    out.cohens_kappa = cohens_kappa(&pairs);
+    Ok(out)
+}
+
+fn tally_matches(
+    what: &str,
+    got: LabelTally,
+    tp: usize,
+    fp: usize,
+    ct: usize,
+) -> Result<(), String> {
+    let want = LabelTally {
+        true_positives: tp,
+        false_positives: fp,
+        cannot_tell: ct,
+    };
+    if got == want {
+        Ok(())
+    } else {
+        Err(format!(
+            "{what}: labels give {got:?}, summary.json says {want:?}"
+        ))
+    }
+}
+
+/// Compares summary.json's counts and kappa with the ones the item labels give.
+fn check_summary_against_labels(
+    summary: &SummaryDoc,
+    adj: &AdjudicationDoc,
+    r: &RecomputedLabels,
+) -> Result<(), String> {
+    for cr in &summary.class_results {
+        let got = r.per_class.get(&cr.class).copied().unwrap_or_default();
+        tally_matches(
+            &format!("class {}", cr.class),
+            got,
+            cr.true_positives,
+            cr.false_positives,
+            cr.cannot_tell,
+        )?;
+    }
+    for class in r.per_class.keys() {
+        if !summary.class_results.iter().any(|c| &c.class == class) {
+            return Err(format!("class {class} has labels but no summary row"));
+        }
+    }
+    for gr in &summary.per_gate_results {
+        let got = r.per_gate.get(&gr.gate).copied().unwrap_or_default();
+        tally_matches(
+            &format!("gate {}", gr.gate),
+            got,
+            gr.true_positives,
+            gr.false_positives,
+            gr.cannot_tell,
+        )?;
+    }
+    for gate in r.per_gate.keys() {
+        if !summary.per_gate_results.iter().any(|g| &g.gate == gate) {
+            return Err(format!("gate {gate} has labels but no summary row"));
+        }
+    }
+    let tr = &summary.twin_baseline_result;
+    tally_matches(
+        "twin",
+        r.twin,
+        tr.true_positives,
+        tr.false_positives,
+        tr.cannot_tell,
+    )?;
+    if r.exact_agreement != adj.exact_agreement_count {
+        return Err(format!(
+            "rater labels agree on {} items, adjudication.json says {}",
+            r.exact_agreement, adj.exact_agreement_count
+        ));
+    }
+    for (name, reported) in [
+        ("summary.json", summary.cohens_kappa),
+        ("adjudication.json", adj.cohens_kappa),
+    ] {
+        if (reported - r.cohens_kappa).abs() >= 1e-6 {
+            return Err(format!(
+                "{name} kappa {reported} vs {} from the rater labels",
+                r.cohens_kappa
+            ));
+        }
+    }
+    Ok(())
+}
+
+struct BenchmarkInputs {
+    summary: SummaryDoc,
+    adj: AdjudicationDoc,
+    findings: FindingsDoc,
+    gate_class: std::collections::BTreeMap<String, String>,
+}
+
+fn load_benchmark_inputs() -> BenchmarkInputs {
+    let read = |path: &str| {
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path} must exist: {e}"))
+    };
+    let prereg: PreregistrationDoc =
+        toml::from_str(&read("docs/benchmarks/precision-preregistration.toml"))
+            .expect("precision-preregistration.toml must parse strictly");
+    let gate_class = prereg
+        .gate_floors
+        .iter()
+        .flat_map(|g| g.gates.iter().map(|gate| (gate.clone(), g.class.clone())))
+        .collect();
+    BenchmarkInputs {
+        summary: serde_json::from_str(&read("docs/benchmarks/results/summary.json"))
+            .expect("summary.json must parse cleanly"),
+        adj: serde_json::from_str(&read("docs/benchmarks/results/adjudication.json"))
+            .expect("adjudication.json must parse cleanly"),
+        findings: serde_json::from_str(&read("docs/benchmarks/results/findings.json"))
+            .expect("findings.json must parse cleanly"),
+        gate_class,
+    }
+}
+
+#[test]
+fn flipping_one_adjudication_label_breaks_the_summary_cross_check() {
+    let inputs = load_benchmark_inputs();
+    let recheck = |adjudications: &[AdjudicationItem]| {
+        let r = recompute_from_labels(&inputs.findings.items, adjudications, &inputs.gate_class)
+            .unwrap();
+        check_summary_against_labels(&inputs.summary, &inputs.adj, &r)
+    };
+    // A final label flipped on one discipline finding moves its gate and class tally.
+    let discipline_ids: std::collections::BTreeSet<&str> = inputs
+        .findings
+        .items
+        .iter()
+        .filter(|f| f.source_tool == "discipline")
+        .map(|f| f.item_id.as_str())
+        .collect();
+    let mut flipped = inputs.adj.adjudications.clone();
+    let tp = flipped
+        .iter_mut()
+        .find(|a| a.final_label == "true-positive" && discipline_ids.contains(a.item_id.as_str()))
+        .expect("a discipline true positive");
+    tp.final_label = "false-positive".into();
+    let err = recheck(&flipped).unwrap_err();
+    assert!(err.contains("class") || err.contains("gate"), "{err}");
+
+    // A final label flipped on one twin flag moves the twin tally.
+    let mut flipped = inputs.adj.adjudications.clone();
+    let twin = flipped
+        .iter_mut()
+        .find(|a| a.final_label == "false-positive" && !discipline_ids.contains(a.item_id.as_str()))
+        .expect("a twin false positive");
+    twin.final_label = "true-positive".into();
+    assert!(recheck(&flipped).unwrap_err().starts_with("twin"));
+
+    // One rater label flipped changes the agreement count and kappa.
+    let mut flipped = inputs.adj.adjudications.clone();
+    flipped[0].rater_1_label = if flipped[0].rater_1_label == "true-positive" {
+        "false-positive".into()
+    } else {
+        "true-positive".into()
+    };
+    assert!(recheck(&flipped).unwrap_err().contains("agree"));
 }
 
 fn expected_verdict(
@@ -521,15 +803,28 @@ fn expected_verdict(
 
 #[test]
 fn test_benchmark_summary_results_match_rust_bounds() {
-    let summary_raw = std::fs::read_to_string("docs/benchmarks/results/summary.json")
-        .expect("docs/benchmarks/results/summary.json must exist");
-    let summary: SummaryDoc =
-        serde_json::from_str(&summary_raw).expect("summary.json must parse cleanly");
+    let inputs = load_benchmark_inputs();
 
-    let adj_raw = std::fs::read_to_string("docs/benchmarks/results/adjudication.json")
-        .expect("docs/benchmarks/results/adjudication.json must exist");
-    let adj: AdjudicationDoc =
-        serde_json::from_str(&adj_raw).expect("adjudication.json must parse cleanly");
+    // The counts and kappa in summary.json must follow from the item-level labels:
+    // findings.json joined to adjudication.json's final labels, per gate, per class
+    // (from the locked pre-registration) and for the twin; kappa from both raters.
+    let recomputed = recompute_from_labels(
+        &inputs.findings.items,
+        &inputs.adj.adjudications,
+        &inputs.gate_class,
+    )
+    .expect("every finding joins to one adjudication");
+    check_summary_against_labels(&inputs.summary, &inputs.adj, &recomputed).unwrap();
+    for gr in &inputs.summary.per_gate_results {
+        assert_eq!(
+            inputs.gate_class.get(&gr.gate),
+            Some(&gr.class),
+            "gate {} class differs from the pre-registration",
+            gr.gate
+        );
+    }
+
+    let BenchmarkInputs { summary, adj, .. } = inputs;
 
     assert_eq!(summary.study_id, "agent-pr-precision-v1");
     assert_eq!(adj.study_id, "agent-pr-precision-v1");

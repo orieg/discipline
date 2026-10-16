@@ -199,3 +199,38 @@ fn cargo_publish_precedes_latest_mark_and_tag_movement_in_promote() {
         "cargo publish (step {publish_idx}) must precede Move the floating container tags (step {tags_idx})"
     );
 }
+
+/// The release tarball records no runner's build user and the same modes on every
+/// runner: owner and group 0 with no names for GNU tar (Linux runners) and bsdtar
+/// (macOS runners), the binary 0755 and every other entry normalised before archiving.
+#[test]
+fn the_release_tarball_normalises_owner_and_mode() {
+    let workflow = release_workflow();
+    let steps = workflow["jobs"]["build"]["steps"]
+        .as_sequence()
+        .expect("build has steps");
+    let package = steps
+        .iter()
+        .find(|s| s["name"].as_str() == Some("Package"))
+        .and_then(|s| s["run"].as_str())
+        .expect("build has a Package step");
+    for needle in [
+        "chmod 0755 \"${stage}/discipline\"",
+        "find \"${stage}\" -type f -exec chmod 0644 {} +",
+        "find \"${stage}\" -type d -exec chmod 0755 {} +",
+        "if tar --version 2>/dev/null | grep -q 'GNU tar'; then",
+        "owner=(--owner=0 --group=0 --numeric-owner)",
+        "owner=(--uid 0 --gid 0 --uname '' --gname '')",
+        "tar \"${owner[@]}\" --no-recursion --format=ustar",
+    ] {
+        assert!(package.contains(needle), "Package step lacks `{needle}`");
+    }
+    // The modes are set after the last file is copied in and before the archive is made.
+    let at = |s: &str| package.find(s).unwrap();
+    assert!(at("cp -r completions") < at("chmod 0755 \"${stage}/discipline\""));
+    assert!(at("chmod 0755 \"${stage}/discipline\"") < at("tar \"${owner[@]}\""));
+    assert!(
+        at("-type f -exec chmod 0644") < at("chmod 0755 \"${stage}/discipline\""),
+        "the binary's mode is set after every file's"
+    );
+}

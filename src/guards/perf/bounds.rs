@@ -396,7 +396,11 @@ pub fn wilson_score_interval(k: usize, n: usize, confidence_level: f64) -> Resul
 /// Standard normal quantile function (inverse cumulative distribution function, \Phi^{-1}(p))
 /// using Peter J. Acklam's rational Chebyshev approximation algorithm.
 ///
-/// Precision: absolute error < 1.15e-9 across the entire domain (0, 1).
+/// Precision: Acklam's stated bound is a *relative* error below 1.15e-9 across `(0, 1)`
+/// (measured against `scipy.stats.norm.ppf` on a grid from `1e-300` to `1 - 1e-16`: maximum
+/// relative error 1.13e-9). The absolute error therefore grows with `|z|`: at most 2.9e-9 for
+/// `|z| < 3`, rising to 3.8e-8 deep in the tails (`p` near `1e-256`). The canonical critical
+/// values below are returned as exact constants instead.
 ///
 /// Reference: Acklam, P. J. (2003). "An algorithm for computing the inverse normal cumulative distribution function".
 pub fn standard_normal_quantile(p: f64) -> Result<f64> {
@@ -493,6 +497,9 @@ pub fn standard_normal_quantile(p: f64) -> Result<f64> {
 /// n = ceil( z^2 * (p * (1 - p) - 2 * w^2 + sqrt((p * (1 - p))^2 + w^2 * (1 - 2p)^2)) / (2 * w^2) )
 /// ```
 ///
+/// Errors when an input is out of range, or when the required `n` is not finite or exceeds
+/// [`MAX_SAMPLE_SIZE`] (a vanishing half-width).
+///
 /// Reference: Wilson, E. B. (1927). "Probable inference, the law of succession, and statistical inference".
 /// Journal of the American Statistical Association, 22(158), 209-212.
 pub fn sample_size_for_interval(
@@ -521,14 +528,27 @@ pub fn sample_size_for_interval(
     let term2 = (v * v + w2 * (1.0 - 2.0 * p).powi(2)).sqrt();
     let n = (z * z * (term1 + term2)) / (2.0 * w2);
 
+    // A vanishing half-width drives `n` to infinity; a saturating cast would report it as
+    // `usize::MAX` findings. Refuse instead of returning a number no study can collect.
+    if !n.is_finite() || n > MAX_SAMPLE_SIZE as f64 {
+        bail!(
+            "required sample size for half-width {target_half_width} at precision {assumed_precision} \
+             exceeds {MAX_SAMPLE_SIZE} (computed {n})"
+        );
+    }
+
     Ok((n.ceil() as usize).max(1))
 }
+
+/// Largest sample size `sample_size_for_interval` returns; anything larger is an error.
+pub const MAX_SAMPLE_SIZE: usize = 1_000_000_000;
 
 /// Computes the minimum detectable difference (MDD) in precision between two arms (e.g. discipline
 /// and the natural substitution twin baseline) given their sample sizes `n1` and `n2`, baseline precision `p1`,
 /// two-sided confidence level (significance level alpha = 1 - confidence_level), and statistical power (1 - beta).
 ///
-/// Solves the standard two-sample proportion test power equation:
+/// Solves the unpooled (Wald-type) two-sample proportion power equation, in which the
+/// same unpooled variance is used under the null and the alternative:
 /// ```text
 /// delta = (z_{alpha/2} + z_beta) * sqrt( p1 * (1 - p1) / n1 + (p1 + delta) * (1 - p1 - delta) / n2 )
 /// ```
@@ -537,10 +557,22 @@ pub fn sample_size_for_interval(
 /// (1 + K2) * delta^2 - K2 * (1 - 2 * p1) * delta - (K1 + K2) * p1 * (1 - p1) = 0
 /// ```
 /// where `K1 = (z_{alpha/2} + z_beta)^2 / n1` and `K2 = (z_{alpha/2} + z_beta)^2 / n2`.
-/// The positive root yields the exact minimum detectable delta.
+/// The positive root solves this unpooled equation exactly; it is not the Fleiss
+/// pooled-null formula. Fleiss et al. use the pooled proportion
+/// `p_bar = (n1 p1 + n2 p2) / (n1 + n2)` for the `z_{alpha/2}` term:
+/// ```text
+/// delta = z_{alpha/2} * sqrt(p_bar (1 - p_bar) (1/n1 + 1/n2)) + z_beta * sqrt(p1 q1 / n1 + p2 q2 / n2)
+/// ```
+/// which gives a larger difference, so this function is optimistic. Measured against that
+/// formula (`fleiss_pooled_mdd` in `scripts/benchmark_precision.py`, at 95% confidence and
+/// 80% power): 0.91% smaller at `n1 = n2 = 141, p1 = 0.55`, 0.54% at `n1 = n2 = 245`, 0.76% at
+/// `n1 = 144, n2 = 150`, and up to about 9% at `n1 = n2 = 10, p1 = 0.30`. The values pinned in
+/// `docs/benchmarks/precision-preregistration.toml` come from this unpooled form and are
+/// kept as locked.
 ///
 /// References:
-/// - Fleiss, J. L., Levin, B., & Paik, M. C. (2003). "Statistical Methods for Rates and Proportions".
+/// - Fleiss, J. L., Levin, B., & Paik, M. C. (2003). "Statistical Methods for Rates and Proportions"
+///   (source of the pooled-null form above, which this function does not implement).
 /// - Chow, S. C., Shao, J., & Wang, H. (2008). "Sample Size Calculations in Clinical Research".
 pub fn minimum_detectable_difference(
     n1: usize,
@@ -1373,6 +1405,25 @@ mod tests {
         // Median is zero
         assert!(standard_normal_quantile(0.50).unwrap().abs() < 1e-9);
 
+        // Rational-approximation values off the constant fast path, pinned to
+        // `scipy.stats.norm.ppf` at a relative tolerance just above Acklam's 1.15e-9 bound.
+        // The tail values exercise the C / D coefficients, the others the A / B ones.
+        for (p, reference) in [
+            (0.01, -2.326_347_874_040_840_8),
+            (0.99, 2.326_347_874_040_840_8),
+            (1e-6, -4.753_424_308_822_899),
+            (1e-12, -7.034_483_825_301_131),
+            (0.3, -0.524_400_512_708_040_9),
+            (0.7, 0.524_400_512_708_040_7),
+        ] {
+            let q = standard_normal_quantile(p).unwrap();
+            let rel = ((q - reference) / reference).abs();
+            assert!(
+                rel < 2e-9,
+                "p={p}: {q} vs {reference} (relative error {rel})"
+            );
+        }
+
         // Validation bounds
         assert!(standard_normal_quantile(0.0).is_err());
         assert!(standard_normal_quantile(1.0).is_err());
@@ -1419,6 +1470,18 @@ mod tests {
         assert!(sample_size_for_interval(0.90, 0.6, 0.95).is_err());
         assert!(sample_size_for_interval(0.90, 0.05, 0.0).is_err());
         assert!(sample_size_for_interval(0.90, 0.05, 1.0).is_err());
+    }
+
+    #[test]
+    fn sample_size_for_interval_refuses_an_unbounded_result() {
+        // w = 1e-300 squares to 0.0, so n is +inf; it once saturated to usize::MAX.
+        let err = sample_size_for_interval(0.90, 1e-300, 0.95).unwrap_err();
+        assert!(err.to_string().contains("exceeds"), "{err}");
+        // Finite but beyond the cap (n is about 9.6e9 at p = 0.5, w = 1e-5).
+        assert!(sample_size_for_interval(0.50, 1e-5, 0.95).is_err());
+        // Just inside the cap still answers (n is about 9.6e7 at w = 1e-4).
+        let n = sample_size_for_interval(0.50, 1e-4, 0.95).unwrap();
+        assert!(n > 90_000_000 && n <= MAX_SAMPLE_SIZE, "{n}");
     }
 
     #[test]

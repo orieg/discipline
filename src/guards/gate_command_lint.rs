@@ -2,7 +2,7 @@
 //!
 //! Rejects vacuous, masked, or inverted verification commands in plan files.
 
-use crate::guards::{Context, GateOutcome, PathFilter};
+use crate::guards::{shell_masking, Context, GateOutcome, PathFilter};
 use anyhow::Result;
 
 pub const GATE: &str = "gate-command-lint";
@@ -88,20 +88,12 @@ pub fn extract_declared_gates(content: &str) -> Vec<DeclaredGate> {
     gates
 }
 
-fn strip_shell_comments(cmd: &str) -> String {
-    cmd.lines()
-        .map(|l| {
-            if let Some((code, _comment)) = l.split_once('#') {
-                let single_quotes = code.chars().filter(|c| *c == '\'').count();
-                let double_quotes = code.chars().filter(|c| *c == '"').count();
-                if single_quotes % 2 == 0 && double_quotes % 2 == 0 {
-                    return code.trim_end();
-                }
-            }
-            l
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+/// How a declared gate command masks its exit code, read from its bash syntax tree (a
+/// gate runs as `sh -c`, `errexit` and `pipefail` off): text in a string or a comment
+/// neither masks nor sets an option. `exit_masked()` is an `unfailable-command`,
+/// `pipeline_masked()` a `pipeline-exit-masked`.
+pub fn analyze_gate_command(command: &str) -> shell_masking::Analysis {
+    shell_masking::analyze(command, shell_masking::GATE_COMMAND)
 }
 
 /// Evaluates plan files against gate-command-lint invariants.
@@ -127,15 +119,6 @@ pub fn evaluate_gate_command_lint(ctx: &Context) -> Result<GateOutcome> {
         return Ok(out);
     }
 
-    let unfailable_re = regex::Regex::new(
-        r"(?:\|\||;)\s*(?:true|exit\s+0|:)\s*(?:;|\s*$)|^\s*(?:true|exit\s+0|:)\s*(?:;|\s*$)",
-    )
-    .unwrap();
-    let pipefail_re =
-        regex::Regex::new(r"set\s+(?:-[a-zA-Z0-9]*o\s+pipefail|-[a-zA-Z0-9]*pipefail)").unwrap();
-    let downstream_pipe_re =
-        regex::Regex::new(r"(?:^|[^|])\|\s*(?:tail|head|grep|awk|cat|sed|cut|sort|uniq|wc|tee)\b")
-            .unwrap();
     let path_test_re =
         regex::Regex::new(r#"(?:test\s+-[fe]\s+|\[\[?\s+-[fe]\s+)([`"']?[a-zA-Z0-9_./\-]+[`"']?)"#)
             .unwrap();
@@ -162,36 +145,44 @@ pub fn evaluate_gate_command_lint(ctx: &Context) -> Result<GateOutcome> {
 
         for gate in declared_gates {
             out.examined += 1;
-            let stripped_cmd = strip_shell_comments(&gate.command);
+            let analysis = analyze_gate_command(&gate.command);
+            if analysis.unparsed {
+                out.notes.push(format!(
+                    "`{}` line {}: the gate command does not parse as shell, so whether it masks its exit code is not fully verified",
+                    file.path, gate.line_num
+                ));
+            }
 
             // 1. Unfailable command
-            if unfailable_re.is_match(&stripped_cmd) {
+            if let Some(mask) = analysis.exit_masked() {
                 out.add_violation(
                     ctx.overridable(settings.severity),
                     &crate::findings::UNFAILABLE_COMMAND,
                     &file.path,
                     gate.line_num,
-                    format!("gate command has no non-zero exit path: `{}`", gate.command),
-                    "remove `|| true` or `|| exit 0` so failure propagates to the runner",
+                    format!(
+                        "gate command has no non-zero exit path (`{}`): `{}`",
+                        mask.snippet, gate.command
+                    ),
+                    "remove the `|| true`, `|| :`, `|| echo`, trailing `; true` or `exit 0` so failure propagates to the runner",
                 );
             }
 
             // 2. Pipeline exit status masking
-            if !settings.allow_pipeline_without_pipefail
-                && downstream_pipe_re.is_match(&stripped_cmd)
-                && !pipefail_re.is_match(&stripped_cmd)
-            {
-                out.add_violation(
-                    ctx.overridable(settings.severity),
-                    &crate::findings::PIPELINE_EXIT_MASKED,
-                    &file.path,
-                    gate.line_num,
-                    format!(
-                        "pipeline exit status is masked by downstream filter: `{}`",
-                        gate.command
-                    ),
-                    "specify `set -o pipefail` before piped commands so upstream failures are not masked",
-                );
+            if !settings.allow_pipeline_without_pipefail {
+                if let Some(mask) = analysis.pipeline_masked() {
+                    out.add_violation(
+                        ctx.overridable(settings.severity),
+                        &crate::findings::PIPELINE_EXIT_MASKED,
+                        &file.path,
+                        gate.line_num,
+                        format!(
+                            "pipeline exit status is masked by its last stage (`{}`): `{}`",
+                            mask.snippet, gate.command
+                        ),
+                        "run `set -o pipefail` before the pipeline so an upstream failure is not masked",
+                    );
+                }
             }
 
             // 3. Pre-existing path test
@@ -387,6 +378,8 @@ enabled = true
             "- Gate: cargo test ; exit 0\n",
             "- Gate: true\n",
             "- Gate: :\n",
+            "- Gate: cargo test || :\n",
+            "- Gate: cargo test ; :\n",
         ] {
             let out = eval(cmd, &[]);
             let codes: Vec<_> = out.violations.iter().map(|v| v.code.as_str()).collect();
@@ -395,5 +388,80 @@ enabled = true
                 "command `{cmd}` must trigger unfailable-command: {codes:?}"
             );
         }
+    }
+
+    fn codes(cmd: &str) -> Vec<String> {
+        eval(&format!("- Gate: {cmd}\n"), &[])
+            .violations
+            .iter()
+            .map(|v| v.code.clone())
+            .collect()
+    }
+
+    /// Forms the old trailing-`true` pattern let through (audit M6).
+    #[test]
+    fn test_unfailable_bypasses_are_caught() {
+        for cmd in [
+            "cargo test || echo ok",
+            "cargo test || /bin/true",
+            "cargo test || /usr/bin/true",
+            "(cargo test || true)",
+            "cargo test || { true; }",
+            "cargo test || exit 00",
+            "cargo test ||true",
+            "cargo test || printf 'failed'",
+        ] {
+            assert_eq!(
+                codes(cmd),
+                vec!["gate-command-lint/unfailable-command".to_string()],
+                "`{cmd}`"
+            );
+        }
+    }
+
+    #[test]
+    fn test_failure_paths_are_not_unfailable() {
+        for cmd in [
+            "cargo test || exit 1",
+            "cargo test || { echo failed; exit 1; }",
+            "cargo test || echo failed && exit 1",
+            "cargo test # || true",
+            "grep -q '|| true' notes.txt",
+        ] {
+            assert!(codes(cmd).is_empty(), "`{cmd}`: {:?}", codes(cmd));
+        }
+    }
+
+    #[test]
+    fn test_pipefail_must_be_a_command_and_any_filter_counts() {
+        for cmd in [
+            "echo \"set -o pipefail\"; cargo test | grep passed",
+            "cargo test | xargs echo",
+            "cargo test | python3 summarize.py",
+        ] {
+            assert_eq!(
+                codes(cmd),
+                vec!["gate-command-lint/pipeline-exit-masked".to_string()],
+                "`{cmd}`"
+            );
+        }
+        for cmd in [
+            "set -euo pipefail; cargo test | xargs echo",
+            "echo y | cargo test",
+        ] {
+            assert!(codes(cmd).is_empty(), "`{cmd}`: {:?}", codes(cmd));
+        }
+    }
+
+    #[test]
+    fn test_unparsable_command_is_noted_not_passed() {
+        let out = eval("- Gate: cargo test || (\n", &[]);
+        assert!(
+            out.notes
+                .iter()
+                .any(|n| n.contains("does not parse as shell")),
+            "{:?}",
+            out.notes
+        );
     }
 }

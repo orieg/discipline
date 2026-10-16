@@ -50,16 +50,11 @@ pub fn evaluate_unsafe_budget(ctx: &Context) -> Result<GateOutcome> {
                     continue;
                 };
                 if let Some(pack) = registry.find_pack(&file.path) {
-                    match pack.extract(&file.path, &head_src, &vocab) {
-                        Ok(f) => f.unsafe_sites,
-                        Err(e) => {
-                            out.notes.push(format!(
-                                "`{}`: not analysed, the head side does not parse ({e})",
-                                file.path
-                            ));
-                            continue;
-                        }
-                    }
+                    // Fail closed: a head side that does not parse may hold any number of
+                    // new `unsafe` sites, and the budget is a count of all of them. A
+                    // note and a skip would pass a change that adds `unsafe` to a file
+                    // nested past the parse limit.
+                    pack.extract(&file.path, &head_src, &vocab)?.unsafe_sites
                 } else {
                     Vec::new()
                 }

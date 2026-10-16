@@ -6,8 +6,7 @@ use super::{
     record_or_excuse, step_label, step_line, step_spans, steps_match_identity, JobSite, StepMatch,
     StepSite, WorkflowFile, GATE,
 };
-use crate::guards::{line_allows, Context, GateOutcome, Severity};
-use regex::Regex;
+use crate::guards::{line_allows, shell_masking, Context, GateOutcome, Severity};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -721,82 +720,84 @@ fn check_step_exit_code_masked(
     let (step, base_step, approx_line) = (site.step, site.base_step, site.approx_line);
     let run_str = step.get("run").and_then(|r| r.as_str());
     // 5f. Error suppression: || true / set +e
-    if settings.forbid_or_true {
-        if let Some(run_cmd) = run_str {
-            if masks_exit_code(run_cmd) {
-                let base_had_mask = base_step
-                    .and_then(|b| b.get("run"))
-                    .and_then(|r| r.as_str())
-                    .is_some_and(masks_exit_code);
-                if !base_had_mask {
-                    let mask_line = site
-                        .text_line(head_content, "|| true")
-                        .or_else(|| site.text_line(head_content, "set +e"))
-                        .or(approx_line);
-                    let step_subject = step
-                        .get("name")
-                        .and_then(|n| n.as_str())
-                        .or_else(|| step.get("id").and_then(|i| i.as_str()))
-                        .unwrap_or("or-true");
-                    record_or_excuse(
-                        ctx,
-                        Some(head_content),
-                        out,
-                        settings.severity,
-                        &crate::findings::EXIT_CODE_MASKED,
-                        Some(path.to_string()),
-                        mask_line,
-                        "Command uses '|| true' or 'set +e' to mask command failure.".to_string(),
-                        "Remove '|| true' or provide an allow-gate-weakening: ci-integrity <reason> directive.",
-                        step_subject,
-                    );
-                }
-            }
-        }
+    if !settings.forbid_or_true {
+        return;
     }
+    let Some(run_cmd) = run_str else {
+        return;
+    };
+    let base_run = base_step
+        .and_then(|b| b.get("run"))
+        .and_then(|r| r.as_str());
+    let step_subject = step
+        .get("name")
+        .and_then(|n| n.as_str())
+        .or_else(|| step.get("id").and_then(|i| i.as_str()))
+        .unwrap_or("or-true");
+    let changed = base_run != Some(run_cmd);
+    if !runs_posix_shell(step) {
+        if changed {
+            out.notes.push(format!(
+                "`{path}`: step `{step_subject}` runs a shell other than bash or sh, so whether it masks its exit code is not checked"
+            ));
+        }
+        return;
+    }
+    let head = shell_masking::analyze_ci_script(run_cmd);
+    if head.unparsed && changed {
+        out.notes.push(format!(
+            "`{path}`: the run script of step `{step_subject}` does not parse as shell, so whether it masks its exit code is not fully verified"
+        ));
+    }
+    let Some(mask) = head.exit_masked() else {
+        return;
+    };
+    let base_had_mask =
+        base_run.is_some_and(|b| shell_masking::analyze_ci_script(b).exit_masked().is_some());
+    if base_had_mask {
+        return;
+    }
+    let mask_line = site.text_line(head_content, &mask.snippet).or(approx_line);
+    record_or_excuse(
+        ctx,
+        Some(head_content),
+        out,
+        settings.severity,
+        &crate::findings::EXIT_CODE_MASKED,
+        Some(path.to_string()),
+        mask_line,
+        format!(
+            "Command masks a command's failure (`{}`): {}.",
+            mask.snippet,
+            mask.kind.describe()
+        ),
+        "Remove the mask (`|| true`, `|| :`, `|| echo ...`, `|| exit 0`, `set +e`) or provide an allow-gate-weakening: ci-integrity <reason> directive.",
+        step_subject,
+    );
+}
+
+/// Whether a step's `run:` is read by bash or sh: no `shell:`, or one whose program is
+/// `bash` or `sh` (by any path).
+fn runs_posix_shell(step: &serde_yaml::Value) -> bool {
+    let Some(shell) = step.get("shell").and_then(|s| s.as_str()) else {
+        return true;
+    };
+    let program = shell.split_whitespace().next().unwrap_or("");
+    matches!(program.rsplit('/').next(), Some("bash" | "sh"))
 }
 
 /// Whether a script that turns `set -e` off checks the status it stops acting on:
 /// `$?` is saved into a variable that a later line tests or exits with, or a later
 /// line tests or exits with `$?` itself. `set +e; cmd; rc=$?; set -e; [ "$rc" -eq 0 ]`
 /// is a checked negative control, not a masked failure.
+/// The masking analysis reads a real `set +e` command (`shell_masking`); this text form
+/// is kept for callers that hold a script with one.
 pub(crate) fn set_e_status_checked(run: &str) -> bool {
     let lines: Vec<&str> = run.lines().collect();
     let Some(start) = lines.iter().position(|l| l.contains("set +e")) else {
         return false;
     };
-    let tests = |l: &str| {
-        let l = l.trim_start();
-        ["if ", "[ ", "[[ ", "test ", "exit ", "case ", "((", "elif "]
-            .iter()
-            .any(|k| l.starts_with(k) || l.contains(&format!("; {k}")))
-    };
-    let assign = Regex::new(r#"\b([A-Za-z_][A-Za-z0-9_]*)="?\$\?"?"#).expect("static regex");
-    let mut vars: Vec<String> = Vec::new();
-    for l in &lines[start..] {
-        if tests(l) {
-            if l.contains("$?") {
-                return true;
-            }
-            if vars
-                .iter()
-                .any(|v| l.contains(&format!("${v}")) || l.contains(&format!("${{{v}}}")))
-            {
-                return true;
-            }
-        }
-        for c in assign.captures_iter(l) {
-            vars.push(c[1].to_string());
-        }
-    }
-    false
-}
-
-/// Whether a step's script masks a failure: `|| true`, or `set +e` whose status is
-/// never checked.
-fn masks_exit_code(run: &str) -> bool {
-    run.lines().any(|l| l.contains("|| true"))
-        || (run.lines().any(|l| l.contains("set +e")) && !set_e_status_checked(run))
+    shell_masking::status_checked(&lines[start..])
 }
 
 /// Whether a discipline step's `with:` block switches advisory mode on. YAML `true` and

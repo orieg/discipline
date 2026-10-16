@@ -42,6 +42,7 @@ pub mod review_threads;
 pub mod sandbox_config;
 pub mod sanitizers;
 pub mod scope_confinement;
+pub mod shell_masking;
 pub mod shell_secrets;
 pub mod source_maps;
 pub mod stub_bodies;

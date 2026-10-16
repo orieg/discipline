@@ -14869,6 +14869,95 @@ forbidden_paths = [".github/**"]
     assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
 }
 
+const SCOPE_SECURE_FORBIDDEN: &str = "[meta]\nversion = 1\nname = \"t\"\n\n[gates.scope-confinement]\nenabled = true\nforbidden_paths = [\"secure/**\"]\n";
+
+/// The `scope-confinement` findings of `run` as `(code, message)`.
+fn scope_findings(run: &Run) -> Vec<(String, String)> {
+    run.violations("scope-confinement")
+        .into_iter()
+        .map(|v| {
+            (
+                v["code"].as_str().unwrap().to_string(),
+                v["message"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+/// Moving a file out of a forbidden directory removes it from there: the rename's source
+/// is judged as well as its destination, the same as a deletion would be.
+#[test]
+fn scope_confinement_rename_out_of_a_forbidden_path_is_reported() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", SCOPE_SECURE_FORBIDDEN),
+            ("secure/policy.py", "ALLOW_ALL = False\n"),
+        ],
+        "base: forbid secure/",
+    );
+    repo.git(&["mv", "secure/policy.py", "src/policy.py"]);
+    repo.commit("refactor: move the policy");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let found = scope_findings(&run);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].0, "scope-confinement/file-in-forbidden-scope");
+    assert!(
+        found[0].1.contains("`secure/policy.py`") && found[0].1.contains("src/policy.py"),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn scope_confinement_rename_into_a_forbidden_path_is_reported() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", SCOPE_SECURE_FORBIDDEN),
+            ("src/helper.py", "def helper():\n    return 1\n"),
+        ],
+        "base: forbid secure/",
+    );
+    std::fs::create_dir_all(repo.path().join("secure")).unwrap();
+    repo.git(&["mv", "src/helper.py", "secure/helper.py"]);
+    repo.commit("refactor: move the helper");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let found = scope_findings(&run);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].0, "scope-confinement/file-in-forbidden-scope");
+    assert!(found[0].1.contains("`secure/helper.py`"), "{found:?}");
+}
+
+/// A symlink is a change to the directory it is added to, though other gates read it as
+/// its target and skip it.
+#[test]
+fn scope_confinement_new_symlink_in_a_forbidden_path_is_reported() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", SCOPE_SECURE_FORBIDDEN),
+            ("secure/policy.py", "ALLOW_ALL = False\n"),
+        ],
+        "base: forbid secure/",
+    );
+    std::os::unix::fs::symlink("../src/lib.rs", repo.path().join("secure/override.py")).unwrap();
+    repo.commit("feat: link an override");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let found = scope_findings(&run);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].1.contains("`secure/override.py`"), "{found:?}");
+
+    // Control: the same link outside the forbidden directory passes.
+    repo.git(&["rm", "-q", "secure/override.py"]);
+    std::os::unix::fs::symlink("lib.rs", repo.path().join("src/alias.rs")).unwrap();
+    repo.commit("feat: link outside secure/");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+}
+
 #[test]
 fn scope_confinement_invalid_glob_is_could_not_check_not_a_pass() {
     let repo = Repo::new();
@@ -15101,7 +15190,7 @@ exempt_paths = ["["]
 }
 
 #[test]
-fn unsafe_budget_unparseable_head_emits_note_and_does_not_abort() {
+fn unsafe_budget_unparseable_head_is_could_not_check() {
     const UNFINISHED: &str = "(>\u{fffd}t(0(.t();}";
     let repo = Repo::new();
     repo.write(
@@ -15134,22 +15223,20 @@ enabled = false
     repo.write("src/broken.rs", UNFINISHED);
     repo.commit("feat: broken syntax");
     let run = repo.check(&[]);
-    assert_ne!(
+    // Fail closed: the head side's `unsafe` sites cannot be counted, so the gate could
+    // not check the change (a note and a skip would pass an added `unsafe` block).
+    assert_eq!(
         run.code, 2,
-        "must not exit 2\nstdout: {}\nstderr: {}",
+        "stdout: {}\nstderr: {}",
         run.stdout, run.stderr
     );
-    let notes = run.outcome("unsafe-budget")["notes"]
-        .as_array()
-        .expect("notes array")
-        .iter()
-        .map(|n| n.as_str().unwrap().to_string())
-        .collect::<Vec<_>>();
+    let (reason, gate) = run.could_not_check();
+    assert_eq!(reason, "gate");
+    assert_eq!(gate.as_deref(), Some("unsafe-budget"));
+    let detail = run.json()["could_not_check"]["detail"].to_string();
     assert!(
-        notes
-            .iter()
-            .any(|n| n.starts_with("`src/broken.rs`: not analysed, the head side does not parse")),
-        "unsafe-budget notes must note unparseable head: {notes:?}"
+        detail.contains("could not parse `src/broken.rs`"),
+        "{detail}"
     );
 }
 
@@ -20210,9 +20297,12 @@ fn test_floor_test_command_runs_before_resolving_head_report() {
 #[test]
 fn citation_anchors_e2e_controls() {
     let repo = Repo::new();
-    repo.write("src/lib.rs", "pub fn core_metric() -> usize {\n    42\n}\n");
-    repo.commit("feat: initial metric");
-    let sha = repo.git_output(&["rev-parse", "HEAD"]);
+    // The cited commit is on the base branch: history the change starts from.
+    repo.commit_base_files(
+        &[("src/lib.rs", "pub fn core_metric() -> usize {\n    42\n}\n")],
+        "feat: initial metric",
+    );
+    let sha = repo.git_output(&["rev-parse", "main"]);
     let short_sha = &sha[..7];
 
     repo.write(
@@ -20242,15 +20332,68 @@ unanchored_citations = "ignore"
         .collect();
     assert_eq!(codes, vec!["citation-anchors/text-mismatch"]);
 
-    // Positive control: valid citation
+    // Negative control: a quote too short to identify the line, though it matches.
     repo.write(
         "docs/plan.md",
         &format!("# Verification\n\nSee src/lib.rs:2@{short_sha} \"42\"\n"),
+    );
+    repo.commit("docs: cite two characters");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let codes: Vec<String> = run
+        .violations("citation-anchors")
+        .into_iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(codes, vec!["citation-anchors/quote-too-short"]);
+
+    // Positive control: valid citation
+    repo.write(
+        "docs/plan.md",
+        &format!("# Verification\n\nSee src/lib.rs:1@{short_sha} \"pub fn core_metric()\"\n"),
     );
     repo.commit("docs: fix citation text");
     let run_pass = repo.check(&[]);
     assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
     assert!(run_pass.violations("citation-anchors").is_empty());
+}
+
+/// Evidence written in one commit of the change and deleted in a later one still sits in
+/// the object database; a citation of that commit is reported, not verified.
+#[test]
+fn citation_anchors_e2e_rejects_a_commit_only_this_change_holds() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"repo\"\n[gates.citation-anchors]\nenabled = true\nunanchored_citations = \"ignore\"\n",
+    );
+    repo.write("src/evidence.rs", "// fabricated evidence line\n");
+    repo.commit("test: add evidence");
+    let sha = repo.git_output(&["rev-parse", "HEAD"]);
+    repo.remove("src/evidence.rs");
+    repo.write(
+        "docs/plan.md",
+        &format!(
+            "# Verification\n\nSee src/evidence.rs:1@{} \"fabricated evidence line\"\n",
+            &sha[..10]
+        ),
+    );
+    repo.commit("docs: cite evidence, then drop it");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("citation-anchors");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(
+        violations[0]["code"].as_str(),
+        Some("citation-anchors/commit-unresolvable")
+    );
+    assert!(
+        violations[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not on the base's history"),
+        "{violations:?}"
+    );
 }
 
 // ---- gate-command-lint e2e -------------------------------------------------
@@ -20379,6 +20522,31 @@ enabled = true
     let run_pass = repo.check(&[]);
     assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
     assert!(run_pass.violations("mechanism-sections").is_empty());
+}
+
+/// An untagged claim whose 57th byte falls inside a multi-byte character is a finding in
+/// a normal report, never a panic (exit 101) while the message is truncated.
+#[test]
+fn mechanism_sections_non_ascii_claim_is_reported_not_a_crash() {
+    let repo = Repo::new();
+    repo.write(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"repo\"\n[gates.mechanism-sections]\nenabled = true\n",
+    );
+    let claim = format!("{}été and the rest of the sentence", "a".repeat(56));
+    repo.write(
+        "docs/incident.md",
+        &format!("# Incident\n\n## Root cause\n\n{claim}\n"),
+    );
+    repo.commit("docs: untagged non-ASCII root cause claim");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let codes: Vec<String> = run
+        .violations("mechanism-sections")
+        .into_iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(codes, vec!["mechanism-sections/untagged-mechanism-claim"]);
 }
 
 #[test]

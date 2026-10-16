@@ -40,6 +40,8 @@
 //! Every agent but Cursor and Aider also gets a session-start entry (`--event
 //! session-start`, the worktree's lease) and a pre-tool entry (`--event pre-tool`, which
 //! refuses an edit into another worktree before it runs); both are in `crate::pretool`.
+//! It also gets a post-tool entry after its shell tool (`--event post-tool`, which
+//! records a passing verification command for `[hooks.verified-stop]` and never blocks).
 //!
 //! `discipline hook install --agent <name>` writes that agent's configuration
 //! only where none exists. An existing file is never rewritten, except by `--upgrade`
@@ -612,8 +614,55 @@ fn side_base_name(side: &CheckSide) -> Option<&str> {
     }
 }
 
+/// An exit code a shell tool states in its text result: Codex's `Exit code: N` (its whole
+/// `tool_response` string, recorded live with Codex CLI 0.162.1), Qwen Code's
+/// `Exit Code: N` line in `llmContent`, Copilot CLI's `<exited with exit code N>`.
+static TEXT_EXIT_CODE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"(?im)^\s*exit code:\s*(-?[0-9]+)\b|exited with exit code (-?[0-9]+)\b")
+        .expect("valid regex")
+});
+
+/// The exit code stated in `text`, when it states one. The command's own output is in the
+/// same text and can print a line of that form too, so every statement is read: a
+/// non-zero one is the result (the real one is among them), and 0 only when all say 0.
+fn text_exit_code(text: &str) -> Option<i32> {
+    let mut codes = TEXT_EXIT_CODE.captures_iter(text).filter_map(|c| {
+        c.get(1)
+            .or_else(|| c.get(2))
+            .and_then(|m| m.as_str().parse::<i32>().ok())
+    });
+    let first = codes.next()?;
+    if first != 0 {
+        return Some(first);
+    }
+    Some(codes.find(|c| *c != 0).unwrap_or(0))
+}
+
+/// The text of `v`: a string, or the `text` of each part of an array of parts.
+fn text_of(v: &serde_json::Value) -> Option<String> {
+    match v {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Array(parts) => {
+            let texts: Vec<&str> = parts
+                .iter()
+                .filter_map(|p| p.as_str().or_else(|| p.get("text")?.as_str()))
+                .collect();
+            (!texts.is_empty()).then(|| texts.join("\n"))
+        }
+        _ => None,
+    }
+}
+
 /// Extracts `(exit_code, combined_output)` from a post-tool hook payload.
-fn parse_post_tool_outcome(v: &serde_json::Value) -> (Option<i32>, String) {
+///
+/// The exit code is `None` unless the payload states one: a numeric exit-code field, an
+/// error flag or a result type other than success (a failure), an `Exit code: N`
+/// statement in the tool's text result, or, for Claude Code only, a `PostToolUse` event
+/// whose result was not interrupted (Claude Code's hooks reference: `PostToolUse` runs
+/// after a tool succeeds, and a failing tool reaches `PostToolUseFailure` instead; READ
+/// from its documentation, not recorded). A result that states none of these is not read
+/// as a pass, so it is never witnessed.
+fn parse_post_tool_outcome(agent: Agent, v: &serde_json::Value) -> (Option<i32>, String) {
     let mut exit_code: Option<i32> = None;
     for ptr in [
         "/tool_response/exit_code",
@@ -634,14 +683,63 @@ fn parse_post_tool_outcome(v: &serde_json::Value) -> (Option<i32>, String) {
         "/code",
     ] {
         if let Some(n) = v.pointer(ptr).and_then(|x| x.as_i64()) {
-            exit_code = Some(n as i32);
+            exit_code = Some(i32::try_from(n).unwrap_or(1));
             break;
         }
     }
-    if exit_code.is_none() {
-        if let Some(res_type) = v.pointer("/toolResult/resultType").and_then(|x| x.as_str()) {
-            exit_code = Some(if res_type == "success" { 0 } else { 1 });
+
+    let mut texts: Vec<String> = Vec::new();
+    for ptr in [
+        "/tool_response",
+        "/tool_response/stdout",
+        "/tool_response/stderr",
+        "/tool_response/output",
+        "/tool_response/llmContent",
+        "/tool_result",
+        "/tool_result/stdout",
+        "/tool_result/stderr",
+        "/tool_result/output",
+        "/toolResult/textResultForLlm",
+        "/toolResult/output",
+        "/output/output",
+        "/stdout",
+        "/stderr",
+    ] {
+        if let Some(t) = v.pointer(ptr).and_then(text_of) {
+            texts.push(t);
         }
+    }
+    let output = texts.join("\n");
+
+    if exit_code.is_none() {
+        // Where a stated code lives: the whole text result of Codex, Qwen Code's
+        // `llmContent`, Copilot CLI's text for the model.
+        exit_code = [
+            "/tool_response",
+            "/tool_response/llmContent",
+            "/tool_result",
+            "/toolResult/textResultForLlm",
+        ]
+        .iter()
+        .filter_map(|p| v.pointer(p).and_then(text_of))
+        .filter_map(|t| text_exit_code(&t))
+        .reduce(|a, b| if a != 0 { a } else { b });
+    }
+    if exit_code.is_none()
+        && agent == Agent::ClaudeCode
+        && v.get("hook_event_name").and_then(|e| e.as_str()) == Some("PostToolUse")
+        && v.pointer("/tool_response/interrupted")
+            .and_then(|i| i.as_bool())
+            == Some(false)
+    {
+        exit_code = Some(0);
+    }
+    // A result type other than success is a failure; success alone states no exit code.
+    if v.pointer("/toolResult/resultType")
+        .and_then(|x| x.as_str())
+        .is_some_and(|t| t != "success")
+    {
+        exit_code = Some(1);
     }
     for err_ptr in [
         "/tool_response/is_error",
@@ -653,41 +751,6 @@ fn parse_post_tool_outcome(v: &serde_json::Value) -> (Option<i32>, String) {
         if v.pointer(err_ptr).and_then(|x| x.as_bool()) == Some(true) {
             exit_code = Some(1);
         }
-    }
-    if exit_code.is_none()
-        && ["/tool_response", "/tool_result", "/toolResult", "/output"]
-            .iter()
-            .any(|p| v.pointer(p).is_some())
-    {
-        exit_code = Some(0);
-    }
-
-    let mut output = String::new();
-    for ptr in [
-        "/tool_response/stdout",
-        "/tool_response/stderr",
-        "/tool_response/output",
-        "/tool_result/stdout",
-        "/tool_result/stderr",
-        "/tool_result/output",
-        "/toolResult/textResultForLlm",
-        "/toolResult/output",
-        "/output/output",
-        "/stdout",
-        "/stderr",
-    ] {
-        if let Some(s) = v.pointer(ptr).and_then(|x| x.as_str()) {
-            if !output.is_empty() {
-                output.push('\n');
-            }
-            output.push_str(s);
-        }
-    }
-    if let Some(s) = v.pointer("/tool_response").and_then(|x| x.as_str()) {
-        if !output.is_empty() {
-            output.push('\n');
-        }
-        output.push_str(s);
     }
     (exit_code, output)
 }
@@ -708,12 +771,15 @@ fn witness_post_tool(agent: Agent, dir: &Path, side: &CheckSide, stdin: &str) {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(stdin) else {
         return;
     };
-    let (exit_code, output) = parse_post_tool_outcome(&v);
+    let (exit_code, output) = parse_post_tool_outcome(agent, &v);
     if exit_code != Some(0) || crate::session::output_is_vacuous(&output) {
         return;
     }
     let base_cfg = base_discipline_config(dir, side).unwrap_or_default();
-    let vouched = crate::session::vouched_commands(&base_cfg);
+    if !base_cfg.hooks.verified_stop.enabled {
+        return;
+    }
+    let vouched = crate::session::vouched_commands(&base_cfg, dir, side_base_name(side));
     let Some(command_id) = crate::session::matches_vouched_command(cmd, &vouched) else {
         return;
     };
@@ -761,6 +827,13 @@ pub fn post_tool_with(
     if if_configured && !configured(&dir) {
         return pass;
     }
+    // Installed hooks run this after every shell command. Where the working tree's
+    // `discipline.toml` does not name the check, return before reading the base ref or
+    // the tree. Only the base ref's configuration switches the check on, so this can skip
+    // a record (a stricter stop), never grant one.
+    if !names_verified_stop(&dir) {
+        return pass;
+    }
     let side = match base {
         Some(b) => CheckSide::Base(b),
         None => CheckSide::Default,
@@ -768,6 +841,19 @@ pub fn post_tool_with(
     witness_post_tool(agent, &dir, &side, stdin);
     pass
 }
+
+/// Whether the `discipline.toml` at the root of `dir`'s working tree mentions
+/// `verified-stop`.
+fn names_verified_stop(dir: &Path) -> bool {
+    crate::gitctx::discover_repository(dir)
+        .ok()
+        .and_then(|r| r.workdir().map(|w| w.join("discipline.toml")))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .is_some_and(|t| t.contains("verified-stop"))
+}
+
+/// The line a verified-stop refusal carries when no command can verify the tree.
+const NO_VERIFICATION_COMMAND: &str = "discipline: no verification command applies to this repository: the base ref sets no [hooks.verified-stop].commands, [gates.command] or [gates.test-floor] test_command, and its root has none of Cargo.toml, pyproject.toml, setup.py, pytest.ini, package.json or go.mod. Set [hooks.verified-stop].commands on the base branch.\n";
 
 /// `[hooks.verified-stop]` (`#700`): at the end of a turn, once the change check has
 /// passed, check that a vouched verification command has passed on the current
@@ -811,7 +897,7 @@ fn verified_stop(
         return None;
     }
 
-    let vouched = crate::session::vouched_commands(&base_cfg);
+    let vouched = crate::session::vouched_commands(&base_cfg, dir, side_base_name(side));
     if config.run_at_stop && digest != "unreadable-tree" && !vouched.is_empty() {
         let mut all_passed = true;
         for cmd in &vouched {
@@ -847,7 +933,10 @@ fn verified_stop(
     }
 
     let code = crate::turn::TurnKind::UnverifiedDirtyTree.code();
-    let expected_cmd = vouched.first().map(String::as_str).unwrap_or("cargo test");
+    let expected_cmd = vouched
+        .first()
+        .map(String::as_str)
+        .unwrap_or("no verification command is configured");
     let mut out = translate_event(agent, Event::Stop, 0, "", "");
     if observe || config.mode == crate::config::StopMode::Observe {
         let logged = append_observation(
@@ -870,41 +959,49 @@ fn verified_stop(
         return Some(out);
     }
 
-    let so_far = session_state.as_ref().map(|s| s.stop_refusals).unwrap_or(0);
-    let let_through = if payload.stop_hook_active || payload.execution_num.is_some_and(|n| n > 0) {
-        Some("the agent's loop guard")
-    } else if so_far >= config.max_per_session {
-        Some("this session's cap (hooks.verified-stop.max_per_session)")
-    } else {
-        match session_id.zip(store.as_ref()) {
-            Some((s, st)) => {
-                if st
-                    .update(s, agent.id(), now, |state| {
-                        state.stop_refusals = state.stop_refusals.saturating_add(1);
-                    })
-                    .ok()
-                    .flatten()
-                    .is_none()
-                {
-                    Some("a cap that could not be recorded")
-                } else {
-                    None
-                }
-            }
-            None => Some("a cap that could not be recorded"),
-        }
-    };
-    if let Some(why) = let_through {
+    // The agent's own loop guard is the bound that holds whatever happens to the session
+    // store: a stop this hook already continued is let through.
+    if payload.stop_hook_active || payload.execution_num.is_some_and(|n| n > 0) {
         out.stderr = format!(
-            "discipline: this stop was let through at {why}, but the turn ended on {code}.\n"
+            "discipline: this stop was let through at the agent's loop guard, but the turn ended on {code}.\n"
         );
         return Some(out);
     }
+    let so_far = session_state.as_ref().map(|s| s.stop_refusals).unwrap_or(0);
+    if so_far >= config.max_per_session {
+        out.stderr = format!(
+            "discipline: this stop was let through at this session's cap (hooks.verified-stop.max_per_session), but the turn ended on {code}.\n"
+        );
+        return Some(out);
+    }
+    // A refusal that cannot be counted is still a refusal: letting the stop through here
+    // would let an agent that holds the session lock (a file it can create) or sends no
+    // session id end every turn unverified.
+    let unrecorded = match (session_id, store.as_ref()) {
+        (None, _) => Some("the hook payload names no session id".to_string()),
+        (Some(_), None) => Some("the repository's session store cannot be opened".to_string()),
+        (Some(s), Some(st)) => match st.update(s, agent.id(), now, |state| {
+            state.stop_refusals = state.stop_refusals.saturating_add(1);
+        }) {
+            Ok(Some(())) => None,
+            Ok(None) => Some("the session id has no usable characters".to_string()),
+            Err(err) => Some(format!("{err:#}")),
+        },
+    };
     let verdict = crate::turn::Verdict {
         kind: crate::turn::TurnKind::UnverifiedDirtyTree,
         sentence: expected_cmd.to_string(),
     };
-    Some(refusal_for(agent, &verdict.refusal()))
+    let mut text = verdict.refusal();
+    if vouched.is_empty() {
+        text.push_str(NO_VERIFICATION_COMMAND);
+    }
+    if let Some(why) = unrecorded {
+        text.push_str(&format!(
+            "discipline: this refusal could not be recorded against the session's cap ({why}); the stop is refused, and the agent's own loop guard bounds it.\n"
+        ));
+    }
+    Some(refusal_for(agent, &text))
 }
 
 /// Appends one line to `<git dir>/discipline/hook-observe.log` and returns its path.
@@ -1358,6 +1455,17 @@ pub fn config_for_opts(
         Agent::Opencode => start_run,
         _ => guarded_pretool(&start_run),
     };
+    // After a shell tool ran: record a passing verification command for
+    // `[hooks.verified-stop]`. It never blocks, so it has no observe form; with the
+    // check switched off it returns before reading the tree.
+    let post_run = format!(
+        "discipline hook run --agent {} --event post-tool",
+        agent.id()
+    );
+    let post = match agent {
+        Agent::Opencode => post_run,
+        _ => guarded_pretool(&post_run),
+    };
     match agent {
         Agent::ClaudeCode => (
             ".claude/settings.json",
@@ -1379,6 +1487,7 @@ pub fn config_for_opts(
                     hook_entry(&pre, None),
                 ),
                 ("Edit|Write|MultiEdit|NotebookEdit", hook_entry(&cmd, None)),
+                ("Bash", hook_entry(&post, None)),
             ),
         ),
         // Codex's contract is Claude Code's (recorded live:
@@ -1391,6 +1500,7 @@ pub fn config_for_opts(
                 serde_json::json!({ "hooks": [hook_entry(&start, None)] }),
                 ("apply_patch|Edit|Write|Bash", hook_entry(&pre, None)),
                 ("apply_patch|Edit|Write", hook_entry(&cmd, None)),
+                ("Bash", hook_entry(&post, None)),
             ),
         ),
         Agent::Cursor => (
@@ -1410,7 +1520,7 @@ pub fn config_for_opts(
         ),
         Agent::Copilot => (
             ".github/hooks/discipline.json",
-            copilot_hooks(&cmd, secs, Some((&pre, &start))),
+            copilot_hooks(&cmd, secs, Some((&pre, &start, &post))),
         ),
         Agent::Agy => (
             ".agents/hooks.json",
@@ -1431,6 +1541,12 @@ pub fn config_for_opts(
                         "matcher": ".*",
                         "hooks": [{ "type": "command", "command": pre, "timeout": 30 }]
                     }],
+                    // agy reads nothing a hook returns after a tool call; the shell
+                    // tool's result is only witnessed for `[hooks.verified-stop]`.
+                    "PostToolUse": [{
+                        "matcher": "run_command",
+                        "hooks": [{ "type": "command", "command": post, "timeout": 30 }]
+                    }],
                     "Stop": [{ "type": "command", "command": cmd, "timeout": secs }]
                 }
             }))
@@ -1449,11 +1565,12 @@ pub fn config_for_opts(
                     hook_entry(&pre, Some(30)),
                 ),
                 ("^(write_file|edit)$", hook_entry(&cmd, Some(secs))),
+                ("^(run_shell_command)$", hook_entry(&post, Some(30))),
             )),
         ),
         Agent::Opencode => (
             ".opencode/plugins/discipline.js",
-            opencode_plugin(&cmd, &pre, &start, observe),
+            opencode_plugin(&cmd, &pre, &start, &post, observe),
         ),
     }
 }
@@ -1517,18 +1634,22 @@ fn hook_entry(command: &str, timeout: Option<u32>) -> serde_json::Value {
 }
 
 /// The hook file of an agent whose contract is Claude Code's: one `SessionStart` group,
-/// the pre-tool handler and the check after an edit under their tool matchers, and the
-/// same check on `Stop`.
+/// the pre-tool handler, the check after an edit and the post-tool witness after a shell
+/// command under their tool matchers, and the same check on `Stop`.
 fn claude_shaped(
     session_start: serde_json::Value,
     (pre_matcher, pre): (&str, serde_json::Value),
     (post_matcher, check): (&str, serde_json::Value),
+    (shell_matcher, witness): (&str, serde_json::Value),
 ) -> String {
     serde_json::to_string_pretty(&serde_json::json!({
         "hooks": {
             "SessionStart": [session_start],
             "PreToolUse": [{ "matcher": pre_matcher, "hooks": [pre] }],
-            "PostToolUse": [{ "matcher": post_matcher, "hooks": [check.clone()] }],
+            "PostToolUse": [
+                { "matcher": post_matcher, "hooks": [check.clone()] },
+                { "matcher": shell_matcher, "hooks": [witness] }
+            ],
             "Stop": [{ "hooks": [check] }]
         }
     }))
@@ -1570,7 +1691,11 @@ pub const OPENCODE_OBSERVE_NEVER_BLOCKS: &str =
 
 /// The OpenCode plugin: when a session is created, take the worktree's lease; before an
 /// edit or shell tool, the pre-tool check; after an edit tool, run the hook and append a failure to the
-/// tool's output, which is the text the model reads.
+/// tool's output, which is the text the model reads; after a shell tool, hand its result
+/// to `hook run --event post-tool` (`post`), which records a passing verification command
+/// for `[hooks.verified-stop]`. That handler never throws, in either mode. 1.x gives
+/// `tool.execute.after` no arguments on some releases, so `tool.execute.before` keeps a
+/// shell call's arguments by `callID` for it.
 ///
 /// Enforcing, a pre-tool command that exits non-zero or cannot be run throws, which
 /// refuses the call. With `observe` no handler can throw: the pre-tool handlers have no
@@ -1585,9 +1710,15 @@ pub const OPENCODE_OBSERVE_NEVER_BLOCKS: &str =
 /// stream, in a loop detached from `setup` whose errors go nowhere in either mode: the
 /// lease never blocks a session. Its commands are each given their stdin, the check an
 /// empty one: `hook run` reads stdin to its end, and a 2.x server's own stdin does not
-/// end. In enforcing mode, an API without `tool.hook` throws from `setup` so the plugin
-/// fails closed rather than leaving tool calls unchecked.
-fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
+/// end. In enforcing mode, an API without `tool.hook` is said once on stderr
+/// (`console.error`); `setup` does not throw, so the plugin loads and checks no tool call
+/// there (CI still gates the change).
+///
+/// `withTimeout` stops waiting for a command; it does not kill it. Bun's `$` returns a
+/// `ShellPromise`, whose methods (`cwd`, `env`, `quiet`, `nothrow`, `text` and the like)
+/// give no handle to the child process, so a command that outlives its timeout runs on
+/// until it exits by itself.
+fn opencode_plugin(cmd: &str, pre: &str, start: &str, post: &str, observe: bool) -> String {
     // A handler body, as written when enforcing; in observe mode, inside `try`/`catch`.
     let guard = |indent: usize, body: String| -> String {
         if !observe {
@@ -1632,22 +1763,44 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
         4,
         format!(
             "    if (!EDIT_TOOLS.includes(input.tool) && input.tool !== \"bash\") return
+    if (input.tool === \"bash\" && input.callID) {{
+      if (SHELL_ARGS.size > 256) SHELL_ARGS.clear()
+      SHELL_ARGS.set(input.callID, output?.args)
+    }}
     const call = new Response(JSON.stringify({{ input, output, cwd: directory }}))
 {}",
             pre_call(4, "call")
         ),
     );
-    let v1_after = guard(
-        4,
-        format!(
-            "    if (!EDIT_TOOLS.includes(input.tool)) return
+    // Not through `guard`: the witness never refuses a call, in either mode.
+    let v1_witness = format!(
+        "    if (SHELL_TOOLS.includes(input.tool)) {{
+      try {{
+        const args = input.args ?? SHELL_ARGS.get(input.callID) ?? {{}}
+        SHELL_ARGS.delete(input.callID)
+        const ran = new Response(JSON.stringify({{
+          input: {{ tool: input.tool, sessionID: input.sessionID }},
+          output: {{ args, metadata: output?.metadata, output: output?.output }},
+          cwd: directory
+        }}))
+        await withTimeout($`{post} < ${{ran}}`.cwd(directory).nothrow().quiet(), HOOK_TIMEOUT_MS)
+      }} catch {{}}
+      return
+    }}
+"
+    );
+    let v1_after = v1_witness
+        + &guard(
+            4,
+            format!(
+                "    if (!EDIT_TOOLS.includes(input.tool)) return
     const r = await withTimeout($`{cmd}`.cwd(directory).nothrow().quiet(), CHECK_TIMEOUT_MS)
     if (r.exitCode !== 0) {{
       output.output += \"\\n\\n\" + r.stdout.toString() + r.stderr.toString()
     }}
 "
-        ),
-    );
+            ),
+        );
     // Not through `guard`: the loop that awaits this is detached from `setup`, so in
     // either mode an error here has no caller to reach and must not end the loop.
     let v2_session = format!(
@@ -1678,7 +1831,41 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
             pre_call(6, "payload")
         ),
     );
-    let v2_after = guard(
+    // Not through `guard`: the witness never refuses a call, in either mode.
+    let v2_witness = format!(
+        "      const shellName = call.tool ?? call.input?.tool
+      if (SHELL_TOOLS.includes(shellName)) {{
+        try {{
+          const text = Array.isArray(call.result?.content)
+            ? call.result.content.filter((c) => typeof c?.text === \"string\").map((c) => c.text).join(\"\\n\")
+            : call.result?.output
+          const ran = new Response(JSON.stringify({{
+            input: {{ tool: shellName, sessionID: call.sessionID }},
+            output: {{
+              args: call.input ?? {{}},
+              metadata: call.result?.metadata,
+              output: typeof text === \"string\" ? text : undefined
+            }},
+            cwd: directory
+          }}))
+          await withTimeout($`{post} < ${{ran}}`.cwd(directory).nothrow().quiet(), HOOK_TIMEOUT_MS)
+        }} catch {{}}
+        return
+      }}
+"
+    );
+    // Enforcing only (an observe-mode check exits 0): a result with neither a text part
+    // nor a string output has nowhere for the report to go, so it is said on stderr
+    // rather than dropped.
+    let dropped = if observe {
+        ""
+    } else {
+        " else {
+          console.error(\"discipline: the check after this edit failed, and its tool result has no text the report could be added to:\" + report)
+        }"
+    };
+    let v2_after = v2_witness
+        + &guard(
         6,
         format!(
             "      const toolName = call.tool ?? call.input?.tool
@@ -1693,7 +1880,7 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
           else call.result.content.push({{ type: \"text\", text: report.trimStart() }})
         }} else if (typeof call.result.output === \"string\") {{
           call.result.output += report
-        }}
+        }}{dropped}
       }}
 "
         ),
@@ -1719,9 +1906,13 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, observe: bool) -> String {
 const EDIT_TOOLS = [\"edit\", \"write\", \"apply_patch\"]
 // OpenCode 2.x names its shell tool `shell`; 1.x named it `bash`.
 const SHELL_TOOLS = [\"bash\", \"shell\"]
+// 1.x: a shell call's arguments, kept from `tool.execute.before` for `tool.execute.after`.
+const SHELL_ARGS = new Map()
 const HOOK_TIMEOUT_MS = 30_000
 const CHECK_TIMEOUT_MS = 120_000
 
+// Stops waiting for `p` after `ms`. It cannot kill the command: Bun's `$` gives no handle
+// to the child process, so a command that outlives the timeout runs on until it exits.
 const withTimeout = (p, ms) => {{
   let timer
   const limit = new Promise((_, reject) => {{
@@ -2058,7 +2249,11 @@ pub fn opencode_plugin_mode(text: &str) -> Option<bool> {
     let run = format!("discipline hook run --agent {}", Agent::Opencode.id());
     let commands: Vec<bool> = text
         .lines()
-        .filter(|l| l.contains(&run) && !l.contains("--event session-start"))
+        .filter(|l| {
+            l.contains(&run)
+                && !l.contains("--event session-start")
+                && !l.contains("--event post-tool")
+        })
         .map(|l| l.contains(" --observe"))
         .collect();
     let observing = commands.iter().filter(|o| **o).count();
@@ -2116,6 +2311,8 @@ enum JsonCommand {
         observe: bool,
     },
     SessionStart,
+    /// `hook run --event post-tool` after a shell command, which never blocks.
+    PostTool,
     /// The Claude Code bootstrap, agy's missing-binary notice.
     Fixed,
 }
@@ -2156,6 +2353,7 @@ fn json_command(agent: Agent, cmd: &str, user: bool) -> Option<JsonCommand> {
         " --event pre-tool" => Some(JsonCommand::PreTool { observe: false }),
         " --event pre-tool --observe" => Some(JsonCommand::PreTool { observe: true }),
         " --event session-start" => Some(JsonCommand::SessionStart),
+        " --event post-tool" => Some(JsonCommand::PostTool),
         _ => None,
     }
 }
@@ -2310,7 +2508,7 @@ fn generated_json_against(
                 Some(observe)
             }
             JsonCommand::PreTool { observe } => Some(observe),
-            JsonCommand::SessionStart | JsonCommand::Fixed => None,
+            JsonCommand::SessionStart | JsonCommand::PostTool | JsonCommand::Fixed => None,
         };
         if !matches!(entry.command, JsonCommand::Check { .. }) && !fixed_timeouts.contains(&secs) {
             return None;
@@ -2546,8 +2744,9 @@ pub fn configured(dir: &Path) -> bool {
 }
 
 /// Copilot CLI's hook file running `cmd` after an edit and at the end of a turn, each
-/// with `timeout` seconds.
-fn copilot_hooks(cmd: &str, timeout: u32, pre: Option<(&str, &str)>) -> String {
+/// with `timeout` seconds; with `pre`, also the pre-tool check, the session-start lease
+/// and the post-tool witness after a `bash` call.
+fn copilot_hooks(cmd: &str, timeout: u32, pre: Option<(&str, &str, &str)>) -> String {
     let mut hooks = serde_json::json!({
         "postToolUse": [{
             "type": "command",
@@ -2559,7 +2758,15 @@ fn copilot_hooks(cmd: &str, timeout: u32, pre: Option<(&str, &str)>) -> String {
         }],
         "agentStop": [{ "type": "command", "bash": cmd, "timeoutSec": timeout }]
     });
-    if let Some((pre, start)) = pre {
+    if let Some((pre, start, post)) = pre {
+        if let Some(list) = hooks["postToolUse"].as_array_mut() {
+            list.push(serde_json::json!({
+                "type": "command",
+                "matcher": "bash",
+                "bash": post,
+                "timeoutSec": 30
+            }));
+        }
         hooks["sessionStart"] = serde_json::json!([{
             "type": "command",
             "bash": start,
@@ -2611,6 +2818,9 @@ pub fn user_config_for(
                         )),
                         &guarded_pretool(
                             "discipline hook run --agent copilot --event session-start --if-configured",
+                        ),
+                        &guarded_pretool(
+                            "discipline hook run --agent copilot --event post-tool --if-configured",
                         ),
                     )),
                 ),
@@ -4078,6 +4288,91 @@ mod tests {
         }
     }
 
+    /// Audit C1: an exit code is read only where a payload states one; a result without
+    /// one is unknown, never a pass.
+    #[test]
+    fn post_tool_outcome_reads_a_stated_exit_code_and_nothing_else() {
+        let outcome = |agent: Agent, raw: &str| {
+            parse_post_tool_outcome(agent, &serde_json::from_str(raw).unwrap()).0
+        };
+        // Recorded live (Codex CLI 0.162.1, Qwen Code 0.25.2; see the test above).
+        assert_eq!(
+            outcome(
+                Agent::Codex,
+                r#"{"hook_event_name":"PostToolUse","tool_name":"apply_patch","tool_response":"Exit code: 0\n"}"#
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            outcome(
+                Agent::Qwen,
+                r#"{"hook_event_name":"PostToolUse","tool_name":"edit","tool_response":{"llmContent":"updated"}}"#
+            ),
+            None
+        );
+        // A failing run whose own output prints a passing statement is still failing.
+        assert_eq!(
+            outcome(
+                Agent::Codex,
+                r#"{"tool_response":"Exit code: 101\nOutput:\nExit code: 0\n2 passed\n"}"#
+            ),
+            Some(101)
+        );
+        assert_eq!(
+            outcome(
+                Agent::Qwen,
+                r#"{"tool_response":{"llmContent":"Command: cargo test\nOutput: Exit Code: 0\nExit Code: 101\nSignal: (none)"}}"#
+            ),
+            Some(101)
+        );
+        assert_eq!(
+            outcome(
+                Agent::Copilot,
+                r#"{"toolName":"bash","toolResult":{"resultType":"success","textResultForLlm":"2 passed\n<exited with exit code 1>"}}"#
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            outcome(
+                Agent::Copilot,
+                r#"{"toolName":"bash","toolResult":{"resultType":"success","textResultForLlm":"2 passed"}}"#
+            ),
+            None
+        );
+        assert_eq!(
+            outcome(
+                Agent::Copilot,
+                r#"{"toolName":"bash","toolResult":{"resultType":"failure","textResultForLlm":"<exited with exit code 0>"}}"#
+            ),
+            Some(1)
+        );
+        // Claude Code's PostToolUse runs only after a tool succeeded.
+        let claude = r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_response":{"stdout":"2 passed","stderr":"","interrupted":false,"isImage":false}}"#;
+        assert_eq!(outcome(Agent::ClaudeCode, claude), Some(0));
+        assert_eq!(outcome(Agent::Codex, claude), None);
+        assert_eq!(
+            outcome(
+                Agent::ClaudeCode,
+                r#"{"tool_name":"Bash","tool_response":{"stdout":"2 passed","interrupted":false}}"#
+            ),
+            None
+        );
+        assert_eq!(
+            outcome(
+                Agent::ClaudeCode,
+                r#"{"hook_event_name":"PostToolUse","tool_response":{"stdout":"","interrupted":true}}"#
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            outcome(
+                Agent::Opencode,
+                r#"{"output":{"args":{"command":"cargo test"}}}"#
+            ),
+            None
+        );
+    }
+
     #[test]
     fn payload_reads_cwd_and_stop_hook_active_and_tolerates_anything_else() {
         assert_eq!(
@@ -4648,11 +4943,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".claude/settings.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let text = merged(
-            Agent::ClaudeCode,
-            "permissions",
-            serde_json::json!({"allow": ["Bash(cargo test)"]}),
-        );
+        let mut current = json(&config_for_mode(Agent::ClaudeCode, true).1);
+        current["permissions"] = serde_json::json!({"allow": ["Bash(cargo test)"]});
+        let text = pretty(&current);
         std::fs::write(&path, &text).unwrap();
         let up = install_with(Agent::ClaudeCode, dir.path(), true, true, None).unwrap();
         assert_eq!(up, Installed::AlreadyPresent(path.clone()));
@@ -4733,6 +5026,7 @@ mod tests {
                 "$`discipline hook run --agent opencode --event session-start < ${start}`"
                     .to_string(),
                 format!("$`discipline hook run --agent opencode --event pre-tool{flag} < ${{"),
+                "$`discipline hook run --agent opencode --event post-tool < ${ran}`".to_string(),
             ] {
                 assert_eq!(
                     text.matches(&run).count(),
@@ -4749,13 +5043,13 @@ mod tests {
             }
             assert_eq!(
                 text.matches("await withTimeout($`").count(),
-                6,
+                8,
                 "observe={observe}: every shell call runs with a timeout\n{text}"
             );
             assert_eq!(
                 text.matches(", HOOK_TIMEOUT_MS)").count(),
-                4,
-                "observe={observe}: session-start and pre-tool use HOOK_TIMEOUT_MS"
+                6,
+                "observe={observe}: session-start, pre-tool and post-tool use HOOK_TIMEOUT_MS"
             );
             assert_eq!(
                 text.matches(", CHECK_TIMEOUT_MS)").count(),
@@ -4782,9 +5076,10 @@ mod tests {
             1,
             "{observe}"
         );
-        // Six handlers (three per block), each one guarded.
-        assert_eq!(observe.matches(" try {\n").count(), 6, "{observe}");
-        assert_eq!(observe.matches(" } catch {}\n").count(), 6, "{observe}");
+        // Six handlers (three per block), each one guarded, and the post-tool witness of
+        // each block, which has its own `try` in either mode.
+        assert_eq!(observe.matches(" try {\n").count(), 8, "{observe}");
+        assert_eq!(observe.matches(" } catch {}\n").count(), 8, "{observe}");
         assert!(!observe.contains("console.error"), "{observe}");
     }
 
@@ -4808,16 +5103,22 @@ mod tests {
 ";
         assert_eq!(enforcing.matches(v1).count(), 1, "{enforcing}");
         assert_eq!(enforcing.matches(v2).count(), 1, "{enforcing}");
-        // The one `try` and the two `catch` are the 2.x session lease's, whose loop is
-        // detached from `setup`: nothing around a pre-tool or post-edit command.
+        // One `try` and two `catch` are the 2.x session lease's, whose loop is detached
+        // from `setup`; the others are the post-tool witness's, one per block, which
+        // records and never refuses. Nothing is around a pre-tool or post-edit command.
         let lease = &enforcing[enforcing.find("    const events = ").unwrap()
             ..enforcing
                 .find("    tool?.hook?.(\"execute.before\"")
                 .unwrap()];
         assert_eq!(lease.matches("try {").count(), 1, "{lease}");
         assert_eq!(lease.matches("catch").count(), 2, "{lease}");
-        assert_eq!(enforcing.matches("try {").count(), 1, "{enforcing}");
-        assert_eq!(enforcing.matches("catch").count(), 2, "{enforcing}");
+        assert_eq!(enforcing.matches("try {").count(), 3, "{enforcing}");
+        assert_eq!(enforcing.matches("catch").count(), 4, "{enforcing}");
+        for witness in enforcing.split("if (SHELL_TOOLS.includes(").skip(1) {
+            let body = &witness[..witness.find("      return\n").unwrap()];
+            assert!(body.contains("--event post-tool"), "{body}");
+            assert!(body.contains("} catch {}"), "{body}");
+        }
         assert!(!enforcing.contains(OPENCODE_OBSERVE_NEVER_BLOCKS));
         let notice = "    if (typeof tool?.hook !== \"function\") {
       console.error(\"discipline: this OpenCode offered the plugin no tool.hook; the pre-tool check was not registered and no tool call will be checked\")
@@ -4826,6 +5127,13 @@ mod tests {
 }
 ";
         assert!(enforcing.ends_with(notice), "{enforcing}");
-        assert_eq!(enforcing.matches("console.error").count(), 1);
+        // The notice above, and the report of a failed check that has no text to join.
+        assert_eq!(enforcing.matches("console.error").count(), 2);
+        assert_eq!(
+            enforcing
+                .matches("console.error(\"discipline: the check after this edit failed")
+                .count(),
+            1
+        );
     }
 }
