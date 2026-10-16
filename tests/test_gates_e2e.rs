@@ -582,6 +582,34 @@ fn vacuous_tests_read_expect_poll_and_soft_as_assertion_receivers() {
 }
 
 #[test]
+fn stub_bodies_reads_a_test_fixture_input_as_test_scope() {
+    // astral-sh/ruff: a linter's input file under `resources/test/fixtures/` holds the
+    // `pass` bodies the rule under test reads; it holds no test and is not shipped.
+    let src = "@dag(start_date=pendulum.now())\ndef my_dag():\n    pass\n\n\ndef not_airflow(start_date):\n    pass\n";
+    let fixture = "crates/lint/resources/test/fixtures/airflow/AIR304.py";
+    let repo = Repo::new();
+    repo.write(fixture, src);
+    repo.commit("test: add a fixture");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.titles("stub-bodies"),
+        Vec::<String>::new(),
+        "{}",
+        run.stdout
+    );
+
+    // Positive control: the same file added in test scope by its directory only, outside
+    // a fixtures directory, is still judged as production code.
+    let helper = "crates/lint/resources/test/helpers/airflow.py";
+    let repo = Repo::new();
+    repo.write(helper, src);
+    repo.commit("test: add a helper");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert_eq!(run.titles("stub-bodies").len(), 2, "{}", run.stdout);
+}
+
+#[test]
 fn vacuous_tests_are_lifted_per_test_by_allow_vacuous_test() {
     let repo = Repo::new();
     repo.write(
