@@ -30,6 +30,29 @@ pub struct DependencyRecord {
     pub is_path: bool,
     pub manifest_path: String,
     pub line: Option<usize>,
+    /// The manifest table that declares it (`devDependencies`, `dev-dependencies`,
+    /// `require-dev`, ...); empty for a manifest with one list. A dependency is compared
+    /// with the base only within its own section: the same name may carry a different
+    /// constraint in another one (a `peerDependencies` range beside a `devDependencies`
+    /// workspace link).
+    pub section: String,
+}
+
+/// The base record a head dependency is compared with: the same name in the same section.
+/// One that matches only in another section is new to its own.
+fn base_counterpart<'a>(
+    base: &'a [DependencyRecord],
+    head: &DependencyRecord,
+) -> Option<&'a DependencyRecord> {
+    base.iter()
+        .find(|b| b.name == head.name && b.section == head.section)
+}
+
+/// Names the section of every record pushed since `start`.
+fn tag_section(records: &mut [DependencyRecord], start: usize, section: &str) {
+    for r in &mut records[start..] {
+        r.section = section.to_string();
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -122,11 +145,17 @@ pub fn parse_cargo_toml(content: &str, path: &str) -> Vec<DependencyRecord> {
 
     // Check target tables: target.<target>.dependencies
     if let Some(target) = root.get("target").and_then(TomlValue::as_table) {
-        for (_target_name, target_val) in target {
+        for (target_name, target_val) in target {
             if let Some(target_tbl) = target_val.as_table() {
                 for tbl_name in &tables_to_check {
                     if let Some(deps) = target_tbl.get(*tbl_name).and_then(TomlValue::as_table) {
+                        let start = records.len();
                         extract_cargo_deps(deps, path, &mut records);
+                        tag_section(
+                            &mut records,
+                            start,
+                            &format!("target.{target_name}.{tbl_name}"),
+                        );
                     }
                 }
             }
@@ -137,7 +166,9 @@ pub fn parse_cargo_toml(content: &str, path: &str) -> Vec<DependencyRecord> {
     if let Some(ws) = root.get("workspace").and_then(TomlValue::as_table) {
         for tbl_name in &tables_to_check {
             if let Some(deps) = ws.get(*tbl_name).and_then(TomlValue::as_table) {
+                let start = records.len();
                 extract_cargo_deps(deps, path, &mut records);
+                tag_section(&mut records, start, &format!("workspace.{tbl_name}"));
             }
         }
     }
@@ -145,7 +176,9 @@ pub fn parse_cargo_toml(content: &str, path: &str) -> Vec<DependencyRecord> {
     // Top-level dependency tables
     for tbl_name in tables_to_check {
         if let Some(deps) = root.get(tbl_name).and_then(TomlValue::as_table) {
+            let start = records.len();
             extract_cargo_deps(deps, path, &mut records);
+            tag_section(&mut records, start, tbl_name);
         }
     }
 
@@ -170,6 +203,7 @@ fn extract_cargo_deps(
                     is_path: false,
                     manifest_path: path.to_string(),
                     line: None,
+                    section: String::new(),
                 });
             }
             TomlValue::Table(tbl) => {
@@ -213,6 +247,7 @@ fn extract_cargo_deps(
                     is_path,
                     manifest_path: path.to_string(),
                     line: None,
+                    section: String::new(),
                 });
             }
             _ => {}
@@ -281,6 +316,7 @@ pub fn parse_package_json(content: &str, path: &str) -> Vec<DependencyRecord> {
                         is_path: v_str.starts_with("file:") || v_str.starts_with("link:"),
                         manifest_path: path.to_string(),
                         line: None,
+                        section: tbl_name.to_string(),
                     });
                 }
             }
@@ -305,23 +341,31 @@ pub fn parse_pyproject_toml(content: &str, path: &str) -> Vec<DependencyRecord> 
     // 1. PEP 621: project.dependencies
     if let Some(project) = root.get("project").and_then(TomlValue::as_table) {
         if let Some(deps) = project.get("dependencies").and_then(TomlValue::as_array) {
+            let start = records.len();
             for dep in deps {
                 if let Some(s) = dep.as_str() {
                     parse_pep508_string(s, path, &mut records);
                 }
             }
+            tag_section(&mut records, start, "project.dependencies");
         }
         if let Some(opt) = project
             .get("optional-dependencies")
             .and_then(TomlValue::as_table)
         {
-            for (_group, deps) in opt {
+            for (group, deps) in opt {
                 if let Some(arr) = deps.as_array() {
+                    let start = records.len();
                     for dep in arr {
                         if let Some(s) = dep.as_str() {
                             parse_pep508_string(s, path, &mut records);
                         }
                     }
+                    tag_section(
+                        &mut records,
+                        start,
+                        &format!("project.optional-dependencies.{group}"),
+                    );
                 }
             }
         }
@@ -342,18 +386,28 @@ pub fn parse_pyproject_toml(content: &str, path: &str) -> Vec<DependencyRecord> 
     if let Some(tool) = root.get("tool").and_then(TomlValue::as_table) {
         if let Some(poetry) = tool.get("poetry").and_then(TomlValue::as_table) {
             if let Some(deps) = poetry.get("dependencies").and_then(TomlValue::as_table) {
+                let start = records.len();
                 extract_poetry_deps(deps, path, &mut records);
+                tag_section(&mut records, start, "tool.poetry.dependencies");
             }
             if let Some(dev_deps) = poetry.get("dev-dependencies").and_then(TomlValue::as_table) {
+                let start = records.len();
                 extract_poetry_deps(dev_deps, path, &mut records);
+                tag_section(&mut records, start, "tool.poetry.dev-dependencies");
             }
             if let Some(groups) = poetry.get("group").and_then(TomlValue::as_table) {
-                for (_grp_name, grp_val) in groups {
+                for (grp_name, grp_val) in groups {
                     if let Some(grp_tbl) = grp_val.as_table() {
                         if let Some(deps) =
                             grp_tbl.get("dependencies").and_then(TomlValue::as_table)
                         {
+                            let start = records.len();
                             extract_poetry_deps(deps, path, &mut records);
+                            tag_section(
+                                &mut records,
+                                start,
+                                &format!("tool.poetry.group.{grp_name}.dependencies"),
+                            );
                         }
                     }
                 }
@@ -403,6 +457,7 @@ fn extract_poetry_deps(
                     is_path: false,
                     manifest_path: path.to_string(),
                     line: None,
+                    section: String::new(),
                 });
             }
             TomlValue::Table(tbl) => {
@@ -435,6 +490,7 @@ fn extract_poetry_deps(
                     is_path: tbl.contains_key("path"),
                     manifest_path: path.to_string(),
                     line: None,
+                    section: String::new(),
                 });
             }
             _ => {}
@@ -484,6 +540,7 @@ fn parse_pep508_string(s: &str, path: &str, records: &mut Vec<DependencyRecord>)
             is_path: false,
             manifest_path: path.to_string(),
             line: None,
+            section: String::new(),
         });
     } else {
         // No version constraint specified -> unconstrained / wildcard!
@@ -503,6 +560,7 @@ fn parse_pep508_string(s: &str, path: &str, records: &mut Vec<DependencyRecord>)
             is_path: false,
             manifest_path: path.to_string(),
             line: None,
+            section: String::new(),
         });
     }
 }
@@ -594,6 +652,7 @@ pub fn parse_go_mod(content: &str, path: &str) -> Vec<DependencyRecord> {
             is_path: false,
             manifest_path: path.to_string(),
             line: None,
+            section: String::new(),
         });
     }
 
@@ -630,6 +689,7 @@ pub fn parse_composer_json(content: &str, path: &str) -> Vec<DependencyRecord> {
                         is_path: false,
                         manifest_path: path.to_string(),
                         line: None,
+                        section: tbl_name.to_string(),
                     });
                 }
             }
@@ -680,6 +740,7 @@ pub fn parse_gemfile(content: &str, path: &str) -> Vec<DependencyRecord> {
                 is_path: false,
                 manifest_path: path.to_string(),
                 line: None,
+                section: String::new(),
             });
         }
     }
@@ -720,6 +781,7 @@ pub fn parse_csproj(content: &str, path: &str) -> Vec<DependencyRecord> {
                 is_path: false,
                 manifest_path: path.to_string(),
                 line: None,
+                section: String::new(),
             });
         }
     }
@@ -1120,7 +1182,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
 
         // Find deltas: new dependencies or modified existing dependencies
         for h in &head_deps {
-            let matching_base = base_deps.iter().find(|b| b.name == h.name);
+            let matching_base = base_counterpart(&base_deps, h);
             let is_delta = match matching_base {
                 None => true, // newly added dependency
                 Some(b) => {
@@ -1414,6 +1476,42 @@ tokio = { version = "1.0" }
         let pinned = deps.iter().find(|d| d.name == "pinned-pkg").unwrap();
         assert!(pinned.is_git);
         assert_eq!(pinned.git_pin.as_deref(), Some("v1.0.0"));
+    }
+
+    #[test]
+    fn a_dependency_is_compared_with_the_base_within_its_own_section() {
+        let base = parse_package_json(
+            r#"{"peerDependencies": {"vite": "^8.0.0"},
+                "devDependencies": {"vite": "workspace:*", "lodash": "4.17.21"}}"#,
+            "package.json",
+        );
+        let head = parse_package_json(
+            r#"{"peerDependencies": {"vite": "^8.0.0"},
+                "devDependencies": {"vite": "workspace:*", "lodash": "^4.17.21"}}"#,
+            "package.json",
+        );
+        let pair = |name: &str, section: &str| {
+            let h = head
+                .iter()
+                .find(|r| r.name == name && r.section == section)
+                .expect("head record");
+            let b = base_counterpart(&base, h).expect("base record");
+            (b.version.clone(), h.version.clone())
+        };
+        // Negative control: the dev-side workspace link meets its own base entry, not the
+        // peer range, so nothing reads as loosened.
+        let (b, h) = pair("vite", "devDependencies");
+        assert_eq!(b.as_deref(), Some("workspace:*"));
+        assert!(!is_constraint_loosened(b.as_deref(), h.as_deref()));
+        let (b, h) = pair("vite", "peerDependencies");
+        assert_eq!(b.as_deref(), Some("^8.0.0"));
+        assert!(!is_constraint_loosened(b.as_deref(), h.as_deref()));
+        // Positive control: a pin loosened within one section is still found.
+        let (b, h) = pair("lodash", "devDependencies");
+        assert!(is_constraint_loosened(b.as_deref(), h.as_deref()));
+        // A name new to a section has no counterpart even when another section has it.
+        let moved = parse_package_json(r#"{"dependencies": {"vite": "^8.0.0"}}"#, "package.json");
+        assert!(base_counterpart(&base, &moved[0]).is_none());
     }
 
     #[test]
