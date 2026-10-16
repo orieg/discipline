@@ -170,8 +170,12 @@ pub fn analyze(script: &str, mode: ShellMode) -> Analysis {
         mode,
         options: Vec::new(),
         masks: Vec::new(),
+        functions: Vec::new(),
     };
     a.collect_options(root);
+    // Twice, so a condition function that calls one defined after it is recognised.
+    a.collect_functions(root);
+    a.collect_functions(root);
     a.walk(root, false);
     a.final_statement(root);
     a.masks.sort_by_key(|m| m.line);
@@ -221,6 +225,9 @@ struct Analyzer<'s> {
     mode: ShellMode,
     options: Vec<OptionChange>,
     masks: Vec<Mask>,
+    /// Names of the functions the script defines whose bodies are conditions only: a
+    /// call to one is a test the script branches on, not a verification command.
+    functions: Vec<String>,
 }
 
 fn named_children(node: Node<'_>) -> Vec<Node<'_>> {
@@ -351,6 +358,93 @@ impl<'s> Analyzer<'s> {
         change
     }
 
+    /// Records each function the script defines whose body is made of conditions only
+    /// (`edited() { case ... esac; return 1; }`). A function that runs a verification
+    /// command (`t() { cargo test; }`) is not one, so `t || echo ok` still masks.
+    fn collect_functions(&mut self, node: Node<'_>) {
+        if node.kind() == "function_definition" {
+            if let (Some(name), Some(body)) = (
+                node.child_by_field_name("name"),
+                node.child_by_field_name("body"),
+            ) {
+                let name = self.text(name).to_string();
+                if !self.functions.contains(&name) && self.only_conditions(body) {
+                    self.functions.push(name);
+                }
+            }
+        }
+        for child in named_children(node) {
+            self.collect_functions(child);
+        }
+    }
+
+    /// Whether every command whose failure can reach `node`'s exit status is a
+    /// condition rather than a verification command: a test (`[`, `[[`, `test`,
+    /// `((`), an existence check (`command -v`, `type`, `hash`), a negated command,
+    /// a `case`, a `return` with a literal status, or a call to a function whose body
+    /// is made of those. `p && echo yes || echo no` and
+    /// `[ -f f ] || echo missing` branch on a condition; they mask no check.
+    fn only_conditions(&self, node: Node<'_>) -> bool {
+        if self.cannot_fail(node) {
+            return true;
+        }
+        match node.kind() {
+            "test_command" | "case_statement" => true,
+            "negated_command" => named_children(node)
+                .first()
+                .is_some_and(|inner| self.only_conditions(*inner)),
+            "command" => {
+                let Some(name) = node.child_by_field_name("name") else {
+                    return false;
+                };
+                let first = self.text(name);
+                if matches!(first, "[" | "test" | "type" | "hash") {
+                    return true;
+                }
+                if first == "return" {
+                    let mut c = node.walk();
+                    let args: Vec<_> = node.children_by_field_name("argument", &mut c).collect();
+                    return args.len() == 1 && self.literal(args[0]).is_some();
+                }
+                if first == "command" {
+                    let mut c = node.walk();
+                    return node
+                        .children_by_field_name("argument", &mut c)
+                        .next()
+                        .is_some_and(|a| matches!(self.text(a), "-v" | "-V"));
+                }
+                self.functions.iter().any(|f| f == first)
+            }
+            "redirected_statement" => node
+                .child_by_field_name("body")
+                .is_some_and(|b| self.only_conditions(b)),
+            "subshell" | "compound_statement" => named_children(node)
+                .last()
+                .is_some_and(|last| self.only_conditions(*last)),
+            "list" => {
+                let parts = named_children(node);
+                let (Some(l), Some(r)) = (parts.first(), parts.last()) else {
+                    return false;
+                };
+                match list_operator(node) {
+                    Some("&&") => self.only_conditions(*l) && self.only_conditions(*r),
+                    Some("||") => self.only_conditions(*r),
+                    _ => false,
+                }
+            }
+            "pipeline" => {
+                let stages = named_children(node);
+                let (_, pipefail) = self.option_state(node.start_byte());
+                if pipefail {
+                    stages.iter().all(|s| self.only_conditions(*s))
+                } else {
+                    stages.last().is_some_and(|s| self.only_conditions(*s))
+                }
+            }
+            _ => false,
+        }
+    }
+
     /// Whether `node`'s exit status is 0 however the commands in it behave.
     fn cannot_fail(&self, node: Node<'_>) -> bool {
         match node.kind() {
@@ -408,7 +502,11 @@ impl<'s> Analyzer<'s> {
             let parts = named_children(node);
             let op = list_operator(node);
             if let (Some(l), Some(r)) = (parts.first(), parts.last()) {
-                if op == Some("||") && self.cannot_fail(*r) && !restored {
+                if op == Some("||")
+                    && self.cannot_fail(*r)
+                    && !restored
+                    && !self.only_conditions(*l)
+                {
                     self.mask(MaskKind::OrUnfailable, node);
                 }
                 let left_restored = restored || (op == Some("&&") && !self.cannot_fail(*r));
@@ -553,6 +651,31 @@ mod tests {
                 );
                 assert!(!a.unparsed, "`{cmd}`");
             }
+        }
+    }
+
+    #[test]
+    fn a_branch_on_a_condition_is_not_masked_but_a_wrapped_check_is() {
+        // Negative controls: the left side of `||` only tests a condition.
+        for script in [
+            "[ -f Cargo.lock ] || echo missing",
+            "[[ -n \"$X\" ]] || echo unset",
+            "test -d target || echo none",
+            "command -v cargo >/dev/null || echo 'no cargo'",
+            "! [ -f x ] || echo present",
+            "edited() { case \"$changed\" in *\" $1 \"*) return 0;; esac; return 1; }\ned() { edited \"$1\" && echo true || echo false; }",
+        ] {
+            assert!(ci(script).exit_masked().is_none(), "{script}");
+        }
+        // Positive controls: a verification command, directly or inside a function.
+        for script in [
+            "cargo test || echo failed",
+            "t() { cargo test; }\nt || echo ok",
+            "t() { cargo test; } ; t && echo yes || echo no",
+            "! cargo test || echo ok",
+            "[ -f x ] && cargo test || echo skipped",
+        ] {
+            assert!(ci(script).exit_masked().is_some(), "{script}");
         }
     }
 
