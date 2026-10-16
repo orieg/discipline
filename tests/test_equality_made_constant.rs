@@ -89,10 +89,12 @@ fn positive_control_changed_equality_made_constant() {
     r.commit("fix: make equality return true");
     let run = r.check(&[]);
     let got = reported(&run);
-    assert_eq!(run.code, 0);
+    // An existing equality method whose comparison is replaced by `return True` blocks
+    // at the gate's severity, as it did when it was `body-replaced-by-stub`.
+    assert_eq!(run.code, 1, "{}", run.stdout);
     assert_eq!(got.len(), 1, "expected 1 finding, got: {got:?}");
     assert_eq!(got[0].0, CODE);
-    assert_eq!(got[0].1, "warning");
+    assert_eq!(got[0].1, "error");
     assert_eq!(got[0].2, 2);
 }
 

@@ -793,7 +793,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it catches:**
   - `Stub Body Added`: a new non-test function whose whole body is a stub marker.
   - `Function Body Replaced By Stub`: a function whose base body was substantive and whose head body is a stub, empty, or a bare constant return (`None`, `return null`, `return nil, nil`).
-  - `Equality Method Made Constant` (`stub-bodies/equality-made-constant`, **`warning` at most**): an added or changed equality method (`__eq__`, `eq`, `equals`, `Equals`, `operator==`, `==`) whose body returns constant `true` (including preceded only by logging statements, comments, or docstrings).
+  - `Equality Method Made Constant` (`stub-bodies/equality-made-constant`): an added or changed equality method (`__eq__`, `eq`, `equals`, `Equals`, `operator==`, `==`) whose body returns constant `true` (including preceded only by logging statements, comments, or docstrings). An existing production equality method whose base body was substantive is reported at the gate's own severity, as any other body replaced by a stub; an equality method the change adds, one whose base body was already a bare constant, and one in test code are reported at **`warning` at most**.
     - **Carve-outs:** Test doubles in test paths (classes named `Stub*`, `Fake*`, `Mock*`, `Dummy*`, `Double*`, `Spy*`); mock framework stubs (subclassing or importing `unittest.mock`, `MagicMock`, `pytest_mock`, `mockito`, `mockall`, `gomock`); and generated equality markers (`@dataclass`, `BaseModel`, `@EqualsAndHashCode`, Java `record`, `#[derive(PartialEq)]`, `#[automatically_derived]`).
 - **Failing diff (rejected):**
   ```diff

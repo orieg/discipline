@@ -29,6 +29,11 @@ pub struct Finding {
     pub type_name: Option<String>,
     pub line: usize,
     pub what: String,
+    /// Reported at `warning` at most: an equality method the change adds, or one in test
+    /// code. An existing production equality method whose substantive body is made
+    /// constant is reported at the gate's own severity, as any other body replaced by a
+    /// stub.
+    pub capped_at_warning: bool,
 }
 
 fn shape_label(shape: &BodyShape) -> String {
@@ -76,6 +81,7 @@ pub fn judge(base: &[FunctionFacts], head: &[FunctionFacts]) -> Vec<Finding> {
                             "`{}` is an equality method added returning constant `true`",
                             h.name
                         ),
+                        capped_at_warning: true,
                     });
                 } else if let BodyShape::Stub(m) = &h.shape {
                     if !h.is_test {
@@ -88,6 +94,7 @@ pub fn judge(base: &[FunctionFacts], head: &[FunctionFacts]) -> Vec<Finding> {
                                 "`{}` is added with the body `{m}` and nothing else",
                                 h.name
                             ),
+                            capped_at_warning: false,
                         });
                     }
                 }
@@ -107,6 +114,7 @@ pub fn judge(base: &[FunctionFacts], head: &[FunctionFacts]) -> Vec<Finding> {
                                 "`{}` is an equality method that now returns constant `true`",
                                 h.name
                             ),
+                            capped_at_warning: h.is_test || b.shape != BodyShape::Substantive,
                         });
                     }
                 } else if b.shape == BodyShape::Substantive
@@ -123,6 +131,7 @@ pub fn judge(base: &[FunctionFacts], head: &[FunctionFacts]) -> Vec<Finding> {
                             h.name,
                             shape_label(&h.shape)
                         ),
+                        capped_at_warning: false,
                     });
                 }
             }
@@ -213,7 +222,7 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
                 .or_else(|| f.type_name.as_deref().and_then(lift))
                 .or_else(|| lift(&file.path))
                 .or_else(|| file.path.rsplit('/').next().and_then(lift));
-            let severity = if f.kind == &crate::findings::EQUALITY_MADE_CONSTANT {
+            let severity = if f.capped_at_warning {
                 settings.severity().capped_at_warning()
             } else {
                 settings.severity()
@@ -356,6 +365,29 @@ mod tests {
         assert_eq!(got.len(), 1, "{got:?}");
         assert_eq!(got[0].kind.title, "Equality Method Made Constant");
         assert_eq!(got[0].name, "__eq__");
+        assert!(
+            !got[0].capped_at_warning,
+            "a substantive production body made constant keeps the gate's severity"
+        );
+    }
+
+    #[test]
+    fn only_a_changed_production_equality_keeps_the_gate_severity() {
+        let added = judge(
+            &[],
+            &[f("__eq__", 1, BodyShape::Trivial("return True".into()), false)],
+        );
+        assert!(added[0].capped_at_warning, "added: {added:?}");
+        let in_test = judge(
+            &[f("__eq__", 1, BodyShape::Substantive, true)],
+            &[f("__eq__", 1, BodyShape::Trivial("return True".into()), true)],
+        );
+        assert!(in_test[0].capped_at_warning, "test code: {in_test:?}");
+        let from_trivial = judge(
+            &[f("__eq__", 1, BodyShape::Trivial("return False".into()), false)],
+            &[f("__eq__", 1, BodyShape::Trivial("return True".into()), false)],
+        );
+        assert!(from_trivial[0].capped_at_warning, "{from_trivial:?}");
     }
 
     #[test]
