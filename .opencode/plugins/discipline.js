@@ -1,5 +1,5 @@
 // Written by `discipline hook install --agent opencode`.
-// discipline-hook-file: mode=observe sha256=0ab3f4de7c96c13dbc33c92d1b7167c70916890896dac0a71b1c18908293325a
+// discipline-hook-file: mode=observe sha256=848c47c423ee11a0a433e0fbdbcf2facdf7e57842751436577865931381cbddf
 // When a session is created, takes this worktree's lease for it. Before an edit tool, refuses an edit outside this session's worktree (the tool call
 // is sent on stdin; a refusal throws, and the model reads the reason). After it, runs
 // the discipline check and, when it fails, appends the report to the tool's output so
@@ -10,9 +10,13 @@ import { $ } from "bun"
 const EDIT_TOOLS = ["edit", "write", "apply_patch"]
 // OpenCode 2.x names its shell tool `shell`; 1.x named it `bash`.
 const SHELL_TOOLS = ["bash", "shell"]
+// 1.x: a shell call's arguments, kept from `tool.execute.before` for `tool.execute.after`.
+const SHELL_ARGS = new Map()
 const HOOK_TIMEOUT_MS = 30_000
 const CHECK_TIMEOUT_MS = 120_000
 
+// Stops waiting for `p` after `ms`. It cannot kill the command: Bun's `$` gives no handle
+// to the child process, so a command that outlives the timeout runs on until it exits.
 const withTimeout = (p, ms) => {
   let timer
   const limit = new Promise((_, reject) => {
@@ -34,11 +38,28 @@ export const Discipline = async ({ $, directory }) => ({
   "tool.execute.before": async (input, output) => {
     try {
       if (!EDIT_TOOLS.includes(input.tool) && input.tool !== "bash") return
+      if (input.tool === "bash" && input.callID) {
+        if (SHELL_ARGS.size > 256) SHELL_ARGS.clear()
+        SHELL_ARGS.set(input.callID, output?.args)
+      }
       const call = new Response(JSON.stringify({ input, output, cwd: directory }))
       await withTimeout($`discipline hook run --agent opencode --event pre-tool --observe < ${call}`.cwd(directory).nothrow().quiet(), HOOK_TIMEOUT_MS)
     } catch {}
   },
   "tool.execute.after": async (input, output) => {
+    if (SHELL_TOOLS.includes(input.tool)) {
+      try {
+        const args = input.args ?? SHELL_ARGS.get(input.callID) ?? {}
+        SHELL_ARGS.delete(input.callID)
+        const ran = new Response(JSON.stringify({
+          input: { tool: input.tool, sessionID: input.sessionID },
+          output: { args, metadata: output?.metadata, output: output?.output },
+          cwd: directory
+        }))
+        await withTimeout($`discipline hook run --agent opencode --event post-tool < ${ran}`.cwd(directory).nothrow().quiet(), HOOK_TIMEOUT_MS)
+      } catch {}
+      return
+    }
     try {
       if (!EDIT_TOOLS.includes(input.tool)) return
       const r = await withTimeout($`discipline hook run --agent opencode --observe`.cwd(directory).nothrow().quiet(), CHECK_TIMEOUT_MS)
@@ -92,6 +113,25 @@ export default {
     })
 
     tool?.hook?.("execute.after", async (call) => {
+      const shellName = call.tool ?? call.input?.tool
+      if (SHELL_TOOLS.includes(shellName)) {
+        try {
+          const text = Array.isArray(call.result?.content)
+            ? call.result.content.filter((c) => typeof c?.text === "string").map((c) => c.text).join("\n")
+            : call.result?.output
+          const ran = new Response(JSON.stringify({
+            input: { tool: shellName, sessionID: call.sessionID },
+            output: {
+              args: call.input ?? {},
+              metadata: call.result?.metadata,
+              output: typeof text === "string" ? text : undefined
+            },
+            cwd: directory
+          }))
+          await withTimeout($`discipline hook run --agent opencode --event post-tool < ${ran}`.cwd(directory).nothrow().quiet(), HOOK_TIMEOUT_MS)
+        } catch {}
+        return
+      }
       try {
         const toolName = call.tool ?? call.input?.tool
         if (!EDIT_TOOLS.includes(toolName)) return
