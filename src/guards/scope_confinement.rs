@@ -2,87 +2,148 @@
 //!
 //! Restricts agent modifications strictly within authorized directory and file paths.
 
+use crate::findings::FindingKind;
+use crate::gitctx::{ChangeKind, ChangedFile};
 use crate::guards::{Context, GateOutcome, PathFilter};
 use crate::tokens::ALLOW_SCOPE;
 use anyhow::Result;
 
 pub const GATE: &str = "scope-confinement";
 
+/// The compiled path rules of `[gates.scope-confinement]`.
+pub struct ScopeRules {
+    pub exempt: PathFilter,
+    pub allowed: PathFilter,
+    pub has_allowed: bool,
+    pub forbidden: PathFilter,
+}
+
+impl ScopeRules {
+    /// Compiles the globs. A malformed glob is a configuration error (exit 2), never a
+    /// silently skipped pattern that would let a forbidden path pass.
+    pub fn new(exempt: &[String], allowed: &[String], forbidden: &[String]) -> Result<Self> {
+        Ok(Self {
+            exempt: PathFilter::new(exempt)?,
+            allowed: PathFilter::new(allowed)?,
+            has_allowed: !allowed.is_empty(),
+            forbidden: PathFilter::new(forbidden)?,
+        })
+    }
+
+    /// `"forbidden"`, `"outside-allowed"`, or `None` for a path inside the scope.
+    pub fn breach(&self, path: &str) -> Option<&'static str> {
+        check_path_confinement(
+            path,
+            &self.exempt,
+            &self.allowed,
+            self.has_allowed,
+            &self.forbidden,
+        )
+    }
+}
+
+/// One path of a change that leaves the scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathBreach {
+    /// The path judged: the changed path, or the source of a rename.
+    pub path: String,
+    /// `"forbidden"` or `"outside-allowed"`.
+    pub breach: &'static str,
+    /// For the source of a rename, where it moved to.
+    pub renamed_to: Option<String>,
+}
+
+/// The paths of `file` that leave the scope. A change lands at its path; a rename also
+/// removes its source, which is judged the same as a deletion of it would be.
+pub fn changed_file_breaches(file: &ChangedFile, rules: &ScopeRules) -> Vec<PathBreach> {
+    let mut out = Vec::new();
+    if let Some(breach) = rules.breach(&file.path) {
+        out.push(PathBreach {
+            path: file.path.clone(),
+            breach,
+            renamed_to: None,
+        });
+    }
+    if matches!(file.kind, ChangeKind::Renamed) && file.old_path != file.path {
+        if let Some(breach) = rules.breach(&file.old_path) {
+            out.push(PathBreach {
+                path: file.old_path.clone(),
+                breach,
+                renamed_to: Some(file.path.clone()),
+            });
+        }
+    }
+    out
+}
+
+/// The outputs a plan declares that leave the scope, as `(line, path, breach)`.
+pub fn planned_output_breaches(
+    content: &str,
+    rules: &ScopeRules,
+) -> Vec<(usize, String, &'static str)> {
+    extract_planned_outputs(content)
+        .into_iter()
+        .filter_map(|(line, path)| rules.breach(&path).map(|b| (line, path, b)))
+        .collect()
+}
+
 /// Evaluates git diff paths against authorized and forbidden scope rules.
 pub fn evaluate_scope_confinement(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.scope_confinement;
     let mut out = GateOutcome::new(GATE);
 
-    let changed = ctx.git.changed_files()?;
+    // Symlinks count here: a link added under a forbidden directory changes it.
+    let changed = ctx.git.changed_files_including_symlinks()?;
     out.examined = changed.len();
 
     if changed.is_empty() {
         return Ok(out);
     }
 
-    // A malformed glob is a configuration error (exit 2), never a silently
-    // skipped pattern that would let a forbidden path pass.
-    let exempt = PathFilter::new(&settings.exempt_paths)?;
-
-    // Build allowed paths filter (if non-empty)
-    let has_allowed = !settings.allowed_paths.is_empty();
-    let allowed = PathFilter::new(&settings.allowed_paths)?;
-
-    // Build forbidden paths filter
-    let forbidden = PathFilter::new(&settings.forbidden_paths)?;
+    let rules = ScopeRules::new(
+        &settings.exempt_paths,
+        &settings.allowed_paths,
+        &settings.forbidden_paths,
+    )?;
 
     for file in &changed {
-        if exempt.matches(&file.path) {
-            continue;
-        }
-
-        // 1. Check forbidden paths first
-        if forbidden.matches(&file.path) {
-            if let Some(ov) = ctx.find_override(
-                GATE,
-                &crate::findings::FILE_IN_FORBIDDEN_SCOPE,
-                ALLOW_SCOPE,
-                &file.path,
-            ) {
-                out.overrides.push(ov.clone());
-                out.notes.push(format!(
-                    "override applied: `{}: {}` for forbidden file `{}` ({})",
-                    ov.directive, ov.reason, file.path, ov.source
-                ));
-            } else {
-                out.add_violation(
-                    ctx.overridable(settings.severity),
-&crate::findings::FILE_IN_FORBIDDEN_SCOPE,
-                    &file.path,
-                    1,
-                    format!("file `{}` is inside forbidden scope", file.path),
+        for b in changed_file_breaches(file, &rules) {
+            let (kind, what, hint): (&'static FindingKind, &str, &str) = match b.breach {
+                "forbidden" => (
+                    &crate::findings::FILE_IN_FORBIDDEN_SCOPE,
+                    "inside forbidden scope",
                     "changes to this path are forbidden by [gates.scope-confinement.forbidden_paths]; use `discipline:allow(scope-confinement): <reason>` to waive",
-                );
-            }
-            continue;
-        }
-
-        // 2. Check allowed paths if configured
-        if has_allowed && !allowed.matches(&file.path) {
-            if let Some(ov) = ctx.find_override(
-                GATE,
-                &crate::findings::FILE_OUTSIDE_AUTHORIZED_SCOPE,
-                ALLOW_SCOPE,
-                &file.path,
-            ) {
+                ),
+                _ => (
+                    &crate::findings::FILE_OUTSIDE_AUTHORIZED_SCOPE,
+                    "outside authorized scope",
+                    "file is not included in [gates.scope-confinement.allowed_paths]; use `discipline:allow(scope-confinement): <reason>` to waive",
+                ),
+            };
+            let moved = b
+                .renamed_to
+                .as_deref()
+                .map(|to| format!(" (renamed to `{to}`)"))
+                .unwrap_or_default();
+            if let Some(ov) = ctx.find_override(GATE, kind, ALLOW_SCOPE, &b.path) {
                 out.overrides.push(ov.clone());
+                let label = if b.breach == "forbidden" {
+                    "forbidden"
+                } else {
+                    "out-of-scope"
+                };
                 out.notes.push(format!(
-                    "override applied: `{}: {}` for out-of-scope file `{}` ({})",
-                    ov.directive, ov.reason, file.path, ov.source
+                    "override applied: `{}: {}` for {label} file `{}`{moved} ({})",
+                    ov.directive, ov.reason, b.path, ov.source
                 ));
             } else {
                 out.add_violation(
                     ctx.overridable(settings.severity),
-&crate::findings::FILE_OUTSIDE_AUTHORIZED_SCOPE,
-                    &file.path,
+                    kind,
+                    &b.path,
                     1,
-                    format!("file `{}` is outside authorized scope", file.path),
-                    "file is not included in [gates.scope-confinement.allowed_paths]; use `discipline:allow(scope-confinement): <reason>` to waive",
+                    format!("file `{}`{moved} is {what}", b.path),
+                    hint,
                 );
             }
         }
@@ -97,13 +158,16 @@ pub fn evaluate_scope_confinement(ctx: &Context) -> Result<GateOutcome> {
             if file.is_deleted() || !plan_filter.matches(&file.path) {
                 continue;
             }
+            // A plan is read for its text; a symlinked plan is its target, read there.
+            if ctx.git.is_symlink(&file.path)? {
+                continue;
+            }
             plan_files_examined += 1;
             let Some(content) = ctx.git.head_content(&file.path)? else {
                 continue;
             };
 
-            let planned = extract_planned_outputs(&content);
-            if planned.is_empty() {
+            if extract_planned_outputs(&content).is_empty() {
                 if settings.require_declared_outputs {
                     out.add_violation(
                         ctx.overridable(settings.severity),
@@ -117,60 +181,44 @@ pub fn evaluate_scope_confinement(ctx: &Context) -> Result<GateOutcome> {
                     out.notes
                         .push(format!("plan `{}` declared no output paths", file.path));
                 }
-            } else {
-                for (line_num, path) in planned {
-                    if exempt.matches(&path) {
-                        continue;
-                    }
-
-                    if forbidden.matches(&path) {
-                        if let Some(ov) = ctx.find_override(
-                            GATE,
-                            &crate::findings::PLANNED_FILE_IN_FORBIDDEN_SCOPE,
-                            ALLOW_SCOPE,
-                            &path,
-                        ) {
-                            out.overrides.push(ov.clone());
-                            out.notes.push(format!(
-                                "override applied: `{}: {}` for forbidden planned file `{}` ({})",
-                                ov.directive, ov.reason, path, ov.source
-                            ));
-                        } else {
-                            out.add_violation(
-                                ctx.overridable(settings.severity),
-                                &crate::findings::PLANNED_FILE_IN_FORBIDDEN_SCOPE,
-                                &file.path,
-                                line_num,
-                                format!("planned output `{}` is inside forbidden scope", path),
-                                "changes to this path are forbidden by [gates.scope-confinement.forbidden_paths]; use `discipline:allow(scope-confinement): <reason>` or `allow-scope: <path> <reason>` to waive",
-                            );
-                        }
-                        continue;
-                    }
-
-                    if has_allowed && !allowed.matches(&path) {
-                        if let Some(ov) = ctx.find_override(
-                            GATE,
-                            &crate::findings::PLANNED_FILE_OUTSIDE_AUTHORIZED_SCOPE,
-                            ALLOW_SCOPE,
-                            &path,
-                        ) {
-                            out.overrides.push(ov.clone());
-                            out.notes.push(format!(
-                                "override applied: `{}: {}` for out-of-scope planned file `{}` ({})",
-                                ov.directive, ov.reason, path, ov.source
-                            ));
-                        } else {
-                            out.add_violation(
-                                ctx.overridable(settings.severity),
-                                &crate::findings::PLANNED_FILE_OUTSIDE_AUTHORIZED_SCOPE,
-                                &file.path,
-                                line_num,
-                                format!("planned output `{}` is outside authorized scope", path),
-                                "planned output is not included in [gates.scope-confinement.allowed_paths]; use `discipline:allow(scope-confinement): <reason>` or `allow-scope: <path> <reason>` to waive",
-                            );
-                        }
-                    }
+                continue;
+            }
+            for (line_num, path, breach) in planned_output_breaches(&content, &rules) {
+                let forbidden = breach == "forbidden";
+                let kind: &'static FindingKind = if forbidden {
+                    &crate::findings::PLANNED_FILE_IN_FORBIDDEN_SCOPE
+                } else {
+                    &crate::findings::PLANNED_FILE_OUTSIDE_AUTHORIZED_SCOPE
+                };
+                if let Some(ov) = ctx.find_override(GATE, kind, ALLOW_SCOPE, &path) {
+                    out.overrides.push(ov.clone());
+                    let label = if forbidden {
+                        "forbidden planned"
+                    } else {
+                        "out-of-scope planned"
+                    };
+                    out.notes.push(format!(
+                        "override applied: `{}: {}` for {label} file `{}` ({})",
+                        ov.directive, ov.reason, path, ov.source
+                    ));
+                } else if forbidden {
+                    out.add_violation(
+                        ctx.overridable(settings.severity),
+                        kind,
+                        &file.path,
+                        line_num,
+                        format!("planned output `{}` is inside forbidden scope", path),
+                        "changes to this path are forbidden by [gates.scope-confinement.forbidden_paths]; use `discipline:allow(scope-confinement): <reason>` or `allow-scope: <path> <reason>` to waive",
+                    );
+                } else {
+                    out.add_violation(
+                        ctx.overridable(settings.severity),
+                        kind,
+                        &file.path,
+                        line_num,
+                        format!("planned output `{}` is outside authorized scope", path),
+                        "planned output is not included in [gates.scope-confinement.allowed_paths]; use `discipline:allow(scope-confinement): <reason>` or `allow-scope: <path> <reason>` to waive",
+                    );
                 }
             }
         }
@@ -441,6 +489,79 @@ mod tests {
             &forbidden
         )
         .is_none());
+    }
+
+    fn renamed(from: &str, to: &str) -> crate::gitctx::ChangedFile {
+        crate::gitctx::ChangedFile {
+            path: to.to_string(),
+            old_path: from.to_string(),
+            kind: crate::gitctx::ChangeKind::Renamed,
+            added_lines: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_rename_is_judged_at_its_source_and_its_destination() {
+        use super::{changed_file_breaches, PathBreach, ScopeRules};
+        let rules = ScopeRules::new(&[], &[], &["secure/**".to_string()]).unwrap();
+        assert_eq!(
+            changed_file_breaches(&renamed("secure/p.py", "src/p.py"), &rules),
+            vec![PathBreach {
+                path: "secure/p.py".to_string(),
+                breach: "forbidden",
+                renamed_to: Some("src/p.py".to_string()),
+            }]
+        );
+        assert_eq!(
+            changed_file_breaches(&renamed("src/p.py", "secure/p.py"), &rules),
+            vec![PathBreach {
+                path: "secure/p.py".to_string(),
+                breach: "forbidden",
+                renamed_to: None,
+            }]
+        );
+        // Control: a rename that stays outside the forbidden directory.
+        assert!(changed_file_breaches(&renamed("src/p.py", "lib/p.py"), &rules).is_empty());
+
+        // An allow-list: moving a file in from outside it removes a file outside it.
+        let allowed = ScopeRules::new(&[], &["src/**".to_string()], &[]).unwrap();
+        let found = changed_file_breaches(&renamed("ops/run.sh", "src/run.sh"), &allowed);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(
+            (found[0].path.as_str(), found[0].breach),
+            ("ops/run.sh", "outside-allowed")
+        );
+    }
+
+    /// Only the accessor `scope-confinement` uses lists a new symlink; every other gate
+    /// keeps reading `changed_files`, which skips it.
+    #[test]
+    fn only_the_symlink_accessor_lists_a_new_symlink() {
+        let (_dir, git) =
+            crate::gitctx::test_support::repo_with_files(&[("src/lib.rs", "pub fn a() {}\n")], &[]);
+        std::fs::create_dir_all(git.root().join("secure")).unwrap();
+        std::os::unix::fs::symlink("../src/lib.rs", git.root().join("secure/link.rs")).unwrap();
+        let repo = git2::Repository::open(git.root()).unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add_path(std::path::Path::new("secure/link.rs"))
+            .unwrap();
+        index.write().unwrap();
+
+        let plain: Vec<String> = git
+            .changed_files()
+            .unwrap()
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
+        let with_links: Vec<String> = git
+            .changed_files_including_symlinks()
+            .unwrap()
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
+        assert!(plain.is_empty(), "{plain:?}");
+        assert_eq!(with_links, vec!["secure/link.rs".to_string()]);
     }
 
     #[test]

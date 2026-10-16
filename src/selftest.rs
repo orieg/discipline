@@ -9537,14 +9537,35 @@ proptest! {
         },
     ),
     (
-        "scope-confinement: extracts planned outputs from front-matter and list sections",
+        "scope-confinement: a planned output and a rename source in a forbidden path are reported; outputs and renames inside the scope are not",
         || {
-            use crate::guards::scope_confinement::extract_planned_outputs;
-            let text = "# Plan\n\nOutputs:\n- `src/core.rs`\n- `docs/index.md`\n";
-            let outputs = extract_planned_outputs(text);
-            Ok(outputs.len() == 2
-                && outputs[0].1 == "src/core.rs"
-                && outputs[1].1 == "docs/index.md")
+            use crate::gitctx::{ChangeKind, ChangedFile};
+            use crate::guards::scope_confinement::{changed_file_breaches, planned_output_breaches, ScopeRules};
+            let rules = ScopeRules::new(&[], &[], &["secure/**".to_string()])?;
+            // Plan mode. Positive control: one declared output is forbidden.
+            let bad_plan = planned_output_breaches(
+                "# Plan\n\nOutputs:\n- `src/core.rs`\n- `secure/policy.py`\n",
+                &rules,
+            );
+            // Negative control: every declared output is inside the scope.
+            let good_plan = planned_output_breaches(
+                "# Plan\n\nOutputs:\n- `src/core.rs`\n- `docs/index.md`\n",
+                &rules,
+            );
+            let moved = |from: &str, to: &str| ChangedFile {
+                path: to.to_string(),
+                old_path: from.to_string(),
+                kind: ChangeKind::Renamed,
+                added_lines: Default::default(),
+            };
+            // A rename out of the forbidden directory is judged at its source.
+            let out_of = changed_file_breaches(&moved("secure/policy.py", "src/policy.py"), &rules);
+            let inside = changed_file_breaches(&moved("src/a.py", "src/b.py"), &rules);
+            Ok(bad_plan == [(5, "secure/policy.py".to_string(), "forbidden")]
+                && good_plan.is_empty()
+                && out_of.len() == 1
+                && out_of[0].path == "secure/policy.py"
+                && inside.is_empty())
         },
     ),
     (

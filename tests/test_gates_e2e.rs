@@ -14869,6 +14869,95 @@ forbidden_paths = [".github/**"]
     assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
 }
 
+const SCOPE_SECURE_FORBIDDEN: &str = "[meta]\nversion = 1\nname = \"t\"\n\n[gates.scope-confinement]\nenabled = true\nforbidden_paths = [\"secure/**\"]\n";
+
+/// The `scope-confinement` findings of `run` as `(code, message)`.
+fn scope_findings(run: &Run) -> Vec<(String, String)> {
+    run.violations("scope-confinement")
+        .into_iter()
+        .map(|v| {
+            (
+                v["code"].as_str().unwrap().to_string(),
+                v["message"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+/// Moving a file out of a forbidden directory removes it from there: the rename's source
+/// is judged as well as its destination, the same as a deletion would be.
+#[test]
+fn scope_confinement_rename_out_of_a_forbidden_path_is_reported() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", SCOPE_SECURE_FORBIDDEN),
+            ("secure/policy.py", "ALLOW_ALL = False\n"),
+        ],
+        "base: forbid secure/",
+    );
+    repo.git(&["mv", "secure/policy.py", "src/policy.py"]);
+    repo.commit("refactor: move the policy");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let found = scope_findings(&run);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].0, "scope-confinement/file-in-forbidden-scope");
+    assert!(
+        found[0].1.contains("`secure/policy.py`") && found[0].1.contains("src/policy.py"),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn scope_confinement_rename_into_a_forbidden_path_is_reported() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", SCOPE_SECURE_FORBIDDEN),
+            ("src/helper.py", "def helper():\n    return 1\n"),
+        ],
+        "base: forbid secure/",
+    );
+    std::fs::create_dir_all(repo.path().join("secure")).unwrap();
+    repo.git(&["mv", "src/helper.py", "secure/helper.py"]);
+    repo.commit("refactor: move the helper");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let found = scope_findings(&run);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].0, "scope-confinement/file-in-forbidden-scope");
+    assert!(found[0].1.contains("`secure/helper.py`"), "{found:?}");
+}
+
+/// A symlink is a change to the directory it is added to, though other gates read it as
+/// its target and skip it.
+#[test]
+fn scope_confinement_new_symlink_in_a_forbidden_path_is_reported() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", SCOPE_SECURE_FORBIDDEN),
+            ("secure/policy.py", "ALLOW_ALL = False\n"),
+        ],
+        "base: forbid secure/",
+    );
+    std::os::unix::fs::symlink("../src/lib.rs", repo.path().join("secure/override.py")).unwrap();
+    repo.commit("feat: link an override");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let found = scope_findings(&run);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].1.contains("`secure/override.py`"), "{found:?}");
+
+    // Control: the same link outside the forbidden directory passes.
+    repo.git(&["rm", "-q", "secure/override.py"]);
+    std::os::unix::fs::symlink("lib.rs", repo.path().join("src/alias.rs")).unwrap();
+    repo.commit("feat: link outside secure/");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+}
+
 #[test]
 fn scope_confinement_invalid_glob_is_could_not_check_not_a_pass() {
     let repo = Repo::new();

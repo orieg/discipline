@@ -942,8 +942,11 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Rule:** Agent modifications must remain strictly within configured authorized directory and file paths (`allowed_paths`) and never touch restricted paths (`forbidden_paths`).
 - **Languages:** Any.
 - **What it catches:**
-  - Modifications touching paths outside `allowed_paths`.
-  - Modifications touching paths matching `forbidden_paths` (e.g. security credentials, CI workflow definitions, release scripts).
+  - Modifications touching paths outside `allowed_paths` (`file-outside-authorized-scope`).
+  - Modifications touching paths matching `forbidden_paths` (e.g. security credentials, CI workflow definitions, release scripts) (`file-in-forbidden-scope`).
+  - Renames, judged at both ends: `git mv secure/policy.py src/` removes a file from `secure/`, so it is reported against `secure/policy.py` (the message names where it moved), as deleting it would be; a rename into a forbidden path is reported at its destination.
+  - Symlinks added, retargeted or removed inside a forbidden path, or outside `allowed_paths`. The link itself is the change; other gates read a symlink as its target and skip it.
+  - **Plan mode** (`check_plans = true`): each changed plan file matching `plan_paths` is read for the outputs it declares (an `outputs:` front-matter list, an `Outputs:` / `Produces:` / `Writes:` label or heading with its list, or `into` / `update` / `create` / `write to` followed by a path). A declared output inside `forbidden_paths` is `planned-file-in-forbidden-scope`, one outside `allowed_paths` is `planned-file-outside-authorized-scope`, both reported on the plan's line. With `require_declared_outputs = true`, a plan that declares no output is `plan-without-declared-outputs`; otherwise it is a note.
 - **Passing commit / PR body (accepted):**
   ```text
   allow-scope: deploy/ authorized infra migration across deploy scripts
@@ -951,6 +954,8 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **What it does NOT catch:**
   - Files exempted via `exempt_paths`.
   - Modifications when `allowed_paths` is empty and no `forbidden_paths` are matched.
+  - A write through a symlink that lives outside the forbidden path and points into it: the change is to the target file, which is judged at its own path only when the target itself changes in the diff.
+  - Plan outputs written in a form the extractor does not read (prose without a path-like token, a path with spaces).
 - **Lifting directive:** `allow-scope: <path-or-directory/> <reason>` (a directory prefix is written with its slash).
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `allowed_paths`, `forbidden_paths`, `check_plans`, `plan_paths`, `require_declared_outputs`.
 

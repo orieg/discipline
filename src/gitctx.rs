@@ -929,6 +929,18 @@ impl GitCtx {
     }
 
     pub fn changed_files(&self) -> Result<Vec<ChangedFile>> {
+        self.changed_files_with(false)
+    }
+
+    /// [`GitCtx::changed_files`] with symlinks added, changed or removed included (each
+    /// as its own path, not its target). For a gate that judges where a change lands,
+    /// such as `scope-confinement`: a link added under a forbidden directory changes that
+    /// directory. Gates that read file content keep using `changed_files`.
+    pub fn changed_files_including_symlinks(&self) -> Result<Vec<ChangedFile>> {
+        self.changed_files_with(true)
+    }
+
+    fn changed_files_with(&self, include_symlinks: bool) -> Result<Vec<ChangedFile>> {
         let tree = self.base_tree()?;
         let mut opts = DiffOptions::new();
         opts.context_lines(0);
@@ -956,8 +968,9 @@ impl GitCtx {
             }
             // A symlink (`CLAUDE.md -> AGENTS.md`) is its target, which is enumerated on
             // its own; `tracked_files` skips symlinks for the same reason.
-            if delta.new_file().mode() == git2::FileMode::Link
-                || delta.old_file().mode() == git2::FileMode::Link
+            if !include_symlinks
+                && (delta.new_file().mode() == git2::FileMode::Link
+                    || delta.old_file().mode() == git2::FileMode::Link)
             {
                 continue;
             }
