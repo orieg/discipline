@@ -626,3 +626,23 @@ fn verified_stop_refuses_a_stop_whose_refusal_cannot_be_recorded() {
     );
     assert!(r.stderr.contains("no session id"), "{}", r.stderr);
 }
+
+/// Audit (verified-stop defaults): with `run_at_stop = true` and no command configured,
+/// only the default runners whose ecosystem marker exists are run. A repository with
+/// none of them is refused with a message that says so, rather than with `cargo test`.
+#[test]
+fn verified_stop_run_at_stop_without_a_command_or_a_marker_names_the_gap() {
+    let repo = verified_stop_repo("run_at_stop = true\n");
+    let stop_payload = recorded_stop("claude-code/stop.json", |v| {
+        v["cwd"] = repo.path().display().to_string().into();
+        v["session_id"] = "sess-defaults".into();
+        v["last_assistant_message"] = "All done.".into();
+    });
+    let r = hook(&repo, &["--agent", "claude-code"], &stop_payload);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert!(
+        r.stderr.contains("no verification command applies"),
+        "{}",
+        r.stderr
+    );
+}

@@ -774,7 +774,7 @@ fn witness_post_tool(agent: Agent, dir: &Path, side: &CheckSide, stdin: &str) {
         return;
     }
     let base_cfg = base_discipline_config(dir, side).unwrap_or_default();
-    let vouched = crate::session::vouched_commands(&base_cfg);
+    let vouched = crate::session::vouched_commands(&base_cfg, dir, side_base_name(side));
     let Some(command_id) = crate::session::matches_vouched_command(cmd, &vouched) else {
         return;
     };
@@ -830,6 +830,9 @@ pub fn post_tool_with(
     pass
 }
 
+/// The line a verified-stop refusal carries when no command can verify the tree.
+const NO_VERIFICATION_COMMAND: &str = "discipline: no verification command applies to this repository: the base ref sets no [hooks.verified-stop].commands, [gates.command] or [gates.test-floor] test_command, and its root has none of Cargo.toml, pyproject.toml, setup.py, pytest.ini, package.json or go.mod. Set [hooks.verified-stop].commands on the base branch.\n";
+
 /// `[hooks.verified-stop]` (`#700`): at the end of a turn, once the change check has
 /// passed, check that a vouched verification command has passed on the current
 /// working-tree digest when in-scope files have changed.
@@ -872,7 +875,7 @@ fn verified_stop(
         return None;
     }
 
-    let vouched = crate::session::vouched_commands(&base_cfg);
+    let vouched = crate::session::vouched_commands(&base_cfg, dir, side_base_name(side));
     if config.run_at_stop && digest != "unreadable-tree" && !vouched.is_empty() {
         let mut all_passed = true;
         for cmd in &vouched {
@@ -908,7 +911,10 @@ fn verified_stop(
     }
 
     let code = crate::turn::TurnKind::UnverifiedDirtyTree.code();
-    let expected_cmd = vouched.first().map(String::as_str).unwrap_or("cargo test");
+    let expected_cmd = vouched
+        .first()
+        .map(String::as_str)
+        .unwrap_or("no verification command is configured");
     let mut out = translate_event(agent, Event::Stop, 0, "", "");
     if observe || config.mode == crate::config::StopMode::Observe {
         let logged = append_observation(
@@ -965,6 +971,9 @@ fn verified_stop(
         sentence: expected_cmd.to_string(),
     };
     let mut text = verdict.refusal();
+    if vouched.is_empty() {
+        text.push_str(NO_VERIFICATION_COMMAND);
+    }
     if let Some(why) = unrecorded {
         text.push_str(&format!(
             "discipline: this refusal could not be recorded against the session's cap ({why}); the stop is refused, and the agent's own loop guard bounds it.\n"

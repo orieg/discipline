@@ -399,9 +399,16 @@ pub fn tool_input_digest(tool_name: &str, input: &serde_json::Value) -> String {
 /// 1. `base_config.hooks.verified_stop.commands`
 /// 2. `base_config.gates.command` (`command`, `preset`, `commands`)
 /// 3. `base_config.gates.test_floor.test_command`
-/// 4. If none of the above are configured on the base ref, defaults to the standard
-///    test runner invocations (`cargo test`, `pytest`, `npm test`, `go test ./...`).
-pub fn vouched_commands(base: &crate::config::DisciplineConfig) -> Vec<String> {
+/// 4. If none of the above are configured on the base ref, the standard test runner
+///    invocations whose ecosystem marker is at the root of the base tree
+///    ([`default_commands`]: `cargo test` for `Cargo.toml`, `pytest` for
+///    `pyproject.toml`, `setup.py` or `pytest.ini`, `npm test` for `package.json`,
+///    `go test ./...` for `go.mod`). Empty when none applies.
+pub fn vouched_commands(
+    base: &crate::config::DisciplineConfig,
+    dir: &Path,
+    base_ref: Option<&str>,
+) -> Vec<String> {
     let mut out = Vec::new();
     for cmd in &base.hooks.verified_stop.commands {
         let trimmed = cmd.trim();
@@ -469,11 +476,40 @@ pub fn vouched_commands(base: &crate::config::DisciplineConfig) -> Vec<String> {
         }
     }
     if out.is_empty() {
-        for default_cmd in ["cargo test", "pytest", "npm test", "go test ./..."] {
-            out.push(default_cmd.to_string());
-        }
+        out = default_commands(dir, base_ref);
     }
     out
+}
+
+/// The default test runners, each with the files that mark its ecosystem at the root of
+/// the working tree.
+const DEFAULT_COMMANDS: &[(&str, &[&str])] = &[
+    ("cargo test", &["Cargo.toml"]),
+    ("pytest", &["pyproject.toml", "setup.py", "pytest.ini"]),
+    ("npm test", &["package.json"]),
+    ("go test ./...", &["go.mod"]),
+];
+
+/// The default runners whose ecosystem marker is a file at the root of the base tree (the
+/// tree [`tree_digest`] compares against) of the repository containing `dir`; empty when
+/// none is. The base side decides, as it does for the configuration: a marker the change
+/// adds (a `package.json` whose `test` script prints a passing line) vouches for nothing.
+pub fn default_commands(dir: &Path, base_ref: Option<&str>) -> Vec<String> {
+    let Ok(repo) = crate::gitctx::discover_repository(dir) else {
+        return Vec::new();
+    };
+    let Ok(tree) = resolve_base_tree(&repo, base_ref) else {
+        return Vec::new();
+    };
+    let is_file = |name: &str| {
+        tree.get_name(name)
+            .is_some_and(|e| e.kind() == Some(git2::ObjectType::Blob))
+    };
+    DEFAULT_COMMANDS
+        .iter()
+        .filter(|(_, markers)| markers.iter().any(|m| is_file(m)))
+        .map(|(cmd, _)| cmd.to_string())
+        .collect()
 }
 
 /// Whether `cmd` is a single simple shell command with no pipelines, lists (`&&`, `||`, `;`),
@@ -635,6 +671,48 @@ mod tests {
             "running 0 tests\ntest result: ok. 0 passed; 0 failed\nrunning 4 tests\ntest result: ok. 4 passed; 0 failed\n"
         ));
         assert!(output_is_vacuous("==== no tests ran in 0.01s ===="));
+    }
+
+    /// A repository at `dir` with one commit on `main` holding `files`, and `added`
+    /// written to the working tree only.
+    fn repo_with(dir: &Path, files: &[&str], added: &[&str]) {
+        let repo = git2::Repository::init(dir).unwrap();
+        let mut index = repo.index().unwrap();
+        for f in files {
+            std::fs::write(dir.join(f), "x\n").unwrap();
+            index.add_path(Path::new(f)).unwrap();
+        }
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.invalid").unwrap();
+        repo.commit(Some("refs/heads/main"), &sig, &sig, "base", &tree, &[])
+            .unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+        for f in added {
+            std::fs::write(dir.join(f), "x\n").unwrap();
+        }
+    }
+
+    /// Audit (verified-stop defaults): with no command configured, only the runners whose
+    /// ecosystem marker is in the base tree are vouched, and a marker the change adds to
+    /// the working tree vouches for nothing.
+    #[test]
+    fn default_commands_follow_the_base_trees_ecosystem_markers() {
+        let base = crate::config::DisciplineConfig::default();
+        let rust = tempfile::tempdir().unwrap();
+        repo_with(rust.path(), &["Cargo.toml"], &["package.json"]);
+        assert_eq!(
+            vouched_commands(&base, rust.path(), Some("main")),
+            vec!["cargo test".to_string()]
+        );
+        let none = tempfile::tempdir().unwrap();
+        repo_with(none.path(), &["README.md"], &["go.mod"]);
+        assert!(vouched_commands(&base, none.path(), Some("main")).is_empty());
+        let mixed = tempfile::tempdir().unwrap();
+        repo_with(mixed.path(), &["setup.py", "go.mod"], &[]);
+        assert_eq!(
+            vouched_commands(&base, mixed.path(), Some("main")),
+            vec!["pytest".to_string(), "go test ./...".to_string()]
+        );
     }
 
     #[test]
