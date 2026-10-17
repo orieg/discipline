@@ -2375,6 +2375,284 @@ fn the_opencode_enforcing_plugin_refuses_a_call_it_could_not_check() {
     );
 }
 
+/// A stand-in for OpenCode 2.x around the generated plugin's end-of-turn handler. Each
+/// scenario sets the plugin up afresh with its own event stream and `session` API, feeds
+/// it events from `events.json` (`tests/fixtures/stop/opencode/turn_events_v2.json`, recorded
+/// with 2.0.28), and records the `hook run --event stop` payloads and what reached
+/// `session.synthetic` and `session.prompt`. `answer` is what the stop command does.
+const OPENCODE_STOP_DRIVER: &str = r#"
+const { readFileSync } = await import("node:fs")
+const recorded = JSON.parse(readFileSync("events.json", "utf8"))
+const BLOCK = JSON.stringify({ decision: "block", reason: "discipline [turn/announced-action-not-taken]: do it now" }) + "\n"
+let answer = async () => ({ exitCode: 0, stdout: "", stderr: "" })
+let stops = []
+globalThis.__shell = (strings, ...args) => {
+  const command = strings.join("<arg>")
+  const run = async () => {
+    if (!command.includes("--event stop")) return { exitCode: 0, stdout: "", stderr: "" }
+    stops.push({ command, payload: JSON.parse(await args[0].text()) })
+    const r = await answer()
+    return { exitCode: r.exitCode, stdout: Buffer.from(r.stdout), stderr: Buffer.from(r.stderr) }
+  }
+  const pending = { cwd: () => pending, nothrow: () => pending, quiet: () => pending, then: (ok, err) => run().then(ok, err) }
+  return pending
+}
+const plugin = await import("./plugin.mjs")
+const settle = () => new Promise((r) => setTimeout(r, 30))
+
+async function scenario({ events, session, behaviour, argv }) {
+  answer = behaviour
+  stops = []
+  const calls = { synthetic: [], prompt: [] }
+  const notices = []
+  const realError = console.error
+  console.error = (...w) => notices.push(w.join(" "))
+  const queued = []
+  let waiting = null
+  const stream = {
+    [Symbol.asyncIterator]: () => ({
+      next: () => queued.length
+        ? Promise.resolve({ value: queued.shift(), done: false })
+        : new Promise((d) => { waiting = d }),
+    }),
+  }
+  const emit = async (e) => {
+    if (waiting) { const d = waiting; waiting = null; d({ value: e, done: false }) } else queued.push(e)
+    await settle()
+  }
+  const api = session === "none" ? undefined : {
+    prompt: async (input) => { calls.prompt.push(input); return { type: "user" } },
+  }
+  if (session === "synthetic" || session === "synthetic-throws") {
+    api.synthetic = async (input) => {
+      calls.synthetic.push(input)
+      if (session === "synthetic-throws") throw new Error("synthetic: not supported")
+      return { type: "synthetic" }
+    }
+  }
+  const realArgv = process.argv
+  if (argv) process.argv = argv
+  let threw = false
+  try {
+    plugin.default.setup({ tool: { hook: () => {} }, event: { subscribe: () => stream }, location: { directory: "/plugin/dir" }, session: api })
+    for (const e of events) await emit(structuredClone(e))
+    await settle()
+  } catch { threw = true }
+  process.argv = realArgv
+  console.error = realError
+  return { stops, calls, notices, threw }
+}
+
+const service = recorded.service
+const firstEnd = service.findIndex((e) => e.type === "session.execution.succeeded")
+const firstTurn = service.slice(0, firstEnd + 1)
+const ok = async () => ({ exitCode: 0, stdout: "", stderr: "" })
+const block = async () => ({ exitCode: 0, stdout: BLOCK, stderr: "" })
+const out = {}
+out.synthetic = await scenario({ events: firstTurn, session: "synthetic", behaviour: block })
+out.syntheticThrows = await scenario({ events: firstTurn, session: "synthetic-throws", behaviour: block })
+out.noSynthetic = await scenario({ events: firstTurn, session: "prompt-only", behaviour: block })
+out.pass = await scenario({ events: firstTurn, session: "synthetic", behaviour: ok })
+out.staleBinary = await scenario({ events: firstTurn, session: "synthetic", behaviour: async () => ({ exitCode: 2, stdout: "", stderr: "error: invalid value 'stop' for '--event <EVENT>'" }) })
+out.refusalOnStderr = await scenario({ events: firstTurn, session: "synthetic", behaviour: async () => ({ exitCode: 2, stdout: "", stderr: "discipline [turn/announced-action-not-taken]: do it now" }) })
+out.throws = await scenario({ events: firstTurn, session: "synthetic", behaviour: async () => { throw new Error("command not found: discipline") } })
+out.noSession = await scenario({ events: firstTurn, session: "none", behaviour: block })
+// The whole recorded session: a refused turn, the continuation, and its end.
+out.service = await scenario({ events: service, session: "synthetic", behaviour: async () => (stops.length === 1 ? block() : ok()) })
+// The person writes again while the check of the first turn runs.
+let release
+out.personSpoke = await scenario({
+  events: [...firstTurn, { type: "session.execution.started", data: { sessionID: firstTurn[0].data.sessionID } }],
+  session: "synthetic",
+  behaviour: () => new Promise((r) => { release = () => r({ exitCode: 0, stdout: BLOCK, stderr: "" }) }),
+})
+release()
+await settle()
+out.personSpoke.calls = out.personSpoke.calls
+// A tool call after the final text: the turn went on, so the text is not its last word.
+const textAt = firstTurn.findIndex((e) => e.type === "session.text.ended")
+const toolAfter = [...firstTurn.slice(0, textAt + 1), firstTurn[1], firstTurn[2], firstTurn.at(-1)]
+out.toolAfter = await scenario({ events: toolAfter, session: "synthetic", behaviour: ok })
+// A plugin loaded mid-turn has not seen the turn start, and sends nothing.
+out.midTurn = await scenario({ events: firstTurn.slice(1), session: "synthetic", behaviour: block })
+// `opencode run --standalone`'s private server (RUN, 2.0.28: `serve --stdio --port 0`).
+out.standalone = await scenario({ events: firstTurn, session: "synthetic", behaviour: ok, argv: JSON.parse(readFileSync("argv.json", "utf8")).plugin_process_argv.standalone })
+console.log(JSON.stringify(out))
+"#;
+
+/// Runs [`OPENCODE_STOP_DRIVER`] against the generated plugin; `None` when `node` is not
+/// installed (said on stderr, as [`run_opencode_plugin`] does).
+fn run_opencode_stop(observe: bool, test: &str) -> Option<serde_json::Value> {
+    if common::script_command("node")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        std::io::stderr()
+            .write_all(
+                format!(
+                    "SKIPPED {test}: `node` is not installed, so the generated OpenCode plugin was not executed\n"
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        return None;
+    }
+    let (_, text) = config_for_mode(Agent::Opencode, observe);
+    let import = "import { $ } from \"bun\"\n";
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("plugin.mjs"),
+        text.replace(import, "const $ = globalThis.__shell\n"),
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("driver.mjs"), OPENCODE_STOP_DRIVER).unwrap();
+    let fixtures = format!(
+        "{}/tests/fixtures/stop/opencode",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    std::fs::copy(
+        format!("{fixtures}/turn_events_v2.json"),
+        dir.path().join("events.json"),
+    )
+    .unwrap();
+    std::fs::copy(
+        format!("{fixtures}/plugin_argv.json"),
+        dir.path().join("argv.json"),
+    )
+    .unwrap();
+    let out = common::script_command("node")
+        .arg("driver.mjs")
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "node driver.mjs: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    Some(serde_json::from_slice(&out.stdout).unwrap())
+}
+
+/// Phase 17 Step 3 (#778): at the end of a recorded OpenCode 2.0.28 turn the plugin sends
+/// `hook run --event stop` the final text and whether a tool call followed it, from the
+/// turn's own directory. Enforcing, a block answer goes back through `session.synthetic`,
+/// through `session.prompt` where that is missing or throws, and nowhere when the person
+/// wrote again meanwhile. Anything other than a block answer on stdout (a pass, a release
+/// that does not know the event, an error) sends nothing, and no error leaves the plugin.
+#[test]
+fn the_opencode_plugin_sends_the_end_of_a_turn_and_re_prompts_a_refusal() {
+    let Some(v) = run_opencode_stop(
+        false,
+        "the_opencode_plugin_sends_the_end_of_a_turn_and_re_prompts_a_refusal",
+    ) else {
+        return;
+    };
+    let reason = "discipline [turn/announced-action-not-taken]: do it now";
+    let first = &v["synthetic"]["stops"];
+    assert_eq!(first.as_array().unwrap().len(), 1, "{v}");
+    assert_eq!(
+        first[0]["command"],
+        "discipline hook run --agent opencode --event stop < <arg>"
+    );
+    assert_eq!(
+        first[0]["payload"],
+        serde_json::json!({
+            "hook_event_name": "Stop",
+            "session_id": "00000000-0000-0000-0000-000000000000",
+            "last_assistant_message": "Now let me run the tests.",
+            "tool_call_followed": false,
+            "standalone": false,
+            "cwd": "/work/repo",
+        })
+    );
+    let sent = serde_json::json!([{ "sessionID": "00000000-0000-0000-0000-000000000000", "text": reason }]);
+    for (scenario, synthetic, prompt) in [
+        ("synthetic", sent.clone(), serde_json::json!([])),
+        ("syntheticThrows", sent.clone(), sent.clone()),
+        ("noSynthetic", serde_json::json!([]), sent.clone()),
+        ("pass", serde_json::json!([]), serde_json::json!([])),
+        ("staleBinary", serde_json::json!([]), serde_json::json!([])),
+        (
+            "refusalOnStderr",
+            serde_json::json!([]),
+            serde_json::json!([]),
+        ),
+        ("throws", serde_json::json!([]), serde_json::json!([])),
+        ("personSpoke", serde_json::json!([]), serde_json::json!([])),
+    ] {
+        assert_eq!(
+            v[scenario]["calls"]["synthetic"], synthetic,
+            "{scenario}: {v}"
+        );
+        assert_eq!(v[scenario]["calls"]["prompt"], prompt, "{scenario}: {v}");
+        assert_eq!(v[scenario]["threw"], false, "{scenario}");
+    }
+    // The whole recorded session: the refused turn and the continuation each end in a
+    // stop; only the first is answered with a block, and only it is sent back.
+    let service = v["service"]["stops"].as_array().unwrap();
+    assert_eq!(service.len(), 2, "{v}");
+    assert!(service[1]["payload"]["last_assistant_message"]
+        .as_str()
+        .unwrap()
+        .starts_with("This repository contains no test files"));
+    assert_eq!(v["service"]["calls"]["synthetic"], sent);
+    // An error is said once on stderr in enforcing mode, and never thrown.
+    for scenario in ["throws", "noSession"] {
+        let notices = v[scenario]["notices"].as_array().unwrap();
+        assert_eq!(notices.len(), 1, "{scenario}: {v}");
+        assert!(
+            notices[0]
+                .as_str()
+                .unwrap()
+                .starts_with("discipline: the end-of-turn check"),
+            "{scenario}"
+        );
+        assert_eq!(v[scenario]["threw"], false, "{scenario}");
+    }
+    assert_eq!(v["synthetic"]["notices"], serde_json::json!([]));
+    assert_eq!(
+        v["toolAfter"]["stops"][0]["payload"]["tool_call_followed"], true,
+        "{v}"
+    );
+    assert_eq!(v["midTurn"]["stops"], serde_json::json!([]), "{v}");
+    assert_eq!(
+        v["standalone"]["stops"][0]["payload"]["standalone"], true,
+        "{v}"
+    );
+}
+
+/// An observe-mode plugin sends the end of a turn with `--observe` and never re-prompts,
+/// whatever the command answers; nothing it does reaches stderr.
+#[test]
+fn the_opencode_observe_plugin_sends_the_end_of_a_turn_and_never_re_prompts() {
+    let Some(v) = run_opencode_stop(
+        true,
+        "the_opencode_observe_plugin_sends_the_end_of_a_turn_and_never_re_prompts",
+    ) else {
+        return;
+    };
+    assert_eq!(
+        v["synthetic"]["stops"][0]["command"],
+        "discipline hook run --agent opencode --event stop --observe < <arg>"
+    );
+    for (scenario, result) in v.as_object().unwrap() {
+        assert_eq!(
+            result["calls"]["synthetic"],
+            serde_json::json!([]),
+            "{scenario}"
+        );
+        assert_eq!(
+            result["calls"]["prompt"],
+            serde_json::json!([]),
+            "{scenario}"
+        );
+        assert_eq!(result["notices"], serde_json::json!([]), "{scenario}");
+        assert_eq!(result["threw"], false, "{scenario}");
+    }
+}
+
 /// Issue 699: `hook install --agent <agent> --enforce` switches a file generated in
 /// observe mode to enforcing mode, keeps an already enforcing file, and refuses an
 /// edited file unless `--force` is given.

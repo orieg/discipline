@@ -231,6 +231,12 @@ pub struct Payload {
     pub transcript_path: Option<PathBuf>,
     /// agy's execution count (`executionNum`).
     pub execution_num: Option<u64>,
+    /// A tool call followed the final message (`tool_call_followed`, which the OpenCode
+    /// plugin reads from the event stream's `session.step.ended` `finish`).
+    pub tool_call_followed: bool,
+    /// The turn ran under `opencode run --standalone` (`standalone`, from the plugin),
+    /// whose process exits before a continuation could run.
+    pub standalone: bool,
 }
 
 pub fn parse_payload(raw: &str) -> Payload {
@@ -289,6 +295,14 @@ pub fn parse_payload(raw: &str) -> Payload {
             .filter(|p| !p.is_empty())
             .map(PathBuf::from),
         execution_num: v.get("executionNum").and_then(|n| n.as_u64()),
+        tool_call_followed: v
+            .get("tool_call_followed")
+            .and_then(|b| b.as_bool())
+            .unwrap_or(false),
+        standalone: v
+            .get("standalone")
+            .and_then(|b| b.as_bool())
+            .unwrap_or(false),
     }
 }
 
@@ -442,7 +456,25 @@ pub fn run_with(
     if_configured: bool,
     observe: bool,
 ) -> Result<HookOutput> {
-    let payload = parse_payload(stdin);
+    run_payload(
+        agent,
+        base,
+        parse_payload(stdin),
+        stdin,
+        if_configured,
+        observe,
+    )
+}
+
+/// [`run_with`] on a payload already read from `stdin`.
+fn run_payload(
+    agent: Agent,
+    base: Option<String>,
+    payload: Payload,
+    stdin: &str,
+    if_configured: bool,
+    observe: bool,
+) -> Result<HookOutput> {
     let event = if payload.stop {
         Event::Stop
     } else {
@@ -513,17 +545,156 @@ pub fn run_with(
     ))
 }
 
+/// `hook run --event stop`: the payload on stdin is the end of a turn, whatever it names.
+/// OpenCode has no stop hook; its plugin reads the turn from the event stream and sends it
+/// here ([`opencode_stop`]). Any other agent's payload is judged as [`run_with`] judges a
+/// stop.
+pub fn stop_with(
+    agent: Agent,
+    base: Option<String>,
+    stdin: &str,
+    if_configured: bool,
+    observe: bool,
+) -> Result<HookOutput> {
+    let mut payload = parse_payload(stdin);
+    payload.stop = true;
+    if agent == Agent::Opencode {
+        return opencode_stop(base, payload, stdin, if_configured, observe);
+    }
+    run_payload(agent, base, payload, stdin, if_configured, observe)
+}
+
+/// The end of an OpenCode 2.x turn, as its plugin read it from `event.subscribe()`
+/// (`session.text.ended` for the final message, `session.step.ended` `finish` for whether a
+/// tool call followed, sent on `session.execution.succeeded`; RUN with 2.0.28,
+/// `tests/fixtures/stop/opencode/`).
+///
+/// Only the end-of-turn checks are its business: when the base ref enables neither
+/// `[hooks.premature-stop]` nor `[hooks.verified-stop]`, the stop passes without running the
+/// change check, which the plugin already runs after every edit. Under `opencode run
+/// --standalone` (`standalone` in the payload) the process exits before a continuation
+/// runs, so the check is skipped and the skip is logged.
+///
+/// OpenCode marks no continuation, so the loop guard is a marker kept here: a refused stop
+/// leaves `<git dir>/discipline/opencode-stop-<session>`, and the next stop of that session
+/// is read as `stop_hook_active` and removes it. Each check's `max_per_session` applies as
+/// for every agent. A refusal is `{"decision": "block", "reason"}` on stdout with exit 0,
+/// which the plugin sends back to the model; anything else (a release that does not know
+/// this event fails with a usage error) is not a refusal and is not sent.
+fn opencode_stop(
+    base: Option<String>,
+    mut payload: Payload,
+    stdin: &str,
+    if_configured: bool,
+    observe: bool,
+) -> Result<HookOutput> {
+    let agent = Agent::Opencode;
+    let pass = translate_event(agent, Event::Stop, 0, "", "");
+    let dir = payload
+        .cwd
+        .clone()
+        .filter(|d| d.is_dir())
+        .unwrap_or_else(|| PathBuf::from("."));
+    if if_configured && !configured(&dir) {
+        return Ok(pass);
+    }
+    let side = match &base {
+        Some(b) => CheckSide::Base(b.clone()),
+        None => CheckSide::Default,
+    };
+    let enabled = base_discipline_config(&dir, &side)
+        .is_some_and(|c| c.hooks.premature_stop.enabled || c.hooks.verified_stop.enabled);
+    if !enabled {
+        return Ok(pass);
+    }
+    if payload.standalone {
+        let logged = append_observation(
+            &dir,
+            &serde_json::json!({
+                "time": crate::lease::now(),
+                "agent": agent.id(),
+                "event": "stop",
+                "verdict": "skipped",
+                "reason": "standalone",
+                "codes": [],
+            }),
+        );
+        let mut out = pass;
+        out.stderr = format!(
+            "discipline: the end-of-turn check was skipped: under `opencode run --standalone` the process exits before a continuation could run.{}\n",
+            logged
+                .map(|p| format!(" Logged to {}.", p.display()))
+                .unwrap_or_default()
+        );
+        return Ok(out);
+    }
+    let marker = payload.session.as_deref().and_then(|s| {
+        let name: String = s
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .take(96)
+            .collect();
+        let repo = crate::gitctx::discover_repository(&dir).ok()?;
+        (!name.is_empty()).then(|| {
+            repo.path()
+                .join("discipline")
+                .join(format!("opencode-stop-{name}"))
+        })
+    });
+    if let Some(m) = marker.as_deref().filter(|m| m.exists()) {
+        payload.stop_hook_active = true;
+        let _removed = std::fs::remove_file(m);
+    }
+    let out = run_payload(agent, base, payload, stdin, false, observe)?;
+    if out.code == 0 {
+        return Ok(out);
+    }
+    let reason = format!("{}{}", out.stdout, out.stderr);
+    let recorded = marker.as_deref().is_some_and(|m| {
+        m.parent()
+            .map(std::fs::create_dir_all)
+            .unwrap_or(Ok(()))
+            .and_then(|()| std::fs::write(m, "1"))
+            .is_ok()
+    });
+    if !recorded {
+        // Without the marker nothing bounds the continuation: let this stop through.
+        let mut out = pass;
+        out.stderr = format!(
+            "discipline: this stop was let through: the refusal could not be recorded against this session, so nothing would end the continuation. It would have said: {}\n",
+            reason.trim_end()
+        );
+        return Ok(out);
+    }
+    Ok(HookOutput {
+        stdout: format!(
+            "{}\n",
+            serde_json::json!({ "decision": "block", "reason": reason.trim_end() })
+        ),
+        stderr: String::new(),
+        code: 0,
+    })
+}
+
 /// The agents whose stop payload carries the turn's final message, so the end of a turn
 /// can be judged without reading a transcript.
 fn stop_payload_carries_the_message(agent: Agent) -> bool {
-    matches!(agent, Agent::ClaudeCode | Agent::Codex | Agent::Qwen)
+    matches!(
+        agent,
+        Agent::ClaudeCode | Agent::Codex | Agent::Qwen | Agent::Opencode
+    )
 }
 
 /// The agents supported by the premature stop check.
 fn agent_supports_premature_stop(agent: Agent) -> bool {
     matches!(
         agent,
-        Agent::ClaudeCode | Agent::Codex | Agent::Qwen | Agent::Copilot | Agent::Agy
+        Agent::ClaudeCode
+            | Agent::Codex
+            | Agent::Qwen
+            | Agent::Copilot
+            | Agent::Agy
+            | Agent::Opencode
     )
 }
 
@@ -1046,7 +1217,7 @@ fn premature_stop(
 
     let (message, tool_call_followed) = if stop_payload_carries_the_message(agent) {
         let m = payload.last_assistant_message.as_deref()?;
-        (Some(m.to_string()), false)
+        (Some(m.to_string()), payload.tool_call_followed)
     } else if matches!(agent, Agent::Copilot | Agent::Agy) {
         let is_observe = observe || config.mode == crate::config::StopMode::Observe;
         let counter = payload
@@ -1736,6 +1907,17 @@ pub const OPENCODE_OBSERVE_NEVER_BLOCKS: &str =
 /// (`console.error`); `setup` does not throw, so the plugin loads and checks no tool call
 /// there (CI still gates the change).
 ///
+/// At the end of a 2.x turn (`session.execution.succeeded`) the same loop sends the
+/// turn's final message (`session.text.ended`) and whether a tool call followed it
+/// (`session.tool.called`, `session.step.ended` with `finish: "tool-calls"`) to
+/// `hook run --event stop` ([`stop_with`]), in a promise nothing awaits, so it never holds
+/// the session. Enforcing, a refusal is sent back with `session.synthetic` (RUN with
+/// 2.0.28 under the background service: delivered, not recorded as the person's message,
+/// and answered), and with `session.prompt` when `session.synthetic` is missing or throws.
+/// A turn the person followed with a message of their own while the check ran is not
+/// re-prompted. Under `opencode run --standalone` (the plugin's process is `serve
+/// --stdio`) the payload says so and `hook run` skips the check.
+///
 /// `withTimeout` stops waiting for a command; it does not kill it. Bun's `$` returns a
 /// `ShellPromise`, whose methods (`cwd`, `env`, `quiet`, `nothrow`, `text` and the like)
 /// give no handle to the child process, so a command that outlives its timeout runs on
@@ -1767,6 +1949,10 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, post: &str, observe: bool)
 "
         )
     };
+    let stop = format!(
+        "discipline hook run --agent opencode --event stop{}",
+        if observe { " --observe" } else { "" }
+    );
     let mode = if observe {
         format!("{OPENCODE_OBSERVE_NEVER_BLOCKS}\n")
     } else {
@@ -1839,6 +2025,66 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, post: &str, observe: bool)
           }} catch {{}}
 "
     );
+    // The end of a turn, read from the same stream: not through `guard`, for the reason
+    // above. A session's turn is known from its `session.execution.started`; the final
+    // message is the text of the last assistant message, and a tool call after it (a
+    // `session.tool.called`, or a step that ended `tool-calls`) clears it.
+    let v2_turn = "          try {
+            const turnID = e?.data?.sessionID
+            if (typeof turnID === \"string\") {
+              if (e.type === \"session.execution.started\") {
+                if (TURNS.size > 256) TURNS.clear()
+                TURNS.set(turnID, { run: (TURNS.get(turnID)?.run ?? 0) + 1, text: undefined, message: undefined, toolAfter: false, cwd: undefined })
+              } else if (TURNS.has(turnID)) {
+                const turn = TURNS.get(turnID)
+                // `session.execution.succeeded` names no directory (RUN, 2.0.28); the turn's other events do.
+                if (typeof e.location?.directory === \"string\") turn.cwd = e.location.directory
+                if (e.type === \"session.text.ended\" && typeof e.data.text === \"string\") {
+                  const same = turn.message === e.data.assistantMessageID && !turn.toolAfter && turn.text !== undefined
+                  turn.text = same ? turn.text + \"\\n\\n\" + e.data.text : e.data.text
+                  turn.message = e.data.assistantMessageID
+                  turn.toolAfter = false
+                } else if (e.type === \"session.tool.called\" || (e.type === \"session.step.ended\" && e.data.finish === \"tool-calls\")) {
+                  turn.toolAfter = true
+                } else if (e.type === \"session.execution.succeeded\") {
+                  endOfTurn(turnID, { ...turn }, turn.cwd ?? directory).catch(TURN_ERROR)
+                }
+              }
+            }
+          } catch {}
+";
+    // Enforcing only: a refusal (`{"decision": "block", "reason"}` on stdout, nothing
+    // else: a release without `--event stop` fails with a usage error, which is not one)
+    // goes back to the model, first as a synthetic message, which the session does not
+    // record as the person's, and as a prompt where that cannot be sent.
+    let reprompt = if observe {
+        ""
+    } else {
+        "      let answer
+      try { answer = JSON.parse(r.stdout.toString()) } catch { return }
+      if (answer?.decision !== \"block\" || typeof answer.reason !== \"string\") return
+      // The person wrote again while the check ran: theirs is the next message.
+      if (TURNS.get(sessionID)?.run !== turn.run) return
+      if (typeof session?.synthetic === \"function\") {
+        try {
+          await session.synthetic({ sessionID, text: answer.reason })
+          return
+        } catch {}
+      }
+      await session.prompt({ sessionID, text: answer.reason })
+"
+    };
+    let (await_stop, turn_error) = if observe {
+        (
+            format!("      await withTimeout($`{stop} < ${{payload}}`.cwd(cwd).nothrow().quiet(), CHECK_TIMEOUT_MS)\n"),
+            "() => {}",
+        )
+    } else {
+        (
+            format!("      const r = await withTimeout($`{stop} < ${{payload}}`.cwd(cwd).nothrow().quiet(), CHECK_TIMEOUT_MS)\n"),
+            "(err) => console.error(\"discipline: the end-of-turn check did not finish, so this turn was not judged: \" + (err?.message ?? err))",
+        )
+    };
     let v2_before = guard(
         6,
         format!(
@@ -1922,7 +2168,8 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, post: &str, observe: bool)
 // When a session is created, takes this worktree's lease for it. Before an edit tool, refuses an edit outside this session's worktree (the tool call
 // is sent on stdin; a refusal throws, and the model reads the reason). After it, runs
 // the discipline check and, when it fails, appends the report to the tool's output so
-// the model reads it and repairs the change.
+// the model reads it and repairs the change. On OpenCode 2.x, at the end of a turn, sends
+// the final message to the end-of-turn checks; a refusal goes back to the model.
 {mode}import {{ $ }} from \"bun\"
 
 const EDIT_TOOLS = [\"edit\", \"write\", \"apply_patch\"]
@@ -1956,8 +2203,29 @@ export const Discipline = async ({{ $, directory }}) => ({{
 
 export default {{
   id: \"discipline\",
-  setup({{ tool, event, location }}) {{
+  setup({{ tool, event, location, session }}) {{
     const directory = location?.directory ?? process.cwd()
+    // `opencode run --standalone` serves this plugin over stdio (`serve --stdio`; the
+    // background service is `serve --service`), and exits before a continuation runs.
+    const STANDALONE = process.argv.includes(\"--stdio\")
+    // Each session's turn so far, by session id.
+    const TURNS = new Map()
+    const TURN_ERROR = {turn_error}
+
+    // OpenCode 2.x has no stop hook: at the end of a turn the final message and whether
+    // a tool call followed it are sent to `hook run --event stop`, which judges them
+    // (`[hooks.premature-stop]`, `[hooks.verified-stop]`). It never holds the session:
+    // nothing waits for it.
+    const endOfTurn = async (sessionID, turn, cwd) => {{
+      const payload = new Response(JSON.stringify({{
+        hook_event_name: \"Stop\",
+        session_id: sessionID,
+        last_assistant_message: turn.text,
+        tool_call_followed: turn.toolAfter,
+        standalone: STANDALONE,
+        cwd
+      }}))
+{await_stop}{reprompt}    }}
 
     // OpenCode 2.x registers no event callback: `event.subscribe()` returns the events
     // as an async iterable. A session new to this plugin takes the lease on the first of
@@ -1968,7 +2236,7 @@ export default {{
       const leased = new Set()
       ;(async () => {{
         for await (const e of events) {{
-{v2_session}        }}
+{v2_turn}{v2_session}        }}
       }})().catch(() => {{}})
     }}
 
@@ -3403,6 +3671,8 @@ pub fn run_cli(args: crate::cli::HookArgs) -> Result<bool> {
                 crate::hook::post_tool_with(a.agent, a.base, &stdin, a.if_configured)
             } else if a.event == crate::cli::HookEvent::SessionStart {
                 crate::pretool::session_start_with(a.agent, &stdin, a.if_configured)
+            } else if a.event == crate::cli::HookEvent::Stop {
+                crate::hook::stop_with(a.agent, a.base, &stdin, a.if_configured, a.observe)?
             } else {
                 crate::hook::run_with(a.agent, a.base, &stdin, a.if_configured, a.observe)?
             };
@@ -4418,6 +4688,11 @@ mod tests {
         );
         assert_eq!(parse_payload(""), Payload::default());
         assert_eq!(parse_payload("[1]"), Payload::default());
+        // The OpenCode plugin's end of a turn; a field that is not a boolean reads as false.
+        let p = parse_payload(r#"{"tool_call_followed":true,"standalone":true}"#);
+        assert!(p.tool_call_followed && p.standalone);
+        let p = parse_payload(r#"{"tool_call_followed":"yes","standalone":1}"#);
+        assert!(!p.tool_call_followed && !p.standalone);
     }
 
     /// Copilot CLI's `config.json` opens with comment lines; a hand edit can leave a
@@ -5064,7 +5339,8 @@ mod tests {
         "  \"tool.execute.after\": async (input, output) => {\n",
         "export default {\n",
         "  id: \"discipline\",\n",
-        "  setup({ tool, event, location }) {\n",
+        "  setup({ tool, event, location, session }) {\n",
+        "    const endOfTurn = async (sessionID, turn, cwd) => {\n",
         "    const events = event?.subscribe?.()\n",
         "        for await (const e of events) {\n",
         "    tool?.hook?.(\"execute.before\", async (call) => {\n",
@@ -5106,12 +5382,16 @@ mod tests {
             for run in [
                 format!("$`discipline hook run --agent opencode{flag}`"),
                 format!("$`discipline hook run --agent opencode{flag} < ${{none}}`"),
+                // The end of a 2.x turn.
+                format!(
+                    "$`discipline hook run --agent opencode --event stop{flag} < ${{payload}}`"
+                ),
             ] {
                 assert_eq!(text.matches(&run).count(), 1, "observe={observe}: {run:?}");
             }
             assert_eq!(
                 text.matches("await withTimeout($`").count(),
-                8,
+                9,
                 "observe={observe}: every shell call runs with a timeout\n{text}"
             );
             assert_eq!(
@@ -5121,8 +5401,8 @@ mod tests {
             );
             assert_eq!(
                 text.matches(", CHECK_TIMEOUT_MS)").count(),
-                2,
-                "observe={observe}: post-edit check uses CHECK_TIMEOUT_MS"
+                3,
+                "observe={observe}: the post-edit check and the end of a turn use CHECK_TIMEOUT_MS"
             );
         }
     }
@@ -5144,10 +5424,19 @@ mod tests {
             1,
             "{observe}"
         );
-        // Six handlers (three per block), each one guarded, and the post-tool witness of
-        // each block, which has its own `try` in either mode.
-        assert_eq!(observe.matches(" try {\n").count(), 8, "{observe}");
-        assert_eq!(observe.matches(" } catch {}\n").count(), 8, "{observe}");
+        // Six handlers (three per block), each one guarded, the post-tool witness of
+        // each block, which has its own `try` in either mode, and the 2.x reader of the
+        // end of a turn, whose `endOfTurn` call is caught by a `catch` that does nothing.
+        assert_eq!(observe.matches(" try {\n").count(), 9, "{observe}");
+        assert_eq!(observe.matches(" } catch {}\n").count(), 9, "{observe}");
+        assert!(
+            observe.contains("const TURN_ERROR = () => {}\n"),
+            "{observe}"
+        );
+        assert!(
+            !observe.contains("session.synthetic") && !observe.contains("session.prompt"),
+            "{observe}"
+        );
         assert!(!observe.contains("console.error"), "{observe}");
     }
 
@@ -5171,17 +5460,24 @@ mod tests {
 ";
         assert_eq!(enforcing.matches(v1).count(), 1, "{enforcing}");
         assert_eq!(enforcing.matches(v2).count(), 1, "{enforcing}");
-        // One `try` and two `catch` are the 2.x session lease's, whose loop is detached
-        // from `setup`; the others are the post-tool witness's, one per block, which
+        // In the 2.x loop, detached from `setup`: the end-of-turn reader's `try` and the
+        // session lease's, their two `catch`, the `catch` of the loop and the one that
+        // takes an `endOfTurn` error to stderr. In `endOfTurn`: a block answer that does
+        // not parse sends nothing, and a `session.synthetic` that throws falls back to
+        // `session.prompt`. The others are the post-tool witness's, one per block, which
         // records and never refuses. Nothing is around a pre-tool or post-edit command.
         let lease = &enforcing[enforcing.find("    const events = ").unwrap()
             ..enforcing
                 .find("    tool?.hook?.(\"execute.before\"")
                 .unwrap()];
-        assert_eq!(lease.matches("try {").count(), 1, "{lease}");
-        assert_eq!(lease.matches("catch").count(), 2, "{lease}");
-        assert_eq!(enforcing.matches("try {").count(), 3, "{enforcing}");
-        assert_eq!(enforcing.matches("catch").count(), 4, "{enforcing}");
+        assert_eq!(lease.matches("try {").count(), 2, "{lease}");
+        assert_eq!(lease.matches("catch").count(), 4, "{lease}");
+        let end = &enforcing[enforcing.find("    const endOfTurn = ").unwrap()
+            ..enforcing.find("    const events = ").unwrap()];
+        assert_eq!(end.matches("try {").count(), 2, "{end}");
+        assert_eq!(end.matches("catch").count(), 2, "{end}");
+        assert_eq!(enforcing.matches("try {").count(), 6, "{enforcing}");
+        assert_eq!(enforcing.matches("catch").count(), 8, "{enforcing}");
         for witness in enforcing.split("if (SHELL_TOOLS.includes(").skip(1) {
             let body = &witness[..witness.find("      return\n").unwrap()];
             assert!(body.contains("--event post-tool"), "{body}");
@@ -5195,8 +5491,9 @@ mod tests {
 }
 ";
         assert!(enforcing.ends_with(notice), "{enforcing}");
-        // The notice above, and the report of a failed check that has no text to join.
-        assert_eq!(enforcing.matches("console.error").count(), 2);
+        // The notice above, the report of a failed check that has no text to join, and an
+        // end-of-turn check that did not finish.
+        assert_eq!(enforcing.matches("console.error").count(), 3);
         assert_eq!(
             enforcing
                 .matches("console.error(\"discipline: the check after this edit failed")
