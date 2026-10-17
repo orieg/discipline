@@ -1,0 +1,264 @@
+{
+  "opencode": "2.0.28",
+  "service": [
+    {
+      "type": "session.execution.started",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    {
+      "type": "session.tool.called",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000",
+        "assistantMessageID": "msg-1",
+        "input": {
+          "code": "const r = await tools.shell({\"command\":\"cat a.txt\"});\nreturn r;"
+        },
+        "executed": false
+      },
+      "location": {
+        "directory": "/work/repo"
+      }
+    },
+    {
+      "type": "session.step.ended",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000",
+        "assistantMessageID": "msg-1",
+        "finish": "tool-calls",
+        "rawFinish": "tool_calls"
+      },
+      "location": {
+        "directory": "/work/repo"
+      }
+    },
+    {
+      "type": "session.tool.called",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000",
+        "assistantMessageID": "msg-2",
+        "input": {
+          "command": "cat a.txt"
+        },
+        "executed": false
+      },
+      "location": {
+        "directory": "/work/repo"
+      }
+    },
+    {
+      "type": "session.step.ended",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000",
+        "assistantMessageID": "msg-2",
+        "finish": "tool-calls",
+        "rawFinish": "tool_calls"
+      },
+      "location": {
+        "directory": "/work/repo"
+      }
+    },
+    {
+      "type": "session.text.ended",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000",
+        "assistantMessageID": "msg-3",
+        "ordinal": 0,
+        "text": "Now let me run the tests."
+      },
+      "location": {
+        "directory": "/work/repo"
+      }
+    },
+    {
+      "type": "session.step.ended",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000",
+        "assistantMessageID": "msg-3",
+        "finish": "stop",
+        "rawFinish": "stop"
+      },
+      "location": {
+        "directory": "/work/repo"
+      }
+    },
+    {
+      "type": "session.execution.succeeded",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    {
+      "type": "session.inbox.enqueued",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000",
+        "item": {
+          "type": "synthetic",
+          "payload": {
+            "text": "discipline [turn/announced-action-not-taken]: you ended your turn after announcing an action and did not take it: `Now let me run the tests.`. Do it now, or say in one sentence why you cannot."
+          }
+        }
+      }
+    },
+    {
+      "type": "session.execution.started",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    {
+      "type": "session.tool.called",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000",
+        "assistantMessageID": "msg-4",
+        "input": {
+          "command": "ls -la"
+        },
+        "executed": false
+      },
+      "location": {
+        "directory": "/work/repo"
+      }
+    },
+    {
+      "type": "session.step.ended",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000",
+        "assistantMessageID": "msg-4",
+        "finish": "tool-calls",
+        "rawFinish": "tool_calls"
+      },
+      "location": {
+        "directory": "/work/repo"
+      }
+    },
+    {
+      "type": "session.tool.called",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000",
+        "assistantMessageID": "msg-5",
+        "input": {
+          "command": "cat discipline.toml; echo \"---\"; cat AGENTS.md; echo \"---\"; ls .opencode"
+        },
+        "executed": false
+      },
+      "location": {
+        "directory": "/work/repo"
+      }
+    },
+    {
+      "type": "session.step.ended",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000",
+        "assistantMessageID": "msg-5",
+        "finish": "tool-calls",
+        "rawFinish": "tool_calls"
+      },
+      "location": {
+        "directory": "/work/repo"
+      }
+    },
+    {
+      "type": "session.text.ended",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000",
+        "assistantMessageID": "msg-6",
+        "ordinal": 0,
+        "text": "This repository contains no test files or test runner (only `a.txt`, `AGENTS.md`, and `discipline.toml`), so there are no tests for me to run."
+      },
+      "location": {
+        "directory": "/work/repo"
+      }
+    },
+    {
+      "type": "session.step.ended",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000",
+        "assistantMessageID": "msg-6",
+        "finish": "stop",
+        "rawFinish": "stop"
+      },
+      "location": {
+        "directory": "/work/repo"
+      }
+    },
+    {
+      "type": "session.execution.succeeded",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000"
+      }
+    }
+  ],
+  "standalone": [
+    {
+      "type": "session.execution.started",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    {
+      "type": "session.tool.called",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000",
+        "assistantMessageID": "msg-7",
+        "input": {
+          "command": "cat a.txt"
+        },
+        "executed": false
+      },
+      "location": {
+        "directory": "/work/repo"
+      }
+    },
+    {
+      "type": "session.step.ended",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000",
+        "assistantMessageID": "msg-7",
+        "finish": "tool-calls",
+        "rawFinish": "tool_calls"
+      },
+      "location": {
+        "directory": "/work/repo"
+      }
+    },
+    {
+      "type": "session.text.ended",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000",
+        "assistantMessageID": "msg-8",
+        "ordinal": 0,
+        "text": "Now let me run the tests."
+      },
+      "location": {
+        "directory": "/work/repo"
+      }
+    },
+    {
+      "type": "session.step.ended",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000",
+        "assistantMessageID": "msg-8",
+        "finish": "stop",
+        "rawFinish": "stop"
+      },
+      "location": {
+        "directory": "/work/repo"
+      }
+    },
+    {
+      "type": "session.execution.succeeded",
+      "data": {
+        "sessionID": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    {
+      "type": "location.shutdown",
+      "data": {},
+      "location": {
+        "directory": "/work/repo"
+      }
+    }
+  ]
+}

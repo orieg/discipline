@@ -1295,7 +1295,7 @@ _discipline() {
                     return 0
                     ;;
                 --event)
-                    COMPREPLY=($(compgen -W "check pre-tool post-tool session-start" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "check pre-tool post-tool session-start stop" -- "${cur}"))
                     return 0
                     ;;
                 *)

@@ -139,6 +139,71 @@ fn opencode_turn_ends_with_text_a_stop_step_and_execution_succeeded() {
     assert_eq!(text(&reprompt, "/result/type"), "user");
 }
 
+/// OpenCode 2.0.28 (RUN 2026-10-16, Phase 17 Step 3): the events the plugin's end-of-turn
+/// handler reads, once under the background service (a refused turn, the synthetic
+/// message that refused it, the continuation the model answered it with) and once under
+/// `opencode run --standalone` (the process shut down after the turn); the result of
+/// `session.synthetic`; and the plugin process's arguments in each.
+#[test]
+fn opencode_2028_turns_under_the_service_and_standalone() {
+    let events = fixture("opencode/turn_events_v2.json");
+    let kinds = |run: &str| -> Vec<String> {
+        events[run]
+            .as_array()
+            .expect("an array of events")
+            .iter()
+            .map(|e| text(e, "/type").to_string())
+            .collect()
+    };
+    let service = kinds("service");
+    let ends: Vec<usize> = service
+        .iter()
+        .enumerate()
+        .filter(|(_, k)| *k == "session.execution.succeeded")
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(ends.len(), 2, "{service:?}");
+    let first = &events["service"][ends[0] - 2];
+    assert_eq!(text(first, "/type"), "session.text.ended");
+    assert_eq!(text(first, "/data/text"), ANNOUNCED);
+    assert_eq!(
+        text(&events["service"][ends[0] - 1], "/data/finish"),
+        "stop"
+    );
+    // The succeeded event names no directory; the text event does.
+    assert!(events["service"][ends[0]].get("location").is_none());
+    assert_eq!(text(first, "/location/directory"), "/work/repo");
+    let enqueued = &events["service"][ends[0] + 1];
+    assert_eq!(text(enqueued, "/type"), "session.inbox.enqueued");
+    assert_eq!(text(enqueued, "/data/item/type"), "synthetic");
+    assert_eq!(service[ends[0] + 2], "session.execution.started");
+    assert!(text(&events["service"][ends[1] - 2], "/data/text").starts_with("This repository"));
+
+    let standalone = kinds("standalone");
+    assert_eq!(
+        &standalone[standalone.len() - 2..],
+        ["session.execution.succeeded", "location.shutdown"]
+    );
+
+    let synthetic = fixture("opencode/synthetic.json");
+    assert_eq!(text(&synthetic, "/result/type"), "synthetic");
+    assert_eq!(text(&synthetic, "/result/delivery"), "steer");
+    assert_eq!(
+        text(&synthetic, "/call/text"),
+        text(&synthetic, "/result/payload/text")
+    );
+
+    let argv = fixture("opencode/plugin_argv.json");
+    let has = |run: &str, arg: &str| {
+        argv["plugin_process_argv"][run]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a == arg)
+    };
+    assert!(has("standalone", "--stdio") && !has("service", "--stdio"));
+}
+
 #[test]
 fn transcript_readers_parse_recorded_stop_fixtures() {
     use discipline::hook::Agent;

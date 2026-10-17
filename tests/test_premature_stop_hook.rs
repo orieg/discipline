@@ -551,3 +551,262 @@ fn copilot_and_agy_missing_or_unreadable_transcript_skipped_in_observe_mode() {
         );
     }
 }
+
+/// The final message of the turn recorded under OpenCode 2.0.28's background service
+/// (`tests/fixtures/stop/opencode/turn_events_v2.json`): the last `session.text.ended`
+/// before the first `session.execution.succeeded`.
+fn opencode_recorded_text() -> String {
+    let events: Value = serde_json::from_str(
+        &std::fs::read_to_string(format!(
+            "{}/tests/fixtures/stop/opencode/turn_events_v2.json",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let service = events["service"].as_array().unwrap();
+    let end = service
+        .iter()
+        .position(|e| e["type"] == "session.execution.succeeded")
+        .unwrap();
+    service[..end]
+        .iter()
+        .rev()
+        .find(|e| e["type"] == "session.text.ended")
+        .and_then(|e| e["data"]["text"].as_str())
+        .unwrap()
+        .to_string()
+}
+
+/// What the generated OpenCode plugin sends `hook run --event stop` at the end of a turn
+/// (the node-driven tests in `tests/test_agent_hooks.rs` pin that it does).
+fn opencode_stop(
+    repo: &Repo,
+    session: &str,
+    text: Option<&str>,
+    edit: impl FnOnce(&mut Value),
+) -> String {
+    let mut v = serde_json::json!({
+        "hook_event_name": "Stop",
+        "session_id": session,
+        "tool_call_followed": false,
+        "standalone": false,
+        "cwd": repo.path(),
+    });
+    if let Some(t) = text {
+        v["last_assistant_message"] = t.into();
+    }
+    edit(&mut v);
+    v.to_string()
+}
+
+const OPENCODE_STOP: [&str; 4] = ["--agent", "opencode", "--event", "stop"];
+
+/// The refusal is `{"decision": "block", "reason"}` with exit 0, which the plugin sends
+/// back to the model; the continuation that follows is let through at the marker this hook
+/// keeps, since OpenCode marks none; the next turn is judged again, up to the cap.
+#[test]
+fn opencode_refuses_once_per_turn_as_a_block_answer_up_to_the_cap() {
+    let text = opencode_recorded_text();
+    assert_eq!(text, SENTENCE);
+    let repo = repo_with("enabled = true\nmode = \"refuse\"\nmax_per_session = 2\n");
+    let session = "ses_0000000000000000000000000";
+    let payload = opencode_stop(&repo, session, Some(&text), |_| {});
+    let marker = repo.file(&format!(".git/discipline/opencode-stop-{session}"));
+
+    let first = hook(&repo, &OPENCODE_STOP, &payload);
+    assert_eq!(
+        (first.code, first.stderr.as_str()),
+        (0, ""),
+        "{}",
+        first.stdout
+    );
+    let answer: Value = serde_json::from_str(first.stdout.trim()).unwrap();
+    assert_eq!(answer["decision"], "block", "{answer}");
+    let reason = answer["reason"].as_str().unwrap();
+    assert!(
+        reason.contains(&format!("[{CODE}]")) && reason.contains(&format!("`{SENTENCE}`")),
+        "{reason}"
+    );
+    assert!(marker.exists());
+
+    // The continuation announces again: let through at the marker, which it removes.
+    let continued = hook(&repo, &OPENCODE_STOP, &payload);
+    assert_eq!(
+        (continued.code, continued.stdout.as_str()),
+        (0, ""),
+        "{}",
+        continued.stderr
+    );
+    assert!(
+        continued.stderr.contains("loop guard") && continued.stderr.contains(CODE),
+        "{}",
+        continued.stderr
+    );
+    assert!(!continued.stderr.contains(SENTENCE), "{}", continued.stderr);
+    assert!(!marker.exists());
+
+    // The next turn is judged again, and refused: the second of the cap of two.
+    let next = hook(&repo, &OPENCODE_STOP, &payload);
+    assert!(
+        next.stdout.contains("\"block\""),
+        "{}\n{}",
+        next.stdout,
+        next.stderr
+    );
+    let _ = hook(&repo, &OPENCODE_STOP, &payload);
+    // The session is at its cap.
+    let capped = hook(&repo, &OPENCODE_STOP, &payload);
+    assert_eq!(
+        (capped.code, capped.stdout.as_str()),
+        (0, ""),
+        "{}",
+        capped.stderr
+    );
+    assert!(
+        capped.stderr.contains("max_per_session"),
+        "{}",
+        capped.stderr
+    );
+}
+
+/// Off unless the base ref enables an end-of-turn check; observe mode logs and never
+/// answers with a block; a turn whose final message a tool call followed, or that has
+/// no message, is not judged.
+#[test]
+fn opencode_stop_is_off_by_default_logs_in_observe_mode_and_skips_handed_on_turns() {
+    let repo = Repo::new();
+    let payload = opencode_stop(&repo, "s-1", Some(SENTENCE), |_| {});
+    let run = hook(&repo, &OPENCODE_STOP, &payload);
+    assert_eq!(
+        (run.code, run.stdout.as_str(), run.stderr.as_str()),
+        (0, "", "")
+    );
+
+    for (settings, observe) in [
+        ("enabled = true\n", false),
+        ("enabled = true\nmode = \"refuse\"\n", true),
+    ] {
+        let repo = repo_with(settings);
+        let mut args = OPENCODE_STOP.to_vec();
+        if observe {
+            args.push("--observe");
+        }
+        let run = hook(
+            &repo,
+            &args,
+            &opencode_stop(&repo, "s-1", Some(SENTENCE), |_| {}),
+        );
+        assert_eq!((run.code, run.stdout.as_str()), (0, ""), "{settings}");
+        assert!(
+            run.stderr.contains("observe mode, not enforced") && run.stderr.contains(CODE),
+            "{}",
+            run.stderr
+        );
+        let entry: Value =
+            serde_json::from_str(observe_log(&repo).lines().next().unwrap()).unwrap();
+        assert_eq!(
+            (entry["agent"].as_str(), entry["verdict"].as_str()),
+            (Some("opencode"), Some("premature-stop"))
+        );
+        assert!(!repo.file(".git/discipline/opencode-stop-s-1").exists());
+    }
+
+    let repo = repo_with("enabled = true\nmode = \"refuse\"\n");
+    for (why, payload) in [
+        (
+            "a tool call followed",
+            opencode_stop(&repo, "s-2", Some(SENTENCE), |v| {
+                v["tool_call_followed"] = true.into()
+            }),
+        ),
+        ("no message", opencode_stop(&repo, "s-2", None, |_| {})),
+        (
+            "finished work",
+            opencode_stop(&repo, "s-2", Some("All 12 tests pass."), |_| {}),
+        ),
+    ] {
+        let run = hook(&repo, &OPENCODE_STOP, &payload);
+        assert_eq!(
+            (run.code, run.stdout.as_str(), run.stderr.as_str()),
+            (0, "", ""),
+            "{why}"
+        );
+    }
+}
+
+/// Under `opencode run --standalone` the process exits before a continuation runs: the
+/// check is skipped and the skip logged, where an end-of-turn check is enabled.
+#[test]
+fn opencode_standalone_turn_is_skipped_and_logged() {
+    let repo = repo_with("enabled = true\nmode = \"refuse\"\n");
+    let payload = opencode_stop(&repo, "s-3", Some(SENTENCE), |v| {
+        v["standalone"] = true.into()
+    });
+    let run = hook(&repo, &OPENCODE_STOP, &payload);
+    assert_eq!((run.code, run.stdout.as_str()), (0, ""), "{}", run.stderr);
+    assert!(
+        run.stderr.contains("skipped") && run.stderr.contains("--standalone"),
+        "{}",
+        run.stderr
+    );
+    let entry: Value = serde_json::from_str(observe_log(&repo).lines().next().unwrap()).unwrap();
+    assert_eq!(entry["event"], "stop");
+    assert_eq!(entry["verdict"], "skipped");
+    assert_eq!(entry["reason"], "standalone");
+    assert!(!repo.file(".git/discipline/turn-s-3").exists());
+
+    // Nothing enabled: nothing to skip, nothing logged.
+    let repo = Repo::new();
+    let run = hook(
+        &repo,
+        &OPENCODE_STOP,
+        &opencode_stop(&repo, "s-3", Some(SENTENCE), |v| {
+            v["standalone"] = true.into()
+        }),
+    );
+    assert_eq!(
+        (run.code, run.stdout.as_str(), run.stderr.as_str()),
+        (0, "", "")
+    );
+    assert_eq!(observe_log(&repo), "");
+}
+
+/// The change check runs first, as for every agent, once an end-of-turn check is
+/// enabled: its report is the block. With none enabled the stop does not run it (the
+/// plugin already checks after every edit), where Claude Code's stop does.
+#[test]
+fn opencode_stop_answers_a_change_with_findings_only_when_a_turn_check_is_enabled() {
+    let weakened = "#[test]\nfn adds() {\n    let x = 1;\n    let _ = x + 1;\n}\n\n#[test]\nfn orders() {\n    let x = 1;\n    assert!(x < 2);\n}\n";
+    let repo = repo_with("enabled = true\nmode = \"refuse\"\n");
+    repo.write("tests/a.rs", weakened);
+    let run = hook(
+        &repo,
+        &OPENCODE_STOP,
+        &opencode_stop(&repo, "s-4", Some("All done."), |_| {}),
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let answer: Value = serde_json::from_str(run.stdout.trim()).unwrap();
+    assert_eq!(answer["decision"], "block");
+    assert!(
+        answer["reason"]
+            .as_str()
+            .unwrap()
+            .contains("[assertion-reduction/assertions-reduced]"),
+        "{answer}"
+    );
+
+    let repo = repo_with("enabled = false\n");
+    repo.write("tests/a.rs", weakened);
+    let run = hook(
+        &repo,
+        &OPENCODE_STOP,
+        &opencode_stop(&repo, "s-4", Some("All done."), |_| {}),
+    );
+    assert_eq!(
+        (run.code, run.stdout.as_str(), run.stderr.as_str()),
+        (0, "", "")
+    );
+    let control = hook(&repo, &["--agent", "claude-code"], &stop("claude-code"));
+    assert_eq!(control.code, 2, "{}", control.stderr);
+}

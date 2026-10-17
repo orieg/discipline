@@ -1,0 +1,19 @@
+{
+  "opencode": "2.0.28",
+  "plugin_process_argv": {
+    "standalone": [
+      "bun",
+      "/$bunfs/root/opencode",
+      "serve",
+      "--stdio",
+      "--port",
+      "0"
+    ],
+    "service": [
+      "bun",
+      "/$bunfs/root/opencode",
+      "serve",
+      "--service"
+    ]
+  }
+}

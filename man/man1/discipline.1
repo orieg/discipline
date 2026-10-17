@@ -686,7 +686,7 @@ Pass silently unless the working directory (for the pre\-tool and session\-start
 Observe mode: run the check but never block; what would have blocked is said on stderr and appended to <git dir>/discipline/hook\-observe.log
 .TP
 \fB\-\-event\fR \fI<EVENT>\fR [default: check]
-The hook event: `pre\-tool` checks the tool call on stdin before it runs (an edit into another worktree, into a worktree another session leases, or into forbidden_paths is refused); `session\-start` takes this worktree\*(Aqs lease for the session on stdin (never blocks); the default checks the change so far
+The hook event: `pre\-tool` checks the tool call on stdin before it runs (an edit into another worktree, into a worktree another session leases, or into forbidden_paths is refused); `session\-start` takes this worktree\*(Aqs lease for the session on stdin (never blocks); `stop` judges the end of a turn on stdin (the OpenCode plugin\*(Aqs payload); the default checks the change so far
 .br
 
 .br
@@ -700,6 +700,8 @@ pre\-tool: Before a tool runs: refuse an edit outside this session\*(Aqs worktre
 post\-tool: After a tool runs: record a passing verification command on the current working\-tree digest
 .IP \(bu 2
 session\-start: When a session starts: take this worktree\*(Aqs lease for it (never blocks)
+.IP \(bu 2
+stop: At the end of a turn: judge the turn on stdin (the OpenCode plugin sends the final message it read from the event stream)
 .RE
 .TP
 \fB\-h\fR, \fB\-\-help\fR

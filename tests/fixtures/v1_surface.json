@@ -282,7 +282,8 @@
       "hook run --event=check",
       "hook run --event=post-tool",
       "hook run --event=pre-tool",
-      "hook run --event=session-start"
+      "hook run --event=session-start",
+      "hook run --event=stop"
     ],
     "config.keys": [
       "directives",

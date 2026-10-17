@@ -1,9 +1,10 @@
 // Written by `discipline hook install --agent opencode`.
-// discipline-hook-file: mode=observe sha256=848c47c423ee11a0a433e0fbdbcf2facdf7e57842751436577865931381cbddf
+// discipline-hook-file: mode=observe sha256=b513946b0a8b7559000f7506c7daba8d96fc2eae2a2a697741512d32034ad039
 // When a session is created, takes this worktree's lease for it. Before an edit tool, refuses an edit outside this session's worktree (the tool call
 // is sent on stdin; a refusal throws, and the model reads the reason). After it, runs
 // the discipline check and, when it fails, appends the report to the tool's output so
-// the model reads it and repairs the change.
+// the model reads it and repairs the change. On OpenCode 2.x, at the end of a turn, sends
+// the final message to the end-of-turn checks; a refusal goes back to the model.
 // Observe mode: no hook below refuses a tool call or throws, whatever the command does (a non-zero exit, a command that is not found, any other error).
 import { $ } from "bun"
 
@@ -72,8 +73,30 @@ export const Discipline = async ({ $, directory }) => ({
 
 export default {
   id: "discipline",
-  setup({ tool, event, location }) {
+  setup({ tool, event, location, session }) {
     const directory = location?.directory ?? process.cwd()
+    // `opencode run --standalone` serves this plugin over stdio (`serve --stdio`; the
+    // background service is `serve --service`), and exits before a continuation runs.
+    const STANDALONE = process.argv.includes("--stdio")
+    // Each session's turn so far, by session id.
+    const TURNS = new Map()
+    const TURN_ERROR = () => {}
+
+    // OpenCode 2.x has no stop hook: at the end of a turn the final message and whether
+    // a tool call followed it are sent to `hook run --event stop`, which judges them
+    // (`[hooks.premature-stop]`, `[hooks.verified-stop]`). It never holds the session:
+    // nothing waits for it.
+    const endOfTurn = async (sessionID, turn, cwd) => {
+      const payload = new Response(JSON.stringify({
+        hook_event_name: "Stop",
+        session_id: sessionID,
+        last_assistant_message: turn.text,
+        tool_call_followed: turn.toolAfter,
+        standalone: STANDALONE,
+        cwd
+      }))
+      await withTimeout($`discipline hook run --agent opencode --event stop --observe < ${payload}`.cwd(cwd).nothrow().quiet(), CHECK_TIMEOUT_MS)
+    }
 
     // OpenCode 2.x registers no event callback: `event.subscribe()` returns the events
     // as an async iterable. A session new to this plugin takes the lease on the first of
@@ -84,6 +107,29 @@ export default {
       const leased = new Set()
       ;(async () => {
         for await (const e of events) {
+          try {
+            const turnID = e?.data?.sessionID
+            if (typeof turnID === "string") {
+              if (e.type === "session.execution.started") {
+                if (TURNS.size > 256) TURNS.clear()
+                TURNS.set(turnID, { run: (TURNS.get(turnID)?.run ?? 0) + 1, text: undefined, message: undefined, toolAfter: false, cwd: undefined })
+              } else if (TURNS.has(turnID)) {
+                const turn = TURNS.get(turnID)
+                // `session.execution.succeeded` names no directory (RUN, 2.0.28); the turn's other events do.
+                if (typeof e.location?.directory === "string") turn.cwd = e.location.directory
+                if (e.type === "session.text.ended" && typeof e.data.text === "string") {
+                  const same = turn.message === e.data.assistantMessageID && !turn.toolAfter && turn.text !== undefined
+                  turn.text = same ? turn.text + "\n\n" + e.data.text : e.data.text
+                  turn.message = e.data.assistantMessageID
+                  turn.toolAfter = false
+                } else if (e.type === "session.tool.called" || (e.type === "session.step.ended" && e.data.finish === "tool-calls")) {
+                  turn.toolAfter = true
+                } else if (e.type === "session.execution.succeeded") {
+                  endOfTurn(turnID, { ...turn }, turn.cwd ?? directory).catch(TURN_ERROR)
+                }
+              }
+            }
+          } catch {}
           try {
             if (e?.type !== "session.created" && e?.type !== "session.execution.started") continue
             const sessionID = e.data?.sessionID

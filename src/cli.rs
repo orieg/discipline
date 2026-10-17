@@ -293,7 +293,7 @@ pub struct HookRunArgs {
     #[arg(long)]
     pub observe: bool,
 
-    /// The hook event: `pre-tool` checks the tool call on stdin before it runs (an edit into another worktree, into a worktree another session leases, or into forbidden_paths is refused); `session-start` takes this worktree's lease for the session on stdin (never blocks); the default checks the change so far
+    /// The hook event: `pre-tool` checks the tool call on stdin before it runs (an edit into another worktree, into a worktree another session leases, or into forbidden_paths is refused); `session-start` takes this worktree's lease for the session on stdin (never blocks); `stop` judges the end of a turn on stdin (the OpenCode plugin's payload); the default checks the change so far
     #[arg(long, value_enum, default_value_t = HookEvent::Check)]
     pub event: HookEvent,
 
@@ -313,6 +313,8 @@ pub enum HookEvent {
     PostTool,
     /// When a session starts: take this worktree's lease for it (never blocks)
     SessionStart,
+    /// At the end of a turn: judge the turn on stdin (the OpenCode plugin sends the final message it read from the event stream)
+    Stop,
 }
 
 #[derive(Args, Debug)]
