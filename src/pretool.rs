@@ -165,44 +165,67 @@ pub fn parse(agent: Agent, raw: &str) -> Option<ToolCall> {
 }
 
 /// `path` made absolute against `cwd`, `.` and `..` resolved lexically, and the longest
-/// prefix that exists resolved through symlinks (`/tmp` is `/private/tmp` on macOS), so
-/// it compares with canonical worktree roots.
+/// prefix that exists (or is a dangling symlink) resolved through symlinks (`/tmp` is
+/// `/private/tmp` on macOS), so it compares with canonical worktree roots.
 pub fn resolve(path: &str, cwd: &Path) -> PathBuf {
-    let p = Path::new(path);
-    let joined = if p.is_absolute() {
+    let normalized = path.replace('\\', "/");
+    let p = Path::new(&normalized);
+    let mut current = if p.is_absolute() {
         p.to_path_buf()
     } else {
         cwd.join(p)
     };
-    let mut clean = PathBuf::new();
-    for c in joined.components() {
-        match c {
-            Component::ParentDir => {
-                clean.pop();
+    for _ in 0..40 {
+        let mut clean = PathBuf::new();
+        for c in current.components() {
+            match c {
+                Component::ParentDir => {
+                    clean.pop();
+                }
+                Component::CurDir => {}
+                other => clean.push(other.as_os_str()),
             }
-            Component::CurDir => {}
-            other => clean.push(other.as_os_str()),
         }
-    }
-    let mut existing = clean.clone();
-    let mut rest = Vec::new();
-    while !existing.exists() {
-        match (
-            existing.file_name().map(|n| n.to_os_string()),
-            existing.parent(),
-        ) {
-            (Some(name), Some(parent)) => {
-                rest.push(name);
-                existing = parent.to_path_buf();
+        let mut existing = clean.clone();
+        let mut rest = Vec::new();
+        let mut expanded_dangling = None;
+        while !existing.exists() {
+            if existing.is_symlink() {
+                if let Ok(target) = std::fs::read_link(&existing) {
+                    let mut next = if target.is_absolute() {
+                        target
+                    } else {
+                        existing.parent().unwrap_or(Path::new("/")).join(target)
+                    };
+                    for name in rest.iter().rev() {
+                        next.push(name);
+                    }
+                    expanded_dangling = Some(next);
+                    break;
+                }
             }
-            _ => return clean,
+            match (
+                existing.file_name().map(|n| n.to_os_string()),
+                existing.parent(),
+            ) {
+                (Some(name), Some(parent)) => {
+                    rest.push(name);
+                    existing = parent.to_path_buf();
+                }
+                _ => return clean,
+            }
         }
+        if let Some(next) = expanded_dangling {
+            current = next;
+            continue;
+        }
+        let mut out = existing.canonicalize().unwrap_or(existing);
+        for name in rest.iter().rev() {
+            out.push(name);
+        }
+        return out;
     }
-    let mut out = existing.canonicalize().unwrap_or(existing);
-    for name in rest.iter().rev() {
-        out.push(name);
-    }
-    out
+    current
 }
 
 /// The repository's worktrees: key (as `lease` names them) and canonical root.
@@ -270,9 +293,35 @@ pub struct Scene<'a> {
     pub branch: Option<&'a str>,
 }
 
+fn check_worktree_lease(key: &str, call: &ToolCall, scene: &Scene) -> Option<Verdict> {
+    let (_, lease) = scene.leases.iter().find(|(k, _)| k == key)?;
+    let other_session = !lease.session.is_empty()
+        && call
+            .session
+            .as_deref()
+            .is_some_and(|s| !s.is_empty() && s != lease.session);
+    other_session.then(|| {
+        Verdict::Deny(format!(
+            "worktree {} is leased by {} session {}; this session ({}) may not edit it. Hand the work over, or take the worktree's lease with `discipline lease take --steal`",
+            q(key),
+            q(&lease.agent),
+            q(&lease.session),
+            q(call.session.as_deref().unwrap_or("-"))
+        ))
+    })
+}
+
 /// Decide whether `call` may run.
 pub fn judge(call: &ToolCall, cwd: &Path, scene: &Scene) -> Verdict {
+    let here = scene
+        .worktrees
+        .all
+        .iter()
+        .find(|(k, _)| *k == scene.worktrees.here);
     if let Some(cmd) = &call.command {
+        if let Some(v) = check_worktree_lease(&scene.worktrees.here, call, scene) {
+            return v;
+        }
         return judge_shell(cmd, cwd, scene);
     }
     if !call.edits {
@@ -284,11 +333,6 @@ pub fn judge(call: &ToolCall, cwd: &Path, scene: &Scene) -> Verdict {
             q(&call.tool)
         ));
     }
-    let here = scene
-        .worktrees
-        .all
-        .iter()
-        .find(|(k, _)| *k == scene.worktrees.here);
     for t in &call.targets {
         let path = resolve(t, cwd);
         let Some((key, root)) = scene.worktrees.owner(&path) else {
@@ -304,21 +348,8 @@ pub fn judge(call: &ToolCall, cwd: &Path, scene: &Scene) -> Verdict {
                 key = q(key)
             ));
         }
-        if let Some((_, lease)) = scene.leases.iter().find(|(k, _)| k == key) {
-            let other_session = !lease.session.is_empty()
-                && call
-                    .session
-                    .as_deref()
-                    .is_some_and(|s| !s.is_empty() && s != lease.session);
-            if other_session {
-                return Verdict::Deny(format!(
-                    "worktree {} is leased by {} session {}; this session ({}) may not edit it. Hand the work over, or take the worktree's lease with `discipline lease take --steal`",
-                    q(key),
-                    q(&lease.agent),
-                    q(&lease.session),
-                    q(call.session.as_deref().unwrap_or("-"))
-                ));
-            }
+        if let Some(v) = check_worktree_lease(key, call, scene) {
+            return v;
         }
         if let Some(f) = scene.forbidden {
             if let Ok(rel) = path.strip_prefix(root) {
@@ -396,10 +427,12 @@ fn silent_pass() -> HookOutput {
     }
 }
 
-/// `run`, and with `if_configured` a silent pass unless the payload's directory (else
 /// Whether a truncated or malformed JSON payload unambiguously names a read-only tool
-/// and no edit or shell tool.
+/// at its leading tool-name key and contains no unicode escapes or edit/shell markers.
 fn unparsed_read_only_tool(raw: &str) -> Option<String> {
+    if raw.contains("\\u") || raw.contains("\\U") {
+        return None;
+    }
     const READ_TOOLS: &[&str] = &[
         "Read",
         "Glob",
@@ -438,10 +471,41 @@ fn unparsed_read_only_tool(raw: &str) -> Option<String> {
     {
         return None;
     }
+    for key in ["\"tool_name\"", "\"toolName\"", "\"toolCall\""] {
+        if raw.matches(key).count() > 1 {
+            return None;
+        }
+    }
+    let tool = extract_leading_tool_name(raw)?;
     READ_TOOLS
         .iter()
-        .find(|t| raw.contains(&format!("\"{t}\"")))
+        .find(|&&t| t == tool)
         .map(|t| (*t).to_string())
+}
+
+fn extract_leading_tool_name(raw: &str) -> Option<&str> {
+    let s = raw.trim_start().strip_prefix('{')?.trim_start();
+    for key in ["\"tool_name\"", "\"toolName\""] {
+        if let Some(rest) = s.strip_prefix(key) {
+            let rest = rest.trim_start().strip_prefix(':')?.trim_start();
+            let rest = rest.strip_prefix('"')?;
+            let (val, _) = rest.split_once('"')?;
+            return (!val.contains('\\')).then_some(val);
+        }
+    }
+    for (outer, inner) in [("\"input\"", "\"tool\""), ("\"toolCall\"", "\"name\"")] {
+        if let Some(rest) = s.strip_prefix(outer) {
+            let rest = rest.trim_start().strip_prefix(':')?.trim_start();
+            let rest = rest.strip_prefix('{')?.trim_start();
+            if let Some(rest) = rest.strip_prefix(inner) {
+                let rest = rest.trim_start().strip_prefix(':')?.trim_start();
+                let rest = rest.strip_prefix('"')?;
+                let (val, _) = rest.split_once('"')?;
+                return (!val.contains('\\')).then_some(val);
+            }
+        }
+    }
+    None
 }
 
 /// Computes the canonical SHA-256 digest of `(tool_name, tool_input)` for `raw` without
@@ -506,6 +570,41 @@ fn resolve_tool_loop_config(
         }
     }
     None
+}
+
+/// Resolves `scope-confinement`'s `forbidden_paths`, combining the base ref's
+/// configuration with the working tree's so a session cannot weaken or remove
+/// base-configured `forbidden_paths` by editing `discipline.toml`.
+fn resolve_forbidden_paths(
+    cwd: &Path,
+    root: &Path,
+) -> anyhow::Result<Option<crate::guards::PathFilter>> {
+    let mut patterns: Vec<String> = Vec::new();
+    if let Some(base_cfg) =
+        crate::hook::base_discipline_config(cwd, &crate::hook::CheckSide::Default)
+    {
+        let s = &base_cfg.gates.scope_confinement;
+        if s.enabled {
+            patterns.extend(s.forbidden_paths.iter().cloned());
+        }
+    }
+    let config = root.join("discipline.toml");
+    if config.is_file() {
+        let c = crate::config::DisciplineConfig::load_from_file(&config)?;
+        let s = &c.gates.scope_confinement;
+        if s.enabled {
+            for p in &s.forbidden_paths {
+                if !patterns.contains(p) {
+                    patterns.push(p.clone());
+                }
+            }
+        }
+    }
+    if patterns.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(crate::guards::PathFilter::new(&patterns)?))
+    }
 }
 
 /// Checks `[hooks.tool-loop]` (`#701`): updates consecutive identical tool-call count in
@@ -620,16 +719,7 @@ pub fn run_with(agent: Agent, stdin: &str, observe: bool, if_configured: bool) -
             .into_iter()
             .filter(|(_, l)| l.is_live(now))
             .collect();
-        let config = here.root.join("discipline.toml");
-        let forbidden = if config.is_file() {
-            let c = crate::config::DisciplineConfig::load_from_file(&config)?;
-            let s = &c.gates.scope_confinement;
-            (s.enabled && !s.forbidden_paths.is_empty())
-                .then(|| crate::guards::PathFilter::new(&s.forbidden_paths))
-                .transpose()?
-        } else {
-            None
-        };
+        let forbidden = resolve_forbidden_paths(&cwd, &here.root)?;
         let scene = Scene {
             worktrees: &wts,
             leases: &leases,
@@ -702,6 +792,23 @@ fn finish(agent: Agent, verdict: &Verdict, observe: bool, root: Option<&Path>) -
     }
 }
 
+fn unescape_shell_word(text: &str) -> Option<String> {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('\n') => {}
+                Some(escaped) => out.push(escaped),
+                None => return None,
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    Some(out)
+}
+
 /// The literal text of a shell word, or `None` when it expands at run time (a variable,
 /// a command substitution, a glob): such a word cannot be resolved before the command
 /// runs.
@@ -709,7 +816,10 @@ fn literal(node: tree_sitter::Node, src: &str) -> Option<String> {
     let text = node.utf8_text(src.as_bytes()).ok()?;
     match node.kind() {
         "word" | "number" => {
-            (!text.contains(['*', '?', '[', '~', '$', '`'])).then(|| text.to_string())
+            if text.contains(['*', '?', '[', '~', '$', '`']) {
+                return None;
+            }
+            unescape_shell_word(text)
         }
         "raw_string" => Some(text.trim_matches('\'').to_string()),
         "string" => {
@@ -751,9 +861,6 @@ const GIT_READ_ONLY: &[&str] = &[
     "cat-file",
     "rev-list",
     "reflog",
-    "worktree",
-    "remote",
-    "config",
 ];
 
 /// The shell parser, reachable only through an ASCII copy of the command.
@@ -842,21 +949,28 @@ fn is_non_ascii_heredoc_delimiter(node: tree_sitter::Node, cmd: &str) -> bool {
 
 /// Decide whether a shell command may run: it must not `cd` into another worktree, run
 /// git against one (`-C`, `--git-dir`, `--work-tree`) other than to read, redirect output
-/// into one, or force-push a branch another worktree leases. A command that does not
-/// parse, or whose path in one of those positions expands at run time, is refused. The
-/// parser reads an ASCII copy of the command (`shell_tree`); every word judged here is
-/// the command's own text.
+/// into one, mutate files in another worktree or `forbidden_paths`, or force-push a branch
+/// another worktree leases. A command that does not parse, or whose path in one of those
+/// positions expands at run time, is refused. The parser reads an ASCII copy of the
+/// command (`shell_tree`); every word judged here is the command's own text.
 pub fn judge_shell(cmd: &str, cwd: &Path, scene: &Scene) -> Verdict {
+    judge_shell_depth(cmd, cwd, scene, 0)
+}
+
+fn judge_shell_depth(cmd: &str, cwd: &Path, scene: &Scene, depth: usize) -> Verdict {
+    let unparsed = || {
+        Verdict::Deny(
+            "discipline could not parse this shell command, so it cannot tell where it acts; it is refused".into(),
+        )
+    };
+    if depth > 8 {
+        return unparsed();
+    }
     // The tree's byte ranges are the command's own (the copy changes no offset), so the
     // text of every node below is read from `cmd`, never from the copy.
     let tree = match shell_tree::parse(&shell_tree::ascii_copy_with_unchanged_offsets(cmd)) {
         Ok(tree) => tree,
         Err(reason) => return Verdict::Deny(reason.into()),
-    };
-    let unparsed = || {
-        Verdict::Deny(
-            "discipline could not parse this shell command, so it cannot tell where it acts; it is refused".into(),
-        )
     };
     if tree.root_node().has_error() {
         return unparsed();
@@ -873,6 +987,19 @@ pub fn judge_shell(cmd: &str, cwd: &Path, scene: &Scene) -> Verdict {
         let (key, root) = scene.worktrees.owner(&path)?;
         (Some(key) != here.as_ref()).then(|| (key.clone(), root.clone()))
     };
+    let forbidden_in = |p: &str, dir: &Path| -> Option<Verdict> {
+        let f = scene.forbidden?;
+        let path = resolve(p, dir);
+        let (_, root) = scene.worktrees.owner(&path)?;
+        let rel = path.strip_prefix(root).ok()?;
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        f.matches(&rel).then(|| {
+            Verdict::Deny(format!(
+                "{} matches `scope-confinement`'s forbidden_paths; this repository does not let an agent edit it",
+                q(&rel)
+            ))
+        })
+    };
     let dynamic = |what: &str| {
         Verdict::Deny(format!(
             "the {what} in this command expands when it runs, so discipline cannot tell which worktree it acts on; it is refused. Use a literal path"
@@ -885,6 +1012,15 @@ pub fn judge_shell(cmd: &str, cwd: &Path, scene: &Scene) -> Verdict {
             q(&scene.worktrees.here),
             key = q(key)
         ))
+    };
+    let check_write_target = |target: &str, dir: &Path| -> Option<Verdict> {
+        if target.starts_with("/dev/") {
+            return None;
+        }
+        if let Some((key, root)) = foreign(target, dir) {
+            return Some(other_wt("writes into", &key, &root));
+        }
+        forbidden_in(target, dir)
     };
     // Commands in source order; `cd` moves the directory the later ones run in.
     let mut dir = cwd.to_path_buf();
@@ -921,47 +1057,450 @@ pub fn judge_shell(cmd: &str, cwd: &Path, scene: &Scene) -> Verdict {
                 let Some(target) = literal(dest, cmd) else {
                     return dynamic("redirect target");
                 };
-                if target.starts_with("/dev/") {
-                    continue;
-                }
-                if let Some((key, root)) = foreign(&target, &dir) {
-                    return other_wt("writes into", &key, &root);
+                if let Some(v) = check_write_target(&target, &dir) {
+                    return v;
                 }
             }
             "command" => {
-                let Some(name) = n.child_by_field_name("name") else {
+                let Some(name_node) = n.child_by_field_name("name") else {
                     continue;
                 };
-                let Some(name) = name.named_child(0).and_then(|w| literal(w, cmd)) else {
+                let Some(name_word) = name_node.named_child(0) else {
                     continue;
+                };
+                let Some(raw_name) = literal(name_word, cmd) else {
+                    return dynamic("command name");
                 };
                 let mut c = n.walk();
                 let args: Vec<tree_sitter::Node> =
                     n.children_by_field_name("argument", &mut c).collect();
-                let arg = |i: usize| args.get(i).map(|a| literal(*a, cmd));
-                match name.as_str() {
+                let raw_args: Vec<Option<String>> = args.iter().map(|a| literal(*a, cmd)).collect();
+
+                let mut cmd_dir = dir.clone();
+                let mut eff_name = raw_name;
+                let mut eff_args: &[Option<String>] = &raw_args;
+
+                // Unwrap prefix wrappers (`env`, `command`, `builtin`, `exec`, `nohup`, `nice`, `time`, `sudo`, `doas`).
+                let mut skip_command = false;
+                loop {
+                    let base = Path::new(&eff_name)
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(eff_name.as_str());
+                    match base {
+                        "env" => {
+                            let mut idx = 0;
+                            let mut next_cmd = None;
+                            while idx < eff_args.len() {
+                                let Some(a) = eff_args[idx].as_deref() else {
+                                    return dynamic("`env` argument");
+                                };
+                                if a == "--" {
+                                    idx += 1;
+                                    break;
+                                } else if a == "-u" || a == "--unset" {
+                                    idx += 2;
+                                } else if a == "-C" || a == "--chdir" {
+                                    let Some(Some(target)) = eff_args.get(idx + 1) else {
+                                        return dynamic("`env -C` directory");
+                                    };
+                                    if let Some((key, root)) = foreign(target, &cmd_dir) {
+                                        return other_wt("changes into", &key, &root);
+                                    }
+                                    cmd_dir = resolve(target, &cmd_dir);
+                                    idx += 2;
+                                } else if let Some(target) = a.strip_prefix("--chdir=") {
+                                    if let Some((key, root)) = foreign(target, &cmd_dir) {
+                                        return other_wt("changes into", &key, &root);
+                                    }
+                                    cmd_dir = resolve(target, &cmd_dir);
+                                    idx += 1;
+                                } else if a == "-S" || a == "--split-string" {
+                                    let Some(Some(s_cmd)) = eff_args.get(idx + 1) else {
+                                        return dynamic("`env -S` command");
+                                    };
+                                    let v = judge_shell_depth(s_cmd, &cmd_dir, scene, depth + 1);
+                                    if matches!(v, Verdict::Deny(_)) {
+                                        return v;
+                                    }
+                                    idx += 2;
+                                } else if let Some(s_cmd) = a.strip_prefix("--split-string=") {
+                                    let v = judge_shell_depth(s_cmd, &cmd_dir, scene, depth + 1);
+                                    if matches!(v, Verdict::Deny(_)) {
+                                        return v;
+                                    }
+                                    idx += 1;
+                                } else if a.starts_with('-') || a.contains('=') {
+                                    idx += 1;
+                                } else {
+                                    next_cmd = Some((a.to_string(), &eff_args[idx + 1..]));
+                                    break;
+                                }
+                            }
+                            if next_cmd.is_none() && idx < eff_args.len() {
+                                let Some(a) = eff_args[idx].as_deref() else {
+                                    return dynamic("`env` command");
+                                };
+                                next_cmd = Some((a.to_string(), &eff_args[idx + 1..]));
+                            }
+                            if let Some((next_name, rest)) = next_cmd {
+                                eff_name = next_name;
+                                eff_args = rest;
+                            } else {
+                                skip_command = true;
+                                break;
+                            }
+                        }
+                        "command" | "builtin" | "exec" | "nohup" | "time" | "nice" | "sudo"
+                        | "doas" => {
+                            let mut idx = 0;
+                            while idx < eff_args.len() {
+                                let Some(a) = eff_args[idx].as_deref() else {
+                                    return dynamic("wrapper argument");
+                                };
+                                if base == "command" && (a == "-v" || a == "-V") {
+                                    skip_command = true;
+                                    break;
+                                }
+                                if a == "--" {
+                                    idx += 1;
+                                    break;
+                                }
+                                if matches!(
+                                    (base, a),
+                                    ("nice", "-n") | ("sudo" | "doas", "-u" | "-g" | "-C")
+                                ) {
+                                    idx += 2;
+                                    continue;
+                                }
+                                if a.starts_with('-') {
+                                    idx += 1;
+                                } else {
+                                    break;
+                                }
+                            }
+                            if skip_command || idx >= eff_args.len() {
+                                skip_command = true;
+                                break;
+                            }
+                            let Some(next_name) = eff_args[idx].clone() else {
+                                return dynamic("command name");
+                            };
+                            eff_name = next_name;
+                            eff_args = &eff_args[idx + 1..];
+                        }
+                        _ => break,
+                    }
+                }
+                if skip_command {
+                    continue;
+                }
+
+                let base_name = Path::new(&eff_name)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(eff_name.as_str());
+
+                match base_name {
                     "cd" | "pushd" => {
-                        let Some(target) = arg(0) else {
+                        let Some(target) = eff_args.first() else {
                             continue;
                         };
-                        let Some(target) = target else {
+                        let Some(target) = target.as_deref() else {
                             return dynamic("`cd` directory");
                         };
                         if target == "-" {
                             continue;
                         }
-                        if let Some((key, root)) = foreign(&target, &dir) {
+                        if let Some((key, root)) = foreign(target, &cmd_dir) {
                             return other_wt("changes into", &key, &root);
                         }
-                        dir = resolve(&target, &dir);
+                        dir = resolve(target, &cmd_dir);
+                    }
+                    "sh" | "bash" | "zsh" | "dash" | "ksh" => {
+                        let mut i = 0;
+                        let mut has_c = false;
+                        while i < eff_args.len() {
+                            let Some(a) = eff_args[i].as_deref() else {
+                                return dynamic("shell argument");
+                            };
+                            if a == "--" {
+                                i += 1;
+                                break;
+                            }
+                            if a == "-c"
+                                || (a.starts_with('-')
+                                    && !a.starts_with("--")
+                                    && a[1..].contains('c'))
+                            {
+                                has_c = true;
+                                i += 1;
+                                break;
+                            }
+                            if a == "-o" || a == "+o" {
+                                i += 2;
+                            } else if a.starts_with('-') || a.starts_with('+') {
+                                i += 1;
+                            } else {
+                                break;
+                            }
+                        }
+                        if has_c {
+                            let Some(Some(script)) = eff_args.get(i) else {
+                                return dynamic("shell `-c` command");
+                            };
+                            let v = judge_shell_depth(script, &cmd_dir, scene, depth + 1);
+                            if matches!(v, Verdict::Deny(_)) {
+                                return v;
+                            }
+                        } else if let Some(Some(script_path)) = eff_args.get(i) {
+                            if let Some(v) = check_write_target(script_path, &cmd_dir) {
+                                return v;
+                            }
+                        }
+                    }
+                    "eval" => {
+                        let mut parts = Vec::with_capacity(eff_args.len());
+                        for a in eff_args {
+                            let Some(s) = a.as_deref() else {
+                                return dynamic("`eval` argument");
+                            };
+                            parts.push(s);
+                        }
+                        if !parts.is_empty() {
+                            let v = judge_shell_depth(&parts.join(" "), &cmd_dir, scene, depth + 1);
+                            if matches!(v, Verdict::Deny(_)) {
+                                return v;
+                            }
+                        }
+                    }
+                    "xargs" => {
+                        let mut i = 0;
+                        while i < eff_args.len() {
+                            let Some(a) = eff_args[i].as_deref() else {
+                                return dynamic("`xargs` argument");
+                            };
+                            if a == "--" {
+                                i += 1;
+                                break;
+                            }
+                            if matches!(
+                                a,
+                                "-n" | "-L"
+                                    | "-P"
+                                    | "-I"
+                                    | "-J"
+                                    | "-d"
+                                    | "-s"
+                                    | "-a"
+                                    | "-E"
+                                    | "--max-args"
+                                    | "--max-lines"
+                                    | "--max-procs"
+                                    | "--replace"
+                                    | "--arg-file"
+                                    | "--delimiter"
+                            ) {
+                                i += 2;
+                            } else if a.starts_with('-') {
+                                i += 1;
+                            } else {
+                                break;
+                            }
+                        }
+                        if i < eff_args.len() {
+                            let Some(sub_cmd) = eff_args[i].as_deref() else {
+                                return dynamic("`xargs` command");
+                            };
+                            let sub_base = Path::new(sub_cmd)
+                                .file_name()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or(sub_cmd);
+                            let mut sub_parts = Vec::new();
+                            for a in &eff_args[i..] {
+                                let Some(s) = a.as_deref() else {
+                                    return dynamic("`xargs` argument");
+                                };
+                                sub_parts.push(s);
+                            }
+                            let v =
+                                judge_shell_depth(&sub_parts.join(" "), &cmd_dir, scene, depth + 1);
+                            if matches!(v, Verdict::Deny(_)) {
+                                return v;
+                            }
+                            const XARGS_SAFE_READERS: &[&str] = &[
+                                "echo",
+                                "printf",
+                                "cat",
+                                "head",
+                                "tail",
+                                "wc",
+                                "grep",
+                                "rg",
+                                "ls",
+                                "stat",
+                                "file",
+                                "sha256sum",
+                                "shasum",
+                                "md5sum",
+                                "true",
+                                "false",
+                                "test",
+                            ];
+                            if !XARGS_SAFE_READERS.contains(&sub_base) {
+                                return dynamic("`xargs` command target");
+                            }
+                        }
+                    }
+                    "cp" | "mv" | "rm" | "unlink" | "tee" | "ln" | "touch" | "mkdir" | "rmdir"
+                    | "install" | "truncate" | "chmod" | "chown" | "chgrp" | "patch" => {
+                        let mut i = 0;
+                        let mut after_ddash = false;
+                        while i < eff_args.len() {
+                            let Some(a) = eff_args[i].as_deref() else {
+                                return dynamic("file target");
+                            };
+                            if !after_ddash && a == "--" {
+                                after_ddash = true;
+                                i += 1;
+                                continue;
+                            }
+                            if !after_ddash
+                                && matches!(
+                                    a,
+                                    "-t" | "--target-directory"
+                                        | "-o"
+                                        | "--output"
+                                        | "-d"
+                                        | "--directory"
+                                )
+                            {
+                                let Some(Some(dir_target)) = eff_args.get(i + 1) else {
+                                    return dynamic("file target");
+                                };
+                                if let Some(v) = check_write_target(dir_target, &cmd_dir) {
+                                    return v;
+                                }
+                                i += 2;
+                                continue;
+                            }
+                            if !after_ddash {
+                                if let Some(dir_target) = a
+                                    .strip_prefix("--target-directory=")
+                                    .or_else(|| a.strip_prefix("--output="))
+                                    .or_else(|| a.strip_prefix("--directory="))
+                                {
+                                    if let Some(v) = check_write_target(dir_target, &cmd_dir) {
+                                        return v;
+                                    }
+                                    i += 1;
+                                    continue;
+                                }
+                                if a.starts_with('-') {
+                                    i += 1;
+                                    continue;
+                                }
+                            }
+                            if let Some(v) = check_write_target(a, &cmd_dir) {
+                                return v;
+                            }
+                            if base_name == "ln" {
+                                let stripped = a.trim_start_matches("../");
+                                if stripped != a {
+                                    if let Some(v) = check_write_target(stripped, &cmd_dir) {
+                                        return v;
+                                    }
+                                }
+                            }
+                            i += 1;
+                        }
+                    }
+                    "dd" => {
+                        for a in eff_args {
+                            let Some(a) = a.as_deref() else {
+                                return dynamic("`dd` argument");
+                            };
+                            if let Some(target) = a.strip_prefix("of=") {
+                                if let Some(v) = check_write_target(target, &cmd_dir) {
+                                    return v;
+                                }
+                            }
+                        }
+                    }
+                    "sed" => {
+                        let mut in_place = false;
+                        let mut has_explicit_expr = false;
+                        let mut i = 0;
+                        let mut positional = Vec::new();
+                        let mut after_ddash = false;
+                        while i < eff_args.len() {
+                            let Some(a) = eff_args[i].as_deref() else {
+                                return dynamic("`sed` argument");
+                            };
+                            if !after_ddash && a == "--" {
+                                after_ddash = true;
+                                i += 1;
+                                continue;
+                            }
+                            if !after_ddash && a.starts_with('-') {
+                                if a == "-i"
+                                    || a.starts_with("--in-place")
+                                    || (!a.starts_with("--") && a[1..].contains('i'))
+                                {
+                                    in_place = true;
+                                }
+                                if a == "-e" || a == "-f" || a == "--expression" || a == "--file" {
+                                    has_explicit_expr = true;
+                                    i += 2;
+                                    continue;
+                                }
+                                if a.starts_with("--expression=") || a.starts_with("--file=") {
+                                    has_explicit_expr = true;
+                                }
+                                i += 1;
+                                continue;
+                            }
+                            positional.push(a);
+                            i += 1;
+                        }
+                        if in_place {
+                            let files = if has_explicit_expr {
+                                &positional[..]
+                            } else {
+                                positional.get(1..).unwrap_or(&[])
+                            };
+                            for f in files {
+                                if let Some(v) = check_write_target(f, &cmd_dir) {
+                                    return v;
+                                }
+                            }
+                        }
+                    }
+                    "python" | "python2" | "python3" | "perl" | "ruby" | "node" | "deno"
+                    | "bun" | "php" => {
+                        for a in eff_args {
+                            let Some(a) = a.as_deref() else {
+                                return dynamic("interpreter argument");
+                            };
+                            if !a.starts_with('-') {
+                                if let Some(v) = check_write_target(a, &cmd_dir) {
+                                    return v;
+                                }
+                            }
+                            for token in extract_script_path_candidates(a) {
+                                if let Some(v) = check_write_target(&token, &cmd_dir) {
+                                    return v;
+                                }
+                            }
+                        }
                     }
                     "git" => {
                         let mut i = 0;
-                        let mut git_dir = dir.clone();
+                        let mut git_dir = cmd_dir.clone();
                         let mut elsewhere: Option<(String, PathBuf)> = None;
-                        let mut sub = None;
-                        while i < args.len() {
-                            let Some(a) = arg(i).flatten() else {
+                        let mut sub: Option<(usize, String)> = None;
+                        while i < eff_args.len() {
+                            let Some(a) = eff_args[i].as_deref() else {
                                 if sub.is_none() {
                                     return dynamic("git option");
                                 }
@@ -972,12 +1511,19 @@ pub fn judge_shell(cmd: &str, cwd: &Path, scene: &Scene) -> Verdict {
                                 i += 1;
                                 continue;
                             }
-                            let value = |j: usize| arg(j).flatten();
-                            let (opt, val) = match a.split_once('=') {
-                                Some((o, v)) if o.starts_with("--") => {
+                            let value = |j: usize| eff_args.get(j).and_then(|x| x.clone());
+                            let (opt, val) = if let Some((o, v)) = a.split_once('=') {
+                                if o.starts_with("--") {
                                     (o.to_string(), Some(v.to_string()))
+                                } else {
+                                    (a.to_string(), None)
                                 }
-                                _ => (a.clone(), None),
+                            } else if let Some(v) = a.strip_prefix("-C").filter(|v| !v.is_empty()) {
+                                ("-C".to_string(), Some(v.to_string()))
+                            } else if let Some(v) = a.strip_prefix("-c").filter(|v| !v.is_empty()) {
+                                ("-c".to_string(), Some(v.to_string()))
+                            } else {
+                                (a.to_string(), None)
                             };
                             match opt.as_str() {
                                 "-C" | "--git-dir" | "--work-tree" => {
@@ -998,12 +1544,21 @@ pub fn judge_shell(cmd: &str, cwd: &Path, scene: &Scene) -> Verdict {
                                         git_dir = resolve(&v, &git_dir);
                                     }
                                 }
+                                "-c" | "--config-env" | "--exec-path" | "--namespace"
+                                | "--super-prefix" => {
+                                    if val.is_none() {
+                                        i += 1;
+                                        if value(i).is_none() {
+                                            return dynamic("git option");
+                                        }
+                                    }
+                                }
                                 o if o.starts_with('-') => {}
-                                _ => sub = Some(a.clone()),
+                                _ => sub = Some((i, a.to_string())),
                             }
                             i += 1;
                         }
-                        let sub = sub.unwrap_or_default();
+                        let (sub_idx, sub) = sub.unwrap_or((eff_args.len(), String::new()));
                         if let Some((key, root)) = elsewhere {
                             if !GIT_READ_ONLY.contains(&sub.as_str()) {
                                 return other_wt(
@@ -1014,7 +1569,9 @@ pub fn judge_shell(cmd: &str, cwd: &Path, scene: &Scene) -> Verdict {
                             }
                         }
                         if sub == "push" {
-                            if let Some(v) = judge_push(&args, cmd, scene) {
+                            if let Some(v) =
+                                judge_push_words(eff_args.get(sub_idx + 1..).unwrap_or(&[]), scene)
+                            {
                                 return v;
                             }
                         }
@@ -1028,19 +1585,42 @@ pub fn judge_shell(cmd: &str, cwd: &Path, scene: &Scene) -> Verdict {
     Verdict::Allow
 }
 
+fn extract_script_path_candidates(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for quote in ['\'', '"'] {
+        let mut rest = s;
+        while let Some((_, after_open)) = rest.split_once(quote) {
+            if let Some((inside, after_close)) = after_open.split_once(quote) {
+                if !inside.is_empty() {
+                    out.push(inside.to_string());
+                }
+                rest = after_close;
+            } else {
+                break;
+            }
+        }
+    }
+    for tok in s.split(|c: char| {
+        c.is_whitespace()
+            || matches!(
+                c,
+                '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';' | ':' | '\'' | '"'
+            )
+    }) {
+        if !tok.is_empty() && !tok.starts_with('-') {
+            out.push(tok.to_string());
+        }
+    }
+    out
+}
+
 /// A force push (`-f`, `--force`, `--force-with-lease`, a `+` refspec) of a branch
 /// another worktree's live lease claims. Without a refspec the push is of this
 /// worktree's branch.
-fn judge_push(args: &[tree_sitter::Node], cmd: &str, scene: &Scene) -> Option<Verdict> {
-    let words: Vec<Option<String>> = args.iter().map(|a| literal(*a, cmd)).collect();
-    let after: Vec<&Option<String>> = words
-        .iter()
-        .skip_while(|w| w.as_deref() != Some("push"))
-        .skip(1)
-        .collect();
+fn judge_push_words(after_push: &[Option<String>], scene: &Scene) -> Option<Verdict> {
     let mut force = false;
     let mut positional = Vec::new();
-    for w in &after {
+    for w in after_push {
         match w.as_deref() {
             None => return Some(Verdict::Deny(
                 "a `git push` argument in this command expands when it runs, so discipline cannot tell which branch it pushes; it is refused".into(),
@@ -2009,6 +2589,161 @@ mod tests {
         assert_eq!(
             judge(&edit("r\u{e9}sum\u{e9}.txt", "s-other"), &cwd, &leased),
             Verdict::Allow
+        );
+    }
+
+    #[test]
+    fn shell_confinement_wrappers_git_options_symlinks_and_unparsed_tool_hardening() {
+        let d = tempfile::tempdir().unwrap();
+        let main = d.path().join("main");
+        let other = main.join("wt2");
+        std::fs::create_dir_all(&other).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(other.join("new_via_link.txt"), main.join("dangling_link"))
+            .unwrap();
+
+        let wts = scene_with(&[("main", &main), ("wt2", &other)], "main");
+        let f = crate::guards::PathFilter::new(&[".github/workflows/**".to_string()]).unwrap();
+        let main_lease = Lease {
+            agent: "copilot".into(),
+            session: "s-owner".into(),
+            worktree: "/w".into(),
+            branches: vec![],
+            taken_at: 0,
+            heartbeat: 0,
+            ttl_secs: 60,
+        };
+        let other_lease = Lease {
+            agent: "copilot".into(),
+            session: "s-wt2".into(),
+            worktree: "/w2".into(),
+            branches: vec!["feat/stack".into()],
+            taken_at: 0,
+            heartbeat: 0,
+            ttl_secs: 60,
+        };
+        let cwd = main.canonicalize().unwrap();
+
+        // 1. Current-worktree lease must refuse shell calls from another session.
+        let leased_here = vec![("main".to_string(), main_lease)];
+        let leased_scene = Scene {
+            worktrees: &wts,
+            leases: &leased_here,
+            forbidden: Some(&f),
+            branch: Some("work"),
+        };
+        let shell_call = ToolCall {
+            tool: "Bash".into(),
+            edits: false,
+            targets: vec![],
+            session: Some("s-intruder".into()),
+            cwd: Some(cwd.clone()),
+            command: Some("echo hi > a.txt".into()),
+        };
+        assert!(
+            matches!(judge(&shell_call, &cwd, &leased_scene), Verdict::Deny(r) if r.contains("leased by `copilot` session `s-owner`")),
+            "shell call from non-holder session must be refused"
+        );
+
+        // 2. Dangling symlink pointing into another worktree must be refused on edit and shell write.
+        let other_leases = vec![("wt2".to_string(), other_lease)];
+        let scene = Scene {
+            worktrees: &wts,
+            leases: &other_leases,
+            forbidden: Some(&f),
+            branch: Some("work"),
+        };
+        #[cfg(unix)]
+        {
+            assert!(
+                matches!(judge(&edit("dangling_link", "s-owner"), &cwd, &scene), Verdict::Deny(r) if r.contains("worktree `wt2`")),
+                "edit through dangling symlink into wt2 must be refused"
+            );
+            assert!(
+                matches!(
+                    judge_shell("echo hi > dangling_link", &cwd, &scene),
+                    Verdict::Deny(_)
+                ),
+                "redirect through dangling symlink into wt2 must be refused"
+            );
+        }
+
+        // 3. Backslash paths in edit targets and shell commands must be normalized.
+        assert!(
+            matches!(
+                judge(&edit("wt2\\escape.txt", "s-owner"), &cwd, &scene),
+                Verdict::Deny(_)
+            ),
+            "backslash path in edit target must be refused"
+        );
+        assert!(
+            matches!(
+                judge(&edit(".github\\workflows\\ci.yml", "s-owner"), &cwd, &scene),
+                Verdict::Deny(_)
+            ),
+            "backslash forbidden_paths target must be refused"
+        );
+
+        // 4. Shell wrappers, /usr/bin/git, git -c option confusion, mutating tools, interpreters, and forbidden_paths.
+        for refused in [
+            "echo hi > .github/workflows/ci.yml",
+            "cp a.txt wt2/a.txt",
+            "cp a.txt .github/workflows/ci.yml",
+            "mv a.txt wt2/a.txt",
+            "rm wt2/a.txt",
+            "rm .github/workflows/ci.yml",
+            "tee wt2/a.txt",
+            "tee .github/workflows/ci.yml",
+            "ln -s ../wt2/a.txt link",
+            "sed -i 's/a/b/' wt2/a.txt",
+            "sed -i 's/a/b/' .github/workflows/ci.yml",
+            "/usr/bin/git -C wt2 commit -m x",
+            "env git -C wt2 commit -m x",
+            "git -C wt2 worktree remove .",
+            "git -C wt2 remote set-url origin https://evil.example/r",
+            "git -C wt2 config core.hooksPath /tmp",
+            "git -c status push --force origin feat/stack",
+            "git -c user.name=status -C wt2 commit -m x",
+            "sh -c 'cd wt2 && echo hi > x'",
+            "bash -lc 'git -C wt2 reset --hard'",
+            "eval 'cd wt2'",
+            "echo wt2/a.txt | xargs rm",
+            "cd w\\t2",
+            "\\g\\i\\t -C wt2 commit -m x",
+            "python3 -c \"open('wt2/x.txt', 'w').write('a')\"",
+            "python3 -c \"open('.github/workflows/ci.yml', 'w').write('a')\"",
+            "node -e \"require('fs').writeFileSync('wt2/x.txt', 'a')\"",
+            "perl -pi -e 's/a/b/' wt2/x.txt",
+            "ruby -e \"File.write('.github/workflows/ci.yml', 'a')\"",
+        ] {
+            assert!(
+                matches!(judge_shell(refused, &cwd, &scene), Verdict::Deny(_)),
+                "expected Deny for shell bypass: `{refused}`"
+            );
+        }
+
+        // 5. unparsed_read_only_tool must anchor to leading key and reject \u escapes and unknown tools.
+        assert_eq!(
+            unparsed_read_only_tool(r#"{"tool_name":"Read","tool_input":{"file_path":"/tmp/x"#),
+            Some("Read".to_string())
+        );
+        assert_eq!(
+            unparsed_read_only_tool(
+                r#"{"tool_name":"\u0057rite","tool_input":{"content":"Read","file_path":"/tmp/x"#
+            ),
+            None
+        );
+        assert_eq!(
+            unparsed_read_only_tool(
+                r#"{"tool_name":"CustomWrite","tool_input":{"content":"Read","file_path":"/tmp/x"#
+            ),
+            None
+        );
+        assert_eq!(
+            unparsed_read_only_tool(
+                r#"{"cwd":"/repo","note":"Read","tool_name":"Write","tool_input":{"file_path":"/tmp/x"#
+            ),
+            None
         );
     }
 }

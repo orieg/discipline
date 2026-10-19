@@ -757,3 +757,69 @@ fn if_configured_acts_only_in_a_repository_with_discipline_toml() {
     let o = pretool(&main, "copilot", "not json", &guarded);
     assert!(denied("copilot", &o), "{} {}", o.stdout, o.stderr);
 }
+
+#[test]
+fn shell_respects_worktree_lease_and_base_forbidden_paths_survive_worktree_tampering() {
+    let (repo, main, _wt2) = two_worktrees();
+    std::fs::write(
+        main.join("discipline.toml"),
+        "[gates.scope-confinement]\nenabled = true\nforbidden_paths = [\".github/workflows/**\"]\n",
+    )
+    .unwrap();
+    repo.git(&["add", "discipline.toml"]);
+    repo.git(&["commit", "-q", "-m", "chore: lock forbidden_paths"]);
+    repo.git(&["branch", "-f", "main", "HEAD"]);
+
+    // Tamper with the working tree's discipline.toml to weaken forbidden_paths.
+    std::fs::write(
+        main.join("discipline.toml"),
+        "[gates.scope-confinement]\nenabled = false\nforbidden_paths = []\n",
+    )
+    .unwrap();
+
+    // Direct edit to forbidden path is still refused via base config.
+    let edit_ci = payload(
+        "claude-code/write.json",
+        &main,
+        &main.join(".github/workflows/ci.yml"),
+    );
+    let o = pretool(&main, "claude-code", &edit_ci, &[]);
+    assert_eq!(o.code, 2, "{}", o.stderr);
+    assert!(o.stderr.contains("forbidden_paths"), "{}", o.stderr);
+
+    // Shell command writing to forbidden path is refused too.
+    let sh_ci = shell(
+        "claude-code",
+        "",
+        &main,
+        "echo pwn > .github/workflows/ci.yml",
+    );
+    let o = pretool(&main, "claude-code", &sh_ci, &[]);
+    assert_eq!(o.code, 2, "{}", o.stderr);
+    assert!(o.stderr.contains("forbidden_paths"), "{}", o.stderr);
+
+    // Lease the worktree to another session; a shell call from this session is refused.
+    let take = repo.run(
+        &[
+            "lease",
+            "take",
+            "--agent",
+            "copilot",
+            "--session",
+            "holder-session",
+            "--branch",
+            "work",
+        ],
+        &[],
+    );
+    assert_eq!(take.code, 0, "{}", take.stderr);
+    let sh_benign = shell("claude-code", "", &main, "echo hi > own.txt");
+    let o = pretool(&main, "claude-code", &sh_benign, &[]);
+    assert_eq!(o.code, 2, "{}", o.stderr);
+    assert!(
+        o.stderr
+            .contains("leased by `copilot` session `holder-session`"),
+        "{}",
+        o.stderr
+    );
+}

@@ -111,13 +111,23 @@ pub fn session_key(raw: &str) -> Option<String> {
     Some(trimmed.chars().take(MAX_KEY_LEN).collect())
 }
 
-struct Lock(PathBuf);
+struct Lock {
+    path: PathBuf,
+    identity: Option<(u64, u64)>,
+    _file: std::fs::File,
+}
 
 impl Drop for Lock {
     fn drop(&mut self) {
-        if let Err(e) = std::fs::remove_file(&self.0) {
+        if !lock_matches_identity(&self.path, self.identity) {
+            return;
+        }
+        if let Err(e) = std::fs::remove_file(&self.path) {
             if e.kind() != std::io::ErrorKind::NotFound {
-                eprintln!("session: could not remove lock {}: {e}", self.0.display());
+                eprintln!(
+                    "session: could not remove lock {}: {e}",
+                    self.path.display()
+                );
             }
         }
     }
@@ -144,7 +154,14 @@ impl SessionStore {
         let path = self.dir.join(".lock");
         for _ in 0..LOCK_ATTEMPTS {
             match open_owner_only(&path) {
-                Ok(_) => return Ok(Lock(path)),
+                Ok(f) => {
+                    let identity = f.metadata().ok().and_then(|m| file_identity(&m));
+                    return Ok(Lock {
+                        path,
+                        identity,
+                        _file: f,
+                    });
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     let stale = std::fs::metadata(&path)
                         .and_then(|m| m.modified())
@@ -152,15 +169,10 @@ impl SessionStore {
                         .and_then(|t| t.elapsed().ok())
                         .is_some_and(|age| age.as_secs() > STALE_LOCK_SECS);
                     if stale {
-                        match std::fs::remove_file(&path) {
-                            Ok(()) => continue,
-                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                            Err(e) => {
-                                return Err(e).with_context(|| {
-                                    format!("cannot remove stale session lock {}", path.display())
-                                })
-                            }
-                        }
+                        break_stale_lock(&self.dir, &path, STALE_LOCK_SECS).with_context(|| {
+                            format!("cannot remove stale session lock {}", path.display())
+                        })?;
+                        continue;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(LOCK_RETRY_MS));
                 }
@@ -237,7 +249,7 @@ impl SessionStore {
         state.agent = agent.to_string();
         state.updated_at = now;
         let out = f(&mut state);
-        let tmp = self.dir.join(format!(".{key}.tmp"));
+        let tmp = self.dir.join(format!(".{key}.{}.tmp", std::process::id()));
         write_owner_only(
             &tmp,
             (serde_json::to_string_pretty(&state)? + "\n").as_bytes(),
@@ -248,9 +260,61 @@ impl SessionStore {
     }
 }
 
+pub(crate) fn file_identity(meta: &std::fs::Metadata) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        Some((meta.dev(), meta.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        None
+    }
+}
+
+pub(crate) fn lock_matches_identity(path: &Path, expected: Option<(u64, u64)>) -> bool {
+    let Some(expected) = expected else {
+        return true;
+    };
+    std::fs::symlink_metadata(path)
+        .ok()
+        .and_then(|m| file_identity(&m))
+        .is_some_and(|actual| actual == expected)
+}
+
+/// Atomically breaks a stale lock file by renaming it to a per-PID trash file before
+/// unlinking, verifying age on the trash path so a fresh lock created in a race is restored.
+pub(crate) fn break_stale_lock(dir: &Path, path: &Path, stale_secs: u64) -> std::io::Result<()> {
+    let trash = dir.join(format!(".lock.stale.{}", std::process::id()));
+    match std::fs::rename(path, &trash) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    }
+    let still_stale = std::fs::metadata(&trash)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age.as_secs() > stale_secs);
+    if !still_stale {
+        if let Err(e) = std::fs::rename(&trash, path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("discipline: could not restore lock {}: {e}", path.display());
+            }
+        }
+        return Ok(());
+    }
+    match std::fs::remove_file(&trash) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 /// Creates `path` for writing (`create_new`: an existing file is an error), readable by
 /// its owner only (`0600` on Unix; elsewhere the platform's default).
-fn open_owner_only(path: &Path) -> std::io::Result<std::fs::File> {
+pub(crate) fn open_owner_only(path: &Path) -> std::io::Result<std::fs::File> {
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
@@ -263,7 +327,7 @@ fn open_owner_only(path: &Path) -> std::io::Result<std::fs::File> {
 
 /// Writes `bytes` to `path` with [`open_owner_only`]. A file left from an earlier write
 /// is removed first, so the mode is the one this call creates it with, not that file's.
-fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
     match std::fs::remove_file(path) {
         Ok(()) => {}
@@ -793,5 +857,25 @@ mod tests {
             .unwrap();
         let after = store.load("s1", "claude-code", 106).unwrap();
         assert_eq!(after.consecutive_calls, 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replaced_session_lock_is_not_unlinked_on_drop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SessionStore {
+            dir: tmp.path().join("sessions"),
+        };
+        let old_lock = store.lock().unwrap();
+        let lock_path = store.dir.join(".lock");
+        let trash = store.dir.join(".lock.stale.sim");
+        std::fs::rename(&lock_path, &trash).unwrap();
+        std::fs::remove_file(&trash).unwrap();
+        std::fs::write(&lock_path, "replacement").unwrap();
+        drop(old_lock);
+        assert!(
+            lock_path.exists(),
+            "dropping a superseded session Lock must not unlink a newer .lock inode"
+        );
     }
 }

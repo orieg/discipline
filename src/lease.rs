@@ -176,15 +176,25 @@ pub fn now() -> i64 {
 }
 
 /// Held while leases are read and written; removed on drop.
-struct Lock(PathBuf);
+struct Lock {
+    path: PathBuf,
+    identity: Option<(u64, u64)>,
+    _file: std::fs::File,
+}
 
 impl Drop for Lock {
     fn drop(&mut self) {
+        if !crate::session::lock_matches_identity(&self.path, self.identity) {
+            return;
+        }
         // Drop cannot return an error. A lock left behind blocks later takes until it
         // is stale (STALE_LOCK_SECS), so the failure is said rather than dropped.
-        if let Err(e) = std::fs::remove_file(&self.0) {
+        if let Err(e) = std::fs::remove_file(&self.path) {
             if e.kind() != std::io::ErrorKind::NotFound {
-                eprintln!("lease: could not remove the lock {}: {e}", self.0.display());
+                eprintln!(
+                    "lease: could not remove the lock {}: {e}",
+                    self.path.display()
+                );
             }
         }
     }
@@ -204,12 +214,18 @@ impl Store {
             .with_context(|| format!("cannot create {}", self.dir.display()))?;
         let path = self.dir.join(".lock");
         for _ in 0..LOCK_ATTEMPTS {
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
-                Ok(_) => return Ok(Lock(path)),
+            match crate::session::open_owner_only(&path) {
+                Ok(f) => {
+                    let identity = f
+                        .metadata()
+                        .ok()
+                        .and_then(|m| crate::session::file_identity(&m));
+                    return Ok(Lock {
+                        path,
+                        identity,
+                        _file: f,
+                    });
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     let old = std::fs::metadata(&path)
                         .and_then(|m| m.modified())
@@ -217,15 +233,11 @@ impl Store {
                         .and_then(|t| t.elapsed().ok())
                         .is_some_and(|age| age.as_secs() > STALE_LOCK_SECS);
                     if old {
-                        match std::fs::remove_file(&path) {
-                            Ok(()) => continue,
-                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                            Err(e) => {
-                                return Err(e).with_context(|| {
-                                    format!("cannot remove the stale lease lock {}", path.display())
-                                })
-                            }
-                        }
+                        crate::session::break_stale_lock(&self.dir, &path, STALE_LOCK_SECS)
+                            .with_context(|| {
+                                format!("cannot remove the stale lease lock {}", path.display())
+                            })?;
+                        continue;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(LOCK_RETRY_MS));
                 }
@@ -246,9 +258,14 @@ impl Store {
 
     fn write(&self, key: &str, lease: &Lease) -> Result<()> {
         let path = self.path(key);
-        let tmp = self.dir.join(format!(".{}.tmp", safe_key(key)));
-        std::fs::write(&tmp, serde_json::to_string_pretty(lease)? + "\n")
-            .with_context(|| format!("cannot write {}", tmp.display()))?;
+        let tmp = self
+            .dir
+            .join(format!(".{}.{}.tmp", safe_key(key), std::process::id()));
+        crate::session::write_owner_only(
+            &tmp,
+            (serde_json::to_string_pretty(lease)? + "\n").as_bytes(),
+        )
+        .with_context(|| format!("cannot write {}", tmp.display()))?;
         std::fs::rename(&tmp, &path).with_context(|| format!("cannot write {}", path.display()))
     }
 
@@ -769,5 +786,34 @@ mod tests {
         );
         assert_eq!(safe_key("../evil/name"), "_evil_name");
         assert_eq!(safe_key(".."), "_");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lease_files_are_owner_only_and_replaced_lock_is_not_unlinked_on_drop() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (_d, s) = store();
+        s.take("wt-a", lease(&["main"], 0), 1000, false).unwrap();
+        let mode = std::fs::metadata(s.path("wt-a"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "lease file must be 0600, got {mode:o}");
+
+        // Acquire a lock, simulate another process breaking and replacing `.lock` with a new inode,
+        // and verify dropping the old `Lock` does not unlink the replacement `.lock`.
+        let old_lock = s.lock().unwrap();
+        let lock_path = s.dir.join(".lock");
+        let trash = s.dir.join(".lock.stale.sim");
+        std::fs::rename(&lock_path, &trash).unwrap();
+        std::fs::remove_file(&trash).unwrap();
+        std::fs::write(&lock_path, "replacement").unwrap();
+        drop(old_lock);
+        assert!(
+            lock_path.exists(),
+            "dropping a superseded Lock must not unlink a newer .lock inode"
+        );
+        std::fs::remove_file(&lock_path).unwrap();
     }
 }
