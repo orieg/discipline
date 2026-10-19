@@ -672,7 +672,10 @@ pub fn matches_vouched_command(ran: &str, vouched: &[String]) -> Option<String> 
 /// with no target running at least 1 test, or `no tests ran`).
 pub fn output_is_vacuous(output: &str) -> bool {
     static NON_ZERO_PASSED: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"\b[1-9][0-9]* passed\b").expect("valid regex")
+        regex::Regex::new(
+            r"(?im)^test result: ok\. [1-9][0-9]* passed;\s*0 failed\b|^=+ [1-9][0-9]* passed\b.*=+$|^\s*tests:\s+[1-9][0-9]* passed\b",
+        )
+        .expect("valid regex")
     });
     static ZERO_PASSED: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(r"(?i)\b0 passed;\s*0 failed\b|\bno tests ran\b|\bran 0 tests\b")
@@ -876,6 +879,15 @@ mod tests {
         assert!(
             lock_path.exists(),
             "dropping a superseded session Lock must not unlink a newer .lock inode"
+        );
+    }
+
+    #[test]
+    fn output_is_vacuous_rejects_zero_passed_even_with_forged_passed_prefix() {
+        let forged = "step 1 passed\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out\n";
+        assert!(
+            output_is_vacuous(forged),
+            "0-test run preceded by `1 passed` prose must still be classified as vacuous"
         );
     }
 }

@@ -5,7 +5,7 @@
 //! (Copilot CLI, agy; docs/ROADMAP.md Phase 17 Step 2b).
 
 use crate::hook::Agent;
-use anyhow::{bail, Result};
+use anyhow::{bail, Context as _, Result};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -104,23 +104,32 @@ pub fn parse_copilot_transcript(content: &str) -> Result<TurnEnding> {
         }
     }
 
-    // 2. Iterate JSON Lines from the end.
-    let mut last_non_empty = None;
-    for line in content.lines().rev() {
+    // 2. Validate all non-empty JSON Lines and inspect from the end.
+    let mut records = Vec::new();
+    for (idx, line) in content.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
-        if last_non_empty.is_none() {
-            last_non_empty = Some(trimmed);
-            if serde_json::from_str::<Value>(trimmed).is_err() {
-                bail!("final line of transcript is malformed or incomplete JSON");
-            }
+        let val = serde_json::from_str::<Value>(trimmed).with_context(|| {
+            format!(
+                "line {} of transcript is malformed or incomplete JSON",
+                idx + 1
+            )
+        })?;
+        if !val.is_object() {
+            bail!("line {} of transcript is not a JSON object", idx + 1);
         }
-        if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
-            if val.get("type").and_then(Value::as_str) == Some("assistant.message") {
-                return Ok(copilot_turn_from_value(&val));
+        records.push(val);
+    }
+
+    for val in records.iter().rev() {
+        match val.get("type").and_then(Value::as_str) {
+            Some("assistant.message") => return Ok(copilot_turn_from_value(val)),
+            Some("user.message") => {
+                bail!("transcript has an intervening user.message after the last assistant.message")
             }
+            _ => {}
         }
     }
 
@@ -157,23 +166,32 @@ pub fn parse_agy_transcript(content: &str) -> Result<TurnEnding> {
         }
     }
 
-    // 2. Iterate JSON Lines from the end.
-    let mut last_non_empty = None;
-    for line in content.lines().rev() {
+    // 2. Validate all non-empty JSON Lines and inspect from the end.
+    let mut records = Vec::new();
+    for (idx, line) in content.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
-        if last_non_empty.is_none() {
-            last_non_empty = Some(trimmed);
-            if serde_json::from_str::<Value>(trimmed).is_err() {
-                bail!("final line of transcript is malformed or incomplete JSON");
-            }
+        let val = serde_json::from_str::<Value>(trimmed).with_context(|| {
+            format!(
+                "line {} of transcript is malformed or incomplete JSON",
+                idx + 1
+            )
+        })?;
+        if !val.is_object() {
+            bail!("line {} of transcript is not a JSON object", idx + 1);
         }
-        if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
-            if val.get("type").and_then(Value::as_str) == Some("PLANNER_RESPONSE") {
-                return Ok(agy_turn_from_value(&val));
+        records.push(val);
+    }
+
+    for val in records.iter().rev() {
+        match val.get("type").and_then(Value::as_str) {
+            Some("PLANNER_RESPONSE") => return Ok(agy_turn_from_value(val)),
+            Some("USER_INPUT") => {
+                bail!("transcript has an intervening USER_INPUT after the last PLANNER_RESPONSE")
             }
+            _ => {}
         }
     }
 
@@ -295,5 +313,30 @@ mod tests {
         let turn_agy = read_final_turn(Agent::Agy, temp_agy.path()).unwrap();
         assert_eq!(turn_agy.message.as_deref(), Some("Now let me commit."));
         assert!(!turn_agy.tool_call_followed);
+    }
+
+    #[test]
+    fn corrupt_earlier_lines_and_intervening_user_messages_are_rejected() {
+        let copilot_corrupt = "{not json\n{\"type\":\"assistant.message\",\"data\":{\"content\":\"done\",\"toolRequests\":[]}}\n";
+        assert!(
+            parse_copilot_transcript(copilot_corrupt).is_err(),
+            "corrupt earlier line in Copilot JSONL must fail closed"
+        );
+        let agy_corrupt = "{not json\n{\"type\":\"PLANNER_RESPONSE\",\"content\":\"done\"}\n";
+        assert!(
+            parse_agy_transcript(agy_corrupt).is_err(),
+            "corrupt earlier line in Agy JSONL must fail closed"
+        );
+
+        let copilot_intervening_user = "{\"type\":\"assistant.message\",\"data\":{\"content\":\"Now let me run the tests.\",\"toolRequests\":[]}}\n{\"type\":\"user.message\",\"data\":{\"content\":\"stop\"}}\n";
+        assert!(
+            parse_copilot_transcript(copilot_intervening_user).is_err(),
+            "intervening user.message after last assistant.message must fail closed"
+        );
+        let agy_intervening_user = "{\"type\":\"PLANNER_RESPONSE\",\"content\":\"Now let me run the tests.\"}\n{\"type\":\"USER_INPUT\",\"content\":\"stop\"}\n";
+        assert!(
+            parse_agy_transcript(agy_intervening_user).is_err(),
+            "intervening USER_INPUT after last PLANNER_RESPONSE must fail closed"
+        );
     }
 }

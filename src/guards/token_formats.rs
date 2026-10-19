@@ -152,9 +152,15 @@ pub fn is_placeholder_or_var(val: &str) -> bool {
         "secret",
         "token",
     ];
-    if known_placeholders
-        .iter()
-        .any(|&p| lower == p || lower.starts_with("todo") || lower.starts_with("fixme"))
+    let has_word_prefix = |prefix: &str| {
+        lower == prefix
+            || lower
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with(|c: char| !c.is_ascii_alphanumeric()))
+    };
+    if known_placeholders.contains(&lower.as_str())
+        || has_word_prefix("todo")
+        || has_word_prefix("fixme")
     {
         return true;
     }
@@ -368,5 +374,20 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), TOKEN_CLASSES.len());
+    }
+
+    #[test]
+    fn todo_and_fixme_prefixes_require_word_boundary() {
+        let header = |value: &str| format!("{}: Bearer {value}", "Authorization");
+        assert!(
+            hit("literal-bearer", &header("todoist_prod_token_9f3kLm2QpX")),
+            "token starting with `todoist_` must not be exempted as a `todo` placeholder"
+        );
+        assert!(
+            hit("literal-bearer", &header("fixmefast_prod_token_9f3kLm2Qp")),
+            "token starting with `fixmefast_` must not be exempted as a `fixme` placeholder"
+        );
+        assert!(!hit("literal-bearer", &header("todo_replace_before_prod")));
+        assert!(!hit("literal-bearer", &header("fixme-replace-before-prod")));
     }
 }

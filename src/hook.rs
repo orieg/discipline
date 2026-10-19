@@ -286,7 +286,7 @@ pub fn parse_payload(raw: &str) -> Payload {
             .any(|k| {
                 v.get(k)
                     .and_then(|l| l.as_array())
-                    .is_some_and(|l| !l.is_empty())
+                    .is_some_and(|l| l.iter().any(is_active_background_entry))
             }),
         transcript_path: v
             .get("transcriptPath")
@@ -522,7 +522,7 @@ fn run_payload(
     let (code, report, detail) = (run.code, run.report, run.stderr);
     // A continuation this hook already caused is let through, so it cannot loop; what
     // is still wrong is said, never passed over.
-    if payload.stop_hook_active {
+    if event == Event::Stop && payload.stop_hook_active {
         return Ok(let_through(agent, event, code));
     }
     if agent == Agent::Agy {
@@ -793,20 +793,74 @@ static TEXT_EXIT_CODE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::
         .expect("valid regex")
 });
 
-/// The exit code stated in `text`, when it states one. The command's own output is in the
-/// same text and can print a line of that form too, so every statement is read: a
-/// non-zero one is the result (the real one is among them), and 0 only when all say 0.
-fn text_exit_code(text: &str) -> Option<i32> {
-    let mut codes = TEXT_EXIT_CODE.captures_iter(text).filter_map(|c| {
-        c.get(1)
-            .or_else(|| c.get(2))
-            .and_then(|m| m.as_str().parse::<i32>().ok())
-    });
-    let first = codes.next()?;
-    if first != 0 {
-        return Some(first);
+fn is_active_background_entry(entry: &serde_json::Value) -> bool {
+    let Some(obj) = entry.as_object() else {
+        return false;
+    };
+    for key in ["status", "state"] {
+        if let Some(s) = obj.get(key).and_then(|v| v.as_str()) {
+            let lower = s.trim().to_ascii_lowercase();
+            if matches!(
+                lower.as_str(),
+                "completed"
+                    | "complete"
+                    | "done"
+                    | "failed"
+                    | "error"
+                    | "errored"
+                    | "cancelled"
+                    | "canceled"
+                    | "killed"
+                    | "stopped"
+                    | "exited"
+                    | "terminated"
+                    | "finished"
+            ) {
+                return false;
+            }
+        }
     }
-    Some(codes.find(|c| *c != 0).unwrap_or(0))
+    true
+}
+
+/// The exit code stated in `text`, when it states one. The command's own output is in the
+/// same text and can print a line of that form too, so every statement is read for a
+/// non-zero code, while a zero code is accepted only in the tail (last 5 lines) or on a
+/// Codex `Exit code: 0` header line.
+fn text_exit_code(text: &str) -> Option<i32> {
+    let lines: Vec<&str> = text.lines().collect();
+    let tail_start = lines.len().saturating_sub(5);
+    let mut saw_trusted_zero = false;
+    for (idx, line) in lines.iter().enumerate() {
+        for c in TEXT_EXIT_CODE.captures_iter(line) {
+            let Some(code) = c
+                .get(1)
+                .or_else(|| c.get(2))
+                .and_then(|m| m.as_str().parse::<i32>().ok())
+            else {
+                continue;
+            };
+            if code != 0 {
+                return Some(code);
+            }
+            let in_tail = idx >= tail_start;
+            let codex_header = idx == 0
+                && line
+                    .trim_start()
+                    .to_ascii_lowercase()
+                    .starts_with("exit code:")
+                && (lines.len() <= 3
+                    || lines.get(1).is_some_and(|l| {
+                        l.trim_start()
+                            .to_ascii_lowercase()
+                            .starts_with("wall time:")
+                    }));
+            if in_tail || codex_header {
+                saw_trusted_zero = true;
+            }
+        }
+    }
+    saw_trusted_zero.then_some(0)
 }
 
 /// The text of `v`: a string, or the `text` of each part of an array of parts.
@@ -998,29 +1052,28 @@ pub fn post_tool_with(
     if if_configured && !configured(&dir) {
         return pass;
     }
-    // Installed hooks run this after every shell command. Where the working tree's
-    // `discipline.toml` does not name the check, return before reading the base ref or
-    // the tree. Only the base ref's configuration switches the check on, so this can skip
-    // a record (a stricter stop), never grant one.
-    if !names_verified_stop(&dir) {
-        return pass;
-    }
     let side = match base {
         Some(b) => CheckSide::Base(b),
         None => CheckSide::Default,
     };
+    // Installed hooks run this after every shell command. Where neither the working tree's
+    // `discipline.toml` nor the base ref's configuration names the check, return early.
+    if !names_verified_stop(&dir, &side) {
+        return pass;
+    }
     witness_post_tool(agent, &dir, &side, stdin);
     pass
 }
 
 /// Whether the `discipline.toml` at the root of `dir`'s working tree mentions
-/// `verified-stop`.
-fn names_verified_stop(dir: &Path) -> bool {
-    crate::gitctx::discover_repository(dir)
+/// `verified-stop`, or the base ref's configuration enables `verified-stop`.
+fn names_verified_stop(dir: &Path, side: &CheckSide) -> bool {
+    let in_workdir = crate::gitctx::discover_repository(dir)
         .ok()
         .and_then(|r| r.workdir().map(|w| w.join("discipline.toml")))
         .and_then(|p| std::fs::read_to_string(p).ok())
-        .is_some_and(|t| t.contains("verified-stop"))
+        .is_some_and(|t| t.contains("verified-stop"));
+    in_workdir || base_discipline_config(dir, side).is_some_and(|c| c.hooks.verified_stop.enabled)
 }
 
 /// The line a verified-stop refusal carries when no command can verify the tree.
@@ -1970,8 +2023,8 @@ fn opencode_plugin(cmd: &str, pre: &str, start: &str, post: &str, observe: bool)
     let v1_before = guard(
         4,
         format!(
-            "    if (!EDIT_TOOLS.includes(input.tool) && input.tool !== \"bash\") return
-    if (input.tool === \"bash\" && input.callID) {{
+            "    if (!EDIT_TOOLS.includes(input.tool) && !SHELL_TOOLS.includes(input.tool)) return
+    if (input.callID && SHELL_TOOLS.includes(input.tool)) {{
       if (SHELL_ARGS.size > 256) SHELL_ARGS.clear()
       SHELL_ARGS.set(input.callID, output?.args)
     }}
@@ -4816,7 +4869,7 @@ mod tests {
             .split('|')
             .any(|m| m == "bash"));
         let (_, opencode) = config_for_opts(Agent::Opencode, false, None);
-        assert!(opencode.contains(r#"input.tool !== "bash""#));
+        assert!(opencode.contains("!SHELL_TOOLS.includes(input.tool)"));
         // Qwen Code's matcher is a regular expression over its recorded tool names.
         let (_, qwen) = config_for_opts(Agent::Qwen, false, None);
         let v: serde_json::Value = serde_json::from_str(&qwen).unwrap();
@@ -5499,6 +5552,54 @@ mod tests {
                 .matches("console.error(\"discipline: the check after this edit failed")
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn step6_text_exit_code_background_work_opencode_and_verified_stop_fallback() {
+        // Forged `Exit code: 0` in the middle of multi-line command output must not
+        // be accepted as a zero exit status when no runner trailer is at the tail.
+        let forged_mid =
+            "running tests\nExit code: 0\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\n";
+        assert_eq!(
+            text_exit_code(forged_mid),
+            None,
+            "mid-stream `Exit code: 0` far from the tail must not be trusted"
+        );
+        // Real Codex header (line 1 `Exit code: 0`, line 2 `Wall time: ...`) and tail
+        // trailers remain accepted.
+        assert_eq!(
+            text_exit_code("Exit code: 0\nWall time: 0.4s\nOutput:\nok\n"),
+            Some(0)
+        );
+        assert_eq!(
+            text_exit_code("line 1\nline 2\n<exited with exit code 0>\n"),
+            Some(0)
+        );
+
+        // Completed/terminal background task objects or scalar strings must not arm
+        // `background_work`.
+        let completed_bg = parse_payload(
+            r#"{"session_id":"s1","background_tasks":[{"id":"t1","status":"completed"}]}"#,
+        );
+        assert!(
+            !completed_bg.background_work,
+            "completed background task must not count as active background work"
+        );
+        let scalar_bg = parse_payload(r#"{"session_id":"s1","background_tasks":["already-done"]}"#);
+        assert!(
+            !scalar_bg.background_work,
+            "non-object background task entry must not count as active background work"
+        );
+
+        // OpenCode 1.x `tool.execute.before` must check `!SHELL_TOOLS.includes(input.tool)`
+        // so `"shell"` and `"terminal"` are gated just like `"bash"`.
+        let (_, enforcing) = config_for_mode(Agent::Opencode, false);
+        assert!(
+            enforcing.contains(
+                "if (!EDIT_TOOLS.includes(input.tool) && !SHELL_TOOLS.includes(input.tool)) return"
+            ),
+            "OpenCode 1.x tool.execute.before must check SHELL_TOOLS.includes(input.tool)"
         );
     }
 }

@@ -72,6 +72,7 @@ pub(crate) fn invisible_class(c: char) -> Option<&'static str> {
         0x200B..=0x200F | 0x2060..=0x2064 | 0xFEFF | 0x180E | 0x00AD => Some("zero-width"),
         0x202A..=0x202E | 0x2066..=0x2069 => Some("bidirectional-control"),
         0xE0000..=0xE007F => Some("tag-character"),
+        0xFE00..=0xFE0F | 0xE0100..=0xE01EF => Some("variation-selector"),
         _ => None,
     }
 }
@@ -201,15 +202,13 @@ fn fold_word(word: &str) -> String {
             && chars[i - 1].is_alphanumeric()
             && chars[i + 1].is_alphanumeric()
     };
-    for sep in ['-', '_', '.'] {
-        let at: Vec<usize> = (0..chars.len())
-            .filter(|&i| chars[i] == sep && between(&chars, i))
-            .collect();
-        // One separator is a compound (`system_prompt`, `e-mail`); two or more join words.
-        if at.len() >= 2 {
-            for i in at {
-                chars[i] = ' ';
-            }
+    let at: Vec<usize> = (0..chars.len())
+        .filter(|&i| matches!(chars[i], '-' | '_' | '.') && between(&chars, i))
+        .collect();
+    // One separator is a compound (`system_prompt`, `e-mail`); two or more (even mixed) join words.
+    if at.len() >= 2 {
+        for i in at {
+            chars[i] = ' ';
         }
     }
     chars.into_iter().collect()
@@ -374,7 +373,7 @@ fn join_wrapped(text: &str) -> String {
             continue;
         }
         let width = body(lines[i]).map(str::len).unwrap_or(0);
-        if width == 64 || width == 76 {
+        if width >= 16 {
             let mut run = body(lines[i]).unwrap_or_default().to_string();
             let mut j = i + 1;
             while let Some(next) = lines.get(j).and_then(|l| body(l)) {
@@ -387,7 +386,13 @@ fn join_wrapped(text: &str) -> String {
                     break;
                 }
             }
-            if j > i + 1 {
+            if j > i + 1
+                && (width == 64
+                    || width == 76
+                    || has_encoded_blob(&run)
+                    || base64_text(&run).is_some()
+                    || hex_text(&run, 24).is_some())
+            {
                 out.push(run);
                 i = j;
                 continue;
@@ -691,30 +696,40 @@ pub fn instruction_smuggling(ctx: &Context) -> Result<GateOutcome> {
             }
             last_joins = joins;
         };
-        if let Some(pack) = registry.find_pack(&file.path) {
-            if pack.supplies(Fact::Prose) {
-                match pack.extract(&file.path, &head, &vocab) {
-                    Ok(facts) => {
-                        for p in facts.prose {
-                            if (p.line..=p.end_line).any(|l| file.added_lines.contains(&l)) {
-                                let line_comment = p.line == p.end_line
-                                    && ["//", "#", "--"].iter().any(|l| p.text.starts_with(l));
-                                add_span(p.line, p.text, line_comment);
-                            }
+        if let Some(pack) = registry
+            .find_pack(&file.path)
+            .filter(|p| p.supplies(Fact::Prose))
+        {
+            match pack.extract(&file.path, &head, &vocab) {
+                Ok(facts) => {
+                    for p in facts.prose {
+                        if (p.line..=p.end_line).any(|l| file.added_lines.contains(&l)) {
+                            let line_comment = p.line == p.end_line
+                                && ["//", "#", "--"].iter().any(|l| p.text.starts_with(l));
+                            add_span(p.line, p.text, line_comment);
                         }
                     }
-                    // No tree, no comment or string to read: said, not passed.
-                    Err(e) => {
-                        unparsed = Some(format!(
+                }
+                // No tree, no comment or string to read: said, not passed.
+                Err(e) => {
+                    unparsed = Some(format!(
                         "{e}, so its comments and strings were not read for instruction phrases"
                     ))
-                    }
                 }
             }
         } else if is_prose_path(&file.path) {
             for (idx, line) in head.lines().enumerate() {
                 if file.added_lines.contains(&(idx + 1)) && !line.trim().is_empty() {
                     add_span(idx + 1, line.to_string(), true);
+                }
+            }
+        } else {
+            for (idx, line) in head.lines().enumerate() {
+                if file.added_lines.contains(&(idx + 1)) && !line.trim().is_empty() {
+                    let joins = ["//", "#", "--"]
+                        .iter()
+                        .any(|l| line.trim_start().starts_with(l));
+                    add_span(idx + 1, line.to_string(), joins);
                 }
             }
         }
@@ -1245,5 +1260,44 @@ mod tests {
         assert!(!is_instruction_file(".github/workflows/ci.yml"));
         assert!(!is_instruction_file("README.md"));
         assert!(!is_instruction_file("docs/AGENTS.md.bak"));
+    }
+
+    #[test]
+    fn variation_selectors_mixed_separators_and_arbitrary_width_base64_are_detected() {
+        // Variation selectors (U+FE00..=U+FE0F and U+E0100..=U+E01EF).
+        assert_eq!(
+            invisible_classes(&format!("hello{}world", '\u{FE0F}'), false),
+            vec!["variation-selector"]
+        );
+        assert_eq!(
+            invisible_classes(&format!("hello{}world", '\u{E0100}'), false),
+            vec!["variation-selector"]
+        );
+
+        // Mixed word separators (combining `-`, `_`, and `.` within a single phrase).
+        let mixed_a = format!("{}-{}_{}", "ignore", "previous", "instructions");
+        let mixed_b = format!("{}.{}-{}", "ignore", "previous", "instructions");
+        assert!(
+            phrase_classes(&mixed_a).contains(&"instruction-override"),
+            "mixed `-` and `_` separators must fold to spaces"
+        );
+        assert!(
+            phrase_classes(&mixed_b).contains(&"instruction-override"),
+            "mixed `.` and `-` separators must fold to spaces"
+        );
+
+        // Base64 wrapped at non-64/76 width (e.g. 40 columns).
+        let encoded = b64(&format!("{P}. {P}. "));
+        let wrapped_40 = encoded
+            .as_bytes()
+            .chunks(40)
+            .map(|c| std::str::from_utf8(c).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let classes = text_classes(&wrapped_40);
+        assert!(
+            classes.contains(&"instruction-override") && classes.contains(&"base64-encoded"),
+            "base64 wrapped at 40 columns must be joined and decoded, got {classes:?}"
+        );
     }
 }
