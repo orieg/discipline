@@ -3,6 +3,7 @@
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 
@@ -12,6 +13,24 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from build_apt_repo import build_apt_repo
 from build_rpm_repo import build_rpm_repo
 from site_theme import get_default_version
+
+
+def sanitize_docs_dir(docs_dir: str) -> None:
+    """Reject symlinks under docs_dir and purge pre-existing apt/ and rpm/ subdirectories."""
+    if os.path.islink(docs_dir):
+        sys.exit(f"error: docs_dir '{docs_dir}' must not be a symlink")
+    if os.path.exists(docs_dir):
+        for root, dirs, files in os.walk(docs_dir, followlinks=False):
+            for name in [*dirs, *files]:
+                entry = os.path.join(root, name)
+                if os.path.islink(entry):
+                    sys.exit(f"error: refusing symlink in docs_dir: {entry}")
+    for sub in ("apt", "rpm"):
+        target = os.path.join(docs_dir, sub)
+        if os.path.islink(target) or os.path.isfile(target):
+            os.unlink(target)
+        elif os.path.isdir(target):
+            shutil.rmtree(target)
 
 
 def main():
@@ -51,6 +70,8 @@ def main():
     args = parser.parse_args()
     if not args.sign_key and not args.unsigned:
         sys.exit("error: pass --sign-key KEYID (or --unsigned for a local preview)")
+
+    sanitize_docs_dir(args.docs_dir)
 
     ver = args.version or get_default_version()
     apt_out = os.path.join(args.docs_dir, "apt")

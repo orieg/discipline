@@ -63,6 +63,8 @@ RULES: Dict[str, List[str]] = {
     "supply-chain": [
         "Cargo.toml",
         "Cargo.lock",
+        "fuzz/Cargo.toml",
+        "fuzz/Cargo.lock",
         "deny.toml",
         ".github/workflows/ci.yml",
     ],
@@ -218,12 +220,15 @@ def run_tests() -> None:
     res = evaluate_files(cargo_lock, "pull_request")
     assert all(v for v in res.values()), f"Expected all True for Cargo.lock, got {res}"
 
-    # 4. deny.toml change
+    # 4. deny.toml and fuzz lockfile changes trigger supply-chain
     deny = ["deny.toml"]
     res = evaluate_files(deny, "pull_request")
     assert res["test"] is True
     assert res["supply-chain"] is True
     assert res["msrv"] is False
+    for fuzz_manifest in ["fuzz/Cargo.toml", "fuzz/Cargo.lock"]:
+        res_fuzz = evaluate_files([fuzz_manifest], "pull_request")
+        assert res_fuzz["supply-chain"] is True, f"Expected supply-chain True for {fuzz_manifest}, got {res_fuzz}"
 
     # 5. action.yml change
     action = ["action.yml"]

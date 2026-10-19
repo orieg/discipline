@@ -90,6 +90,9 @@ fi
 mkdir -p "${DEST_DIR}"
 
 # Download URLs
+if [ "${DOWNLOAD_URL}" != "https://github.com/orieg/discipline/releases" ]; then
+  echo "warning: using non-default download URL: ${DOWNLOAD_URL}" >&2
+fi
 if [ -n "${VERSION}" ]; then
   base="${DOWNLOAD_URL}/download/${VERSION}"
 else
@@ -97,13 +100,20 @@ else
 fi
 
 archive="discipline-${triple}.tar.gz"
-tmp_dir="$(mktemp -d 2>/dev/null || mktemp -d -t 'discipline-install')"
+tmp_dir="$(umask 077 && (mktemp -d 2>/dev/null || mktemp -d -t 'discipline-install'))"
 trap 'rm -rf "${tmp_dir}"' EXIT
 
 fetch() {
   local url="$1" out="$2"
   if command -v curl >/dev/null 2>&1; then
-    curl --fail --silent --show-error --location --retry 3 --output "${out}" "${url}"
+    case "${url}" in
+      https://*)
+        curl --proto '=https' --tlsv1.2 --max-redirs 3 --fail --silent --show-error --location --retry 3 --output "${out}" "${url}"
+        ;;
+      *)
+        curl --fail --silent --show-error --location --retry 3 --output "${out}" "${url}"
+        ;;
+    esac
   elif command -v wget >/dev/null 2>&1; then
     wget --quiet --tries=3 --output-document="${out}" "${url}"
   else
@@ -132,12 +142,13 @@ if [ "${expected}" != "${actual}" ]; then
   fail "checksum mismatch for ${archive}: expected ${expected}, got ${actual}"
 fi
 
-# Extract and install
-tar -xzf "${tmp_dir}/${archive}" -C "${tmp_dir}"
+# Extract and install atomically
+tar --no-same-owner --no-same-permissions -xzf "${tmp_dir}/${archive}" -C "${tmp_dir}"
 [ -x "${tmp_dir}/discipline" ] || fail "archive did not contain an executable 'discipline' binary"
 
-cp "${tmp_dir}/discipline" "${DEST_DIR}/discipline"
-chmod +x "${DEST_DIR}/discipline"
+tmp_bin="${DEST_DIR}/.discipline.tmp.$$"
+install -m 0755 "${tmp_dir}/discipline" "${tmp_bin}"
+mv -f "${tmp_bin}" "${DEST_DIR}/discipline"
 
 echo "Successfully installed discipline to ${DEST_DIR}/discipline"
 "${DEST_DIR}/discipline" --version

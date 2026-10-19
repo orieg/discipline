@@ -272,3 +272,197 @@ fn forgejo_and_gitea_selftest_workflows_run_the_same_jobs() {
         "Forgejo and Gitea self-test workflows drifted apart: mirror the change to both"
     );
 }
+
+#[test]
+fn step10_action_and_installers_use_hardened_tempdirs_fetch_tar_and_container_home() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let action = std::fs::read_to_string(root.join("action.yml")).unwrap();
+    assert!(
+        action.contains("umask 077 && mktemp -d"),
+        "action.yml must create temp directories with umask 077 && mktemp -d"
+    );
+    assert!(
+        action.contains("--proto '=https' --tlsv1.2 --max-redirs 3"),
+        "action.yml curl fetch must enforce HTTPS, TLSv1.2+, and bounded redirects"
+    );
+    assert!(
+        action.contains("--no-same-owner --no-same-permissions"),
+        "action.yml tar extraction must pass --no-same-owner --no-same-permissions"
+    );
+    assert!(
+        action.contains("protocol.file.allow=never")
+            && action.contains("core.hooksPath=/dev/null")
+            && action.contains("core.fsmonitor=false"),
+        "action.yml git fetch must pass hardened git -c overrides"
+    );
+
+    let install_sh = std::fs::read_to_string(root.join("install.sh")).unwrap();
+    assert!(
+        install_sh.contains("--no-same-owner --no-same-permissions"),
+        "install.sh must pass --no-same-owner --no-same-permissions to tar"
+    );
+    assert!(
+        install_sh.contains("--proto '=https' --tlsv1.2 --max-redirs 3"),
+        "install.sh must pass --proto '=https' --tlsv1.2 --max-redirs 3 to curl"
+    );
+    assert!(
+        install_sh.contains("install -m 0755") && install_sh.contains("mv -f"),
+        "install.sh must install atomically via install + mv -f"
+    );
+
+    // Run install.sh against a fake release with a non-default DOWNLOAD_URL and verify warning + atomic install
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("store/download/v0.0.0-test");
+    std::fs::create_dir_all(&store).unwrap();
+    let bin_src = dir.path().join("discipline");
+    std::fs::write(&bin_src, "#!/bin/sh\necho 'discipline 0.0.0-test'\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bin_src, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let triple = match (std::env::consts::ARCH, std::env::consts::OS) {
+        ("x86_64", "linux") => "x86_64-unknown-linux-musl",
+        ("aarch64", "linux") => "aarch64-unknown-linux-musl",
+        ("x86_64", "macos") => "x86_64-apple-darwin",
+        ("aarch64", "macos") => "aarch64-apple-darwin",
+        (a, o) => panic!("unsupported test target: {a}-{o}"),
+    };
+    let archive_name = format!("discipline-{triple}.tar.gz");
+    let archive_path = store.join(&archive_name);
+    let tar_status = common::script_command("tar")
+        .arg("-czf")
+        .arg(&archive_path)
+        .arg("-C")
+        .arg(dir.path())
+        .arg("discipline")
+        .status()
+        .unwrap();
+    assert!(tar_status.success());
+    let sha_out = common::script_command("sh")
+        .arg("-c")
+        .arg(format!(
+            "(sha256sum '{}' 2>/dev/null || shasum -a 256 '{}') | awk '{{print $1}}'",
+            archive_path.display(),
+            archive_path.display()
+        ))
+        .output()
+        .unwrap();
+    let digest = String::from_utf8(sha_out.stdout).unwrap();
+    std::fs::write(
+        store.join("SHA256SUMS"),
+        format!("{}  {}\n", digest.trim(), archive_name),
+    )
+    .unwrap();
+    let dest = dir.path().join("dest");
+    let out = common::script_command("bash")
+        .arg(root.join("install.sh"))
+        .arg("--to")
+        .arg(&dest)
+        .arg("--version")
+        .arg("v0.0.0-test")
+        .arg("--download-url")
+        .arg(format!("file://{}/store", dir.path().display()))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "install.sh failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("warning: using non-default download URL"),
+        "expected non-default download URL warning on stderr, got: {stderr}"
+    );
+
+    for dockerfile in ["Dockerfile", "Dockerfile.release"] {
+        let df = std::fs::read_to_string(root.join(dockerfile)).unwrap();
+        assert!(
+            df.contains("-h /var/lib/discipline"),
+            "{dockerfile} must set discipline user home to /var/lib/discipline, not /workspace"
+        );
+        assert!(
+            !df.contains("VOLUME [\"/workspace\"]"),
+            "{dockerfile} must not declare VOLUME [\"/workspace\"]"
+        );
+    }
+}
+
+#[test]
+fn step11_build_repo_rejects_symlinks_purges_existing_outputs_and_homebrew_pins_host_key() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = tempfile::tempdir().unwrap();
+    let artifacts = dir.path().join("artifacts");
+    let docs = dir.path().join("docs");
+    std::fs::create_dir_all(&artifacts).unwrap();
+    std::fs::create_dir_all(docs.join("apt")).unwrap();
+
+    // 1. Pre-existing poisoned file in docs/apt must be purged by build_repo.py
+    let poisoned = docs.join("apt/poisoned.txt");
+    std::fs::write(&poisoned, "stale artifact").unwrap();
+
+    let out = common::script_command("python3")
+        .arg(root.join("scripts/build_repo.py"))
+        .arg("--artifacts-dir")
+        .arg(&artifacts)
+        .arg("--docs-dir")
+        .arg(&docs)
+        .arg("--allow-empty")
+        .arg("--unsigned")
+        .arg("--version")
+        .arg("0.22.0")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "build_repo.py failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !poisoned.exists(),
+        "build_repo.py must purge pre-existing docs/apt contents before building"
+    );
+
+    // 2. A symlink inside docs_dir must be rejected fail-closed by build_repo.py
+    #[cfg(unix)]
+    {
+        let symlink_path = docs.join("evil-link");
+        std::os::unix::fs::symlink("/etc/passwd", &symlink_path).unwrap();
+        let bad_out = common::script_command("python3")
+            .arg(root.join("scripts/build_repo.py"))
+            .arg("--artifacts-dir")
+            .arg(&artifacts)
+            .arg("--docs-dir")
+            .arg(&docs)
+            .arg("--allow-empty")
+            .arg("--unsigned")
+            .arg("--version")
+            .arg("0.22.0")
+            .output()
+            .unwrap();
+        assert!(
+            !bad_out.status.success(),
+            "build_repo.py must reject symlinks inside --docs-dir"
+        );
+    }
+
+    // 3. update_homebrew_formula.py must pin GitHub's SSH host key and use StrictHostKeyChecking=yes
+    let hb = std::fs::read_to_string(root.join("scripts/update_homebrew_formula.py")).unwrap();
+    assert!(
+        !hb.contains("StrictHostKeyChecking=accept-new"),
+        "update_homebrew_formula.py must not use StrictHostKeyChecking=accept-new"
+    );
+    assert!(
+        hb.contains("StrictHostKeyChecking=yes") && hb.contains("UserKnownHostsFile="),
+        "update_homebrew_formula.py must enforce StrictHostKeyChecking=yes with a pinned UserKnownHostsFile"
+    );
+
+    // 4. pages.yml site job must run step-security/harden-runner
+    let pages = std::fs::read_to_string(root.join(".github/workflows/pages.yml")).unwrap();
+    let harden_count = pages.matches("step-security/harden-runner@").count();
+    assert!(
+        harden_count >= 3,
+        "pages.yml must run step-security/harden-runner in all three jobs (site, sign, deploy), found {harden_count}"
+    );
+}
