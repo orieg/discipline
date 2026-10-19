@@ -527,13 +527,29 @@ impl TempDir {
         Self::named("replay")
     }
 
-    /// `discipline-<what>-<pid>-<n>` under the system temp directory.
+    /// `<128-bit-hex>-<what>` under the system temp directory, created with mode `0700`.
     pub(crate) fn named(what: &str) -> Result<Self> {
         let base = std::env::temp_dir();
-        for i in 0..100u32 {
-            let p = base.join(format!("discipline-{what}-{}-{i}", std::process::id()));
-            if std::fs::create_dir(&p).is_ok() {
-                return Ok(TempDir(p));
+        for _ in 0..32u32 {
+            let rand_hex = random_hex_128()?;
+            let p = base.join(format!("{rand_hex}-{what}"));
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt as _;
+                builder.mode(0o700);
+            }
+            match builder.create(&p) {
+                Ok(()) => return Ok(TempDir(p)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => {
+                    return Err(e).with_context(|| {
+                        format!(
+                            "cannot create a temporary directory under {}",
+                            base.display()
+                        )
+                    })
+                }
             }
         }
         bail!(
@@ -541,6 +557,35 @@ impl TempDir {
             base.display()
         )
     }
+}
+
+fn random_hex_128() -> Result<String> {
+    let mut bytes = [0u8; 16];
+    #[cfg(unix)]
+    {
+        use std::io::Read as _;
+        let mut f = std::fs::File::open("/dev/urandom")
+            .context("cannot open /dev/urandom for temporary directory entropy")?;
+        f.read_exact(&mut bytes)
+            .context("cannot read 16 bytes from /dev/urandom")?;
+    }
+    #[cfg(not(unix))]
+    {
+        use std::collections::hash_map::RandomState;
+        use std::hash::{BuildHasher, Hasher};
+        let a = RandomState::new().build_hasher().finish();
+        let b = RandomState::new().build_hasher().finish();
+        bytes[..8].copy_from_slice(&a.to_le_bytes());
+        bytes[8..].copy_from_slice(&b.to_le_bytes());
+    }
+    let mut out = String::with_capacity(32);
+    for b in bytes {
+        use std::fmt::Write as _;
+        if write!(&mut out, "{b:02x}").is_err() {
+            bail!("cannot format random hex");
+        }
+    }
+    Ok(out)
 }
 
 impl Drop for TempDir {
@@ -1159,5 +1204,36 @@ mod tests {
         assert_eq!(parsed.cases_detail[0].overrides.len(), 1);
         assert_eq!(parsed.cases_detail[0].findings.len(), 1);
         assert_eq!(parsed.cases_detail[0].skipped_checks.len(), 1);
+    }
+
+    #[test]
+    fn tempdir_named_uses_csprng_entropy_and_owner_only_mode() {
+        let a = TempDir::named("replay").unwrap();
+        let b = TempDir::named("replay").unwrap();
+        assert_ne!(a.0, b.0);
+        let name_a = a.0.file_name().unwrap().to_str().unwrap();
+        let name_b = b.0.file_name().unwrap().to_str().unwrap();
+        // No predictable `discipline-<what>-<pid>-` prefix; starts with 32 hex chars (128 bits).
+        assert!(
+            !name_a.starts_with("discipline-"),
+            "predictable prefix in {name_a}"
+        );
+        let hex_prefix = name_a.split('-').next().unwrap_or("");
+        assert_eq!(
+            hex_prefix.len(),
+            32,
+            "expected 128-bit (32 hex) prefix in {name_a}"
+        );
+        assert!(
+            hex_prefix.chars().all(|c| c.is_ascii_hexdigit()),
+            "{name_a}"
+        );
+        assert_ne!(name_a, name_b);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(&a.0).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "TempDir must be 0700, got {mode:o}");
+        }
     }
 }
