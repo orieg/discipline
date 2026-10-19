@@ -291,38 +291,153 @@ pub fn detect(path: &Path) -> Result<Format> {
     }
 }
 
+/// Maximum total decompressed bytes read across an archive (512 MiB).
+pub const MAX_DECOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Maximum number of entries allowed in a single archive.
+pub const MAX_ARCHIVE_ENTRIES: usize = 100_000;
+
+/// Maximum size of a single cpio entry in bytes (1 GiB).
+pub const MAX_CPIO_FILE_BYTES: u64 = 1024 * 1024 * 1024;
+
+#[derive(Clone)]
+struct ArchiveBudget {
+    used_bytes: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    max_bytes: u64,
+    entries: usize,
+    max_entries: usize,
+}
+
+impl ArchiveBudget {
+    fn new(max_bytes: u64, max_entries: usize) -> Self {
+        Self {
+            used_bytes: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            max_bytes,
+            entries: 0,
+            max_entries,
+        }
+    }
+
+    fn record_entry(&mut self) -> Result<()> {
+        self.entries = self.entries.saturating_add(1);
+        if self.entries > self.max_entries {
+            bail!(
+                "archive exceeds maximum entry count ({} entries)",
+                self.max_entries
+            );
+        }
+        Ok(())
+    }
+
+    fn charge_bytes(&self, n: u64) -> io::Result<()> {
+        let prev = self
+            .used_bytes
+            .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+        if prev.saturating_add(n) > self.max_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "archive decompressed data exceeds maximum allowed size ({} bytes)",
+                    self.max_bytes
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn wrap<R: Read>(&self, inner: R) -> BoundedReader<R> {
+        BoundedReader {
+            inner,
+            budget: self.clone(),
+        }
+    }
+}
+
+struct BoundedReader<R> {
+    inner: R,
+    budget: ArchiveBudget,
+}
+
+impl<R: Read> Read for BoundedReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        if n > 0 {
+            self.budget.charge_bytes(n as u64)?;
+        }
+        Ok(n)
+    }
+}
+
+fn validate_entry_name(name: &str) -> Result<()> {
+    if name.contains('\0') {
+        bail!("archive entry name contains a NUL byte");
+    }
+    if name.starts_with('/') {
+        bail!("archive entry `{name}` has an absolute path");
+    }
+    if name.split('/').any(|c| c == "..") {
+        bail!("archive entry `{name}` contains `..` path traversal");
+    }
+    Ok(())
+}
+
 /// Calls `visit` for every entry of the archive at `path`, and returns its format.
 pub fn walk(path: &Path, visit: &mut Visit<'_>) -> Result<Format> {
+    walk_with_limits(path, MAX_DECOMPRESSED_BYTES, MAX_ARCHIVE_ENTRIES, visit)
+}
+
+/// Calls `visit` for every entry of the archive at `path` under explicit decompression
+/// and entry-count budgets.
+pub fn walk_with_limits(
+    path: &Path,
+    max_decompressed_bytes: u64,
+    max_entries: usize,
+    visit: &mut Visit<'_>,
+) -> Result<Format> {
     let format = detect(path)?;
+    let mut budget = ArchiveBudget::new(max_decompressed_bytes, max_entries);
     let res = match format {
-        Format::Zip => walk_zip(File::open(path)?, visit),
+        Format::Zip => walk_zip(File::open(path)?, &mut budget, visit),
         Format::Tar(c) => {
-            let decoded = decode(Box::new(File::open(path)?), c)?;
-            walk_tar_stream(decoded, "", visit)
+            let decoded = decode(Box::new(File::open(path)?), c, &budget)?;
+            walk_tar_stream(decoded, "", &mut budget, visit)
         }
-        Format::Gem => walk_gem(File::open(path)?, visit),
-        Format::Deb => walk_deb(path, visit),
-        Format::Rpm => walk_rpm(path, visit),
+        Format::Gem => walk_gem(File::open(path)?, &mut budget, visit),
+        Format::Deb => walk_deb(path, &mut budget, visit),
+        Format::Rpm => walk_rpm(path, &mut budget, visit),
     };
     res.with_context(|| format!("reading it as a {}", format.label()))?;
     Ok(format)
 }
 
-fn walk_zip(file: File, visit: &mut Visit<'_>) -> Result<()> {
+fn walk_zip(file: File, budget: &mut ArchiveBudget, visit: &mut Visit<'_>) -> Result<()> {
     let mut zip = zip::ZipArchive::new(file)?;
+    let mut declared_total = 0u64;
     for i in 0..zip.len() {
+        budget.record_entry()?;
         let (name, size) = {
             let raw = zip.by_index_raw(i)?;
             (raw.name()?.replace('\\', "/"), raw.size())
         };
+        validate_entry_name(&name)?;
+        declared_total = declared_total.saturating_add(size);
+        if declared_total > budget.max_bytes {
+            bail!(
+                "archive decompressed data exceeds maximum allowed size ({} bytes)",
+                budget.max_bytes
+            );
+        }
         let is_dir = name.ends_with('/');
         match zip.by_index(i) {
-            Ok(mut f) => visit(Entry {
-                name,
-                size,
-                is_dir,
-                data: EntryData::Bytes(&mut f),
-            })?,
+            Ok(f) => {
+                let mut bounded = budget.wrap(f);
+                visit(Entry {
+                    name,
+                    size,
+                    is_dir,
+                    data: EntryData::Bytes(&mut bounded),
+                })?
+            }
             Err(e) => visit(Entry {
                 name,
                 size,
@@ -336,15 +451,21 @@ fn walk_zip(file: File, visit: &mut Visit<'_>) -> Result<()> {
 
 /// Walks a tar stream to its end, then drains the decoder so the compression
 /// format's own trailer and checksum are verified.
-fn walk_tar_stream(decoded: Decoded, prefix: &str, visit: &mut Visit<'_>) -> Result<()> {
+fn walk_tar_stream(
+    decoded: Decoded,
+    prefix: &str,
+    budget: &mut ArchiveBudget,
+    visit: &mut Visit<'_>,
+) -> Result<()> {
     let mut archive = tar::Archive::new(decoded);
-    walk_tar(&mut archive, prefix, visit)?;
+    walk_tar(&mut archive, prefix, budget, visit)?;
     archive.into_inner().finish()
 }
 
 fn walk_tar<R: Read>(
     archive: &mut tar::Archive<R>,
     prefix: &str,
+    budget: &mut ArchiveBudget,
     visit: &mut Visit<'_>,
 ) -> Result<()> {
     for entry in archive.entries().context("not a tar stream")? {
@@ -354,10 +475,14 @@ fn walk_tar<R: Read>(
         if kind.is_pax_global_extensions() {
             continue;
         }
-        let name = format!(
-            "{prefix}{}",
-            entry.path()?.to_string_lossy().replace('\\', "/")
-        );
+        budget.record_entry()?;
+        if entry.path_bytes().contains(&0) {
+            bail!("archive entry name contains a NUL byte");
+        }
+        let raw_rel = entry.path()?.to_string_lossy().replace('\\', "/");
+        validate_entry_name(&raw_rel)?;
+        let name = format!("{prefix}{raw_rel}");
+        validate_entry_name(&name)?;
         let size = entry.size();
         visit(Entry {
             name,
@@ -371,8 +496,8 @@ fn walk_tar<R: Read>(
 
 /// A `.gem` is an uncompressed tar of `metadata.gz`, `data.tar.gz` and
 /// `checksums.yaml.gz`; the packaged files are inside `data.tar.gz`.
-fn walk_gem(file: File, visit: &mut Visit<'_>) -> Result<()> {
-    let mut outer = tar::Archive::new(file);
+fn walk_gem(file: File, budget: &mut ArchiveBudget, visit: &mut Visit<'_>) -> Result<()> {
+    let mut outer = tar::Archive::new(budget.wrap(file));
     let mut saw_data = false;
     for entry in outer.entries().context("not a tar stream")? {
         let mut entry = entry.context("corrupt tar entry")?;
@@ -380,7 +505,12 @@ fn walk_gem(file: File, visit: &mut Visit<'_>) -> Result<()> {
         if kind.is_pax_global_extensions() {
             continue;
         }
+        budget.record_entry()?;
+        if entry.path_bytes().contains(&0) {
+            bail!("archive entry name contains a NUL byte");
+        }
         let name = entry.path()?.to_string_lossy().replace('\\', "/");
+        validate_entry_name(&name)?;
         let size = entry.size();
         if name.trim_start_matches("./") == "data.tar.gz" {
             saw_data = true;
@@ -390,12 +520,14 @@ fn walk_gem(file: File, visit: &mut Visit<'_>) -> Result<()> {
                 is_dir: false,
                 data: EntryData::Expanded,
             })?;
-            let mut gz = flate2::read::MultiGzDecoder::new(&mut entry);
+            let gz = flate2::read::MultiGzDecoder::new(&mut entry);
+            let mut bounded_gz = budget.wrap(gz);
             {
-                let mut inner = tar::Archive::new(&mut gz);
-                walk_tar(&mut inner, "data/", visit).context("reading the gem's data.tar.gz")?;
+                let mut inner = tar::Archive::new(&mut bounded_gz);
+                walk_tar(&mut inner, "data/", budget, visit)
+                    .context("reading the gem's data.tar.gz")?;
             }
-            io::copy(&mut gz, &mut io::sink()).context("reading the gem's data.tar.gz")?;
+            io::copy(&mut bounded_gz, &mut io::sink()).context("reading the gem's data.tar.gz")?;
         } else {
             visit(Entry {
                 name,
@@ -413,7 +545,7 @@ fn walk_gem(file: File, visit: &mut Visit<'_>) -> Result<()> {
 
 /// A `.deb` is an ar archive of `debian-binary`, `control.tar.*` and `data.tar.*`;
 /// the installed files are the entries of the data member.
-fn walk_deb(path: &Path, visit: &mut Visit<'_>) -> Result<()> {
+fn walk_deb(path: &Path, budget: &mut ArchiveBudget, visit: &mut Visit<'_>) -> Result<()> {
     let mut file = File::open(path)?;
     let len = file.metadata()?.len();
     let mut magic = [0u8; 8];
@@ -439,12 +571,19 @@ fn walk_deb(path: &Path, visit: &mut Visit<'_>) -> Result<()> {
             .ok()
             .and_then(|s| s.trim().parse().ok())
             .ok_or_else(|| anyhow!("corrupt ar member size for `{name}`"))?;
-        let next = offset + 60 + stored + (stored % 2);
-        let mut body = offset + 60;
-        let mut size = stored;
-        if offset + 60 + stored > len {
+        let mut body = offset
+            .checked_add(60)
+            .ok_or_else(|| anyhow!("corrupt ar member offset for `{name}`"))?;
+        let member_end = body
+            .checked_add(stored)
+            .ok_or_else(|| anyhow!("corrupt ar member size for `{name}`"))?;
+        if member_end > len {
             bail!("ar member `{name}` runs past the end of the file");
         }
+        let next = member_end
+            .checked_add(stored % 2)
+            .ok_or_else(|| anyhow!("corrupt ar member padding for `{name}`"))?;
+        let mut size = stored;
         // BSD ar (macOS) stores a long name as `#1/<len>`, the name leading the body.
         if let Some(name_len) = name.strip_prefix("#1/").and_then(|n| n.parse::<u64>().ok()) {
             if name_len > stored || name_len > 4096 {
@@ -455,8 +594,12 @@ fn walk_deb(path: &Path, visit: &mut Visit<'_>) -> Result<()> {
             name = String::from_utf8_lossy(&raw)
                 .trim_end_matches('\0')
                 .to_string();
-            body += name_len;
-            size -= name_len;
+            body = body
+                .checked_add(name_len)
+                .ok_or_else(|| anyhow!("corrupt BSD ar name offset at byte {offset}"))?;
+            size = size
+                .checked_sub(name_len)
+                .ok_or_else(|| anyhow!("corrupt BSD ar name length at byte {offset}"))?;
         }
         if name.starts_with("data.tar") {
             if data_member.is_some() {
@@ -471,8 +614,8 @@ fn walk_deb(path: &Path, visit: &mut Visit<'_>) -> Result<()> {
     let compression = member_compression(path, body, size, &name)?;
     let mut member = File::open(path)?;
     member.seek(SeekFrom::Start(body))?;
-    let decoded = decode(Box::new(member.take(size)), compression)?;
-    walk_tar_stream(decoded, "", visit).with_context(|| format!("reading member `{name}`"))
+    let decoded = decode(Box::new(member.take(size)), compression, budget)?;
+    walk_tar_stream(decoded, "", budget, visit).with_context(|| format!("reading member `{name}`"))
 }
 
 /// Compression of a member at `offset`, by its magic bytes.
@@ -502,12 +645,16 @@ fn rpm_header_len(file: &mut File) -> Result<u64> {
     let data = u64::from(u32::from_be_bytes([
         intro[12], intro[13], intro[14], intro[15],
     ]));
-    Ok(16 + 16 * index + data)
+    index
+        .checked_mul(16)
+        .and_then(|v| v.checked_add(16))
+        .and_then(|v| v.checked_add(data))
+        .ok_or_else(|| anyhow!("corrupt RPM header size overflow"))
 }
 
 /// An `.rpm` is a 96-byte lead, a signature header padded to 8 bytes, the main
 /// header, then a compressed cpio (newc) payload.
-fn walk_rpm(path: &Path, visit: &mut Visit<'_>) -> Result<()> {
+fn walk_rpm(path: &Path, budget: &mut ArchiveBudget, visit: &mut Visit<'_>) -> Result<()> {
     let mut file = File::open(path)?;
     let len = file.metadata()?.len();
     let mut lead = [0u8; 96];
@@ -515,13 +662,20 @@ fn walk_rpm(path: &Path, visit: &mut Visit<'_>) -> Result<()> {
     if lead[0..4] != [0xed, 0xab, 0xee, 0xdb] {
         bail!("not an RPM package");
     }
-    let signature_end = 96 + rpm_header_len(&mut file)?;
-    let header_start = signature_end.div_ceil(8) * 8;
+    let signature_end = 96u64
+        .checked_add(rpm_header_len(&mut file)?)
+        .ok_or_else(|| anyhow!("corrupt RPM signature header size"))?;
+    let header_start = signature_end
+        .div_ceil(8)
+        .checked_mul(8)
+        .ok_or_else(|| anyhow!("corrupt RPM signature header alignment"))?;
     if header_start > len {
         bail!("RPM signature header runs past the end of the file");
     }
     file.seek(SeekFrom::Start(header_start))?;
-    let payload = header_start + rpm_header_len(&mut file)?;
+    let payload = header_start
+        .checked_add(rpm_header_len(&mut file)?)
+        .ok_or_else(|| anyhow!("corrupt RPM main header size"))?;
     if payload > len {
         bail!("RPM header runs past the end of the file");
     }
@@ -537,13 +691,17 @@ fn walk_rpm(path: &Path, visit: &mut Visit<'_>) -> Result<()> {
         _ => bail!("the RPM payload compression is not recognised (not analysed)"),
     };
     file.seek(SeekFrom::Start(payload))?;
-    let mut decoded = decode(Box::new(file), compression)?;
-    walk_cpio(&mut decoded, visit).context("reading the RPM cpio payload")?;
+    let mut decoded = decode(Box::new(file), compression, budget)?;
+    walk_cpio(&mut decoded, budget, visit).context("reading the RPM cpio payload")?;
     decoded.finish()
 }
 
 /// Reads a cpio archive in the SVR4 `newc` / `crc` formats (magic `070701` / `070702`).
-fn walk_cpio(reader: &mut dyn Read, visit: &mut Visit<'_>) -> Result<()> {
+fn walk_cpio(
+    reader: &mut dyn Read,
+    budget: &mut ArchiveBudget,
+    visit: &mut Visit<'_>,
+) -> Result<()> {
     loop {
         let mut header = [0u8; 110];
         reader
@@ -567,16 +725,24 @@ fn walk_cpio(reader: &mut dyn Read, visit: &mut Visit<'_>) -> Result<()> {
         if name_size == 0 || name_size > 65_536 {
             bail!("corrupt cpio name length {name_size}");
         }
+        if file_size > MAX_CPIO_FILE_BYTES {
+            bail!("cpio entry file_size {file_size} exceeds maximum ({MAX_CPIO_FILE_BYTES} bytes)");
+        }
         let mut raw_name = vec![0u8; name_size as usize];
         reader
             .read_exact(&mut raw_name)
             .context("truncated cpio name")?;
-        let name = String::from_utf8_lossy(raw_name.strip_suffix(&[0]).unwrap_or(&raw_name))
-            .replace('\\', "/");
+        let stripped = raw_name.strip_suffix(&[0]).unwrap_or(&raw_name);
+        if stripped.contains(&0) {
+            bail!("archive entry name contains a NUL byte");
+        }
+        let name = String::from_utf8_lossy(stripped).replace('\\', "/");
         skip(reader, (4 - (110 + name_size) % 4) % 4)?;
         if name == "TRAILER!!!" {
             return Ok(());
         }
+        budget.record_entry()?;
+        validate_entry_name(&name)?;
         let mut data = reader.take(file_size);
         visit(Entry {
             name: name.clone(),
@@ -627,12 +793,16 @@ impl Decoded {
     }
 }
 
-fn decode(source: Box<dyn Read + Send>, compression: Compression) -> Result<Decoded> {
+fn decode(
+    source: Box<dyn Read + Send>,
+    compression: Compression,
+    budget: &ArchiveBudget,
+) -> Result<Decoded> {
     let reader: Box<dyn Read> = match compression {
-        Compression::None => source,
-        Compression::Gzip => Box::new(flate2::read::MultiGzDecoder::new(source)),
-        Compression::Bzip2 => Box::new(bzip2_rs::DecoderReader::new(source)),
-        Compression::Zstd => Box::new(ZstdFrames::new(source)),
+        Compression::None => Box::new(budget.wrap(source)),
+        Compression::Gzip => Box::new(budget.wrap(flate2::read::MultiGzDecoder::new(source))),
+        Compression::Bzip2 => Box::new(budget.wrap(bzip2_rs::DecoderReader::new(source))),
+        Compression::Zstd => Box::new(budget.wrap(ZstdFrames::new(source))),
         Compression::Xz => {
             // lzma-rs decodes xz into a writer; a thread and a pipe turn that into a
             // reader, so a large payload streams instead of being held in memory.
@@ -652,7 +822,7 @@ fn decode(source: Box<dyn Read + Send>, compression: Compression) -> Result<Deco
                 }
             });
             return Ok(Decoded {
-                reader: Box::new(pipe_reader),
+                reader: Box::new(budget.wrap(pipe_reader)),
                 worker: Some(worker),
             });
         }
@@ -1370,5 +1540,81 @@ mod tests {
         assert!(names(&path).is_err());
         let err = format!("{:#}", names(&path).unwrap_err());
         assert!(err.starts_with("reading it as a RPM package: "), "{err}");
+    }
+
+    #[test]
+    fn decompression_and_entry_count_bounds_reject_bombs() {
+        let dir = TempDir::new().unwrap();
+        let big = vec![0u8; 64 * 1024];
+        let tar_gz = fixtures::gzip(&fixtures::tar(&[("pkg/zero.bin", &big)]));
+        let gz_path = write(&dir, "bomb.tar.gz", &tar_gz);
+
+        // Under a 16 KiB decompressed byte limit, the 64 KiB tar stream is rejected even
+        // when the visitor does not read entry bytes.
+        let err = format!(
+            "{:#}",
+            walk_with_limits(&gz_path, 16 * 1024, 100, &mut |_| Ok(())).unwrap_err()
+        );
+        assert!(
+            err.contains("exceeds maximum allowed size") || err.contains("corrupt"),
+            "{err}"
+        );
+
+        // Control: under a 256 KiB budget, the same archive succeeds.
+        walk_with_limits(&gz_path, 256 * 1024, 100, &mut |_| Ok(())).unwrap();
+
+        // Entry-count limit rejects archives with more entries than allowed.
+        let three = fixtures::tar(&[("a", b"1"), ("b", b"2"), ("c", b"3")]);
+        let three_path = write(&dir, "three.tar", &three);
+        let err = format!(
+            "{:#}",
+            walk_with_limits(&three_path, 256 * 1024, 2, &mut |_| Ok(())).unwrap_err()
+        );
+        assert!(err.contains("exceeds maximum entry count"), "{err}");
+        walk_with_limits(&three_path, 256 * 1024, 3, &mut |_| Ok(())).unwrap();
+    }
+
+    #[test]
+    fn unsafe_entry_names_and_overflowing_headers_are_rejected() {
+        let dir = TempDir::new().unwrap();
+
+        // Zip with `..` traversal or leading `/`.
+        for bad_name in ["../evil.sh", "pkg/../../evil.sh", "/etc/passwd"] {
+            let zip_bytes = fixtures::zip(&[(bad_name, b"x")]);
+            let path = write(&dir, "bad.zip", &zip_bytes);
+            let err = format!("{:#}", names(&path).unwrap_err());
+            assert!(
+                err.contains("path traversal") || err.contains("absolute path"),
+                "{bad_name}: {err}"
+            );
+        }
+
+        // Cpio with `..` traversal or file_size > MAX_CPIO_FILE_BYTES.
+        let bad_cpio = fixtures::cpio_newc(&[("../evil", b"x")]);
+        let path = write(&dir, "bad.rpm", &fixtures::rpm(&fixtures::gzip(&bad_cpio)));
+        let err = format!("{:#}", names(&path).unwrap_err());
+        assert!(err.contains("path traversal"), "{err}");
+
+        let mut huge_cpio = fixtures::cpio_newc(&[("test.bin", &[0u8; 4])]);
+        // `c_filesize` is the 7th 8-char hex field after 6-byte magic: bytes 54..62.
+        huge_cpio[54..62].copy_from_slice(b"80000000"); // 2 GiB > MAX_CPIO_FILE_BYTES (1 GiB)
+        let path = write(
+            &dir,
+            "huge_cpio.rpm",
+            &fixtures::rpm(&fixtures::gzip(&huge_cpio)),
+        );
+        let err = format!("{:#}", names(&path).unwrap_err());
+        assert!(err.contains("exceeds maximum"), "{err}");
+
+        // Deb with huge ar member size near u64::MAX must fail cleanly without overflow panic.
+        let mut deb_bytes = b"!<arch>\n".to_vec();
+        deb_bytes
+            .extend_from_slice(b"data.tar.gz     0           0     0     100644  9999999999`\n");
+        let path = write(&dir, "overflow.deb", &deb_bytes);
+        let err = format!("{:#}", names(&path).unwrap_err());
+        assert!(
+            err.contains("runs past the end") || err.contains("corrupt"),
+            "{err}"
+        );
     }
 }

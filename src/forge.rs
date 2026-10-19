@@ -91,9 +91,15 @@ impl Forge {
     }
 }
 
-/// The lower-cased host of a URL (`https://user:pass@host:port/path` → `host`).
+/// The lower-cased host of a URL (`https://user:pass@host:port/path` → `host`,
+/// `http://[::1]:8080/path` → `[::1]`).
 pub fn host_of(url: &str) -> String {
     let auth = authority_of(url);
+    if let Some(rest) = auth.strip_prefix('[') {
+        if let Some((ip, _)) = rest.split_once(']') {
+            return format!("[{}]", ip.to_ascii_lowercase());
+        }
+    }
     auth.split(':')
         .next()
         .unwrap_or_default()
@@ -141,13 +147,14 @@ pub fn parse_remote(remote: &str) -> Option<Remote> {
 /// Guess a forge from its host name alone.
 pub fn kind_from_host(host: &str) -> Option<ForgeKind> {
     let h = host.to_ascii_lowercase();
+    let has_label = |want: &str| h.split('.').any(|label| label == want);
     if h == "github.com" || h.ends_with(".ghe.com") {
         Some(ForgeKind::GitHub)
-    } else if h == "codeberg.org" || h.contains("forgejo") {
+    } else if h == "codeberg.org" || has_label("forgejo") {
         Some(ForgeKind::Forgejo)
-    } else if h.contains("gitlab") {
+    } else if has_label("gitlab") {
         Some(ForgeKind::GitLab)
-    } else if h.contains("gitea") {
+    } else if has_label("gitea") {
         Some(ForgeKind::Gitea)
     } else {
         None
@@ -295,17 +302,55 @@ pub fn ssh_hostname_from_home(alias: &str) -> Option<String> {
     ssh_hostname(&text, alias)
 }
 
+const MAX_SSH_CONFIG_BYTES: usize = 256 * 1024;
+
 /// A config file with its `Include` directives expanded in place (relative paths are
-/// under `~/.ssh`; `*` and `?` match file names), up to a fixed depth.
+/// under `~/.ssh`; `*` and `?` match file names), up to a fixed depth and byte cap.
+/// Included files must canonicalize inside `ssh_dir` or `/etc/ssh`.
 fn read_ssh_config(path: &std::path::Path, ssh_dir: &std::path::Path, depth: usize) -> String {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return String::new();
-    };
-    if depth > 4 {
-        return text;
-    }
     let mut out = String::new();
+    read_ssh_config_into(path, ssh_dir, depth, &mut out);
+    out
+}
+
+fn read_ssh_config_into(
+    path: &std::path::Path,
+    ssh_dir: &std::path::Path,
+    depth: usize,
+    out: &mut String,
+) {
+    if out.len() >= MAX_SSH_CONFIG_BYTES {
+        return;
+    }
+    if depth > 0 {
+        let Ok(canon) = path.canonicalize() else {
+            return;
+        };
+        let in_ssh_dir = ssh_dir
+            .canonicalize()
+            .is_ok_and(|base| canon.starts_with(base));
+        let in_etc_ssh = std::path::Path::new("/etc/ssh").canonicalize().map_or_else(
+            |_| canon.starts_with("/etc/ssh"),
+            |etc| canon.starts_with(etc),
+        );
+        if !in_ssh_dir && !in_etc_ssh {
+            return;
+        }
+    }
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
+    if out.len().saturating_add(text.len()) > MAX_SSH_CONFIG_BYTES {
+        return;
+    }
+    if depth > 4 {
+        out.push_str(&text);
+        return;
+    }
     for line in text.lines() {
+        if out.len() >= MAX_SSH_CONFIG_BYTES {
+            break;
+        }
         let (key, args) = ssh_config_line(line);
         if !key.eq_ignore_ascii_case("include") {
             out.push_str(line);
@@ -338,14 +383,13 @@ fn read_ssh_config(path: &std::path::Path, ssh_dir: &std::path::Path, depth: usi
                         .collect();
                     files.sort();
                     for f in files {
-                        out.push_str(&read_ssh_config(&f, ssh_dir, depth + 1));
+                        read_ssh_config_into(&f, ssh_dir, depth + 1, out);
                     }
                 }
-                _ => out.push_str(&read_ssh_config(&expanded, ssh_dir, depth + 1)),
+                _ => read_ssh_config_into(&expanded, ssh_dir, depth + 1, out),
             }
         }
     }
-    out
 }
 
 /// Keyword and arguments of one OpenSSH config line (`Key value`, `Key=value`, quotes).
@@ -391,7 +435,24 @@ pub fn ssh_hostname(config: &str, alias: &str) -> Option<String> {
             applies = false;
         } else if applies && key.eq_ignore_ascii_case("hostname") {
             if let Some(h) = args.first() {
-                return Some(h.replace("%h", alias).replace("%%", "%"));
+                let mut expanded = String::with_capacity(h.len());
+                let mut chars = h.chars();
+                while let Some(c) = chars.next() {
+                    if c == '%' {
+                        match chars.next() {
+                            Some('%') => expanded.push('%'),
+                            Some('h') => expanded.push_str(alias),
+                            Some(other) => {
+                                expanded.push('%');
+                                expanded.push(other);
+                            }
+                            None => expanded.push('%'),
+                        }
+                    } else {
+                        expanded.push(c);
+                    }
+                }
+                return Some(expanded);
             }
         }
     }
@@ -1169,9 +1230,12 @@ impl HttpApi<'_> {
     }
 }
 
-/// Validate a base URL: http(s) scheme, credentials removed, no trailing slash.
+/// Validate a base URL: http(s) scheme, credentials removed, no query/fragment, no trailing slash.
 pub fn clean_url(url: &str) -> Result<String, String> {
     let url = url.trim().trim_end_matches('/');
+    if url.contains(['?', '#']) {
+        return Err("base URL must not contain query (`?`) or fragment (`#`)".to_string());
+    }
     let (scheme, rest) = match url.split_once("://") {
         Some((s, r)) => (s.to_ascii_lowercase(), r),
         None => ("https".to_string(), url),
@@ -1204,7 +1268,9 @@ pub(crate) fn authority_of(url: &str) -> String {
 
 fn is_loopback(host: &str) -> bool {
     let h = host.trim_start_matches('[').trim_end_matches(']');
-    h == "localhost" || h == "::1" || h.starts_with("127.")
+    h.eq_ignore_ascii_case("localhost")
+        || h.parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// `value` as one API path segment or query value: every byte other than ASCII letters,
@@ -1446,7 +1512,7 @@ impl HttpApi<'_> {
                             format!("{base_host} redirected without a location"),
                         )
                     })?;
-                let next = if location.starts_with('/') {
+                let next = if location.starts_with('/') && !location.starts_with("//") {
                     let origin_end = url.find("://").map(|i| i + 3).unwrap_or(0);
                     let origin_end = url[origin_end..]
                         .find('/')
@@ -1456,7 +1522,8 @@ impl HttpApi<'_> {
                 } else {
                     location.to_string()
                 };
-                let same_scheme = next.split("://").next() == url.split("://").next();
+                let same_scheme =
+                    next.contains("://") && next.split("://").next() == url.split("://").next();
                 if authority_of(&next) != authority_of(&url) || !same_scheme {
                     return Err(ForgeError::new(
                         ForgeErrorKind::Malformed,
@@ -2964,6 +3031,93 @@ mod tests {
         assert_eq!(
             ssh_hostname(&text, "fallback").as_deref(),
             Some("fallback.example")
+        );
+
+        // Include outside ~/.ssh is ignored.
+        let outside = home.path().join("outside.conf");
+        std::fs::write(&outside, "Host evil\n  HostName evil.example.org\n").unwrap();
+        std::fs::write(
+            ssh.join("config"),
+            format!("Include {}\n", outside.display()),
+        )
+        .unwrap();
+        let text = read_ssh_config(&ssh.join("config"), &ssh, 0);
+        assert_eq!(ssh_hostname(&text, "evil"), None);
+    }
+
+    #[test]
+    fn loopback_ipv6_redirect_and_ssh_token_hardening() {
+        // 127.attacker.example.com is not loopback: refused over plain HTTP and under DISCIPLINE_NO_NETWORK=1.
+        assert!(!is_loopback("127.attacker.example.com"));
+        assert!(is_loopback("127.0.0.1"));
+        assert!(is_loopback("[::1]"));
+        assert!(is_loopback("localhost"));
+        assert_eq!(host_of("http://[::1]:8080/api/v1"), "[::1]");
+        assert!(is_loopback(&host_of("http://[::1]:8080/api/v1")));
+
+        let fake_loopback = Forge {
+            kind: ForgeKind::Gitea,
+            url: "http://127.attacker.example.com".into(),
+            repo: "o/r".into(),
+        };
+        let e = env(&[]);
+        let err = HttpApi { env: &e }
+            .get(&fake_loopback, "repos/o/r")
+            .unwrap_err();
+        assert!(err.contains("plain HTTP"), "{err}");
+
+        let fake_https = Forge {
+            url: "https://127.attacker.example.com".into(),
+            ..fake_loopback
+        };
+        let off = env(&[("DISCIPLINE_NO_NETWORK", "1")]);
+        let err = HttpApi { env: &off }
+            .get(&fake_https, "repos/o/r")
+            .unwrap_err();
+        assert!(err.contains("DISCIPLINE_NO_NETWORK"), "{err}");
+
+        // clean_url rejects ? and # in base URLs.
+        assert!(clean_url("https://git.example.com/api?foo=bar").is_err());
+        assert!(clean_url("https://git.example.com/api#frag").is_err());
+
+        // Single-pass %h expansion: %%h becomes literal %h, not %<alias>.
+        assert_eq!(
+            ssh_hostname("Host *\n  HostName %%h.example.com\n", "myalias").as_deref(),
+            Some("%h.example.com")
+        );
+
+        // Substring host names without dot-separated labels do not match forge kinds.
+        assert_eq!(kind_from_host("notgitea.example.com"), None);
+        assert_eq!(kind_from_host("mygitlabhost.example.com"), None);
+        assert_eq!(kind_from_host("gitea.example.com"), Some(ForgeKind::Gitea));
+
+        // Protocol-relative Location: //evil.example/path is refused as a cross-host redirect.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader, Write};
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                while reader.read_line(&mut line).unwrap_or(0) > 2 {
+                    line.clear();
+                }
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 302 Found\r\nLocation: //evil.example/api\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+            }
+        });
+        let e = env(&[
+            ("DISCIPLINE_FORGE_API_URL", &base),
+            ("DISCIPLINE_NO_NETWORK", "1"),
+        ]);
+        let err = HttpApi { env: &e }
+            .get(&gh(), "repos/o/r/issues")
+            .unwrap_err();
+        assert!(
+            err.contains("redirected to another host or scheme"),
+            "{err}"
         );
     }
 

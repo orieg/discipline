@@ -115,6 +115,8 @@ pub struct GitCtx {
     staged: bool,
     /// A number no other `GitCtx` of this process has ([`GitCtx::run_id`]).
     run: u64,
+    /// `GitCtx` wraps `libgit2::Repository` and is used on a single thread.
+    _not_send: std::marker::PhantomData<*const ()>,
 }
 
 /// The next [`GitCtx::run_id`].
@@ -515,10 +517,13 @@ pub fn format_discover_error(err: &git2::Error, path: &std::path::Path) -> anyho
 /// baseline code): keeps every read error instead of dropping it, so the caller ends with
 /// `finish()?` and the gate is "could not run", not a pass over a missing file. The first
 /// [`ReadRecorder::MAX_KEPT`] distinct errors are kept whole and the rest are counted.
+///
+/// `ReadRecorder` uses interior mutability (`RefCell`) and is single-threaded (`!Sync`).
 #[derive(Default)]
 #[must_use = "a recorder that is never `finish()`ed drops the read errors it kept"]
 pub struct ReadRecorder {
     failed: std::cell::RefCell<FailedReads>,
+    _not_sync: std::marker::PhantomData<*const ()>,
 }
 
 #[derive(Default)]
@@ -697,6 +702,10 @@ fn last_component(path: &std::path::Path) -> String {
         .unwrap_or_else(|| "(unnamed)".to_string())
 }
 
+/// Maximum size in bytes of a single repository source blob or working-tree file read into
+/// memory (32 MiB). Files above this bound fail closed rather than exhausting memory.
+pub const MAX_SOURCE_FILE_BYTES: u64 = 32 * 1024 * 1024;
+
 impl GitCtx {
     /// `staged = true` inspects the index against `HEAD` (pre-commit hook).
     /// Otherwise the working tree is measured against the merge base of
@@ -731,6 +740,7 @@ impl GitCtx {
             base_label: "empty tree (whole-tree baseline)".to_string(),
             staged: false,
             run: next_run(),
+            _not_send: std::marker::PhantomData,
         })
     }
 
@@ -846,6 +856,7 @@ impl GitCtx {
             base_label,
             staged,
             run: next_run(),
+            _not_send: std::marker::PhantomData,
         })
     }
 
@@ -886,6 +897,7 @@ impl GitCtx {
             base_label: "base".to_string(),
             staged: false,
             run: next_run(),
+            _not_send: std::marker::PhantomData,
         }
     }
 
@@ -1044,6 +1056,13 @@ impl GitCtx {
             Ok(entry) if entry.kind() != Some(git2::ObjectType::Blob) => Ok(None),
             Ok(entry) => {
                 let blob = self.repo.find_blob(entry.id())?;
+                if blob.size() as u64 > MAX_SOURCE_FILE_BYTES {
+                    bail!(
+                        "`{path}` on the base side is {} bytes, exceeding MAX_SOURCE_FILE_BYTES ({} bytes)",
+                        blob.size(),
+                        MAX_SOURCE_FILE_BYTES
+                    );
+                }
                 Ok(Some(blob.content().to_vec()))
             }
             Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(None),
@@ -1081,6 +1100,13 @@ impl GitCtx {
             Ok(entry) if entry.kind() != Some(git2::ObjectType::Blob) => Ok(None),
             Ok(entry) => {
                 let blob = self.repo.find_blob(entry.id())?;
+                if blob.size() as u64 > MAX_SOURCE_FILE_BYTES {
+                    bail!(
+                        "`{path}` at commit `{commit_hex}` is {} bytes, exceeding MAX_SOURCE_FILE_BYTES ({} bytes)",
+                        blob.size(),
+                        MAX_SOURCE_FILE_BYTES
+                    );
+                }
                 Ok(Some(blob.content().to_vec()))
             }
             Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(None),
@@ -1114,7 +1140,15 @@ impl GitCtx {
             if entry.mode == 0o160000 {
                 return Ok(None);
             }
-            Ok(Some(self.repo.find_blob(entry.id)?.content().to_vec()))
+            let blob = self.repo.find_blob(entry.id)?;
+            if blob.size() as u64 > MAX_SOURCE_FILE_BYTES {
+                bail!(
+                    "`{path}` in index is {} bytes, exceeding MAX_SOURCE_FILE_BYTES ({} bytes)",
+                    blob.size(),
+                    MAX_SOURCE_FILE_BYTES
+                );
+            }
+            Ok(Some(blob.content().to_vec()))
         } else {
             let root = self
                 .repo
@@ -1129,6 +1163,13 @@ impl GitCtx {
             if meta.is_dir() {
                 return Ok(None);
             }
+            if meta.len() > MAX_SOURCE_FILE_BYTES {
+                bail!(
+                    "`{path}` is {} bytes, exceeding MAX_SOURCE_FILE_BYTES ({} bytes)",
+                    meta.len(),
+                    MAX_SOURCE_FILE_BYTES
+                );
+            }
             let Some(canon) = absent_or(full_path.canonicalize())
                 .with_context(|| format!("failed to read `{path}`"))?
             else {
@@ -1139,9 +1180,20 @@ impl GitCtx {
                 // Path escapes repository root (symlink traversal)
                 return Ok(None);
             }
-            Ok(Some(
-                std::fs::read(&full_path).with_context(|| format!("failed to read `{path}`"))?,
-            ))
+            use std::io::Read as _;
+            let mut file = std::fs::File::open(&full_path)
+                .with_context(|| format!("failed to read `{path}`"))?;
+            let mut bytes = Vec::with_capacity((meta.len() as usize).min(64 * 1024));
+            std::io::Read::take(&mut file, MAX_SOURCE_FILE_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .with_context(|| format!("failed to read `{path}`"))?;
+            if bytes.len() as u64 > MAX_SOURCE_FILE_BYTES {
+                bail!(
+                    "`{path}` exceeds MAX_SOURCE_FILE_BYTES ({} bytes)",
+                    MAX_SOURCE_FILE_BYTES
+                );
+            }
+            Ok(Some(bytes))
         }
     }
 
@@ -1493,19 +1545,23 @@ pub(crate) fn is_ci_environment() -> bool {
 /// `git://` can go through `core.gitProxy`.
 const FETCH_TRANSPORTS: &[&str] = &["https", "http", "ssh", "file"];
 
-/// `-c` arguments for the base fetch. `git` reads the repository's own `.git/config`, which a
-/// hostile repository controls, and several keys there name a command: hooks, the file-system
-/// monitor, a transport. A fetch needs none of them, so they are overridden (`-c` wins over
-/// every configuration file). The upload-pack program is not among them: git reads
-/// `remote.<name>.uploadpack` first value first, so the fetch passes `--upload-pack` instead. The runner legitimately sets three
-/// other command keys (`core.sshCommand`, `credential.helper`, `core.askPass`), so only a
-/// value the repository's own configuration sets is replaced, by the global or system value
-/// (#364). `entries` is every configuration entry in priority order: name, value, and whether
-/// it comes from the repository (local or worktree scope).
+/// `-c` arguments for the base fetch. `git` reads the repository's own `.git/config` (and any
+/// `include.path` / `includeIf.*.path` files it pulls in, which `libgit2` does not evaluate on
+/// every conditional), which a hostile repository controls, and several keys there name a
+/// command: hooks, the file-system monitor, alternate-ref commands, gitProxy, or a transport.
+/// A fetch needs none of them, so they are overridden unconditionally (`-c` wins over every
+/// configuration file). The upload-pack program is not among them: git reads
+/// `remote.<name>.uploadpack` first value first, so the fetch passes `--upload-pack` instead.
+/// The runner legitimately sets three other command keys (`core.sshCommand`, `credential.helper`,
+/// `core.askPass`), so their local values are unconditionally cleared and replaced by the global
+/// or system value (#364). `entries` is every configuration entry in priority order: name, value,
+/// and whether it comes from the repository (local or worktree scope).
 fn fetch_overrides_from(entries: &[(String, String, bool)]) -> Vec<String> {
     let mut out: Vec<String> = [
         "core.fsmonitor=false",
         "core.hooksPath=/dev/null",
+        "core.alternateRefsCommand=false",
+        "core.gitProxy=false",
         "fetch.recurseSubmodules=false",
         "gc.auto=0",
         "maintenance.auto=false",
@@ -1525,17 +1581,37 @@ fn fetch_overrides_from(entries: &[(String, String, bool)]) -> Vec<String> {
     let global = |name: &str| {
         entries
             .iter()
-            .filter(|(n, _, l)| !*l && n == name)
+            .filter(|(n, _, l)| !*l && n.eq_ignore_ascii_case(name))
             .map(|(_, v, _)| v.clone())
             .collect::<Vec<_>>()
     };
-    let mut seen: Vec<&str> = Vec::new();
+
+    // Unconditionally override the three runner keys so a repository's `includeIf` (which
+    // libgit2 may not expand as `is_local`) cannot smuggle a command.
+    out.push("credential.helper=".to_string());
+    out.extend(
+        global("credential.helper")
+            .into_iter()
+            .map(|v| format!("credential.helper={v}")),
+    );
+    let ssh_cmd = global("core.sshCommand")
+        .pop()
+        .unwrap_or_else(|| "ssh".to_string());
+    out.push(format!("core.sshCommand={ssh_cmd}"));
+    let ask_pass = global("core.askPass").pop().unwrap_or_default();
+    out.push(format!("core.askPass={ask_pass}"));
+
+    let mut seen: Vec<String> = vec![
+        "credential.helper".to_string(),
+        "core.sshcommand".to_string(),
+        "core.askpass".to_string(),
+    ];
     for (name, _, is_local) in entries {
-        if !*is_local || seen.contains(&name.as_str()) {
+        let lower = name.to_ascii_lowercase();
+        if !*is_local || seen.contains(&lower) {
             continue;
         }
-        seen.push(name);
-        let lower = name.to_ascii_lowercase();
+        seen.push(lower.clone());
         // A transport the repository allows for itself.
         if let Some(t) = lower
             .strip_prefix("protocol.")
@@ -1545,17 +1621,9 @@ fn fetch_overrides_from(entries: &[(String, String, bool)]) -> Vec<String> {
                 out.push(format!("{name}=never"));
             }
         } else if lower.starts_with("credential.") && lower.ends_with(".helper") {
-            // Multi-valued: an empty value clears the list, then the runner's own helpers.
+            // Multi-valued URL-scoped helper: an empty value clears the list, then the runner's own helpers.
             out.push(format!("{name}="));
             out.extend(global(name).into_iter().map(|v| format!("{name}={v}")));
-        } else if lower == "core.sshcommand" || lower == "core.askpass" {
-            let fallback = if lower == "core.sshcommand" {
-                "ssh"
-            } else {
-                ""
-            };
-            let value = global(name).pop().unwrap_or_else(|| fallback.to_string());
-            out.push(format!("{name}={value}"));
         }
     }
     out
@@ -1581,14 +1649,7 @@ fn fetch_overrides(repo: &Repository) -> Vec<String> {
         }
         Some(out)
     });
-    let strict = || {
-        vec![
-            ("credential.helper".to_string(), String::new(), true),
-            ("core.sshCommand".to_string(), String::new(), true),
-            ("core.askPass".to_string(), String::new(), true),
-        ]
-    };
-    fetch_overrides_from(&entries.unwrap_or_else(strict))
+    fetch_overrides_from(&entries.unwrap_or_default())
 }
 
 fn deepen_git_history(candidates: &[String], base_ref: &str, repo: &Repository) -> Vec<String> {
@@ -1598,7 +1659,9 @@ fn deepen_git_history(candidates: &[String], base_ref: &str, repo: &Repository) 
         return fetch_errors;
     }
     // `DISCIPLINE_NO_NETWORK=1` keeps every request off the network, this fetch included.
-    if std::env::var("DISCIPLINE_NO_NETWORK").is_ok_and(|v| v == "1") {
+    if std::env::var("DISCIPLINE_NO_NETWORK")
+        .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    {
         fetch_errors.push(
             "git fetch skipped: DISCIPLINE_NO_NETWORK=1 keeps every request off the network"
                 .to_string(),
@@ -1615,6 +1678,7 @@ fn deepen_git_history(candidates: &[String], base_ref: &str, repo: &Repository) 
 
     let overrides = fetch_overrides(repo);
     let mut run_fetch = |args: &[&str]| {
+        use std::io::Read as _;
         use std::process::Stdio;
         use std::time::{Duration, Instant};
         let mut cmd = std::process::Command::new("git");
@@ -1636,33 +1700,57 @@ fn deepen_git_history(candidates: &[String], base_ref: &str, repo: &Repository) 
             .env("LC_ALL", "C")
             .env_remove("LANGUAGE");
 
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+
         let Ok(mut child) = cmd.spawn() else {
             return;
         };
 
+        // Drain stderr on a background thread so a noisy `git fetch` (>64 KiB on stderr)
+        // never blocks on a full OS pipe buffer while `try_wait()` polls for exit.
+        let stderr_pipe = child.stderr.take().expect("piped stderr");
+        let stderr_handle = std::thread::spawn(move || -> std::io::Result<Vec<u8>> {
+            let mut buf = Vec::new();
+            stderr_pipe.take(256 * 1024).read_to_end(&mut buf)?;
+            Ok(buf)
+        });
+
         let start = Instant::now();
         let timeout = Duration::from_secs(30);
         let mut timed_out = false;
-        loop {
+        let status = loop {
             match child.try_wait() {
-                Ok(Some(_status)) => break,
+                Ok(Some(status)) => break Some(status),
                 Ok(None) => {
                     if start.elapsed() >= timeout {
-                        let _ = child.kill();
+                        if let Err(e) = child.kill() {
+                            fetch_errors.push(format!("git {}: kill failed: {e}", args.join(" ")));
+                        }
+                        if let Err(e) = child.wait() {
+                            fetch_errors.push(format!("git {}: wait failed: {e}", args.join(" ")));
+                        }
                         timed_out = true;
-                        break;
+                        break None;
                     }
                     std::thread::sleep(Duration::from_millis(50));
                 }
-                Err(_) => break,
+                Err(_) => break None,
             }
-        }
-        let output = child.wait_with_output();
+        };
+        let stderr_bytes = stderr_handle
+            .join()
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default();
         if timed_out {
             fetch_errors.push(format!("git {}: timed out after 30s", args.join(" ")));
-        } else if let Ok(out) = output {
-            if !out.status.success() {
-                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        } else if let Some(st) = status {
+            if !st.success() {
+                let stderr = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
                 if !stderr.is_empty() {
                     fetch_errors.push(format!("git {}: {stderr}", args.join(" ")));
                 }
@@ -1884,6 +1972,7 @@ pub(crate) mod test_support {
             base_label: "base".to_string(),
             staged: false,
             run: super::next_run(),
+            _not_send: std::marker::PhantomData,
         };
         (dir, git)
     }
@@ -1927,6 +2016,7 @@ pub(crate) mod test_support {
             base_label: "base".to_string(),
             staged: false,
             run: super::next_run(),
+            _not_send: std::marker::PhantomData,
         };
         (dir, git)
     }
@@ -1970,18 +2060,38 @@ mod tests {
         for want in [
             "core.fsmonitor=false",
             "core.hooksPath=/dev/null",
+            "core.alternateRefsCommand=false",
+            "core.gitProxy=false",
             "protocol.allow=never",
             "protocol.ext.allow=never",
             "protocol.https.allow=always",
+            "credential.helper=",
+            "core.sshCommand=ssh",
+            "core.askPass=",
         ] {
             assert!(fixed.contains(&want.to_string()), "{want}: {fixed:?}");
         }
-        // Nothing the repository sets: the runner's own values are left alone.
+        let prefix_len = fixed.len() - 3;
+        // Even when the repository sets nothing visible in `entries` (e.g. hidden behind
+        // `includeIf`), the three runner keys are unconditionally reset to the runner's values.
         let runner = [
             e("credential.helper", "!gh auth git-credential", false),
             e("core.sshCommand", "ssh -i key", false),
         ];
-        assert_eq!(fetch_overrides_from(&runner), fixed);
+        let runner_got = fetch_overrides_from(&runner);
+        let runner_tail: Vec<&str> = runner_got[prefix_len..]
+            .iter()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            runner_tail,
+            [
+                "credential.helper=",
+                "credential.helper=!gh auth git-credential",
+                "core.sshCommand=ssh -i key",
+                "core.askPass=",
+            ]
+        );
         // The repository's helper is cleared and the runner's put back, in order.
         let mut both = runner.to_vec();
         both.push(e("credential.helper", "!touch pwn", true));
@@ -1995,21 +2105,25 @@ mod tests {
         both.push(e("protocol.ext.allow", "always", true));
         both.push(e("protocol.file.allow", "always", true));
         let got = fetch_overrides_from(&both);
-        let extra: Vec<&str> = got[fixed.len()..].iter().map(String::as_str).collect();
+        let extra: Vec<&str> = got[prefix_len..].iter().map(String::as_str).collect();
         assert_eq!(
             extra,
             [
                 "credential.helper=",
                 "credential.helper=!gh auth git-credential",
-                "credential.https://example.com.helper=",
                 "core.sshCommand=ssh -i key",
                 "core.askPass=",
+                "credential.https://example.com.helper=",
                 "protocol.ext.allow=never",
             ]
         );
         // With no runner value, ssh falls back to plain `ssh`.
         let only = fetch_overrides_from(&[e("core.sshCommand", "touch pwn; ssh", true)]);
-        assert_eq!(only.last().unwrap(), "core.sshCommand=ssh");
+        let only_tail: Vec<&str> = only[prefix_len..].iter().map(String::as_str).collect();
+        assert_eq!(
+            only_tail,
+            ["credential.helper=", "core.sshCommand=ssh", "core.askPass="]
+        );
     }
 
     use super::*;
@@ -2585,6 +2699,7 @@ mod tests {
             base_label: "base".to_string(),
             staged: false,
             run: next_run(),
+            _not_send: std::marker::PhantomData,
         };
         (dir, git, blob)
     }
@@ -2620,6 +2735,7 @@ mod tests {
             base_label: "base".to_string(),
             staged: false,
             run: next_run(),
+            _not_send: std::marker::PhantomData,
         };
         (dir, git, sub)
     }
@@ -2658,6 +2774,7 @@ mod tests {
             base_label: "base".to_string(),
             staged: false,
             run: next_run(),
+            _not_send: std::marker::PhantomData,
         };
         let shown = format!("{:#}", git.base_content("sub/a.txt").unwrap_err());
         assert!(shown.contains("`sub/a.txt` on the base side"), "{shown}");
@@ -2838,6 +2955,7 @@ mod tests {
                 base_label: "base".to_string(),
                 staged,
                 run: next_run(),
+                _not_send: std::marker::PhantomData,
             };
             for path in ["somedir", "vendor/sub"] {
                 assert_eq!(git.base_content(path).unwrap(), None, "{path} base");
@@ -3010,5 +3128,18 @@ mod tests {
         let detail = CommitDetail::of(&git.repo.find_commit(odd).unwrap());
         assert_eq!(detail.message, "caf\u{fffd} subject\n");
         assert_eq!((detail.parent_count, detail.author_name.as_str()), (0, "a"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn oversized_files_and_blobs_are_rejected_before_allocation() {
+        let (dir, git, _) = repo_with_base_file();
+        let huge_path = dir.path().join("huge.txt");
+        let f = std::fs::File::create(&huge_path).unwrap();
+        f.set_len(MAX_SOURCE_FILE_BYTES + 1).unwrap();
+        drop(f);
+        let err = git.head_bytes("huge.txt").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("exceeding MAX_SOURCE_FILE_BYTES"), "{msg}");
     }
 }
