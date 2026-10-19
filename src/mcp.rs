@@ -302,10 +302,42 @@ pub fn handle(runner: &dyn Runner, line: &str) -> Option<Value> {
     })
 }
 
+/// Maximum bytes read from a single JSON-RPC line on stdin (10 MiB).
+pub const MAX_LINE_BYTES: usize = 10 * 1024 * 1024;
+
 /// Serves until `input` closes.
-pub fn serve(runner: &dyn Runner, input: impl BufRead, mut output: impl Write) -> Result<()> {
-    for line in input.lines() {
-        let line = line?;
+pub fn serve(runner: &dyn Runner, mut input: impl BufRead, mut output: impl Write) -> Result<()> {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        let n = (&mut input)
+            .take((MAX_LINE_BYTES + 1) as u64)
+            .read_until(b'\n', &mut buf)?;
+        if n == 0 {
+            break;
+        }
+        if buf.len() > MAX_LINE_BYTES {
+            // Drain the remainder of the oversized line in bounded chunks.
+            while !buf.ends_with(b"\n") {
+                buf.clear();
+                let m = (&mut input)
+                    .take(MAX_LINE_BYTES as u64)
+                    .read_until(b'\n', &mut buf)?;
+                if m == 0 {
+                    break;
+                }
+            }
+            let err = json!({
+                "jsonrpc": "2.0",
+                "id": null,
+                "error": { "code": -32600, "message": "Invalid Request: line exceeds maximum length" }
+            });
+            writeln!(output, "{}", serde_json::to_string(&err)?)?;
+            output.flush()?;
+            continue;
+        }
+        let line = String::from_utf8_lossy(&buf);
         if line.trim().is_empty() {
             continue;
         }
@@ -473,5 +505,28 @@ mod tests {
         let out = call(&Fake(1, leaky), "check_diff", json!({}));
         let text = out["result"]["content"][0]["text"].as_str().unwrap();
         assert!(!text.contains("allow-assertion-drop"), "{text}");
+    }
+
+    #[test]
+    fn serve_rejects_oversized_line_with_invalid_request_and_keeps_serving() {
+        let oversized = "x".repeat(10 * 1024 * 1024 + 64);
+        let valid = r#"{"jsonrpc":"2.0","id":9,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#;
+        let input = format!("{oversized}\n{valid}\n");
+        let mut out = Vec::new();
+        serve(
+            &Fake(0, ""),
+            std::io::Cursor::new(input.into_bytes()),
+            &mut out,
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        let replies: Vec<Value> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(replies.len(), 2, "{replies:?}");
+        assert_eq!(replies[0]["error"]["code"], -32600);
+        assert_eq!(replies[1]["id"], 9);
+        assert_eq!(replies[1]["result"]["protocolVersion"], "2025-03-26");
     }
 }

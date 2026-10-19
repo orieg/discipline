@@ -328,6 +328,8 @@ pub fn issue_comments(
             read_all(api, forge, &path)?
                 .iter()
                 .map(|n| {
+                    let raw_created = str_at(n, &["created_at"]);
+                    let raw_updated = str_at(n, &["updated_at"]);
                     let created_at = time_at(n, "created_at")?;
                     let updated_at = time_at(n, "updated_at").unwrap_or(created_at);
                     Ok(Comment {
@@ -338,7 +340,9 @@ pub fn issue_comments(
                         imported: n["imported"].as_bool().unwrap_or(false),
                         via_email: false,
                         created_at,
-                        edited: if updated_at == created_at {
+                        edited: if raw_updated.is_empty()
+                            || (updated_at == created_at && raw_updated == raw_created)
+                        {
                             Edited::No
                         } else {
                             Edited::Unknown
@@ -353,17 +357,24 @@ pub fn issue_comments(
             read_all(api, forge, &path)?
                 .iter()
                 .map(|c| {
+                    let raw_created = str_at(c, &["created_at"]);
+                    let raw_updated = str_at(c, &["updated_at"]);
                     let created_at = time_at(c, "created_at")?;
                     let updated_at = time_at(c, "updated_at").unwrap_or(created_at);
+                    let author = str_at(c, &["user", "login"]).to_string();
+                    let author_is_bot = c["user"]["is_bot"].as_bool().unwrap_or(false)
+                        || author.to_ascii_lowercase().ends_with("[bot]");
                     Ok(Comment {
                         id: c["id"].to_string(),
-                        author: str_at(c, &["user", "login"]).to_string(),
-                        author_is_bot: false,
+                        author,
+                        author_is_bot,
                         system: false,
                         imported: !str_at(c, &["original_author"]).is_empty(),
                         via_email: false,
                         created_at,
-                        edited: if updated_at == created_at {
+                        edited: if raw_updated.is_empty()
+                            || (updated_at == created_at && raw_updated == raw_created)
+                        {
                             Edited::No
                         } else {
                             Edited::Unknown
@@ -1535,5 +1546,86 @@ mod tests {
             .responses
             .insert(notes_key.into(), json!([note(true)]));
         assert_eq!(unratified(&check(&system)), protected);
+    }
+
+    #[test]
+    fn gitea_detects_bot_accounts_and_sub_second_edits_mark_edited_unknown() {
+        let forge = Forge {
+            kind: ForgeKind::Gitea,
+            url: "https://gitea.example.invalid".into(),
+            repo: "o/r".into(),
+        };
+        let mut api = CannedApi::default();
+        api.responses
+            .insert("gitea:repos/o/r/issues/3".into(), json!({"state": "open"}));
+        let comments_key = "gitea:repos/o/r/issues/3/comments?limit=50&page=1";
+        api.responses.insert(
+            comments_key.into(),
+            json!([
+                {
+                    "id": 10,
+                    "user": {"login": "ci-helper", "is_bot": true},
+                    "body": format!("{MARKER}\n- AGENTS.md\n"),
+                    "created_at": "2026-03-01T12:00:00.100Z",
+                    "updated_at": "2026-03-01T12:00:00.100Z"
+                },
+                {
+                    "id": 11,
+                    "user": {"login": "dependabot[bot]"},
+                    "body": format!("{MARKER}\n- AGENTS.md\n"),
+                    "created_at": "2026-03-01T12:00:00.100Z",
+                    "updated_at": "2026-03-01T12:00:00.850Z"
+                }
+            ]),
+        );
+        api.responses.insert(
+            "gitea:repos/o/r/issues/3/comments?limit=50&page=2".into(),
+            json!([]),
+        );
+        let parsed = issue_comments(&api, &forge, "o/r", 3).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert!(
+            parsed[0].author_is_bot,
+            "Gitea user.is_bot=true must set author_is_bot"
+        );
+        assert_eq!(parsed[0].edited, Edited::No);
+        assert!(
+            parsed[1].author_is_bot,
+            "Gitea [bot] login suffix must set author_is_bot"
+        );
+        assert_eq!(
+            parsed[1].edited,
+            Edited::Unknown,
+            "sub-second timestamp difference must mark Gitea comment as Edited::Unknown"
+        );
+
+        let gl_forge = Forge {
+            kind: ForgeKind::GitLab,
+            url: "https://gitlab.com".into(),
+            repo: "o/r".into(),
+        };
+        let mut gl_api = CannedApi::default();
+        gl_api.responses.insert(
+            "gitlab:projects/o%2Fr/issues/3/notes?per_page=100&page=1".into(),
+            json!([
+                {
+                    "id": 20,
+                    "author": {"username": "owner"},
+                    "body": format!("{MARKER}\n- AGENTS.md\n"),
+                    "created_at": "2026-03-01T12:00:00.100Z",
+                    "updated_at": "2026-03-01T12:00:00.850Z"
+                }
+            ]),
+        );
+        gl_api.responses.insert(
+            "gitlab:projects/o%2Fr/issues/3/notes?per_page=100&page=2".into(),
+            json!([]),
+        );
+        let gl_parsed = issue_comments(&gl_api, &gl_forge, "o/r", 3).unwrap();
+        assert_eq!(
+            gl_parsed[0].edited,
+            Edited::Unknown,
+            "sub-second timestamp difference must mark GitLab note as Edited::Unknown"
+        );
     }
 }

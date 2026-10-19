@@ -323,8 +323,11 @@ mod tests {
             escaped.ends_with("&lt;/failure&gt;&lt;testcase name=&quot;x&quot; y=&apos;z&apos;&gt;]]&gt;&amp;amp;[31m"),
             "{escaped:?}"
         );
-        // C1 controls and the bidirectional controls are XML characters: carried as they are.
-        assert_eq!(xml("a\u{9b}b\u{202e}c"), "a\u{9b}b\u{202e}c");
+        // C1 controls, DEL, and bidirectional/zero-width controls are replaced with U+FFFD.
+        assert_eq!(
+            xml("a\u{7f}b\u{9b}c\u{202e}d\u{200b}e"),
+            "a\u{fffd}b\u{fffd}c\u{fffd}d\u{fffd}e"
+        );
     }
 
     #[test]

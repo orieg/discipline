@@ -92,6 +92,7 @@ pub(crate) fn xml(s: &str) -> String {
             // The two noncharacters XML 1.0 excludes from `Char` as well: a parser
             // refuses the document that carries one.
             '\u{FFFE}' | '\u{FFFF}' => {}
+            c if is_hidden(c) => out.push(crate::report::text::REPLACEMENT),
             _ => out.push(c),
         }
     }
@@ -224,8 +225,8 @@ mod tests {
             ("html_content", "a\u{1}b\u{7f}c\rd\u{9b}e\u{fffe}f\u{ffff}g"),
             ("html_content", "&lt;!-- discipline:report --&gt; &lt;b&gt;x&lt;/b&gt; @org/team allow-assertion-drop: y https://h.example.invalid/a|b #12"),
             ("html_content", ""),
-            ("xml", "!&quot;#$%&amp;&apos;()*+,-./:;&lt;=&gt;?@[\\]^_`{|}~ a\nb\tc | `d` @name é ü 日本 \u{1f600} \u{202e}"),
-            ("xml", "ab\u{7f}c\rd\u{9b}efg"),
+            ("xml", "!&quot;#$%&amp;&apos;()*+,-./:;&lt;=&gt;?@[\\]^_`{|}~ a\nb\tc | `d` @name é ü 日本 \u{1f600} \u{fffd}"),
+            ("xml", "ab\u{fffd}c\rd\u{fffd}efg"),
             ("xml", "&lt;!-- discipline:report --&gt; &lt;b&gt;x&lt;/b&gt; @org/team allow-assertion-drop: y https://h.example.invalid/a|b #12"),
             ("xml", ""),
             ("docs_markdown_cell", "!\"#$%&'()*+,-./:;&lt;=&gt;?@[\\]^_`{\\|}~ a b\tc \\| `d` @name é ü 日本 \u{1f600} \u{202e}"),
