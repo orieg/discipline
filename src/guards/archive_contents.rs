@@ -558,15 +558,22 @@ pub fn read_archive(
     strip_components: usize,
     scan_limit: Option<u64>,
 ) -> Result<ArchiveRead> {
-    let mut raw_paths = Vec::new();
+    let mut raw_paths: Vec<(String, bool)> = Vec::new();
     let mut scan = scan_limit.map(|_| ScanReport::default());
     archive_formats::walk(archive_path, &mut |entry| {
+        if raw_paths.len() >= archive_formats::MAX_ARCHIVE_ENTRIES {
+            bail!(
+                "archive exceeds maximum entry count ({} entries)",
+                archive_formats::MAX_ARCHIVE_ENTRIES
+            );
+        }
+        let is_dir = entry.is_dir || matches!(entry.data, EntryData::Expanded);
         if let (Some(report), Some(limit), Some(name)) = (
             scan.as_mut(),
             scan_limit,
-            strip_entry(&entry.name, strip_components),
+            strip_entry(&entry.name, strip_components, is_dir),
         ) {
-            if !entry.is_dir {
+            if !is_dir {
                 match entry.data {
                     EntryData::Bytes(reader) => {
                         scan_entry(&name, entry.size, reader, limit, report)?;
@@ -578,7 +585,7 @@ pub fn read_archive(
                 }
             }
         }
-        raw_paths.push(entry.name);
+        raw_paths.push((entry.name, is_dir));
         Ok(())
     })?;
     Ok(ArchiveRead {
@@ -660,11 +667,11 @@ fn scan_entry(
 
 /// Normalises raw entry names (`./` and empty components dropped), strips
 /// `strip_components` leading directories, and removes duplicates in order.
-fn strip_entries(raw_paths: Vec<String>, strip_components: usize) -> Vec<String> {
+fn strip_entries(raw_paths: Vec<(String, bool)>, strip_components: usize) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     let mut stripped_paths = Vec::new();
-    for raw in raw_paths {
-        if let Some(stripped) = strip_entry(&raw, strip_components) {
+    for (raw, is_dir) in raw_paths {
+        if let Some(stripped) = strip_entry(&raw, strip_components, is_dir) {
             if seen.insert(stripped.clone()) {
                 stripped_paths.push(stripped);
             }
@@ -673,13 +680,19 @@ fn strip_entries(raw_paths: Vec<String>, strip_components: usize) -> Vec<String>
     stripped_paths
 }
 
-fn strip_entry(raw: &str, strip_components: usize) -> Option<String> {
+fn strip_entry(raw: &str, strip_components: usize, is_dir: bool) -> Option<String> {
     let parts: Vec<&str> = raw
         .split('/')
         .filter(|s| !s.is_empty() && *s != ".")
         .collect();
-    if parts.len() <= strip_components {
+    if parts.is_empty() {
         return None;
+    }
+    if parts.len() <= strip_components {
+        if is_dir || raw.ends_with('/') {
+            return None;
+        }
+        return parts.last().map(|s| (*s).to_string());
     }
     Some(parts[strip_components..].join("/"))
 }
@@ -893,5 +906,35 @@ mod tests {
 
         assert!(forbidden_rules(&[], None).unwrap().is_empty());
         assert!(forbidden_rules(&["(".to_string()], None).is_err());
+    }
+
+    #[test]
+    fn strip_components_does_not_drop_root_level_files() {
+        let dir = tempdir().unwrap();
+        let path = npm_tgz(
+            &dir,
+            &[
+                ("package/package.json", b"{}"),
+                (".env", b"SECRET=1\n"),
+                ("root.js.map", LEAKING_MAP.as_bytes()),
+            ],
+        );
+        let read = read_archive(&path, 1, Some(1 << 20)).unwrap();
+        assert!(
+            read.entries.contains(&".env".to_string()),
+            "root file must not be dropped when strip_components = 1: {:?}",
+            read.entries
+        );
+        assert!(
+            read.entries.contains(&"root.js.map".to_string()),
+            "root map must not be dropped when strip_components = 1: {:?}",
+            read.entries
+        );
+        let scan = read.scan.unwrap();
+        assert_eq!(scan.leaks.len(), 1);
+        assert_eq!(scan.leaks[0].entry, "root.js.map");
+        // Directory entries at root are still dropped when stripped to empty.
+        assert_eq!(strip_entry("package/", 1, true), None);
+        assert_eq!(strip_entry("package", 1, true), None);
     }
 }
