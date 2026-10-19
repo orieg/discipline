@@ -1,5 +1,5 @@
 // Written by `discipline hook install --agent opencode`.
-// discipline-hook-file: mode=observe sha256=b513946b0a8b7559000f7506c7daba8d96fc2eae2a2a697741512d32034ad039
+// discipline-hook-file: mode=observe sha256=7455debabe1fd05598196ab6a956e551713965a4483d70a16d45a30fca073b48
 // When a session is created, takes this worktree's lease for it. Before an edit tool, refuses an edit outside this session's worktree (the tool call
 // is sent on stdin; a refusal throws, and the model reads the reason). After it, runs
 // the discipline check and, when it fails, appends the report to the tool's output so
@@ -38,8 +38,8 @@ export const Discipline = async ({ $, directory }) => ({
   },
   "tool.execute.before": async (input, output) => {
     try {
-      if (!EDIT_TOOLS.includes(input.tool) && input.tool !== "bash") return
-      if (input.tool === "bash" && input.callID) {
+      if (!EDIT_TOOLS.includes(input.tool) && !SHELL_TOOLS.includes(input.tool)) return
+      if (input.callID && SHELL_TOOLS.includes(input.tool)) {
         if (SHELL_ARGS.size > 256) SHELL_ARGS.clear()
         SHELL_ARGS.set(input.callID, output?.args)
       }

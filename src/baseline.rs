@@ -311,7 +311,7 @@ fn fingerprint_of(v: &Violation, located: Option<(&str, usize)>, version: u32) -
 /// occurrence number of their line as in [`fingerprint_of`].
 fn message_fingerprint(v: &Violation, occurrence: usize) -> String {
     let source = format!(
-        "v2:{}:{}:{}",
+        "v2-msg:{}:{}:{}",
         v.code,
         v.file.as_deref().unwrap_or(""),
         sha256_hex(
@@ -392,14 +392,13 @@ fn first_occurrence_twin(
 /// Version-2 fingerprints for every finding of a run. Two findings with no line and no
 /// anchor, of one code in one file, would share a fingerprint, so baselining one would
 /// hide the other: those fall back to hashing their messages. A code that can repeat in
-/// a file without a line needs an anchor; debug builds (every test) stop on one that has
-/// none.
+/// a file without a line needs an anchor; all builds stop on one that has none.
 pub fn fill_fingerprints<F>(violations: &mut [&mut Violation], read_file: F)
 where
     F: Fn(&str) -> Option<String>,
 {
     let collided = fingerprint_all(violations, read_file);
-    debug_assert!(
+    assert!(
         collided.is_empty(),
         "{} repeats in `{}` with no line and no anchor: give it an anchor (GateOutcome::anchor_last)",
         collided
@@ -1544,5 +1543,22 @@ mod tests {
 
         // Line number shifted from 3 to 8, but fingerprint MUST match exactly
         assert_eq!(fp1, fp2);
+    }
+
+    #[test]
+    fn message_fingerprint_uses_distinct_v2_msg_domain_prefix() {
+        let v = Violation {
+            line: Some(1),
+            message: "msg".into(),
+            ..finding("t", "c/x")
+        };
+        let expected_inner = sha256_hex(b"message:msg");
+        let expected_v2_msg =
+            sha256_hex(format!("v2-msg:c/x:src/lib.rs:{expected_inner}").as_bytes());
+        assert_eq!(
+            message_fingerprint(&v, 1),
+            expected_v2_msg,
+            "message_fingerprint must use `v2-msg:` domain prefix so it cannot collide with `v2:`"
+        );
     }
 }
