@@ -309,3 +309,38 @@ fn seeds_added_to_a_corpus_directory_do_not_offset_a_deleted_seed() {
         run.stdout
     );
 }
+
+#[test]
+fn step12_yaml_and_lockfiles_fuzz_target_is_wired_and_ledger_updated() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let fuzz_toml = std::fs::read_to_string(root.join("fuzz/Cargo.toml")).unwrap();
+    assert!(
+        fuzz_toml.contains("name = \"yaml_and_lockfiles\"")
+            && fuzz_toml.contains("path = \"fuzz_targets/yaml_and_lockfiles.rs\""),
+        "fuzz/Cargo.toml must register yaml_and_lockfiles target"
+    );
+    let target_src =
+        std::fs::read_to_string(root.join("fuzz/fuzz_targets/yaml_and_lockfiles.rs")).unwrap();
+    assert!(
+        target_src.contains("lockfile::parse_lock")
+            && target_src.contains("ci_gitlab::diff_gitlab_ci")
+            && target_src.contains("citation_metadata::check"),
+        "yaml_and_lockfiles.rs must exercise lockfile, ci_gitlab, and citation_metadata YAML parsers"
+    );
+    let fuzz_wf = std::fs::read_to_string(root.join(".github/workflows/fuzz.yml")).unwrap();
+    assert!(
+        fuzz_wf.contains("- yaml_and_lockfiles"),
+        ".github/workflows/fuzz.yml must include yaml_and_lockfiles in matrix"
+    );
+    let arch_md = std::fs::read_to_string(root.join("docs/ARCHITECTURE.md")).unwrap();
+    assert!(
+        arch_md.contains("| `yaml_and_lockfiles` |"),
+        "docs/ARCHITECTURE.md §8.6 must list yaml_and_lockfiles"
+    );
+    let roadmap_md = std::fs::read_to_string(root.join("docs/ROADMAP.md")).unwrap();
+    assert!(
+        roadmap_md.contains("`pretool` shell and worktree confinement")
+            && roadmap_md.contains("`instruction-smuggling` variation selectors"),
+        "docs/ROADMAP.md compatibility ledger must record the security-hardening changes"
+    );
+}
