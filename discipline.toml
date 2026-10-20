@@ -93,6 +93,7 @@ require_agent_review = false
 
 [gates.pii]
 exempt_paths = ["tests/fixtures/**"]
+redact_lan_ips = true
 
 # Path-filtered jobs are gated by detect-changes; ci-skip-set verifies at runtime
 # that every job in ci-gate's needs skipped if and only if its if: evaluated to false.

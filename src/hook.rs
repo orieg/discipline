@@ -436,6 +436,23 @@ fn default_side_base(dir: &Path) -> Option<String> {
     change_base(&crate::gitctx::discover_repository(dir).ok()?)
 }
 
+/// Maximum size in bytes of a hook JSON payload read from stdin (10 MiB).
+pub const MAX_HOOK_STDIN_BYTES: usize = 10 * 1024 * 1024;
+
+/// Reads a hook payload from `reader`, failing closed when the payload exceeds `max_bytes`.
+pub fn read_bounded_hook_stdin(reader: impl std::io::Read, max_bytes: usize) -> Result<String> {
+    use std::io::Read as _;
+    let mut buf = Vec::new();
+    reader
+        .take((max_bytes as u64).saturating_add(1))
+        .read_to_end(&mut buf)
+        .context("cannot read the hook payload on stdin")?;
+    if buf.len() > max_bytes {
+        bail!("hook payload on stdin exceeds maximum size ({max_bytes} bytes)");
+    }
+    String::from_utf8(buf).context("hook payload on stdin is not valid UTF-8")
+}
+
 /// Runs the check for the agent and returns what the hook emits.
 #[cfg(test)]
 pub fn run(agent: Agent, base: Option<String>, stdin: &str) -> Result<HookOutput> {
@@ -456,6 +473,9 @@ pub fn run_with(
     if_configured: bool,
     observe: bool,
 ) -> Result<HookOutput> {
+    if stdin.len() > MAX_HOOK_STDIN_BYTES {
+        bail!("hook payload on stdin exceeds maximum size ({MAX_HOOK_STDIN_BYTES} bytes)");
+    }
     run_payload(
         agent,
         base,
@@ -556,6 +576,9 @@ pub fn stop_with(
     if_configured: bool,
     observe: bool,
 ) -> Result<HookOutput> {
+    if stdin.len() > MAX_HOOK_STDIN_BYTES {
+        bail!("hook payload on stdin exceeds maximum size ({MAX_HOOK_STDIN_BYTES} bytes)");
+    }
     let mut payload = parse_payload(stdin);
     payload.stop = true;
     if agent == Agent::Opencode {
@@ -1553,6 +1576,79 @@ pub enum CheckSide {
     Base(String),
 }
 
+/// Verifies that `exe` is an absolute path to a regular file outside the target
+/// repository worktree (preventing relative-PATH or in-worktree binary hijacking),
+/// and optionally matches `DISCIPLINE_EXPECTED_EXE_SHA256` when set.
+pub fn verify_hook_binary(exe: &Path, repo_dir: &Path) -> Result<PathBuf> {
+    let expected = std::env::var("DISCIPLINE_EXPECTED_EXE_SHA256")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    verify_hook_binary_with_digest(exe, repo_dir, expected.as_deref())
+}
+
+pub fn verify_hook_binary_with_digest(
+    exe: &Path,
+    repo_dir: &Path,
+    expected_sha256: Option<&str>,
+) -> Result<PathBuf> {
+    if !exe.is_absolute() {
+        bail!(
+            "refusing to execute hook binary '{}': path is not absolute",
+            exe.display()
+        );
+    }
+    let canon_exe = exe
+        .canonicalize()
+        .with_context(|| format!("cannot canonicalize hook binary '{}'", exe.display()))?;
+    let meta = std::fs::metadata(&canon_exe)
+        .with_context(|| format!("cannot stat hook binary '{}'", canon_exe.display()))?;
+    if !meta.is_file() {
+        bail!(
+            "refusing to execute hook binary '{}': not a regular file",
+            canon_exe.display()
+        );
+    }
+    let worktree = crate::gitctx::discover_repository(repo_dir)
+        .ok()
+        .and_then(|r| r.workdir().map(Path::to_path_buf))
+        .unwrap_or_else(|| repo_dir.to_path_buf());
+    if let Ok(canon_worktree) = worktree.canonicalize() {
+        let in_cargo_target = canon_exe.starts_with(canon_worktree.join("target"));
+        if canon_exe.starts_with(&canon_worktree) && !in_cargo_target {
+            bail!(
+                "refusing to execute hook binary '{}' located inside the target repository worktree '{}'",
+                canon_exe.display(),
+                canon_worktree.display()
+            );
+        }
+    }
+    if let Some(expected) = expected_sha256 {
+        let want = expected.trim().to_ascii_lowercase();
+        if want.len() != 64 || !want.chars().all(|c| c.is_ascii_hexdigit()) {
+            bail!(
+                "invalid DISCIPLINE_EXPECTED_EXE_SHA256 digest '{}': expected 64 hex characters",
+                expected.trim()
+            );
+        }
+        let bytes = std::fs::read(&canon_exe).with_context(|| {
+            format!(
+                "cannot read hook binary '{}' for digest verification",
+                canon_exe.display()
+            )
+        })?;
+        let got = crate::report::gitlab::sha256_hex(&bytes);
+        if got != want {
+            bail!(
+                "hook binary '{}' SHA-256 digest mismatch (expected {}, got {})",
+                canon_exe.display(),
+                want,
+                got
+            );
+        }
+    }
+    Ok(canon_exe)
+}
+
 /// Runs this binary's `check --format agent-prompt` in `dir` and returns its exit
 /// code, report and stderr.
 ///
@@ -1562,7 +1658,20 @@ pub enum CheckSide {
 /// only source left is a PR body, and none is passed), so a waiver in a commit message
 /// does not lift a finding here. CI, which reads the reviewed PR body, still can.
 pub fn run_check(dir: &Path, side: &CheckSide) -> Result<CheckRun> {
-    let exe = std::env::current_exe().context("cannot locate the discipline binary")?;
+    let exe = match std::env::current_exe()
+        .context("cannot locate the discipline binary")
+        .and_then(|exe| verify_hook_binary(&exe, dir))
+    {
+        Ok(exe) => exe,
+        Err(err) => {
+            return Ok(CheckRun {
+                code: 2,
+                report: String::new(),
+                stderr: format!("{err:#}\n"),
+                json: None,
+            });
+        }
+    };
     let tmp = crate::replay::TempDir::named("hook")?;
     let json_out = tmp.0.join("report.json");
     let mut cmd = std::process::Command::new(exe);
@@ -3707,16 +3816,14 @@ pub fn repo_root() -> Result<PathBuf> {
 pub fn run_cli(args: crate::cli::HookArgs) -> Result<bool> {
     use crate::cli::HookCommand;
     use crate::hook::Installed;
-    use std::io::{IsTerminal, Read, Write};
+    use std::io::{IsTerminal, Write};
     match args.command {
         HookCommand::Run(a) => {
             let mut stdin = String::new();
             // Only the agents that send a payload are read from: an inherited pipe that
             // is never closed must not hang Aider's lint command.
             if a.agent != crate::hook::Agent::Aider && !std::io::stdin().is_terminal() {
-                std::io::stdin()
-                    .read_to_string(&mut stdin)
-                    .context("cannot read the hook payload on stdin")?;
+                stdin = read_bounded_hook_stdin(std::io::stdin().lock(), MAX_HOOK_STDIN_BYTES)?;
             }
             let out = if a.event == crate::cli::HookEvent::PreTool {
                 crate::pretool::run_with(a.agent, &stdin, a.observe, a.if_configured)
@@ -5600,6 +5707,43 @@ mod tests {
                 "if (!EDIT_TOOLS.includes(input.tool) && !SHELL_TOOLS.includes(input.tool)) return"
             ),
             "OpenCode 1.x tool.execute.before must check SHELL_TOOLS.includes(input.tool)"
+        );
+    }
+
+    #[test]
+    fn step18_oversized_config_and_hook_stdin_fail_closed() {
+        let oversized_toml = format!(
+            "[meta]\nversion = 1\nname = \"{}\"\n",
+            "a".repeat(crate::config::MAX_CONFIG_BYTES + 1)
+        );
+        let err = crate::config::DisciplineConfig::from_toml_str(&oversized_toml).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("exceeding MAX_CONFIG_BYTES"),
+            "expected MAX_CONFIG_BYTES error, got: {err:#}"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_path = dir.path().join("discipline.toml");
+        std::fs::write(&cfg_path, &oversized_toml).unwrap();
+        let file_err = crate::config::DisciplineConfig::load_from_file(&cfg_path).unwrap_err();
+        assert!(
+            format!("{file_err:#}").contains("exceeding MAX_CONFIG_BYTES"),
+            "expected MAX_CONFIG_BYTES file error, got: {file_err:#}"
+        );
+
+        let oversized_stdin = "x".repeat(MAX_HOOK_STDIN_BYTES + 1);
+        let stdin_err =
+            read_bounded_hook_stdin(oversized_stdin.as_bytes(), MAX_HOOK_STDIN_BYTES).unwrap_err();
+        assert!(
+            format!("{stdin_err:#}").contains("exceeds maximum size"),
+            "expected hook stdin cap error, got: {stdin_err:#}"
+        );
+
+        let run_err =
+            run_with(Agent::ClaudeCode, None, &oversized_stdin, false, false).unwrap_err();
+        assert!(
+            format!("{run_err:#}").contains("exceeds maximum size"),
+            "expected run_with stdin cap error, got: {run_err:#}"
         );
     }
 }

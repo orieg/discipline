@@ -57,6 +57,15 @@ impl ChangedFile {
     }
 }
 
+/// One submodule pointer (`gitlink`, mode `0o160000`) change between base and head/index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmoduleDelta {
+    pub path: String,
+    pub old_oid: Option<String>,
+    pub new_oid: Option<String>,
+    pub kind: ChangeKind,
+}
+
 /// What a hexadecimal object id names ([`GitCtx::lookup_commit`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommitLookup {
@@ -901,6 +910,18 @@ impl GitCtx {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn for_test_staged(repo: Repository, base: Option<Oid>) -> Self {
+        Self {
+            repo,
+            base,
+            base_label: "base".to_string(),
+            staged: true,
+            run: next_run(),
+            _not_send: std::marker::PhantomData,
+        }
+    }
+
     /// A number that names this opened repository among all those of the process. One
     /// run opens one, and neither side of the change moves while it runs, so what was
     /// read from the head side for this number holds for the rest of the run.
@@ -917,6 +938,15 @@ impl GitCtx {
     /// Submodule pointers (gitlinks) the change adds, moves, bumps or removes. They are
     /// left out of [`GitCtx::changed_files`]: no gate can read a submodule's content.
     pub fn changed_submodules(&self) -> Result<Vec<String>> {
+        Ok(self
+            .changed_submodule_deltas()?
+            .into_iter()
+            .map(|d| d.path)
+            .collect())
+    }
+
+    /// Structured submodule pointer (`gitlink`, mode `0o160000`) deltas between base and head/index.
+    pub fn changed_submodule_deltas(&self) -> Result<Vec<SubmoduleDelta>> {
         let tree = self.base_tree()?;
         let mut opts = DiffOptions::new();
         opts.context_lines(0);
@@ -927,17 +957,42 @@ impl GitCtx {
             self.repo
                 .diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut opts))?
         };
-        let mut out = BTreeSet::new();
+        let mut by_path: BTreeMap<String, SubmoduleDelta> = BTreeMap::new();
         for delta in diff.deltas() {
-            for f in [delta.new_file(), delta.old_file()] {
-                if f.mode() == git2::FileMode::Commit {
-                    if let Some(p) = f.path() {
-                        out.insert(p.to_string_lossy().replace('\\', "/"));
-                    }
-                }
+            let old_is_sub = delta.old_file().mode() == git2::FileMode::Commit;
+            let new_is_sub = delta.new_file().mode() == git2::FileMode::Commit;
+            if !old_is_sub && !new_is_sub {
+                continue;
             }
+            let path = delta
+                .new_file()
+                .path()
+                .or_else(|| delta.old_file().path())
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            if path.is_empty() {
+                continue;
+            }
+            let old_oid = (old_is_sub && !delta.old_file().id().is_zero())
+                .then(|| delta.old_file().id().to_string());
+            let new_oid = (new_is_sub && !delta.new_file().id().is_zero())
+                .then(|| delta.new_file().id().to_string());
+            let kind = match (old_oid.is_some(), new_oid.is_some()) {
+                (false, true) => ChangeKind::Added,
+                (true, false) => ChangeKind::Deleted,
+                _ => ChangeKind::Modified,
+            };
+            by_path.insert(
+                path.clone(),
+                SubmoduleDelta {
+                    path,
+                    old_oid,
+                    new_oid,
+                    kind,
+                },
+            );
         }
-        Ok(out.into_iter().collect())
+        Ok(by_path.into_values().collect())
     }
 
     pub fn changed_files(&self) -> Result<Vec<ChangedFile>> {
@@ -3262,5 +3317,60 @@ mod tests {
             res_inode.is_err(),
             "TOCTOU inode replacement during open must fail closed, got {res_inode:?}"
         );
+    }
+
+    #[test]
+    fn step20_submodule_pointer_deltas_detected_and_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.invalid").unwrap();
+
+        let oid_a = Oid::from_str("1111111111111111111111111111111111111111").unwrap();
+        let oid_b = Oid::from_str("2222222222222222222222222222222222222222").unwrap();
+
+        let base_commit = {
+            let mut tb = repo.treebuilder(None).unwrap();
+            tb.insert("submod", oid_a, 0o160000).unwrap();
+            let base_tree_id = tb.write().unwrap();
+            let tree = repo.find_tree(base_tree_id).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+                .unwrap()
+        };
+
+        {
+            let mut index = repo.index().unwrap();
+            index
+                .add(&git2::IndexEntry {
+                    ctime: git2::IndexTime::new(0, 0),
+                    mtime: git2::IndexTime::new(0, 0),
+                    dev: 0,
+                    ino: 0,
+                    mode: 0o160000,
+                    uid: 0,
+                    gid: 0,
+                    file_size: 0,
+                    id: oid_b,
+                    flags: 0,
+                    flags_extended: 0,
+                    path: b"submod".to_vec(),
+                })
+                .unwrap();
+            index.write().unwrap();
+        }
+
+        let mut git = GitCtx::for_test(repo, Some(base_commit));
+        git.staged = true;
+        let deltas = git.changed_submodule_deltas().unwrap();
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].path, "submod");
+        assert_eq!(
+            deltas[0].old_oid.as_deref(),
+            Some(oid_a.to_string().as_str())
+        );
+        assert_eq!(
+            deltas[0].new_oid.as_deref(),
+            Some(oid_b.to_string().as_str())
+        );
+        assert_eq!(deltas[0].kind, ChangeKind::Modified);
     }
 }

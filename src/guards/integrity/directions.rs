@@ -229,7 +229,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     // Output shaping, run limits that can only fail a run sooner, and fields of list
     // entries (judged with their entry: an edited entry counts as a lost one unless
     // `ENTRY_SHAPES` finds it only tightened).
-    ("redact_lan_ips", Direction::Neutral),
+    ("redact_lan_ips", Direction::LooserWhenFalse),
     ("quote_line", Direction::Neutral),
     ("unanchored_citations", Direction::Neutral),
     ("timeout_seconds", Direction::Neutral),

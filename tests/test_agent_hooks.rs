@@ -3005,3 +3005,74 @@ fn the_post_tool_entry_passes_with_a_release_that_predates_it() {
         );
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn step17_hook_binary_path_hijack_and_digest_verification_fail_closed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repo = Repo::new();
+
+    // 1. A discipline binary planted inside the target repository worktree (e.g. via relative PATH hijack)
+    // must be refused when `hook run` invokes `run_check`.
+    let in_repo_dir = repo.path().join("bin");
+    std::fs::create_dir_all(&in_repo_dir).unwrap();
+    let planted_bin = in_repo_dir.join("discipline");
+    common::copy_built_binary(&planted_bin);
+    std::fs::set_permissions(&planted_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut hijacked = Command::new(&planted_bin);
+    common::isolate_env(&mut hijacked);
+    hijacked
+        .current_dir(repo.path())
+        .args(["hook", "run", "--agent", "claude-code"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = hijacked.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(POST_EDIT.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "in-worktree hook binary must fail closed, got {:?}: {stderr}",
+        out.status.code()
+    );
+    assert!(
+        stderr.contains("refusing to execute hook binary") && stderr.contains("could not check"),
+        "expected worktree-binary refusal in stderr, got: {stderr}"
+    );
+
+    // 2. Digest verification via DISCIPLINE_EXPECTED_EXE_SHA256 must fail closed on mismatch.
+    let bad_digest = "0".repeat(64);
+    let mismatch = hook_env(
+        &repo,
+        &["hook", "run", "--agent", "claude-code"],
+        POST_EDIT,
+        &[("DISCIPLINE_EXPECTED_EXE_SHA256", &bad_digest)],
+    );
+    assert_eq!(mismatch.code, 2, "{}", mismatch.stderr);
+    assert!(
+        mismatch.stderr.contains("SHA-256 digest mismatch")
+            && mismatch.stderr.contains("could not check"),
+        "expected SHA-256 mismatch error, got: {}",
+        mismatch.stderr
+    );
+
+    // 3. Matching SHA-256 digest passes cleanly.
+    let bytes = common::built_binary_bytes();
+    let actual_digest = discipline::report::gitlab::sha256_hex(&bytes);
+    let matched = hook_env(
+        &repo,
+        &["hook", "run", "--agent", "claude-code"],
+        POST_EDIT,
+        &[("DISCIPLINE_EXPECTED_EXE_SHA256", &actual_digest)],
+    );
+    assert_eq!(matched.code, 0, "{}", matched.stderr);
+}

@@ -1109,7 +1109,49 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
         }
     }
 
-    if manifest_files.is_empty() && lock_files.is_empty() {
+    let submodule_deltas: Vec<_> = ctx
+        .git
+        .changed_submodule_deltas()?
+        .into_iter()
+        .filter(|d| !exempt.matches(&d.path))
+        .collect();
+    for sub in &submodule_deltas {
+        outcome.examined += 1;
+        let summary = match (&sub.old_oid, &sub.new_oid) {
+            (Some(old), Some(new)) => format!(
+                "submodule `{}` pointer changed: {:.12} -> {:.12}",
+                sub.path, old, new
+            ),
+            (None, Some(new)) => format!("submodule `{}` pointer added at {:.12}", sub.path, new),
+            (Some(old), None) => {
+                format!("submodule `{}` pointer removed (was {:.12})", sub.path, old)
+            }
+            (None, None) => format!("submodule `{}` pointer modified", sub.path),
+        };
+        outcome.notes.push(summary);
+        if gate.deny_dependencies.iter().any(|d| d == &sub.path)
+            || deny_policy.deny_bans.contains(&sub.path)
+        {
+            outcome.lift_or_push(
+                ctx.find_override(
+                    GATE,
+                    &crate::findings::BANNED_DEPENDENCY,
+                    tokens::ALLOW_DEPENDENCY,
+                    &sub.path,
+                ),
+                ctx.overridable(gate.severity()),
+                &crate::findings::BANNED_DEPENDENCY,
+                (Some(&sub.path), None),
+                format!("Submodule `{}` is denied by dependency policy.", sub.path),
+                &format!(
+                    "Remove submodule `{}` or justify it with `allow-dependency: {} <reason>`.",
+                    sub.path, sub.path
+                ),
+            );
+        }
+    }
+
+    if manifest_files.is_empty() && lock_files.is_empty() && submodule_deltas.is_empty() {
         outcome
             .notes
             .push("no dependency manifests or lockfiles modified in this diff".to_string());
@@ -1598,5 +1640,83 @@ allow-git = ["https://github.com/orieg/"]
         assert!(policy.wildcards_denied);
         assert!(policy.deny_unknown_git);
         assert_eq!(policy.allow_git, vec!["https://github.com/orieg/"]);
+    }
+
+    #[test]
+    fn step20_dependency_delta_examines_submodule_pointer_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.invalid").unwrap();
+
+        let oid_a = git2::Oid::from_str("1111111111111111111111111111111111111111").unwrap();
+        let oid_b = git2::Oid::from_str("2222222222222222222222222222222222222222").unwrap();
+
+        let base_commit = {
+            let mut tb = repo.treebuilder(None).unwrap();
+            tb.insert("submod", oid_a, 0o160000).unwrap();
+            let base_tree_id = tb.write().unwrap();
+            let tree = repo.find_tree(base_tree_id).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+                .unwrap()
+        };
+
+        {
+            let mut index = repo.index().unwrap();
+            index
+                .add(&git2::IndexEntry {
+                    ctime: git2::IndexTime::new(0, 0),
+                    mtime: git2::IndexTime::new(0, 0),
+                    dev: 0,
+                    ino: 0,
+                    mode: 0o160000,
+                    uid: 0,
+                    gid: 0,
+                    file_size: 0,
+                    id: oid_b,
+                    flags: 0,
+                    flags_extended: 0,
+                    path: b"submod".to_vec(),
+                })
+                .unwrap();
+            index.write().unwrap();
+        }
+
+        let git = crate::gitctx::GitCtx::for_test_staged(repo, Some(base_commit));
+        let cfg = crate::config::DisciplineConfig::default();
+        let ctx = crate::guards::Context {
+            git: &git,
+            config: &cfg,
+            head_config: None,
+            config_path: "discipline.toml",
+            baseline_path: None,
+            baseline: None,
+            staged: true,
+            pr_title: None,
+            pr_body: None,
+            directives: Vec::new(),
+            directive_notes: Vec::new(),
+            bench_provenance: None,
+            allow_cross_host_bench: false,
+            bench_base_file: None,
+            bench_head_file: None,
+            test_base_report: None,
+            test_head_report: None,
+            test_report: None,
+            forge: None,
+            cli_disabled_gates: &[],
+        };
+        let outcome = evaluate_dependency_delta(&ctx).unwrap();
+        assert_eq!(
+            outcome.examined, 1,
+            "submodule pointer delta must be examined"
+        );
+        assert!(
+            outcome
+                .notes
+                .iter()
+                .any(|n| n.contains("submodule `submod`")),
+            "expected submodule delta note in {:?}",
+            outcome.notes
+        );
     }
 }
