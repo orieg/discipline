@@ -1131,6 +1131,7 @@ impl GitCtx {
     /// Raw bytes of `path` on the head side (index when staged, else worktree).
     pub fn head_bytes(&self, path: &str) -> Result<Option<Vec<u8>>> {
         let rel_path = self.normalize_repo_path(path);
+        validate_repo_relative_path(rel_path, path)?;
         if self.staged {
             let index = self.repo.index()?;
             let Some(entry) = index.get_path(std::path::Path::new(rel_path), 0) else {
@@ -1154,46 +1155,7 @@ impl GitCtx {
                 .repo
                 .workdir()
                 .ok_or_else(|| anyhow!("repository has no working tree"))?;
-            let full_path = root.join(rel_path);
-            let Some(meta) = worktree_metadata(&full_path)
-                .with_context(|| format!("failed to read `{path}`"))?
-            else {
-                return Ok(None);
-            };
-            if meta.is_dir() {
-                return Ok(None);
-            }
-            if meta.len() > MAX_SOURCE_FILE_BYTES {
-                bail!(
-                    "`{path}` is {} bytes, exceeding MAX_SOURCE_FILE_BYTES ({} bytes)",
-                    meta.len(),
-                    MAX_SOURCE_FILE_BYTES
-                );
-            }
-            let Some(canon) = absent_or(full_path.canonicalize())
-                .with_context(|| format!("failed to read `{path}`"))?
-            else {
-                return Ok(None);
-            };
-            let root_canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-            if !canon.starts_with(&root_canon) {
-                // Path escapes repository root (symlink traversal)
-                return Ok(None);
-            }
-            use std::io::Read as _;
-            let mut file = std::fs::File::open(&full_path)
-                .with_context(|| format!("failed to read `{path}`"))?;
-            let mut bytes = Vec::with_capacity((meta.len() as usize).min(64 * 1024));
-            std::io::Read::take(&mut file, MAX_SOURCE_FILE_BYTES + 1)
-                .read_to_end(&mut bytes)
-                .with_context(|| format!("failed to read `{path}`"))?;
-            if bytes.len() as u64 > MAX_SOURCE_FILE_BYTES {
-                bail!(
-                    "`{path}` exceeds MAX_SOURCE_FILE_BYTES ({} bytes)",
-                    MAX_SOURCE_FILE_BYTES
-                );
-            }
-            Ok(Some(bytes))
+            read_verified_worktree_bytes(root, rel_path, path, || {})
         }
     }
 
@@ -1530,6 +1492,126 @@ impl GitCtx {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
     }
+}
+
+fn validate_repo_relative_path(rel_path: &str, display_path: &str) -> Result<()> {
+    let p = std::path::Path::new(rel_path);
+    if p.is_absolute()
+        || p.components().any(|c| {
+            matches!(
+                c,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        bail!("refusing path `{display_path}` with parent-directory or non-relative component");
+    }
+    Ok(())
+}
+
+pub(crate) fn read_verified_worktree_bytes<F: FnOnce()>(
+    root: &std::path::Path,
+    rel_path: &str,
+    path: &str,
+    after_precheck: F,
+) -> Result<Option<Vec<u8>>> {
+    validate_repo_relative_path(rel_path, path)?;
+    let root_canon = root
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize repository root for `{path}`"))?;
+    let mut step = root.to_path_buf();
+    let rel_components: Vec<_> = std::path::Path::new(rel_path).components().collect();
+    if let Some((_, ancestors)) = rel_components.split_last() {
+        for comp in ancestors {
+            step.push(comp.as_os_str());
+            let Some(step_canon) = absent_or(step.canonicalize())
+                .with_context(|| format!("failed to read `{path}`"))?
+            else {
+                return Ok(None);
+            };
+            if !step_canon.starts_with(&root_canon) {
+                return Ok(None);
+            }
+        }
+    }
+    let full_path = root.join(rel_path);
+    let Some(pre_meta) =
+        worktree_metadata(&full_path).with_context(|| format!("failed to read `{path}`"))?
+    else {
+        return Ok(None);
+    };
+    if pre_meta.is_dir() {
+        return Ok(None);
+    }
+    if pre_meta.len() > MAX_SOURCE_FILE_BYTES {
+        bail!(
+            "`{path}` is {} bytes, exceeding MAX_SOURCE_FILE_BYTES ({} bytes)",
+            pre_meta.len(),
+            MAX_SOURCE_FILE_BYTES
+        );
+    }
+    let Some(pre_canon) =
+        absent_or(full_path.canonicalize()).with_context(|| format!("failed to read `{path}`"))?
+    else {
+        return Ok(None);
+    };
+    if !pre_canon.starts_with(&root_canon) {
+        // Path escapes repository root (symlink traversal)
+        return Ok(None);
+    }
+
+    after_precheck();
+
+    use std::io::Read as _;
+    let Some(mut file) = absent_or(std::fs::File::open(&full_path))
+        .with_context(|| format!("failed to read `{path}`"))?
+    else {
+        return Ok(None);
+    };
+    let file_meta = file
+        .metadata()
+        .with_context(|| format!("failed to inspect open file metadata for `{path}`"))?;
+    if file_meta.is_dir() {
+        return Ok(None);
+    }
+    if file_meta.len() > MAX_SOURCE_FILE_BYTES {
+        bail!(
+            "`{path}` is {} bytes, exceeding MAX_SOURCE_FILE_BYTES ({} bytes)",
+            file_meta.len(),
+            MAX_SOURCE_FILE_BYTES
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if (file_meta.dev(), file_meta.ino()) != (pre_meta.dev(), pre_meta.ino()) {
+            bail!("TOCTOU race detected while opening `{path}`: file identity changed during open");
+        }
+        let post_canon = full_path
+            .canonicalize()
+            .with_context(|| format!("TOCTOU race detected while opening `{path}`"))?;
+        if !post_canon.starts_with(&root_canon) {
+            bail!("TOCTOU race detected while opening `{path}`: resolved path escaped repository root");
+        }
+        let post_meta = std::fs::metadata(&full_path)
+            .with_context(|| format!("TOCTOU race detected while opening `{path}`"))?;
+        if (post_meta.dev(), post_meta.ino()) != (file_meta.dev(), file_meta.ino()) {
+            bail!("TOCTOU race detected while opening `{path}`: path target changed after open");
+        }
+    }
+    let mut bytes = Vec::with_capacity((file_meta.len() as usize).min(64 * 1024));
+    std::io::Read::take(&mut file, MAX_SOURCE_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("failed to read `{path}`"))?;
+    if bytes.len() as u64 > MAX_SOURCE_FILE_BYTES {
+        bail!(
+            "`{path}` exceeds MAX_SOURCE_FILE_BYTES ({} bytes)",
+            MAX_SOURCE_FILE_BYTES
+        );
+    }
+    Ok(Some(bytes))
 }
 
 /// Whether the run is on a CI runner, by the markers the forges set.
@@ -3141,5 +3223,44 @@ mod tests {
         let err = git.head_bytes("huge.txt").unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("exceeding MAX_SOURCE_FILE_BYTES"), "{msg}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn step15_head_bytes_rejects_parent_dir_traversal_and_detects_toctou_swap() {
+        let (dir, git, _) = repo_with_base_subdir();
+        // 1. Parent-directory (`..`) components in path must be rejected, never resolved.
+        assert!(
+            git.head_bytes("sub/../sub/a.txt").is_err(),
+            "parent-dir traversal in head_bytes must fail closed"
+        );
+
+        // 2. TOCTOU swap between pre-open metadata check and File::open must be detected and fail closed.
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, "secret\n").unwrap();
+
+        let target = dir.path().join("sub/a.txt");
+        let res = read_verified_worktree_bytes(dir.path(), "sub/a.txt", "sub/a.txt", || {
+            std::fs::remove_file(&target).unwrap();
+            std::os::unix::fs::symlink(&secret, &target).unwrap();
+        });
+        assert!(
+            res.is_err(),
+            "TOCTOU symlink swap during open must fail closed, got {res:?}"
+        );
+
+        // 3. Even an in-repo file replacement between precheck and open (inode change) must be detected.
+        std::fs::remove_file(&target).unwrap();
+        std::fs::write(&target, "original\n").unwrap();
+        let replacement = dir.path().join("sub/replacement.txt");
+        std::fs::write(&replacement, "replaced\n").unwrap();
+        let res_inode = read_verified_worktree_bytes(dir.path(), "sub/a.txt", "sub/a.txt", || {
+            std::fs::rename(&replacement, &target).unwrap();
+        });
+        assert!(
+            res_inode.is_err(),
+            "TOCTOU inode replacement during open must fail closed, got {res_inode:?}"
+        );
     }
 }

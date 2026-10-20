@@ -164,68 +164,71 @@ pub fn parse(agent: Agent, raw: &str) -> Option<ToolCall> {
     Some(call)
 }
 
-/// `path` made absolute against `cwd`, `.` and `..` resolved lexically, and the longest
-/// prefix that exists (or is a dangling symlink) resolved through symlinks (`/tmp` is
-/// `/private/tmp` on macOS), so it compares with canonical worktree roots.
+/// `path` made absolute against `cwd`, `.` and `..` resolved component-by-component
+/// after expanding any symlink prefixes (`/tmp` is `/private/tmp` on macOS), so a symlink
+/// followed by `..` resolves relative to the symlink target rather than lexically collapsing
+/// the symlink component before OS traversal.
 pub fn resolve(path: &str, cwd: &Path) -> PathBuf {
     let normalized = path.replace('\\', "/");
     let p = Path::new(&normalized);
-    let mut current = if p.is_absolute() {
+    let initial = if p.is_absolute() {
         p.to_path_buf()
     } else {
         cwd.join(p)
     };
-    for _ in 0..40 {
-        let mut clean = PathBuf::new();
-        for c in current.components() {
-            match c {
-                Component::ParentDir => {
-                    clean.pop();
-                }
-                Component::CurDir => {}
-                other => clean.push(other.as_os_str()),
+    let mut queue: std::collections::VecDeque<std::ffi::OsString> = initial
+        .components()
+        .map(|c| c.as_os_str().to_os_string())
+        .collect();
+    let mut acc = PathBuf::new();
+    let mut symlink_hops = 0usize;
+
+    while let Some(part) = queue.pop_front() {
+        let comp_path = Path::new(&part);
+        let mut comps = comp_path.components();
+        match comps.next() {
+            Some(Component::RootDir) => {
+                acc.push(Path::new("/"));
             }
-        }
-        let mut existing = clean.clone();
-        let mut rest = Vec::new();
-        let mut expanded_dangling = None;
-        while !existing.exists() {
-            if existing.is_symlink() {
-                if let Ok(target) = std::fs::read_link(&existing) {
-                    let mut next = if target.is_absolute() {
-                        target
-                    } else {
-                        existing.parent().unwrap_or(Path::new("/")).join(target)
-                    };
-                    for name in rest.iter().rev() {
-                        next.push(name);
+            Some(Component::Prefix(pref)) => {
+                acc.push(pref.as_os_str());
+            }
+            Some(Component::CurDir) | None => {}
+            Some(Component::ParentDir) => {
+                if acc.exists() {
+                    if let Ok(canon) = acc.canonicalize() {
+                        acc = canon;
                     }
-                    expanded_dangling = Some(next);
-                    break;
+                }
+                acc.pop();
+            }
+            Some(Component::Normal(name)) => {
+                acc.push(name);
+                if acc.is_symlink() {
+                    if symlink_hops < 40 {
+                        if let Ok(target) = std::fs::read_link(&acc) {
+                            symlink_hops += 1;
+                            acc.pop();
+                            let replacement = if target.is_absolute() {
+                                acc.clear();
+                                target
+                            } else {
+                                target
+                            };
+                            for c in replacement.components().rev() {
+                                queue.push_front(c.as_os_str().to_os_string());
+                            }
+                        }
+                    }
+                } else if acc.exists() {
+                    if let Ok(canon) = acc.canonicalize() {
+                        acc = canon;
+                    }
                 }
             }
-            match (
-                existing.file_name().map(|n| n.to_os_string()),
-                existing.parent(),
-            ) {
-                (Some(name), Some(parent)) => {
-                    rest.push(name);
-                    existing = parent.to_path_buf();
-                }
-                _ => return clean,
-            }
         }
-        if let Some(next) = expanded_dangling {
-            current = next;
-            continue;
-        }
-        let mut out = existing.canonicalize().unwrap_or(existing);
-        for name in rest.iter().rev() {
-            out.push(name);
-        }
-        return out;
     }
-    current
+    acc
 }
 
 /// The repository's worktrees: key (as `lease` names them) and canonical root.
@@ -993,7 +996,11 @@ fn judge_shell_depth(cmd: &str, cwd: &Path, scene: &Scene, depth: usize) -> Verd
         let (_, root) = scene.worktrees.owner(&path)?;
         let rel = path.strip_prefix(root).ok()?;
         let rel = rel.to_string_lossy().replace('\\', "/");
-        f.matches(&rel).then(|| {
+        if rel.is_empty() {
+            return None;
+        }
+        let dir_probe = format!("{}/_", rel.trim_end_matches('/'));
+        (f.matches(&rel) || f.matches(&dir_probe)).then(|| {
             Verdict::Deny(format!(
                 "{} matches `scope-confinement`'s forbidden_paths; this repository does not let an agent edit it",
                 q(&rel)
@@ -1021,6 +1028,38 @@ fn judge_shell_depth(cmd: &str, cwd: &Path, scene: &Scene, depth: usize) -> Verd
             return Some(other_wt("writes into", &key, &root));
         }
         forbidden_in(target, dir)
+    };
+    let check_leased_branch = |branch: &str, what: &str| -> Option<Verdict> {
+        let b = branch.strip_prefix("refs/heads/").unwrap_or(branch);
+        if b.is_empty() || b == "HEAD" || b.starts_with('-') {
+            return None;
+        }
+        for (wt, l) in scene.leases {
+            if l.branches.iter().any(|lb| lb == b) {
+                return Some(Verdict::Deny(format!(
+                    "this command {what} branch {}, which is in {}'s live lease on worktree {} (session {}). Each session works only on its own branch",
+                    q(b),
+                    l.agent,
+                    q(wt),
+                    q(&l.session)
+                )));
+            }
+        }
+        None
+    };
+    let check_git_env_var = |name: &str, val: Option<&str>, dir: &Path| -> Option<Verdict> {
+        if matches!(name, "GIT_DIR" | "GIT_WORK_TREE" | "GIT_COMMON_DIR") {
+            let Some(v) = val else {
+                return Some(dynamic(&format!("`{name}` value")));
+            };
+            if let Some((key, root)) = foreign(v, dir) {
+                return Some(other_wt(&format!("points `{name}` at"), &key, &root));
+            }
+            if let Some(verdict) = forbidden_in(v, dir) {
+                return Some(verdict);
+            }
+        }
+        None
     };
     // Commands in source order; `cd` moves the directory the later ones run in.
     let mut dir = cwd.to_path_buf();
@@ -1062,6 +1101,21 @@ fn judge_shell_depth(cmd: &str, cwd: &Path, scene: &Scene, depth: usize) -> Verd
                 }
             }
             "command" => {
+                let mut vc = n.walk();
+                for child in n.named_children(&mut vc) {
+                    if child.kind() == "variable_assignment" {
+                        if let Some(var_name_node) = child.child_by_field_name("name") {
+                            if let Ok(var_name) = var_name_node.utf8_text(cmd.as_bytes()) {
+                                let val = child
+                                    .child_by_field_name("value")
+                                    .and_then(|vn| literal(vn, cmd));
+                                if let Some(v) = check_git_env_var(var_name, val.as_deref(), &dir) {
+                                    return v;
+                                }
+                            }
+                        }
+                    }
+                }
                 let Some(name_node) = n.child_by_field_name("name") else {
                     continue;
                 };
@@ -1130,7 +1184,16 @@ fn judge_shell_depth(cmd: &str, cwd: &Path, scene: &Scene, depth: usize) -> Verd
                                         return v;
                                     }
                                     idx += 1;
-                                } else if a.starts_with('-') || a.contains('=') {
+                                } else if !a.starts_with('-') && a.contains('=') {
+                                    if let Some((k, v)) = a.split_once('=') {
+                                        if let Some(verdict) =
+                                            check_git_env_var(k, Some(v), &cmd_dir)
+                                        {
+                                            return verdict;
+                                        }
+                                    }
+                                    idx += 1;
+                                } else if a.starts_with('-') {
                                     idx += 1;
                                 } else {
                                     next_cmd = Some((a.to_string(), &eff_args[idx + 1..]));
@@ -1568,15 +1631,163 @@ fn judge_shell_depth(cmd: &str, cwd: &Path, scene: &Scene, depth: usize) -> Verd
                                 );
                             }
                         }
-                        if sub == "push" {
-                            if let Some(v) =
-                                judge_push_words(eff_args.get(sub_idx + 1..).unwrap_or(&[]), scene)
-                            {
+                        let sub_args = eff_args.get(sub_idx + 1..).unwrap_or(&[]);
+                        match sub.as_str() {
+                            "push" => {
+                                if let Some(v) = judge_push_words(sub_args, scene) {
+                                    return v;
+                                }
+                            }
+                            "worktree" => {
+                                let wt_sub = sub_args
+                                    .first()
+                                    .and_then(|x| x.as_deref())
+                                    .unwrap_or_default();
+                                if matches!(wt_sub, "add" | "remove" | "move" | "lock" | "unlock") {
+                                    for a in &sub_args[1..] {
+                                        let Some(a) = a.as_deref() else {
+                                            return dynamic("`git worktree` argument");
+                                        };
+                                        if a.starts_with('-') {
+                                            continue;
+                                        }
+                                        if let Some(v) = check_write_target(a, &git_dir) {
+                                            return v;
+                                        }
+                                        if wt_sub == "add" {
+                                            if let Some(v) = check_leased_branch(a, "checks out") {
+                                                return v;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            "checkout" | "switch" | "restore" => {
+                                for a in sub_args {
+                                    let Some(a) = a.as_deref() else {
+                                        return dynamic(&format!("`git {sub}` argument"));
+                                    };
+                                    if a == "--" || a.starts_with('-') {
+                                        continue;
+                                    }
+                                    if let Some(v) = check_write_target(a, &git_dir) {
+                                        return v;
+                                    }
+                                    if sub != "restore" {
+                                        if let Some(v) = check_leased_branch(a, "switches to") {
+                                            return v;
+                                        }
+                                    }
+                                }
+                            }
+                            "reset" | "stash" | "clean" | "add" | "rm" | "mv" | "apply" | "am" => {
+                                for a in sub_args {
+                                    let Some(a) = a.as_deref() else {
+                                        return dynamic(&format!("`git {sub}` argument"));
+                                    };
+                                    if a == "--" || a.starts_with('-') {
+                                        continue;
+                                    }
+                                    if let Some(v) = check_write_target(a, &git_dir) {
+                                        return v;
+                                    }
+                                }
+                            }
+                            "branch" => {
+                                let mut mutating = false;
+                                for a in sub_args {
+                                    if let Some(s) = a.as_deref() {
+                                        if matches!(
+                                            s,
+                                            "-f" | "--force"
+                                                | "-d"
+                                                | "-D"
+                                                | "--delete"
+                                                | "-m"
+                                                | "-M"
+                                                | "--move"
+                                        ) {
+                                            mutating = true;
+                                        }
+                                    }
+                                }
+                                if mutating {
+                                    for a in sub_args {
+                                        let Some(a) = a.as_deref() else {
+                                            return dynamic("`git branch` argument");
+                                        };
+                                        if a.starts_with('-') {
+                                            continue;
+                                        }
+                                        if let Some(v) = check_leased_branch(a, "modifies") {
+                                            return v;
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {
+                        const SAFE_READ_COMMANDS: &[&str] = &[
+                            "ls",
+                            "cat",
+                            "head",
+                            "tail",
+                            "wc",
+                            "grep",
+                            "rg",
+                            "echo",
+                            "printf",
+                            "stat",
+                            "file",
+                            "sha256sum",
+                            "shasum",
+                            "md5sum",
+                            "true",
+                            "false",
+                            "test",
+                            "[",
+                            "diff",
+                            "cmp",
+                            "pwd",
+                            "which",
+                            "type",
+                            "id",
+                            "uname",
+                            "date",
+                            "whoami",
+                            "cargo",
+                        ];
+                        if !SAFE_READ_COMMANDS.contains(&base_name) {
+                            if let Some(v) = check_write_target(&eff_name, &cmd_dir) {
                                 return v;
+                            }
+                            for a in eff_args {
+                                let Some(a) = a.as_deref() else {
+                                    continue;
+                                };
+                                if a.starts_with('-') {
+                                    if let Some((_, val)) = a.split_once('=') {
+                                        if let Some(v) = check_write_target(val, &cmd_dir) {
+                                            return v;
+                                        }
+                                    }
+                                    continue;
+                                }
+                                if let Some(v) = check_write_target(a, &cmd_dir) {
+                                    return v;
+                                }
+                                if matches!(base_name, "awk" | "gawk" | "nawk" | "mawk") {
+                                    for token in extract_script_path_candidates(a) {
+                                        if let Some(v) = check_write_target(&token, &cmd_dir) {
+                                            return v;
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
-                    _ => {}
                 }
             }
             _ => {}
@@ -2745,5 +2956,92 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn step14_git_subcommands_interpreters_symlink_dotdot_and_raw_foreign_backstop() {
+        let d = tempfile::tempdir().unwrap();
+        let main = d.path().join("main");
+        let other = main.join("wt2");
+        std::fs::create_dir_all(other.join("sub")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(other.join("sub"), main.join("link_sub")).unwrap();
+
+        let wts = scene_with(&[("main", &main), ("wt2", &other)], "main");
+        let f = crate::guards::PathFilter::new(&[".github/workflows/**".to_string()]).unwrap();
+        let other_lease = Lease {
+            agent: "copilot".into(),
+            session: "s-wt2".into(),
+            worktree: "/w2".into(),
+            branches: vec!["feat/stack".into()],
+            taken_at: 0,
+            heartbeat: 0,
+            ttl_secs: 60,
+        };
+        let other_leases = vec![("wt2".to_string(), other_lease)];
+        let scene = Scene {
+            worktrees: &wts,
+            leases: &other_leases,
+            forbidden: Some(&f),
+            branch: Some("work"),
+        };
+        let cwd = main.canonicalize().unwrap();
+
+        // 1. Symlink + `..` traversal must resolve symlink before popping `..`.
+        #[cfg(unix)]
+        {
+            assert!(
+                matches!(
+                    judge(&edit("link_sub/../escape.txt", "s-owner"), &cwd, &scene),
+                    Verdict::Deny(r) if r.contains("worktree `wt2`")
+                ),
+                "symlink + .. into wt2 must be refused on edit"
+            );
+            assert!(
+                matches!(
+                    judge_shell("echo hi > link_sub/../escape.txt", &cwd, &scene),
+                    Verdict::Deny(r) if r.contains("worktree `wt2`")
+                ),
+                "symlink + .. into wt2 must be refused on shell redirect"
+            );
+        }
+
+        // 2. git worktree / checkout / switch / restore / reset / stash / branch & GIT_WORK_TREE= / GIT_DIR=
+        //    plus interpreter directory-prefix targeting and raw foreign-path backstop.
+        for refused in [
+            "git worktree remove wt2",
+            "git worktree move wt2 wt3",
+            "git worktree add wt2/nested",
+            "git worktree add new-wt feat/stack",
+            "git checkout feat/stack",
+            "git checkout -B feat/stack",
+            "git switch feat/stack",
+            "git switch -C feat/stack",
+            "git checkout HEAD -- wt2/a.txt",
+            "git checkout HEAD -- .github/workflows/ci.yml",
+            "git restore wt2/a.txt",
+            "git restore .github/workflows/ci.yml",
+            "git reset HEAD -- wt2/a.txt",
+            "git reset HEAD -- .github/workflows/ci.yml",
+            "git stash push -- wt2/a.txt",
+            "git stash push -- .github/workflows/ci.yml",
+            "git branch -f feat/stack HEAD",
+            "git branch -D feat/stack",
+            "GIT_WORK_TREE=wt2 git reset --hard",
+            "GIT_DIR=wt2/.git git commit -m x",
+            "env GIT_WORK_TREE=wt2 git checkout -- .",
+            "python3 -c \"import pathlib; (pathlib.Path('.github/workflows') / 'ci.yml').write_text('pwn')\"",
+            "rsync -a a.txt wt2/",
+            "tar -xf archive.tar -C wt2",
+            "curl -s https://example.com -o .github/workflows/ci.yml",
+            "find wt2 -delete",
+            "awk '{print > \"wt2/x.txt\"}' a.txt",
+        ] {
+            let v = judge_shell(refused, &cwd, &scene);
+            assert!(
+                matches!(v, Verdict::Deny(_)),
+                "expected Deny for `{refused}`, got {v:?}"
+            );
+        }
     }
 }

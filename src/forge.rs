@@ -12,13 +12,18 @@
 //! Requests are made in-process over HTTPS (rustls, no OpenSSL), so the static binary and
 //! the container need no external tool. The client:
 //!
-//! - speaks HTTPS only; plain HTTP is accepted for a loopback address, or for any host with
-//!   `DISCIPLINE_FORGE_ALLOW_HTTP=1` (the token then travels in clear);
+//! - speaks HTTPS only; plain HTTP is accepted for a loopback address, or for a private
+//!   host with `DISCIPLINE_FORGE_ALLOW_HTTP=1` (or `DISCIPLINE_FORGE_ALLOW_HTTP=insecure-cleartext`
+//!   for a public cloud forge; a stderr warning is emitted whenever plain HTTP is enabled);
 //! - follows a redirect only to the same scheme and host, so a token never leaves it;
 //! - refuses API paths with empty or dot segments;
 //! - verifies certificates with the platform's trust store (system CA bundle, macOS
-//!   keychain), and honours `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY`;
-//! - does nothing when `DISCIPLINE_NO_NETWORK=1`, except against a loopback address.
+//!   keychain), and honours `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` unless
+//!   `DISCIPLINE_NO_NETWORK=1` is set (which disables environment proxies);
+//! - does nothing when `DISCIPLINE_NO_NETWORK=1`, except against a loopback address
+//!   (`localhost`, `127.0.0.0/8`, `[::1]`) with proxy environment variables disabled so
+//!   in-process test harnesses (`FakeForge`) can run deterministically without external
+//!   network egress.
 //!
 //! | Forge   | API base                         | Token environment                                   |
 //! |---------|----------------------------------|-----------------------------------------------------|
@@ -27,8 +32,11 @@
 //! | Gitea   | `<url>/api/v1`                   | `DISCIPLINE_FORGE_TOKEN`, else `GITEA_TOKEN`        |
 //! | Forgejo | `<url>/api/v1`                   | `DISCIPLINE_FORGE_TOKEN`, else `FORGEJO_TOKEN`, else `GITEA_TOKEN` |
 //!
-//! `DISCIPLINE_FORGE_API_URL` replaces the computed API base (a proxy, or a local mock in
-//! tests). Without a token, requests are anonymous: enough for public repositories.
+//! `DISCIPLINE_FORGE_API_URL` replaces the computed API base when its host matches the
+//! detected forge host (`<host>` or `api.<host>`), is loopback, or is listed in
+//! `DISCIPLINE_FORGE_API_ALLOW_HOSTS`. Non-loopback private, link-local/metadata, and
+//! unspecified IP literals are rejected unless explicitly allowlisted. Without a token,
+//! requests are anonymous: enough for public repositories.
 
 use regex::Regex;
 use std::sync::LazyLock;
@@ -113,34 +121,139 @@ pub struct Remote {
     pub repo: String,
 }
 
+/// Validate a hostname or bracketed IPv6 literal (`[::1]`) or IPv4 literal.
+fn is_valid_host(host: &str) -> bool {
+    if host.is_empty() || host.len() > 253 {
+        return false;
+    }
+    if let Some(inner) = host.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        return inner.parse::<std::net::Ipv6Addr>().is_ok();
+    }
+    if host.parse::<std::net::Ipv4Addr>().is_ok() {
+        return true;
+    }
+    if host.starts_with('.') || host.ends_with('.') || host.contains("..") {
+        return false;
+    }
+    host.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    })
+}
+
+/// Validate `host[:port]` (after stripping credentials), returning `(normalized_authority, host_only)`
+/// when the host is valid and any `:port` is in `1..=65535`.
+fn validate_host_port(host_port: &str) -> Option<(String, String)> {
+    if host_port.is_empty() || host_port.contains('@') {
+        return None;
+    }
+    let (host, port_str) = if let Some(rest) = host_port.strip_prefix('[') {
+        let (ip, after) = rest.split_once(']')?;
+        let bracketed = format!("[{ip}]");
+        if after.is_empty() {
+            (bracketed, None)
+        } else {
+            let p = after.strip_prefix(':')?;
+            (bracketed, Some(p))
+        }
+    } else if let Some((h, p)) = host_port.rsplit_once(':') {
+        if h.contains(':') {
+            return None;
+        }
+        (h.to_string(), Some(p))
+    } else {
+        (host_port.to_string(), None)
+    };
+    if !is_valid_host(&host) {
+        return None;
+    }
+    let host_lower = host.to_ascii_lowercase();
+    if let Some(p) = port_str {
+        if p.is_empty() || !p.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        let port: u16 = p.parse().ok()?;
+        if port == 0 {
+            return None;
+        }
+        Some((format!("{host_lower}:{port}"), host_lower))
+    } else {
+        Some((host_lower.clone(), host_lower))
+    }
+}
+
 /// Parse `https://host[:port]/path(.git)`, `git@host:path(.git)` and
 /// `ssh://git@host[:port]/path(.git)`. SSH remotes map to `https://host`.
 pub fn parse_remote(remote: &str) -> Option<Remote> {
     static HTTP: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^(https?)://(?:[^@/]+@)?([^/]+)/(.+?)(?:\.git)?/?$").unwrap()
+        Regex::new(r"^(https?)://(?:([^@/]+)@)?([^/@]+)/(.+?)(?:\.git)?/?$").unwrap()
     });
     static SSH_URL: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^ssh://(?:[^@/]+@)?([^/:]+)(?::\d+)?/(.+?)(?:\.git)?/?$").unwrap()
+        Regex::new(r"^ssh://(?:([^@/]+)@)?([^/:@]+)(?::(\d+))?/(.+?)(?:\.git)?/?$").unwrap()
     });
     static SCP: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^(?:[^@/]+@)?([^/:]+):(.+?)(?:\.git)?/?$").unwrap());
+        LazyLock::new(|| Regex::new(r"^(?:([^@/:]+)@)?([^/:@]+):(.+?)(?:\.git)?/?$").unwrap());
     let remote = remote.trim();
+    if remote.contains("://@") || remote.starts_with('@') {
+        return None;
+    }
+    let valid_repo = |r: &str| {
+        !r.is_empty()
+            && !r.starts_with('/')
+            && !r.starts_with(':')
+            && !r
+                .split('/')
+                .any(|seg| seg.is_empty() || seg == "." || seg == "..")
+    };
     if let Some(c) = HTTP.captures(remote) {
+        let (auth, _) = validate_host_port(&c[3])?;
+        let repo = c[4].to_string();
+        if !valid_repo(&repo) {
+            return None;
+        }
         return Some(Remote {
-            url: format!("{}://{}", &c[1], &c[2]),
-            repo: c[3].to_string(),
+            url: format!("{}://{}", &c[1], auth),
+            repo,
         });
     }
     if let Some(c) = SSH_URL.captures(remote) {
+        let host = &c[2];
+        if !is_valid_host(host) {
+            return None;
+        }
+        if let Some(port_m) = c.get(3) {
+            let port: u16 = port_m.as_str().parse().ok()?;
+            if port == 0 {
+                return None;
+            }
+        }
+        let repo = c[4].to_string();
+        if !valid_repo(&repo) {
+            return None;
+        }
         return Some(Remote {
-            url: format!("https://{}", &c[1]),
-            repo: c[2].to_string(),
+            url: format!("https://{}", host.to_ascii_lowercase()),
+            repo,
         });
     }
+    if remote.contains("://") {
+        return None;
+    }
     let c = SCP.captures(remote)?;
+    let host = &c[2];
+    if !is_valid_host(host) {
+        return None;
+    }
+    let repo = c[3].to_string();
+    if !valid_repo(&repo) {
+        return None;
+    }
     Some(Remote {
-        url: format!("https://{}", &c[1]),
-        repo: c[2].to_string(),
+        url: format!("https://{}", host.to_ascii_lowercase()),
+        repo,
     })
 }
 
@@ -1185,6 +1298,18 @@ impl HttpApi<'_> {
     }
 
     fn token(&self, kind: ForgeKind) -> Option<String> {
+        if let Some(warn) = token_conflict_warning(kind, self.env) {
+            static WARNED: std::sync::LazyLock<
+                std::sync::Mutex<std::collections::BTreeSet<String>>,
+            > = std::sync::LazyLock::new(|| {
+                std::sync::Mutex::new(std::collections::BTreeSet::new())
+            });
+            if let Ok(mut set) = WARNED.lock() {
+                if set.insert(warn.clone()) {
+                    eprintln!("{warn}");
+                }
+            }
+        }
         token_variables(kind)
             .iter()
             .find_map(|n| self.var(n))
@@ -1196,10 +1321,41 @@ impl HttpApi<'_> {
         self.token(kind).is_some()
     }
 
+    fn allowed_api_hosts(&self) -> Vec<String> {
+        self.var("DISCIPLINE_FORGE_API_ALLOW_HOSTS")
+            .map(|s| {
+                s.split(',')
+                    .map(|h| h.trim().to_ascii_lowercase())
+                    .filter(|h| !h.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// The API base URL for `forge`, without a trailing slash.
     pub fn api_base(&self, forge: &Forge) -> Result<String, String> {
         if let Some(u) = self.var("DISCIPLINE_FORGE_API_URL") {
-            return clean_url(&u).map_err(|e| format!("DISCIPLINE_FORGE_API_URL: {e}"));
+            let cleaned = clean_url(&u).map_err(|e| format!("DISCIPLINE_FORGE_API_URL: {e}"))?;
+            let api_host = host_of(&cleaned);
+            let forge_host = forge.host();
+            let allow_hosts = self.allowed_api_hosts();
+            let explicitly_allowed = allow_hosts.iter().any(|h| h == &api_host);
+            if !explicitly_allowed && !is_loopback(&api_host) {
+                if is_private_or_forbidden_ip(&api_host) {
+                    return Err(format!(
+                        "DISCIPLINE_FORGE_API_URL: refusing private, link-local, or reserved IP literal `{api_host}` (set DISCIPLINE_FORGE_API_ALLOW_HOSTS={api_host} to allow)"
+                    ));
+                }
+                let matches_forge = !forge_host.is_empty()
+                    && (api_host == forge_host || api_host == format!("api.{forge_host}"));
+                let is_test_invalid = api_host.ends_with(".invalid");
+                if !matches_forge && !is_test_invalid {
+                    return Err(format!(
+                        "DISCIPLINE_FORGE_API_URL: host `{api_host}` does not match forge host `{forge_host}` (set DISCIPLINE_FORGE_API_ALLOW_HOSTS={api_host} to allow a custom API proxy)"
+                    ));
+                }
+            }
+            return Ok(cleaned);
         }
         let host = forge.host();
         Ok(match forge.kind {
@@ -1230,7 +1386,8 @@ impl HttpApi<'_> {
     }
 }
 
-/// Validate a base URL: http(s) scheme, credentials removed, no query/fragment, no trailing slash.
+/// Validate a base URL: http(s) scheme, credentials removed, no query/fragment, no trailing slash,
+/// valid hostname and optional port (`1..=65535`).
 pub fn clean_url(url: &str) -> Result<String, String> {
     let url = url.trim().trim_end_matches('/');
     if url.contains(['?', '#']) {
@@ -1244,11 +1401,25 @@ pub fn clean_url(url: &str) -> Result<String, String> {
         return Err(format!("unsupported scheme `{scheme}`"));
     }
     // Drop `user:secret@`: credentials belong in a token variable, not a URL.
-    let (authority, path) = rest.split_once('/').map_or((rest, ""), |(a, p)| (a, p));
-    let authority = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
-    if authority.is_empty() {
+    // Empty userinfo (`@host`) is malformed and rejected.
+    let (raw_authority, path) = rest.split_once('/').map_or((rest, ""), |(a, p)| (a, p));
+    if raw_authority.starts_with('@') {
+        return Err("empty userinfo in authority".to_string());
+    }
+    let host_port = match raw_authority.rsplit_once('@') {
+        Some((userinfo, h)) => {
+            if userinfo.is_empty() || userinfo.contains('@') {
+                return Err("malformed userinfo in authority".to_string());
+            }
+            h
+        }
+        None => raw_authority,
+    };
+    if host_port.is_empty() {
         return Err("no host".to_string());
     }
+    let (authority, _) = validate_host_port(host_port)
+        .ok_or_else(|| format!("invalid host or port `{host_port}`"))?;
     Ok(if path.is_empty() {
         format!("{scheme}://{authority}")
     } else {
@@ -1256,14 +1427,19 @@ pub fn clean_url(url: &str) -> Result<String, String> {
     })
 }
 
-/// `host[:port]` of a URL, lower-cased, without credentials.
+/// `host[:port]` of a URL, lower-cased, without credentials; empty string if the host or port is invalid.
 pub(crate) fn authority_of(url: &str) -> String {
     let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    authority
+    let raw_authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if raw_authority.starts_with('@') {
+        return String::new();
+    }
+    let host_port = raw_authority
         .rsplit_once('@')
-        .map_or(authority, |(_, h)| h)
-        .to_ascii_lowercase()
+        .map_or(raw_authority, |(_, h)| h);
+    validate_host_port(host_port)
+        .map(|(auth, _)| auth)
+        .unwrap_or_default()
 }
 
 fn is_loopback(host: &str) -> bool {
@@ -1271,6 +1447,60 @@ fn is_loopback(host: &str) -> bool {
     h.eq_ignore_ascii_case("localhost")
         || h.parse::<std::net::IpAddr>()
             .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// Whether `host` is a non-loopback IP literal in a private, link-local/metadata,
+/// unspecified, multicast, or broadcast range.
+fn is_private_or_forbidden_ip(host: &str) -> bool {
+    let h = host.trim_start_matches('[').trim_end_matches(']');
+    let Ok(ip) = h.parse::<std::net::IpAddr>() else {
+        return false;
+    };
+    if ip.is_loopback() {
+        return false;
+    }
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || v4.is_documentation()
+                || v4.octets()[0] == 0
+                || (v4.octets()[0] == 100 && (v4.octets()[1] & 0b1100_0000) == 0b0100_0000)
+        }
+        std::net::IpAddr::V6(v6) => {
+            let seg0 = v6.segments()[0];
+            v6.is_unspecified()
+                || v6.is_multicast()
+                || (seg0 & 0xfe00) == 0xfc00 // unique local (fc00::/7)
+                || (seg0 & 0xffc0) == 0xfe80 // link-local (fe80::/10)
+        }
+    }
+}
+
+/// Whether `host` is a link-local / cloud metadata (`169.254.0.0/16`, `fe80::/10`) or
+/// unspecified (`0.0.0.0`, `::`) IP literal that is never a valid forge endpoint.
+fn is_metadata_or_unspecified_ip(host: &str) -> bool {
+    let h = host.trim_start_matches('[').trim_end_matches(']');
+    let Ok(ip) = h.parse::<std::net::IpAddr>() else {
+        return false;
+    };
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_link_local() || v4.is_unspecified() || v4.is_broadcast() || v4.octets()[0] == 0
+        }
+        std::net::IpAddr::V6(v6) => v6.is_unspecified() || (v6.segments()[0] & 0xffc0) == 0xfe80,
+    }
+}
+
+fn is_public_cloud_forge_host(host: &str) -> bool {
+    let h = host.to_ascii_lowercase();
+    matches!(
+        h.as_str(),
+        "github.com" | "api.github.com" | "gitlab.com" | "codeberg.org"
+    ) || h.ends_with(".ghe.com")
 }
 
 /// `value` as one API path segment or query value: every byte other than ASCII letters,
@@ -1335,33 +1565,78 @@ pub trait ForgeWrite {
 
 impl HttpApi<'_> {
     /// The API base, its host, and whether plain HTTP is allowed, after the checks
-    /// every request passes: a plain path, https (or loopback / an explicit opt-in),
-    /// and `DISCIPLINE_NO_NETWORK` honoured.
+    /// every request passes: `DISCIPLINE_NO_NETWORK` checked first, a plain path,
+    /// no metadata/unspecified IP, and https (or loopback / an explicit opt-in).
     fn guard(&self, forge: &Forge, path: &str) -> Result<(String, String, bool), String> {
         check_api_path(path)?;
-        let base = self.api_base(forge)?;
-        let base_host = host_of(&base);
-        let insecure_ok = is_loopback(&base_host) || self.flag("DISCIPLINE_FORGE_ALLOW_HTTP");
-        if !base.starts_with("https://") && !insecure_ok {
+        let no_network = self.flag("DISCIPLINE_NO_NETWORK");
+        let forge_host = forge.host();
+        if no_network && self.var("DISCIPLINE_FORGE_API_URL").is_none() && !is_loopback(&forge_host)
+        {
             return Err(format!(
-                "refusing plain HTTP to {base_host}: use https, or set DISCIPLINE_FORGE_ALLOW_HTTP=1"
+                "network access is disabled (DISCIPLINE_NO_NETWORK); cannot reach {forge_host}"
             ));
         }
-        if self.flag("DISCIPLINE_NO_NETWORK") && !is_loopback(&base_host) {
+        let base = self.api_base(forge)?;
+        let base_host = host_of(&base);
+        if no_network && !is_loopback(&base_host) {
             return Err(format!(
                 "network access is disabled (DISCIPLINE_NO_NETWORK); cannot reach {base_host}"
             ));
         }
+        if is_metadata_or_unspecified_ip(&base_host) {
+            return Err(format!(
+                "refusing link-local, metadata, or unspecified IP address {base_host}"
+            ));
+        }
+        let allow_http_val = self.var("DISCIPLINE_FORGE_ALLOW_HTTP");
+        let allow_http_ack = allow_http_val
+            .as_deref()
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case("insecure-cleartext"));
+        let allow_http_flag = self.flag("DISCIPLINE_FORGE_ALLOW_HTTP");
+        let insecure_ok = if is_loopback(&base_host) {
+            true
+        } else if is_public_cloud_forge_host(&base_host) {
+            allow_http_ack
+        } else {
+            allow_http_flag
+        };
+        if !base.starts_with("https://") {
+            if !insecure_ok {
+                if is_public_cloud_forge_host(&base_host) {
+                    return Err(format!(
+                        "refusing plain HTTP to public forge {base_host}: use https, or set DISCIPLINE_FORGE_ALLOW_HTTP=insecure-cleartext"
+                    ));
+                }
+                return Err(format!(
+                    "refusing plain HTTP to {base_host}: use https, or set DISCIPLINE_FORGE_ALLOW_HTTP=1"
+                ));
+            }
+            if !is_loopback(&base_host) {
+                eprintln!(
+                    "warning: DISCIPLINE_FORGE_ALLOW_HTTP is enabled for {base_host}; forge credentials may be transmitted in cleartext over HTTP"
+                );
+            }
+        }
         Ok((base, base_host, insecure_ok))
     }
 
+    pub(crate) fn uses_env_proxy(&self) -> bool {
+        !self.flag("DISCIPLINE_NO_NETWORK")
+    }
+
     fn agent(&self, insecure_ok: bool) -> ureq::Agent {
+        let proxy = if self.uses_env_proxy() {
+            ureq::Proxy::try_from_env()
+        } else {
+            None
+        };
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(std::time::Duration::from_secs(API_TIMEOUT_SECS)))
             .max_redirects(0)
             .http_status_as_error(false)
             .https_only(!insecure_ok)
-            .proxy(ureq::Proxy::try_from_env())
+            .proxy(proxy)
             .user_agent(concat!("discipline/", env!("CARGO_PKG_VERSION")))
             .tls_config(
                 ureq::tls::TlsConfig::builder()
@@ -1370,6 +1645,30 @@ impl HttpApi<'_> {
             )
             .build();
         ureq::Agent::new_with_config(config)
+    }
+}
+
+/// Returns a startup warning when more than one token environment variable for `kind` is
+/// set simultaneously, naming all set variables and which one wins by precedence.
+/// Never echoes any token value.
+pub fn token_conflict_warning(
+    kind: ForgeKind,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let set_vars: Vec<&str> = token_variables(kind)
+        .iter()
+        .copied()
+        .filter(|var| env(var).is_some_and(|v| !v.trim().is_empty()))
+        .collect();
+    if set_vars.len() > 1 {
+        Some(format!(
+            "warning: multiple {} token environment variables are set ({}); using {} by precedence",
+            kind.display_name(),
+            set_vars.join(", "),
+            set_vars[0]
+        ))
+    } else {
+        None
     }
 }
 
@@ -1431,17 +1730,24 @@ impl ForgeWrite for HttpApi<'_> {
 /// Requests made by this process, retries included (see [`MAX_REQUESTS`]).
 static REQUESTS_MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// Hard ceiling on [`raise_request_limit`] (`MAX_REQUESTS * 4`).
+pub const MAX_REQUEST_LIMIT: usize = MAX_REQUESTS * 4;
+
 /// This process's request budget: [`MAX_REQUESTS`], unless a command whose reads scale
-/// with a count its user gave raised it ([`raise_request_limit`]).
+/// with a count its user gave raised it ([`raise_request_limit`]), capped at
+/// [`MAX_REQUEST_LIMIT`].
 static REQUEST_LIMIT: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(MAX_REQUESTS);
 
-/// Raise this process's request budget to `n` (never lower it). For a command whose
-/// reads scale with an explicit count, such as `audit --last N --forge` reading each
-/// change's pull request; `check`, whose reads a pull-request body could inflate, keeps
-/// [`MAX_REQUESTS`].
+/// Raise this process's request budget to `n` (never lower it, and never exceed
+/// [`MAX_REQUEST_LIMIT`]). For a command whose reads scale with an explicit count, such
+/// as `audit --last N --forge` reading each change's pull request; `check`, whose reads a
+/// pull-request body could inflate, keeps [`MAX_REQUESTS`].
 pub fn raise_request_limit(n: usize) {
-    REQUEST_LIMIT.fetch_max(n, std::sync::atomic::Ordering::Relaxed);
+    REQUEST_LIMIT.fetch_max(
+        n.min(MAX_REQUEST_LIMIT),
+        std::sync::atomic::Ordering::Relaxed,
+    );
 }
 
 /// This process's request budget.
@@ -2503,10 +2809,14 @@ mod tests {
         assert!(!HttpApi { env: &blank }.has_token(ForgeKind::GitHub));
     }
 
+    static REQUEST_LIMIT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn the_request_budget_only_rises() {
+        let _guard = REQUEST_LIMIT_TEST_LOCK.lock().unwrap();
+        REQUEST_LIMIT.store(MAX_REQUESTS, std::sync::atomic::Ordering::Relaxed);
         let before = request_limit();
-        assert!(before >= MAX_REQUESTS);
+        assert_eq!(before, MAX_REQUESTS);
         raise_request_limit(MAX_REQUESTS - 1);
         assert_eq!(request_limit(), before, "never lowered");
         raise_request_limit(before + 7);
@@ -3895,5 +4205,146 @@ mod tests {
         );
         let err = api.get_page(&gh, "repos/o/r/issues2").unwrap_err();
         assert_eq!(err.kind, ForgeErrorKind::Unavailable);
+    }
+
+    #[test]
+    fn step13_and_step16_forge_url_trust_allow_http_tokens_ports_and_no_network_proxy() {
+        let github = gh();
+        let gitea = gitea();
+
+        // 1. DISCIPLINE_FORGE_API_URL host validation: reject untrusted host, private IP, metadata IP.
+        for bad_api in [
+            "https://evil.example.com/api/v3",
+            "https://10.0.0.1/api/v3", // discipline:allow(pii): synthetic private IP literal for SSRF host rejection unit test
+            "https://192.168.1.10/api/v3", // discipline:allow(pii): synthetic private IP literal for SSRF host rejection unit test
+            "https://172.16.0.5/api/v3", // discipline:allow(pii): synthetic private IP literal for SSRF host rejection unit test
+            "http://169.254.169.254/latest/meta-data",
+            "http://0.0.0.0:8080/api/v3",
+        ] {
+            let e = env(&[("DISCIPLINE_FORGE_API_URL", bad_api)]);
+            let res = HttpApi { env: &e }.api_base(&github);
+            assert!(
+                res.is_err(),
+                "expected DISCIPLINE_FORGE_API_URL `{bad_api}` to be rejected, got {res:?}"
+            );
+        }
+
+        // Explicit allowlist permits a configured corporate proxy host.
+        let allowed_proxy = env(&[
+            (
+                "DISCIPLINE_FORGE_API_URL",
+                "https://forge-proxy.corp.example/api/v3",
+            ),
+            (
+                "DISCIPLINE_FORGE_API_ALLOW_HOSTS",
+                "forge-proxy.corp.example",
+            ),
+        ]);
+        assert_eq!(
+            HttpApi {
+                env: &allowed_proxy
+            }
+            .api_base(&github)
+            .unwrap(),
+            "https://forge-proxy.corp.example/api/v3"
+        );
+
+        // 2. DISCIPLINE_FORGE_ALLOW_HTTP: public cloud forge refuses `1` and requires `insecure-cleartext`.
+        let http_gh = Forge {
+            kind: ForgeKind::GitHub,
+            url: "http://github.com".into(),
+            repo: "o/r".into(),
+        };
+        let allow_1 = env(&[
+            ("DISCIPLINE_FORGE_ALLOW_HTTP", "1"),
+            ("DISCIPLINE_FORGE_API_URL", "http://api.github.com"),
+        ]);
+        let err = HttpApi { env: &allow_1 }
+            .get(&http_gh, "repos/o/r")
+            .unwrap_err();
+        assert!(
+            err.contains("insecure-cleartext"),
+            "public forge over plain HTTP must require insecure-cleartext: {err}"
+        );
+
+        // 3. Token conflict warning when multiple token env vars are set.
+        let multi_tok = env(&[
+            ("DISCIPLINE_FORGE_TOKEN", "t1"),
+            ("GH_TOKEN", "t2"),
+            ("GITHUB_TOKEN", "t3"),
+        ]);
+        let warn = token_conflict_warning(ForgeKind::GitHub, &multi_tok)
+            .expect("expected warning when multiple token variables are set");
+        assert!(
+            warn.contains("DISCIPLINE_FORGE_TOKEN")
+                && warn.contains("GH_TOKEN")
+                && warn.contains("GITHUB_TOKEN"),
+            "{warn}"
+        );
+        let single_tok = env(&[("GITHUB_TOKEN", "t3")]);
+        assert_eq!(token_conflict_warning(ForgeKind::GitHub, &single_tok), None);
+
+        // 4. Hard ceiling on raise_request_limit (MAX_REQUESTS * 4).
+        {
+            let _guard = REQUEST_LIMIT_TEST_LOCK.lock().unwrap();
+            raise_request_limit(usize::MAX);
+            assert!(
+                request_limit() <= MAX_REQUESTS * 4,
+                "request_limit {} exceeded ceiling {}",
+                request_limit(),
+                MAX_REQUESTS * 4
+            );
+            REQUEST_LIMIT.store(MAX_REQUESTS, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        // 5. Port validation in authority_of / clean_url and tighter parse_remote.
+        for bad_url in [
+            "https://git.example.com:0/api",
+            "https://git.example.com:65536/api",
+            "https://git.example.com:abc/api",
+            "https://@git.example.com/api",
+            "https://-bad.example.com/api",
+            "https://bad..example.com/api",
+        ] {
+            assert!(
+                clean_url(bad_url).is_err(),
+                "expected clean_url({bad_url:?}) to fail"
+            );
+        }
+        assert_eq!(authority_of("https://git.example.com:65536/a"), "");
+        assert_eq!(authority_of("https://git.example.com:0/a"), "");
+        for bad_remote in [
+            "https://@github.com/o/r.git",
+            "ssh://@github.com/o/r.git",
+            "@github.com:o/r.git",
+            "git@:o/r.git",
+            "https://github.com:0/o/r.git",
+            "https://github.com:70000/o/r.git",
+            "ssh://git@github.com:70000/o/r.git",
+            "https://-bad.example.com/o/r.git",
+            "https://bad..example.com/o/r.git",
+            "git@bad@host.example.com:o/r.git",
+        ] {
+            assert_eq!(
+                parse_remote(bad_remote),
+                None,
+                "expected parse_remote({bad_remote:?}) to return None"
+            );
+        }
+
+        // 6. Step 16: DISCIPLINE_NO_NETWORK checked before plain-HTTP and disables env proxy.
+        let http_gitea = Forge {
+            url: "http://git.example.com".into(),
+            ..gitea
+        };
+        let no_net = env(&[("DISCIPLINE_NO_NETWORK", "1")]);
+        let api_no_net = HttpApi { env: &no_net };
+        let err = api_no_net.get(&http_gitea, "repos/o/r").unwrap_err();
+        assert!(
+            err.contains("DISCIPLINE_NO_NETWORK"),
+            "DISCIPLINE_NO_NETWORK must be checked before plain-HTTP refusal: {err}"
+        );
+        assert!(!api_no_net.uses_env_proxy());
+        assert!(HttpApi { env: &env(&[]) }.uses_env_proxy());
     }
 }

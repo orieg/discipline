@@ -678,6 +678,7 @@ fn plain_http_forge_and_url_credentials_are_refused_or_stripped() {
     let run = repo.run(
         &["doctor"],
         &[
+            ("DISCIPLINE_NO_NETWORK", "0"),
             ("DISCIPLINE_FORGE", "gitea"),
             (
                 "DISCIPLINE_FORGE_URL",
