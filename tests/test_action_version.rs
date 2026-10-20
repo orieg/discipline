@@ -575,3 +575,109 @@ fn step22_fuzz_workflow_and_manifest_register_forge_and_smuggling_target() {
         "forge_and_smuggling.rs must fuzz parse_remote, ssh_hostname, and instruction_smuggling::text_classes"
     );
 }
+
+#[test]
+fn step26_container_and_infra_hardening_enforces_cap_drop_seccomp_safe_dir_and_gpg_install() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    // 1. ci.yml docker-smoke must drop capabilities and disable privilege escalation
+    let ci_yml = std::fs::read_to_string(root.join(".github/workflows/ci.yml")).unwrap();
+    assert!(
+        ci_yml.contains("--cap-drop=ALL")
+            && ci_yml.contains("--security-opt=no-new-privileges:true"),
+        "ci.yml docker-smoke must pass --cap-drop=ALL --security-opt=no-new-privileges:true"
+    );
+
+    // 2. templates/argo-workflow-template.yaml must define securityContext (cap-drop ALL, seccomp RuntimeDefault, non-root) and pin alpine digest
+    let argo = std::fs::read_to_string(root.join("templates/argo-workflow-template.yaml")).unwrap();
+    assert!(
+        argo.contains("securityContext:")
+            && argo.contains("allowPrivilegeEscalation: false")
+            && argo.contains("seccompProfile:")
+            && argo.contains("type: RuntimeDefault")
+            && argo.contains("drop:")
+            && argo.contains("alpine:3.21@sha256:"),
+        "argo-workflow-template.yaml must enforce non-root securityContext with cap-drop ALL, seccomp RuntimeDefault, and pinned alpine digest"
+    );
+
+    // 3. packaging/docker/docker-entrypoint.sh must only add safe.directory when DISCIPLINE_TRUST_WORKSPACE=1
+    let entrypoint = root.join("packaging/docker/docker-entrypoint.sh");
+    let ep_dir = tempfile::tempdir().unwrap();
+    let bin = ep_dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("discipline"), "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            bin.join("discipline"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let out_untrusted = common::script_command("sh")
+        .arg(&entrypoint)
+        .arg("check")
+        .current_dir(ep_dir.path())
+        .env("PATH", &path)
+        .env("HOME", ep_dir.path())
+        .env_remove("DISCIPLINE_TRUST_WORKSPACE")
+        .env_remove("CI")
+        .env_remove("GITHUB_ACTIONS")
+        .env_remove("GITLAB_CI")
+        .env_remove("GITEA_ACTIONS")
+        .env_remove("FORGEJO_ACTIONS")
+        .output()
+        .unwrap();
+    assert!(out_untrusted.status.success());
+    let gitconfig = std::fs::read_to_string(ep_dir.path().join(".gitconfig")).unwrap_or_default();
+    assert!(
+        !gitconfig.contains("directory ="),
+        "docker-entrypoint.sh must not add safe.directory for untrusted non-CI host directories, got: {gitconfig}"
+    );
+
+    // 4. install.sh and docs/install.sh must stay identical, reject cleartext non-loopback HTTP DOWNLOAD_URL, and fail closed when DISCIPLINE_GPG_KEY is set without a valid SHA256SUMS.asc
+    let install_sh = std::fs::read_to_string(root.join("install.sh")).unwrap();
+    let docs_install_sh = std::fs::read_to_string(root.join("docs/install.sh")).unwrap();
+    assert_eq!(
+        install_sh, docs_install_sh,
+        "install.sh and docs/install.sh must stay byte-for-byte identical"
+    );
+
+    let dest = ep_dir.path().join("dest");
+    for bad_url in [
+        "http://mirror.example.com/releases",
+        "http://localhost:@mirror.example.com/releases",
+        "http://127.0.0.1:@mirror.example.com/releases",
+    ] {
+        let bad_http = common::script_command("bash")
+            .arg(root.join("install.sh"))
+            .arg("--to")
+            .arg(&dest)
+            .arg("--download-url")
+            .arg(bad_url)
+            .output()
+            .unwrap();
+        assert!(
+            !bad_http.status.success(),
+            "install.sh must refuse cleartext non-loopback HTTP DOWNLOAD_URL `{bad_url}` by default"
+        );
+        let bad_http_err = String::from_utf8_lossy(&bad_http.stderr);
+        assert!(
+            bad_http_err.contains("refusing cleartext HTTP download URL"),
+            "expected cleartext HTTP refusal diagnostic for `{bad_url}`, got: {bad_http_err}"
+        );
+    }
+
+    // 5. docs/CONFIGURATION.md must document scoped safe.directory '/workspace' and --cap-drop=ALL
+    let config_doc = std::fs::read_to_string(root.join("docs/CONFIGURATION.md")).unwrap();
+    assert!(
+        !config_doc.contains("safe.directory '*'"),
+        "docs/CONFIGURATION.md must not claim system-wide safe.directory '*'"
+    );
+    assert!(
+        config_doc.contains("--cap-drop=ALL") && config_doc.contains("no-new-privileges:true"),
+        "docs/CONFIGURATION.md must document --cap-drop=ALL and no-new-privileges:true for docker run"
+    );
+}

@@ -20,6 +20,7 @@ fail() {
 DEST_DIR="${DEST_DIR:-}"
 VERSION="${VERSION:-}"
 DOWNLOAD_URL="${DOWNLOAD_URL:-https://github.com/orieg/discipline/releases}"
+GPG_KEY="${DISCIPLINE_GPG_KEY:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -35,13 +36,18 @@ while [[ $# -gt 0 ]]; do
       DOWNLOAD_URL="$2"
       shift 2
       ;;
+    --gpg-key)
+      GPG_KEY="$2"
+      shift 2
+      ;;
     -h|--help)
-      echo "Usage: install.sh [--to <dir>] [--version <version>] [--download-url <url>]"
+      echo "Usage: install.sh [--to <dir>] [--version <version>] [--download-url <url>] [--gpg-key <key-file>]"
       echo ""
       echo "Options:"
       echo "  --to <dir>            Install directory (default: /usr/local/bin or ~/.local/bin)"
       echo "  --version <v>         Release tag to install (e.g. v0.1.0; default: latest)"
       echo "  --download-url <url>  Base release download URL (for mirrors/testing)"
+      echo "  --gpg-key <file>      Public key file to verify SHA256SUMS.asc with gpg"
       exit 0
       ;;
     *)
@@ -92,6 +98,37 @@ mkdir -p "${DEST_DIR}"
 # Download URLs
 if [ "${DOWNLOAD_URL}" != "https://github.com/orieg/discipline/releases" ]; then
   echo "warning: using non-default download URL: ${DOWNLOAD_URL}" >&2
+  case "${DOWNLOAD_URL}" in
+    https://*|file://*)
+      ;;
+    http://*)
+      url_rest="${DOWNLOAD_URL#http://}"
+      url_auth="${url_rest%%/*}"
+      case "${url_auth}" in
+        *@*)
+          url_host=""
+          ;;
+        \[::1\]|\[::1\]:*)
+          url_host="[::1]"
+          ;;
+        *)
+          url_host="${url_auth%%:*}"
+          ;;
+      esac
+      case "${url_host}" in
+        127.0.0.1|localhost|\[::1\])
+          ;;
+        *)
+          if [ "${DISCIPLINE_INSTALL_ALLOW_INSECURE_HTTP:-}" != "1" ]; then
+            fail "refusing cleartext HTTP download URL '${DOWNLOAD_URL}' (use https://, loopback, or set DISCIPLINE_INSTALL_ALLOW_INSECURE_HTTP=1)"
+          fi
+          ;;
+      esac
+      ;;
+    *)
+      fail "unsupported download URL scheme in '${DOWNLOAD_URL}'"
+      ;;
+  esac
 fi
 if [ -n "${VERSION}" ]; then
   base="${DOWNLOAD_URL}/download/${VERSION}"
@@ -124,6 +161,16 @@ fetch() {
 echo "Downloading discipline (${triple})..."
 fetch "${base}/${archive}" "${tmp_dir}/${archive}" || fail "could not download ${base}/${archive}"
 fetch "${base}/SHA256SUMS" "${tmp_dir}/SHA256SUMS" || fail "could not download ${base}/SHA256SUMS"
+
+if [ -n "${GPG_KEY}" ]; then
+  command -v gpg >/dev/null 2>&1 || fail "gpg is required when --gpg-key / DISCIPLINE_GPG_KEY is set"
+  [ -r "${GPG_KEY}" ] || fail "GPG key file '${GPG_KEY}' is not readable"
+  fetch "${base}/SHA256SUMS.asc" "${tmp_dir}/SHA256SUMS.asc" || fail "could not download ${base}/SHA256SUMS.asc"
+  gpg_home="${tmp_dir}/gnupg"
+  mkdir -m 0700 "${gpg_home}"
+  gpg --homedir "${gpg_home}" --batch --quiet --import "${GPG_KEY}" || fail "failed to import GPG key '${GPG_KEY}'"
+  gpg --homedir "${gpg_home}" --batch --verify "${tmp_dir}/SHA256SUMS.asc" "${tmp_dir}/SHA256SUMS" || fail "GPG signature verification of SHA256SUMS.asc failed"
+fi
 
 # SHA256 checksum verification
 echo "Verifying SHA256 checksum..."
