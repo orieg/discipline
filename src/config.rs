@@ -18,6 +18,8 @@ use toml::Value;
 pub const HOSTNAME_DENYLIST_ENV: &str = "DISCIPLINE_HOSTNAME_DENYLIST";
 pub const TERM_DENYLIST_ENV: &str = "DISCIPLINE_TERM_DENYLIST";
 pub const SCHEMA_VERSION: u32 = 1;
+/// Maximum size in bytes for a configuration file or inline override (`1 MiB`).
+pub const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Suite {
@@ -2717,8 +2719,18 @@ impl DisciplineConfig {
         }
     }
 
+    /// Maximum size in bytes of a `discipline.toml` configuration file (1 MiB).
+    pub const MAX_CONFIG_BYTES: usize = 1024 * 1024;
+
     /// Parse a `discipline.toml` body with no overrides applied.
     pub fn from_toml_str(content: &str) -> Result<Self> {
+        if content.len() > Self::MAX_CONFIG_BYTES {
+            bail!(
+                "discipline.toml is {} bytes, exceeding MAX_CONFIG_BYTES ({} bytes)",
+                content.len(),
+                Self::MAX_CONFIG_BYTES
+            );
+        }
         let value: Value = match toml::from_str(content) {
             Ok(v) => v,
             Err(e) => {
@@ -2774,12 +2786,24 @@ impl DisciplineConfig {
     /// Resolve the effective configuration. `path = None` starts from defaults.
     pub fn resolve(path: Option<&Path>, overrides: &Overrides) -> Result<Self> {
         let source = match path {
-            Some(p) => Some((
-                p,
-                std::fs::read_to_string(p).with_context(|| {
-                    format!("failed to read configuration file {}", p.display())
-                })?,
-            )),
+            Some(p) => {
+                if let Ok(meta) = std::fs::metadata(p) {
+                    if meta.len() > Self::MAX_CONFIG_BYTES as u64 {
+                        bail!(
+                            "configuration file {} is {} bytes, exceeding MAX_CONFIG_BYTES ({} bytes)",
+                            p.display(),
+                            meta.len(),
+                            Self::MAX_CONFIG_BYTES
+                        );
+                    }
+                }
+                Some((
+                    p,
+                    std::fs::read_to_string(p).with_context(|| {
+                        format!("failed to read configuration file {}", p.display())
+                    })?,
+                ))
+            }
             None => None,
         };
         Self::resolve_source(source, overrides)
@@ -2791,6 +2815,14 @@ impl DisciplineConfig {
         let mut source_info: Option<(std::path::PathBuf, String)> = None;
         let mut value = match source {
             Some((p, content)) => {
+                if content.len() > Self::MAX_CONFIG_BYTES {
+                    bail!(
+                        "configuration file {} is {} bytes, exceeding MAX_CONFIG_BYTES ({} bytes)",
+                        p.display(),
+                        content.len(),
+                        Self::MAX_CONFIG_BYTES
+                    );
+                }
                 let val = match toml::from_str::<Value>(&content) {
                     Ok(v) => v,
                     Err(e) => {

@@ -1255,4 +1255,19 @@ mod tests {
         assert!(!term_rule.re.is_match("secrets"));
         assert!(!term_rule.re.is_match("secretary"));
     }
+
+    #[test]
+    fn step19_dogfood_config_redacts_lan_ips_and_direction_forbids_weakening() {
+        let repo_toml = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("discipline.toml");
+        let cfg = crate::config::DisciplineConfig::load_from_file(&repo_toml).unwrap();
+        assert!(
+            cfg.gates.pii.redact_lan_ips,
+            "dogfood discipline.toml must set gates.pii.redact_lan_ips = true"
+        );
+        assert_eq!(
+            crate::guards::integrity::direction_of("redact_lan_ips"),
+            Some(crate::guards::integrity::Direction::LooserWhenFalse),
+            "redact_lan_ips must be classified LooserWhenFalse so config-integrity forbids disabling it"
+        );
+    }
 }

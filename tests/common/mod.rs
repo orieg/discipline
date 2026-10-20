@@ -115,6 +115,14 @@ pub fn discipline_bin() -> &'static Path {
     Path::new(env!("CARGO_BIN_EXE_discipline"))
 }
 
+pub fn copy_built_binary(dest: &Path) {
+    std::fs::copy(discipline_bin(), dest).unwrap();
+}
+
+pub fn built_binary_bytes() -> Vec<u8> {
+    std::fs::read(discipline_bin()).unwrap()
+}
+
 /// Removes from `cmd` every inherited variable that could change what the binary, or a
 /// program it runs, does, and sets the few the harness controls. Applied to every
 /// `discipline` and every `git` a test spawns.
@@ -212,6 +220,7 @@ pub fn git_command() -> Command {
 
 pub const ISOLATED_ENV_VARS: &[&str] = &[
     "DISCIPLINE_HOOK_RUN",
+    "DISCIPLINE_EXPECTED_EXE_SHA256",
     "PR_BODY",
     "DISCIPLINE_PR_BODY_FILE",
     "PR_TITLE",
