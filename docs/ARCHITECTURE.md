@@ -653,6 +653,7 @@ Scorecard's Fuzzing check looks for a fuzzing integration; for Rust it is any `*
 | `pretool_payload` | `pretool::parse` and `parse_session_start` (all agent shapes), `patch_targets`, `judge_shell` (tree-sitter-bash) | arbitrary bytes as a hook payload or shell command |
 | `archive_walk` | `archive_formats::detect` and `walk` (zip, tar and its compressions, gem, deb, rpm) | arbitrary bytes written to a file whose name the first byte picks |
 | `artifact_parsers` | `perf::parse_metrics` (Criterion, Google Benchmark, pytest-benchmark, `go test -bench`, iai-callgrind, neutral JSON), `source_maps` | arbitrary bytes as a benchmark artifact or source map |
+| `yaml_and_lockfiles` | `lockfile::parse_lock` and `diff_lock` (`pnpm-lock.yaml`, `yarn.lock`, `Cargo.lock`, `package-lock.json`, `poetry.lock`, `uv.lock`, `composer.lock`, `Gemfile.lock`), `ci_gitlab::includes` and `diff_gitlab_ci`, `citation_metadata::check` | arbitrary bytes as a lockfile, GitLab CI pipeline or citation record |
 
   The two targets that reach a tree-sitter parser (`language_packs`, `pretool_payload`) run their body inside `deep_stack::on_deep_stack`, as the binary runs its work: an input of the job's 64 KiB can nest to the tree depth limit, which a walker descends on that stack and not on the fuzzer's own (#667).
 

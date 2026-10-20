@@ -68,3 +68,11 @@ path = "fuzz_targets/artifact_parsers.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "yaml_and_lockfiles"
+path = "fuzz_targets/yaml_and_lockfiles.rs"
+test = false
+doc = false
+bench = false
+
