@@ -623,6 +623,19 @@ fn lifted_badge(r: &Record) -> &'static str {
     }
 }
 
+fn encode_repo_segments(repo: &str) -> String {
+    repo.split('/')
+        .map(|seg| {
+            if seg == "." || seg == ".." {
+                seg.bytes().map(|b| format!("%{b:02X}")).collect()
+            } else {
+                crate::forge::encode_segment(seg)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// The issues a waiver cites, each linked, with its state when `--forge` read it.
 fn cites_cell(r: &Record, s: &Summary) -> String {
     r.cites
@@ -632,7 +645,7 @@ fn cites_cell(r: &Record, s: &Summary) -> String {
             let href = match (&s.links, fact) {
                 (Some(l), Some(f)) if !f.repo.is_empty() => Some(
                     l.issue
-                        .replace("{repo}", &f.repo)
+                        .replace("{repo}", &encode_repo_segments(&f.repo))
                         .replace("{n}", &f.number.to_string()),
                 ),
                 _ => None,
@@ -685,9 +698,9 @@ fn ratification_cell(rs: &[&Record], s: &Summary) -> String {
                         r##" <a class="src-link" href="{}" title="Open the ratifying comment">#{n} comment{} ↗</a>"##,
                         esc(&l
                             .issue_comment
-                            .replace("{repo}", repo)
+                            .replace("{repo}", &encode_repo_segments(repo))
                             .replace("{n}", &n.to_string())
-                            .replace("{id}", id)),
+                            .replace("{id}", &crate::forge::encode_segment(id))),
                         f.created
                             .map(|t| format!(", {}", date(t)))
                             .unwrap_or_default()
@@ -1657,5 +1670,80 @@ mod tests {
              check that the issue still supports the waiver"
         );
         assert!(signal_sentence(&signal(2), &summary).starts_with("2 waivers point to"));
+    }
+
+    #[test]
+    fn cites_and_ratification_cells_segment_encode_repo_and_comment_id() {
+        let s = Summary {
+            links: Some(crate::audit::Links {
+                repository: "https://github.com/o/r".into(),
+                pull: "https://github.com/o/r/pull/{n}".into(),
+                commit: "https://github.com/o/r/commit/{sha}".into(),
+                file: "https://github.com/o/r/blob/{sha}/{path}#L{line}".into(),
+                file_diff: None,
+                issue_comment: "https://github.com/{repo}/issues/{n}#issuecomment-{id}".into(),
+                issue: "https://github.com/{repo}/issues/{n}".into(),
+            }),
+            issues: vec![crate::audit::IssueFact {
+                reference: "#12".into(),
+                repo: "owner/../evil#frag".into(),
+                number: 12,
+                state: "open",
+                state_reason: None,
+                closed_at: None,
+                error: None,
+            }],
+            ..Default::default()
+        };
+        let mut r = Record {
+            sha: "0123456789abcdef".into(),
+            pr: Some(1),
+            time: 0,
+            kind: "directive",
+            class: "detector",
+            evidence: "claimed",
+            tier: "C",
+            gate: Some("pii".into()),
+            directive: Some("allow-pii".into()),
+            key: None,
+            change: None,
+            before: None,
+            after: None,
+            count: None,
+            file: Some("AGENTS.md".into()),
+            line: None,
+            hidden: None,
+            reason_sha256: None,
+            reason_len: None,
+            reason: None,
+            detail: None,
+            source: None,
+            ratification: Some(crate::audit::RatificationFact {
+                state: "ratified",
+                issue_repo: Some("owner/../evil?q=1".into()),
+                issue: Some(12),
+                comment_id: Some("99?foo=bar#baz".into()),
+                created: None,
+                why: None,
+            }),
+            cites: vec!["#12".into()],
+            edited: false,
+            lifted: None,
+            ord: 0,
+            subject: "s".into(),
+        };
+        let cite_html = cites_cell(&r, &s);
+        assert!(
+            cite_html.contains("https://github.com/owner/%2E%2E/evil%23frag/issues/12"),
+            "cites_cell must segment-encode repo: {cite_html}"
+        );
+        let rat_html = ratification_cell(&[&r], &s);
+        assert!(
+            rat_html.contains(
+                "https://github.com/owner/%2E%2E/evil%3Fq%3D1/issues/12#issuecomment-99%3Ffoo%3Dbar%23baz"
+            ),
+            "ratification_cell must segment-encode repo and comment_id: {rat_html}"
+        );
+        r.cites.clear();
     }
 }
