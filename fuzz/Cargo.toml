@@ -76,3 +76,10 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "forge_and_smuggling"
+path = "fuzz_targets/forge_and_smuggling.rs"
+test = false
+doc = false
+bench = false
+

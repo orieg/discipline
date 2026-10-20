@@ -79,6 +79,13 @@ Discipline stands between a change and the branch it merges into. This section s
 3. Ratifications and approvals come from a login no agent can use. **This does not hold on this repository today:** every agent posts as the owner's login (Phase 15 Step 8), so a ratification here shows the owner's login agreed, not that a second party did.
 4. The forge reports authors, edits and links truthfully. When it fails to (a closing reference it did not link, #350), discipline refuses rather than guesses.
 
+| Assumption | Guarantee underpinned | Verification / failure mode |
+|---|---|---|
+| Required check runs with `policy_from: base` and `ci-integrity` enabled | A change cannot weaken the policy or workflow that judges it (CICD-SEC-4) | `discipline doctor` checks `required-check` and `workflow-protection`; `ci-integrity` flags workflow tampering |
+| `protected_paths` covers policy, workflows, hooks, and agent instructions | Protected files require explicit owner ratification on a closed issue | `ratified-paths` gate and `config-integrity` gate fail closed on unratified edits |
+| Ratifier and approver logins are distinct from agent credentials | Second-party human authorization on ratifications and override approvals | `ratified-paths` refuses `agent_logins` and (when `refuse_author_ratification = true`) the PR author; shared login is residual risk |
+| Forge API reports logins, edit timestamps, and issue links accurately | Ratification immutability, approval attribution, and issue-link verification | `src/forge.rs` fails closed (exit 2) on malformed, partial, HTTP-error, or unlinked responses |
+
 **Residual risks: what an attacker in this model can still do.**
 - A weakening the AST gates do not model (a rewritten test with the same assertion count, a workflow rewritten in a form `ci-integrity` does not read, what a GitLab `include:` brings in; §10). One rewrite with the same count is caught in its exact form: an equality assertion made to compare an expression with itself (`assert_eq!(y, y)`, `expect(x).toBe(x)`) is reported by `vacuous-tests` in a new test and by `assertion-reduction` in a changed one, as a warning ([GATES.md](GATES.md#self-comparison-assertions)). The detector compares tokens and follows no value, so it stops a careless rewrite and not an evasive one. Still not caught: two names bound to one value (`let b = a; assert_eq!(a, b)`), a copy compared with its source (`y.clone()`), the same call on both sides, an assertion a macro expands to, an assertion whose operands never reach the code under test, and a self-comparison kept beside a real comparison of the same operand. Held-out tests and review are the control for those.
 - Every waiver the policy allows, on the record. `audit` shows them; it does not undo them.
@@ -654,6 +661,7 @@ Scorecard's Fuzzing check looks for a fuzzing integration; for Rust it is any `*
 | `archive_walk` | `archive_formats::detect` and `walk` (zip, tar and its compressions, gem, deb, rpm) | arbitrary bytes written to a file whose name the first byte picks |
 | `artifact_parsers` | `perf::parse_metrics` (Criterion, Google Benchmark, pytest-benchmark, `go test -bench`, iai-callgrind, neutral JSON), `source_maps` | arbitrary bytes as a benchmark artifact or source map |
 | `yaml_and_lockfiles` | `lockfile::parse_lock` and `diff_lock` (`pnpm-lock.yaml`, `yarn.lock`, `Cargo.lock`, `package-lock.json`, `poetry.lock`, `uv.lock`, `composer.lock`, `Gemfile.lock`), `ci_gitlab::includes` and `diff_gitlab_ci`, `citation_metadata::check` | arbitrary bytes as a lockfile, GitLab CI pipeline or citation record |
+| `forge_and_smuggling` | `forge::parse_remote`, `ssh_hostname`, `clean_url`, `encode_segment`, `check_api_path`, and `instruction_smuggling::invisible_classes`, `phrase_classes`, `fold`, `has_mixed_script_word`, `has_encoded_blob`, `text_classes` | arbitrary bytes as a remote URL, SSH config, API path, or text scanned for smuggling |
 
   The two targets that reach a tree-sitter parser (`language_packs`, `pretool_payload`) run their body inside `deep_stack::on_deep_stack`, as the binary runs its work: an input of the job's 64 KiB can nest to the tree depth limit, which a walker descends on that stack and not on the fuzzer's own (#667).
 

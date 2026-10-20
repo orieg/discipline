@@ -83,3 +83,24 @@ Automated static analysis runs across multiple layers to catch defects before co
 - **Clippy (`cargo clippy --all-targets --locked -- -D warnings`):** Runs on every pull request and push to `main` as part of the `ci-gate` rollup. Any compiler warning or linter deviation blocks the merge.
 - **Discipline Sentinel:** The sentinel checks its own diffs on every pull request (`dogfood` job), enforcing fail-closed AST invariant gates against assertion reduction, vacuous tests, safety justifications on unsafe blocks, and test floor regressions.
 - **CodeQL Advanced (`security-extended`):** Runs on pull requests, pushes to `main`, and on a weekly schedule (`.github/workflows/codeql.yml`) across Rust, Actions, and Python. As documented in [`docs/ARCHITECTURE.md` §8.3](docs/ARCHITECTURE.md#83-codeql-security-pipeline-githubworkflowscodeqlyml), CodeQL runs in an advisory mode so that heuristic false positives or upstream query modifications do not block unrelated merges. However, any verified true positive is classified as a blocking security defect that must be remediated before the next release.
+
+## Security Assumptions & Incident Response
+
+### Operational Security Assumptions
+
+The fail-closed guarantees documented in [`docs/ARCHITECTURE.md` §1.4](docs/ARCHITECTURE.md#14-threat-model) rely on four operational assumptions:
+
+1. **Base-side policy evaluation (`policy_from: base`):** CI workflows evaluate pull requests against the base branch policy (`--policy-from base`) and protect the workflow files via `ci-integrity` and branch protection rulesets.
+2. **Comprehensive protected paths (`ratified-paths`):** Repository configuration (`discipline.toml`), CI workflows, composite action definitions, and agent instruction/hook files are listed under `protected_paths`.
+3. **Separate ratifier identity:** Ratifications (`Owner-ratified-paths:`) and pull-request approvals (`directives.require_approval`) originate from a forge account that coding agents do not control.
+4. **Truthful forge metadata and transport integrity:** The forge API reports pull-request authors, comment edit histories, and linked issues accurately over TLS, and release consumers verify SHA-256 checksums and Sigstore build-provenance attestations (`gh attestation verify`).
+
+### Incident Response & Coordinated Remediation Workflow
+
+When a vulnerability is reported via [GitHub Security Advisories](https://github.com/orieg/discipline/security/advisories/new) or discovered through fuzzing (`fuzz.yml`), CodeQL (`codeql.yml`), or `cargo-deny`:
+
+1. **Triage & Reproduction:** Maintainers confirm the entry point, affected versions, and severity within the private GitHub Security Advisory workspace and construct a minimal reproducing test case (unit, end-to-end, or `tests/red_team/` probe).
+2. **Isolated Remediation & Discriminating Test:** A fix is developed in a private advisory fork or branch alongside a regression test verified to fail before the fix and pass with it, plus a `self-test` case when a gate invariant is affected.
+3. **Release & Attestation:** A patched release (`vX.Y.Z`) is tagged on `main` via `scripts/tag-release.sh`, producing static binaries, signed APT/RPM metadata, CycloneDX SBOMs (`discipline.cdx.json`), and Sigstore build-provenance bundles (`discipline.intoto.jsonl`). If a signing key or deploy key is suspected of compromise, it is revoked and rotated per [`docs/ARCHITECTURE.md` §8.2.1](docs/ARCHITECTURE.md#signing-key-maintenance) and §8.4.
+4. **Advisory Publication:** Once the patched release is published and promoted, the GitHub Security Advisory and corresponding RustSec / CVE metadata are published with upgrade instructions and reporter credit.
+

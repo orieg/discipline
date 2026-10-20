@@ -41,6 +41,7 @@ The attack scripts rewrite the global git configuration (`user.name lab`) and de
   - `git-01` to `git-03`: Git and filesystem boundary probes (`.gitattributes` diff masking; tests replaced by a submodule or a bare gitlink, and a pointer move inside an existing submodule; symlink traversal outside workspace).
   - `rat-01` to `rat-04`: Protected path owner ratification probes on live Gitea (author self-ratification, `refuse_author_ratification`, legitimate owner ratification, edited comments).
   - `sec-01`: `DISCIPLINE_NO_NETWORK=1` fail-closed verification.
+  - `sec-02`: variation-selector smuggling, separator-folded injected phrases, and `eval` / `sh -c` secret-argument detection.
   - `ast-01` to `ast-02`: AST assertion reduction and stealth test deletion probes.
 - Each attack's `expected.txt`: the lines its output must contain (verdicts HOLDS / GAP / KNOWN, exit codes, finding titles or codes). Results and remediation are tracked in issue #359 and `docs/ROADMAP.md`.
 

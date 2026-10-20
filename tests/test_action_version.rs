@@ -466,3 +466,112 @@ fn step11_build_repo_rejects_symlinks_purges_existing_outputs_and_homebrew_pins_
         "pages.yml must run step-security/harden-runner in all three jobs (site, sign, deploy), found {harden_count}"
     );
 }
+
+#[test]
+fn step21_container_images_scope_safe_directory_and_defer_workspace_trust_to_entrypoint() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for dockerfile in ["Dockerfile", "Dockerfile.release"] {
+        let df = std::fs::read_to_string(root.join(dockerfile)).unwrap();
+        assert!(
+            !df.contains("safe.directory '*'"),
+            "{dockerfile} must scope system safe.directory to /workspace instead of '*'"
+        );
+        assert!(
+            df.contains("git config --system --add safe.directory /workspace"),
+            "{dockerfile} must set git config --system --add safe.directory /workspace"
+        );
+        assert!(
+            !df.contains("ENV DISCIPLINE_TRUST_WORKSPACE=1"),
+            "{dockerfile} must not set global ENV DISCIPLINE_TRUST_WORKSPACE=1"
+        );
+        assert!(
+            df.contains("USER 10001:10001"),
+            "{dockerfile} must run as non-root USER 10001:10001"
+        );
+    }
+
+    let entrypoint = root.join("packaging/docker/docker-entrypoint.sh");
+    let ep_text = std::fs::read_to_string(&entrypoint).unwrap();
+    assert!(
+        ep_text.contains("DISCIPLINE_TRUST_WORKSPACE=1"),
+        "docker-entrypoint.sh must conditionally export DISCIPLINE_TRUST_WORKSPACE=1 for container workspaces"
+    );
+
+    // Execute docker-entrypoint.sh in an arbitrary non-CI directory and verify DISCIPLINE_TRUST_WORKSPACE is not forced on.
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let stub = bin.join("discipline");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\nprintf 'TRUST=%s\\n' \"${DISCIPLINE_TRUST_WORKSPACE:-unset}\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let out_non_ci = common::script_command("sh")
+        .arg(&entrypoint)
+        .arg("check")
+        .current_dir(dir.path())
+        .env("PATH", &path)
+        .env("HOME", dir.path())
+        .env_remove("DISCIPLINE_TRUST_WORKSPACE")
+        .env_remove("CI")
+        .env_remove("GITHUB_ACTIONS")
+        .env_remove("GITLAB_CI")
+        .env_remove("GITEA_ACTIONS")
+        .env_remove("FORGEJO_ACTIONS")
+        .output()
+        .unwrap();
+    assert!(out_non_ci.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out_non_ci.stdout).trim(),
+        "TRUST=unset",
+        "entrypoint outside /workspace without CI env must leave DISCIPLINE_TRUST_WORKSPACE unset"
+    );
+
+    // Execute docker-entrypoint.sh with CI=true and verify DISCIPLINE_TRUST_WORKSPACE=1 is exported.
+    let out_ci = common::script_command("sh")
+        .arg(&entrypoint)
+        .arg("check")
+        .current_dir(dir.path())
+        .env("PATH", &path)
+        .env("HOME", dir.path())
+        .env_remove("DISCIPLINE_TRUST_WORKSPACE")
+        .env("CI", "true")
+        .output()
+        .unwrap();
+    assert!(out_ci.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out_ci.stdout).trim(),
+        "TRUST=1",
+        "entrypoint with CI=true must export DISCIPLINE_TRUST_WORKSPACE=1"
+    );
+}
+
+#[test]
+fn step22_fuzz_workflow_and_manifest_register_forge_and_smuggling_target() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let fuzz_toml = std::fs::read_to_string(root.join("fuzz/Cargo.toml")).unwrap();
+    assert!(
+        fuzz_toml.contains("name = \"forge_and_smuggling\""),
+        "fuzz/Cargo.toml must register forge_and_smuggling bin target"
+    );
+    let fuzz_wf = std::fs::read_to_string(root.join(".github/workflows/fuzz.yml")).unwrap();
+    assert!(
+        fuzz_wf.contains("- forge_and_smuggling"),
+        ".github/workflows/fuzz.yml matrix must include forge_and_smuggling"
+    );
+    let target_src = std::fs::read_to_string(root.join("fuzz/fuzz_targets/forge_and_smuggling.rs"))
+        .expect("fuzz/fuzz_targets/forge_and_smuggling.rs must exist");
+    assert!(
+        target_src.contains("parse_remote")
+            && target_src.contains("ssh_hostname")
+            && target_src.contains("text_classes"),
+        "forge_and_smuggling.rs must fuzz parse_remote, ssh_hostname, and instruction_smuggling::text_classes"
+    );
+}
