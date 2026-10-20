@@ -240,19 +240,62 @@ fn load_base_policy(
         None if config_path != "discipline.toml" => git.base_content("discipline.toml")?,
         None => None,
     };
-    match base_src {
+    let mut no_config_override = overrides.clone();
+    no_config_override.config_override = None;
+    let (resolved, base_without_ov) = match base_src {
         Some(content) => {
             let label = PathBuf::from(format!("{config_path} (base ref)"));
-            DisciplineConfig::resolve_source(Some((&label, content)), overrides)
+            let without = if overrides.config_override.is_some() {
+                Some(DisciplineConfig::resolve_source(
+                    Some((&label, content.clone())),
+                    &no_config_override,
+                )?)
+            } else {
+                None
+            };
+            (
+                DisciplineConfig::resolve_source(Some((&label, content)), overrides)?,
+                without,
+            )
         }
         None => {
             eprintln!(
                 "{} --policy-from base: the base ref has no discipline.toml; judging by built-in defaults.",
                 style::yellow("note:")
             );
-            DisciplineConfig::resolve(None, overrides)
+            let without = if overrides.config_override.is_some() {
+                Some(DisciplineConfig::resolve(None, &no_config_override)?)
+            } else {
+                None
+            };
+            (DisciplineConfig::resolve(None, overrides)?, without)
+        }
+    };
+    if let Some(base_plain) = base_without_ov {
+        let allow_override_weakening = std::env::var("DISCIPLINE_ALLOW_OVERRIDE_WEAKENING")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if !allow_override_weakening {
+            let weakenings = discipline::guards::integrity::diff_configs_under(
+                &base_plain,
+                &resolved,
+                discipline::guards::command::runner_authorises_command_change(),
+            )?;
+            if !weakenings.is_empty() {
+                let summary = weakenings
+                    .iter()
+                    .map(|w| format!("[{}] {}", w.gate, w.what()))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                anyhow::bail!(
+                    "--policy-from base: config_override weakens base policy ({summary}); \
+                     remove the weakening from --config-override / DISCIPLINE_CONFIG_OVERRIDE \
+                     or set DISCIPLINE_ALLOW_OVERRIDE_WEAKENING=1 on the runner if intentional"
+                );
+            }
         }
     }
+    Ok(resolved)
 }
 
 fn is_gitlab_ci() -> bool {
@@ -317,6 +360,7 @@ fn merged_pull_bodies(
         return Ok(out);
     }
     let api = discipline::forge::HttpApi::from_env();
+    let mut saw_unmerged_commit = false;
     for (short, _) in commits {
         // The commit list carries abbreviated ids; the forge is asked by the full one.
         let full = git.full_oid(short).map_err(|e| {
@@ -341,15 +385,21 @@ fn merged_pull_bodies(
                 });
                 out.pulls.push(pull);
             }
-            Ok(discipline::forge::CommitOrigin::DirectPush) => out.notes.push(format!(
-                "merged-pr-body: commit {} arrived through no merged pull request (direct push); its message is the only directive source",
-                &oid[..oid.len().min(10)]
-            )),
-            Ok(discipline::forge::CommitOrigin::NotOnForge) => out.notes.push(format!(
-                "merged-pr-body: commit {} is not on {} (a local commit), so no merged pull request carries it; its message is the only directive source",
-                &oid[..oid.len().min(10)],
-                forge.kind.label()
-            )),
+            Ok(discipline::forge::CommitOrigin::DirectPush) => {
+                saw_unmerged_commit = true;
+                out.notes.push(format!(
+                    "merged-pr-body: commit {} arrived through no merged pull request (direct push); its message is the only directive source",
+                    &oid[..oid.len().min(10)]
+                ));
+            }
+            Ok(discipline::forge::CommitOrigin::NotOnForge) => {
+                saw_unmerged_commit = true;
+                out.notes.push(format!(
+                    "merged-pr-body: commit {} is not on {} (a local commit), so no merged pull request carries it; its message is the only directive source",
+                    &oid[..oid.len().min(10)],
+                    forge.kind.label()
+                ));
+            }
             // The client refuses non-loopback hosts under DISCIPLINE_NO_NETWORK: the
             // operator's choice, reported as a note, not a failed lookup.
             Err(e) if e.contains("DISCIPLINE_NO_NETWORK") => {
@@ -359,6 +409,7 @@ fn merged_pull_bodies(
                 return Ok(out);
             }
             Err(e) => {
+                saw_unmerged_commit = true;
                 let what = format!(
                     "merged-pr-body: cannot resolve the merged pull request of commit {} on {} ({e})",
                     &oid[..oid.len().min(10)],
@@ -380,6 +431,18 @@ fn merged_pull_bodies(
                 }
             }
         }
+    }
+    // A push range that mixes commits from a merged PR with direct-push / local commits
+    // or spans multiple distinct pull requests cannot let one PR's body waive findings
+    // across the entire range.
+    if !out.bodies.is_empty() && (saw_unmerged_commit || out.pulls.len() > 1) {
+        out.bodies.clear();
+        out.pulls.clear();
+        out.notes.push(
+            "merged-pr-body: push range mixes commits outside a single merged pull request; \
+             merged pull-request body directives were not applied across the range"
+                .to_string(),
+        );
     }
     Ok(out)
 }

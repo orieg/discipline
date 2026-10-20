@@ -277,7 +277,7 @@ pub fn run_argv_bounded(
 /// `DISCIPLINE_COMMAND` and `DISCIPLINE_COMMAND_<NAME>` are not this switch. Each
 /// supplies one command in place of a configured one ([`runner_supplies_command`]) and
 /// authorises nothing else.
-pub(crate) fn runner_authorises_command_change() -> bool {
+pub fn runner_authorises_command_change() -> bool {
     std::env::var("DISCIPLINE_ALLOW_COMMAND_CHANGE").is_ok()
 }
 

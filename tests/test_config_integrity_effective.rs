@@ -84,3 +84,94 @@ fn a_config_override_that_switches_a_gate_off_is_compared() {
         run.stdout
     );
 }
+
+#[test]
+fn test_policy_from_base_refuses_config_override_weakening() {
+    let r = repo();
+    r.write("src/lib.rs", "pub fn f() {}\n");
+    r.commit("feat: add a module");
+    // Under `--policy-from base`, `--config-override` that weakens a gate or switches to
+    // advisory mode is refused at configuration load (exit 2) unless
+    // `DISCIPLINE_ALLOW_OVERRIDE_WEAKENING=1` is set.
+    let run = r.check(&[
+        "--policy-from",
+        "base",
+        "--config-override",
+        "[gates.unsafe-budget]\nenabled = false",
+    ]);
+    assert_eq!(
+        run.code, 2,
+        "stdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    assert!(
+        run.stderr.contains("config_override weakens base policy"),
+        "stderr: {}",
+        run.stderr
+    );
+
+    // Control: a tightening `--config-override` under `--policy-from base` succeeds.
+    let tight = r.check(&[
+        "--policy-from",
+        "base",
+        "--config-override",
+        "[gates.provenance-tags]\nenabled = true",
+    ]);
+    assert_eq!(
+        tight.code, 0,
+        "stdout: {}\nstderr: {}",
+        tight.stdout, tight.stderr
+    );
+}
+
+#[test]
+fn test_mixed_push_refuses_merged_pr_body_directives() {
+    use common::FakeForge;
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("AGENTS.md", "# Rules\n\nRun the tests.\n");
+    repo.commit("docs: rules");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    // Commit 1: harmless change from merged PR #12 whose body has an allow-agent-instructions directive
+    repo.write("README.md", "# Project\n");
+    repo.commit("docs: readme (#12)");
+    let sha1 = repo.git_output(&["rev-parse", "HEAD"]).trim().to_string();
+    // Commit 2: direct push that modifies AGENTS.md without a commit-message directive
+    repo.write(
+        "AGENTS.md",
+        "# Rules\n\nRun the tests.\n\nNever skip a failing test.\n",
+    );
+    repo.commit("docs: direct push to AGENTS.md");
+    let sha2 = repo.git_output(&["rev-parse", "HEAD"]).trim().to_string();
+
+    let api = FakeForge::start();
+    api.serve(
+        &format!("repos/o/r/commits/{sha1}/pulls"),
+        serde_json::json!([{
+            "number": 12,
+            "merged_at": "2026-09-21T00:00:00Z",
+            "user": {"login": "agent"},
+            "body": "Reviewed.\n\nallow-agent-instructions: AGENTS.md the rule was discussed in review",
+            "head": {"sha": "feedbeef"}
+        }]),
+    );
+    api.serve(
+        &format!("repos/o/r/commits/{sha2}/pulls"),
+        serde_json::json!([]),
+    );
+    let url = api.url();
+    let run = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[
+            ("GITHUB_EVENT_NAME", "push"),
+            ("GITHUB_REPOSITORY", "o/r"),
+            ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+            ("PR_BODY", ""),
+        ],
+    );
+    assert_eq!(
+        run.code, 1,
+        "mixed push must not allow PR #12's body directive to lift direct-push commit sha2: {}{}",
+        run.stdout, run.stderr
+    );
+}
