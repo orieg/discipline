@@ -113,6 +113,11 @@ def validate_ruby_syntax(content: str) -> bool:
         return True
 
 
+GITHUB_SSH_KNOWN_HOSTS = (
+    "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n"
+)
+
+
 def push_to_tap_repo(
     tap_repo: str,
     token: str | None,
@@ -128,8 +133,12 @@ def push_to_tap_repo(
             key_file = Path(tmpdir) / "id_deploy"
             key_file.write_text(deploy_key.strip() + "\n", encoding="utf-8")
             os.chmod(key_file, 0o600)
+            known_hosts_file = Path(tmpdir) / "known_hosts"
+            known_hosts_file.write_text(GITHUB_SSH_KNOWN_HOSTS, encoding="utf-8")
+            os.chmod(known_hosts_file, 0o600)
             git_env["GIT_SSH_COMMAND"] = (
-                f"ssh -i {key_file} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+                f"ssh -i {key_file} -o IdentitiesOnly=yes "
+                f"-o StrictHostKeyChecking=yes -o UserKnownHostsFile={known_hosts_file}"
             )
             if tap_repo.startswith("/") or tap_repo.startswith("file://"):
                 clone_url = tap_repo

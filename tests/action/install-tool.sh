@@ -32,15 +32,18 @@ case "${1:?tool name}" in
     ;;
 esac
 
-tmp="$(mktemp -d)"
-curl --fail --silent --show-error --location --retry 3 --output "${tmp}/tool.archive" "${url}"
+tmp="$(umask 077 && mktemp -d)"
+trap 'rm -rf "${tmp}"' EXIT
+curl --proto '=https' --tlsv1.2 --max-redirs 3 --fail --silent --show-error --location --retry 3 --output "${tmp}/tool.archive" "${url}"
 echo "${sha}  ${tmp}/tool.archive" | sha256sum --check --quiet
-mkdir -p "${HOME}/.local/bin"
+mkdir -p "${tmp}/extract" "${HOME}/.local/bin"
 if [ -n "${archive_member}" ]; then
-  tar -xf "${tmp}/tool.archive" -C "${HOME}/.local/bin" --strip-components=1 "${archive_member}"
+  tar --no-same-owner --no-same-permissions -xf "${tmp}/tool.archive" -C "${tmp}/extract" --strip-components=1 "${archive_member}"
 else
-  tar -xzf "${tmp}/tool.archive" -C "${HOME}/.local/bin" "$1"
+  tar --no-same-owner --no-same-permissions -xzf "${tmp}/tool.archive" -C "${tmp}/extract" "$1"
 fi
+install -m 0755 "${tmp}/extract/$1" "${HOME}/.local/bin/.$1.tmp.$$"
+mv -f "${HOME}/.local/bin/.$1.tmp.$$" "${HOME}/.local/bin/$1"
 "${HOME}/.local/bin/$1" "${version_args[@]}"
 if [ -n "${GITHUB_PATH:-}" ]; then
   echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"

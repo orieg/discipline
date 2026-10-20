@@ -215,12 +215,19 @@ runs:
             base="${INPUT_DOWNLOAD_URL}/latest/download"
           fi
 
-          dir="${FORGEJO_TEMP:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}}/discipline-${version:-latest}"
-          mkdir -p "${dir}"
+          tmp_root="${FORGEJO_TEMP:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}}"
+          dir="$(umask 077 && mktemp -d "${tmp_root%/}/discipline-${version:-latest}.XXXXXXXXXX")"
           archive="discipline-${triple}.tar.gz"
           fetch() {
             if command -v curl >/dev/null 2>&1; then
-              curl --fail --silent --show-error --location --retry 3 --output "$2" "$1"
+              case "$1" in
+                https://*)
+                  curl --proto '=https' --tlsv1.2 --max-redirs 3 --fail --silent --show-error --location --retry 3 --output "$2" "$1"
+                  ;;
+                *)
+                  curl --fail --silent --show-error --location --retry 3 --output "$2" "$1"
+                  ;;
+              esac
             elif command -v wget >/dev/null 2>&1; then
               wget --quiet --tries=3 --output-document="$2" "$1"
             else
@@ -262,7 +269,7 @@ runs:
           fi
           # provenance:end
 
-          tar -xzf "${dir}/${archive}" -C "${dir}"
+          tar --no-same-owner --no-same-permissions -xzf "${dir}/${archive}" -C "${dir}"
           bin="${dir}/discipline"
           [ -x "${bin}" ] || fail "archive did not contain an executable 'discipline'"
         fi
@@ -296,16 +303,21 @@ runs:
           git rev-parse --verify --quiet "$1^{commit}" >/dev/null \
             || git rev-parse --verify --quiet "origin/$1^{commit}" >/dev/null
         }
+        git_fetch=(git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.sshCommand=false -c credential.helper=)
+        case "$(git remote get-url origin 2>/dev/null || true)" in
+          file://*|/*) ;;
+          *) git_fetch+=(-c protocol.file.allow=never) ;;
+        esac
         # Best effort only. The binary is the arbiter: if the base still does
         # not resolve it exits 2, it never falls back to an empty diff.
         if ! resolves "${base}"; then
           echo "base '${base}' is not available locally; fetching it"
-          git fetch --no-tags origin "+refs/heads/${base}:refs/remotes/origin/${base}" \
-            || git fetch --no-tags origin "${base}" || true
+          "${git_fetch[@]}" fetch --no-tags origin "+refs/heads/${base}:refs/remotes/origin/${base}" \
+            || "${git_fetch[@]}" fetch --no-tags origin "${base}" || true
         fi
         if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
           echo "shallow clone; fetching history so a merge base exists"
-          git fetch --no-tags --unshallow origin || true
+          "${git_fetch[@]}" fetch --no-tags --unshallow origin || true
         fi
         echo "ref=${base}" >> "${GITHUB_OUTPUT}"
 
@@ -343,7 +355,9 @@ runs:
         set -euo pipefail
         run_id="${GITHUB_RUN_ID:-${FORGEJO_RUN_ID:-0}}"
         action_id="${GITHUB_ACTION:-${FORGEJO_ACTION:-step}}"
-        report="${FORGEJO_TEMP:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}}/discipline-report-${run_id}-${action_id}.json"
+        tmp_root="${FORGEJO_TEMP:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}}"
+        report_dir="$(umask 077 && mktemp -d "${tmp_root%/}/discipline-report-${run_id}-${action_id}.XXXXXXXXXX")"
+        report="${report_dir}/report.json"
         echo "report=${report}" >> "${GITHUB_OUTPUT}"
         set +e
         "${DISCIPLINE_BIN}" check \
