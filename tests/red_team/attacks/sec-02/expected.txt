@@ -1,0 +1,5 @@
+sec-02 exit: 1
+finding: instruction-smuggling/instruction-like-text-added
+finding: instruction-smuggling/invisible-characters-added
+finding: shell-secrets/argv-inline
+HOLDS: variation selector smuggling, separator-folded injected phrase, and eval command secret caught

@@ -182,7 +182,7 @@ impl ShellSecretScanner {
         ))?;
 
         let re_inline = Regex::new(&format!(
-            r#"(?i)\b(?:python[0-9.]*|bash|sh|zsh|node|ruby|perl)\b(?:\s+-[A-Za-z0-9_-]+)*\s+(?:-[A-Za-z0-9_-]*c|-c|-e)\s+(?:(?:"[^"]*?\$[{{]?[A-Za-z0-9_]*(?:{secret_union})[A-Za-z0-9_]*[}}]?|'[^']*?\$[{{]?[A-Za-z0-9_]*(?:{secret_union})[A-Za-z0-9_]*[}}]?)|(?:'[^']*'|"[^"]*"|[^\s]+)\s+[^;\n\r|&]*?\$[{{]?[A-Za-z0-9_]*(?:{secret_union}))"#
+            r#"(?i)(?:\b(?:python[0-9.]*|bash|sh|zsh|node|ruby|perl)\b(?:\s+-[A-Za-z0-9_-]+)*\s+(?:-[A-Za-z0-9_-]*c|-c|-e)\s+|\beval\s+)(?:(?:"[^"]*?\$[{{]?[A-Za-z0-9_]*(?:{secret_union})[A-Za-z0-9_]*[}}]?|'[^']*?\$[{{]?[A-Za-z0-9_]*(?:{secret_union})[A-Za-z0-9_]*[}}]?)|(?:'[^']*'|"[^"]*"|[^\s]+)\s+[^;\n\r|&]*?\$[{{]?[A-Za-z0-9_]*(?:{secret_union}))"#
         ))?;
 
         let re_xargs = Regex::new(

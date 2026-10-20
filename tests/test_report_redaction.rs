@@ -455,3 +455,87 @@ fn suppression_delta_default_locations_only_excludes_source_line_and_quote_line_
         run_quoted.stderr
     );
 }
+
+#[test]
+fn step24_cross_format_encoding_and_forge_token_leakage_regression() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let security_md = std::fs::read_to_string(root.join("SECURITY.md")).unwrap();
+    assert!(
+        security_md.contains("## Security Assumptions & Incident Response"),
+        "SECURITY.md must include '## Security Assumptions & Incident Response' section"
+    );
+    let arch_md = std::fs::read_to_string(root.join("docs/ARCHITECTURE.md")).unwrap();
+    assert!(
+        arch_md.contains("| Assumption | Guarantee underpinned | Verification / failure mode |"),
+        "docs/ARCHITECTURE.md §1.4 must include the structured Assumptions table"
+    );
+
+    // 1. Cross-format control/C1/bidi neutralization: raw ESC (\u{1b}), C1 CSI (\u{9b}), and RLO (\u{202e})
+    // inside violation file/message/remediation must never pass through unescaped to human/XML formats.
+    let mut outcome = GateOutcome::new("command");
+    outcome.push(
+        Severity::Error,
+        &discipline::findings::COMMAND_FAILED,
+        Some("src/evil\u{1b}[31m\u{9b}\u{202e}name.rs"),
+        Some(1),
+        "Command failed with \u{1b}[2J\u{9b}0m\u{202e}bidi override".to_string(),
+        "Remove \u{202e}override and \u{9b}C1 control.",
+    );
+    let summary = CheckSummary {
+        schema_version: discipline::output_schema::REPORT_SCHEMA_VERSION,
+        could_not_check: None,
+        base: "origin/main".to_string(),
+        errors: 1,
+        warnings: 0,
+        notes: 0,
+        overrides: 0,
+        baselined: 0,
+        outcomes: vec![outcome],
+        planned_gates: Vec::new(),
+        policy_failures: Vec::new(),
+        refused_hidden_directives: Vec::new(),
+        deprecations: Vec::new(),
+        directive_notes: Vec::new(),
+        unused_directives: Vec::new(),
+    };
+    for format in [
+        OutputFormat::Terminal,
+        OutputFormat::GithubSummary,
+        OutputFormat::Junit,
+        OutputFormat::AgentPrompt,
+    ] {
+        let rendered = format_report_content(&summary, format, false, false).unwrap();
+        assert!(
+            !rendered.contains('\u{9b}') && !rendered.contains('\u{202e}'),
+            "format {format:?} leaked raw C1 or bidi override character:\n{rendered}"
+        );
+    }
+
+    // 2. Token leakage regression: a failing forge lookup under DISCIPLINE_NO_NETWORK=1 or invalid URL
+    // must never echo GH_TOKEN / GITHUB_TOKEN / GITLAB_TOKEN / GITEA_TOKEN / FORGEJO_TOKEN values.
+    let secret_token = "ghp_SUPER_SECRET_FORGE_TOKEN_VALUE_999999"; // discipline:allow(pii)
+    let repo = Repo::new();
+    repo.commit_base(
+        "discipline.toml",
+        "[meta]\nversion = 1\n[gates.issue-link]\nenabled = true\nverify_references = true\n",
+        "chore: enable verify_references",
+    );
+    repo.write("src/lib.rs", "pub fn f() -> i32 { 42 }\n");
+    repo.commit("feat: change");
+    let run = repo.run(
+        &["check", "--base", "main", "--pr-body", "Fixes #1"],
+        &[
+            ("DISCIPLINE_NO_NETWORK", "1"),
+            ("GH_TOKEN", secret_token),
+            ("GITHUB_TOKEN", secret_token),
+            ("GITLAB_TOKEN", secret_token),
+            ("GITEA_TOKEN", secret_token),
+            ("FORGEJO_TOKEN", secret_token),
+        ],
+    );
+    assert_eq!(run.code, 2);
+    assert!(
+        !run.stdout.contains(secret_token) && !run.stderr.contains(secret_token),
+        "forge token value must never appear in stdout or stderr on failure"
+    );
+}
