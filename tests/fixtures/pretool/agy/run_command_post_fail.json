@@ -1,0 +1,19 @@
+{
+  "artifactDirectoryPath": "/home/user/.agent/transcript",
+  "conversationId": "00000000-0000-0000-0000-000000000000",
+  "error": "",
+  "modelName": "model",
+  "stepIdx": 2,
+  "toolCall": {
+    "args": {
+      "CommandLine": "cargo test",
+      "WaitMsBeforeAsync": 10000,
+      "toolSummary": "Cargo test execution"
+    },
+    "name": "run_command"
+  },
+  "transcriptPath": "/home/user/.agent/transcript",
+  "workspacePaths": [
+    "/work/repo"
+  ]
+}

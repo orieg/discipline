@@ -1429,6 +1429,7 @@ fn resolve_scoped_wrapper(
     path: &mut Vec<String>,
     hops: usize,
 ) -> Option<HelperFacts> {
+    ancestry::count(1);
     if name.contains('|') {
         let mut sure: Option<HelperFacts> = None;
         for choice in name.split('|') {
@@ -1480,6 +1481,7 @@ fn resolve_helper(
     level: usize,
     hops: usize,
 ) -> Option<HelperFacts> {
+    ancestry::count(1);
     if name.contains('|') {
         // A callee chosen at the call (`(if c { a } else { b })(x)`, named `a|b` by the
         // pack): only the checks every choice runs are sure, so each count is the smallest
@@ -2070,18 +2072,17 @@ impl PackSpec {
     ) {
         facts.functions = functions::extract(root, anc, src, path, self.functions);
         {
-            let spans: Vec<(usize, usize)> = facts
-                .tests
-                .iter()
-                .map(|t| (t.line, t.end_line.max(t.line)))
-                .collect();
             // A file matching the shared test-path conventions, the pack's own test-file
             // convention, or one the repository declares as test scope, is test code
             // line for line.
             let whole_file = functions::is_test_file(path, self.own_test_path)
                 || functions::declared_test_path(path, &vocab.test_paths);
-            let is_test_line =
-                |l: usize| whole_file || spans.iter().any(|(a, b)| *a <= l && l <= *b);
+            let test_of = if whole_file {
+                Vec::new()
+            } else {
+                innermost_tests_by_line(&facts.tests, root.end_position().row + 1)
+            };
+            let is_test_line = |l: usize| whole_file || test_of.get(l).copied().flatten().is_some();
             let (swallowed, fallbacks) = handlers::extract_with_constants(
                 root,
                 anc,

@@ -421,6 +421,7 @@ pub fn count(root: Node, src: &str, tests: &mut [TestFn], counted: &Counted) {
     const MOCKS: u32 = 1;
     let vocab_bit = |at: usize| 2u32 << at;
     let vocabs: u32 = (0..counted.vocabs.len()).map(vocab_bit).sum();
+    let test_of = super::innermost_tests_by_line(tests, root.end_position().row + 1);
     let code = FileCode::new(root, src);
     // The third part says the node stands inside a string or a comment and not in an
     // expression it interpolates: its bytes are spaces in the text of the file as code.
@@ -479,10 +480,10 @@ pub fn count(root: Node, src: &str, tests: &mut [TestFn], counted: &Counted) {
                     super::mocks::double(&callee, head, counted.mock_setup, counted.mock_verify)
                 };
                 if let Some(double) = double {
-                    if let Some(t) = super::innermost_test(tests, line) {
+                    if let Some(&Some(i)) = test_of.get(line) {
                         match double {
-                            super::mocks::Double::Verify => t.mock_asserts += 1,
-                            super::mocks::Double::Setup => t.mock_setups += 1,
+                            super::mocks::Double::Verify => tests[i].mock_asserts += 1,
+                            super::mocks::Double::Setup => tests[i].mock_setups += 1,
                         }
                     }
                     // `when(x).thenReturn(y)` nests a matching call; count the chain once.
@@ -515,8 +516,8 @@ pub fn count(root: Node, src: &str, tests: &mut [TestFn], counted: &Counted) {
                     }
                 };
                 if named {
-                    if let Some(t) = super::innermost_test(tests, line) {
-                        *pick(t) += 1;
+                    if let Some(&Some(i)) = test_of.get(line) {
+                        *pick(&mut tests[i]) += 1;
                     }
                     live &= !vocab_bit(at);
                 }
@@ -585,13 +586,17 @@ fn push_interpolations<'t>(text_node: Node<'t>, stack: &mut Vec<Node<'t>>) {
 /// assert statements the walker cannot see as calls: an `is not None` comparison, or a
 /// call of `isinstance`. Neither is read out of a string or a comment.
 pub fn count_python_assert_statements(root: Node, src: &str, tests: &mut [TestFn]) {
+    if tests.is_empty() {
+        return;
+    }
+    let test_of = super::innermost_tests_by_line(tests, root.end_position().row + 1);
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
         if node.kind() == "assert_statement" {
             if python_assert_is_trivial(node, src) {
                 let line = node.start_position().row + 1;
-                if let Some(test) = super::innermost_test(tests, line) {
-                    test.trivial_asserts += 1;
+                if let Some(&Some(i)) = test_of.get(line) {
+                    tests[i].trivial_asserts += 1;
                 }
             }
             continue;

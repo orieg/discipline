@@ -66,6 +66,7 @@ impl LanguagePack for RustPack {
         let mut cx = Extractor {
             dead: super::reach::dead_ranges(root, src, &RS_REACH),
             src: src.as_bytes(),
+            src_str: src,
             anc: &anc,
             lines: src.lines().collect(),
             line_starts: std::iter::once(0)
@@ -137,6 +138,7 @@ struct Extractor<'a> {
     /// Byte ranges no execution reaches (`super::reach`).
     dead: super::reach::DeadRanges,
     src: &'a [u8],
+    src_str: &'a str,
     /// The ancestors of the nodes of the file's tree (`super::ancestry`).
     anc: &'a Ancestry<'a>,
     lines: Vec<&'a str>,
@@ -330,10 +332,9 @@ impl<'a> Extractor<'a> {
                         .unwrap_or(false);
                     let mut dummy_calls = Vec::new();
                     if let Some(body) = node.child_by_field_name("body") {
-                        let src = std::str::from_utf8(self.src).unwrap_or("");
                         self.library_helper = !self.test_file
-                            && !rust_fn_skip(node, self.anc, src)
-                            && !has_cfg_test_attribute(node, self.anc, src);
+                            && !rust_fn_skip(node, self.anc, self.src_str)
+                            && !has_cfg_test_attribute(node, self.anc, self.src_str);
                         self.count_asserts(
                             body,
                             &mut helper_test,

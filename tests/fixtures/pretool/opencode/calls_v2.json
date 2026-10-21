@@ -1,8 +1,8 @@
 {
-  "agent": "OpenCode 2.0.22 / 2.0.28",
+  "agent": "OpenCode 2.0.22 / 2.0.28 / 2.1.2",
   "event": "tool.hook(\"execute.before\") and tool.hook(\"execute.after\") (plugin)",
-  "observed": "RUN 2026-10-08, RUN 2026-10-15",
-  "note": "The call object each handler received, ids zeroed. The generated plugin maps execute.before to {input: {tool, sessionID}, output: {args: call.input}, cwd}; shell_v2.json, write_v2.json and edit_v2.json are that mapping. In execute.after (recorded on 2.0.28), call.result carries an object-valued .output and a .content array of {type: 'text', text} items that populate state.output.",
+  "observed": "RUN 2026-10-08, RUN 2026-10-15, RUN 2026-10-21",
+  "note": "The call object each handler received, ids zeroed. The generated plugin maps execute.before to {input: {tool, sessionID}, output: {args: call.input}, cwd}; shell_v2.json, write_v2.json and edit_v2.json are that mapping. In execute.after (recorded on 2.0.28 and 2.1.2), call.result carries an object-valued .output, a .metadata object (including .exit for shell), and a .content array of {type: 'text', text} items that populate state.output; shell_post_pass_v2.json and shell_post_fail_v2.json are that mapping for passing and failing shell runs.",
   "calls": [
     {
       "tool": "shell",
@@ -62,6 +62,71 @@
           "text": "Created file successfully: a.txt"
         }
       ]
+    }
+  },
+  "after_shell_pass": {
+    "tool": "shell",
+    "sessionID": "00000000-0000-0000-0000-000000000000",
+    "agent": "build",
+    "messageID": "00000000-0000-0000-0000-000000000000",
+    "id": "00000000-0000-0000-0000-000000000000",
+    "input": {
+      "command": "cargo test"
+    },
+    "status": "completed",
+    "result": {
+      "output": {
+        "exit": 0,
+        "truncated": false,
+        "output": "   Compiling probe v0.1.0 (/work/repo)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.77s\n     Running unittests src/lib.rs (target/debug/deps/probe-7fc983f26093c8f4)\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/a.rs (target/debug/deps/a-405c8ae4818ca716)\n\nrunning 1 test\ntest passes ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests probe\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+        "status": "completed"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "   Compiling probe v0.1.0 (/work/repo)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.77s\n     Running unittests src/lib.rs (target/debug/deps/probe-7fc983f26093c8f4)\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/a.rs (target/debug/deps/a-405c8ae4818ca716)\n\nrunning 1 test\ntest passes ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests probe\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n"
+        }
+      ],
+      "metadata": {
+        "status": "completed",
+        "truncated": false,
+        "exit": 0
+      }
+    }
+  },
+  "after_shell_fail": {
+    "tool": "shell",
+    "sessionID": "00000000-0000-0000-0000-000000000000",
+    "agent": "build",
+    "messageID": "00000000-0000-0000-0000-000000000000",
+    "id": "00000000-0000-0000-0000-000000000000",
+    "input": {
+      "command": "cargo test",
+      "workdir": "/work/repo"
+    },
+    "status": "completed",
+    "result": {
+      "output": {
+        "exit": 101,
+        "truncated": false,
+        "output": "   Compiling probe v0.1.0 (/work/repo)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.89s\n     Running unittests src/lib.rs (target/debug/deps/probe-7fc983f26093c8f4)\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/a.rs (target/debug/deps/a-405c8ae4818ca716)\n\nrunning 2 tests\ntest passes ... ok\ntest fails ... FAILED\n\nfailures:\n\n---- fails stdout ----\n\nthread 'fails' (167925) panicked at tests/a.rs:7:5:\nassertion `left == right` failed\n  left: 2\n right: 3\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    fails\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `--test a`\n",
+        "status": "completed"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "   Compiling probe v0.1.0 (/work/repo)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.89s\n     Running unittests src/lib.rs (target/debug/deps/probe-7fc983f26093c8f4)\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/a.rs (target/debug/deps/a-405c8ae4818ca716)\n\nrunning 2 tests\ntest passes ... ok\ntest fails ... FAILED\n\nfailures:\n\n---- fails stdout ----\n\nthread 'fails' (167925) panicked at tests/a.rs:7:5:\nassertion `left == right` failed\n  left: 2\n right: 3\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    fails\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `--test a`\n"
+        },
+        {
+          "type": "text",
+          "text": "Exited with code 101"
+        }
+      ],
+      "metadata": {
+        "status": "completed",
+        "truncated": false,
+        "exit": 101
+      }
     }
   }
 }

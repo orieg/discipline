@@ -1,0 +1,19 @@
+{
+  "input": {
+    "tool": "shell",
+    "sessionID": "00000000-0000-0000-0000-000000000000"
+  },
+  "output": {
+    "args": {
+      "command": "cargo test",
+      "workdir": "/work/repo"
+    },
+    "metadata": {
+      "status": "completed",
+      "truncated": false,
+      "exit": 101
+    },
+    "output": "   Compiling probe v0.1.0 (/work/repo)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.89s\n     Running unittests src/lib.rs (target/debug/deps/probe-7fc983f26093c8f4)\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/a.rs (target/debug/deps/a-405c8ae4818ca716)\n\nrunning 2 tests\ntest passes ... ok\ntest fails ... FAILED\n\nfailures:\n\n---- fails stdout ----\n\nthread 'fails' (167925) panicked at tests/a.rs:7:5:\nassertion `left == right` failed\n  left: 2\n right: 3\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    fails\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `--test a`\n\nExited with code 101"
+  },
+  "cwd": "/work/repo"
+}

@@ -48,6 +48,12 @@ fn claude_code_and_qwen_payloads_carry_the_last_message_and_the_loop_flag() {
             ANNOUNCED,
             "{agent}: the continued turn ends on the model's answer to the refusal"
         );
+        if agent == "qwen" {
+            assert!(
+                text(&continued, "/last_assistant_message").contains("cargo test"),
+                "qwen continued Stop was recorded after a run_shell_command tool call"
+            );
+        }
 
         let refuse = fixture(&format!("{agent}/refuse.json"));
         assert_eq!(refuse["exit_code"], 2, "{agent}");
@@ -232,4 +238,96 @@ fn transcript_readers_parse_recorded_stop_fixtures() {
     );
     let a_tool = read_final_turn(Agent::Agy, Path::new(&agy_tool_fixture)).unwrap();
     assert!(a_tool.tool_call_followed);
+}
+
+/// Issue #780 item 3 (RUN 2026-10-16, RUN 2026-10-21): committed live enforcing session
+/// sequences across all six headless CLI agents (`claude-code`, `codex`, `qwen`,
+/// `copilot`, `agy`, `opencode`). In each session:
+/// 1. `weaken_call` edits `tests/a.rs` to empty `fn adds()`.
+/// 2. `finding` is the hook invocation that reported
+///    `[assertion-reduction/assertions-reduced]` (`effective assertions dropped from 2 to 0`)
+///    back to the agent, with the `Repair:` instruction.
+/// 3. `repair_call` is the agent's subsequent edit tool call restoring the two
+///    `assert_eq!` assertions in `tests/a.rs`.
+/// 4. `after_repair` is the hook invocation after the repair, exiting `0` with no
+///    blocking finding.
+#[test]
+fn recorded_enforcing_sessions_show_all_six_agents_repairing_a_hook_finding() {
+    let sessions = fixture("enforcing_sessions.json");
+    let raw = std::fs::read_to_string(format!(
+        "{}/tests/fixtures/stop/enforcing_sessions.json",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
+    for leak in ["/Users/", "/private/tmp", "/var/folders"] {
+        assert!(!raw.contains(leak), "enforcing_sessions.json leaks {leak}");
+    }
+
+    for agent in ["claude-code", "codex", "qwen", "copilot", "agy", "opencode"] {
+        let s = &sessions[agent];
+        assert!(
+            text(s, "/observed").starts_with("RUN "),
+            "{agent}: missing RUN provenance"
+        );
+
+        let weaken = &s["weaken_call"];
+        assert_eq!(weaken["exit_code"], 0, "{agent}: weaken pre-tool");
+        let w_stdin = serde_json::to_string(&weaken["stdin"]).unwrap();
+        assert!(
+            w_stdin.contains("tests/a.rs"),
+            "{agent}: weaken call must target tests/a.rs: {w_stdin}"
+        );
+
+        let finding = &s["finding"];
+        let finding_text = match (
+            finding.get("stderr").and_then(Value::as_str),
+            finding.get("stdout"),
+        ) {
+            (Some(err), _) if !err.is_empty() => err.to_string(),
+            (_, Some(Value::String(out))) => out.clone(),
+            (_, Some(out)) => serde_json::to_string(out).unwrap(),
+            _ => panic!("{agent}: finding has neither stdout nor stderr: {finding:#}"),
+        };
+        assert!(
+            finding_text.contains("[assertion-reduction/assertions-reduced]")
+                && finding_text.contains("Test `adds`: effective assertions dropped from 2 to 0.")
+                && finding_text.contains("Repair: Restore the assertions"),
+            "{agent}: unexpected finding output: {finding_text}"
+        );
+        match agent {
+            "claude-code" | "codex" | "qwen" => assert_eq!(finding["exit_code"], 2, "{agent}"),
+            "opencode" => assert_eq!(finding["exit_code"], 1, "{agent}"),
+            "copilot" => {
+                assert_eq!(finding["exit_code"], 0, "{agent}");
+                assert!(
+                    text(finding, "/stdout/additionalContext")
+                        .contains("[assertion-reduction/assertions-reduced]"),
+                    "{agent}"
+                );
+            }
+            "agy" => {
+                assert_eq!(finding["exit_code"], 0, "{agent}");
+                assert_eq!(text(finding, "/stdout/decision"), "continue", "{agent}");
+            }
+            _ => unreachable!(),
+        }
+
+        let repair = &s["repair_call"];
+        assert_eq!(repair["exit_code"], 0, "{agent}: repair pre-tool");
+        let r_stdin = serde_json::to_string(&repair["stdin"]).unwrap();
+        assert!(
+            r_stdin.contains("tests/a.rs")
+                && r_stdin.contains("assert_eq!(x + 1, 2)")
+                && r_stdin.contains("assert_eq!(x + 2, 3)"),
+            "{agent}: repair call must restore both assertions in tests/a.rs: {r_stdin}"
+        );
+
+        let after = &s["after_repair"];
+        assert_eq!(after["exit_code"], 0, "{agent}: after_repair exit_code");
+        let after_out = serde_json::to_string(after).unwrap();
+        assert!(
+            !after_out.contains("assertions-reduced"),
+            "{agent}: after_repair still had finding: {after_out}"
+        );
+    }
 }
