@@ -5,8 +5,10 @@
 # verdicts `INTERMEDIATE_amended_threshold_redesign` and requires a fresh evaluation band.
 
 [study]
-id = "agent-pr-precision-v1"
+id = "agent-pr-precision-v2"
+previous_study_id = "agent-pr-precision-v1"
 status = "locked-pre-data"
+locked_date = "2026-10-21"
 novelty_tier_claimed = "Characterisation"
 tier_justification = """
 Measures empirical precision and 95% Wilson score confidence intervals of shipped
@@ -15,7 +17,7 @@ repositories, compared against a naive file-path substitution twin. Claims a mea
 property of existing detectors on a bounded population rather than a causal mechanism
 or closed-form theoretical law.
 """
-discipline_version = "0.20.3"
+discipline_version = "0.23.0"
 configuration_mode = "default-with-test-entrypoints"
 primary_unit_of_analysis = "blocking-finding-error-severity"
 secondary_unit_of_analysis = "per-pull-request-block-rate"
@@ -26,6 +28,21 @@ visibility = "public-only"
 exclude_private_repositories = true
 exclude_named_consumer_repositories = true
 pull_request_state = "merged-only"
+pr_number_rule = """
+Every harvested first-parent commit on the default branch must carry an explicit
+merged pull-request or Gerrit change number (`#NNNN` in commit subject/body,
+`Merge pull request #NNNN`, or `Reviewed-on: .../+/<NNNN>`); commits without a
+resolvable pull-request or change number are excluded so zero entries have `pr_number = null`.
+"""
+head_base_definition = """
+Each replayed change unit is a merged first-parent commit on the repository's default
+branch (`head_sha`) diffed against its first parent (`base_sha = head_sha~1`) in
+diff-scoped isolation (`DISCIPLINE_REPLAY_CASE=1`, `DISCIPLINE_NO_NETWORK=1`).
+"""
+pilot_git_log_window = 1500
+evaluation_git_log_window = 4000
+max_coding_agent_commits_per_repo = 45
+max_dependency_bot_commits_per_repo = 15
 band_separation = "disjoint-by-repository"
 pilot_repos = [
   "astral-sh/uv",
@@ -33,7 +50,7 @@ pilot_repos = [
   "biomejs/biome",
 ]
 evaluation_repos = [
-  "ruff-sh/ruff",
+  "astral-sh/ruff",
   "denoland/deno",
   "BurntSushi/ripgrep",
   "tokio-rs/tokio",
@@ -70,6 +87,13 @@ agreement_metric = "cohens_kappa"
 min_acceptable_kappa = 0.75
 blind_to_source_tool = true
 hash_contributor_and_rater_identities = true
+committed_rater_packet = "docs/benchmarks/results/rater-packet.json"
+rater_kind_disclosure = """
+adjudication.json records `rater_1_kind`, `rater_2_kind`, and `tie_breaker_kind`
+(`"human"` or `"llm-subagent"`) alongside an explicit Rule 3 synthetic/LLM-rater
+disclosure whenever any rater is non-human, so model-to-model agreement is never
+presented as independent human review.
+"""
 disagreement_resolution_rule = """
 All disagreements between Rater 1 and Rater 2 are adjudicated in a third pass by a
 designated tie-breaker reading the diff and finding location without seeing either
@@ -126,16 +150,25 @@ in the local diff context where equivalence cannot be verified from the reposito
 
 [twin_baseline]
 id = "naive-sensitive-path-filter"
+sampled_flags = 150
+sample_seed = 482
+packet_shuffle_seed = 48201
 rule = """
-Flag any agent-authored pull request that modifies an existing test file, a CI
-workflow file (`.github/workflows/**`, `.gitlab-ci.yml`, `.gitea/workflows/**`,
-`.forgejo/workflows/**`), or a linter/test-runner configuration file.
+Flag any modified file in an agent-authored pull request that matches (1) an existing
+test file present on `base_sha` (`tests/`, `test/`, `__tests__/`, `*_test.*`, `*.test.*`,
+`*.spec.*`), (2) a CI workflow file (`.github/workflows/**`, `.gitlab-ci.yml`,
+`.gitea/workflows/**`, `.forgejo/workflows/**`), or (3) a project manifest, linter, or
+test-runner configuration file (`Cargo.toml`, `pyproject.toml`, `package.json`,
+`deno.json(c)`, `pom.xml`, `build.gradle(.kts)`, `tsconfig*.json`, `.eslintrc*`,
+`eslint.config.*`, `biome.json(c)`, `(.)ruff.toml`, `mypy.ini`, `.flake8`, `pytest.ini`,
+`vitest.config.*`, `jest.config.*`, `.golangci.ya?ml`, `(.)clippy.toml`, `(.)rustfmt.toml`,
+`codecov.ya?ml`).
 """
 winning_regime = """
 Recall and operational simplicity: zero AST parsing required, guaranteed 100% recall
-on any test-file or workflow-file erosion within those paths, and wins whenever a
-team prefers reviewing every agent touch to tests or CI over maintaining language-specific
-structural parsers.
+on any test-file, workflow-file, or manifest/linter/runner config erosion within those
+paths, and wins whenever a team prefers reviewing every agent touch to tests, CI, or
+project configuration over maintaining language-specific structural parsers.
 """
 
 [power_and_bounds]

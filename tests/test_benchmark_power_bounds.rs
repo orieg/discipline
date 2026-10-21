@@ -146,7 +146,9 @@ struct PreregistrationDoc {
 #[serde(deny_unknown_fields)]
 struct StudySection {
     id: String,
+    previous_study_id: String,
     status: String,
+    locked_date: String,
     novelty_tier_claimed: String,
     tier_justification: String,
     discipline_version: String,
@@ -163,6 +165,12 @@ struct PopulationSection {
     exclude_private_repositories: bool,
     exclude_named_consumer_repositories: bool,
     pull_request_state: String,
+    pr_number_rule: String,
+    head_base_definition: String,
+    pilot_git_log_window: usize,
+    evaluation_git_log_window: usize,
+    max_coding_agent_commits_per_repo: usize,
+    max_dependency_bot_commits_per_repo: usize,
     band_separation: String,
     pilot_repos: Vec<String>,
     evaluation_repos: Vec<String>,
@@ -178,6 +186,8 @@ struct AdjudicationSection {
     min_acceptable_kappa: f64,
     blind_to_source_tool: bool,
     hash_contributor_and_rater_identities: bool,
+    committed_rater_packet: String,
+    rater_kind_disclosure: String,
     disagreement_resolution_rule: String,
     labels: Vec<AdjudicationLabel>,
 }
@@ -196,6 +206,9 @@ struct AdjudicationLabel {
 #[serde(deny_unknown_fields)]
 struct TwinBaselineSection {
     id: String,
+    sampled_flags: usize,
+    sample_seed: u64,
+    packet_shuffle_seed: u64,
     rule: String,
     winning_regime: String,
 }
@@ -238,11 +251,13 @@ fn test_preregistration_audit_bounds_match_committed_toml() {
         toml::from_str(&raw).expect("precision-preregistration.toml must parse strictly");
 
     // 1. Study metadata & novelty tier
-    assert_eq!(doc.study.id, "agent-pr-precision-v1");
+    assert_eq!(doc.study.id, "agent-pr-precision-v2");
+    assert_eq!(doc.study.previous_study_id, "agent-pr-precision-v1");
     assert_eq!(doc.study.status, "locked-pre-data");
+    assert!(!doc.study.locked_date.is_empty());
     assert_eq!(doc.study.novelty_tier_claimed, "Characterisation");
     assert!(!doc.study.tier_justification.trim().is_empty());
-    assert!(!doc.study.discipline_version.is_empty());
+    assert_eq!(doc.study.discipline_version, "0.23.0");
     assert!(!doc.study.configuration_mode.is_empty());
     assert!(!doc.study.primary_unit_of_analysis.is_empty());
     assert!(!doc.study.secondary_unit_of_analysis.is_empty());
@@ -253,9 +268,23 @@ fn test_preregistration_audit_bounds_match_committed_toml() {
     assert!(doc.population.exclude_private_repositories);
     assert!(doc.population.exclude_named_consumer_repositories);
     assert_eq!(doc.population.pull_request_state, "merged-only");
+    assert!(!doc.population.pr_number_rule.trim().is_empty());
+    assert!(!doc.population.head_base_definition.trim().is_empty());
+    assert!(doc.population.pilot_git_log_window >= 1000);
+    assert!(doc.population.evaluation_git_log_window >= 1000);
+    assert_eq!(doc.population.max_coding_agent_commits_per_repo, 45);
+    assert_eq!(doc.population.max_dependency_bot_commits_per_repo, 15);
     assert_eq!(doc.population.band_separation, "disjoint-by-repository");
     assert!(!doc.population.pilot_repos.is_empty());
     assert!(!doc.population.evaluation_repos.is_empty());
+    assert!(doc
+        .population
+        .evaluation_repos
+        .contains(&"astral-sh/ruff".to_string()));
+    assert!(!doc
+        .population
+        .evaluation_repos
+        .contains(&"ruff-sh/ruff".to_string()));
     for repo in &doc.population.pilot_repos {
         assert!(
             !doc.population.evaluation_repos.contains(repo),
@@ -271,6 +300,11 @@ fn test_preregistration_audit_bounds_match_committed_toml() {
     assert!(doc.adjudication.min_acceptable_kappa >= 0.70);
     assert!(doc.adjudication.blind_to_source_tool);
     assert!(doc.adjudication.hash_contributor_and_rater_identities);
+    assert_eq!(
+        doc.adjudication.committed_rater_packet,
+        "docs/benchmarks/results/rater-packet.json"
+    );
+    assert!(!doc.adjudication.rater_kind_disclosure.trim().is_empty());
     assert!(!doc
         .adjudication
         .disagreement_resolution_rule
@@ -297,6 +331,9 @@ fn test_preregistration_audit_bounds_match_committed_toml() {
 
     // 4. Twin baseline specification with winning regime
     assert!(!doc.twin_baseline.id.is_empty());
+    assert_eq!(doc.twin_baseline.sampled_flags, 150);
+    assert_eq!(doc.twin_baseline.sample_seed, 482);
+    assert_eq!(doc.twin_baseline.packet_shuffle_seed, 48201);
     assert!(!doc.twin_baseline.rule.trim().is_empty());
     assert!(!doc.twin_baseline.winning_regime.trim().is_empty());
 
@@ -407,12 +444,57 @@ fn test_preregistration_audit_bounds_match_committed_toml() {
 #[derive(serde::Deserialize)]
 struct SummaryDoc {
     study_id: String,
+    discipline_version: String,
+    evaluated_commit: String,
     confidence_level: f64,
     cohens_kappa: f64,
+    rater_kind: String,
+    synthetic_rater_disclosure: String,
     pull_request_block_rates: BlockRatesSection,
     class_results: Vec<ClassResultEntry>,
     twin_baseline_result: TwinResultEntry,
     per_gate_results: Vec<PerGateResultEntry>,
+}
+
+#[derive(serde::Deserialize)]
+struct ManifestDoc {
+    study_id: String,
+    discipline_version: String,
+    evaluated_commit: String,
+    total_pull_requests: usize,
+    discipline_blocked_pull_requests: usize,
+    twin_blocked_pull_requests: usize,
+    pull_requests: Vec<ManifestPullRequest>,
+}
+
+#[derive(serde::Deserialize)]
+struct ManifestPullRequest {
+    repo: String,
+    pr_number: u64,
+    base_sha: String,
+    head_sha: String,
+}
+
+#[derive(serde::Deserialize)]
+struct RaterPacketDoc {
+    study_id: String,
+    blind_to_source_tool: bool,
+    total_items: usize,
+    items: Vec<RaterPacketItem>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RaterPacketItem {
+    item_id: String,
+    repo: String,
+    commit_sha: String,
+    commit_subject: String,
+    file: Option<String>,
+    line: Option<usize>,
+    rule_summary: String,
+    diff_excerpt: String,
+    line_context: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -483,6 +565,11 @@ struct AdjudicationDoc {
     study_id: String,
     blind_to_source_tool: bool,
     hash_contributor_and_rater_identities: bool,
+    rater_1_kind: String,
+    rater_2_kind: String,
+    tie_breaker_kind: String,
+    synthetic_rater_disclosure: String,
+    committed_rater_packet: String,
     total_items: usize,
     exact_agreement_count: usize,
     disagreement_count: usize,
@@ -711,9 +798,12 @@ fn check_summary_against_labels(
 
 struct BenchmarkInputs {
     summary: SummaryDoc,
+    manifest: ManifestDoc,
+    packet: RaterPacketDoc,
     adj: AdjudicationDoc,
     findings: FindingsDoc,
     gate_class: std::collections::BTreeMap<String, String>,
+    evaluation_repos: Vec<String>,
 }
 
 fn load_benchmark_inputs() -> BenchmarkInputs {
@@ -731,11 +821,16 @@ fn load_benchmark_inputs() -> BenchmarkInputs {
     BenchmarkInputs {
         summary: serde_json::from_str(&read("docs/benchmarks/results/summary.json"))
             .expect("summary.json must parse cleanly"),
+        manifest: serde_json::from_str(&read("docs/benchmarks/results/manifest.json"))
+            .expect("manifest.json must parse cleanly"),
+        packet: serde_json::from_str(&read("docs/benchmarks/results/rater-packet.json"))
+            .expect("rater-packet.json must parse cleanly"),
         adj: serde_json::from_str(&read("docs/benchmarks/results/adjudication.json"))
             .expect("adjudication.json must parse cleanly"),
         findings: serde_json::from_str(&read("docs/benchmarks/results/findings.json"))
             .expect("findings.json must parse cleanly"),
         gate_class,
+        evaluation_repos: prereg.population.evaluation_repos,
     }
 }
 
@@ -824,12 +919,75 @@ fn test_benchmark_summary_results_match_rust_bounds() {
         );
     }
 
-    let BenchmarkInputs { summary, adj, .. } = inputs;
+    let BenchmarkInputs {
+        summary,
+        manifest,
+        packet,
+        adj,
+        evaluation_repos,
+        ..
+    } = inputs;
 
-    assert_eq!(summary.study_id, "agent-pr-precision-v1");
-    assert_eq!(adj.study_id, "agent-pr-precision-v1");
+    assert_eq!(summary.study_id, "agent-pr-precision-v2");
+    assert_eq!(manifest.study_id, "agent-pr-precision-v2");
+    assert_eq!(packet.study_id, "agent-pr-precision-v2");
+    assert_eq!(adj.study_id, "agent-pr-precision-v2");
+    assert_eq!(summary.discipline_version, "0.23.0");
+    assert_eq!(manifest.discipline_version, "0.23.0");
+    assert_eq!(summary.evaluated_commit.len(), 40);
+    assert_eq!(summary.evaluated_commit, manifest.evaluated_commit);
     assert!(adj.blind_to_source_tool);
+    assert!(packet.blind_to_source_tool);
     assert!(adj.hash_contributor_and_rater_identities);
+    assert_eq!(
+        adj.committed_rater_packet,
+        "docs/benchmarks/results/rater-packet.json"
+    );
+    assert!(!adj.rater_1_kind.is_empty());
+    assert!(!adj.rater_2_kind.is_empty());
+    assert!(!adj.tie_breaker_kind.is_empty());
+    assert!(!adj.synthetic_rater_disclosure.trim().is_empty());
+    assert_eq!(summary.rater_kind, adj.rater_1_kind);
+    assert_eq!(
+        summary.synthetic_rater_disclosure,
+        adj.synthetic_rater_disclosure
+    );
+    assert_eq!(packet.total_items, adj.total_items);
+    assert_eq!(packet.items.len(), adj.total_items);
+    for (p_item, a_item) in packet.items.iter().zip(adj.adjudications.iter()) {
+        assert_eq!(p_item.item_id, a_item.item_id);
+        assert!(evaluation_repos.contains(&p_item.repo));
+        assert_eq!(p_item.commit_sha.len(), 12);
+        assert!(!p_item.commit_subject.trim().is_empty());
+        assert!(!p_item.rule_summary.trim().is_empty());
+        assert!(!p_item.diff_excerpt.trim().is_empty());
+        if p_item.line.is_some() {
+            assert!(p_item.file.is_some());
+            assert!(p_item.line_context.is_some());
+        }
+    }
+    assert_eq!(manifest.pull_requests.len(), manifest.total_pull_requests);
+    assert_eq!(
+        manifest.discipline_blocked_pull_requests,
+        summary.pull_request_block_rates.discipline.blocked
+    );
+    assert_eq!(
+        manifest.twin_blocked_pull_requests,
+        summary
+            .pull_request_block_rates
+            .naive_sensitive_path_filter
+            .blocked
+    );
+    for pr in &manifest.pull_requests {
+        assert!(
+            evaluation_repos.contains(&pr.repo),
+            "unknown repo {} in manifest.json",
+            pr.repo
+        );
+        assert!(pr.pr_number > 0);
+        assert_eq!(pr.base_sha.len(), 40);
+        assert_eq!(pr.head_sha.len(), 40);
+    }
     assert_eq!(adj.adjudications.len(), adj.total_items);
     assert_eq!(
         adj.exact_agreement_count + adj.disagreement_count,
