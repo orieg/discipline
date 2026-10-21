@@ -12,6 +12,9 @@ version = 1
 name = "discipline"
 description = "Universal CI/CD gatekeeper and AI coding agent diff sentinel"
 
+[directives]
+degrade_offline = false
+
 [gates.agents-md]
 severity = "error"
 

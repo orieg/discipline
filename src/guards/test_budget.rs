@@ -320,14 +320,14 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                         .find_override(
                             GATE,
                             &crate::findings::FUZZ_TARGET_REMOVED,
-                            tokens::ALLOW_TEST_SHRINK,
+                            tokens::ALLOW_TEST_BUDGET,
                             &subject,
                         )
                         .or_else(|| {
                             ctx.find_override(
                                 GATE,
                                 &crate::findings::FUZZ_TARGET_REMOVED,
-                                tokens::ALLOW_TEST_SHRINK,
+                                tokens::ALLOW_TEST_BUDGET,
                                 target,
                             )
                         });
@@ -364,14 +364,14 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                 .find_override(
                     GATE,
                     &crate::findings::FUZZ_TARGET_DELETED,
-                    tokens::ALLOW_TEST_SHRINK,
+                    tokens::ALLOW_TEST_BUDGET,
                     &subject,
                 )
                 .or_else(|| {
                     ctx.find_override(
                         GATE,
                         &crate::findings::FUZZ_TARGET_DELETED,
-                        tokens::ALLOW_TEST_SHRINK,
+                        tokens::ALLOW_TEST_BUDGET,
                         target_name,
                     )
                 })
@@ -379,7 +379,7 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                     ctx.find_override(
                         GATE,
                         &crate::findings::FUZZ_TARGET_DELETED,
-                        tokens::ALLOW_TEST_SHRINK,
+                        tokens::ALLOW_TEST_BUDGET,
                         &f.old_path,
                     )
                 });
@@ -453,14 +453,14 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                     .find_override(
                         GATE,
                         &crate::findings::TEST_BUDGET_DECREASED,
-                        tokens::ALLOW_TEST_SHRINK,
+                        tokens::ALLOW_TEST_BUDGET,
                         subject_key,
                     )
                     .or_else(|| {
                         ctx.find_override(
                             GATE,
                             &crate::findings::TEST_BUDGET_DECREASED,
-                            tokens::ALLOW_TEST_SHRINK,
+                            tokens::ALLOW_TEST_BUDGET,
                             path_key,
                         )
                     })
@@ -468,7 +468,7 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                         ctx.find_override(
                             GATE,
                             &crate::findings::TEST_BUDGET_DECREASED,
-                            tokens::ALLOW_TEST_SHRINK,
+                            tokens::ALLOW_TEST_BUDGET,
                             file_stem,
                         )
                     });
@@ -505,14 +505,14 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                 .find_override(
                     GATE,
                     &crate::findings::SEED_CORPUS_DECREASED,
-                    tokens::ALLOW_TEST_SHRINK,
+                    tokens::ALLOW_TEST_BUDGET,
                     &dir_subject,
                 )
                 .or_else(|| {
                     ctx.find_override(
                         GATE,
                         &crate::findings::SEED_CORPUS_DECREASED,
-                        tokens::ALLOW_TEST_SHRINK,
+                        tokens::ALLOW_TEST_BUDGET,
                         &dir,
                     )
                 })
@@ -520,7 +520,7 @@ pub fn evaluate_test_budget(ctx: &Context) -> Result<GateOutcome> {
                     ctx.find_override(
                         GATE,
                         &crate::findings::SEED_CORPUS_DECREASED,
-                        tokens::ALLOW_TEST_SHRINK,
+                        tokens::ALLOW_TEST_BUDGET,
                         dir_stem,
                     )
                 });

@@ -350,6 +350,64 @@ fn check_discipline_enforcement_inputs(
     }
 }
 
+/// If `override_toml` fails to parse or introduces a configuration weakening relative to
+/// `base_cfg` (or `base_override_toml` applied to `base_cfg`), returns a diagnostic reason.
+pub(crate) fn config_override_weakens_base(
+    base_cfg: &crate::config::DisciplineConfig,
+    override_toml: &str,
+    base_override_toml: Option<&str>,
+) -> Option<String> {
+    let base_effective = match base_override_toml {
+        Some(b_ov) => {
+            let ov = crate::config::Overrides {
+                config_override: Some(b_ov.to_string()),
+                ..Default::default()
+            };
+            let base_toml = toml::to_string(base_cfg).ok()?;
+            crate::config::DisciplineConfig::resolve_source(
+                Some((Path::new("discipline.toml"), base_toml)),
+                &ov,
+            )
+            .ok()
+            .unwrap_or_else(|| base_cfg.clone())
+        }
+        None => base_cfg.clone(),
+    };
+    let head_ov = crate::config::Overrides {
+        config_override: Some(override_toml.to_string()),
+        ..Default::default()
+    };
+    let base_toml = match toml::to_string(base_cfg) {
+        Ok(s) => s,
+        Err(e) => return Some(format!("failed to serialize base configuration: {e}")),
+    };
+    let head_effective = match crate::config::DisciplineConfig::resolve_source(
+        Some((Path::new("discipline.toml"), base_toml)),
+        &head_ov,
+    ) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            return Some(format!(
+                "config_override is not valid configuration TOML ({e})"
+            ))
+        }
+    };
+    match crate::guards::integrity::diff_configs(&base_effective, &head_effective) {
+        Ok(weakenings) if !weakenings.is_empty() => {
+            let summary = weakenings
+                .iter()
+                .map(|w| format!("[{}] {}", w.gate, w.what()))
+                .collect::<Vec<_>>()
+                .join("; ");
+            Some(format!("config_override weakens configuration: {summary}"))
+        }
+        Ok(_) => None,
+        Err(e) => Some(format!(
+            "failed to compare config_override against base: {e}"
+        )),
+    }
+}
+
 /// The discipline action inputs that choose what is checked and what lifts a finding:
 /// `config_override`, `suite`, `directive_sources`.
 fn check_discipline_scope_inputs(
@@ -364,10 +422,29 @@ fn check_discipline_scope_inputs(
     let path = wf.path;
     let head_content = wf.head_content;
     let approx_line = site.approx_line;
-    // config_override pointing to non-existent or weakened files
+    // config_override pointing to non-existent or weakened files / inline TOML
     if let Some(cfg_ov) = with_val.get("config_override").and_then(|c| c.as_str()) {
+        let base_cfg_ov = base_with_val
+            .and_then(|b| b.get("config_override"))
+            .and_then(|c| c.as_str());
+        let is_inline_toml = cfg_ov.contains('=') || cfg_ov.contains('[') || cfg_ov.contains('\n');
         let ov_file = Path::new(ctx.git.root()).join(cfg_ov);
-        if !ov_file.is_file() {
+        if is_inline_toml {
+            if let Some(why) = config_override_weakens_base(ctx.config, cfg_ov, base_cfg_ov) {
+                record_or_excuse(
+                    ctx,
+                    Some(head_content),
+                    out,
+                    settings.severity,
+                    &crate::findings::DISCIPLINE_ACTION_CONFIG_OVERRIDE_INVALID,
+                    Some(path.to_string()),
+                    approx_line,
+                    format!("{why}."),
+                    "Remove the weakening from config_override or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                    "config_override",
+                );
+            }
+        } else if !ov_file.is_file() {
             record_or_excuse(
                 ctx,
                 Some(head_content),
@@ -380,6 +457,25 @@ fn check_discipline_scope_inputs(
                 "Provide a valid configuration file path.",
                 "config_override",
             );
+        } else if let Ok(file_toml) = std::fs::read_to_string(&ov_file) {
+            let base_file_toml =
+                base_cfg_ov.and_then(|b_path| ctx.git.base_content(b_path).ok().flatten());
+            if let Some(why) =
+                config_override_weakens_base(ctx.config, &file_toml, base_file_toml.as_deref())
+            {
+                record_or_excuse(
+                    ctx,
+                    Some(head_content),
+                    out,
+                    settings.severity,
+                    &crate::findings::DISCIPLINE_ACTION_CONFIG_OVERRIDE_INVALID,
+                    Some(path.to_string()),
+                    approx_line,
+                    format!("config_override file '{cfg_ov}' weakens configuration ({why})."),
+                    "Remove the weakening from the config_override file or excuse with allow-gate-weakening: ci-integrity <reason>.",
+                    "config_override",
+                );
+            }
         }
     }
 
@@ -865,5 +961,36 @@ mod tests {
         ));
         assert!(!run_is_advisory("echo --advisory"));
         assert!(!run_is_advisory("discipline check --advisory-notes"));
+    }
+
+    #[test]
+    fn test_config_override_weakening_flagged_in_workflow() {
+        assert!(
+            config_override_weakens_base(
+                &crate::config::DisciplineConfig::default(),
+                "[gates.ci-integrity]\nenabled = false\n",
+                None
+            )
+            .is_some(),
+            "inline TOML config_override disabling a gate must be flagged"
+        );
+        assert!(
+            config_override_weakens_base(
+                &crate::config::DisciplineConfig::default(),
+                "not = [valid toml",
+                None
+            )
+            .is_some(),
+            "malformed inline TOML config_override must be flagged"
+        );
+        assert!(
+            config_override_weakens_base(
+                &crate::config::DisciplineConfig::default(),
+                "[gates.unsafe-budget]\nenabled = true\n",
+                None
+            )
+            .is_none(),
+            "strictly tightening inline TOML config_override must be allowed"
+        );
     }
 }

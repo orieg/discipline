@@ -100,6 +100,17 @@ pub fn judge(
                 anyhow!("`directives.require_approval` is set but `allowed_override_actors` names no reviewer"),
             ));
         }
+        if let Some(bad) = cfg.allowed_override_actors.iter().find(|a| {
+            let t = a.trim();
+            t.is_empty() || t.contains('*') || t.chars().any(char::is_whitespace)
+        }) {
+            return Err(tag(
+                Reason::Configuration,
+                anyhow!(
+                    "`directives.allowed_override_actors` contains an invalid or wildcard login (`{bad}`); list explicit reviewer logins only"
+                ),
+            ));
+        }
         let pull = pull.ok_or_else(|| {
             tag(
                 Reason::Configuration,
@@ -112,7 +123,8 @@ pub fn judge(
         let forge =
             forge().map_err(|e| tag(Reason::Forge, anyhow!("cannot identify the forge: {e}")))?;
         let author = pull.author_on(api, &forge)?;
-        if author.trim().is_empty() {
+        let author_trimmed = author.trim();
+        if author_trimmed.is_empty() {
             // Nothing could tell the author's own approval apart from a reviewer's.
             return Err(tag(
                 Reason::Forge,
@@ -130,11 +142,13 @@ pub fn judge(
                 )
             })?;
         let approved = approvers.iter().any(|login| {
-            !login.eq_ignore_ascii_case(&author)
+            let login_trimmed = login.trim();
+            !login_trimmed.is_empty()
+                && !login_trimmed.eq_ignore_ascii_case(author_trimmed)
                 && cfg
                     .allowed_override_actors
                     .iter()
-                    .any(|a| a.eq_ignore_ascii_case(login))
+                    .any(|a| a.trim().eq_ignore_ascii_case(login_trimmed))
         });
         if !approved {
             failures.push(PolicyFailure::new(
@@ -385,5 +399,36 @@ mod tests {
             "number": 7, "user": {"login": "agent"}, "head": {"sha": "abc123"}}});
         assert_eq!(pull_context(&event), Some(pull()));
         assert_eq!(pull_context(&serde_json::json!({"push": {}})), None);
+    }
+
+    #[test]
+    fn test_invalid_allowed_override_actors_rejected() {
+        let p = pull();
+        let reason =
+            |r: Result<Vec<PolicyFailure>>| crate::could_not_check::classify(&r.unwrap_err()).0;
+        for invalid in [
+            vec!["".into()],
+            vec!["   ".into()],
+            vec!["*".into()],
+            vec!["lead".into(), "*".into()],
+        ] {
+            let cfg = DirectivesConfig {
+                require_approval: true,
+                allowed_override_actors: invalid.clone(),
+                ..Default::default()
+            };
+            assert_eq!(
+                reason(judge(
+                    &cfg,
+                    1,
+                    0,
+                    Some(&p),
+                    &forge,
+                    &api(approved_by("lead"))
+                )),
+                Reason::Configuration,
+                "expected Configuration error for invalid actors: {invalid:?}"
+            );
+        }
     }
 }

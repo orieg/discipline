@@ -666,12 +666,7 @@ pub const ALLOW_GOLDEN_UPDATE: &[&str] = &[
     "discipline:allow(golden-output)",
     "allow(golden-output)",
 ];
-pub const ALLOW_NUL: &[&str] = &[
-    "allow-nul",
-    "allow-nul-byte",
-    "discipline:allow(vacuous-tests)",
-    "allow(vacuous-tests)",
-];
+pub const ALLOW_NUL: &[&str] = &["allow-nul", "allow-nul-byte"];
 
 pub const ALLOW_REGRESSION: &[&str] = &[
     "allow-regression",
@@ -700,10 +695,15 @@ pub const ALLOW_DEPENDENCY: &[&str] = &[
 pub const ALLOW_TEST_SHRINK: &[&str] = &[
     "allow-test-shrink",
     "allow-floor-drop",
-    "discipline:allow(test-budget)",
-    "allow(test-budget)",
     "discipline:allow(test-floor)",
     "allow(test-floor)",
+];
+
+pub const ALLOW_TEST_BUDGET: &[&str] = &[
+    "allow-test-shrink",
+    "allow-floor-drop",
+    "discipline:allow(test-budget)",
+    "allow(test-budget)",
 ];
 
 pub const ALLOW_CI_WEAKENING: &[&str] = &[
@@ -2708,6 +2708,76 @@ removes: tests/old.rs inside a fence
         );
         assert!(find_override(&named, "ignored-tests", kind, ALLOW_IGNORE, "flaky_test").is_some());
         assert!(take_subject_misses().is_empty());
+    }
+
+    #[test]
+    fn test_no_duplicate_alias_across_directive_specs() {
+        let mut seen = std::collections::HashMap::<String, &'static str>::new();
+        for spec in DIRECTIVE_SPECS {
+            for &alias in names_for_directive(spec.canonical) {
+                let key = alias.to_ascii_lowercase();
+                assert_eq!(
+                    seen.insert(key, spec.canonical),
+                    None,
+                    "duplicate directive alias `{alias}` on `{}`",
+                    spec.canonical
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_namespaced_directives_do_not_cross_lift_gates() {
+        // `discipline:allow(vacuous-tests)` must not lift `assertion-reduction/nul-byte-added`
+        let vacuous_dir = parse_directives(
+            "discipline:allow(vacuous-tests): src/bad.rs binary payload\n",
+            OverrideSource::PrBody,
+        );
+        assert!(
+            find_override(
+                &vacuous_dir,
+                "assertion-reduction",
+                &crate::findings::NUL_BYTE_ADDED,
+                ALLOW_NUL,
+                "src/bad.rs",
+            )
+            .is_none(),
+            "discipline:allow(vacuous-tests) must not be in ALLOW_NUL"
+        );
+
+        // `discipline:allow(test-budget)` must not lift `test-floor` findings
+        let budget_dir = parse_directives(
+            "discipline:allow(test-budget): min_tests lowered for split\n",
+            OverrideSource::PrBody,
+        );
+        assert!(
+            find_override(
+                &budget_dir,
+                "test-floor",
+                &crate::findings::CONFIGURED_FLOOR_DECREASED,
+                ALLOW_TEST_SHRINK,
+                "min_tests",
+            )
+            .is_none(),
+            "discipline:allow(test-budget) must not be in ALLOW_TEST_SHRINK"
+        );
+
+        // `discipline:allow(test-floor)` must lift `test-floor` but not `test-budget`
+        let floor_dir = parse_directives(
+            "discipline:allow(test-floor): proptest cases lowered\n",
+            OverrideSource::PrBody,
+        );
+        assert!(
+            find_override(
+                &floor_dir,
+                "test-budget",
+                &crate::findings::TEST_BUDGET_DECREASED,
+                ALLOW_TEST_BUDGET,
+                "proptest cases",
+            )
+            .is_none(),
+            "discipline:allow(test-floor) must not be in ALLOW_TEST_BUDGET"
+        );
     }
 }
 
