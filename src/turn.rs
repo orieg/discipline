@@ -377,4 +377,113 @@ mod tests {
         record_refusal(&path, 1).expect("the counter is written");
         assert_eq!(refused_so_far(&path), 2);
     }
+
+    #[derive(serde::Deserialize)]
+    struct RecordedPacket {
+        precision_floor: f64,
+        confidence_level: f64,
+        minimum_n_at_100_percent_precision_to_clear_floor: usize,
+        items: Vec<RecordedEnding>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct RecordedEnding {
+        id: String,
+        detector_flagged: bool,
+        detector_kind: Option<String>,
+        text: String,
+        reviewer_label: Option<String>,
+    }
+
+    #[test]
+    fn recorded_endings_packet_matches_detector_and_wilson_bounds() {
+        let packet: RecordedPacket = serde_json::from_str(include_str!(
+            "../tests/fixtures/premature_stop_recorded_endings.json"
+        ))
+        .expect("valid recorded endings packet json");
+        assert!((packet.precision_floor - 0.90).abs() < 1e-12);
+        assert!((packet.confidence_level - 0.95).abs() < 1e-12);
+
+        // Verify minimum n at 100% precision (k=n) to clear the 0.90 Wilson 95% lower bound is 35.
+        let min_n = packet.minimum_n_at_100_percent_precision_to_clear_floor;
+        assert_eq!(min_n, 35);
+        let (low_prev, _) = crate::guards::perf::bounds::wilson_score_interval(
+            min_n - 1,
+            min_n - 1,
+            packet.confidence_level,
+        )
+        .unwrap();
+        let (low_min, _) = crate::guards::perf::bounds::wilson_score_interval(
+            min_n,
+            min_n,
+            packet.confidence_level,
+        )
+        .unwrap();
+        assert!(low_prev < packet.precision_floor);
+        assert!(low_min >= packet.precision_floor);
+
+        let mut flagged_count = 0usize;
+        let mut flagged_tp = 0usize;
+        let mut control_count = 0usize;
+        let mut control_tn = 0usize;
+        let mut control_fn = 0usize;
+        for item in &packet.items {
+            let v = judge(&item.text, true);
+            assert_eq!(
+                v.is_some(),
+                item.detector_flagged,
+                "{}: detector_flagged mismatch",
+                item.id
+            );
+            let got_kind = v.as_ref().map(|verdict| match verdict.kind {
+                TurnKind::AnnouncedAction => "announced_action",
+                TurnKind::ToolCallAsText => "tool_call_as_text",
+                TurnKind::UnverifiedDirtyTree => "unverified_dirty_tree",
+            });
+            assert_eq!(
+                got_kind,
+                item.detector_kind.as_deref(),
+                "{}: detector_kind mismatch",
+                item.id
+            );
+            let lbl = item
+                .reviewer_label
+                .as_deref()
+                .expect("every recorded ending in packet must have a reviewer_label");
+            if item.detector_flagged {
+                flagged_count += 1;
+                match lbl {
+                    "true-positive" => flagged_tp += 1,
+                    "false-positive" => {}
+                    other => panic!("{}: invalid flagged reviewer_label {other}", item.id),
+                }
+            } else {
+                control_count += 1;
+                match lbl {
+                    "true-negative" => control_tn += 1,
+                    "false-negative" => control_fn += 1,
+                    other => panic!("{}: invalid control reviewer_label {other}", item.id),
+                }
+            }
+        }
+        assert_eq!(flagged_count, 19);
+        assert_eq!(flagged_tp, 18);
+        assert_eq!(control_count, 6);
+        assert_eq!(control_tn, 3);
+        assert_eq!(control_fn, 3);
+
+        let (obs_low, obs_high) = crate::guards::perf::bounds::wilson_score_interval(
+            flagged_tp,
+            flagged_count,
+            packet.confidence_level,
+        )
+        .unwrap();
+        assert!((obs_low - 0.753_613).abs() < 1e-5);
+        assert!((obs_high - 0.990_648).abs() < 1e-5);
+        // Point estimate (18/19 = 0.947368) clears 0.90, but the Wilson 95% lower bound
+        // (0.753613) lies below the 0.90 floor (`INTERMEDIATE_floor_within_ci`), so
+        // `mode = "observe"` remains the default.
+        assert!((flagged_tp as f64 / flagged_count as f64) >= packet.precision_floor);
+        assert!(obs_low < packet.precision_floor);
+    }
 }
