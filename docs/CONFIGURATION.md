@@ -1473,15 +1473,14 @@ Images are built on Alpine Linux with the statically linked musl `discipline` bi
 The container runs under an unprivileged user (`USER 10001:10001`) to comply with strict container security policies (such as CIS Docker Benchmark and Kubernetes restricted PodSecurityStandards).
 
 To ensure volume mounts owned by different host UIDs (including root-owned checkouts created by container runners) work out-of-the-box without requiring host permission changes, the image is built with:
-- System-wide `safe.directory '*'` in `/etc/gitconfig` readable by `USER 10001`.
-- An entrypoint wrapper (`/usr/local/bin/docker-entrypoint.sh`) dynamically registering the active working directory.
-- `ENV DISCIPLINE_TRUST_WORKSPACE=1` by default.
+- System-wide `safe.directory '/workspace'` in `/etc/gitconfig` readable by `USER 10001:10001` (with home directory `/var/lib/discipline`).
+- An entrypoint wrapper (`/usr/local/bin/docker-entrypoint.sh`) dynamically registering `/workspace` or active CI runner working directories and conditionally setting `DISCIPLINE_TRUST_WORKSPACE=1` when running inside `/workspace` or a recognized CI environment.
 
 Every container snippet works as written with no `--user` override and no manual `safe.directory` configuration required.
 
-Run directly against any repository mounted to `/workspace`:
+Run directly against any repository mounted to `/workspace` with all Linux capabilities dropped and privilege escalation disabled:
 ```bash
-docker run --rm -v "$PWD":/workspace ghcr.io/orieg/discipline:latest check --base origin/main
+docker run --rm --cap-drop=ALL --security-opt=no-new-privileges:true -v "$PWD":/workspace ghcr.io/orieg/discipline:latest check --base origin/main
 ```
 
 #### Container Runner Environments (Environments Forbidding `uses:`)

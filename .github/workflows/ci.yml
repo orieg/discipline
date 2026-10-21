@@ -613,20 +613,20 @@ jobs:
           sudo chown -R 0:0 "${RUNNER_TEMP}/fx-root"
       - name: "Smoke test container against root-owned workspace (positive control)"
         run: |
-          docker run --rm -v "${RUNNER_TEMP}/fx-root":/workspace discipline:test check --base main --format json > "${RUNNER_TEMP}/fx-root-clean.json"
+          docker run --rm --cap-drop=ALL --security-opt=no-new-privileges:true -v "${RUNNER_TEMP}/fx-root":/workspace discipline:test check --base main --format json > "${RUNNER_TEMP}/fx-root-clean.json"
           tests/action/assert-report.sh "${RUNNER_TEMP}/fx-root-clean.json" pass
       - name: "Negative control: bad fixture is detected and rejected with real gate verdicts"
         run: |
           tests/action/make-fixture.sh "${RUNNER_TEMP}/fx-root-bad" bad
           sudo chown -R 0:0 "${RUNNER_TEMP}/fx-root-bad"
-          if docker run --rm -v "${RUNNER_TEMP}/fx-root-bad":/workspace discipline:test check --base main --format json > "${RUNNER_TEMP}/fx-root-bad.json"; then
+          if docker run --rm --cap-drop=ALL --security-opt=no-new-privileges:true -v "${RUNNER_TEMP}/fx-root-bad":/workspace discipline:test check --base main --format json > "${RUNNER_TEMP}/fx-root-bad.json"; then
             echo "Expected bad fixture to fail check" >&2
             exit 1
           fi
           tests/action/assert-report.sh "${RUNNER_TEMP}/fx-root-bad.json" fail assertion-reduction pii time-estimates unsafe-safety-comment vacuous-tests
       - name: "Smoke test container in-container checkout (GitLab/Woodpecker pipeline reproduction)"
         run: |
-          docker run --rm discipline:test sh -c '
+          docker run --rm --cap-drop=ALL --security-opt=no-new-privileges:true discipline:test sh -c '
             set -euo pipefail
             git init -b main
             git config user.email "ci@example.invalid"
