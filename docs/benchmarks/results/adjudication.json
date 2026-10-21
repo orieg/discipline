@@ -1,14 +1,19 @@
 {
-  "study_id": "agent-pr-precision-v1",
+  "study_id": "agent-pr-precision-v2",
   "blind_to_source_tool": true,
   "hash_contributor_and_rater_identities": true,
-  "rater_1_id": "sha256:9852adf21a2dc8c4",
-  "rater_2_id": "sha256:e84e7db6e259c027",
-  "tie_breaker_id": "sha256:9633f381741ffcd9",
-  "total_items": 340,
-  "exact_agreement_count": 334,
-  "disagreement_count": 6,
-  "cohens_kappa": 0.963184,
+  "rater_1_id": "sha256:e4457e9a9915c170",
+  "rater_1_kind": "llm-subagent",
+  "rater_2_id": "sha256:3d80558545dd4f73",
+  "rater_2_kind": "llm-subagent",
+  "tie_breaker_id": "sha256:ff8bdb30a2a79a86",
+  "tie_breaker_kind": "llm-subagent",
+  "synthetic_rater_disclosure": "Synthetic-rater disclosure: Rater 1, Rater 2, and the tie-breaker in this study were executed by isolated, source-tool-blinded LLM research subagents, not human engineers. Model-to-model agreement (Cohen's kappa) establishes rubric consistency across independent prompts, not external human peer review.",
+  "committed_rater_packet": "docs/benchmarks/results/rater-packet.json",
+  "total_items": 281,
+  "exact_agreement_count": 276,
+  "disagreement_count": 5,
+  "cohens_kappa": 0.964718,
   "min_acceptable_kappa": 0.75,
   "kappa_passed": true,
   "adjudications": [
@@ -30,11 +35,11 @@
     },
     {
       "item_id": "ITEM-0003",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0004",
@@ -54,11 +59,11 @@
     },
     {
       "item_id": "ITEM-0006",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0007",
@@ -70,19 +75,19 @@
     },
     {
       "item_id": "ITEM-0008",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0009",
       "rater_1_label": "true-positive",
       "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
       "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0009",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0010",
@@ -94,19 +99,19 @@
     },
     {
       "item_id": "ITEM-0011",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "cannot-tell",
-      "agreed": false,
-      "tie_breaker_label": "cannot-tell",
-      "final_label": "cannot-tell"
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0012",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0013",
@@ -142,14 +147,22 @@
     },
     {
       "item_id": "ITEM-0017",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0018",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0019",
       "rater_1_label": "true-positive",
       "rater_2_label": "true-positive",
       "agreed": true,
@@ -157,39 +170,23 @@
       "final_label": "true-positive"
     },
     {
-      "item_id": "ITEM-0019",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
       "item_id": "ITEM-0020",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0021",
       "rater_1_label": "false-positive",
-      "rater_2_label": "true-positive",
-      "agreed": false,
-      "tie_breaker_label": "cannot-tell",
-      "final_label": "cannot-tell"
-    },
-    {
-      "item_id": "ITEM-0022",
-      "rater_1_label": "false-positive",
       "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
       "final_label": "false-positive"
     },
     {
-      "item_id": "ITEM-0023",
+      "item_id": "ITEM-0022",
       "rater_1_label": "true-positive",
       "rater_2_label": "true-positive",
       "agreed": true,
@@ -197,12 +194,20 @@
       "final_label": "true-positive"
     },
     {
-      "item_id": "ITEM-0024",
+      "item_id": "ITEM-0023",
       "rater_1_label": "false-positive",
       "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
       "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0024",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0025",
@@ -278,11 +283,11 @@
     },
     {
       "item_id": "ITEM-0034",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0035",
@@ -310,19 +315,19 @@
     },
     {
       "item_id": "ITEM-0038",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0039",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0040",
@@ -334,19 +339,19 @@
     },
     {
       "item_id": "ITEM-0041",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0042",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0043",
@@ -366,11 +371,11 @@
     },
     {
       "item_id": "ITEM-0045",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0046",
@@ -390,27 +395,27 @@
     },
     {
       "item_id": "ITEM-0048",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0049",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0050",
       "rater_1_label": "false-positive",
       "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
       "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0049",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0050",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "cannot-tell",
+      "agreed": false,
+      "tie_breaker_label": "cannot-tell",
+      "final_label": "cannot-tell"
     },
     {
       "item_id": "ITEM-0051",
@@ -430,14 +435,22 @@
     },
     {
       "item_id": "ITEM-0053",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0054",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0055",
       "rater_1_label": "false-positive",
       "rater_2_label": "false-positive",
       "agreed": true,
@@ -445,20 +458,12 @@
       "final_label": "false-positive"
     },
     {
-      "item_id": "ITEM-0055",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
       "item_id": "ITEM-0056",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0057",
@@ -470,11 +475,11 @@
     },
     {
       "item_id": "ITEM-0058",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0059",
@@ -486,11 +491,11 @@
     },
     {
       "item_id": "ITEM-0060",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0061",
@@ -510,14 +515,22 @@
     },
     {
       "item_id": "ITEM-0063",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0064",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0065",
       "rater_1_label": "true-positive",
       "rater_2_label": "true-positive",
       "agreed": true,
@@ -525,20 +538,12 @@
       "final_label": "true-positive"
     },
     {
-      "item_id": "ITEM-0065",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
       "item_id": "ITEM-0066",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0067",
@@ -574,18 +579,18 @@
     },
     {
       "item_id": "ITEM-0071",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
+      "rater_1_label": "true-positive",
+      "rater_2_label": "cannot-tell",
+      "agreed": false,
+      "tie_breaker_label": "false-positive",
       "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0072",
       "rater_1_label": "false-positive",
-      "rater_2_label": "true-positive",
-      "agreed": false,
-      "tie_breaker_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
       "final_label": "false-positive"
     },
     {
@@ -598,27 +603,27 @@
     },
     {
       "item_id": "ITEM-0074",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0075",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0076",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0077",
@@ -630,14 +635,22 @@
     },
     {
       "item_id": "ITEM-0078",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0079",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0080",
       "rater_1_label": "true-positive",
       "rater_2_label": "true-positive",
       "agreed": true,
@@ -645,20 +658,12 @@
       "final_label": "true-positive"
     },
     {
-      "item_id": "ITEM-0080",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
       "item_id": "ITEM-0081",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0082",
@@ -670,19 +675,19 @@
     },
     {
       "item_id": "ITEM-0083",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0084",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0085",
@@ -694,11 +699,11 @@
     },
     {
       "item_id": "ITEM-0086",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0087",
@@ -734,11 +739,11 @@
     },
     {
       "item_id": "ITEM-0091",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0092",
@@ -750,11 +755,11 @@
     },
     {
       "item_id": "ITEM-0093",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0094",
@@ -766,19 +771,19 @@
     },
     {
       "item_id": "ITEM-0095",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0096",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0097",
@@ -798,19 +803,19 @@
     },
     {
       "item_id": "ITEM-0099",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0100",
       "rater_1_label": "true-positive",
       "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
       "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0100",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0101",
@@ -838,19 +843,19 @@
     },
     {
       "item_id": "ITEM-0104",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0105",
       "rater_1_label": "false-positive",
       "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
       "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0105",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0106",
@@ -862,19 +867,19 @@
     },
     {
       "item_id": "ITEM-0107",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0108",
       "rater_1_label": "true-positive",
       "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
       "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0108",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0109",
@@ -910,11 +915,11 @@
     },
     {
       "item_id": "ITEM-0113",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0114",
@@ -926,11 +931,11 @@
     },
     {
       "item_id": "ITEM-0115",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0116",
@@ -942,6 +947,14 @@
     },
     {
       "item_id": "ITEM-0117",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0118",
       "rater_1_label": "false-positive",
       "rater_2_label": "false-positive",
       "agreed": true,
@@ -949,28 +962,20 @@
       "final_label": "false-positive"
     },
     {
-      "item_id": "ITEM-0118",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
       "item_id": "ITEM-0119",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0120",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0121",
@@ -982,11 +987,11 @@
     },
     {
       "item_id": "ITEM-0122",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0123",
@@ -1007,10 +1012,10 @@
     {
       "item_id": "ITEM-0125",
       "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "rater_2_label": "cannot-tell",
+      "agreed": false,
+      "tie_breaker_label": "false-positive",
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0126",
@@ -1030,19 +1035,19 @@
     },
     {
       "item_id": "ITEM-0128",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0129",
       "rater_1_label": "true-positive",
       "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
       "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0129",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0130",
@@ -1070,11 +1075,11 @@
     },
     {
       "item_id": "ITEM-0133",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0134",
@@ -1094,11 +1099,11 @@
     },
     {
       "item_id": "ITEM-0136",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0137",
@@ -1118,11 +1123,11 @@
     },
     {
       "item_id": "ITEM-0139",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0140",
@@ -1134,11 +1139,11 @@
     },
     {
       "item_id": "ITEM-0141",
-      "rater_1_label": "false-positive",
+      "rater_1_label": "true-positive",
       "rater_2_label": "true-positive",
-      "agreed": false,
-      "tie_breaker_label": "cannot-tell",
-      "final_label": "cannot-tell"
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0142",
@@ -1166,11 +1171,11 @@
     },
     {
       "item_id": "ITEM-0145",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0146",
@@ -1182,22 +1187,14 @@
     },
     {
       "item_id": "ITEM-0147",
-      "rater_1_label": "true-positive",
+      "rater_1_label": "false-positive",
       "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "agreed": false,
+      "tie_breaker_label": "cannot-tell",
+      "final_label": "cannot-tell"
     },
     {
       "item_id": "ITEM-0148",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0149",
       "rater_1_label": "true-positive",
       "rater_2_label": "true-positive",
       "agreed": true,
@@ -1205,12 +1202,20 @@
       "final_label": "true-positive"
     },
     {
-      "item_id": "ITEM-0150",
+      "item_id": "ITEM-0149",
       "rater_1_label": "false-positive",
       "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
       "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0150",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0151",
@@ -1230,11 +1235,11 @@
     },
     {
       "item_id": "ITEM-0153",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0154",
@@ -1254,11 +1259,11 @@
     },
     {
       "item_id": "ITEM-0156",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0157",
@@ -1270,11 +1275,11 @@
     },
     {
       "item_id": "ITEM-0158",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0159",
@@ -1286,51 +1291,51 @@
     },
     {
       "item_id": "ITEM-0160",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0161",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0162",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0163",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0164",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0165",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0166",
@@ -1358,14 +1363,6 @@
     },
     {
       "item_id": "ITEM-0169",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0170",
       "rater_1_label": "false-positive",
       "rater_2_label": "false-positive",
       "agreed": true,
@@ -1373,12 +1370,20 @@
       "final_label": "false-positive"
     },
     {
-      "item_id": "ITEM-0171",
+      "item_id": "ITEM-0170",
       "rater_1_label": "true-positive",
       "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
       "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0171",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0172",
@@ -1390,19 +1395,19 @@
     },
     {
       "item_id": "ITEM-0173",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0174",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0175",
@@ -1422,11 +1427,11 @@
     },
     {
       "item_id": "ITEM-0177",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0178",
@@ -1438,19 +1443,19 @@
     },
     {
       "item_id": "ITEM-0179",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0180",
       "rater_1_label": "true-positive",
       "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
       "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0180",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0181",
@@ -1486,11 +1491,11 @@
     },
     {
       "item_id": "ITEM-0185",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0186",
@@ -1502,11 +1507,11 @@
     },
     {
       "item_id": "ITEM-0187",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0188",
@@ -1534,43 +1539,43 @@
     },
     {
       "item_id": "ITEM-0191",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "rater_1_label": "true-positive",
+      "rater_2_label": "cannot-tell",
+      "agreed": false,
+      "tie_breaker_label": "cannot-tell",
+      "final_label": "cannot-tell"
     },
     {
       "item_id": "ITEM-0192",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0193",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0194",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0195",
       "rater_1_label": "false-positive",
       "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
       "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0194",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0195",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0196",
@@ -1582,14 +1587,6 @@
     },
     {
       "item_id": "ITEM-0197",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0198",
       "rater_1_label": "false-positive",
       "rater_2_label": "false-positive",
       "agreed": true,
@@ -1597,12 +1594,20 @@
       "final_label": "false-positive"
     },
     {
-      "item_id": "ITEM-0199",
+      "item_id": "ITEM-0198",
       "rater_1_label": "true-positive",
       "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
       "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0199",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0200",
@@ -1622,19 +1627,19 @@
     },
     {
       "item_id": "ITEM-0202",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0203",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0204",
@@ -1654,14 +1659,6 @@
     },
     {
       "item_id": "ITEM-0206",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0207",
       "rater_1_label": "false-positive",
       "rater_2_label": "false-positive",
       "agreed": true,
@@ -1669,12 +1666,20 @@
       "final_label": "false-positive"
     },
     {
-      "item_id": "ITEM-0208",
+      "item_id": "ITEM-0207",
       "rater_1_label": "true-positive",
       "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
       "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0208",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0209",
@@ -1694,11 +1699,11 @@
     },
     {
       "item_id": "ITEM-0211",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0212",
@@ -1734,6 +1739,14 @@
     },
     {
       "item_id": "ITEM-0216",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0217",
       "rater_1_label": "false-positive",
       "rater_2_label": "false-positive",
       "agreed": true,
@@ -1741,20 +1754,12 @@
       "final_label": "false-positive"
     },
     {
-      "item_id": "ITEM-0217",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "cannot-tell",
-      "agreed": false,
-      "tie_breaker_label": "cannot-tell",
-      "final_label": "cannot-tell"
-    },
-    {
       "item_id": "ITEM-0218",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0219",
@@ -1774,19 +1779,19 @@
     },
     {
       "item_id": "ITEM-0221",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0222",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0223",
@@ -1814,11 +1819,11 @@
     },
     {
       "item_id": "ITEM-0226",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0227",
@@ -1830,22 +1835,14 @@
     },
     {
       "item_id": "ITEM-0228",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0229",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0230",
       "rater_1_label": "true-positive",
       "rater_2_label": "true-positive",
       "agreed": true,
@@ -1853,7 +1850,7 @@
       "final_label": "true-positive"
     },
     {
-      "item_id": "ITEM-0231",
+      "item_id": "ITEM-0230",
       "rater_1_label": "false-positive",
       "rater_2_label": "false-positive",
       "agreed": true,
@@ -1861,12 +1858,20 @@
       "final_label": "false-positive"
     },
     {
-      "item_id": "ITEM-0232",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "item_id": "ITEM-0231",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0232",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0233",
@@ -1894,11 +1899,11 @@
     },
     {
       "item_id": "ITEM-0236",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0237",
@@ -1918,11 +1923,11 @@
     },
     {
       "item_id": "ITEM-0239",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0240",
@@ -1934,11 +1939,11 @@
     },
     {
       "item_id": "ITEM-0241",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0242",
@@ -1950,19 +1955,19 @@
     },
     {
       "item_id": "ITEM-0243",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0244",
       "rater_1_label": "false-positive",
       "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
       "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0244",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0245",
@@ -1990,19 +1995,19 @@
     },
     {
       "item_id": "ITEM-0248",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0249",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0250",
@@ -2014,27 +2019,27 @@
     },
     {
       "item_id": "ITEM-0251",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0252",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0253",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0254",
@@ -2054,11 +2059,11 @@
     },
     {
       "item_id": "ITEM-0256",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0257",
@@ -2070,11 +2075,11 @@
     },
     {
       "item_id": "ITEM-0258",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0259",
@@ -2094,11 +2099,11 @@
     },
     {
       "item_id": "ITEM-0261",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0262",
@@ -2118,6 +2123,14 @@
     },
     {
       "item_id": "ITEM-0264",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
+    },
+    {
+      "item_id": "ITEM-0265",
       "rater_1_label": "true-positive",
       "rater_2_label": "true-positive",
       "agreed": true,
@@ -2125,20 +2138,12 @@
       "final_label": "true-positive"
     },
     {
-      "item_id": "ITEM-0265",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
       "item_id": "ITEM-0266",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "false-positive"
+      "final_label": "true-positive"
     },
     {
       "item_id": "ITEM-0267",
@@ -2150,11 +2155,11 @@
     },
     {
       "item_id": "ITEM-0268",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0269",
@@ -2174,11 +2179,11 @@
     },
     {
       "item_id": "ITEM-0271",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0272",
@@ -2190,19 +2195,19 @@
     },
     {
       "item_id": "ITEM-0273",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0274",
       "rater_1_label": "true-positive",
       "rater_2_label": "true-positive",
       "agreed": true,
       "tie_breaker_label": null,
       "final_label": "true-positive"
+    },
+    {
+      "item_id": "ITEM-0274",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0275",
@@ -2246,11 +2251,11 @@
     },
     {
       "item_id": "ITEM-0280",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
       "agreed": true,
       "tie_breaker_label": null,
-      "final_label": "true-positive"
+      "final_label": "false-positive"
     },
     {
       "item_id": "ITEM-0281",
@@ -2259,478 +2264,6 @@
       "agreed": true,
       "tie_breaker_label": null,
       "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0282",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0283",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0284",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0285",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0286",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0287",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0288",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0289",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0290",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0291",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0292",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0293",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0294",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0295",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0296",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0297",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0298",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0299",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0300",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0301",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0302",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0303",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0304",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0305",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0306",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0307",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0308",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0309",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0310",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0311",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0312",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0313",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0314",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0315",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0316",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0317",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0318",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0319",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0320",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0321",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0322",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0323",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0324",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0325",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "true-positive",
-      "agreed": false,
-      "tie_breaker_label": "true-positive",
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0326",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0327",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0328",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0329",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0330",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0331",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0332",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0333",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0334",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0335",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0336",
-      "rater_1_label": "true-positive",
-      "rater_2_label": "true-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "true-positive"
-    },
-    {
-      "item_id": "ITEM-0337",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0338",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0339",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
-    },
-    {
-      "item_id": "ITEM-0340",
-      "rater_1_label": "false-positive",
-      "rater_2_label": "false-positive",
-      "agreed": true,
-      "tie_breaker_label": null,
-      "final_label": "false-positive"
     }
   ]
 }
