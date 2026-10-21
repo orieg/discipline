@@ -1,28 +1,30 @@
 {
-  "study_id": "agent-pr-precision-v1",
-  "discipline_version": "0.21.1",
-  "evaluated_commit": "b9cf939b79dc914b5158c3b9bd1393ff9f6d735b",
+  "study_id": "agent-pr-precision-v2",
+  "discipline_version": "0.23.0",
+  "evaluated_commit": "82d02046e4d64012413885b354873cfa769be329",
   "host": "Apple M-series macOS 15 arm64",
   "confidence_level": 0.95,
-  "cohens_kappa": 0.963184,
+  "cohens_kappa": 0.964718,
+  "rater_kind": "llm-subagent",
+  "synthetic_rater_disclosure": "Synthetic-rater disclosure: Rater 1, Rater 2, and the tie-breaker in this study were executed by isolated, source-tool-blinded LLM research subagents, not human engineers. Model-to-model agreement (Cohen's kappa) establishes rubric consistency across independent prompts, not external human peer review.",
   "pull_request_block_rates": {
-    "total_pull_requests": 233,
+    "total_pull_requests": 232,
     "discipline": {
-      "blocked": 58,
-      "n": 233,
-      "point_estimate": 0.248927,
+      "blocked": 42,
+      "n": 232,
+      "point_estimate": 0.181034,
       "wilson_95_ci": [
-        0.197781,
-        0.308217
+        0.136814,
+        0.235646
       ]
     },
     "naive_sensitive_path_filter": {
       "blocked": 130,
-      "n": 233,
-      "point_estimate": 0.55794,
+      "n": 232,
+      "point_estimate": 0.560345,
       "wilson_95_ci": [
-        0.493744,
-        0.620256
+        0.496008,
+        0.622716
       ]
     }
   },
@@ -30,53 +32,53 @@
     {
       "class": "structural-ast-and-deterministic",
       "true_positives": 119,
-      "false_positives": 23,
+      "false_positives": 4,
       "cannot_tell": 2,
       "k": 119,
-      "n": 144,
+      "n": 125,
       "required_n": 141,
       "precision_floor": 0.9,
-      "point_estimate": 0.826389,
+      "point_estimate": 0.952,
       "wilson_95_ci": [
-        0.756266,
-        0.879551
+        0.899229,
+        0.977818
       ],
-      "verdict": "REJECTED"
+      "verdict": "insufficient-n"
     },
     {
       "class": "heuristic-and-prose",
       "true_positives": 3,
-      "false_positives": 43,
+      "false_positives": 3,
       "cannot_tell": 0,
       "k": 3,
-      "n": 46,
+      "n": 6,
       "required_n": 245,
       "precision_floor": 0.8,
-      "point_estimate": 0.065217,
+      "point_estimate": 0.5,
       "wilson_95_ci": [
-        0.022428,
-        0.175027
+        0.187616,
+        0.812384
       ],
       "verdict": "insufficient-n"
     }
   ],
   "twin_baseline_result": {
     "id": "naive-sensitive-path-filter",
-    "true_positives": 9,
-    "false_positives": 139,
-    "cannot_tell": 2,
-    "k": 9,
+    "true_positives": 5,
+    "false_positives": 144,
+    "cannot_tell": 1,
+    "k": 5,
     "n": 150,
     "required_n": 141,
     "precision_floor": 0.9,
-    "point_estimate": 0.06,
+    "point_estimate": 0.033333,
     "wilson_95_ci": [
-      0.031884,
-      0.11009
+      0.01432,
+      0.075652
     ],
     "verdict": "REJECTED",
-    "observed_mdd_vs_structural": 0.156046,
-    "observed_precision_delta_structural_vs_twin": 0.766389
+    "observed_mdd_vs_structural": 0.162077,
+    "observed_precision_delta_structural_vs_twin": 0.918667
   },
   "per_gate_results": [
     {
@@ -246,16 +248,16 @@
       "gate": "dependency-delta",
       "class": "structural-ast-and-deterministic",
       "true_positives": 20,
-      "false_positives": 7,
+      "false_positives": 0,
       "cannot_tell": 0,
       "k": 20,
-      "n": 27,
+      "n": 20,
       "required_n": 141,
       "precision_floor": 0.9,
-      "point_estimate": 0.740741,
+      "point_estimate": 1.0,
       "wilson_95_ci": [
-        0.553214,
-        0.868296
+        0.838875,
+        1.0
       ],
       "verdict": "insufficient-n"
     },
@@ -339,16 +341,16 @@
       "gate": "instruction-smuggling",
       "class": "heuristic-and-prose",
       "true_positives": 3,
-      "false_positives": 0,
+      "false_positives": 2,
       "cannot_tell": 0,
       "k": 3,
-      "n": 3,
+      "n": 5,
       "required_n": 245,
       "precision_floor": 0.8,
-      "point_estimate": 1.0,
+      "point_estimate": 0.6,
       "wilson_95_ci": [
-        0.438503,
-        1.0
+        0.230724,
+        0.882379
       ],
       "verdict": "insufficient-n"
     },
@@ -398,16 +400,16 @@
       "gate": "pii",
       "class": "heuristic-and-prose",
       "true_positives": 0,
-      "false_positives": 43,
+      "false_positives": 1,
       "cannot_tell": 0,
       "k": 0,
-      "n": 43,
+      "n": 1,
       "required_n": 245,
       "precision_floor": 0.8,
       "point_estimate": 0.0,
       "wilson_95_ci": [
         0.0,
-        0.08201
+        0.793451
       ],
       "verdict": "insufficient-n"
     },
@@ -485,16 +487,16 @@
       "gate": "stub-bodies",
       "class": "structural-ast-and-deterministic",
       "true_positives": 1,
-      "false_positives": 6,
+      "false_positives": 1,
       "cannot_tell": 0,
       "k": 1,
-      "n": 7,
+      "n": 2,
       "required_n": 141,
       "precision_floor": 0.9,
-      "point_estimate": 0.142857,
+      "point_estimate": 0.5,
       "wilson_95_ci": [
-        0.02568,
-        0.513128
+        0.094531,
+        0.905469
       ],
       "verdict": "insufficient-n"
     },
@@ -592,17 +594,14 @@
       "gate": "vacuous-tests",
       "class": "structural-ast-and-deterministic",
       "true_positives": 0,
-      "false_positives": 7,
+      "false_positives": 0,
       "cannot_tell": 0,
       "k": 0,
-      "n": 7,
+      "n": 0,
       "required_n": 141,
       "precision_floor": 0.9,
-      "point_estimate": 0.0,
-      "wilson_95_ci": [
-        0.0,
-        0.35433
-      ],
+      "point_estimate": null,
+      "wilson_95_ci": null,
       "verdict": "insufficient-n"
     },
     {
