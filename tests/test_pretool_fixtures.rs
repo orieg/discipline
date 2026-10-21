@@ -285,3 +285,42 @@ fn each_recorded_session_start_names_its_session_and_directory() {
         assert_eq!(text(&v, dir_ptr), "/work/repo", "{rel}");
     }
 }
+
+/// Issue #780 item 1 (RUN 2026-10-21): OpenCode 2.1.2 `tool.hook("execute.after")` for a
+/// shell tool call puts the exit code in `result.metadata.exit` (`0` or `101`) and the
+/// command output in `result.content` (`state.output`), which the generated plugin maps
+/// to `/output/metadata/exit` and `/output/output`. Antigravity CLI (`agy 1.4.2`) sends
+/// the `PreToolUse` payload plus `"error": ""` on `PostToolUse` for both passing and
+/// failing `run_command` executions, with no exit code and no command output.
+#[test]
+fn recorded_opencode_v2_and_agy_post_tool_shell_payloads_pin_exit_and_output_fields() {
+    let calls = fixture("opencode/calls_v2.json");
+    assert_eq!(calls["after_shell_pass"]["result"]["metadata"]["exit"], 0);
+    assert_eq!(calls["after_shell_fail"]["result"]["metadata"]["exit"], 101);
+
+    let oc_pass = fixture("opencode/shell_post_pass_v2.json");
+    assert_eq!(text(&oc_pass, "/input/tool"), "shell");
+    assert_eq!(oc_pass["output"]["metadata"]["exit"], 0);
+    assert!(text(&oc_pass, "/output/output").contains("test result: ok. 1 passed; 0 failed"));
+
+    let oc_fail = fixture("opencode/shell_post_fail_v2.json");
+    assert_eq!(text(&oc_fail, "/input/tool"), "shell");
+    assert_eq!(oc_fail["output"]["metadata"]["exit"], 101);
+    assert!(text(&oc_fail, "/output/output").contains("test result: FAILED. 1 passed; 1 failed"));
+
+    for rel in [
+        "agy/run_command_post_pass.json",
+        "agy/run_command_post_fail.json",
+    ] {
+        let v = fixture(rel);
+        assert_eq!(text(&v, "/toolCall/name"), "run_command", "{rel}");
+        assert_eq!(
+            text(&v, "/toolCall/args/CommandLine"),
+            "cargo test",
+            "{rel}"
+        );
+        assert_eq!(text(&v, "/error"), "", "{rel}");
+        assert!(v.get("tool_response").is_none(), "{rel}");
+        assert!(v.get("output").is_none(), "{rel}");
+    }
+}

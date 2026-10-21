@@ -381,11 +381,23 @@ fn resolving_helpers_and_reach_costs_steps_in_proportion_to_their_number() {
             )
         });
         let helpers = lines(n, |i| {
-            format!("fn check_{i}(v: &S0) {{\n    v.verify();\n    assert_eq!(v.get(), {i});\n}}\n")
+            let next = if i + 1 < n {
+                format!("    check_{}(v);\n", i + 1)
+            } else {
+                String::new()
+            };
+            let next_wrap = if i + 1 < n {
+                format!("wrap_{}(v)", i + 1)
+            } else {
+                "check_0(v)".to_string()
+            };
+            format!(
+                "fn check_{i}(v: &S0) {{\n{next}    v.verify();\n    assert_eq!(v.get(), {i});\n}}\nfn wrap_{i}(v: &S0) {{\n    {next_wrap};\n}}\n"
+            )
         });
         let tests = lines(n, |i| {
             format!(
-                "#[test]\nfn t{i}() {{\n    let v = S0;\n    check_{i}(&v);\n    v.verify();\n}}\n"
+                "#[test]\nfn t{i}() {{\n    let v = S0;\n    check_{i}(&v);\n    wrap_{i}(&v);\n    v.verify();\n}}\n"
             )
         });
         let src = format!("{types}{helpers}{tests}");
@@ -407,13 +419,37 @@ fn resolving_helpers_and_reach_costs_steps_in_proportion_to_their_number() {
         "resolve helpers: {few} steps for 40, {many} for 160"
     );
     assert_eq!(many_facts.tests.len(), 160);
-    assert!(many_facts.tests.iter().all(|t| {
-        t.effective_asserts() == 1
-            && t.strong_asserts == 1
-            && t.method_checks == 1
-            && t.helper_reach.total == 2
-            && t.helper_reach.strong == 2
-    }));
+    for (i, t) in many_facts.tests.iter().enumerate() {
+        let check_hops = (159 - i).min(2);
+        let wrap_inline = usize::from(i >= 157);
+        let wrap_reach = match 159 - i {
+            0 => 3,
+            1 => 1,
+            _ => 0,
+        };
+        assert_eq!(
+            (
+                t.effective_asserts(),
+                t.strong_asserts,
+                t.method_checks,
+                t.helper_reach.total,
+                t.helper_reach.strong,
+            ),
+            (
+                1 + wrap_inline,
+                1 + wrap_inline,
+                1,
+                1 + 2 * check_hops + wrap_reach,
+                1 + 2 * check_hops + wrap_reach,
+            ),
+            "test t{i}"
+        );
+    }
+    let (_, steps_2000) = resolve(2000);
+    assert!(
+        steps_2000 < 15 * many,
+        "resolve helpers: {many} steps for 160, {steps_2000} for 2000"
+    );
 }
 
 /// The indexed helper graph resolves three-level chains, mutual recursion (`a -> b -> a`),

@@ -545,26 +545,100 @@ fn verified_stop_reads_the_codex_and_qwen_shell_outcomes() {
             qwen("q-pass", "0", passing),
             0,
         ),
+        (
+            "opencode 2.x fails",
+            "opencode",
+            "opencode/turn_end_events.json",
+            recorded_pretool("opencode/shell_post_fail_v2.json", |v| {
+                v["cwd"] = cwd.clone().into();
+                v["input"]["sessionID"] = "oc-fail".into();
+            }),
+            2,
+        ),
+        (
+            "opencode 2.x passes",
+            "opencode",
+            "opencode/turn_end_events.json",
+            recorded_pretool("opencode/shell_post_pass_v2.json", |v| {
+                v["cwd"] = cwd.clone().into();
+                v["input"]["sessionID"] = "oc-pass".into();
+            }),
+            0,
+        ),
+        (
+            "agy post-tool carries no exit code on pass",
+            "agy",
+            "agy/stop.json",
+            recorded_pretool("agy/run_command_post_pass.json", |v| {
+                v["workspacePaths"] = json!([cwd]);
+                v["conversationId"] = "agy-pass".into();
+            }),
+            2,
+        ),
+        (
+            "agy post-tool carries no exit code on fail",
+            "agy",
+            "agy/stop.json",
+            recorded_pretool("agy/run_command_post_fail.json", |v| {
+                v["workspacePaths"] = json!([cwd]);
+                v["conversationId"] = "agy-fail".into();
+            }),
+            2,
+        ),
     ];
     for (what, agent, stop, post, want) in cases {
-        let session = serde_json::from_str::<Value>(&post).unwrap()["session_id"]
+        let post_val = serde_json::from_str::<Value>(&post).unwrap();
+        let session = post_val["session_id"]
             .as_str()
+            .or_else(|| post_val.pointer("/input/sessionID").and_then(Value::as_str))
+            .or_else(|| post_val["conversationId"].as_str())
             .unwrap()
             .to_string();
         let w = hook(&repo, &["--agent", agent, "--event", "post-tool"], &post);
         assert_eq!(w.code, 0, "{what}: post-tool never blocks: {}", w.stderr);
-        let stop_payload = recorded_stop(stop, |v| {
-            v["cwd"] = cwd.clone().into();
-            v["session_id"] = session.clone().into();
-            v["last_assistant_message"] = "All done.".into();
-        });
-        let r = hook(&repo, &["--agent", agent], &stop_payload);
-        assert_eq!(r.code, want, "{what}: stderr {}", r.stderr);
+        let stop_payload = match agent {
+            "opencode" => json!({
+                "cwd": cwd,
+                "session_id": session,
+                "last_assistant_message": "All done."
+            })
+            .to_string(),
+            "agy" => recorded_stop(stop, |v| {
+                v["workspacePaths"] = json!([cwd]);
+                v["conversationId"] = session.clone().into();
+                v["last_assistant_message"] = "All done.".into();
+            }),
+            _ => recorded_stop(stop, |v| {
+                v["cwd"] = cwd.clone().into();
+                v["session_id"] = session.clone().into();
+                v["last_assistant_message"] = "All done.".into();
+            }),
+        };
+        let r = if agent == "opencode" {
+            hook(&repo, &["--agent", agent, "--event", "stop"], &stop_payload)
+        } else {
+            hook(&repo, &["--agent", agent], &stop_payload)
+        };
+        let failed = if agent == "opencode" {
+            r.stdout.contains("\"decision\":\"block\"")
+        } else if agent == "agy" {
+            r.stdout.contains("\"decision\":\"continue\"")
+        } else {
+            r.code == 2
+        };
+        assert_eq!(
+            if failed { 2 } else { 0 },
+            want,
+            "{what}: code={} stdout={} stderr={}",
+            r.code,
+            r.stdout,
+            r.stderr
+        );
         if want == 2 {
+            let msg = format!("{}{}", r.stdout, r.stderr);
             assert!(
-                r.stderr.contains("[turn/unverified-dirty-tree]"),
-                "{what}: {}",
-                r.stderr
+                msg.contains("[turn/unverified-dirty-tree]"),
+                "{what}: {msg}"
             );
         }
     }
