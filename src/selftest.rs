@@ -9714,6 +9714,52 @@ proptest! {
                 && counts("self.assertNotIsInstance(f(), str)")? == (1, 0))
         },
     ),
+    (
+        "toolchain-config: Sonar analysis scope loosened in sonar-project.properties or CI scanner arguments is reported (#809)",
+        || {
+            use crate::guards::toolchain_config::{
+                classify, diff_sonar_workflow, diff_trees, load, Classified,
+            };
+            let Some(Classified::Data { rules, .. }) = classify("sonar-project.properties") else {
+                return Ok(false);
+            };
+            let base = load(
+                "sonar-project.properties",
+                "sonar.sources=src/core,src/payments\nsonar.exclusions=**/generated/**\nsonar.qualitygate.wait=true\n",
+            )
+            .ok_or_else(|| anyhow::anyhow!("base properties parse"))?;
+            let head = load(
+                "sonar-project.properties",
+                "sonar.sources=src/core\nsonar.exclusions=**/generated/**,src/payments/**\nsonar.inclusions=src/safe/**\nsonar.qualitygate.wait=false\nsonar.issue.ignore.multicriteria=e1\n",
+            )
+            .ok_or_else(|| anyhow::anyhow!("head properties parse"))?;
+            let prop_keys: Vec<String> = diff_trees(&base, &head, &rules)
+                .into_iter()
+                .map(|w| w.key)
+                .collect();
+            let base_wf = "name: s\non: push\njobs:\n  q:\n    runs-on: ubuntu-latest\n    steps:\n      - run: sonar-scanner -Dsonar.qualitygate.wait=true\n";
+            let head_wf = "name: s\non: push\njobs:\n  q:\n    runs-on: ubuntu-latest\n    steps:\n      - run: sonar-scanner -Dsonar.qualitygate.wait=false -Dsonar.exclusions=src/payments/**\n";
+            let wf_keys: Vec<String> = diff_sonar_workflow(Some(base_wf), head_wf)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(w, _)| w.key)
+                .collect();
+            Ok(prop_keys
+                == [
+                    "sonar.exclusions",
+                    "sonar.inclusions",
+                    "sonar.sources",
+                    "sonar.qualitygate.wait",
+                    "sonar.issue.ignore.multicriteria",
+                ]
+                && diff_trees(&head, &base, &rules).is_empty()
+                && load("sonar-project.properties", "malformed_line_without_sep\n").is_none()
+                && wf_keys == ["sonar.exclusions", "sonar.qualitygate.wait"]
+                && diff_sonar_workflow(Some(head_wf), base_wf)
+                    .unwrap_or_default()
+                    .is_empty())
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

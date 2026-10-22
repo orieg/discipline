@@ -10,6 +10,9 @@ pub enum Judge {
     Grown,
     /// List: a lost entry loosens; so does the list disappearing. Appearing does not.
     Shrunk,
+    /// Inclusion list: a lost entry loosens, and so does the list appearing where there
+    /// was none (an inclusion list narrows the default scope).
+    Narrowed,
     /// Number: a smaller value loosens; so does removal.
     Floor,
     /// Number: a larger value loosens; appearing counts as rising from zero.
@@ -129,6 +132,15 @@ fn matching<'a>(tree: &'a Value, pattern: &str) -> Vec<(String, &'a Value)> {
         }
     }
     let mut out = Vec::new();
+    if pattern.contains('.') {
+        if let Some(map) = tree.as_object() {
+            for (k, child) in map {
+                if k.contains('.') && segment_matches(pattern, k) {
+                    out.push((k.clone(), child));
+                }
+            }
+        }
+    }
     walk(
         tree,
         &pattern.split('.').collect::<Vec<_>>(),
@@ -375,6 +387,26 @@ pub fn diff_trees(base: &Value, head: &Value, rules: &[&Rule]) -> Vec<Weakening>
                             format!("lost {} entr(y/ies): {}", lost.len(), sample(&lost))
                         }
                     })
+                }
+                Judge::Narrowed => {
+                    let bl = b.map(as_list).unwrap_or_default();
+                    let hl = h.map(as_list).unwrap_or_default();
+                    if bl.is_empty() {
+                        let gained: Vec<_> = hl.iter().collect();
+                        (!gained.is_empty()).then(|| {
+                            format!(
+                                "narrowed default scope to {} entr(y/ies): {}",
+                                gained.len(),
+                                sample(&gained)
+                            )
+                        })
+                    } else if h.is_some() {
+                        let lost: Vec<_> = bl.iter().filter(|x| !hl.contains(x)).collect();
+                        (!lost.is_empty())
+                            .then(|| format!("lost {} entr(y/ies): {}", lost.len(), sample(&lost)))
+                    } else {
+                        None
+                    }
                 }
                 Judge::Floor => match (b.and_then(as_num), h.and_then(as_num)) {
                     (Some(bn), Some(hn)) if hn < bn => Some(format!("lowered from {bn} to {hn}")),
