@@ -82,8 +82,6 @@ pub fn evaluate_vacuous_tests(
         }
         // Every assertion holds for nearly any value: `is not None`, `toBeDefined`,
         // `is_ok()`. The test runs the code and checks that something came back.
-        // (`is not None` is a comparison, so the pack may count it as strong; the
-        // trivial count decides.)
         if a.test.trivial_asserts > 0
             && a.test.trivial_asserts >= a.test.checks()
             && a.test.should_panic.is_none()
