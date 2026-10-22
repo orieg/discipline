@@ -21270,3 +21270,92 @@ class Case(unittest.TestCase):
         "{messages:?}"
     );
 }
+
+#[test]
+fn sonar_toolchain_config_reports_loosened_properties_and_ci_scanner_args() {
+    let repo = Repo::new();
+    let base_props = "\
+sonar.projectKey=acme
+sonar.sources=src
+sonar.exclusions=**/generated/**
+sonar.coverage.exclusions=**/migrations/**
+sonar.qualitygate.wait=true
+";
+    let base_wf = "\
+name: sonar
+on: push
+jobs:
+  sonar:
+    runs-on: ubuntu-latest
+    steps:
+      - run: sonar-scanner -Dsonar.qualitygate.wait=true
+";
+    repo.commit_base_files(
+        &[
+            ("sonar-project.properties", base_props),
+            (".github/workflows/sonar.yml", base_wf),
+        ],
+        "base: sonar config and workflow",
+    );
+
+    let head_props = "\
+sonar.projectKey=acme
+sonar.sources=src
+sonar.exclusions=**/generated/**,src/legacy/**,src/payments/**
+sonar.coverage.exclusions=**/migrations/**,src/**
+sonar.inclusions=src/safe/**
+sonar.qualitygate.wait=false
+sonar.issue.ignore.multicriteria=e1
+sonar.issue.ignore.multicriteria.e1.ruleKey=*
+sonar.issue.ignore.multicriteria.e1.resourceKey=**/*.java
+";
+    let head_wf = "\
+name: sonar
+on: push
+jobs:
+  sonar:
+    runs-on: ubuntu-latest
+    steps:
+      - run: sonar-scanner -Dsonar.qualitygate.wait=false -Dsonar.exclusions=src/payments/**
+";
+    repo.write("sonar-project.properties", head_props);
+    repo.write(".github/workflows/sonar.yml", head_wf);
+    repo.commit("chore: update sonar config and workflow");
+
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("toolchain-config");
+    assert_eq!(violations.len(), 7, "{violations:?}");
+    for v in &violations {
+        assert_eq!(v["code"], "toolchain-config/toolchain-config-weakened");
+    }
+
+    // Scoped allow-toolchain-weakening directives lift both .properties and workflow findings.
+    let pr_body = "\
+allow-toolchain-weakening: sonar-project.properties migrating legacy modules
+allow-toolchain-weakening: .github/workflows/sonar.yml staged rollout
+";
+    let waived = repo.run(
+        &["check", "--base", "main", "--format", "json"],
+        &[("PR_BODY", pr_body)],
+    );
+    assert!(
+        waived.violations("toolchain-config").is_empty(),
+        "{}{}",
+        waived.stdout,
+        waived.stderr
+    );
+
+    // Malformed .properties file fails closed with Toolchain Configuration Unreadable.
+    repo.write("sonar-project.properties", "not_a_valid_property_line\n");
+    repo.commit("chore: corrupt sonar-project.properties");
+    let bad = repo.check(&[]);
+    assert_eq!(bad.code, 1, "{}{}", bad.stdout, bad.stderr);
+    let bad_violations = bad.violations("toolchain-config");
+    assert!(
+        bad_violations
+            .iter()
+            .any(|v| v["code"] == "toolchain-config/toolchain-config-unreadable"),
+        "{bad_violations:?}"
+    );
+}

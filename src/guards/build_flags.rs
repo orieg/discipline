@@ -204,7 +204,7 @@ fn classify_words(
 /// of whitespace separate words, quotes group and are removed, a backslash escapes the next
 /// character, and `$(...)` / `${...}` is part of one word whatever it contains. With
 /// `shell`, a `#` that starts a word ends the line (a shell comment).
-fn split_words(s: &str, shell: bool) -> Vec<String> {
+pub(super) fn split_words(s: &str, shell: bool) -> Vec<String> {
     let chars: Vec<char> = s.chars().collect();
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -278,7 +278,7 @@ fn split_words(s: &str, shell: bool) -> Vec<String> {
 
 /// Logical lines of a makefile: a line ending in an odd number of backslashes continues on
 /// the next one. Each carries the number of the physical line it starts on.
-fn make_lines(src: &str) -> Vec<(usize, String)> {
+pub(super) fn make_lines(src: &str) -> Vec<(usize, String)> {
     let mut out = Vec::new();
     let mut pending: Option<(usize, String)> = None;
     for (idx, raw) in src.lines().enumerate() {

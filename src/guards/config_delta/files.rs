@@ -210,6 +210,113 @@ fn parse_phpunit_xml(src: &str) -> Option<Value> {
     Some(Value::Object(root))
 }
 
+/// Unescape a Java `.properties` key or value slice (`\t`, `\n`, `\r`, `\f`, `\uXXXX`, or
+/// `\c` -> `c`). Returns `None` on a malformed `\uXXXX` sequence.
+fn unescape_properties(chars: &[char]) -> Option<String> {
+    let mut out = String::with_capacity(chars.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '\\' {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        i += 1;
+        let esc = *chars.get(i)?;
+        i += 1;
+        match esc {
+            't' => out.push('\t'),
+            'n' => out.push('\n'),
+            'r' => out.push('\r'),
+            'f' => out.push('\u{000c}'),
+            'u' => {
+                let hex: String = chars.get(i..i + 4)?.iter().collect();
+                if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return None;
+                }
+                let code = u32::from_str_radix(&hex, 16).ok()?;
+                out.push(char::from_u32(code)?);
+                i += 4;
+            }
+            other => out.push(other),
+        }
+    }
+    Some(out)
+}
+
+/// A Java `.properties` reader (`sonar-project.properties`, `.sonarcloud.properties`):
+/// `key=value`, `key: value`, or `key value`; `#` and `!` comment lines; `\` line
+/// continuations; and escaped separators (`\=`, `\:`, `\ `) in keys. Returns `None` when
+/// a line has no separator, an empty or section-header key, a dangling trailing `\`, or a
+/// malformed `\uXXXX` escape.
+fn parse_properties(src: &str) -> Option<Value> {
+    let is_ws = |c: char| matches!(c, ' ' | '\t' | '\u{000c}');
+    let mut logical = Vec::new();
+    let mut current = String::new();
+    let mut continuing = false;
+    for raw in src.lines() {
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        let trimmed = line.trim_start_matches(is_ws);
+        if !continuing && (trimmed.is_empty() || trimmed.starts_with(['#', '!'])) {
+            continue;
+        }
+        let slashes = trimmed.chars().rev().take_while(|c| *c == '\\').count();
+        if slashes % 2 == 1 {
+            current.push_str(&trimmed[..trimmed.len() - 1]);
+            continuing = true;
+        } else {
+            current.push_str(trimmed);
+            logical.push(std::mem::take(&mut current));
+            continuing = false;
+        }
+    }
+    if continuing {
+        return None;
+    }
+
+    let mut root = serde_json::Map::new();
+    for line in logical {
+        let chars: Vec<char> = line.chars().collect();
+        let mut i = 0;
+        let mut sep_at = None;
+        while i < chars.len() {
+            let c = chars[i];
+            if c == '\\' {
+                i += 1;
+                let esc = *chars.get(i)?;
+                i += if esc == 'u' { 5 } else { 1 };
+                if i > chars.len() {
+                    return None;
+                }
+                continue;
+            }
+            if c == '=' || c == ':' || is_ws(c) {
+                sep_at = Some(i);
+                break;
+            }
+            i += 1;
+        }
+        let key_end = sep_at?;
+        let key = unescape_properties(&chars[..key_end])?;
+        if key.is_empty() || key.starts_with(['[', '{']) {
+            return None;
+        }
+        let mut val_start = key_end;
+        while val_start < chars.len() && is_ws(chars[val_start]) {
+            val_start += 1;
+        }
+        if val_start < chars.len() && matches!(chars[val_start], '=' | ':') {
+            val_start += 1;
+            while val_start < chars.len() && is_ws(chars[val_start]) {
+                val_start += 1;
+            }
+        }
+        let val = unescape_properties(&chars[val_start..])?;
+        root.insert(key, Value::String(val.trim_end().to_string()));
+    }
+    Some(Value::Object(root))
+}
+
 /// Load a configuration file into one generic tree. `None` = not parseable as its format.
 pub fn load(name: &str, content: &str) -> Option<Value> {
     if name.ends_with(".toml") || name == ".cargo/config" || name == "config" {
@@ -229,6 +336,8 @@ pub fn load(name: &str, content: &str) -> Option<Value> {
         serde_json::to_value(v).ok()
     } else if name.ends_with(".xml") || name.ends_with(".xml.dist") {
         parse_phpunit_xml(content)
+    } else if name.ends_with(".properties") {
+        parse_properties(content)
     } else {
         Some(parse_ini(content))
     }

@@ -30,6 +30,7 @@ const NEXTEST: &[&str] = &[".config/nextest.toml"];
 const PHPSTAN: &[&str] = &["phpstan.neon", "phpstan.neon.dist", "phpstan.dist.neon"];
 const PHPUNIT: &[&str] = &["phpunit.xml", "phpunit.xml.dist"];
 const CLIPPY: &[&str] = &["clippy.toml", ".clippy.toml"];
+pub(super) const SONAR: &[&str] = &["sonar-project.properties", ".sonarcloud.properties"];
 
 /// Configurations written as code: read for a change, not for a delta.
 pub(super) const EXECUTABLE: &[&str] = &[
@@ -982,6 +983,62 @@ pub const RULES: &[Rule] = &[
         files: PHPUNIT,
         path: "phpunit.failOnSkipped",
         judge: Judge::LooserWhenFalse,
+    },
+    // SonarQube / SonarCloud
+    Rule {
+        files: SONAR,
+        path: "sonar.exclusions",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: SONAR,
+        path: "sonar.coverage.exclusions",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: SONAR,
+        path: "sonar.cpd.exclusions",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: SONAR,
+        path: "sonar.test.exclusions",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: SONAR,
+        path: "sonar.inclusions",
+        judge: Judge::Narrowed,
+    },
+    Rule {
+        files: SONAR,
+        path: "sonar.test.inclusions",
+        judge: Judge::Narrowed,
+    },
+    Rule {
+        files: SONAR,
+        path: "sonar.sources",
+        judge: Judge::Narrowed,
+    },
+    Rule {
+        files: SONAR,
+        path: "sonar.qualitygate.wait",
+        judge: Judge::LooserWhenFalse,
+    },
+    Rule {
+        files: SONAR,
+        path: "sonar.issue.ignore.multicriteria",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: SONAR,
+        path: "sonar.issue.ignore.block",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: SONAR,
+        path: "sonar.issue.ignore.allfile",
+        judge: Judge::Grown,
     },
 ];
 
