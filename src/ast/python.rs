@@ -1292,23 +1292,19 @@ impl<'a> PythonExtractor<'a> {
     }
 
     fn is_strong_assertion(&self, cond: Node<'a>) -> bool {
-        match cond.kind() {
-            "comparison_operator" => {
-                // Check operator: ==, !=, in, not in, is, is not
-                let text = self.text(cond);
-                text.contains("==")
-                    || text.contains("!=")
-                    || text.contains(" in ")
-                    || text.contains(" not in ")
-                    || text.contains(" is ")
-                    || text.contains(" is not ")
-            }
-            "call" => {
-                let text = self.text(cond);
-                text.contains("isinstance") || text.contains("issubclass")
-            }
-            _ => false,
+        if cond.kind() != "comparison_operator" {
+            return false;
         }
+        let mut cursor = cond.walk();
+        let children: Vec<_> = cond
+            .children(&mut cursor)
+            .filter(|c| c.kind() != "comment")
+            .collect();
+        children.windows(3).any(|w| match w[1].kind() {
+            "==" | "!=" | "in" | "not in" | "is" => true,
+            "is not" => !is_python_none(w[0]) && !is_python_none(w[2]),
+            _ => false,
+        })
     }
 
     fn is_strong_unittest_assert(&self, func_name: &str) -> bool {
@@ -1321,9 +1317,6 @@ impl<'a> PythonExtractor<'a> {
                 | "self.assertIs"
                 | "self.assertIsNot"
                 | "self.assertIsNone"
-                | "self.assertIsNotNone"
-                | "self.assertIsInstance"
-                | "self.assertNotIsInstance"
                 | "self.assertAlmostEqual"
                 | "self.assertNotAlmostEqual"
                 | "self.assertCountEqual"
@@ -1410,6 +1403,18 @@ const PYTHON_CODE: super::NotCode = super::NotCode {
     comments: &["comment"],
     interpolations: &["interpolation"],
 };
+
+/// Whether `node` (unwrapping enclosing parentheses) is Python's `None` literal.
+fn is_python_none(mut node: Node) -> bool {
+    while node.kind() == "parenthesized_expression" {
+        let mut cursor = node.walk();
+        let Some(inner) = node.named_children(&mut cursor).next() else {
+            return false;
+        };
+        node = inner;
+    }
+    node.kind() == "none"
+}
 
 /// Whether `node` is a candidate for a condition on the environment: its code, outside
 /// string literals and comments, spells an environment read or names a CI variable. A CI
@@ -2699,6 +2704,117 @@ class LegacyCase(unittest.TestCase):
             named_tests("[flake8]\npython_functions = check_*\n"),
             ["LegacyCase::test_u", "TestDefault::test_m", "test_default"]
         );
+    }
+
+    /// #808: Python strong assertions are read from the `comparison_operator` AST
+    /// children and exclude existence (`is not None`, `assertIsNotNone`) and type
+    /// (`isinstance`, `issubclass`, `assertIsInstance`, `assertNotIsInstance`) checks.
+    #[test]
+    fn python_strong_assertion_classification_uses_ast_operators_and_excludes_existence_or_type_checks(
+    ) {
+        let src = r#"
+import unittest
+
+def test_weak_is_not_none():
+    assert f() is not None
+
+def test_weak_none_is_not():
+    assert None is not f()
+
+def test_weak_parenthesized_none():
+    assert f() is not (None)
+
+def test_weak_isinstance():
+    assert isinstance(f(), float)
+
+def test_weak_issubclass():
+    assert issubclass(cls(), Base)
+
+def test_weak_string_containing_eq():
+    assert f("==") > 0
+
+def test_weak_string_containing_is():
+    assert f(" is ") > 0
+
+def test_strong_eq():
+    assert f() == 85.0
+
+def test_strong_ne():
+    assert f() != 85.0
+
+def test_strong_in():
+    assert "==" in s()
+
+def test_strong_not_in():
+    assert "x" not in s()
+
+def test_strong_is_sentinel():
+    assert f() is SENTINEL
+
+def test_strong_is_not_sentinel():
+    assert f() is not SENTINEL
+
+def test_strong_is_none():
+    assert f() is None
+
+class Case(unittest.TestCase):
+    def test_weak_assert_is_not_none(self):
+        self.assertIsNotNone(f())
+
+    def test_weak_assert_is_instance(self):
+        self.assertIsInstance(f(), float)
+
+    def test_weak_assert_not_is_instance(self):
+        self.assertNotIsInstance(f(), str)
+
+    def test_strong_assert_equal(self):
+        self.assertEqual(f(), 85.0)
+
+    def test_strong_assert_is_none(self):
+        self.assertIsNone(f())
+"#;
+        let facts = PythonPack
+            .extract("tests/test_strength.py", src, &AssertVocabulary::default())
+            .unwrap();
+        let counts = |name: &str| -> (usize, usize) {
+            let t = facts
+                .tests
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap_or_else(|| panic!("missing test {name}"));
+            (t.total_asserts, t.strong_asserts)
+        };
+
+        // Weak assertions: total == 1, strong == 0
+        for weak in [
+            "test_weak_is_not_none",
+            "test_weak_none_is_not",
+            "test_weak_parenthesized_none",
+            "test_weak_isinstance",
+            "test_weak_issubclass",
+            "test_weak_string_containing_eq",
+            "test_weak_string_containing_is",
+            "Case::test_weak_assert_is_not_none",
+            "Case::test_weak_assert_is_instance",
+            "Case::test_weak_assert_not_is_instance",
+        ] {
+            assert_eq!(counts(weak), (1, 0), "{weak} should be weak");
+        }
+
+        // Strong assertions: total == 1, strong == 1
+        for strong in [
+            "test_strong_eq",
+            "test_strong_ne",
+            "test_strong_in",
+            "test_strong_not_in",
+            "test_strong_is_sentinel",
+            "test_strong_is_not_sentinel",
+            "test_strong_is_none",
+            "Case::test_strong_assert_equal",
+            "Case::test_strong_assert_is_none",
+        ] {
+            assert_eq!(counts(strong), (1, 1), "{strong} should be strong");
+        }
     }
 }
 

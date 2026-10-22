@@ -21196,3 +21196,77 @@ severity = "error"
         "expected unvouched command note in {notes:?}"
     );
 }
+
+#[test]
+fn python_equality_rewritten_to_existence_or_type_check_reports_assertion_reduction() {
+    let repo = Repo::new();
+    let base_py = r#"import unittest
+
+def test_not_none():
+    assert f() == 85.0
+
+def test_isinstance():
+    assert f() == 85.0
+
+class Case(unittest.TestCase):
+    def test_unittest_not_none(self):
+        self.assertEqual(f(), 85.0)
+
+    def test_unittest_is_none_stays_strong(self):
+        self.assertEqual(f(), 85.0)
+"#;
+    repo.commit_base_files(
+        &[("tests/test_py.py", base_py)],
+        "base: python equality tests",
+    );
+
+    let head_py = r#"import unittest
+
+def test_not_none():
+    assert f() is not None
+
+def test_isinstance():
+    assert isinstance(f(), float)
+
+class Case(unittest.TestCase):
+    def test_unittest_not_none(self):
+        self.assertIsNotNone(f())
+
+    def test_unittest_is_none_stays_strong(self):
+        self.assertIsNone(f())
+"#;
+    repo.write("tests/test_py.py", head_py);
+    repo.commit("test: weaken python equality checks to existence and type checks");
+
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("assertion-reduction");
+    assert_eq!(violations.len(), 3, "{violations:?}");
+    for v in &violations {
+        assert_eq!(v["code"], "assertion-reduction/assertions-reduced");
+    }
+    let messages: Vec<&str> = violations
+        .iter()
+        .filter_map(|v| v["message"].as_str())
+        .collect();
+    assert!(
+        messages.iter().any(|m| m.contains("test_not_none")),
+        "{messages:?}"
+    );
+    assert!(
+        messages.iter().any(|m| m.contains("test_isinstance")),
+        "{messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("Case::test_unittest_not_none")),
+        "{messages:?}"
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|m| m.contains("test_unittest_is_none_stays_strong")),
+        "{messages:?}"
+    );
+}

@@ -9684,6 +9684,36 @@ proptest! {
                 && !is_label_placeholder("src/lib.rs:10"))
         },
     ),
+    (
+        "ast: Python strong assertions read comparison_operator children and exclude existence or type checks (#808)",
+        || {
+            let counts = |body: &str| -> Result<(usize, usize)> {
+                let src = format!(
+                    "import unittest\nclass T(unittest.TestCase):\n    def test_x(self):\n        {body}\n"
+                );
+                let f = facts("tests/test_x.py", &src)?;
+                let t = &f.tests[0];
+                Ok((t.total_asserts, t.strong_asserts))
+            };
+            Ok(counts("assert f() == 85.0")? == (1, 1)
+                && counts("assert f() != 85.0")? == (1, 1)
+                && counts("assert f() in items")? == (1, 1)
+                && counts("assert f() not in items")? == (1, 1)
+                && counts("assert f() is SENTINEL")? == (1, 1)
+                && counts("assert f() is not SENTINEL")? == (1, 1)
+                && counts("assert f() is None")? == (1, 1)
+                && counts("self.assertEqual(f(), 85.0)")? == (1, 1)
+                && counts("self.assertIsNone(f())")? == (1, 1)
+                && counts("assert f() is not None")? == (1, 0)
+                && counts("assert None is not f()")? == (1, 0)
+                && counts("assert isinstance(f(), float)")? == (1, 0)
+                && counts("assert issubclass(f(), Base)")? == (1, 0)
+                && counts("assert f(\"==\") > 0")? == (1, 0)
+                && counts("self.assertIsNotNone(f())")? == (1, 0)
+                && counts("self.assertIsInstance(f(), float)")? == (1, 0)
+                && counts("self.assertNotIsInstance(f(), str)")? == (1, 0))
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {
