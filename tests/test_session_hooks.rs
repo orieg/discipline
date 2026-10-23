@@ -833,7 +833,22 @@ fn stop_and_post_tool_hook_compact_digest_elides_repeated_warnings_until_changed
         r3.stderr
     );
 
-    // 4. `--verbose` prints all warnings in full even when unchanged.
+    // 4. Shifting the line number of an existing warning (inserting lines above it) keeps it elided.
+    repo.write(
+        "tests/t1.rs",
+        "// header line 1\n// header line 2\n#[test]\n#[ignore]\nfn skipped_alpha() {\n    assert_eq!(1, 1);\n}\n",
+    );
+    let r_shifted = hook(&repo, &["--agent", "claude-code"], &stop_payload);
+    assert_eq!(r_shifted.code, 2, "{}", r_shifted.stderr);
+    assert!(
+        r_shifted.stderr.contains(
+            "Summary: 2 blocking error(s), 2 warning(s) (0 new or changed, 2 unchanged from earlier in this session)."
+        ) && !r_shifted.stderr.contains("tests/t1.rs") && !r_shifted.stderr.contains("tests/t2.rs"),
+        "line-shifted warnings must remain elided: {}",
+        r_shifted.stderr
+    );
+
+    // 5. `--verbose` prints all warnings in full even when unchanged.
     let r4 = hook(
         &repo,
         &["--agent", "claude-code", "--verbose"],

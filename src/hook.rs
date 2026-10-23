@@ -549,14 +549,23 @@ fn run_payload(
         if let Some(sid) = session_id {
             if let Ok(store) = crate::session::SessionStore::open(&dir) {
                 let now = crate::lease::now();
-                if store
+                if let Some(prev) = store
                     .load(sid, agent.id(), now)
-                    .is_some_and(|s| !s.reported_warnings.is_empty())
+                    .map(|s| s.reported_warnings)
+                    .filter(|w| !w.is_empty())
                 {
-                    if let Err(e) = store.update(sid, agent.id(), now, |s| {
-                        s.reported_warnings.clear();
-                    }) {
-                        eprintln!("discipline: could not update session state for {sid}: {e}");
+                    let active = non_blocking_warning_digests(run.json.as_ref(), 0);
+                    let retained: Vec<String> = prev
+                        .iter()
+                        .filter(|d| active.contains(d))
+                        .cloned()
+                        .collect();
+                    if retained != prev {
+                        if let Err(e) = store.update(sid, agent.id(), now, |s| {
+                            s.reported_warnings = retained;
+                        }) {
+                            eprintln!("discipline: could not update session state for {sid}: {e}");
+                        }
                     }
                 }
             }
@@ -607,14 +616,57 @@ fn run_payload(
     ))
 }
 
-fn warning_digest(gate: &str, v: &serde_json::Value) -> String {
+fn warning_digest(gate: &str, v: &serde_json::Value, occurrence: usize) -> String {
     let code = v["code"].as_str().unwrap_or("");
     let file = v["file"].as_str().unwrap_or("");
-    let line = v["line"].as_u64().unwrap_or(0);
     let title = v["title"].as_str().unwrap_or("");
     let message = v["message"].as_str().unwrap_or("");
-    let canonical = format!("{gate}\0{code}\0{file}\0{line}\0{title}\0{message}");
+    let canonical = format!("{gate}\0{code}\0{file}\0{occurrence}\0{title}\0{message}");
     crate::report::gitlab::sha256_hex(canonical.as_bytes())
+}
+
+fn non_blocking_warning_digests(json: Option<&serde_json::Value>, run_code: i32) -> Vec<String> {
+    let Some(json) = json else {
+        return Vec::new();
+    };
+    let errors_count = json["errors"].as_u64().unwrap_or(0);
+    let policy_failures_non_empty = json["policy_failures"]
+        .as_array()
+        .is_some_and(|a| !a.is_empty());
+    let refused_hidden_non_empty = json["refused_hidden_directives"]
+        .as_array()
+        .is_some_and(|a| !a.is_empty());
+    let warnings_are_blocking = run_code != 0
+        && errors_count == 0
+        && !policy_failures_non_empty
+        && !refused_hidden_non_empty;
+    if warnings_are_blocking {
+        return Vec::new();
+    }
+    let mut digests = Vec::new();
+    let mut seen_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    if let Some(outcomes) = json["outcomes"].as_array() {
+        for outcome in outcomes {
+            let gate = outcome["gate"].as_str().unwrap_or("");
+            let Some(violations) = outcome["violations"].as_array() else {
+                continue;
+            };
+            for v in violations {
+                if v["severity"].as_str() == Some("error") {
+                    continue;
+                }
+                let base_key = warning_digest(gate, v, 0);
+                let occ = seen_counts.entry(base_key).or_insert(0);
+                let digest = warning_digest(gate, v, *occ);
+                *occ += 1;
+                if !digests.contains(&digest) {
+                    digests.push(digest);
+                }
+            }
+        }
+    }
+    digests
 }
 
 /// Renders the `agent-prompt` report for a hook firing, eliding non-blocking warnings
@@ -643,6 +695,8 @@ pub fn render_session_report(
     let mut blocking: Vec<(&str, &serde_json::Value)> = Vec::new();
     let mut advisory: Vec<(&str, &serde_json::Value, String)> = Vec::new();
     let mut current_warning_digests: Vec<String> = Vec::new();
+    let mut seen_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
 
     if let Some(outcomes) = json["outcomes"].as_array() {
         for outcome in outcomes {
@@ -655,7 +709,10 @@ pub fn render_session_report(
                 if is_error || warnings_are_blocking {
                     blocking.push((gate, v));
                 } else {
-                    let digest = warning_digest(gate, v);
+                    let base_key = warning_digest(gate, v, 0);
+                    let occ = seen_counts.entry(base_key).or_insert(0);
+                    let digest = warning_digest(gate, v, *occ);
+                    *occ += 1;
                     if !current_warning_digests.contains(&digest) {
                         current_warning_digests.push(digest.clone());
                     }
@@ -760,11 +817,11 @@ pub fn render_session_report(
         .join(", ");
     let pointer = match report_path {
         Some(p) => format!(
-            "Full report: `{}` (or re-run with `discipline hook run --verbose`).",
+            "Full report: `{}` (read this file or run `discipline check` to inspect all warnings; `discipline hook run --verbose` disables elision).",
             p.display()
         ),
         None => {
-            "Re-run with `discipline hook run --verbose` to print all warnings in full.".to_string()
+            "Run `discipline check` to inspect all warnings (or pass `--verbose` to `discipline hook run`).".to_string()
         }
     };
     out.push_str(&format!(
