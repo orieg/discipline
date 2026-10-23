@@ -9762,6 +9762,83 @@ proptest! {
                     .is_empty())
         },
     ),
+    (
+        "hook: stop and post-tool reports elide repeated unchanged non-blocking warnings per session and keep blocking findings in full (#818)",
+        || {
+            let json = serde_json::json!({
+                "errors": 1,
+                "warnings": 2,
+                "policy_failures": [],
+                "refused_hidden_directives": [],
+                "outcomes": [
+                    {
+                        "gate": "unsafe-safety-comment",
+                        "violations": [{
+                            "code": "unsafe-safety-comment/missing-safety-comment",
+                            "severity": "error",
+                            "title": "Unsafe block without SAFETY comment",
+                            "file": "src/lib.rs",
+                            "line": 10,
+                            "message": "unsafe block lacks // SAFETY:",
+                            "remediation": null
+                        }]
+                    },
+                    {
+                        "gate": "complexity",
+                        "violations": [
+                            {
+                                "code": "complexity/cyclomatic-complexity",
+                                "severity": "warning",
+                                "title": "Cyclomatic complexity exceeded",
+                                "file": "src/a.rs",
+                                "line": 20,
+                                "message": "fn alpha complexity 18",
+                                "remediation": null
+                            },
+                            {
+                                "code": "complexity/cyclomatic-complexity",
+                                "severity": "warning",
+                                "title": "Cyclomatic complexity exceeded",
+                                "file": "src/b.rs",
+                                "line": 40,
+                                "message": "fn beta complexity 19",
+                                "remediation": null
+                            }
+                        ]
+                    }
+                ]
+            });
+            let report_path = std::path::Path::new(".git/discipline/sessions/s1.report.txt");
+            let (first, digests) = crate::hook::render_session_report(
+                "FULL",
+                Some(&json),
+                &[],
+                Some(report_path),
+                false,
+            );
+            let (second, _) = crate::hook::render_session_report(
+                "FULL",
+                Some(&json),
+                &digests,
+                Some(report_path),
+                false,
+            );
+            let (verbose, _) = crate::hook::render_session_report(
+                "FULL",
+                Some(&json),
+                &digests,
+                Some(report_path),
+                true,
+            );
+            Ok(first == "FULL"
+                && digests.len() == 2
+                && second.contains("Summary: 1 blocking error(s), 2 warning(s) (0 new or changed, 2 unchanged from earlier in this session).")
+                && second.contains("### Issue 1 [unsafe-safety-comment/missing-safety-comment]")
+                && !second.contains("fn alpha complexity 18")
+                && second.contains("2 unchanged non-blocking warning(s) from earlier in this session elided (complexity/cyclomatic-complexity x2).")
+                && verbose == "FULL")
+        },
+    ),
 ];
 
 pub fn run() -> Result<bool> {

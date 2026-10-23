@@ -645,7 +645,7 @@ Check the change so far and answer in the agent\*(Aqs hook contract (reads the h
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
-\fBdiscipline hook run\fR <\fB\-\-agent\fR> [\fB\-b\fR|\fB\-\-base\fR] [\fB\-\-if\-configured\fR] [\fB\-\-observe\fR] [\fB\-\-event\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIFILES\fR] 
+\fBdiscipline hook run\fR <\fB\-\-agent\fR> [\fB\-b\fR|\fB\-\-base\fR] [\fB\-\-if\-configured\fR] [\fB\-\-observe\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-event\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIFILES\fR] 
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
@@ -684,6 +684,9 @@ Pass silently unless the working directory (for the pre\-tool and session\-start
 .TP
 \fB\-\-observe\fR
 Observe mode: run the check but never block; what would have blocked is said on stderr and appended to <git dir>/discipline/hook\-observe.log
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print every non\-blocking warning in full instead of eliding warnings unchanged since the previous report in the same session
 .TP
 \fB\-\-event\fR \fI<EVENT>\fR [default: check]
 The hook event: `pre\-tool` checks the tool call on stdin before it runs (an edit into another worktree, into a worktree another session leases, or into forbidden_paths is refused); `session\-start` takes this worktree\*(Aqs lease for the session on stdin (never blocks); `stop` judges the end of a turn on stdin (the OpenCode plugin\*(Aqs payload); the default checks the change so far

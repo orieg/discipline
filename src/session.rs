@@ -55,6 +55,8 @@ pub struct SessionState {
     pub consecutive_calls: u32,
     #[serde(default)]
     pub stop_refusals: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reported_warnings: Vec<String>,
 }
 
 impl SessionState {
@@ -68,6 +70,7 @@ impl SessionState {
             last_tree_digest: None,
             consecutive_calls: 0,
             stop_refusals: 0,
+            reported_warnings: Vec::new(),
         }
     }
 
@@ -191,6 +194,27 @@ impl SessionStore {
         self.dir.join(format!("{key}.json"))
     }
 
+    pub fn report_path_for(&self, key: &str) -> PathBuf {
+        self.dir.join(format!("{key}.report.txt"))
+    }
+
+    /// Persist the full `agent-prompt` report for `session` (or `"last"` when `session` is
+    /// `None`) at `<common git dir>/discipline/sessions/<key>.report.txt` (`0600`).
+    pub fn write_report(&self, session: Option<&str>, report: &str) -> Option<PathBuf> {
+        let key = match session {
+            Some(s) => session_key(s)?,
+            None => "last".to_string(),
+        };
+        let _lock = self.lock().ok()?;
+        let path = self.report_path_for(&key);
+        let tmp = self
+            .dir
+            .join(format!(".{key}.report.{}.tmp", std::process::id()));
+        write_owner_only(&tmp, report.as_bytes()).ok()?;
+        std::fs::rename(&tmp, &path).ok()?;
+        Some(path)
+    }
+
     /// Opportunistically delete expired session files older than [`DEFAULT_TTL_SECS`].
     fn prune_stale(&self, now: i64) {
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
@@ -211,6 +235,17 @@ impl SessionStore {
                         "discipline: could not remove expired session file {}: {e}",
                         path.display()
                     );
+                }
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    let report_path = self.report_path_for(stem);
+                    if let Err(e) = std::fs::remove_file(&report_path) {
+                        if e.kind() != std::io::ErrorKind::NotFound {
+                            eprintln!(
+                                "discipline: could not remove expired session report {}: {e}",
+                                report_path.display()
+                            );
+                        }
+                    }
                 }
             }
         }

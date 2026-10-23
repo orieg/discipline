@@ -564,7 +564,7 @@ pub fn quoted(text: &str) -> String {
 
 /// `text` on one line: a title or a path from the repository cannot start a new line
 /// of the report, where it would read as the report's own text.
-fn one_line(text: &str) -> String {
+pub fn one_line(text: &str) -> String {
     text.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect()
