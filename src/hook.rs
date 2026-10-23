@@ -564,7 +564,7 @@ fn run_payload(
                         if let Err(e) = store.update(sid, agent.id(), now, |s| {
                             s.reported_warnings = retained;
                         }) {
-                            eprintln!("discipline: could not update session state for {sid}: {e}");
+                            eprintln!("discipline: could not update session state: {e}");
                         }
                     }
                 }
@@ -866,7 +866,7 @@ fn compact_or_full_report(
             if let Err(e) = s.update(sid, agent.id(), now, |st| {
                 st.reported_warnings = current_warnings;
             }) {
-                eprintln!("discipline: could not update session state for {sid}: {e}");
+                eprintln!("discipline: could not update session state: {e}");
             }
         }
     }
