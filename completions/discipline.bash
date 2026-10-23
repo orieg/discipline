@@ -1276,7 +1276,7 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__hook__subcmd__run)
-            opts="-b -h --agent --base --if-configured --observe --event --help"
+            opts="-b -v -h --agent --base --if-configured --observe --verbose --event --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

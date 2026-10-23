@@ -720,3 +720,144 @@ fn verified_stop_run_at_stop_without_a_command_or_a_marker_names_the_gap() {
         r.stderr
     );
 }
+
+#[test]
+fn stop_and_post_tool_hook_compact_digest_elides_repeated_warnings_until_changed_or_verbose() {
+    let repo = Repo::new();
+    repo.commit_base(
+        "discipline.toml",
+        "[meta]\nversion = 1\nname = \"t\"\n\n[gates.ignored-tests]\nseverity = \"warning\"\n",
+        "chore: configure ignored-tests as warning",
+    );
+    repo.commit_base(
+        "src/lib.rs",
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
+        "feat: init",
+    );
+    repo.commit_base(
+        "tests/t1.rs",
+        "#[test]\nfn skipped_alpha() {\n    assert_eq!(1, 1);\n}\n",
+        "test: t1",
+    );
+    repo.commit_base(
+        "tests/t2.rs",
+        "#[test]\nfn skipped_beta() {\n    assert_eq!(2, 2);\n}\n",
+        "test: t2",
+    );
+
+    // Introduce 1 blocking error (`unsafe-safety-comment`) and 1 non-blocking warning (`ignored-tests`).
+    repo.write(
+        "src/lib.rs",
+        "pub fn add(a: i32, b: i32) -> i32 { unsafe { a + b } }\n",
+    );
+    repo.write(
+        "tests/t1.rs",
+        "#[test]\n#[ignore]\nfn skipped_alpha() {\n    assert_eq!(1, 1);\n}\n",
+    );
+
+    let stop_payload = recorded_stop("claude-code/stop.json", |v| {
+        v["cwd"] = repo.path().display().to_string().into();
+        v["session_id"] = "sess-818".into();
+        v["last_assistant_message"] = "Working on it.".into();
+    });
+
+    // 1. First firing in `sess-818` prints both the blocking error and the warning in full,
+    // and writes the full report to `.git/discipline/sessions/sess-818.report.txt`.
+    let r1 = hook(&repo, &["--agent", "claude-code"], &stop_payload);
+    assert_eq!(r1.code, 2, "{}", r1.stderr);
+    assert!(
+        r1.stderr
+            .contains("[unsafe-safety-comment/safety-comment-missing]"),
+        "missing blocking error in first report: {}",
+        r1.stderr
+    );
+    assert!(
+        r1.stderr.contains("[ignored-tests/") && r1.stderr.contains("tests/t1.rs"),
+        "first firing in session must print warning in full: {}",
+        r1.stderr
+    );
+    let report_path = repo.file(".git/discipline/sessions/sess-818.report.txt");
+    assert!(
+        report_path.is_file(),
+        "expected full report file at {}",
+        report_path.display()
+    );
+
+    // 2. Second firing in `sess-818` with unchanged findings: blocking error stays in full,
+    // unchanged warning is elided into a compact digest with a pointer to the report file.
+    let r2 = hook(&repo, &["--agent", "claude-code"], &stop_payload);
+    assert_eq!(r2.code, 2, "{}", r2.stderr);
+    assert!(
+        r2.stderr.contains(
+            "Summary: 2 blocking error(s), 1 warning(s) (0 new or changed, 1 unchanged from earlier in this session)."
+        ),
+        "expected compact summary header on second firing: {}",
+        r2.stderr
+    );
+    assert!(
+        r2.stderr
+            .contains("### Issue 1 [unsafe-safety-comment/safety-comment-missing]"),
+        "blocking error must still print in full on second firing: {}",
+        r2.stderr
+    );
+    assert!(
+        !r2.stderr.contains("tests/t1.rs"),
+        "unchanged warning body must be elided on second firing: {}",
+        r2.stderr
+    );
+    assert!(
+        r2.stderr
+            .contains("1 unchanged non-blocking warning(s) from earlier in this session elided (ignored-tests/")
+            && r2.stderr.contains("sess-818.report.txt"),
+        "expected digest line and report file pointer on second firing: {}",
+        r2.stderr
+    );
+
+    // 3. Introducing a second warning prints the new warning in full while keeping the first elided.
+    repo.write(
+        "tests/t2.rs",
+        "#[test]\n#[ignore]\nfn skipped_beta() {\n    assert_eq!(2, 2);\n}\n",
+    );
+    let r3 = hook(&repo, &["--agent", "claude-code"], &stop_payload);
+    assert_eq!(r3.code, 2, "{}", r3.stderr);
+    assert!(
+        r3.stderr.contains(
+            "Summary: 2 blocking error(s), 2 warning(s) (1 new or changed, 1 unchanged from earlier in this session)."
+        ),
+        "expected 1 new + 1 unchanged summary on third firing: {}",
+        r3.stderr
+    );
+    assert!(
+        r3.stderr.contains("tests/t2.rs") && !r3.stderr.contains("tests/t1.rs"),
+        "new warning must print in full while unchanged warning stays elided: {}",
+        r3.stderr
+    );
+
+    // 4. Shifting the line number of an existing warning (inserting lines above it) keeps it elided.
+    repo.write(
+        "tests/t1.rs",
+        "// header line 1\n// header line 2\n#[test]\n#[ignore]\nfn skipped_alpha() {\n    assert_eq!(1, 1);\n}\n",
+    );
+    let r_shifted = hook(&repo, &["--agent", "claude-code"], &stop_payload);
+    assert_eq!(r_shifted.code, 2, "{}", r_shifted.stderr);
+    assert!(
+        r_shifted.stderr.contains(
+            "Summary: 2 blocking error(s), 2 warning(s) (0 new or changed, 2 unchanged from earlier in this session)."
+        ) && !r_shifted.stderr.contains("tests/t1.rs") && !r_shifted.stderr.contains("tests/t2.rs"),
+        "line-shifted warnings must remain elided: {}",
+        r_shifted.stderr
+    );
+
+    // 5. `--verbose` prints all warnings in full even when unchanged.
+    let r4 = hook(
+        &repo,
+        &["--agent", "claude-code", "--verbose"],
+        &stop_payload,
+    );
+    assert_eq!(r4.code, 2, "{}", r4.stderr);
+    assert!(
+        r4.stderr.contains("tests/t1.rs") && r4.stderr.contains("tests/t2.rs"),
+        "--verbose must print all warnings in full: {}",
+        r4.stderr
+    );
+}
