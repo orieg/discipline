@@ -582,6 +582,68 @@ fn go_set_of_empty_structs_is_not_a_case_table() {
     assert_reduced(&run, "dropped from 3 to 2");
 }
 
+const GO_INLINE_STRUCT_MAP: &str = "\
+package workflow
+
+import \"testing\"
+
+func TestCDWorkflowNodes(t *testing.T) {
+	nodes := map[string]struct {
+		DisplayName string
+		Phase       string
+	}{
+		\"n1\": {DisplayName: \"step-a\", Phase: \"Succeeded\"},
+		\"n2\": {DisplayName: \"step-b\", Phase: \"Failed\"},
+	}
+	if len(nodes) != 2 {
+		t.Fatalf(\"got %d\", len(nodes))
+	}
+}
+";
+
+const GO_NAMED_STRUCT_MAP: &str = "\
+package workflow
+
+import \"testing\"
+
+type cdWorkflowNode struct {
+	DisplayName string
+	Phase       string
+}
+
+func TestCDWorkflowNodes(t *testing.T) {
+	nodes := map[string]cdWorkflowNode{
+		\"n1\": {DisplayName: \"step-a\", Phase: \"Succeeded\"},
+		\"n2\": {DisplayName: \"step-b\", Phase: \"Failed\"},
+	}
+	if len(nodes) != 2 {
+		t.Fatalf(\"got %d\", len(nodes))
+	}
+}
+";
+
+#[test]
+fn go_map_of_named_struct_type_preserves_case_count() {
+    // Promoting an inline anonymous struct map to a named struct map keeps all cases.
+    let run = judge(
+        "workflow_test.go",
+        GO_INLINE_STRUCT_MAP,
+        GO_NAMED_STRUCT_MAP,
+    );
+    assert_clean(&run);
+
+    // Dropping an entry from a named-struct map is flagged as a case reduction.
+    let run = judge(
+        "workflow_test.go",
+        GO_NAMED_STRUCT_MAP,
+        &GO_NAMED_STRUCT_MAP.replace(
+            "\t\t\"n2\": {DisplayName: \"step-b\", Phase: \"Failed\"},\n",
+            "",
+        ),
+    );
+    assert_reduced(&run, "dropped from 2 to 1");
+}
+
 // ---------------------------------------------------------------------------
 // Rust: rstest and test_case
 // ---------------------------------------------------------------------------

@@ -5025,9 +5025,11 @@ command = "cargo test"
             let local = "package p\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {\n\tcases := []struct{ a int }{{1}, {2}, {3}}\n\tfor _, c := range cases {\n\t\tif c.a == 0 {\n\t\t\tt.Fatal(c)\n\t\t}\n\t}\n}\n";
             let package = "package p\n\nimport \"testing\"\n\nvar cases = []struct{ a int }{{1}, {2}, {3}}\n\nvar unread = []struct{ a int }{{1}, {2}}\n\nfunc TestA(t *testing.T) {\n\tfor _, c := range cases {\n\t\tif c.a == 0 {\n\t\t\tt.Fatal(c)\n\t\t}\n\t}\n}\n";
             let two = "package p\n\nimport \"testing\"\n\ntype row struct{ a int }\n\nfunc TestA(t *testing.T) {\n\tgood := []struct{ a int }{{1}, {2}, {3}}\n\tbad := []row{{4}, {5}}\n\twant := []row{{6}}\n\tseen := map[string]struct{}{\"a\": {}, \"b\": {}}\n\tfor _, c := range good {\n\t\tif c.a == 0 {\n\t\t\tt.Fatal(c)\n\t\t}\n\t}\n\tfor _, c := range bad {\n\t\tif c.a == 0 {\n\t\t\tt.Fatal(c, want, seen)\n\t\t}\n\t}\n}\n";
+            let named_map = "package p\n\nimport \"testing\"\n\ntype cdWorkflowNode struct {\n\tDisplayName string\n\tPhase       string\n}\n\nfunc TestNodes(t *testing.T) {\n\tnodes := map[string]cdWorkflowNode{\n\t\t\"n1\": {DisplayName: \"step-a\", Phase: \"Succeeded\"},\n\t\t\"n2\": {DisplayName: \"step-b\", Phase: \"Failed\"},\n\t}\n\tif len(nodes) == 0 {\n\t\tt.Fatal(\"empty\")\n\t}\n}\n";
             Ok(first_test_cases("a_test.go", local)? == (Some(3), false)
                 && first_test_cases("a_test.go", package)? == (Some(3), false)
-                && first_test_cases("a_test.go", two)? == (Some(5), false))
+                && first_test_cases("a_test.go", two)? == (Some(5), false)
+                && first_test_cases("a_test.go", named_map)? == (Some(2), false))
         },
     ),
     (
