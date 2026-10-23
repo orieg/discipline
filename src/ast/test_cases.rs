@@ -728,6 +728,102 @@ fn go_type_name(node: Node) -> Option<Node> {
     }
 }
 
+/// Whether `node` names a type qualified by a package (`pkg.T`, `*pkg.T`, `pkg.T[K]`).
+fn go_is_qualified_type(node: Node) -> bool {
+    match node.kind() {
+        "qualified_type" => true,
+        "pointer_type" | "parenthesized_type" => {
+            elements(node).into_iter().any(go_is_qualified_type)
+        }
+        "generic_type" => node
+            .child_by_field_name("type")
+            .is_some_and(go_is_qualified_type),
+        _ => false,
+    }
+}
+
+/// Collects from a `type_declaration` node the names of struct types that declare at
+/// least one field (`type T struct { ... }` and `type T = struct { ... }`).
+fn go_collect_struct_types(decl: Node, src: &[u8], out: &mut Vec<String>) {
+    for spec in elements(decl) {
+        let (Some(name), Some(ty)) = (
+            spec.child_by_field_name("name"),
+            spec.child_by_field_name("type"),
+        ) else {
+            continue;
+        };
+        if matches!(spec.kind(), "type_spec" | "type_alias")
+            && ty.kind() == "struct_type"
+            && go_struct_has_fields(ty)
+        {
+            out.push(text(name, src).to_string());
+        }
+    }
+}
+
+/// Collects from a `for_clause` node (`for i := 0; i < len(rows); i++`) the identifiers
+/// passed to `len(...)`.
+fn go_collect_for_clause_lengths(node: Node, src: &[u8], out: &mut Vec<String>) {
+    if node.kind() == "call_expression" {
+        let is_len = node
+            .child_by_field_name("function")
+            .is_some_and(|f| f.kind() == "identifier" && text(f, src) == "len");
+        if is_len {
+            if let Some(args) = node.child_by_field_name("arguments") {
+                for arg in elements(args) {
+                    if arg.kind() == "identifier" {
+                        out.push(text(arg, src).to_string());
+                    }
+                }
+            }
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        go_collect_for_clause_lengths(child, src, out);
+    }
+}
+
+/// Whether every entry of a Go map literal's `body` has a struct literal with named
+/// fields (`"n1": {DisplayName: "step", Phase: "Succeeded"}`) as its value.
+fn go_map_body_has_struct_rows(body: Node) -> bool {
+    let entries = elements(body);
+    !entries.is_empty()
+        && entries.into_iter().all(|entry| {
+            if entry.kind() != "keyed_element" {
+                return false;
+            }
+            let parts = elements(entry);
+            let Some(val_elem) = parts.get(1) else {
+                return false;
+            };
+            let Some(val) = elements(*val_elem).into_iter().next() else {
+                return false;
+            };
+            let inner = match val.kind() {
+                "literal_value" => Some(val),
+                "composite_literal" => val.child_by_field_name("body"),
+                "unary_expression" => val
+                    .child_by_field_name("operand")
+                    .filter(|op| op.kind() == "composite_literal")
+                    .and_then(|op| op.child_by_field_name("body")),
+                _ => None,
+            };
+            let Some(inner) = inner else {
+                return false;
+            };
+            let fields = elements(inner);
+            !fields.is_empty()
+                && fields.into_iter().all(|field| {
+                    field.kind() == "keyed_element"
+                        && elements(field)
+                            .first()
+                            .and_then(|k| elements(*k).into_iter().next())
+                            .is_some_and(|k| matches!(k.kind(), "identifier" | "field_identifier"))
+                })
+        })
+}
+
 /// What the file a test stands in says about the names its body uses.
 struct GoFile<'a, 'tree> {
     src: &'a [u8],
@@ -736,7 +832,10 @@ struct GoFile<'a, 'tree> {
     /// Types declared at package level as a struct with fields, in this file and in
     /// the other files of its package.
     struct_types: &'a [String],
-    /// Identifiers the test body ranges over (`for _, c := range cases`).
+    /// Types declared inside the test body as a struct with fields.
+    local_struct_types: Vec<String>,
+    /// Identifiers the test body iterates over (`for _, c := range cases`,
+    /// `for i := 0; i < len(cases); i++`).
     ranged: Vec<String>,
     /// Every identifier in the test body.
     used: Vec<String>,
@@ -815,20 +914,7 @@ impl<'tree> GoDeclared<'tree> {
             super::ancestry::count(1);
             match decl.kind() {
                 "type_declaration" => {
-                    for spec in elements(decl) {
-                        let (Some(name), Some(ty)) = (
-                            spec.child_by_field_name("name"),
-                            spec.child_by_field_name("type"),
-                        ) else {
-                            continue;
-                        };
-                        if spec.kind() == "type_spec"
-                            && ty.kind() == "struct_type"
-                            && go_struct_has_fields(ty)
-                        {
-                            declared.struct_types.push(text(name, src).to_string());
-                        }
-                    }
+                    go_collect_struct_types(decl, src, &mut declared.struct_types);
                 }
                 "var_declaration" => {
                     for spec in elements(decl) {
@@ -885,12 +971,18 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
     fn collect_names(&mut self, node: Node<'tree>) {
         match node.kind() {
             "identifier" => self.used.push(text(node, self.src).to_string()),
+            "type_declaration" => {
+                go_collect_struct_types(node, self.src, &mut self.local_struct_types);
+            }
             "range_clause" => {
                 if let Some(right) = node.child_by_field_name("right") {
                     if right.kind() == "identifier" {
                         self.ranged.push(text(right, self.src).to_string());
                     }
                 }
+            }
+            "for_clause" => {
+                go_collect_for_clause_lengths(node, self.src, &mut self.ranged);
             }
             _ => {}
         }
@@ -901,8 +993,9 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
     }
 
     /// How the element type of a slice, array or map literal reads as a row type.
-    fn rows(&self, type_node: Node) -> GoRows {
+    fn rows(&self, type_node: Node, body: Node) -> GoRows {
         let src = self.src;
+        let is_map = type_node.kind() == "map_type";
         // The words that name a row of cases: a slice of `testCase` or `tests`, a map of
         // `caseRow`. A word is a whole word of the type's name, so `Showcase` and
         // `Contestant` are not rows.
@@ -924,8 +1017,15 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
             }
             _ => return GoRows::No,
         };
-        if row.kind() == "struct_type" {
-            return if go_struct_has_fields(row) {
+        let struct_node = match row.kind() {
+            "struct_type" => Some(row),
+            "pointer_type" => elements(row)
+                .into_iter()
+                .find(|c| c.kind() == "struct_type"),
+            _ => None,
+        };
+        if let Some(st) = struct_node {
+            return if go_struct_has_fields(st) {
                 GoRows::Table
             } else {
                 GoRows::No
@@ -934,15 +1034,23 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
         let Some(name) = go_type_name(row) else {
             return GoRows::No;
         };
-        let by_name = go_name_words(text(name, src))
+        let name_text = text(name, src);
+        let by_name = go_name_words(name_text)
             .iter()
             .any(|word| words.contains(&word.as_str()));
         if by_name {
             GoRows::Table
-        } else if row.kind() == "type_identifier"
-            && self.struct_types.iter().any(|t| t == text(row, src))
+        } else if !go_is_qualified_type(row)
+            && (self.struct_types.iter().any(|t| t == name_text)
+                || self.local_struct_types.iter().any(|t| t == name_text))
         {
-            GoRows::NamedStruct
+            if is_map {
+                GoRows::Table
+            } else {
+                GoRows::NamedStruct
+            }
+        } else if is_map && go_map_body_has_struct_rows(body) {
+            GoRows::Table
         } else {
             GoRows::No
         }
@@ -986,7 +1094,7 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
                 node.child_by_field_name("type"),
                 node.child_by_field_name("body"),
             ) {
-                let is_table = match self.rows(type_node) {
+                let is_table = match self.rows(type_node, body) {
                     GoRows::Table => true,
                     GoRows::NamedStruct => {
                         self.anc
@@ -1083,6 +1191,7 @@ pub fn extract_go_cases_in_package<'t>(
         src,
         anc,
         struct_types,
+        local_struct_types: Vec::new(),
         ranged: Vec::new(),
         used: Vec::new(),
         declared,
@@ -1094,6 +1203,7 @@ pub fn extract_go_cases_in_package<'t>(
             src: sibling.src,
             anc: &sibling.anc,
             struct_types,
+            local_struct_types: file.local_struct_types.clone(),
             ranged: file.ranged.clone(),
             used: Vec::new(),
             declared: sibling.level.declared(sibling.root, sibling.src),
@@ -2458,5 +2568,26 @@ fn test_matrix(#[values(1, 2)] a: i32, #[values(10, 20, 30)] b: i32) {
                 "( 3 , 4 ) \u{d7} f ( 2 )"
             ]
         );
+    }
+
+    #[test]
+    fn go_named_struct_map_is_a_case_table() {
+        let pkg_struct = "package p\n\nimport \"testing\"\n\ntype cdWorkflowNode struct {\n\tDisplayName string\n\tPhase       string\n}\n\nfunc TestNodes(t *testing.T) {\n\tnodes := map[string]cdWorkflowNode{\n\t\t\"n1\": {DisplayName: \"step-a\", Phase: \"Succeeded\"},\n\t\t\"n2\": {DisplayName: \"step-b\", Phase: \"Failed\"},\n\t}\n\tif len(nodes) == 0 {\n\t\tt.Fatal(\"empty\")\n\t}\n}\n";
+        assert_eq!(first_test("x_test.go", pkg_struct).cases, Some(2));
+
+        let ptr_struct =
+            pkg_struct.replace("map[string]cdWorkflowNode", "map[string]*cdWorkflowNode");
+        assert_eq!(first_test("x_test.go", &ptr_struct).cases, Some(2));
+
+        let local_struct = "package p\n\nimport \"testing\"\n\nfunc TestNodes(t *testing.T) {\n\ttype cdWorkflowNode = struct {\n\t\tDisplayName string\n\t\tPhase       string\n\t}\n\tnodes := map[string]cdWorkflowNode{\n\t\t\"n1\": {DisplayName: \"step-a\", Phase: \"Succeeded\"},\n\t\t\"n2\": {DisplayName: \"step-b\", Phase: \"Failed\"},\n\t}\n\tif len(nodes) == 0 {\n\t\tt.Fatal(\"empty\")\n\t}\n}\n";
+        assert_eq!(first_test("x_test.go", local_struct).cases, Some(2));
+
+        let external_struct_rows = "package p\n\nimport \"testing\"\n\nfunc TestNodes(t *testing.T) {\n\tnodes := map[string]wfv1.NodeStatus{\n\t\t\"n1\": {DisplayName: \"step-a\", Phase: \"Succeeded\"},\n\t\t\"n2\": {DisplayName: \"step-b\", Phase: \"Failed\"},\n\t}\n\tif len(nodes) == 0 {\n\t\tt.Fatal(\"empty\")\n\t}\n}\n";
+        assert_eq!(first_test("x_test.go", external_struct_rows).cases, Some(2));
+
+        // Negative controls: an empty struct type is a set, not a case table; and a map of
+        // an undeclared non-case type with positional values is not a case table.
+        let empty_struct = "package p\n\nimport \"testing\"\n\ntype emptyNode struct{}\n\nfunc TestSeen(t *testing.T) {\n\tseen := map[string]emptyNode{\n\t\t\"a\": {},\n\t\t\"b\": {},\n\t}\n\tif len(seen) == 0 {\n\t\tt.Fatal(\"empty\")\n\t}\n}\n";
+        assert_eq!(first_test("x_test.go", empty_struct).cases, None);
     }
 }
