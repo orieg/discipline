@@ -16,6 +16,10 @@ Implements the complete deterministic pipeline for `docs/benchmarks/precision-pr
 5. Artifact generator (`--generate-artifacts`) producing `manifest.json`, `findings.json`,
    `adjudication.json` (with explicit rater-kind and synthetic-LLM rater disclosure per
    Rule 3), `summary.json`, and `post-hoc-audit.json` under `docs/benchmarks/results/`.
+6. Replay of a committed manifest's exact pairs (`--from-manifest`), and the
+   `agent-pr-precision-v3` re-run (`docs/benchmarks/precision-preregistration-v3.toml`):
+   `--v3-stage diff|packet|artifacts` checks the reproduction of v2, applies the label-reuse
+   rule, builds the fresh-item packet and writes `docs/benchmarks/results-v3/`.
 """
 
 from __future__ import annotations
@@ -39,6 +43,7 @@ from typing import Any, Sequence
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PREREG_PATH = REPO_ROOT / "docs" / "benchmarks" / "precision-preregistration.toml"
 RESULTS_DIR = REPO_ROOT / "docs" / "benchmarks" / "results"
+V3_RESULTS_DIR = REPO_ROOT / "docs" / "benchmarks" / "results-v3"
 
 PILOT_REPOS: list[tuple[str, str]] = [
     ("astral-sh/uv", "uv"),
@@ -654,10 +659,13 @@ def post_hoc_audit(results_dir: Path = RESULTS_DIR) -> dict[str, Any]:
         return round(x, 6)
 
     lo_d, hi_d = newcombe_difference_ci(s_k, len(s_items), twin_k, len(twin))
+    generated_by = "python3 scripts/benchmark_precision.py --post-hoc-audit --write"
+    if Path(results_dir).resolve() != RESULTS_DIR.resolve():
+        generated_by += f" --results-dir {Path(results_dir).resolve().relative_to(REPO_ROOT)}"
     return {
         "study_id": study_id,
         "pre_registered": False,
-        "generated_by": "python3 scripts/benchmark_precision.py --post-hoc-audit --write",
+        "generated_by": generated_by,
         "structural_clustering": {
             "pull_requests_with_findings": robust["clusters"],
             "largest_pull_request_findings": largest[1],
@@ -859,27 +867,43 @@ def _replay_repo_commits(
     oids: set[str] = set()
     commit_data = []
     for sha, parent, an, ae, msg, agent_cat, pr_num in selected:
-        raw = subprocess.check_output(
-            ["git", "-C", str(repo_dir), "diff-tree", "-r", parent, sha],
-            text=True,
-        )
-        paths: list[str] = []
-        base_existing: set[str] = set()
-        for dline in raw.splitlines():
-            if "\t" not in dline:
-                continue
-            meta_str, path = dline.split("\t", 1)
-            paths.append(path)
-            cols = meta_str.split()
-            if len(cols) >= 4:
-                old_mode, new_mode, old_oid, new_oid = cols[0].lstrip(":"), cols[1], cols[2], cols[3]
-                if set(old_oid) != {"0"}:
-                    base_existing.add(path)
-                for mode, oid in ((old_mode, old_oid), (new_mode, new_oid)):
-                    if mode != "160000" and set(oid) != {"0"} and len(oid) == 40:
-                        oids.add(oid)
-        commit_data.append((sha, parent, an, ae, msg, agent_cat, pr_num, paths, sorted(base_existing)))
+        paths, base_existing = _changed_paths(repo_dir, parent, sha, oids)
+        commit_data.append((sha, parent, an, ae, msg, agent_cat, pr_num, paths, base_existing))
+    _prefetch_missing_blobs(repo_slug, repo_dir, oids, len(selected), t_repo)
+    results = _replay_commit_data(repo_slug, repo_dir, discipline_exe, commit_data)
+    print(f"[{repo_slug}] finished {len(results)} cases in {time.time() - t_repo:.1f}s")
+    return results
 
+
+def _changed_paths(
+    repo_dir: Path, parent: str, sha: str, oids: set[str]
+) -> tuple[list[str], list[str]]:
+    """Paths `git diff-tree -r parent sha` lists and those present on `parent`; adds their blob ids to `oids`."""
+    raw = subprocess.check_output(
+        ["git", "-C", str(repo_dir), "diff-tree", "-r", parent, sha],
+        text=True,
+    )
+    paths: list[str] = []
+    base_existing: set[str] = set()
+    for dline in raw.splitlines():
+        if "\t" not in dline:
+            continue
+        meta_str, path = dline.split("\t", 1)
+        paths.append(path)
+        cols = meta_str.split()
+        if len(cols) >= 4:
+            old_mode, new_mode, old_oid, new_oid = cols[0].lstrip(":"), cols[1], cols[2], cols[3]
+            if set(old_oid) != {"0"}:
+                base_existing.add(path)
+            for mode, oid in ((old_mode, old_oid), (new_mode, new_oid)):
+                if mode != "160000" and set(oid) != {"0"} and len(oid) == 40:
+                    oids.add(oid)
+    return paths, sorted(base_existing)
+
+
+def _prefetch_missing_blobs(
+    repo_slug: str, repo_dir: Path, oids: set[str], n_commits: int, t_repo: float
+) -> None:
     # Prefetch any missing blobs in batches of 400 (using --no-lazy-fetch so git does not
     # fire individual network requests inside cat-file --batch-check on partial clones)
     missing_oids = []
@@ -915,9 +939,17 @@ def _replay_repo_commits(
         )
     print(
         f"[{repo_slug}] prefetched {len(missing_oids)} missing blobs (of {len(oids)}) "
-        f"for {len(selected)} commits in {time.time() - t_repo:.1f}s"
+        f"for {n_commits} commits in {time.time() - t_repo:.1f}s"
     )
 
+
+def _replay_commit_data(
+    repo_slug: str,
+    repo_dir: Path,
+    discipline_exe: Path,
+    commit_data: list[tuple[Any, ...]],
+) -> list[dict[str, Any]]:
+    """Diff-scoped scratch-repository replay of each (sha, parent, ...) tuple with `discipline check`."""
     results: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory() as tmp:
         cfg_file = os.path.join(tmp, "bench-discipline.toml")
@@ -1038,7 +1070,6 @@ def _replay_repo_commits(
                 "returncode": res.returncode,
                 "violations": violations,
             })
-    print(f"[{repo_slug}] finished {len(results)} cases in {time.time() - t_repo:.1f}s")
     return results
 
 
@@ -1080,6 +1111,104 @@ def harvest_and_replay_evaluation(
     with open(out_raw_json, "w", encoding="utf-8") as f:
         json.dump(all_results, f, indent=2)
     print(f"Total eval cases: {len(all_results)} in {time.time() - t0:.1f}s")
+    return all_results
+
+
+def _commit_message_and_author(repo_dir: Path, sha: str) -> tuple[str, str, str] | None:
+    """(message, author name, author email) of `sha`, or None when the commit is absent.
+
+    The message is `%B` with trailing whitespace removed, which is what the harvester's
+    `git log` record split hands the replay.
+    """
+    res = subprocess.run(
+        ["git", "-C", str(repo_dir), "show", "-s", "--format=%an\x1f%ae\x1f%B", sha],
+        capture_output=True,
+        text=True,
+        errors="replace",
+    )
+    if res.returncode != 0:
+        return None
+    an, ae, body = res.stdout.split("\x1f", 2)
+    return body.rstrip(), an, ae
+
+
+def replay_from_manifest(
+    manifest_path: Path,
+    clones_dir: Path,
+    discipline_exe: Path,
+    out_raw_json: Path,
+    repos: Sequence[tuple[str, str]] = EVALUATION_REPOS,
+) -> list[dict[str, Any]]:
+    """Replay exactly the (repo, base_sha, head_sha) pairs of a committed study manifest.
+
+    Same diff-scoped scratch-repository replay and `discipline check` invocation as
+    `--harvest-and-replay`, without the harvest: no commit outside the manifest is read,
+    so new upstream merges cannot change the sample. `pr_number`, `author_hash` and
+    `agent_category` come from the manifest; the author hash recomputed from the clone is
+    recorded beside it. A pair whose commits are absent from the clone is reported in
+    the printed summary and left out, never replaced.
+    """
+    t0 = time.time()
+    manifest = json.loads(Path(manifest_path).read_text())
+    dir_for = dict(repos)
+    by_repo: dict[str, list[dict[str, Any]]] = {}
+    for entry in manifest["pull_requests"]:
+        if entry["repo"] not in dir_for:
+            raise ValueError(f"manifest repo {entry['repo']} has no clone directory")
+        by_repo.setdefault(entry["repo"], []).append(entry)
+
+    def replay_repo(repo_slug: str, entries: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+        t_repo = time.time()
+        repo_dir = clones_dir / dir_for[repo_slug]
+        oids: set[str] = set()
+        commit_data = []
+        missing = []
+        recomputed_hash: dict[str, str] = {}
+        for e in entries:
+            head = _commit_message_and_author(repo_dir, e["head_sha"])
+            if head is None or _commit_message_and_author(repo_dir, e["base_sha"]) is None:
+                missing.append(f"{repo_slug}@{e['head_sha']}")
+                continue
+            msg, an, ae = head
+            recomputed_hash[e["head_sha"]] = (
+                "sha256:" + hashlib.sha256(f"{an}<{ae}>".lower().encode("utf-8")).hexdigest()[:16]
+            )
+            paths, base_existing = _changed_paths(repo_dir, e["base_sha"], e["head_sha"], oids)
+            commit_data.append(
+                (e["head_sha"], e["base_sha"], an, ae, msg, e["agent_category"], e["pr_number"], paths, base_existing)
+            )
+        _prefetch_missing_blobs(repo_slug, repo_dir, oids, len(commit_data), t_repo)
+        results = _replay_commit_data(repo_slug, repo_dir, discipline_exe, commit_data)
+        author_of = {e["head_sha"]: e["author_hash"] for e in entries}
+        for r in results:
+            r["author_hash"] = author_of[r["sha"]]
+            r["author_hash_recomputed"] = recomputed_hash[r["sha"]]
+        print(f"[{repo_slug}] replayed {len(results)} manifest cases in {time.time() - t_repo:.1f}s")
+        return results, missing
+
+    results_by_repo: dict[str, list[dict[str, Any]]] = {}
+    missing_all: list[str] = []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futs = {pool.submit(replay_repo, slug, entries): slug for slug, entries in by_repo.items()}
+        for fut in as_completed(futs):
+            results, missing = fut.result()
+            results_by_repo[futs[fut]] = results
+            missing_all.extend(missing)
+
+    # Manifest order, so the twin sample and packet order match the study that wrote it.
+    by_key = {(r["repo"], r["sha"]): r for rs in results_by_repo.values() for r in rs}
+    all_results = [
+        by_key[(e["repo"], e["head_sha"])]
+        for e in manifest["pull_requests"]
+        if (e["repo"], e["head_sha"]) in by_key
+    ]
+    out_raw_json.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_raw_json, "w", encoding="utf-8") as f:
+        json.dump(all_results, f, indent=2)
+    print(
+        f"Replayed {len(all_results)} of {len(manifest['pull_requests'])} manifest pairs "
+        f"in {time.time() - t0:.1f}s; absent from the clones: {sorted(missing_all) or 'none'}"
+    )
     return all_results
 
 
@@ -1172,6 +1301,20 @@ def _get_line_context(
     return "\n".join(f"{i}: {lines[i - 1]}" for i in range(start, end + 1))
 
 
+def twin_sample(
+    eval_cases: list[dict[str, Any]], size: int = 150, seed: int = 482
+) -> list[tuple[dict[str, Any], str, str]]:
+    """The seeded `naive-sensitive-path-filter` sample: (case, path, code) over every twin flag in case order."""
+    candidates = []
+    for case in eval_cases:
+        base_set = set(case["base_existing"])
+        for p in case["paths"]:
+            tcode = classify_twin_sensitive_path(p, p in base_set)
+            if tcode:
+                candidates.append((case, p, tcode))
+    return random.Random(seed).sample(candidates, size)
+
+
 def build_blinded_packet(
     eval_cases: list[dict[str, Any]],
     clones_dir: Path,
@@ -1215,16 +1358,7 @@ def build_blinded_packet(
                 "line_context": lc,
             })
 
-    twin_candidates = []
-    for case in eval_cases:
-        base_set = set(case["base_existing"])
-        for p in case["paths"]:
-            tcode = classify_twin_sensitive_path(p, p in base_set)
-            if tcode:
-                twin_candidates.append((case, p, tcode))
-
-    rng = random.Random(twin_sample_seed)
-    twin_sampled = rng.sample(twin_candidates, twin_sample_size)
+    twin_sampled = twin_sample(eval_cases, twin_sample_size, twin_sample_seed)
     for case, p, tcode in twin_sampled:
         raw_items.append({
             "source_tool": "naive-sensitive-path-filter",
@@ -1300,10 +1434,20 @@ def generate_benchmark_artifacts(
     study_id: str = "agent-pr-precision-v2",
     rater_kind: str = "llm-subagent",
     results_dir: Path = RESULTS_DIR,
+    committed_rater_packet: str = "docs/benchmarks/results/rater-packet.json",
+    host: str = "Apple M-series macOS 15 arm64",
+    label_provenance: dict[str, dict[str, Any]] | None = None,
+    extra_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Generate `manifest.json`, `findings.json`, `adjudication.json`, and `summary.json`
     under `results_dir` from the evaluation cases, ground key, and rater labels.
+
+    `label_provenance` (a re-run that inherits labels, v3 onward) maps every item id to
+    `{"label_source": "inherited-v2" | "fresh", ...}` plus any fields to record on the
+    finding (`finding_fields`) and adjudication (`adjudication_fields`). Kappa is then
+    computed over the fresh items only, the scope the pre-registration names; agreement
+    counts stay over every item.
     """
     results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1354,9 +1498,14 @@ def generate_benchmark_artifacts(
 
     total_items = len(ground_key)
     keys = [f"ITEM-{i:04d}" for i in range(1, total_items + 1)]
-    l1_seq = [rater_1_labels[k] for k in keys]
-    l2_seq = [rater_2_labels[k] for k in keys]
-    kappa = cohens_kappa(l1_seq, l2_seq)
+    kappa_keys = (
+        keys
+        if label_provenance is None
+        else [k for k in keys if label_provenance[k]["label_source"] == "fresh"]
+    )
+    l1_seq = [rater_1_labels[k] for k in kappa_keys]
+    l2_seq = [rater_2_labels[k] for k in kappa_keys]
+    kappa = cohens_kappa(l1_seq, l2_seq) if kappa_keys else None
 
     rater_1_hash = "sha256:" + hashlib.sha256(rater_1_raw_id.encode("utf-8")).hexdigest()[:16]
     rater_2_hash = "sha256:" + hashlib.sha256(rater_2_raw_id.encode("utf-8")).hexdigest()[:16]
@@ -1386,6 +1535,7 @@ def generate_benchmark_artifacts(
         else:
             twin_sampled_count += 1
 
+        prov = label_provenance[item_id] if label_provenance is not None else {}
         findings_entries.append({
             "item_id": item_id,
             "source_tool": gk["source_tool"],
@@ -1397,14 +1547,17 @@ def generate_benchmark_artifacts(
             "author_hash": gk["author_hash"],
             "file": gk["file"],
             "line": gk["line"],
+            **prov.get("finding_fields", {}),
         })
         adjudication_entries.append({
             "item_id": item_id,
+            **({"label_source": prov["label_source"]} if prov else {}),
             "rater_1_label": l1,
             "rater_2_label": l2,
             "agreed": agreed,
             "tie_breaker_label": tb_l,
             "final_label": final_l,
+            **prov.get("adjudication_fields", {}),
         })
 
     findings_doc = {
@@ -1429,15 +1582,26 @@ def generate_benchmark_artifacts(
         "tie_breaker_id": tie_breaker_hash,
         "tie_breaker_kind": rater_kind,
         "synthetic_rater_disclosure": SYNTHETIC_RATER_DISCLOSURE,
-        "committed_rater_packet": "docs/benchmarks/results/rater-packet.json",
+        "committed_rater_packet": committed_rater_packet,
         "total_items": total_items,
         "exact_agreement_count": agreed_count,
         "disagreement_count": total_items - agreed_count,
-        "cohens_kappa": round(kappa, 6),
+        "cohens_kappa": None if kappa is None else round(kappa, 6),
         "min_acceptable_kappa": 0.75,
-        "kappa_passed": kappa >= 0.75,
+        "kappa_passed": kappa is not None and kappa >= 0.75,
         "adjudications": adjudication_entries,
     }
+    if label_provenance is not None:
+        fresh_agreed = sum(1 for k in kappa_keys if rater_1_labels[k] == rater_2_labels[k])
+        adjudication_doc = {
+            **{k: v for k, v in adjudication_doc.items() if k != "adjudications"},
+            "cohens_kappa_scope": "fresh-items",
+            "inherited_label_count": total_items - len(kappa_keys),
+            "fresh_label_count": len(kappa_keys),
+            "fresh_exact_agreement_count": fresh_agreed,
+            "fresh_disagreement_count": len(kappa_keys) - fresh_agreed,
+            "adjudications": adjudication_entries,
+        }
     with open(results_dir / "adjudication.json", "w", encoding="utf-8") as f:
         json.dump(adjudication_doc, f, indent=2)
 
@@ -1553,9 +1717,9 @@ def generate_benchmark_artifacts(
         "study_id": study_id,
         "discipline_version": discipline_version,
         "evaluated_commit": evaluated_commit,
-        "host": "Apple M-series macOS 15 arm64",
+        "host": host,
         "confidence_level": 0.95,
-        "cohens_kappa": round(kappa, 6),
+        "cohens_kappa": None if kappa is None else round(kappa, 6),
         "rater_kind": rater_kind,
         "synthetic_rater_disclosure": SYNTHETIC_RATER_DISCLOSURE,
         "pull_request_block_rates": {
@@ -1576,11 +1740,598 @@ def generate_benchmark_artifacts(
         "class_results": class_summaries,
         "twin_baseline_result": twin_summary,
         "per_gate_results": per_gate_summaries,
+        **(extra_summary or {}),
     }
     with open(results_dir / "summary.json", "w", encoding="utf-8") as f:
         json.dump(summary_doc, f, indent=2)
 
     return summary_doc
+
+
+# --- agent-pr-precision-v3: re-run on the v2 corpus (docs/benchmarks/precision-preregistration-v3.toml) ---
+
+V3_STUDY_ID = "agent-pr-precision-v3"
+V3_PACKET_SHUFFLE_SEED = 48202
+V3_ANCHOR_SEED = 48203
+V3_ANCHORS_PER_SOURCE = 10
+V3_RATER_PACKET = "docs/benchmarks/results-v3/rater-packet.json"
+
+
+def _location_key(gate: str, code: str, file: str | None, line: int | None) -> tuple[Any, ...]:
+    return (gate, code, file, line)
+
+
+def attach_reference_messages(
+    v2_findings: list[dict[str, Any]],
+    v2_manifest: dict[str, Any],
+    reference_cases: list[dict[str, Any]],
+) -> tuple[dict[str, str], list[str]]:
+    """Recover each v2 discipline finding's message from a replay with v2's binary.
+
+    Returns (item_id -> message, differences). The replay reproduces v2 when, per pull
+    request, its multiset of (gate, code, file, line) equals findings.json's and its
+    blocking count equals the manifest's; every difference is listed. Within a repeated
+    key, messages are assigned in replay order to items in item-id order.
+    """
+    diffs: list[str] = []
+    v2_by_pr: dict[tuple[str, str], dict[tuple[Any, ...], list[str]]] = {}
+    for item in sorted(v2_findings, key=lambda i: i["item_id"]):
+        if item["source_tool"] != "discipline":
+            continue
+        key = _location_key(item["gate"], item["code"], item["file"], item["line"])
+        v2_by_pr.setdefault((item["repo"], item["head_sha"]), {}).setdefault(key, []).append(item["item_id"])
+    ref_by_pr = {(c["repo"], c["sha"]): c for c in reference_cases}
+    blocking = {(e["repo"], e["head_sha"]): e["discipline_blocking_findings"] for e in v2_manifest["pull_requests"]}
+    messages: dict[str, str] = {}
+    for pr, expected in blocking.items():
+        case = ref_by_pr.get(pr)
+        if case is None:
+            diffs.append(f"{pr[0]}@{pr[1][:12]}: not replayed")
+            continue
+        if len(case["violations"]) != expected:
+            diffs.append(f"{pr[0]}@{pr[1][:12]}: {len(case['violations'])} blocking findings, manifest says {expected}")
+        got: dict[tuple[Any, ...], list[str]] = {}
+        for v in case["violations"]:
+            got.setdefault(_location_key(v["gate"], v["code"], v["file"], v["line"]), []).append(v["message"])
+        want = v2_by_pr.get(pr, {})
+        for key in sorted(set(got) | set(want), key=repr):
+            ids, msgs = want.get(key, []), got.get(key, [])
+            if len(ids) != len(msgs):
+                diffs.append(f"{pr[0]}@{pr[1][:12]} {key}: v2 has {len(ids)}, replay has {len(msgs)}")
+            for item_id, msg in zip(ids, msgs):
+                messages[item_id] = msg
+    return messages, diffs
+
+
+def diff_findings_against_v2(
+    v2_findings: list[dict[str, Any]],
+    v2_messages: dict[str, str],
+    cases: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Classify each finding of a re-run against v2 per the pre-registered label-reuse rule.
+
+    Per pull request: `unchanged` matches a v2 finding on (gate, code, file, line,
+    message) as a multiset; `changed` shares (gate, file, line) with a still-unmatched v2
+    finding but differs in code or message; `new` has no such v2 finding; v2 findings
+    left over are `gone`. A v2 finding without a recovered message can only be `gone`.
+    """
+    v2_by_pr: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for item in sorted(v2_findings, key=lambda i: i["item_id"]):
+        if item["source_tool"] == "discipline":
+            v2_by_pr.setdefault((item["repo"], item["head_sha"]), []).append(item)
+    records: list[dict[str, Any]] = []
+    gone: list[str] = []
+    for ci, case in enumerate(cases):
+        pool = list(v2_by_pr.pop((case["repo"], case["sha"]), []))
+        cats: list[tuple[str, str | None]] = [("new", None)] * len(case["violations"])
+        for vi, v in enumerate(case["violations"]):
+            for pi, item in enumerate(pool):
+                if (
+                    item["item_id"] in v2_messages
+                    and _location_key(item["gate"], item["code"], item["file"], item["line"])
+                    == _location_key(v["gate"], v["code"], v["file"], v["line"])
+                    and v2_messages[item["item_id"]] == v["message"]
+                ):
+                    cats[vi] = ("unchanged", item["item_id"])
+                    pool.pop(pi)
+                    break
+        for vi, v in enumerate(case["violations"]):
+            if cats[vi][0] != "new":
+                continue
+            for pi, item in enumerate(pool):
+                if item["item_id"] in v2_messages and (item["gate"], item["file"], item["line"]) == (
+                    v["gate"], v["file"], v["line"]
+                ):
+                    cats[vi] = ("changed", item["item_id"])
+                    pool.pop(pi)
+                    break
+        gone.extend(item["item_id"] for item in pool)
+        for vi, v in enumerate(case["violations"]):
+            records.append({
+                "case_index": ci,
+                "violation_index": vi,
+                "repo": case["repo"],
+                "head_sha": case["sha"],
+                "gate": v["gate"],
+                "code": v["code"],
+                "category": cats[vi][0],
+                "v2_item_id": cats[vi][1],
+            })
+    for items in v2_by_pr.values():
+        gone.extend(item["item_id"] for item in items)
+    v2_gate = {i["item_id"]: i["gate"] for i in v2_findings}
+    by_gate: dict[str, dict[str, int]] = {}
+    for r in records:
+        cell = by_gate.setdefault(r["gate"], {"unchanged": 0, "changed": 0, "new": 0, "gone": 0})
+        cell[r["category"]] += 1
+    for item_id in gone:
+        cell = by_gate.setdefault(v2_gate[item_id], {"unchanged": 0, "changed": 0, "new": 0, "gone": 0})
+        cell["gone"] += 1
+    return {"records": records, "gone": sorted(gone), "by_gate": dict(sorted(by_gate.items()))}
+
+
+def twin_reuse(
+    cases: list[dict[str, Any]], v2_findings: list[dict[str, Any]]
+) -> tuple[list[tuple[dict[str, Any], str, str]], dict[int, str]]:
+    """Redraw the twin sample and map each sampled flag (by position) to the v2 twin item it repeats."""
+    sample = twin_sample(cases)
+    v2_twin: dict[tuple[str, str, str, str], list[str]] = {}
+    for item in sorted(v2_findings, key=lambda i: i["item_id"]):
+        if item["source_tool"] != "discipline":
+            v2_twin.setdefault((item["repo"], item["head_sha"], item["file"], item["code"]), []).append(item["item_id"])
+    inherited: dict[int, str] = {}
+    for pos, (case, path, code) in enumerate(sample):
+        ids = v2_twin.get((case["repo"], case["sha"], path, code))
+        if ids:
+            inherited[pos] = ids.pop(0)
+    return sample, inherited
+
+
+def _packet_raw_item(
+    clones_dir: Path,
+    repo_map: dict[str, str],
+    file_cache: dict[tuple[str, str, str], list[str]],
+    repo: str,
+    sha: str,
+    parent: str,
+    subject: str,
+    file: str | None,
+    line: int | None,
+    code: str,
+) -> dict[str, Any]:
+    if code not in RULE_SUMMARIES:
+        raise ValueError(
+            f"finding code {code} has no prose rule summary; add one to RULE_SUMMARIES from "
+            "docs/GATES.md (the generic fallback would name the gate to the raters)"
+        )
+    return {
+        "repo": repo,
+        "commit_sha": sha[:12],
+        "commit_subject": subject,
+        "file": file,
+        "line": line,
+        "rule_summary": RULE_SUMMARIES[code],
+        "diff_excerpt": _redact_packet_pii_literals(
+            _get_diff_excerpt(clones_dir, repo_map, repo, parent, sha, file, line)
+        ),
+        "line_context": _redact_packet_pii_literals(
+            _get_line_context(clones_dir, repo_map, file_cache, repo, sha, file, line)
+        ),
+    }
+
+
+def build_v3_packet(
+    cases: list[dict[str, Any]],
+    diff: dict[str, Any],
+    twin_inherited: dict[int, str],
+    twin_sampled: list[tuple[dict[str, Any], str, str]],
+    v2_findings: list[dict[str, Any]],
+    v2_manifest: dict[str, Any],
+    clones_dir: Path,
+    ground_key_out: Path,
+    rater_packet_out: Path,
+) -> list[dict[str, Any]]:
+    """Blinded packet of the fresh items (new and changed findings, non-inherited twin flags) plus anchors."""
+    repo_map = dict(EVALUATION_REPOS)
+    file_cache: dict[tuple[str, str, str], list[str]] = {}
+    raw: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for r in diff["records"]:
+        if r["category"] == "unchanged":
+            continue
+        case = cases[r["case_index"]]
+        v = case["violations"][r["violation_index"]]
+        raw.append((
+            {"role": "fresh", "source_tool": "discipline", "case_index": r["case_index"],
+             "violation_index": r["violation_index"], "category": r["category"]},
+            _packet_raw_item(clones_dir, repo_map, file_cache, case["repo"], case["sha"], case["parent"],
+                             case["subject"], v["file"], v["line"], v["code"]),
+        ))
+    for pos, (case, path, code) in enumerate(twin_sampled):
+        if pos in twin_inherited:
+            continue
+        raw.append((
+            {"role": "fresh", "source_tool": "naive-sensitive-path-filter", "twin_position": pos},
+            _packet_raw_item(clones_dir, repo_map, file_cache, case["repo"], case["sha"], case["parent"],
+                             case["subject"], path, None, code),
+        ))
+    rng = random.Random(V3_ANCHOR_SEED)
+    parent_of = {(e["repo"], e["head_sha"]): e["base_sha"] for e in v2_manifest["pull_requests"]}
+    subject_of = {(c["repo"], c["sha"]): c["subject"] for c in cases}
+    for source in ("discipline", "naive-sensitive-path-filter"):
+        pool = sorted(
+            (i for i in v2_findings if (i["source_tool"] == "discipline") == (source == "discipline")),
+            key=lambda i: i["item_id"],
+        )
+        for item in rng.sample(pool, V3_ANCHORS_PER_SOURCE):
+            pr = (item["repo"], item["head_sha"])
+            raw.append((
+                {"role": "anchor", "source_tool": item["source_tool"], "v2_item_id": item["item_id"]},
+                _packet_raw_item(clones_dir, repo_map, file_cache, item["repo"], item["head_sha"],
+                                 parent_of[pr], subject_of[pr], item["file"], item["line"], item["code"]),
+            ))
+    random.Random(V3_PACKET_SHUFFLE_SEED).shuffle(raw)
+    ground_key: dict[str, Any] = {}
+    items = []
+    for idx, (key, blinded) in enumerate(raw, 1):
+        packet_id = f"PKT-{idx:04d}"
+        ground_key[packet_id] = key
+        items.append({"item_id": packet_id, **blinded})
+    ground_key_out.parent.mkdir(parents=True, exist_ok=True)
+    ground_key_out.write_text(json.dumps(ground_key, indent=2) + "\n")
+    rater_packet_out.parent.mkdir(parents=True, exist_ok=True)
+    rater_packet_out.write_text(json.dumps({
+        "study_id": V3_STUDY_ID,
+        "blind_to_source_tool": True,
+        "blind_to_gate_name": True,
+        "blind_to_previous_labels": True,
+        "anchor_sample_seed": V3_ANCHOR_SEED,
+        "packet_shuffle_seed": V3_PACKET_SHUFFLE_SEED,
+        "total_items": len(items),
+        "items": items,
+    }, indent=2) + "\n")
+    return items
+
+
+def generate_v3_artifacts(
+    cases: list[dict[str, Any]],
+    diff: dict[str, Any],
+    twin_sampled: list[tuple[dict[str, Any], str, str]],
+    twin_inherited: dict[int, str],
+    v2_results_dir: Path,
+    v2_messages: dict[str, str],
+    reproduction_differences: list[str],
+    packet_key: dict[str, Any],
+    ratings: dict[str, Any],
+    evaluated_commit: str,
+    host: str,
+    results_dir: Path = V3_RESULTS_DIR,
+) -> dict[str, Any]:
+    """Write the v3 manifest, findings, adjudication and summary, inheriting v2 labels per the label-reuse rule."""
+    v2_findings = json.loads((v2_results_dir / "findings.json").read_text())["items"]
+    v2_adj = {a["item_id"]: a for a in json.loads((v2_results_dir / "adjudication.json").read_text())["adjudications"]}
+    r1, r2, tb = ratings["rater_1"], ratings["rater_2"], ratings.get("tie_breaker", {})
+    fresh_packet_id: dict[tuple[Any, ...], str] = {}
+    anchors: list[tuple[str, str]] = []
+    for packet_id, key in packet_key.items():
+        if key["role"] == "anchor":
+            anchors.append((packet_id, key["v2_item_id"]))
+        elif key["source_tool"] == "discipline":
+            fresh_packet_id[("d", key["case_index"], key["violation_index"])] = packet_id
+        else:
+            fresh_packet_id[("t", key["twin_position"])] = packet_id
+    record_of = {(r["case_index"], r["violation_index"]): r for r in diff["records"]}
+
+    ground_key: dict[str, Any] = {}
+    l1: dict[str, str] = {}
+    l2: dict[str, str] = {}
+    lt: dict[str, str] = {}
+    provenance: dict[str, dict[str, Any]] = {}
+
+    def add(item: dict[str, Any], v2_id: str | None, packet_id: str | None, finding_fields: dict[str, Any]) -> None:
+        item_id = f"ITEM-{len(ground_key) + 1:04d}"
+        ground_key[item_id] = item
+        if v2_id is not None:
+            a = v2_adj[v2_id]
+            l1[item_id], l2[item_id] = a["rater_1_label"], a["rater_2_label"]
+            if a["tie_breaker_label"] is not None:
+                lt[item_id] = a["tie_breaker_label"]
+            provenance[item_id] = {
+                "label_source": "inherited-v2",
+                "finding_fields": finding_fields,
+                "adjudication_fields": {"v2_item_id": v2_id},
+            }
+        else:
+            assert packet_id is not None
+            l1[item_id], l2[item_id] = r1[packet_id], r2[packet_id]
+            if packet_id in tb:
+                lt[item_id] = tb[packet_id]
+            provenance[item_id] = {
+                "label_source": "fresh",
+                "finding_fields": finding_fields,
+                "adjudication_fields": {"packet_item_id": packet_id},
+            }
+
+    for ci, case in enumerate(cases):
+        for vi, v in enumerate(case["violations"]):
+            rec = record_of[(ci, vi)]
+            inherited = rec["category"] == "unchanged"
+            add(
+                {**case, "source_tool": "discipline", "gate": v["gate"], "code": v["code"],
+                 "file": v["file"], "line": v["line"]},
+                rec["v2_item_id"] if inherited else None,
+                None if inherited else fresh_packet_id[("d", ci, vi)],
+                {
+                    # Same LAN-address and home-path masking as the packet; the key compares raw messages.
+                    "message": _redact_packet_pii_literals(v["message"]),
+                    "diff_category": rec["category"],
+                    "v2_item_id": rec["v2_item_id"],
+                },
+            )
+    for pos, (case, path, code) in enumerate(twin_sampled):
+        v2_id = twin_inherited.get(pos)
+        add(
+            {**case, "source_tool": "naive-sensitive-path-filter", "gate": "naive-sensitive-path-filter",
+             "code": code, "file": path, "line": None},
+            v2_id,
+            None if v2_id is not None else fresh_packet_id[("t", pos)],
+            {"diff_category": "unchanged" if v2_id is not None else "new", "v2_item_id": v2_id},
+        )
+
+    fresh_ids = [k for k, p in provenance.items() if p["label_source"] == "fresh"]
+    v2_final = {i: a["final_label"] for i, a in v2_adj.items()}
+    anchor_r1 = [r1[p] for p, _ in anchors]
+    anchor_r2 = [r2[p] for p, _ in anchors]
+    anchor_v2 = [v2_final[v] for _, v in anchors]
+    both_1 = [l1[k] for k in fresh_ids] + anchor_r1
+    both_2 = [l2[k] for k in fresh_ids] + anchor_r2
+    inherited_n = len(ground_key) - len(fresh_ids)
+    extra = {
+        "previous_study_id": "agent-pr-precision-v2",
+        "preregistration": "docs/benchmarks/precision-preregistration-v3.toml",
+        "corpus_prior_inspection": (
+            "The 232 pull requests and every 0.23.0 finding on them were inspected and labelled "
+            "under agent-pr-precision-v2; v3 characterises the 0.25.3 binary on the same changes, "
+            "not precision on unseen agent pull requests."
+        ),
+        "reproduction_check": {
+            "reference_binary": "cargo build --release at 82d02046e4d64012413885b354873cfa769be329",
+            "reproduced": not reproduction_differences,
+            "differences": reproduction_differences,
+            "v2_messages_recovered": len(v2_messages),
+        },
+        "label_reuse": {
+            "inherited_from_v2": inherited_n,
+            "fresh": len(fresh_ids),
+            "fresh_discipline": sum(1 for k in fresh_ids if ground_key[k]["source_tool"] == "discipline"),
+            "fresh_twin": sum(1 for k in fresh_ids if ground_key[k]["source_tool"] != "discipline"),
+            "twin_sample_identical_to_v2": len(twin_inherited) == len(twin_sampled),
+        },
+        "findings_diff_vs_v2": {
+            "unchanged": sum(r["category"] == "unchanged" for r in diff["records"]),
+            "changed": sum(r["category"] == "changed" for r in diff["records"]),
+            "new": sum(r["category"] == "new" for r in diff["records"]),
+            "gone": len(diff["gone"]),
+            "gone_v2_item_ids": diff["gone"],
+            "by_gate": diff["by_gate"],
+        },
+        "anchor_check": {
+            "anchors": len(anchors),
+            "rater_1_agrees_with_v2_final": sum(a == b for a, b in zip(anchor_r1, anchor_v2)),
+            "rater_2_agrees_with_v2_final": sum(a == b for a, b in zip(anchor_r2, anchor_v2)),
+            "resolved_agrees_with_v2_final": sum(
+                (r1[p] if r1[p] == r2[p] else tb.get(p, "cannot-tell")) == v2_final[v] for p, v in anchors
+            ),
+            "cohens_kappa_fresh_plus_anchor": round(cohens_kappa(both_1, both_2), 6) if both_1 else None,
+            "items": [
+                {
+                    "packet_item_id": p,
+                    "v2_item_id": v,
+                    "source_tool": packet_key[p]["source_tool"],
+                    "v2_final_label": v2_final[v],
+                    "rater_1_label": r1[p],
+                    "rater_2_label": r2[p],
+                    "tie_breaker_label": tb.get(p) if r1[p] != r2[p] else None,
+                }
+                for p, v in sorted(anchors)
+            ],
+            "use": "drift check only; anchor labels are never final labels",
+        },
+    }
+    return generate_benchmark_artifacts(
+        eval_cases=cases,
+        ground_key=ground_key,
+        rater_1_labels=l1,
+        rater_2_labels=l2,
+        tie_breaker_labels=lt,
+        rater_1_raw_id=ratings["rater_1_id"],
+        rater_2_raw_id=ratings["rater_2_id"],
+        tie_breaker_raw_id=ratings["tie_breaker_id"],
+        evaluated_commit=evaluated_commit,
+        discipline_version="0.25.3",
+        study_id=V3_STUDY_ID,
+        results_dir=results_dir,
+        committed_rater_packet=V3_RATER_PACKET,
+        host=host,
+        label_provenance=provenance,
+        extra_summary=extra,
+    )
+
+
+def _self_test_v3_label_reuse() -> None:
+    """The label-reuse diff on a hand-built pair of v2 findings and re-run violations."""
+    def f(item_id: str, head: str, gate: str, code: str, file: str | None, line: int | None) -> dict[str, Any]:
+        return {"item_id": item_id, "source_tool": "discipline", "repo": "r/r", "head_sha": head,
+                "gate": gate, "code": code, "file": file, "line": line}
+
+    v2 = [
+        f("ITEM-0001", "a", "ci-integrity", "ci-integrity/unpinned-action", "w.yml", 3),
+        f("ITEM-0002", "a", "dependency-delta", "dependency-delta/direct-dependency-added", "package.json", None),
+        f("ITEM-0003", "a", "dependency-delta", "dependency-delta/direct-dependency-added", "package.json", None),
+        f("ITEM-0004", "a", "assertion-reduction", "assertion-reduction/assertions-reduced", "t.py", 9),
+        f("ITEM-0005", "b", "test-floor", "test-floor/test-count-below-floor", "x_test.go", None),
+        f("ITEM-0006", "c", "pii", "pii/host-or-pii-leak", "README.md", 1),
+        {"item_id": "ITEM-0007", "source_tool": "naive-sensitive-path-filter", "repo": "r/r", "head_sha": "a",
+         "gate": "naive-sensitive-path-filter", "code": "twin-sensitive-path/ci-workflow", "file": "w.yml", "line": None},
+    ]
+    msgs = {"ITEM-0001": "pin it", "ITEM-0002": "adds left-pad", "ITEM-0003": "adds right-pad",
+            "ITEM-0004": "2 -> 1 assertions", "ITEM-0005": "4 -> 3 tests"}  # ITEM-0006 not reproduced
+
+    def v(gate: str, code: str, file: str | None, line: int | None, message: str) -> dict[str, Any]:
+        return {"gate": gate, "code": code, "file": file, "line": line, "message": message}
+
+    cases = [
+        {"repo": "r/r", "sha": "a", "violations": [
+            v("dependency-delta", "dependency-delta/direct-dependency-added", "package.json", None, "adds right-pad"),
+            v("ci-integrity", "ci-integrity/unpinned-action", "w.yml", 3, "pin it"),
+            v("assertion-reduction", "assertion-reduction/assertions-reduced", "t.py", 9, "weak isinstance"),
+            v("assertion-reduction", "assertion-reduction/assertions-reduced", "t.py", 20, "new finding"),
+        ]},
+        {"repo": "r/r", "sha": "b", "violations": [
+            v("test-floor", "test-floor/test-count-below-floor", "x_test.go", None, "4 -> 3 tests"),
+        ]},
+        {"repo": "r/r", "sha": "c", "violations": [
+            v("pii", "pii/host-or-pii-leak", "README.md", 1, "home path"),
+        ]},
+    ]
+    d = diff_findings_against_v2(v2, msgs, cases)
+    got = [(r["head_sha"], r["violation_index"], r["category"], r["v2_item_id"]) for r in d["records"]]
+    assert got == [
+        ("a", 0, "unchanged", "ITEM-0003"),
+        ("a", 1, "unchanged", "ITEM-0001"),
+        ("a", 2, "changed", "ITEM-0004"),
+        ("a", 3, "new", None),
+        ("b", 0, "unchanged", "ITEM-0005"),
+        ("c", 0, "new", None),
+    ], got
+    assert d["gone"] == ["ITEM-0002", "ITEM-0006"], d["gone"]
+    assert d["by_gate"]["dependency-delta"] == {"unchanged": 1, "changed": 0, "new": 0, "gone": 1}
+    assert d["by_gate"]["assertion-reduction"] == {"unchanged": 0, "changed": 1, "new": 1, "gone": 0}
+
+    # Reproduction check: a missing finding and a wrong blocking count are both reported.
+    manifest = {"pull_requests": [
+        {"repo": "r/r", "head_sha": "a", "discipline_blocking_findings": 4},
+        {"repo": "r/r", "head_sha": "b", "discipline_blocking_findings": 1},
+        {"repo": "r/r", "head_sha": "c", "discipline_blocking_findings": 1},
+    ]}
+    ref = [
+        {"repo": "r/r", "sha": "a", "violations": [
+            v("ci-integrity", "ci-integrity/unpinned-action", "w.yml", 3, "pin it"),
+            v("dependency-delta", "dependency-delta/direct-dependency-added", "package.json", None, "adds left-pad"),
+            v("dependency-delta", "dependency-delta/direct-dependency-added", "package.json", None, "adds right-pad"),
+            v("assertion-reduction", "assertion-reduction/assertions-reduced", "t.py", 9, "2 -> 1 assertions"),
+        ]},
+        {"repo": "r/r", "sha": "b", "violations": [
+            v("test-floor", "test-floor/test-count-below-floor", "x_test.go", None, "4 -> 3 tests"),
+        ]},
+        {"repo": "r/r", "sha": "c", "violations": []},
+    ]
+    messages, diffs = attach_reference_messages(v2, manifest, ref)
+    assert messages == msgs, messages
+    assert len(diffs) == 2 and all("r/r@c" in x for x in diffs), diffs
+    _, clean = attach_reference_messages(v2[:5] + v2[6:], {"pull_requests": manifest["pull_requests"][:2]}, ref[:2])
+    assert clean == [], clean
+
+
+FAKE_DISCIPLINE = '''#!{python}
+import json, os, sys
+args = sys.argv[1:]
+body = open(args[args.index("--pr-body-file") + 1], encoding="utf-8").read()
+tree = sorted(
+    os.path.relpath(os.path.join(d, f), ".")
+    for d, ds, fs in os.walk(".")
+    if not d.startswith("./.git")
+    for f in fs
+)
+log = {{
+    "args": args,
+    "replay_case": os.environ.get("DISCIPLINE_REPLAY_CASE"),
+    "no_network": os.environ.get("DISCIPLINE_NO_NETWORK"),
+    "body": body,
+    "tree": tree,
+}}
+with open({log!r}, "a", encoding="utf-8") as f:
+    f.write(json.dumps(log) + "\\n")
+print(json.dumps({{"outcomes": [{{"gate": "assertion-reduction", "violations": [
+    {{"severity": "error", "code": "assertion-reduction/assertions-reduced",
+      "file": "tests/test_a.py", "line": 2, "message": "fewer assertions"}},
+    {{"severity": "warning", "code": "assertion-reduction/assertions-reduced",
+      "file": "tests/test_a.py", "line": 3, "message": "warning only"}}]}}]}}))
+sys.exit(1)
+'''
+
+
+def _self_test_replay_from_manifest() -> None:
+    """`replay_from_manifest` replays only the manifest's pairs, diff-scoped, with the manifest's metadata."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = root / "clones" / "demo"
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Agent",
+            "GIT_AUTHOR_EMAIL": "agent@example.invalid",
+            "GIT_COMMITTER_NAME": "Agent",
+            "GIT_COMMITTER_EMAIL": "agent@example.invalid",
+        }
+
+        def git(*a: str) -> str:
+            return subprocess.check_output(["git", "-C", str(repo), *a], env=env, text=True).strip()
+
+        repo.mkdir(parents=True)
+        git("init", "-q")
+        (repo / "src").mkdir()
+        (repo / "tests").mkdir()
+        (repo / "src" / "a.py").write_text("x = 1\n")
+        (repo / "tests" / "test_a.py").write_text("def test_a():\n    assert 1 == 1\n    assert 2 == 2\n")
+        git("add", "-A")
+        git("commit", "-q", "-m", "base")
+        base = git("rev-parse", "HEAD")
+        (repo / "tests" / "test_a.py").write_text("def test_a():\n    assert 1 == 1\n")
+        (repo / "src" / "b.py").write_text("y = 2\n")
+        git("add", "-A")
+        message = "fix: drop an assertion (#7)\n\nCo-authored-by: Claude <noreply@example.invalid>"
+        git("commit", "-q", "-m", message)
+        head = git("rev-parse", "HEAD")
+        (repo / "src" / "later.py").write_text("z = 3\n")
+        git("add", "-A")
+        git("commit", "-q", "-m", "later upstream merge (#8)")
+
+        log = root / "fake.log"
+        exe = root / "fake-discipline"
+        exe.write_text(FAKE_DISCIPLINE.format(python=sys.executable, log=str(log)))
+        exe.chmod(0o755)
+        manifest = root / "manifest.json"
+        manifest.write_text(json.dumps({"pull_requests": [
+            {"repo": "demo/demo", "pr_number": 7, "base_sha": base, "head_sha": head,
+             "author_hash": "sha256:frommanifest00", "agent_category": "claude"},
+            {"repo": "demo/demo", "pr_number": 9, "base_sha": base, "head_sha": "f" * 40,
+             "author_hash": "sha256:frommanifest01", "agent_category": "claude"},
+        ]}))
+        out = root / "raw.json"
+        results = replay_from_manifest(
+            manifest, root / "clones", exe, out, repos=[("demo/demo", "demo")]
+        )
+        assert json.loads(out.read_text()) == results
+        assert len(results) == 1, results
+        r = results[0]
+        assert (r["sha"], r["parent"], r["pr_number"]) == (head, base, 7)
+        assert r["author_hash"] == "sha256:frommanifest00"
+        assert r["author_hash_recomputed"] == hash_identity("Agent<agent@example.invalid>")
+        assert (r["agent_category"], r["subject"]) == ("claude", "fix: drop an assertion (#7)")
+        assert sorted(r["paths"]) == ["src/b.py", "tests/test_a.py"]
+        assert r["base_existing"] == ["tests/test_a.py"]
+        assert r["returncode"] == 1
+        assert r["violations"] == [{
+            "gate": "assertion-reduction", "code": "assertion-reduction/assertions-reduced",
+            "file": "tests/test_a.py", "line": 2, "message": "fewer assertions",
+        }]
+        calls = [json.loads(line) for line in log.read_text().splitlines()]
+        assert len(calls) == 1, calls
+        call = calls[0]
+        assert call["args"][:4] == ["check", "--config", call["args"][2], "--format"]
+        assert "--base" in call["args"] and (call["replay_case"], call["no_network"]) == ("1", "1")
+        assert call["body"] == message
+        # Diff-scoped: only the pair's changed files are in the scratch tree.
+        assert call["tree"] == ["src/b.py", "tests/test_a.py"], call["tree"]
 
 
 def run_self_tests() -> None:
@@ -1689,14 +2440,71 @@ def run_self_tests() -> None:
     )
     assert extract_pr_or_change_number("chore: direct commit without reference") is None
 
-    # 14. Post-hoc audit on the committed data
-    if (RESULTS_DIR / "findings.json").exists() and (RESULTS_DIR / "post-hoc-audit.json").exists():
-        committed = json.loads((RESULTS_DIR / "post-hoc-audit.json").read_text())
-        recomputed = json.loads(json.dumps(post_hoc_audit()))
-        if committed.get("study_id") == recomputed.get("study_id"):
-            assert committed == recomputed, "post-hoc-audit.json is stale; rerun with --post-hoc-audit --write"
+    # 14. Replay from a committed manifest (no harvest)
+    _self_test_replay_from_manifest()
+
+    # 15. v3 label reuse: unchanged / changed / new / gone, and the reproduction check
+    _self_test_v3_label_reuse()
+
+    # 16. The v3 pre-registration pins v2's manifest by hash (python3.10 has no tomllib)
+    prereg_v3 = REPO_ROOT / "docs" / "benchmarks" / "precision-preregistration-v3.toml"
+    if prereg_v3.exists():
+        pinned = re.search(r'^manifest_sha256 = "([0-9a-f]{64})"$', prereg_v3.read_text(), re.M)
+        actual = hashlib.sha256((RESULTS_DIR / "manifest.json").read_bytes()).hexdigest()
+        assert pinned and pinned.group(1) == actual, "v2 manifest.json changed after the v3 pre-registration"
+
+    # 17. Post-hoc audits on the committed data (v2 and v3)
+    for results_dir in (RESULTS_DIR, V3_RESULTS_DIR):
+        if (results_dir / "findings.json").exists() and (results_dir / "post-hoc-audit.json").exists():
+            committed = json.loads((results_dir / "post-hoc-audit.json").read_text())
+            recomputed = json.loads(json.dumps(post_hoc_audit(results_dir)))
+            if committed.get("study_id") == recomputed.get("study_id"):
+                assert committed == recomputed, (
+                    f"{results_dir.name}/post-hoc-audit.json is stale; rerun with --post-hoc-audit --write"
+                )
 
     print("All benchmark_precision.py self-tests passed.")
+
+
+def run_v3_stage(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """`--v3-stage diff|packet|artifacts` (docs/benchmarks/precision-preregistration-v3.toml)."""
+    if not args.raw_eval_json or not args.reference_raw_json or not args.clones_dir:
+        parser.error("--v3-stage requires --raw-eval-json, --reference-raw-json and --clones-dir")
+    cases = json.loads(args.raw_eval_json.read_text())
+    reference = json.loads(args.reference_raw_json.read_text())
+    v2_findings = json.loads((RESULTS_DIR / "findings.json").read_text())["items"]
+    v2_manifest = json.loads((RESULTS_DIR / "manifest.json").read_text())
+    messages, differences = attach_reference_messages(v2_findings, v2_manifest, reference)
+    diff = diff_findings_against_v2(v2_findings, messages, cases)
+    sampled, inherited = twin_reuse(cases, v2_findings)
+    print(json.dumps({
+        "reproduction_differences": differences,
+        "v2_messages_recovered": len(messages),
+        "twin_flags_inherited": f"{len(inherited)} of {len(sampled)}",
+        "findings": {c: sum(r["category"] == c for r in diff["records"]) for c in ("unchanged", "changed", "new")},
+        "gone": len(diff["gone"]),
+        "by_gate": diff["by_gate"],
+    }, indent=2))
+    if args.v3_stage == "diff":
+        return 0
+    if not args.ground_key_json:
+        parser.error("--v3-stage packet|artifacts requires --ground-key-json")
+    if args.v3_stage == "packet":
+        items = build_v3_packet(
+            cases, diff, inherited, sampled, v2_findings, v2_manifest, args.clones_dir,
+            args.ground_key_json, REPO_ROOT / V3_RATER_PACKET,
+        )
+        print(f"wrote {V3_RATER_PACKET} with {len(items)} items")
+        return 0
+    if not args.ratings_json or not args.evaluated_commit:
+        parser.error("--v3-stage artifacts requires --ratings-json and --evaluated-commit")
+    generate_v3_artifacts(
+        cases, diff, sampled, inherited, RESULTS_DIR, messages, differences,
+        json.loads(args.ground_key_json.read_text()), json.loads(args.ratings_json.read_text()),
+        args.evaluated_commit, args.host,
+    )
+    print(f"wrote {V3_RESULTS_DIR.relative_to(REPO_ROOT)}/{{manifest,findings,adjudication,summary}}.json")
+    return 0
 
 
 def main() -> int:
@@ -1716,6 +2524,13 @@ def main() -> int:
         "--harvest-and-replay",
         action="store_true",
         help="Harvest and replay merged agent PRs across the 8 evaluation repos.",
+    )
+    parser.add_argument(
+        "--from-manifest",
+        type=Path,
+        metavar="MANIFEST",
+        help="Replay exactly the (repo, base_sha, head_sha) pairs of a study manifest.json "
+        "instead of harvesting (no re-harvest; new upstream merges cannot enter the sample).",
     )
     parser.add_argument(
         "--build-packet",
@@ -1749,16 +2564,52 @@ def main() -> int:
         default=RESULTS_DIR / "rater-packet.json",
         help="Path to write the committed blinded rater packet JSON.",
     )
+    parser.add_argument(
+        "--v3-stage",
+        choices=["diff", "packet", "artifacts"],
+        help="agent-pr-precision-v3: diff a re-run against v2, build the fresh-item packet, or write "
+        "docs/benchmarks/results-v3/ (needs --raw-eval-json, --reference-raw-json, --clones-dir).",
+    )
+    parser.add_argument(
+        "--reference-raw-json",
+        type=Path,
+        help="Raw replay JSON from v2's binary (82d02046) over the v2 manifest, for the reproduction check.",
+    )
+    parser.add_argument(
+        "--ratings-json",
+        type=Path,
+        help="With --v3-stage artifacts: rater_1 / rater_2 / tie_breaker labels by packet item id, and rater ids.",
+    )
+    parser.add_argument("--evaluated-commit", help="Commit the replayed binary was built from.")
+    parser.add_argument("--host", default="Apple M-series macOS 15 arm64", help="Host recorded in summary.json.")
+    parser.add_argument(
+        "--results-dir",
+        type=Path,
+        default=RESULTS_DIR,
+        help="With --post-hoc-audit: the study results directory to audit.",
+    )
     args = parser.parse_args()
+    if args.v3_stage:
+        return run_v3_stage(args, parser)
     if args.test:
         run_self_tests()
         return 0
     if args.post_hoc_audit:
-        text = json.dumps(post_hoc_audit(), indent=2) + "\n"
+        text = json.dumps(post_hoc_audit(args.results_dir), indent=2) + "\n"
         if args.write:
-            (RESULTS_DIR / "post-hoc-audit.json").write_text(text)
+            (args.results_dir / "post-hoc-audit.json").write_text(text)
         else:
             sys.stdout.write(text)
+        return 0
+    if args.from_manifest:
+        if not args.clones_dir or not args.raw_eval_json:
+            parser.error("--from-manifest requires --clones-dir and --raw-eval-json")
+        replay_from_manifest(
+            manifest_path=args.from_manifest,
+            clones_dir=args.clones_dir,
+            discipline_exe=args.discipline_exe,
+            out_raw_json=args.raw_eval_json,
+        )
         return 0
     if args.harvest_and_replay:
         if not args.clones_dir or not args.raw_eval_json:
