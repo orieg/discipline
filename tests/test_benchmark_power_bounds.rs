@@ -1126,3 +1126,441 @@ fn test_benchmark_summary_results_match_rust_bounds() {
         }
     }
 }
+
+// agent-pr-precision-v3: the v2 corpus re-run with discipline 0.25.3, labels inherited
+// from v2 where a finding is unchanged (docs/benchmarks/precision-preregistration-v3.toml).
+
+const V3_PREREG: &str = "docs/benchmarks/precision-preregistration-v3.toml";
+const V3_RESULTS: &str = "docs/benchmarks/results-v3";
+
+fn read_toml(path: &str) -> toml::Value {
+    let raw = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path} must exist: {e}"));
+    toml::from_str(&raw).unwrap_or_else(|e| panic!("{path} must parse: {e}"))
+}
+
+fn read_json<T: serde::de::DeserializeOwned>(path: &str) -> T {
+    let raw = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path} must exist: {e}"));
+    serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{path} must parse: {e}"))
+}
+
+#[test]
+fn v3_preregistration_keeps_v2_floors_population_and_labels() {
+    let v2 = read_toml("docs/benchmarks/precision-preregistration.toml");
+    let v3 = read_toml(V3_PREREG);
+    let s = &v3["study"];
+    assert_eq!(s["id"].as_str(), Some("agent-pr-precision-v3"));
+    assert_eq!(s["previous_study_id"].as_str(), v2["study"]["id"].as_str());
+    assert_eq!(s["status"].as_str(), Some("locked-pre-data"));
+    assert_eq!(s["discipline_version"].as_str(), Some("0.25.3"));
+    assert_eq!(s["recall_claimed"].as_bool(), Some(false));
+    assert!(s["corpus_prior_inspection"]
+        .as_str()
+        .is_some_and(|t| t.contains("already") || t.contains("inspected")));
+
+    // Floors, required n, the pinned bounds, the label rubric and the twin are v2's.
+    for (key, value) in v2["power_and_bounds"].as_table().unwrap() {
+        assert_eq!(
+            v3["power_and_bounds"].get(key),
+            Some(value),
+            "power_and_bounds.{key} differs from v2"
+        );
+    }
+    let floors = |doc: &toml::Value| -> Vec<(String, f64, f64, i64, Vec<String>)> {
+        doc["gate_floors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|g| {
+                (
+                    g["class"].as_str().unwrap().to_string(),
+                    g["precision_floor"].as_float().unwrap(),
+                    g["assumed_precision"].as_float().unwrap(),
+                    g["required_n"].as_integer().unwrap(),
+                    g["gates"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|x| x.as_str().unwrap().to_string())
+                        .collect(),
+                )
+            })
+            .collect()
+    };
+    assert_eq!(floors(&v3), floors(&v2));
+    assert_eq!(v3["twin_baseline"], v2["twin_baseline"]);
+    assert_eq!(v3["adjudication"]["labels"], v2["adjudication"]["labels"]);
+    for key in [
+        "independent_raters",
+        "agreement_metric",
+        "min_acceptable_kappa",
+        "disagreement_resolution_rule",
+    ] {
+        assert_eq!(
+            v3["adjudication"][key], v2["adjudication"][key],
+            "adjudication.{key}"
+        );
+    }
+
+    // The population is v2's manifest, not a re-harvest.
+    let p = &v3["population"];
+    assert_eq!(p["reharvest"].as_bool(), Some(false));
+    assert_eq!(
+        p["manifest_path"].as_str(),
+        Some("docs/benchmarks/results/manifest.json")
+    );
+    assert_eq!(p["evaluation_repos"], v2["population"]["evaluation_repos"]);
+    let v2_manifest: ManifestDoc = read_json("docs/benchmarks/results/manifest.json");
+    assert_eq!(
+        p["pull_request_count"].as_integer(),
+        Some(v2_manifest.pull_requests.len() as i64)
+    );
+}
+
+#[derive(serde::Deserialize)]
+struct V3AdjudicationDoc {
+    study_id: String,
+    cohens_kappa: f64,
+    cohens_kappa_scope: String,
+    inherited_label_count: usize,
+    fresh_label_count: usize,
+    fresh_exact_agreement_count: usize,
+    total_items: usize,
+    committed_rater_packet: String,
+    synthetic_rater_disclosure: String,
+    rater_1_kind: String,
+    adjudications: Vec<V3AdjudicationItem>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V3AdjudicationItem {
+    item_id: String,
+    label_source: String,
+    rater_1_label: String,
+    rater_2_label: String,
+    agreed: bool,
+    tie_breaker_label: Option<String>,
+    final_label: String,
+    #[serde(default)]
+    v2_item_id: Option<String>,
+    #[serde(default)]
+    packet_item_id: Option<String>,
+}
+
+/// Checks the v3 artifacts against their own labels, the v2 labels they inherit and the
+/// Rust bounds. Returns the first inconsistency.
+fn check_v3_results(
+    summary: &SummaryDoc,
+    adj: &V3AdjudicationDoc,
+    findings: &FindingsDoc,
+) -> Result<(), String> {
+    let v2_adj: AdjudicationDoc = read_json("docs/benchmarks/results/adjudication.json");
+    let v2_by_id: std::collections::BTreeMap<&str, &AdjudicationItem> = v2_adj
+        .adjudications
+        .iter()
+        .map(|a| (a.item_id.as_str(), a))
+        .collect();
+    let packet: RaterPacketDoc = read_json(&format!("{V3_RESULTS}/rater-packet.json"));
+    let packet_ids: std::collections::BTreeSet<&str> =
+        packet.items.iter().map(|i| i.item_id.as_str()).collect();
+
+    let mut inherited = 0;
+    let mut fresh_pairs = Vec::new();
+    for a in &adj.adjudications {
+        if a.agreed != (a.rater_1_label == a.rater_2_label) {
+            return Err(format!(
+                "{}: agreed flag disagrees with the labels",
+                a.item_id
+            ));
+        }
+        let expected_final = if a.agreed {
+            Some(a.rater_1_label.as_str())
+        } else {
+            a.tie_breaker_label.as_deref()
+        };
+        if expected_final != Some(a.final_label.as_str()) {
+            return Err(format!(
+                "{}: final label does not follow the rule",
+                a.item_id
+            ));
+        }
+        match a.label_source.as_str() {
+            "inherited-v2" => {
+                inherited += 1;
+                let id = a
+                    .v2_item_id
+                    .as_deref()
+                    .ok_or("inherited item without v2_item_id")?;
+                let v2 = v2_by_id
+                    .get(id)
+                    .ok_or_else(|| format!("unknown v2 item {id}"))?;
+                if (&v2.rater_1_label, &v2.rater_2_label, &v2.final_label)
+                    != (&a.rater_1_label, &a.rater_2_label, &a.final_label)
+                    || v2.tie_breaker_label != a.tie_breaker_label
+                {
+                    return Err(format!("{}: labels differ from v2 {id}", a.item_id));
+                }
+            }
+            "fresh" => {
+                let id = a
+                    .packet_item_id
+                    .as_deref()
+                    .ok_or("fresh item without packet_item_id")?;
+                if !packet_ids.contains(id) {
+                    return Err(format!(
+                        "{}: packet item {id} is not in the packet",
+                        a.item_id
+                    ));
+                }
+                fresh_pairs.push((a.rater_1_label.as_str(), a.rater_2_label.as_str()));
+            }
+            other => return Err(format!("{}: unknown label_source {other}", a.item_id)),
+        }
+    }
+    if (inherited, fresh_pairs.len()) != (adj.inherited_label_count, adj.fresh_label_count) {
+        return Err(format!(
+            "labels give {inherited} inherited / {} fresh, adjudication.json says {} / {}",
+            fresh_pairs.len(),
+            adj.inherited_label_count,
+            adj.fresh_label_count
+        ));
+    }
+    let fresh_agreed = fresh_pairs.iter().filter(|(x, y)| x == y).count();
+    if fresh_agreed != adj.fresh_exact_agreement_count {
+        return Err("fresh agreement count differs from the labels".into());
+    }
+    let kappa = if fresh_pairs.iter().all(|(x, y)| x == y)
+        && fresh_pairs.iter().all(|(x, _)| *x == fresh_pairs[0].0)
+    {
+        // One category for both raters: kappa is defined as 1 on full agreement.
+        1.0
+    } else {
+        cohens_kappa(&fresh_pairs)
+    };
+    for (name, reported) in [
+        ("summary.json", summary.cohens_kappa),
+        ("adjudication.json", adj.cohens_kappa),
+    ] {
+        if (reported - kappa).abs() >= 1e-6 {
+            return Err(format!(
+                "{name} kappa {reported} vs {kappa} from the fresh labels"
+            ));
+        }
+    }
+
+    // Tallies per gate, class and twin follow from the final labels.
+    let prereg = read_toml(V3_PREREG);
+    let gate_class: std::collections::BTreeMap<String, String> = prereg["gate_floors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|g| {
+            let class = g["class"].as_str().unwrap().to_string();
+            g["gates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(move |x| (x.as_str().unwrap().to_string(), class.clone()))
+        })
+        .collect();
+    let as_v2: Vec<AdjudicationItem> = adj
+        .adjudications
+        .iter()
+        .map(|a| AdjudicationItem {
+            item_id: a.item_id.clone(),
+            rater_1_label: a.rater_1_label.clone(),
+            rater_2_label: a.rater_2_label.clone(),
+            agreed: a.agreed,
+            tie_breaker_label: a.tie_breaker_label.clone(),
+            final_label: a.final_label.clone(),
+        })
+        .collect();
+    let r = recompute_from_labels(&findings.items, &as_v2, &gate_class)?;
+    for cr in &summary.class_results {
+        let got = r.per_class.get(&cr.class).copied().unwrap_or_default();
+        tally_matches(
+            &cr.class,
+            got,
+            cr.true_positives,
+            cr.false_positives,
+            cr.cannot_tell,
+        )?;
+        check_interval_and_verdict(
+            &cr.class,
+            (cr.k, cr.n, cr.required_n, cr.precision_floor),
+            (cr.point_estimate, cr.wilson_95_ci, &cr.verdict),
+        )?;
+    }
+    for gr in &summary.per_gate_results {
+        let got = r.per_gate.get(&gr.gate).copied().unwrap_or_default();
+        tally_matches(
+            &gr.gate,
+            got,
+            gr.true_positives,
+            gr.false_positives,
+            gr.cannot_tell,
+        )?;
+        if gr.n > 0 {
+            check_interval_and_verdict(
+                &gr.gate,
+                (gr.k, gr.n, gr.required_n, gr.precision_floor),
+                (
+                    gr.point_estimate.ok_or("missing point estimate")?,
+                    gr.wilson_95_ci.ok_or("missing interval")?,
+                    &gr.verdict,
+                ),
+            )?;
+        }
+    }
+    let tr = &summary.twin_baseline_result;
+    tally_matches(
+        "twin",
+        r.twin,
+        tr.true_positives,
+        tr.false_positives,
+        tr.cannot_tell,
+    )?;
+    check_interval_and_verdict(
+        "twin",
+        (tr.k, tr.n, tr.required_n, tr.precision_floor),
+        (tr.point_estimate, tr.wilson_95_ci, &tr.verdict),
+    )?;
+    let br = &summary.pull_request_block_rates;
+    for (name, arm) in [
+        ("discipline", &br.discipline),
+        ("twin", &br.naive_sensitive_path_filter),
+    ] {
+        let (low, high) = wilson_score_interval(arm.blocked, arm.n, 0.95).unwrap();
+        if (arm.wilson_95_ci[0] - low).abs() >= 1e-6 || (arm.wilson_95_ci[1] - high).abs() >= 1e-6 {
+            return Err(format!(
+                "{name} block-rate interval differs from the bounds"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `(k, n, required_n, floor)` as measured and locked; `(point, ci, verdict)` as reported.
+fn check_interval_and_verdict(
+    what: &str,
+    (k, n, required_n, floor): (usize, usize, usize, f64),
+    (point, ci, verdict): (f64, [f64; 2], &str),
+) -> Result<(), String> {
+    let (low, high) = wilson_score_interval(k, n, 0.95).map_err(|e| format!("{what}: {e:?}"))?;
+    if (point - k as f64 / n as f64).abs() >= 1e-6
+        || (ci[0] - low).abs() >= 1e-6
+        || (ci[1] - high).abs() >= 1e-6
+    {
+        return Err(format!(
+            "{what}: point estimate or interval differs from {k}/{n}"
+        ));
+    }
+    let want = expected_verdict(k, n, required_n, floor, low);
+    if verdict != want {
+        return Err(format!(
+            "{what}: verdict {verdict}, the locked rule gives {want}"
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn v3_results_follow_from_labels_and_inherit_v2_labels() {
+    let summary: SummaryDoc = read_json(&format!("{V3_RESULTS}/summary.json"));
+    let adj: V3AdjudicationDoc = read_json(&format!("{V3_RESULTS}/adjudication.json"));
+    let findings: FindingsDoc = read_json(&format!("{V3_RESULTS}/findings.json"));
+    let manifest: ManifestDoc = read_json(&format!("{V3_RESULTS}/manifest.json"));
+    let v2_manifest: ManifestDoc = read_json("docs/benchmarks/results/manifest.json");
+
+    assert_eq!(summary.study_id, "agent-pr-precision-v3");
+    assert_eq!(manifest.study_id, "agent-pr-precision-v3");
+    assert_eq!(adj.study_id, "agent-pr-precision-v3");
+    assert_eq!(summary.discipline_version, "0.25.3");
+    assert_eq!(manifest.discipline_version, "0.25.3");
+    assert_eq!(summary.evaluated_commit, manifest.evaluated_commit);
+    assert_eq!(summary.evaluated_commit.len(), 40);
+    assert_eq!(adj.cohens_kappa_scope, "fresh-items");
+    assert_eq!(adj.total_items, adj.adjudications.len());
+    assert_eq!(
+        adj.committed_rater_packet,
+        format!("{V3_RESULTS}/rater-packet.json")
+    );
+    assert_eq!(adj.rater_1_kind, "llm-subagent");
+    assert_eq!(summary.rater_kind, "llm-subagent");
+    assert!(adj.synthetic_rater_disclosure.contains("not human"));
+
+    // Exactly v2's pairs, in v2's order.
+    let pairs = |m: &ManifestDoc| -> Vec<(String, String, String, u64)> {
+        m.pull_requests
+            .iter()
+            .map(|p| {
+                (
+                    p.repo.clone(),
+                    p.base_sha.clone(),
+                    p.head_sha.clone(),
+                    p.pr_number,
+                )
+            })
+            .collect()
+    };
+    assert_eq!(pairs(&manifest), pairs(&v2_manifest));
+    assert_eq!(
+        manifest.total_pull_requests,
+        v2_manifest.total_pull_requests
+    );
+    assert_eq!(
+        manifest.discipline_blocked_pull_requests,
+        summary.pull_request_block_rates.discipline.blocked
+    );
+
+    check_v3_results(&summary, &adj, &findings).unwrap();
+}
+
+#[test]
+fn flipping_one_v3_label_breaks_the_v3_cross_check() {
+    let summary: SummaryDoc = read_json(&format!("{V3_RESULTS}/summary.json"));
+    let findings: FindingsDoc = read_json(&format!("{V3_RESULTS}/findings.json"));
+    let fresh = || -> V3AdjudicationDoc { read_json(&format!("{V3_RESULTS}/adjudication.json")) };
+
+    // An inherited final label that no longer matches v2.
+    let mut adj = fresh();
+    let item = adj
+        .adjudications
+        .iter_mut()
+        .find(|a| a.label_source == "inherited-v2" && a.agreed)
+        .expect("an agreed inherited item");
+    let flipped = if item.final_label == "true-positive" {
+        "false-positive"
+    } else {
+        "true-positive"
+    };
+    item.rater_1_label = flipped.into();
+    item.rater_2_label = flipped.into();
+    item.final_label = flipped.into();
+    assert!(check_v3_results(&summary, &adj, &findings)
+        .unwrap_err()
+        .contains("differ from v2"));
+
+    // A final label that does not follow the agreement rule.
+    let mut adj = fresh();
+    adj.adjudications[0].final_label = "cannot-tell".into();
+    if adj.adjudications[0].rater_1_label == "cannot-tell" {
+        adj.adjudications[0].final_label = "true-positive".into();
+    }
+    assert!(check_v3_results(&summary, &adj, &findings)
+        .unwrap_err()
+        .contains("does not follow"));
+
+    // An inherited item relabelled fresh moves the inherited / fresh counts.
+    let mut adj = fresh();
+    let item = adj
+        .adjudications
+        .iter_mut()
+        .find(|a| a.label_source == "inherited-v2")
+        .unwrap();
+    item.label_source = "fresh".into();
+    item.packet_item_id = Some("PKT-0001".into());
+    assert!(check_v3_results(&summary, &adj, &findings)
+        .unwrap_err()
+        .contains("inherited"));
+}
