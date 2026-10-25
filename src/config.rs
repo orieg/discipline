@@ -1593,7 +1593,8 @@ pub struct CommandGate {
     pub forbid_output: Vec<String>,
     /// Regular expression whose match means zero items were executed (e.g. `running 0 tests`).
     pub zero_items_pattern: Option<String>,
-    /// Whether zero items selected is allowed (default: false).
+    /// Whether zero items selected is allowed (default: false); on a `base-tests` command,
+    /// whether a run that read no test case passes.
     pub allow_zero: bool,
     /// Optional negative-control canary command.
     pub canary_command: Option<String>,
