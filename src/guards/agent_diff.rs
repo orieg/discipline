@@ -256,13 +256,21 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
         }
     }
 
-    ast_gates.push(evaluate_deletion_rationale(
+    let mut deletion = evaluate_deletion_rationale(
         &changed,
         &removed,
         &gates.deletion_rationale,
         &ctx.directives,
         is_staged,
-    )?);
+    )?;
+    report_shadowed_tests(
+        &shadowed_tests(&analyzed_files),
+        &gates.deletion_rationale,
+        &ctx.directives,
+        is_staged,
+        &mut deletion,
+    )?;
+    ast_gates.push(deletion);
     Ok(ast_gates)
 }
 

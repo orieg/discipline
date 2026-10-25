@@ -3913,6 +3913,44 @@ const CASES: &[Case] = &[
     ),
     #[cfg(feature = "lang-python")]
     (
+        "deletion-rationale: a Python test hidden by a later def of its name is reported (#827)",
+        || {
+            use crate::ast::LanguagePack;
+            use crate::gitctx::{ChangeKind, ChangedFile};
+            use crate::guards::agent_diff::{match_tests, shadowed_tests, FileFacts};
+            let vocab = AssertVocabulary::default();
+            let path = "tests/test_calc.py";
+            let side = |src: &str| crate::ast::python::PythonPack.extract(path, src, &vocab);
+            let base = "def test_f():\n    assert f(2) == 4\n\ndef test_g():\n    assert g(1) == 2\n";
+            let change = |head: &str| -> anyhow::Result<Vec<FileFacts>> {
+                Ok(vec![FileFacts {
+                    file: ChangedFile {
+                        path: path.into(),
+                        old_path: path.into(),
+                        kind: ChangeKind::Modified,
+                        added_lines: std::collections::BTreeSet::new(),
+                    },
+                    base: Some(side(base)?),
+                    head: Some(side(head)?),
+                    newly_added_nul: false,
+                }])
+            };
+            let hidden = change(&base.replace("def test_g", "def test_f"))?;
+            let shadowed = shadowed_tests(&hidden);
+            let (pairs, removed, _) = match_tests(&hidden);
+            let control = change(&base.replace("def test_g", "def test_h"))?;
+            Ok(shadowed.len() == 1
+                && shadowed[0].base.name == "test_f"
+                && (shadowed[0].head.line, shadowed[0].head.by_line) == (1, 4)
+                && side(&base.replace("def test_g", "def test_f"))?.tests.len() == 1
+                && pairs.len() == 1
+                && pairs[0].base.name == "test_g"
+                && removed.is_empty()
+                && shadowed_tests(&control).is_empty())
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
         "python: pytest and unittest extraction catches assertions, vacuous tests, and skips",
         || {
             use crate::ast::LanguagePack;

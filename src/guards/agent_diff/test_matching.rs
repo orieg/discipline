@@ -1,7 +1,7 @@
 //! Pairing of the tests of the base side with those of the head side.
 
 use super::{FileFacts, Located, TestPair};
-use crate::ast::TestFn;
+use crate::ast::{ShadowedTest, TestFn};
 
 pub const RENAME_NAME_SIMILARITY_THRESHOLD: f64 = 0.5;
 
@@ -76,8 +76,51 @@ pub fn name_similarity(a: &str, b: &str) -> f64 {
     bigram_sim.max(word_sim)
 }
 
+/// A base-side test that the head side still defines but rebinds: a later definition of
+/// the same name in the same scope hides it, so the runner no longer collects it.
+pub struct Shadowed<'a> {
+    pub path: &'a str,
+    pub base: &'a TestFn,
+    /// The head-side definition that no longer runs, and the line of the one that hides it.
+    pub head: &'a ShadowedTest,
+}
+
+/// The base-side tests the change hides behind a redefinition of their name. A name the
+/// head side rebinds more often than the base side does, and that is a test on the base
+/// side, hides that test; a redefinition already present on the base side hides nothing
+/// new.
+pub fn shadowed_tests(files: &[FileFacts]) -> Vec<Shadowed<'_>> {
+    files.iter().flat_map(shadowed_in).collect()
+}
+
+fn shadowed_in(ff: &FileFacts) -> Vec<Shadowed<'_>> {
+    let (Some(base), Some(head)) = (&ff.base, &ff.head) else {
+        return Vec::new();
+    };
+    let count = |list: &[ShadowedTest], name: &str| list.iter().filter(|s| s.name == name).count();
+    let mut out: Vec<Shadowed> = Vec::new();
+    for hidden in &head.shadowed_tests {
+        if out.iter().any(|s| s.head.name == hidden.name)
+            || count(&head.shadowed_tests, &hidden.name)
+                <= count(&base.shadowed_tests, &hidden.name)
+        {
+            continue;
+        }
+        if let Some(test) = base.tests.iter().find(|t| t.name == hidden.name) {
+            out.push(Shadowed {
+                path: &ff.file.path,
+                base: test,
+                head: hidden,
+            });
+        }
+    }
+    out
+}
+
 /// Pair tests by name within a file, then pair the leftovers across files so a
 /// test moved to another file is compared instead of reported as removed+new.
+/// A base-side test the head side hides behind a redefinition ([`shadowed_tests`]) is
+/// neither paired nor removed: `deletion-rationale` reports it on its own.
 pub fn match_tests(files: &[FileFacts]) -> (Vec<TestPair<'_>>, Vec<Located<'_>>, Vec<Located<'_>>) {
     let mut pairs = Vec::new();
     let mut removed: Vec<Located> = Vec::new();
@@ -97,9 +140,13 @@ pub fn match_tests(files: &[FileFacts]) -> (Vec<TestPair<'_>>, Vec<Located<'_>>,
         let head_tests: &[TestFn] = ff.head.as_ref().map(|f| &f.tests[..]).unwrap_or(&[]);
         let mut taken = vec![false; head_tests.len()];
         let mut unmatched_base = Vec::new();
+        let hidden = shadowed_in(ff);
 
         // 1. Exact name match within file
-        for b in base_tests {
+        for b in base_tests
+            .iter()
+            .filter(|b| !hidden.iter().any(|s| std::ptr::eq(s.base, *b)))
+        {
             let hit = head_tests
                 .iter()
                 .enumerate()
