@@ -1,0 +1,1028 @@
+{
+  "description": "Evasion cases with the verdict the built-in defaults give (plus `enable`). `caught`: the exact finding codes reported. `known_miss`: nothing is reported; the issue tracks it. `exit`: the run could not check. Driven by tests/test_evasion_corpus.rs.",
+  "cases": [
+    {
+      "name": "directive-name-typo",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert!(f(2) > 0);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "body": "allow-assertion-drops: doubles relaxed for refactor\n",
+      "verdict": {
+        "caught": [
+          "assertion-reduction/assertions-reduced"
+        ]
+      }
+    },
+    {
+      "name": "discipline-toml-hallucinated-key",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n",
+        "discipline.toml": "[gates.assertion-reduction]\nenabled = true\n"
+      },
+      "head": {
+        "discipline.toml": "[gates.assertion-reduction]\nenabled = true\nallow_weakening_in_refactors = true\n"
+      },
+      "verdict": {
+        "exit": 2
+      }
+    },
+    {
+      "name": "go-build-ignore-tag",
+      "base": {
+        "go.mod": "module p\n\ngo 1.22\n",
+        "p.go": "package p\n\nfunc F(x int) int {\n\treturn x * 2\n}\n",
+        "p_test.go": "package p\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {\n\tif got := F(2); got != 4 {\n\t\tt.Errorf(\"got %d\", got)\n\t}\n}\n\nfunc TestTable(t *testing.T) {\n\tcases := []struct{ in, want int }{{1, 2}, {2, 4}}\n\tfor _, c := range cases {\n\t\tif got := F(c.in); got != c.want {\n\t\t\tt.Errorf(\"got %d\", got)\n\t\t}\n\t}\n}\n"
+      },
+      "head": {
+        "p_test.go": "//go:build ignore\n\npackage p\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {\n\tif got := F(2); got != 4 {\n\t\tt.Errorf(\"got %d\", got)\n\t}\n}\n\nfunc TestTable(t *testing.T) {\n\tcases := []struct{ in, want int }{{1, 2}, {2, 4}}\n\tfor _, c := range cases {\n\t\tif got := F(c.in); got != c.want {\n\t\t\tt.Errorf(\"got %d\", got)\n\t\t}\n\t}\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "test-floor/test-count-below-floor"
+        ]
+      }
+    },
+    {
+      "name": "go-errorf-to-logf",
+      "base": {
+        "go.mod": "module p\n\ngo 1.22\n",
+        "p.go": "package p\n\nfunc F(x int) int {\n\treturn x * 2\n}\n",
+        "p_test.go": "package p\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {\n\tif got := F(2); got != 4 {\n\t\tt.Errorf(\"got %d\", got)\n\t}\n}\n\nfunc TestTable(t *testing.T) {\n\tcases := []struct{ in, want int }{{1, 2}, {2, 4}}\n\tfor _, c := range cases {\n\t\tif got := F(c.in); got != c.want {\n\t\t\tt.Errorf(\"got %d\", got)\n\t\t}\n\t}\n}\n"
+      },
+      "head": {
+        "p_test.go": "package p\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {\n\tif got := F(2); got != 4 {\n\t\tt.Logf(\"got %d\", got)\n\t}\n}\n\nfunc TestTable(t *testing.T) {\n\tcases := []struct{ in, want int }{{1, 2}, {2, 4}}\n\tfor _, c := range cases {\n\t\tif got := F(c.in); got != c.want {\n\t\t\tt.Errorf(\"got %d\", got)\n\t\t}\n\t}\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/assertions-reduced"
+        ]
+      }
+    },
+    {
+      "name": "go-table-expected-rewritten",
+      "base": {
+        "go.mod": "module p\n\ngo 1.22\n",
+        "p.go": "package p\n\nfunc F(x int) int {\n\treturn x * 2\n}\n",
+        "p_test.go": "package p\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {\n\tif got := F(2); got != 4 {\n\t\tt.Errorf(\"got %d\", got)\n\t}\n}\n\nfunc TestTable(t *testing.T) {\n\tcases := []struct{ in, want int }{{1, 2}, {2, 4}}\n\tfor _, c := range cases {\n\t\tif got := F(c.in); got != c.want {\n\t\t\tt.Errorf(\"got %d\", got)\n\t\t}\n\t}\n}\n"
+      },
+      "head": {
+        "p_test.go": "package p\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {\n\tif got := F(2); got != 4 {\n\t\tt.Errorf(\"got %d\", got)\n\t}\n}\n\nfunc TestTable(t *testing.T) {\n\tcases := []struct{ in, want int }{{1, 2}, {2, 5}}\n\tfor _, c := range cases {\n\t\tif got := F(c.in); got != c.want {\n\t\t\tt.Errorf(\"got %d\", got)\n\t\t}\n\t}\n}\n"
+      },
+      "verdict": {
+        "known_miss": "#826"
+      }
+    },
+    {
+      "name": "go-table-rows-dropped",
+      "base": {
+        "go.mod": "module p\n\ngo 1.22\n",
+        "p.go": "package p\n\nfunc F(x int) int {\n\treturn x * 2\n}\n",
+        "p_test.go": "package p\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {\n\tif got := F(2); got != 4 {\n\t\tt.Errorf(\"got %d\", got)\n\t}\n}\n\nfunc TestTable(t *testing.T) {\n\tcases := []struct{ in, want int }{{1, 2}, {2, 4}}\n\tfor _, c := range cases {\n\t\tif got := F(c.in); got != c.want {\n\t\t\tt.Errorf(\"got %d\", got)\n\t\t}\n\t}\n}\n"
+      },
+      "head": {
+        "p_test.go": "package p\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {\n\tif got := F(2); got != 4 {\n\t\tt.Errorf(\"got %d\", got)\n\t}\n}\n\nfunc TestTable(t *testing.T) {\n\tcases := []struct{ in, want int }{{1, 2}}\n\tfor _, c := range cases {\n\t\tif got := F(c.in); got != c.want {\n\t\t\tt.Errorf(\"got %d\", got)\n\t\t}\n\t}\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/test-cases-reduced"
+        ]
+      }
+    },
+    {
+      "name": "go-testing-Testing-in-prod",
+      "base": {
+        "go.mod": "module p\n\ngo 1.22\n",
+        "p.go": "package p\n\nfunc F(x int) int {\n\treturn x * 2\n}\n",
+        "p_test.go": "package p\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {\n\tif got := F(2); got != 4 {\n\t\tt.Errorf(\"got %d\", got)\n\t}\n}\n\nfunc TestTable(t *testing.T) {\n\tcases := []struct{ in, want int }{{1, 2}, {2, 4}}\n\tfor _, c := range cases {\n\t\tif got := F(c.in); got != c.want {\n\t\t\tt.Errorf(\"got %d\", got)\n\t\t}\n\t}\n}\n"
+      },
+      "head": {
+        "p.go": "package p\n\nimport \"testing\"\n\nfunc F(x int) int {\n\tif testing.Testing() {\n\t\treturn 4\n\t}\n\treturn x * 3\n}\n"
+      },
+      "verdict": {
+        "known_miss": "#824"
+      }
+    },
+    {
+      "name": "js-callback-assert-never-runs",
+      "base": {
+        "src/calc.js": "export function f(x) { return x * 2; }\n",
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "head": {
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    [].forEach(() => expect(f(2)).toBe(4));\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "verdict": {
+        "known_miss": "#837"
+      }
+    },
+    {
+      "name": "js-each-expected-rewritten",
+      "base": {
+        "src/calc.js": "export function f(x) { return x * 2; }\n",
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ntest.each([[1, 2], [2, 4]])('f(%i)', (a, b) => {\n  expect(f(a)).toBe(b);\n});\n"
+      },
+      "head": {
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ntest.each([[1, 2], [2, 5]])('f(%i)', (a, b) => {\n  expect(f(a)).toBe(b);\n});\n"
+      },
+      "verdict": {
+        "known_miss": "#826"
+      }
+    },
+    {
+      "name": "js-existing-matcher-not-called",
+      "base": {
+        "src/calc.js": "export function f(x) { return x * 2; }\n",
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "head": {
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0) === 0).toBeTruthy;\n  });\n});\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/assertions-reduced"
+        ]
+      }
+    },
+    {
+      "name": "js-expect-no-matcher-new-test",
+      "base": {
+        "src/calc.js": "export function f(x) { return x * 2; }\n",
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "head": {
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n  it('neg', () => {\n    expect(f(-1));\n  });\n});\n"
+      },
+      "verdict": {
+        "caught": [
+          "vacuous-tests/vacuous-test-added"
+        ]
+      }
+    },
+    {
+      "name": "js-expected-literal-changed",
+      "base": {
+        "src/calc.js": "export function f(x) { return x * 2; }\n",
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "head": {
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(5);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/expected-value-changed"
+        ]
+      }
+    },
+    {
+      "name": "js-fit-focus",
+      "base": {
+        "src/calc.js": "export function f(x) { return x * 2; }\n",
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "head": {
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  fit('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "verdict": {
+        "caught": [
+          "deletion-rationale/test-removed-without-rationale"
+        ]
+      }
+    },
+    {
+      "name": "js-it-only-focus",
+      "base": {
+        "src/calc.js": "export function f(x) { return x * 2; }\n",
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "head": {
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it.only('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "verdict": {
+        "caught": [
+          "ignored-tests/existing-test-skipped"
+        ]
+      }
+    },
+    {
+      "name": "js-jest-config-testPathIgnore",
+      "base": {
+        "src/calc.js": "export function f(x) { return x * 2; }\n",
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n",
+        "jest.config.js": "module.exports = { testEnvironment: 'node' };\n"
+      },
+      "head": {
+        "jest.config.js": "module.exports = { testEnvironment: 'node', testPathIgnorePatterns: ['calc'] };\n"
+      },
+      "verdict": {
+        "caught": [
+          "toolchain-config/toolchain-config-change-not-analysed"
+        ]
+      }
+    },
+    {
+      "name": "js-mock-assert-deleted",
+      "base": {
+        "src/a.js": "export function run(cb) { cb(1); }\n",
+        "test/a.test.js": "import { run } from '../src/a.js';\n\ntest('run', () => {\n  const m = jest.fn();\n  run(m);\n  expect(m).toHaveBeenCalledWith(1);\n});\n"
+      },
+      "head": {
+        "test/a.test.js": "import { run } from '../src/a.js';\n\ntest('run', () => {\n  const m = jest.fn();\n  run(m);\n});\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/assertions-reduced"
+        ]
+      }
+    },
+    {
+      "name": "js-new-matcher-not-called",
+      "base": {
+        "src/calc.js": "export function f(x) { return x * 2; }\n",
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "head": {
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n  it('pos', () => {\n    expect(f(1) > 0).toBeTruthy;\n  });\n});\n"
+      },
+      "verdict": {
+        "caught": [
+          "vacuous-tests/vacuous-test-added"
+        ]
+      }
+    },
+    {
+      "name": "js-pkg-test-script-changed",
+      "base": {
+        "src/calc.js": "export function f(x) { return x * 2; }\n",
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n",
+        "package.json": "{\"name\":\"x\",\"scripts\":{\"test\":\"jest\"}}\n"
+      },
+      "head": {
+        "package.json": "{\"name\":\"x\",\"scripts\":{\"test\":\"jest --passWithNoTests || true\"}}\n"
+      },
+      "verdict": {
+        "known_miss": "#831"
+      }
+    },
+    {
+      "name": "js-prod-detects-jest",
+      "base": {
+        "src/calc.js": "export function f(x) { return x * 2; }\n",
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "head": {
+        "src/calc.js": "export function f(x) {\n  if (process.env.JEST_WORKER_ID) return 4;\n  return x * 3;\n}\n"
+      },
+      "verdict": {
+        "known_miss": "#824"
+      }
+    },
+    {
+      "name": "js-snapshot-rewritten",
+      "base": {
+        "src/calc.js": "export function f(x) { return x * 2; }\n",
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n",
+        "test/__snapshots__/calc.test.js.snap": "exports[`f doubles 1`] = `4`;\n"
+      },
+      "head": {
+        "test/__snapshots__/calc.test.js.snap": "exports[`f doubles 1`] = `5`;\n"
+      },
+      "verdict": {
+        "caught": [
+          "golden-output/golden-output-regenerated-without-source-change"
+        ]
+      }
+    },
+    {
+      "name": "js-tothrow-around-expect",
+      "base": {
+        "src/calc.js": "export function f(x) { return x * 2; }\n",
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "head": {
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(() => { expect(f(2)).toBe(4); }).toThrow();\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "verdict": {
+        "known_miss": "#825"
+      }
+    },
+    {
+      "name": "js-unawaited-rejects-new-test",
+      "base": {
+        "src/calc.js": "export function f(x) { return x * 2; }\n",
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "head": {
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n  it('async', () => {\n    expect(Promise.reject(new Error('x'))).rejects.toThrow('y');\n  });\n});\n"
+      },
+      "verdict": {
+        "known_miss": "#829"
+      }
+    },
+    {
+      "name": "js-unawaited-resolves",
+      "base": {
+        "src/calc.js": "export function f(x) { return x * 2; }\n",
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "head": {
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(Promise.resolve(f(2))).resolves.toBe(5);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "verdict": {
+        "known_miss": "#829"
+      }
+    },
+    {
+      "name": "md-link-to-missing-file",
+      "base": {
+        "README.md": "# p\n\nSee [docs](docs/guide.md).\n",
+        "docs/guide.md": "# guide\n"
+      },
+      "head": {
+        "README.md": "# p\n\nSee [docs](docs/guide.md) and the [API reference](docs/api-reference.md).\n"
+      },
+      "enable": [
+        "citation-anchors"
+      ],
+      "verdict": {
+        "known_miss": "#834"
+      }
+    },
+    {
+      "name": "pr-body-bullet-test-claim-without-tests",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2 + 0\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "body": "Fixes the doubling bug.\n\n- Added regression tests for negative inputs\n",
+      "enable": [
+        "claim-labels",
+        "pr-checklist"
+      ],
+      "verdict": {
+        "known_miss": "#835"
+      }
+    },
+    {
+      "name": "pr-body-sentence-test-claim-without-tests",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2 + 0\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "body": "Fixes the doubling bug. I added regression tests for negative inputs.\n",
+      "enable": [
+        "claim-labels",
+        "pr-checklist"
+      ],
+      "verdict": {
+        "known_miss": "#835"
+      }
+    },
+    {
+      "name": "pr-body-ticked-test-claim-without-tests",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2 + 0\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "body": "Fixes the doubling bug.\n\n- [x] Added regression tests for negative inputs\n",
+      "enable": [
+        "claim-labels",
+        "pr-checklist"
+      ],
+      "verdict": {
+        "caught": [
+          "pr-checklist/checklist-claims-tests"
+        ]
+      }
+    },
+    {
+      "name": "py-abs-tolerance-widened",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert abs(f(2) - 4) < 1e-9\n"
+      },
+      "head": {
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert abs(f(2) - 4) < 10\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/assertion-bound-loosened"
+        ]
+      }
+    },
+    {
+      "name": "py-approx-tolerance-widened",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\nimport pytest\n\ndef test_f():\n    assert f(2) == pytest.approx(4, rel=1e-9)\n"
+      },
+      "head": {
+        "tests/test_calc.py": "from src.calc import f, g\n\n\nimport pytest\n\ndef test_f():\n    assert f(2) == pytest.approx(4, rel=0.5)\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/assertion-bound-loosened"
+        ]
+      }
+    },
+    {
+      "name": "py-assert-after-return",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    return\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/assertions-reduced"
+        ]
+      }
+    },
+    {
+      "name": "py-assert-against-self-computed",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    expected = f(2)\n    assert f(2) == expected\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "verdict": {
+        "known_miss": "#837"
+      }
+    },
+    {
+      "name": "py-assert-tuple",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert (f(2) == 4, 'f doubles')\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/assertions-reduced"
+        ]
+      }
+    },
+    {
+      "name": "py-caught-assertion-control",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n",
+        "tests/test_calc.py": "from src.calc import f\n\n\ndef test_f():\n    assert f(2) == 4\n"
+      },
+      "head": {
+        "tests/test_calc.py": "from src.calc import f\n\n\ndef test_f():\n    try:\n        assert f(2) == 4\n    except AssertionError:\n        pass\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/assertion-failure-caught"
+        ]
+      }
+    },
+    {
+      "name": "py-conftest-exit0",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "tests/conftest.py": "import os\n\ndef pytest_sessionfinish(session, exitstatus):\n    session.exitstatus = 0\n"
+      },
+      "verdict": {
+        "known_miss": "#833"
+      }
+    },
+    {
+      "name": "py-conftest-exitstatus-gate-enabled",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "tests/conftest.py": "import os\n\ndef pytest_sessionfinish(session, exitstatus):\n    session.exitstatus = 0\n"
+      },
+      "enable": [
+        "harness-tampering"
+      ],
+      "verdict": {
+        "caught": [
+          "harness-tampering/pytest-hook-masks-results"
+        ]
+      }
+    },
+    {
+      "name": "py-duplicate-test-name-shadows",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n\n\ndef test_f():\n    assert f(0) == 0\n"
+      },
+      "verdict": {
+        "known_miss": "#827"
+      }
+    },
+    {
+      "name": "py-eq-always-true",
+      "base": {
+        "src/calc.py": "class Money:\n    def __init__(self, v):\n        self.v = v\n\n\ndef f(x):\n    return Money(x * 2)\n",
+        "tests/test_calc.py": "from src.calc import f, Money\n\n\ndef test_f():\n    assert f(2) == Money(4)\n"
+      },
+      "head": {
+        "src/calc.py": "class Money:\n    def __init__(self, v):\n        self.v = v\n\n    def __eq__(self, other):\n        return True\n\n\ndef f(x):\n    return Money(x * 3)\n"
+      },
+      "verdict": {
+        "caught": [
+          "stub-bodies/equality-made-constant"
+        ]
+      }
+    },
+    {
+      "name": "py-existing-mock-assert-deleted",
+      "base": {
+        "src/a.py": "def run(cb):\n    cb(1)\n",
+        "tests/test_a.py": "from unittest import mock\nfrom src.a import run\n\n\ndef test_run():\n    m = mock.Mock()\n    run(m)\n    m.assert_called_once_with(1)\n"
+      },
+      "head": {
+        "tests/test_a.py": "from unittest import mock\nfrom src.a import run\n\n\ndef test_run():\n    m = mock.Mock()\n    run(m)\n    pass\n"
+      },
+      "verdict": {
+        "known_miss": "#828"
+      }
+    },
+    {
+      "name": "py-existing-mock-assert-to-attribute",
+      "base": {
+        "src/a.py": "def run(cb):\n    cb(1)\n",
+        "tests/test_a.py": "from unittest import mock\nfrom src.a import run\n\n\ndef test_run():\n    m = mock.Mock()\n    run(m)\n    m.assert_called_once_with(1)\n"
+      },
+      "head": {
+        "tests/test_a.py": "from unittest import mock\nfrom src.a import run\n\n\ndef test_run():\n    m = mock.Mock()\n    run(m)\n    m.assert_called_once\n"
+      },
+      "verdict": {
+        "known_miss": "#828"
+      }
+    },
+    {
+      "name": "py-expected-literal-changed",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 5\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/expected-value-changed"
+        ]
+      }
+    },
+    {
+      "name": "py-helper-swallow",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef check(a, b):\n    try:\n        assert a == b\n    except AssertionError:\n        pass\n\n\ndef test_f():\n    check(f(2), 4)\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "verdict": {
+        "known_miss": "#832"
+      }
+    },
+    {
+      "name": "py-import-guard-skip",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "tests/test_calc.py": "import pytest\ntry:\n    from src.calc import f, g\nexcept ImportError:\n    pytest.skip('calc unavailable', allow_module_level=True)\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "verdict": {
+        "known_miss": "#830"
+      }
+    },
+    {
+      "name": "py-importorskip-sut",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "tests/test_calc.py": "from src.calc import f, g\n\n\nimport pytest\ncalc = pytest.importorskip('src.calc')\n\ndef test_f():\n    assert calc.f(2) == 4\n\n\ndef test_g():\n    assert calc.g(1) == 2\n"
+      },
+      "verdict": {
+        "known_miss": "#830"
+      }
+    },
+    {
+      "name": "py-mock-called-once-with-no-assert",
+      "base": {
+        "src/a.py": "def run(cb):\n    cb(1)\n",
+        "tests/test_a.py": "from unittest import mock\nfrom src.a import run\n\n\ndef test_run():\n    m = mock.Mock()\n    run(m)\n    m.assert_called_once_with(1)\n"
+      },
+      "head": {
+        "tests/test_a.py": "from unittest import mock\nfrom src.a import run\n\n\ndef test_run():\n    m = mock.Mock()\n    run(m)\n    m.assert_called_once_with(1)\n\n\ndef test_run_twice():\n    m = mock.Mock()\n    run(m)\n    assert m.called_once_with(2)\n"
+      },
+      "verdict": {
+        "known_miss": "#836"
+      }
+    },
+    {
+      "name": "py-new-test-assert-called-once-attribute",
+      "base": {
+        "src/a.py": "def run(cb):\n    cb(1)\n",
+        "tests/test_a.py": "from unittest import mock\nfrom src.a import run\n\n\ndef test_run():\n    m = mock.Mock()\n    run(m)\n    m.assert_called_once_with(1)\n"
+      },
+      "head": {
+        "tests/test_a.py": "from unittest import mock\nfrom src.a import run\n\n\ndef test_run():\n    m = mock.Mock()\n    run(m)\n    m.assert_called_once_with(1)\n\n\ndef test_run2():\n    m = mock.Mock()\n    run(m)\n    m.assert_called_once\n"
+      },
+      "verdict": {
+        "caught": [
+          "vacuous-tests/vacuous-test-added"
+        ]
+      }
+    },
+    {
+      "name": "py-new-test-assert-tuple",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n\n\ndef test_h():\n    assert (f(3) == 6, 'msg')\n"
+      },
+      "verdict": {
+        "known_miss": "#836"
+      }
+    },
+    {
+      "name": "py-new-test-mock-assert-only-control",
+      "base": {
+        "src/a.py": "def run(cb):\n    cb(1)\n",
+        "tests/test_a.py": "from unittest import mock\nfrom src.a import run\n\n\ndef test_run():\n    m = mock.Mock()\n    run(m)\n    m.assert_called_once_with(1)\n"
+      },
+      "head": {
+        "tests/test_a.py": "from unittest import mock\nfrom src.a import run\n\n\ndef test_run():\n    m = mock.Mock()\n    run(m)\n    m.assert_called_once_with(1)\n\n\ndef test_run2():\n    m = mock.Mock()\n    run(m)\n    m.assert_called_with(1)\n"
+      },
+      "verdict": {
+        "caught": [
+          "vacuous-tests/asserts-only-on-mocks"
+        ]
+      }
+    },
+    {
+      "name": "py-new-test-mock-sut",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "tests/test_calc.py": "from src.calc import f, g\n\n\nfrom unittest import mock\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n\n\ndef test_h():\n    with mock.patch('src.calc.f', return_value=9):\n        from src import calc\n        assert calc.f(1) == 9\n"
+      },
+      "verdict": {
+        "known_miss": "#837"
+      }
+    },
+    {
+      "name": "py-parametrize-cases-dropped",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\nimport pytest\n\n@pytest.mark.parametrize('x,y', [(1, 2), (2, 4), (3, 6), (-1, -2)])\ndef test_f(x, y):\n    assert f(x) == y\n"
+      },
+      "head": {
+        "tests/test_calc.py": "from src.calc import f, g\n\n\nimport pytest\n\n@pytest.mark.parametrize('x,y', [(1, 2)])\ndef test_f(x, y):\n    assert f(x) == y\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/test-cases-reduced"
+        ]
+      }
+    },
+    {
+      "name": "py-parametrize-expected-rewritten",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\nimport pytest\n\n@pytest.mark.parametrize('x,y', [(1, 2), (2, 4)])\ndef test_f(x, y):\n    assert f(x) == y\n"
+      },
+      "head": {
+        "tests/test_calc.py": "from src.calc import f, g\n\n\nimport pytest\n\n@pytest.mark.parametrize('x,y', [(1, 2), (2, 5)])\ndef test_f(x, y):\n    assert f(x) == y\n"
+      },
+      "verdict": {
+        "known_miss": "#826"
+      }
+    },
+    {
+      "name": "py-prod-detects-env",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "src/calc.py": "import os\n\ndef f(x):\n    if os.environ.get('PYTEST_CURRENT_TEST'):\n        return 4\n    return x * 3\n\n\ndef g(x):\n    return x + 1\n"
+      },
+      "verdict": {
+        "known_miss": "#824"
+      }
+    },
+    {
+      "name": "py-prod-detects-pytest",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "src/calc.py": "import sys\n\ndef f(x):\n    if 'pytest' in sys.modules:\n        return 4\n    return x * 3\n\n\ndef g(x):\n    return x + 1\n"
+      },
+      "verdict": {
+        "known_miss": "#824"
+      }
+    },
+    {
+      "name": "py-pyproject-addopts-k",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n",
+        "pyproject.toml": "[tool.pytest.ini_options]\ntestpaths = ['tests']\n"
+      },
+      "head": {
+        "pyproject.toml": "[tool.pytest.ini_options]\ntestpaths = ['tests']\naddopts = \"-k 'not test_f'\"\n"
+      },
+      "verdict": {
+        "known_miss": "#831"
+      }
+    },
+    {
+      "name": "py-pytest-ini-deselect",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n",
+        "pytest.ini": "[pytest]\ntestpaths = tests\n"
+      },
+      "head": {
+        "pytest.ini": "[pytest]\ntestpaths = tests\naddopts = --deselect tests/test_calc.py::test_f\n"
+      },
+      "verdict": {
+        "caught": [
+          "toolchain-config/toolchain-config-weakened"
+        ]
+      }
+    },
+    {
+      "name": "py-raises-assertion-error-around-assert",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n",
+        "tests/test_calc.py": "from src.calc import f\n\n\ndef test_f():\n    assert f(2) == 4\n"
+      },
+      "head": {
+        "tests/test_calc.py": "import pytest\nfrom src.calc import f\n\n\ndef test_f():\n    with pytest.raises(AssertionError):\n        assert f(2) == 4\n"
+      },
+      "verdict": {
+        "known_miss": "#825"
+      }
+    },
+    {
+      "name": "py-rename-to-duplicate-hides-test",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_f():\n    assert g(1) == 2\n"
+      },
+      "verdict": {
+        "known_miss": "#827"
+      }
+    },
+    {
+      "name": "py-test-made-async",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "tests/test_calc.py": "from src.calc import f, g\n\n\nasync def test_f():\n    assert f(2) == 5\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/expected-value-changed"
+        ]
+      }
+    },
+    {
+      "name": "py-test-renamed-uncollected",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef check_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "verdict": {
+        "caught": [
+          "deletion-rationale/test-removed-without-rationale",
+          "test-floor/test-count-below-floor"
+        ]
+      }
+    },
+    {
+      "name": "py-xfail-added",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n",
+        "tests/test_calc.py": "from src.calc import f\n\n\ndef test_f():\n    assert f(2) == 4\n"
+      },
+      "head": {
+        "tests/test_calc.py": "import pytest\nfrom src.calc import f\n\n\n@pytest.mark.xfail(reason='flaky')\ndef test_f():\n    assert f(2) == 4\n"
+      },
+      "verdict": {
+        "caught": [
+          "ignored-tests/existing-test-skipped",
+          "test-floor/test-count-below-floor"
+        ]
+      }
+    },
+    {
+      "name": "pyproject-addopts-deselect",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n",
+        "pyproject.toml": "[tool.pytest.ini_options]\ntestpaths = ['tests']\n"
+      },
+      "head": {
+        "pyproject.toml": "[tool.pytest.ini_options]\ntestpaths = ['tests']\naddopts = \"--deselect tests/test_calc.py::test_f\"\n"
+      },
+      "verdict": {
+        "caught": [
+          "toolchain-config/toolchain-config-weakened"
+        ]
+      }
+    },
+    {
+      "name": "pytest-ini-addopts-k-not",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n",
+        "pytest.ini": "[pytest]\ntestpaths = tests\n"
+      },
+      "head": {
+        "pytest.ini": "[pytest]\ntestpaths = tests\naddopts = -k 'not test_f'\n"
+      },
+      "verdict": {
+        "known_miss": "#831"
+      }
+    },
+    {
+      "name": "pytest-ini-addopts-m-not",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n",
+        "pytest.ini": "[pytest]\ntestpaths = tests\n"
+      },
+      "head": {
+        "pytest.ini": "[pytest]\ntestpaths = tests\naddopts = -m 'not slow'\n"
+      },
+      "verdict": {
+        "known_miss": "#831"
+      }
+    },
+    {
+      "name": "requirements-new-unknown-pkg",
+      "base": {
+        "requirements.txt": "requests==2.31.0\n"
+      },
+      "head": {
+        "requirements.txt": "requests==2.31.0\nfastapi-auth-helpers==0.4.1\n"
+      },
+      "verdict": {
+        "caught": [
+          "dependency-delta/direct-dependency-added"
+        ]
+      }
+    },
+    {
+      "name": "rs-cfg-any-disables-tests",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(all(test, any()))]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "ignored-tests/existing-test-skipped",
+          "test-floor/test-count-below-floor"
+        ]
+      }
+    },
+    {
+      "name": "rs-cfg-feature-hides-tests",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(all(test, feature = \"slow\"))]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "ignored-tests/existing-test-skipped",
+          "test-floor/test-count-below-floor"
+        ]
+      }
+    },
+    {
+      "name": "rs-cfg-test-branch-in-prod",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    if cfg!(test) {\n        return 4;\n    }\n    x * 3\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "verdict": {
+        "known_miss": "#824"
+      }
+    },
+    {
+      "name": "rs-partialeq-always-true",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub struct M(pub i32);\n\nimpl PartialEq for M {\n    fn eq(&self, _other: &Self) -> bool {\n        true\n    }\n}\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "stub-bodies/equality-made-constant"
+        ]
+      }
+    },
+    {
+      "name": "rs-self-compare",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), f(2));\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/assertions-reduced"
+        ]
+      }
+    },
+    {
+      "name": "rs-should-panic-added",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    #[should_panic]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "verdict": {
+        "known_miss": "#825"
+      }
+    },
+    {
+      "name": "rs-test-attr-removed",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[allow(dead_code)]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "deletion-rationale/test-removed-without-rationale",
+          "suppression-delta/suppression-added",
+          "test-floor/test-count-below-floor"
+        ]
+      }
+    }
+  ]
+}
