@@ -3928,6 +3928,27 @@ const CASES: &[Case] = &[
     ),
     #[cfg(feature = "lang-python")]
     (
+        "vacuous-tests: a Python assert of a tuple or of a mock assertion name without its prefix cannot fail (#836)",
+        || {
+            let vacuous = |body: &str| -> Result<bool> {
+                let src = format!("from unittest import mock\n\ndef test_t():\n{body}");
+                Ok(facts("tests/test_t.py", &src)?.tests[0].is_vacuous())
+            };
+            Ok(vacuous("    assert (f(3) == 6, \"f doubles\")\n")?
+                && !vacuous("    assert f(3) == 6, \"f doubles\"\n")?
+                && !vacuous("    assert ()\n")?
+                && vacuous("    m = mock.Mock()\n    run(m)\n    assert m.called_once_with(2)\n")?
+                && vacuous(
+                    "    with mock.patch(\"a.g\") as m:\n        run()\n    assert m.called_with(2)\n"
+                )?
+                && !vacuous(
+                    "    m = mock.Mock(spec=Repo)\n    run(m)\n    assert m.called_once_with(2)\n"
+                )?
+                && !vacuous("    m = make()\n    run(m)\n    assert m.called_once_with(2)\n")?)
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
         "deletion-rationale: a Python test hidden by a later def of its name is reported (#827)",
         || {
             use crate::ast::LanguagePack;
