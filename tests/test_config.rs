@@ -20,8 +20,6 @@ fn dogfood_config_loads_with_every_available_gate_on() {
             || gate.id == "msrv"
             || gate.id == "miri"
             || gate.id == "sanitizers"
-            // Opt-in, and new: enabling it here is a change to the protected `discipline.toml`.
-            || gate.id == "harness-tampering"
             || gate.id == "gate-command-lint"
             || gate.id == "citation-anchors"
             || gate.id == "mechanism-sections"
@@ -311,7 +309,6 @@ name = "my-test-proj"
             || g.id == "manifest-sync"
             || g.id == "version-lockstep"
             || g.id == "scope-confinement"
-            || g.id == "harness-tampering"
             || g.id == "ratified-paths"
             || g.id == "review-threads"
             || g.id == "pr-checklist"
@@ -634,7 +631,7 @@ const DEFAULTS_SNAPSHOT: &[(&str, bool, Severity)] = &[
     ("unsafe-safety-comment", true, Severity::Error),
     ("deletion-rationale", true, Severity::Error),
     ("scope-confinement", false, Severity::Error),
-    ("harness-tampering", false, Severity::Error),
+    ("harness-tampering", true, Severity::Error),
     ("suppression-delta", true, Severity::Warning),
     ("time-estimates", true, Severity::Warning),
     ("pii", true, Severity::Error),
