@@ -1,6 +1,7 @@
 use discipline::guards::perf::bounds::{
-    minimum_detectable_difference, sample_size_for_interval, standard_normal_quantile,
-    wilson_score_interval,
+    minimum_detectable_difference, sample_size_for_interval, sample_size_for_wilson_lower_bound,
+    sample_size_for_wilson_lower_bound_power, standard_normal_quantile, trajectories_required,
+    wilson_pass_probability, wilson_score_interval,
 };
 
 #[test]
@@ -129,6 +130,169 @@ fn test_sample_size_and_mdd_invalid_inputs_fail_closed() {
 
     // Power unachievable when p1 + delta > 1.0
     assert!(minimum_detectable_difference(10, 10, 0.98, 0.95, 0.99).is_err());
+}
+
+// Recall study Step 0 (#838, `docs/benchmarks/recall-preregistration.toml`): the Rust
+// mirrors of the recall functions in `scripts/benchmark_power_audit.py`, pinned to the same
+// values. `tests/test_benchmark_power_bounds_recall.rs` pins the Python side and compares
+// the two on a grid.
+
+#[test]
+fn recall_wilson_lower_bound_sample_sizes_match_the_pinned_values() {
+    // (assumed recall, floor) -> (point-estimate n, power-0.80 n), confidence 0.95.
+    for (expected, floor, point, power) in [
+        (0.90, 0.80, 68, 112),
+        (0.90, 0.75, 37, 58),
+        (0.85, 0.70, 39, 69),
+    ] {
+        assert_eq!(
+            sample_size_for_wilson_lower_bound(expected, floor, 0.95, 2000).unwrap(),
+            point,
+            "point n at ({expected}, {floor})"
+        );
+        assert_eq!(
+            sample_size_for_wilson_lower_bound_power(expected, floor, 0.95, 0.80, 2000).unwrap(),
+            power,
+            "power n at ({expected}, {floor})"
+        );
+    }
+    // Independent of n_max once n_max is past the last gap.
+    assert_eq!(
+        sample_size_for_wilson_lower_bound(0.90, 0.80, 0.95, 500).unwrap(),
+        68
+    );
+    assert_eq!(
+        sample_size_for_wilson_lower_bound_power(0.90, 0.80, 0.95, 0.80, 500).unwrap(),
+        112
+    );
+}
+
+#[test]
+fn recall_wilson_pass_probability_matches_the_exact_binomial_tail() {
+    // The first value is the Python function's float (`--recall-bounds-json` audit row
+    // n = 112); the others are the Python test's exact-arithmetic references.
+    for (n, p, floor, expected) in [
+        (112, 0.90, 0.80, 0.850_602_542_593_940_6),
+        (111, 0.90, 0.80, 0.781_664_997_762_1),
+        (100, 0.90, 0.80, 0.801_821_112_640_4),
+        (58, 0.90, 0.75, 0.878_528_651_867_7),
+        (69, 0.85, 0.70, 0.855_412_199_075_6),
+    ] {
+        let got = wilson_pass_probability(n, p, floor, 0.95).unwrap();
+        assert!(
+            (got - expected).abs() < 1e-9,
+            "pass probability at n={n}, p={p}, floor={floor}: {got} != {expected}"
+        );
+    }
+    // No count can clear a floor of 0.99 at n = 5.
+    assert_eq!(wilson_pass_probability(5, 0.90, 0.99, 0.95).unwrap(), 0.0);
+}
+
+#[test]
+fn recall_wilson_pass_probability_stays_finite_at_large_n() {
+    // ln C(2000, k) is near 1380 at the mode: a direct product would overflow.
+    for (p, floor) in [(0.90, 0.80), (0.70, 0.65), (0.50, 0.55)] {
+        let got = wilson_pass_probability(2000, p, floor, 0.95).unwrap();
+        assert!(
+            got.is_finite() && (0.0..=1.0).contains(&got),
+            "p={p}, floor={floor}: {got}"
+        );
+    }
+    assert!(wilson_pass_probability(2000, 0.90, 0.80, 0.95).unwrap() > 0.999_999);
+    assert!(wilson_pass_probability(2000, 0.50, 0.55, 0.95).unwrap() < 1e-6);
+}
+
+/// The monotonicity rule: each requirement is the start of the last unbroken run of
+/// qualifying sizes up to n_max, not the first size that qualifies.
+#[test]
+fn recall_requirement_is_the_last_unbroken_run_not_the_first_crossing() {
+    let clears = |n: usize| {
+        let k = (0.90 * n as f64 + 0.5).floor() as usize;
+        wilson_score_interval(k, n, 0.95).unwrap().0 >= 0.80
+    };
+    let first_clearing = (1..=2000).find(|&n| clears(n)).unwrap();
+    assert_eq!(first_clearing, 54);
+    let gaps: Vec<usize> = (54..69).filter(|&n| !clears(n)).collect();
+    assert_eq!(gaps, [56, 57, 58, 59, 60, 66, 67]);
+    assert_eq!(
+        sample_size_for_wilson_lower_bound(0.90, 0.80, 0.95, 2000).unwrap(),
+        68
+    );
+
+    let meets = |n: usize| wilson_pass_probability(n, 0.90, 0.80, 0.95).unwrap() >= 0.80;
+    let first_meeting = (1..=2000).find(|&n| meets(n)).unwrap();
+    assert_eq!(first_meeting, 100);
+    let below: Vec<usize> = (100..113).filter(|&n| !meets(n)).collect();
+    assert_eq!(below, [101, 102, 103, 104, 105, 110, 111]);
+    assert_eq!(
+        sample_size_for_wilson_lower_bound_power(0.90, 0.80, 0.95, 0.80, 2000).unwrap(),
+        112
+    );
+}
+
+#[test]
+fn recall_trajectories_required_rounds_up_but_not_on_float_noise() {
+    assert_eq!(trajectories_required(112, 0.30, 0.50, 0.90).unwrap(), 830);
+    // 100 / 0.25 and 10 / 0.1 are not exact in binary; neither may add a run.
+    assert_eq!(trajectories_required(100, 0.50, 0.50, 1.0).unwrap(), 400);
+    assert_eq!(trajectories_required(10, 0.10, 1.0, 1.0).unwrap(), 100);
+    assert_eq!(trajectories_required(1, 1.0, 1.0, 1.0).unwrap(), 1);
+}
+
+#[test]
+fn recall_bounds_invalid_inputs_fail_closed() {
+    assert!(wilson_pass_probability(0, 0.9, 0.8, 0.95).is_err());
+    assert!(wilson_pass_probability(10, 1.0, 0.8, 0.95).is_err());
+    assert!(wilson_pass_probability(10, 0.9, 0.0, 0.95).is_err());
+    assert!(wilson_pass_probability(10, 0.9, 0.8, 1.0).is_err());
+    assert!(wilson_pass_probability(10, f64::NAN, 0.8, 0.95).is_err());
+
+    // Floor not below the expected proportion; n_max that does not qualify; n_max of 0.
+    assert!(sample_size_for_wilson_lower_bound(0.80, 0.80, 0.95, 2000).is_err());
+    assert!(sample_size_for_wilson_lower_bound(0.90, 0.80, 0.95, 10).is_err());
+    assert!(sample_size_for_wilson_lower_bound(0.90, 0.80, 0.95, 0).is_err());
+    assert!(sample_size_for_wilson_lower_bound(0.90, 0.80, f64::NAN, 2000).is_err());
+
+    assert!(sample_size_for_wilson_lower_bound_power(0.90, 0.80, 0.95, 1.0, 2000).is_err());
+    assert!(sample_size_for_wilson_lower_bound_power(0.90, 0.80, 0.95, 0.0, 2000).is_err());
+    assert!(sample_size_for_wilson_lower_bound_power(0.90, 0.80, 0.95, 0.80, 50).is_err());
+    assert!(sample_size_for_wilson_lower_bound_power(0.70, 0.80, 0.95, 0.80, 2000).is_err());
+
+    assert!(trajectories_required(0, 0.5, 0.5, 0.5).is_err());
+    assert!(trajectories_required(10, 0.0, 0.5, 0.5).is_err());
+    assert!(trajectories_required(10, 0.5, 1.5, 0.5).is_err());
+    assert!(trajectories_required(10, 0.5, 0.5, f64::NAN).is_err());
+    assert!(trajectories_required(10, 1e-300, 1e-300, 1.0).is_err());
+}
+
+/// The recall pre-registration's required sizes are what the Rust functions return for
+/// its own inputs.
+#[test]
+fn recall_preregistration_required_n_matches_rust_bounds() {
+    let raw = std::fs::read_to_string("docs/benchmarks/recall-preregistration.toml")
+        .expect("docs/benchmarks/recall-preregistration.toml must exist");
+    let doc: toml::Value = toml::from_str(&raw).expect("recall pre-registration must parse");
+    let pb = &doc["power_and_bounds"];
+    let f = |key: &str| pb[key].as_float().unwrap_or_else(|| panic!("{key} float"));
+    let i = |key: &str| {
+        usize::try_from(
+            pb[key]
+                .as_integer()
+                .unwrap_or_else(|| panic!("{key} integer")),
+        )
+        .unwrap()
+    };
+    let (expected, floor) = (f("assumed_recall"), f("recall_floor"));
+    let (confidence, power, n_max) = (f("confidence_level"), f("statistical_power"), i("n_max"));
+    assert_eq!(
+        sample_size_for_wilson_lower_bound(expected, floor, confidence, n_max).unwrap(),
+        i("required_n_point_estimate")
+    );
+    assert_eq!(
+        sample_size_for_wilson_lower_bound_power(expected, floor, confidence, power, n_max)
+            .unwrap(),
+        i("required_n_before_design_effect")
+    );
 }
 
 #[derive(serde::Deserialize)]
