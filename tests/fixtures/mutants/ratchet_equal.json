@@ -1,0 +1,7 @@
+{
+  "description": "Test ratchet: equal.",
+  "missed": {
+    "src/ast/bounds.rs": 2,
+    "src/guards/ci_skip_set.rs": 1
+  }
+}
