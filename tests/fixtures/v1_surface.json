@@ -1299,6 +1299,7 @@
       "config-integrity/gate-weakened",
       "deletion-rationale/file-deleted-without-rationale",
       "deletion-rationale/test-removed-without-rationale",
+      "deletion-rationale/test-shadowed-by-redefinition",
       "dependency-delta/banned-dependency",
       "dependency-delta/dependency-constraint-loosened",
       "dependency-delta/dependency-outside-allowlist",

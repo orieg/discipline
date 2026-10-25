@@ -537,7 +537,9 @@
         "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n\n\ndef test_f():\n    assert f(0) == 0\n"
       },
       "verdict": {
-        "known_miss": "#827"
+        "caught": [
+          "deletion-rationale/test-shadowed-by-redefinition"
+        ]
       }
     },
     {
@@ -811,7 +813,10 @@
         "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_f():\n    assert g(1) == 2\n"
       },
       "verdict": {
-        "known_miss": "#827"
+        "caught": [
+          "deletion-rationale/test-shadowed-by-redefinition",
+          "test-floor/test-count-below-floor"
+        ]
       }
     },
     {
