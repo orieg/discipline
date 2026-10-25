@@ -1279,6 +1279,7 @@
       "claim-labels/label-placeholder",
       "claim-labels/read-label-unresolvable",
       "command/base-test-failed",
+      "command/base-tests-no-cases",
       "command/canary-command-succeeded",
       "command/canary-diagnostic-missing",
       "command/command-failed",

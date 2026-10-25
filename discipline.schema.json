@@ -401,7 +401,7 @@
       "additionalProperties": false,
       "properties": {
         "allow_zero": {
-          "description": "Whether zero items selected is allowed",
+          "description": "Whether zero items selected is allowed; on a `base-tests` command, whether a run that read no test case passes",
           "type": "boolean"
         },
         "canary_command": {
@@ -462,7 +462,7 @@
       "additionalProperties": false,
       "properties": {
         "allow_zero": {
-          "description": "Whether zero items selected is allowed",
+          "description": "Whether zero items selected is allowed; on a `base-tests` command, whether a run that read no test case passes",
           "type": "boolean"
         },
         "canary_command": {

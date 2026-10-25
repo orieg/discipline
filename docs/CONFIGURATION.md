@@ -149,12 +149,12 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.claim-labels.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.claim-labels.extra_patterns` | list | `[]` | Additional regex patterns treated as verification claims |
 | `gates.claim-labels.severity` | string | `"warning"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
-| `gates.command.allow_zero` | boolean | `false` | Whether zero items selected is allowed |
+| `gates.command.allow_zero` | boolean | `false` | Whether zero items selected is allowed; on a `base-tests` command, whether a run that read no test case passes |
 | `gates.command.canary_command` | string | *(unset)* | Optional negative-control canary command |
 | `gates.command.canary_expected_diagnostic` | string | *(unset)* | Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text |
 | `gates.command.command` | string | *(unset)* | Primary command to execute |
 | `gates.command.commands` | array of tables | `[]` | Multi-command suite entries |
-| `gates.command.commands[].allow_zero` | boolean | *(per entry)* | Whether zero items selected is allowed |
+| `gates.command.commands[].allow_zero` | boolean | *(per entry)* | Whether zero items selected is allowed; on a `base-tests` command, whether a run that read no test case passes |
 | `gates.command.commands[].canary_command` | string | *(per entry)* | Optional negative-control canary command |
 | `gates.command.commands[].canary_expected_diagnostic` | string | *(per entry)* | Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text |
 | `gates.command.commands[].command` | string | *(per entry)* | Command string to execute |

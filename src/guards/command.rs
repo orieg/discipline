@@ -1748,6 +1748,82 @@ pub fn parse_junit_cases(xml: &str) -> Vec<TestCaseReport> {
     cases
 }
 
+/// What a `base-tests` run showed, read from its exit status and the cases of its report.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum BaseTestsVerdict<'a> {
+    /// The run succeeded and no case failed; holds the number of cases read.
+    Passed(usize),
+    /// The run succeeded and the report held no test case: nothing shows the base tests
+    /// ran, so nothing shows they pass.
+    NoCases,
+    /// These cases failed.
+    Failed(Vec<&'a TestCaseReport>),
+    /// The run failed and no case in the report says which test did.
+    RunFailed,
+}
+
+/// Judges a `base-tests` run. A run that read no test case passes only with `allow_zero`.
+pub(crate) fn base_tests_verdict(
+    succeeded: bool,
+    cases: &[TestCaseReport],
+    allow_zero: bool,
+) -> BaseTestsVerdict<'_> {
+    let failed: Vec<&TestCaseReport> = cases
+        .iter()
+        .filter(|c| c.status == TestStatus::Failed)
+        .collect();
+    if !failed.is_empty() {
+        BaseTestsVerdict::Failed(failed)
+    } else if !succeeded {
+        BaseTestsVerdict::RunFailed
+    } else if cases.is_empty() && !allow_zero {
+        BaseTestsVerdict::NoCases
+    } else {
+        BaseTestsVerdict::Passed(cases.len())
+    }
+}
+
+/// Reports a `base-tests` run that read no test case, unless `allow-command:` names the
+/// command (or `default`).
+fn report_base_tests_no_cases(
+    ctx: &Context,
+    cmd: &ResolvedCommand,
+    gate: &crate::config::CommandGate,
+    outcome: &mut GateOutcome,
+) {
+    let kind = &crate::findings::BASE_TESTS_NO_CASES;
+    let ov = ctx
+        .find_override(GATE, kind, tokens::ALLOW_COMMAND, &cmd.name)
+        .or_else(|| {
+            if cmd.name != "default" {
+                ctx.find_override(GATE, kind, tokens::ALLOW_COMMAND, "default")
+            } else {
+                None
+            }
+        });
+    let anchored = ov.is_none();
+    let msg = format!(
+        "Base-tests command `{}` succeeded and no JUnit test case was read: none in its stdout or stderr, and no `*.xml` file at the top of its working directory holds one. A command that reports no test case cannot show that the base tests pass against head code.",
+        cmd.name
+    );
+    let rem = format!(
+        "Make the command print a JUnit report (`cargo test -- --format=junit`, or the runner's JUnit option) or leave one as a top-level `*.xml` file, set `allow_zero = true` on the command when no base test is meant to run, or excuse it with `allow-command: {} <reason>`.",
+        cmd.name
+    );
+    outcome.lift_or_push(
+        ov,
+        gate.severity(),
+        kind,
+        (Some(ctx.config_path), None),
+        msg,
+        &rem,
+    );
+    if anchored {
+        // Located at the configuration file, which every command shares.
+        outcome.anchor_last(format!("command:{}", cmd.name));
+    }
+}
+
 fn evaluate_base_tests(
     ctx: &Context,
     cmd: &ResolvedCommand,
@@ -1864,18 +1940,20 @@ fn evaluate_base_tests(
         cases = first_report_file_cases(&temp_path, &ignore_xml);
     }
 
-    let failed_cases: Vec<&TestCaseReport> = cases
-        .iter()
-        .filter(|c| c.status == TestStatus::Failed)
-        .collect();
-
-    if run_res.status.success() && failed_cases.is_empty() {
-        outcome.notes.push(format!(
-            "command: preset 'base-tests': {} base tests passed against head code",
-            cases.len()
-        ));
-        return Ok(());
-    }
+    let failed_cases = match base_tests_verdict(run_res.status.success(), &cases, cmd.allow_zero) {
+        BaseTestsVerdict::Passed(n) => {
+            outcome.notes.push(format!(
+                "command: preset 'base-tests': {n} base tests passed against head code"
+            ));
+            return Ok(());
+        }
+        BaseTestsVerdict::NoCases => {
+            report_base_tests_no_cases(ctx, cmd, gate, outcome);
+            return Ok(());
+        }
+        BaseTestsVerdict::Failed(failed) => failed,
+        BaseTestsVerdict::RunFailed => Vec::new(),
+    };
 
     if !failed_cases.is_empty() {
         for failed in failed_cases {
@@ -2221,6 +2299,58 @@ mod tests {
         assert_eq!(cases[0].id, "\"quoted\" & <tagged>");
         assert_eq!(cases[0].status, TestStatus::Failed);
         assert_eq!(cases[0].failure_message.as_deref(), Some("\"failed\""));
+    }
+
+    #[test]
+    fn base_tests_that_read_no_case_do_not_pass() {
+        // Empty or whitespace output, and a report with no `<testcase>`, read no case.
+        for out in [
+            "",
+            "  \n\n",
+            "<testsuites/>",
+            "<testsuites><testsuite name=\"s\"/></testsuites>",
+        ] {
+            let cases = parse_junit_cases(out);
+            assert_eq!(
+                base_tests_verdict(true, &cases, false),
+                BaseTestsVerdict::NoCases,
+                "{out:?}"
+            );
+            // `allow_zero` restores the pass.
+            assert_eq!(
+                base_tests_verdict(true, &cases, true),
+                BaseTestsVerdict::Passed(0),
+                "{out:?}"
+            );
+            // A run that failed is reported as one, not as a run that read nothing.
+            assert_eq!(
+                base_tests_verdict(false, &cases, false),
+                BaseTestsVerdict::RunFailed,
+                "{out:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn base_tests_with_cases_pass_or_name_the_failed_case() {
+        let passed =
+            parse_junit_cases(r#"<testsuite><testcase name="adds" classname="a"/></testsuite>"#);
+        assert_eq!(
+            base_tests_verdict(true, &passed, false),
+            BaseTestsVerdict::Passed(1)
+        );
+        let failed = parse_junit_cases(
+            r#"<testsuite><testcase name="adds" classname="a"><failure message="boom"/></testcase></testsuite>"#,
+        );
+        for succeeded in [true, false] {
+            match base_tests_verdict(succeeded, &failed, false) {
+                BaseTestsVerdict::Failed(cases) => {
+                    assert_eq!(cases.len(), 1);
+                    assert_eq!(cases[0].id, "a::adds");
+                }
+                other => panic!("expected the failed case, got {other:?}"),
+            }
+        }
     }
 
     fn re(p: &str) -> regex::Regex {

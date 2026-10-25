@@ -20002,6 +20002,57 @@ command = "python3 run_tests.py"
     assert_eq!(outcome_ov["overrides"].as_array().unwrap().len(), 1);
 }
 
+/// A `base-tests` command that succeeds and prints no JUnit read no test case, which
+/// shows nothing about the base tests (#846). `allow_zero` and `allow-command:` restore
+/// the pass; the passing Python fake above is the control that reads one case.
+#[test]
+fn command_base_tests_that_read_no_case_fail() {
+    const CONFIG: &str = "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\n";
+    let setup = |extra: &str| {
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write(
+            "discipline.toml",
+            &format!("{CONFIG}commands = [ {{ name = \"bt\", preset = \"base-tests\", command = \"true\"{extra} }} ]\n"),
+        );
+        repo.commit("chore: configure base-tests");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+        repo.write("docs/README.md", "# Readme\n");
+        repo.commit("docs: add readme");
+        repo
+    };
+
+    let repo = setup("");
+    let run = repo.check(&["--base", "main"]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("command");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(violations[0]["code"], "command/base-tests-no-cases");
+    let message = violations[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("`bt`") && message.contains("`*.xml`"),
+        "{message}"
+    );
+
+    let lifted = repo.check_with_pr(
+        &["--base", "main"],
+        "Fixes #123\n\nallow-command: bt this repository has no base tests yet\n",
+    );
+    assert_eq!(lifted.code, 0, "{}{}", lifted.stdout, lifted.stderr);
+    let outcome = lifted.outcome("command");
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 0);
+    assert_eq!(outcome["overrides"].as_array().unwrap().len(), 1);
+
+    let allowed = setup(", allow_zero = true");
+    let run = allowed.check(&["--base", "main"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let notes = run.outcome("command")["notes"].to_string();
+    assert!(
+        notes.contains("0 base tests passed against head code"),
+        "{notes}"
+    );
+}
+
 #[test]
 fn assertion_failure_caught_inside_test_fires_and_accepts_override() {
     let repo = Repo::new();
