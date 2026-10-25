@@ -40,6 +40,8 @@ RULES: Dict[str, List[str]] = {
         ".github/workflows/release.yml",
         "renovate/discipline.json",
         "CITATION.cff",
+        # Run by a test:
+        "scripts/mutants_ratchet.py",
         # Generated or checked by `discipline docs --check`, which a test runs
         # over the working tree; several are also read by a test of their own:
         "README.md",
@@ -301,6 +303,8 @@ def run_tests() -> None:
         # tests/test_editor_integrations.rs
         "renovate/discipline.json",
         "CITATION.cff",
+        # tests/test_mutants_ratchet.rs
+        "scripts/mutants_ratchet.py",
     ]
     skipped = [
         f

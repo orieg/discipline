@@ -1,0 +1,243 @@
+{
+  "outcomes": [
+    {
+      "scenario": "Baseline",
+      "summary": "Success",
+      "log_path": "log/baseline.log",
+      "diff_path": null,
+      "phase_results": [
+        {
+          "phase": "Build",
+          "duration": 1.5,
+          "process_status": "Success",
+          "argv": [
+            "cargo",
+            "test",
+            "--no-run",
+            "--verbose",
+            "--package=discipline@0.25.3",
+            "--lib"
+          ]
+        },
+        {
+          "phase": "Test",
+          "duration": 0.75,
+          "process_status": "Success",
+          "argv": [
+            "cargo",
+            "test",
+            "--verbose",
+            "--package=discipline@0.25.3",
+            "--lib"
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": {
+        "Mutant": {
+          "name": "src/ast/bounds.rs:41:9: replace within_limit -> bool with true",
+          "package": "discipline",
+          "file": "src/ast/bounds.rs",
+          "function": {
+            "function_name": "within_limit",
+            "return_type": "-> bool",
+            "span": {
+              "start": {
+                "line": 39,
+                "column": 1
+              },
+              "end": {
+                "line": 45,
+                "column": 2
+              }
+            }
+          },
+          "span": {
+            "start": {
+              "line": 41,
+              "column": 9
+            },
+            "end": {
+              "line": 41,
+              "column": 15
+            }
+          },
+          "replacement": "true",
+          "genre": "FnValue"
+        }
+      },
+      "summary": "MissedMutant",
+      "log_path": "log/src__ast__bounds.rs_line_41_col_9.log",
+      "diff_path": "diff/src__ast__bounds.rs_line_41_col_9.diff",
+      "phase_results": [
+        {
+          "phase": "Build",
+          "duration": 1.5,
+          "process_status": "Success",
+          "argv": [
+            "cargo",
+            "test",
+            "--no-run",
+            "--verbose",
+            "--package=discipline@0.25.3",
+            "--lib"
+          ]
+        },
+        {
+          "phase": "Test",
+          "duration": 0.75,
+          "process_status": "Success",
+          "argv": [
+            "cargo",
+            "test",
+            "--verbose",
+            "--package=discipline@0.25.3",
+            "--lib"
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": {
+        "Mutant": {
+          "name": "src/ast/bounds.rs:47:18: replace <= with > in within_limit",
+          "package": "discipline",
+          "file": "src/ast/bounds.rs",
+          "function": {
+            "function_name": "within_limit",
+            "return_type": "-> bool",
+            "span": {
+              "start": {
+                "line": 45,
+                "column": 1
+              },
+              "end": {
+                "line": 51,
+                "column": 2
+              }
+            }
+          },
+          "span": {
+            "start": {
+              "line": 47,
+              "column": 18
+            },
+            "end": {
+              "line": 47,
+              "column": 24
+            }
+          },
+          "replacement": ">",
+          "genre": "BinaryOperator"
+        }
+      },
+      "summary": "MissedMutant",
+      "log_path": "log/src__ast__bounds.rs_line_47_col_18.log",
+      "diff_path": "diff/src__ast__bounds.rs_line_47_col_18.diff",
+      "phase_results": [
+        {
+          "phase": "Build",
+          "duration": 1.5,
+          "process_status": "Success",
+          "argv": [
+            "cargo",
+            "test",
+            "--no-run",
+            "--verbose",
+            "--package=discipline@0.25.3",
+            "--lib"
+          ]
+        },
+        {
+          "phase": "Test",
+          "duration": 0.75,
+          "process_status": "Success",
+          "argv": [
+            "cargo",
+            "test",
+            "--verbose",
+            "--package=discipline@0.25.3",
+            "--lib"
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": {
+        "Mutant": {
+          "name": "src/ast/bounds.rs:52:5: replace depth -> usize with 0",
+          "package": "discipline",
+          "file": "src/ast/bounds.rs",
+          "function": {
+            "function_name": "depth",
+            "return_type": "-> usize",
+            "span": {
+              "start": {
+                "line": 50,
+                "column": 1
+              },
+              "end": {
+                "line": 56,
+                "column": 2
+              }
+            }
+          },
+          "span": {
+            "start": {
+              "line": 52,
+              "column": 5
+            },
+            "end": {
+              "line": 52,
+              "column": 11
+            }
+          },
+          "replacement": "0",
+          "genre": "FnValue"
+        }
+      },
+      "summary": "CaughtMutant",
+      "log_path": "log/src__ast__bounds.rs_line_52_col_5.log",
+      "diff_path": "diff/src__ast__bounds.rs_line_52_col_5.diff",
+      "phase_results": [
+        {
+          "phase": "Build",
+          "duration": 1.5,
+          "process_status": "Success",
+          "argv": [
+            "cargo",
+            "test",
+            "--no-run",
+            "--verbose",
+            "--package=discipline@0.25.3",
+            "--lib"
+          ]
+        },
+        {
+          "phase": "Test",
+          "duration": 0.75,
+          "process_status": {
+            "Failure": 101
+          },
+          "argv": [
+            "cargo",
+            "test",
+            "--verbose",
+            "--package=discipline@0.25.3",
+            "--lib"
+          ]
+        }
+      ]
+    }
+  ],
+  "total_mutants": 3,
+  "missed": 2,
+  "caught": 1,
+  "timeout": 0,
+  "unviable": 0,
+  "success": 0,
+  "start_time": "2026-10-24T03:30:00Z",
+  "end_time": "2026-10-24T03:31:00Z",
+  "cargo_mutants_version": "27.1.0"
+}
