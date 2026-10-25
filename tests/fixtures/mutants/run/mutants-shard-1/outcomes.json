@@ -1,0 +1,231 @@
+{
+  "outcomes": [
+    {
+      "scenario": "Baseline",
+      "summary": "Success",
+      "log_path": "log/baseline.log",
+      "diff_path": null,
+      "phase_results": [
+        {
+          "phase": "Build",
+          "duration": 1.5,
+          "process_status": "Success",
+          "argv": [
+            "cargo",
+            "test",
+            "--no-run",
+            "--verbose",
+            "--package=discipline@0.25.3",
+            "--lib"
+          ]
+        },
+        {
+          "phase": "Test",
+          "duration": 0.75,
+          "process_status": "Success",
+          "argv": [
+            "cargo",
+            "test",
+            "--verbose",
+            "--package=discipline@0.25.3",
+            "--lib"
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": {
+        "Mutant": {
+          "name": "src/guards/ci_skip_set.rs:88:12: delete ! in is_skipped",
+          "package": "discipline",
+          "file": "src/guards/ci_skip_set.rs",
+          "function": {
+            "function_name": "is_skipped",
+            "return_type": "-> bool",
+            "span": {
+              "start": {
+                "line": 86,
+                "column": 1
+              },
+              "end": {
+                "line": 92,
+                "column": 2
+              }
+            }
+          },
+          "span": {
+            "start": {
+              "line": 88,
+              "column": 12
+            },
+            "end": {
+              "line": 88,
+              "column": 18
+            }
+          },
+          "replacement": "",
+          "genre": "UnaryOperator"
+        }
+      },
+      "summary": "MissedMutant",
+      "log_path": "log/src__guards__ci_skip_set.rs_line_88_col_12.log",
+      "diff_path": "diff/src__guards__ci_skip_set.rs_line_88_col_12.diff",
+      "phase_results": [
+        {
+          "phase": "Build",
+          "duration": 1.5,
+          "process_status": "Success",
+          "argv": [
+            "cargo",
+            "test",
+            "--no-run",
+            "--verbose",
+            "--package=discipline@0.25.3",
+            "--lib"
+          ]
+        },
+        {
+          "phase": "Test",
+          "duration": 0.75,
+          "process_status": "Success",
+          "argv": [
+            "cargo",
+            "test",
+            "--verbose",
+            "--package=discipline@0.25.3",
+            "--lib"
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": {
+        "Mutant": {
+          "name": "src/guards/ci_skip_set.rs:95:9: replace walk with ()",
+          "package": "discipline",
+          "file": "src/guards/ci_skip_set.rs",
+          "function": {
+            "function_name": "walk",
+            "return_type": "",
+            "span": {
+              "start": {
+                "line": 93,
+                "column": 1
+              },
+              "end": {
+                "line": 99,
+                "column": 2
+              }
+            }
+          },
+          "span": {
+            "start": {
+              "line": 95,
+              "column": 9
+            },
+            "end": {
+              "line": 95,
+              "column": 15
+            }
+          },
+          "replacement": "()",
+          "genre": "FnValue"
+        }
+      },
+      "summary": "Timeout",
+      "log_path": "log/src__guards__ci_skip_set.rs_line_95_col_9.log",
+      "diff_path": "diff/src__guards__ci_skip_set.rs_line_95_col_9.diff",
+      "phase_results": [
+        {
+          "phase": "Build",
+          "duration": 1.5,
+          "process_status": "Success",
+          "argv": [
+            "cargo",
+            "test",
+            "--no-run",
+            "--verbose",
+            "--package=discipline@0.25.3",
+            "--lib"
+          ]
+        },
+        {
+          "phase": "Test",
+          "duration": 0.75,
+          "process_status": "Timeout",
+          "argv": [
+            "cargo",
+            "test",
+            "--verbose",
+            "--package=discipline@0.25.3",
+            "--lib"
+          ]
+        }
+      ]
+    },
+    {
+      "scenario": {
+        "Mutant": {
+          "name": "src/guards/ci_skip_set.rs:102:9: replace count -> u32 with 1",
+          "package": "discipline",
+          "file": "src/guards/ci_skip_set.rs",
+          "function": {
+            "function_name": "count",
+            "return_type": "-> u32",
+            "span": {
+              "start": {
+                "line": 100,
+                "column": 1
+              },
+              "end": {
+                "line": 106,
+                "column": 2
+              }
+            }
+          },
+          "span": {
+            "start": {
+              "line": 102,
+              "column": 9
+            },
+            "end": {
+              "line": 102,
+              "column": 15
+            }
+          },
+          "replacement": "1",
+          "genre": "FnValue"
+        }
+      },
+      "summary": "Unviable",
+      "log_path": "log/src__guards__ci_skip_set.rs_line_102_col_9.log",
+      "diff_path": "diff/src__guards__ci_skip_set.rs_line_102_col_9.diff",
+      "phase_results": [
+        {
+          "phase": "Build",
+          "duration": 1.0,
+          "process_status": {
+            "Failure": 101
+          },
+          "argv": [
+            "cargo",
+            "test",
+            "--no-run",
+            "--verbose",
+            "--package=discipline@0.25.3",
+            "--lib"
+          ]
+        }
+      ]
+    }
+  ],
+  "total_mutants": 3,
+  "missed": 1,
+  "caught": 0,
+  "timeout": 1,
+  "unviable": 1,
+  "success": 0,
+  "start_time": "2026-10-24T03:30:00Z",
+  "end_time": "2026-10-24T03:31:00Z",
+  "cargo_mutants_version": "27.1.0"
+}

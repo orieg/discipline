@@ -1,0 +1,5 @@
+{
+  "description": "Test ratchet: bootstrap.",
+  "bootstrap": true,
+  "missed": {}
+}

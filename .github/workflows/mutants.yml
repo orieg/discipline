@@ -1,0 +1,186 @@
+name: "Mutation testing"
+
+# cargo-mutants over the detectors in src/ast/ and src/guards/ (docs/ARCHITECTURE.md §8.7).
+# A surviving mutant is a change to a detector that no unit test notices. The committed
+# ratchet (tests/fixtures/mutants_ratchet.json) caps the survivors per file, and a file
+# above its cap fails the run. Advisory: not in the `ci-gate` rollup.
+on:
+  schedule:
+    - cron: '30 3 * * 6'
+  workflow_dispatch:
+  # A pull request that changes the workflow or the ratchet runs the script's self-check
+  # only, never the mutants.
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/mutants.yml'
+      - 'scripts/mutants_ratchet.py'
+      - 'tests/fixtures/mutants_ratchet.json'
+      - 'tests/fixtures/mutants/**'
+
+concurrency:
+  group: mutants-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: read-all
+
+env:
+  CARGO_TERM_COLOR: always
+  # Bump deliberately: the ratchet's counts belong to this version's mutation operators.
+  CARGO_MUTANTS_VERSION: 27.1.0
+  # The N of every `--shard k/N`; keep it equal to the length of the `shard` matrix.
+  MUTANTS_SHARDS: 16
+
+jobs:
+  self-check:
+    name: Ratchet self-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Aggregation self-check and committed ratchet
+        run: |
+          set -euo pipefail
+          python3 scripts/mutants_ratchet.py --self-check
+          python3 scripts/mutants_ratchet.py --validate tests/fixtures/mutants_ratchet.json
+
+  mutants:
+    name: Mutants (shard ${{ matrix.shard }})
+    needs: self-check
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      # Leaves runners free for pull-request CI while the shards run.
+      max-parallel: 8
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+      # One cache for every shard, saved by one, so the shards do not crowd out CI's.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: mutants
+          save-if: ${{ matrix.shard == 0 }}
+      - name: Install cargo-mutants (pinned)
+        run: cargo install cargo-mutants --version "${CARGO_MUTANTS_VERSION}" --locked
+      # Every shard takes the same arguments, or the shards disagree on the split. A mutant
+      # is caught when a unit test (`cargo test --lib`) fails: building every integration
+      # test binary for each mutant does not fit the job. `--in-place` mutates this
+      # throwaway checkout instead of copying it.
+      - name: Test the shard's mutants
+        timeout-minutes: 320
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -uo pipefail
+          rc=0
+          cargo mutants --in-place --no-shuffle --shard "${SHARD}/${MUTANTS_SHARDS}" \
+            --file 'src/ast/**/*.rs' --file 'src/guards/**/*.rs' \
+            --timeout 300 --cargo-test-arg=--lib || rc=$?
+          # 0: every mutant caught, 2: some missed, 3: some timed out; the ratchet judges
+          # those. Any other exit (usage error, failing baseline, internal error) fails.
+          case "${rc}" in
+            0|2|3) ;;
+            *) echo "::error::cargo mutants exited ${rc}"; exit 1 ;;
+          esac
+      - name: Keep the shard's outcomes
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-shard-${{ matrix.shard }}
+          path: |
+            mutants.out/outcomes.json
+            mutants.out/missed.txt
+            mutants.out/timeout.txt
+          if-no-files-found: error
+
+  ratchet:
+    name: Surviving-mutant ratchet
+    needs: mutants
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      verdict: ${{ steps.compare.outputs.verdict }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: mutants-shard-*
+          path: mutants-outcomes
+      # A shard job that failed, or one whose outcomes are missing or unfinished, fails
+      # this step (exit 2): missing data is never read as zero survivors.
+      - name: Compare the survivors with the ratchet
+        id: compare
+        env:
+          SHARDS_RESULT: ${{ needs.mutants.result }}
+        run: |
+          set -uo pipefail
+          rc=0
+          python3 scripts/mutants_ratchet.py \
+            --outcomes-dir mutants-outcomes --shards "${MUTANTS_SHARDS}" \
+            --shards-result "${SHARDS_RESULT}" --expect-version "${CARGO_MUTANTS_VERSION}" \
+            --ratchet tests/fixtures/mutants_ratchet.json \
+            --write-ratchet mutants-ratchet.json || rc=$?
+          case "${rc}" in
+            0) verdict=pass ;;
+            1) verdict=above ;;
+            *) verdict=incomplete ;;
+          esac
+          echo "verdict=${verdict}" >> "${GITHUB_OUTPUT}"
+          exit "${rc}"
+      # In bootstrap mode, or when a count can be lowered, a follow-up pull request
+      # commits this file as tests/fixtures/mutants_ratchet.json.
+      - name: Keep the computed ratchet
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-ratchet
+          path: mutants-ratchet.json
+          if-no-files-found: ignore
+
+  # A scheduled run that finds a file above the ratchet opens one tracking issue, or
+  # comments on it while it is open. The only job with a write permission; it checks
+  # nothing out and runs nothing from the repository.
+  track:
+    name: Tracking issue
+    needs: ratchet
+    if: failure() && github.event_name == 'schedule' && needs.ratchet.outputs.verdict == 'above'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Scheduled mutation run: surviving mutants above the ratchet"
+          body="The scheduled mutation run ${RUN_URL} found a file with more surviving mutants than \`tests/fixtures/mutants_ratchet.json\` allows. The run's summary lists each surviving mutant by file and line (docs/ARCHITECTURE.md §8.7)."
+          number="$(gh issue list --state open --search "in:title \"${title}\"" --limit 50 --json number,title \
+            | jq -r --arg t "${title}" 'map(select(.title == $t)) | first | .number // empty')"
+          if [ -n "${number}" ]; then
+            gh issue comment "${number}" --body "${body}"
+          else
+            gh issue create --title "${title}" --body "${body}"
+          fi
