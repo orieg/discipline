@@ -14,6 +14,16 @@ description = "Universal CI/CD gatekeeper and AI coding agent diff sentinel"
 
 [directives]
 degrade_offline = false
+# Per-change waiver budget (#840). Every directive here is written by the change it
+# excuses; over the last 200 merged changes most applied one or two, and four applied
+# more than three (#684: 18 allow-assertion-drop). A change that needs more is split,
+# or raises the cap through a ratified edit of this file, which applies only after it
+# merges (policy_from: base). require_approval stays off until agents have a login of
+# their own (#776): no approval can count while they open pull requests as the
+# maintainer.
+max_overrides = 3
+# No max_inline_overrides: whole-tree gates apply every existing marker on every run,
+# so the cap cannot bound what one change adds (#849).
 
 [gates.agents-md]
 severity = "error"
@@ -35,6 +45,11 @@ exempt_paths = ["tests/fixtures/**"]
 
 [gates.ignored-tests]
 exempt_paths = ["tests/fixtures/**"]
+
+# A harness file that turns a failing run into a passing one (#833, #840). The Cargo
+# test targets under tests/ are the harness files it reads here.
+[gates.harness-tampering]
+enabled = true
 
 [gates.issue-link]
 enabled = true
