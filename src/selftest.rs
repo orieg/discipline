@@ -4609,6 +4609,19 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "command: a base-tests run that read no test case does not pass unless allow_zero is set",
+        || {
+            use crate::guards::command::{base_tests_verdict, parse_junit_cases, BaseTestsVerdict};
+            let none = parse_junit_cases("<testsuites/>\n");
+            let one = parse_junit_cases("<testsuite><testcase name=\"adds\" classname=\"a\"/></testsuite>");
+            Ok(base_tests_verdict(true, &parse_junit_cases(""), false) == BaseTestsVerdict::NoCases
+                && base_tests_verdict(true, &none, false) == BaseTestsVerdict::NoCases
+                && base_tests_verdict(true, &none, true) == BaseTestsVerdict::Passed(0)
+                && base_tests_verdict(false, &none, false) == BaseTestsVerdict::RunFailed
+                && base_tests_verdict(true, &one, false) == BaseTestsVerdict::Passed(1))
+        },
+    ),
+    (
         "archive-contents: a directory that cannot be listed matters only where archive_path can match below it",
         || {
             use crate::guards::archive_contents::pattern_can_match_below;
