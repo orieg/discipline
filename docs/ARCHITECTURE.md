@@ -683,6 +683,8 @@ Every gate implemented in Discipline must satisfy the 4-point testing contract b
 3. **Mutation evidence:** Detectors must be deliberately inverted or broken, with proof that the test suite fails on the mutant.
 4. **Self-test cases:** Compiled directly into the binary (`src/selftest.rs`) to allow deployed binaries to verify their own discriminators.
 
+Evasion cases, the shapes a change takes to weaken a test or the run without tripping a gate, are recorded with their verdict in `tests/fixtures/evasion_corpus.json` and driven through the binary by `tests/test_evasion_corpus.rs`: `caught` with the exact finding codes, or `known_miss` with the issue that tracks it. A caught case that stops being caught fails the suite, and so does a known miss that starts being caught, until its verdict and the gate's "What it does NOT catch" list in `docs/GATES.md` are updated together. A new evasion shape goes there first, as a known miss, before the detector that closes it.
+
 Threat model claims, adversarial attack probes, and isolated container reproduction environments are documented under `tests/red_team/README.md`.
 
 ---
