@@ -714,6 +714,73 @@ fn tautology_constant_expressions_fire_vacuous_tests_gate() {
     assert_eq!(violations.len(), 4, "{}", run.stdout);
 }
 
+/// Python asserts that cannot fail: a non-empty tuple, and a `Mock` assertion name
+/// without its `assert_` prefix called on a mock the test makes (#836).
+#[test]
+fn python_always_true_asserts_are_tautologies() {
+    const BASE: &str = "from unittest import mock\nfrom src.calc import f, run\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_run():\n    m = mock.Mock()\n    assert run(m)\n";
+    let repo = Repo::new();
+    repo.commit_base("tests/test_calc.py", BASE, "test: calc");
+    repo.write(
+        "tests/test_calc.py",
+        &format!(
+            "{BASE}\n\ndef test_tuple():\n    assert (f(3) == 6, \"f doubles\")\n\n\n\
+             def test_mock():\n    m = mock.Mock()\n    run(m)\n    assert m.called_once_with(2)\n\n\n\
+             def test_patch():\n    with mock.patch(\"src.calc.g\") as g:\n        run(g)\n    assert g.has_calls([])\n\n\n\
+             def test_real():\n    m = mock.Mock()\n    assert f(3) == 6, \"f doubles\"\n    run(m)\n    m.assert_called_once_with(2)\n\n\n\
+             def test_fixture(m):\n    assert m.called_once_with(2)\n"
+        ),
+    );
+    repo.commit("test: add");
+    let vacuous = |run: &common::Run| -> Vec<(String, u64)> {
+        run.violations("vacuous-tests")
+            .iter()
+            .map(|v| {
+                (
+                    v["code"].as_str().unwrap().to_string(),
+                    v["line"].as_u64().unwrap_or(0),
+                )
+            })
+            .collect()
+    };
+    let run = repo.check(&[]);
+    let added = "vacuous-tests/vacuous-test-added".to_string();
+    assert_eq!(
+        vacuous(&run),
+        [(added.clone(), 14), (added.clone(), 18), (added, 24)],
+        "{}",
+        run.stdout
+    );
+
+    // An existing test whose one check becomes such a call has nothing left that can fail.
+    let repo = Repo::new();
+    repo.commit_base("tests/test_calc.py", BASE, "test: calc");
+    repo.write(
+        "tests/test_calc.py",
+        &BASE.replace("assert run(m)", "run(m)\n    assert m.called_once_with(2)"),
+    );
+    repo.commit("test: change");
+    let codes: Vec<String> = repo
+        .check(&[])
+        .violations("assertion-reduction")
+        .iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(codes, ["assertion-reduction/assertions-reduced"]);
+    // Control: the real assertion method keeps the check.
+    let repo = Repo::new();
+    repo.commit_base("tests/test_calc.py", BASE, "test: calc");
+    repo.write(
+        "tests/test_calc.py",
+        &BASE.replace(
+            "assert run(m)",
+            "assert run(m)\n    m.assert_called_once_with(2)",
+        ),
+    );
+    repo.commit("test: change");
+    assert!(repo.check(&[]).violations("assertion-reduction").is_empty());
+}
+
 #[test]
 fn idiomatic_result_and_unwrap_tests_pass_vacuous_tests_gate() {
     let repo = Repo::new();

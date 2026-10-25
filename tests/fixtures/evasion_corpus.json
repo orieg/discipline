@@ -663,7 +663,9 @@
         "tests/test_a.py": "from unittest import mock\nfrom src.a import run\n\n\ndef test_run():\n    m = mock.Mock()\n    run(m)\n    m.assert_called_once_with(1)\n\n\ndef test_run_twice():\n    m = mock.Mock()\n    run(m)\n    assert m.called_once_with(2)\n"
       },
       "verdict": {
-        "known_miss": "#836"
+        "caught": [
+          "vacuous-tests/vacuous-test-added"
+        ]
       }
     },
     {
@@ -691,7 +693,9 @@
         "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n\n\ndef test_h():\n    assert (f(3) == 6, 'msg')\n"
       },
       "verdict": {
-        "known_miss": "#836"
+        "caught": [
+          "vacuous-tests/vacuous-test-added"
+        ]
       }
     },
     {

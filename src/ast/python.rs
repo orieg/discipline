@@ -1425,7 +1425,9 @@ impl<'a> PythonExtractor<'a> {
                 }
             }
         }
-        false
+        // `assert (x == 1, "msg")` asserts a non-empty tuple, and
+        // `assert m.called_once_with(1)` a child of a local mock: both are truthy.
+        is_non_empty_tuple(cond) || is_unchecked_mock_call(cond, self.anc, self.src)
     }
 
     fn is_tautological_call(&self, call: Node<'a>, func_name: &str, test: &mut TestFn) -> bool {
@@ -1468,6 +1470,331 @@ const PYTHON_CODE: super::NotCode = super::NotCode {
     comments: &["comment"],
     interpolations: &["interpolation"],
 };
+
+/// `node` without the parentheses around it.
+fn unparenthesized(mut node: Node) -> Node {
+    while node.kind() == "parenthesized_expression" {
+        let mut cursor = node.walk();
+        let Some(inner) = node
+            .named_children(&mut cursor)
+            .find(|c| c.kind() != "comment")
+        else {
+            break;
+        };
+        node = inner;
+    }
+    node
+}
+
+/// A tuple literal with an element that is not unpacked: `(x == 1, "msg")`, `(x,)`.
+/// `()` is false, and `(*xs,)` is empty when `xs` is.
+fn is_non_empty_tuple(cond: Node) -> bool {
+    let cond = unparenthesized(cond);
+    let mut cursor = cond.walk();
+    cond.kind() == "tuple"
+        && cond.named_children(&mut cursor).any(|c| {
+            !matches!(
+                c.kind(),
+                "comment" | "list_splat" | "parenthesized_list_splat"
+            )
+        })
+}
+
+/// `Mock`'s assertion methods without their `assert_` prefix. Read on a mock without a
+/// spec, each is a child mock, and calling it returns another one, which is truthy.
+/// Python 3.12 and later raise `AttributeError` for these names instead.
+const MOCK_ASSERTION_STEMS: &[&str] = &[
+    "called_once_with",
+    "called_with",
+    "has_calls",
+    "any_call",
+    "called_once",
+    "not_called",
+];
+
+/// `m.called_once_with(1)` where every binding of `m` in the enclosing function makes it a
+/// mock without a spec (`is_spec_free_mock`). A parameter, a fixture or a binding in
+/// another function is not followed.
+fn is_unchecked_mock_call<'t>(cond: Node<'t>, anc: &Ancestry<'t>, src: &[u8]) -> bool {
+    let call = unparenthesized(cond);
+    let Some(callee) = call
+        .child_by_field_name("function")
+        .filter(|f| call.kind() == "call" && f.kind() == "attribute")
+    else {
+        return false;
+    };
+    let (Some(object), Some(attribute)) = (
+        callee.child_by_field_name("object"),
+        callee.child_by_field_name("attribute"),
+    ) else {
+        return false;
+    };
+    let text = |n: Node| n.utf8_text(src).unwrap_or("");
+    if object.kind() != "identifier" || !MOCK_ASSERTION_STEMS.contains(&text(attribute)) {
+        return false;
+    }
+    let mut function = anc.parent(call);
+    while let Some(f) = function.filter(|f| f.kind() != "function_definition") {
+        function = anc.parent(f);
+    }
+    function.is_some_and(|f| is_spec_free_mock(f, text(object), src))
+}
+
+/// Whether `name` is bound in `function` (its parameters and body, nested functions and
+/// classes left out) at least once, and only to a mock without a spec: `Mock()`,
+/// `MagicMock()`, `AsyncMock()` (bare or under `mock.` / `unittest.mock.`), or the target
+/// of `with patch(..) as name` / `patch.object(..) as name`. A binding in any other form,
+/// a spec given later (`mock_add_spec`, `configure_mock`, `seal`), a `del`, or a use of
+/// one of the stems other than as the asserted call means it is not judged.
+fn is_spec_free_mock(function: Node, name: &str, src: &[u8]) -> bool {
+    let text = |n: Node| n.utf8_text(src).unwrap_or("");
+    let is_name = |n: Node| n.kind() == "identifier" && text(n) == name;
+    let is = |field: &str, parent: Node, n: Node| {
+        parent
+            .child_by_field_name(field)
+            .is_some_and(|c| c.id() == n.id())
+    };
+    let mut bound = false;
+    // The calls that are the condition of an `assert`, by id.
+    let mut asserted = HashSet::new();
+    let mut stack: Vec<(Node, Node)> = Vec::new();
+    for field in ["parameters", "body"] {
+        if let Some(n) = function.child_by_field_name(field) {
+            stack.push((n, function));
+        }
+    }
+    while let Some((node, parent)) = stack.pop() {
+        let mut cursor = node.walk();
+        let mut children: Vec<Node> = node.children(&mut cursor).collect();
+        match node.kind() {
+            "function_definition" | "class_definition" => {
+                if node.child_by_field_name("name").is_some_and(is_name) {
+                    return false;
+                }
+                continue;
+            }
+            "lambda" => continue,
+            "assert_statement" => {
+                if let Some(c) = children
+                    .iter()
+                    .find(|c| c.is_named() && c.kind() != "comment")
+                {
+                    asserted.insert(unparenthesized(*c).id());
+                }
+            }
+            "delete_statement" => {
+                let mut deleted = node.named_children(&mut cursor).flat_map(|c| {
+                    let mut inner = c.walk();
+                    let items: Vec<Node> = if c.kind() == "expression_list" {
+                        c.named_children(&mut inner).collect()
+                    } else {
+                        vec![c]
+                    };
+                    items
+                });
+                if deleted.any(is_name) {
+                    return false;
+                }
+            }
+            "with_item" => {
+                let pattern = node
+                    .child_by_field_name("value")
+                    .filter(|v| v.kind() == "as_pattern");
+                let alias = pattern.and_then(|p| p.child_by_field_name("alias"));
+                let target = alias.and_then(|a| a.named_child(0));
+                if let (Some(p), Some(a)) = (pattern, alias) {
+                    if target.is_some_and(is_name) && a.named_child_count() == 1 {
+                        let mut inner = p.walk();
+                        let value = p.named_children(&mut inner).find(|c| c.id() != a.id());
+                        if !value.is_some_and(|v| patch_call(v, src)) {
+                            return false;
+                        }
+                        bound = true;
+                        children = value.into_iter().collect();
+                    } else if names_in(a, src).any(|n| n == name) {
+                        return false;
+                    }
+                }
+            }
+            "call" => {
+                let callee = node.child_by_field_name("function");
+                if callee.is_some_and(|c| last_segment(c, src) == Some("seal")) {
+                    let args = node.child_by_field_name("arguments");
+                    let mut inner = node.walk();
+                    if args.is_some_and(|a| a.named_children(&mut inner).any(is_name)) {
+                        return false;
+                    }
+                }
+            }
+            "attribute" if node.child_by_field_name("object").is_some_and(is_name) => {
+                match node.child_by_field_name("attribute").map(text) {
+                    Some("mock_add_spec" | "configure_mock") => return false,
+                    Some(stem) if MOCK_ASSERTION_STEMS.contains(&stem) => {
+                        let called = parent.kind() == "call" && is("function", parent, node);
+                        if !called || !asserted.contains(&parent.id()) {
+                            return false;
+                        }
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            "identifier" if text(node) == name => {
+                let binds = match parent.kind() {
+                    "assignment" if is("left", parent, node) => {
+                        let mut value = parent.child_by_field_name("right");
+                        while let Some(v) = value.filter(|v| v.kind() == "assignment") {
+                            value = v.child_by_field_name("right");
+                        }
+                        if !value.is_some_and(|v| mock_constructor(v, src)) {
+                            return false;
+                        }
+                        true
+                    }
+                    "augmented_assignment" | "for_statement" | "for_in_clause" => {
+                        is("left", parent, node)
+                    }
+                    "named_expression"
+                    | "default_parameter"
+                    | "typed_default_parameter"
+                    | "type_alias_statement" => is("name", parent, node),
+                    "except_clause" => is("alias", parent, node),
+                    k => is_binding_position(k),
+                };
+                if binds && parent.kind() != "assignment" {
+                    return false;
+                }
+                bound |= binds;
+                continue;
+            }
+            _ => {}
+        }
+        stack.extend(children.into_iter().map(|c| (c, node)));
+    }
+    bound
+}
+
+/// The identifiers under `node`.
+fn names_in<'s>(node: Node, src: &'s [u8]) -> impl Iterator<Item = &'s str> {
+    let mut stack = vec![node];
+    let mut names = Vec::new();
+    while let Some(n) = stack.pop() {
+        if n.kind() == "identifier" {
+            names.extend(n.utf8_text(src).ok());
+        }
+        let mut cursor = n.walk();
+        stack.extend(n.named_children(&mut cursor));
+    }
+    names.into_iter()
+}
+
+/// Parents of an identifier that bind it wherever it stands under them.
+fn is_binding_position(kind: &str) -> bool {
+    matches!(
+        kind,
+        "pattern_list"
+            | "tuple_pattern"
+            | "list_pattern"
+            | "list_splat_pattern"
+            | "dictionary_splat_pattern"
+            | "parameters"
+            | "lambda_parameters"
+            | "typed_parameter"
+            | "aliased_import"
+            | "dotted_name"
+            | "global_statement"
+            | "nonlocal_statement"
+            | "as_pattern_target"
+            | "case_pattern"
+            | "keyword_pattern"
+            | "splat_pattern"
+    )
+}
+
+/// The last name of a callee: `seal` in `seal`, `mock.seal` and `unittest.mock.seal`.
+fn last_segment<'s>(callee: Node, src: &'s [u8]) -> Option<&'s str> {
+    let name = match callee.kind() {
+        "identifier" => callee,
+        "attribute" => callee.child_by_field_name("attribute")?,
+        _ => return None,
+    };
+    name.utf8_text(src).ok()
+}
+
+/// Whether `callee` is `name`, `mock.name` or `unittest.mock.name`.
+fn is_mock_module_name(callee: Node, src: &[u8], name: &str) -> bool {
+    if last_segment(callee, src) != Some(name) {
+        return false;
+    }
+    callee.kind() == "identifier"
+        || callee
+            .child_by_field_name("object")
+            .and_then(|o| o.utf8_text(src).ok())
+            .is_some_and(|o| matches!(o, "mock" | "unittest.mock"))
+}
+
+/// The arguments of `call` when none is unpacked and no keyword names a spec or a
+/// replacement object: the positional count, or `None`.
+fn spec_free_arguments(call: Node, src: &[u8]) -> Option<usize> {
+    let args = call.child_by_field_name("arguments")?;
+    let mut positional = 0;
+    let mut cursor = args.walk();
+    for arg in args.named_children(&mut cursor) {
+        match arg.kind() {
+            "comment" => {}
+            "keyword_argument" => {
+                let key = arg.child_by_field_name("name")?.utf8_text(src).ok()?;
+                if matches!(
+                    key,
+                    "spec" | "spec_set" | "autospec" | "new" | "new_callable"
+                ) {
+                    return None;
+                }
+            }
+            "list_splat" | "dictionary_splat" => return None,
+            _ => positional += 1,
+        }
+    }
+    Some(positional)
+}
+
+/// `Mock()`, `MagicMock()` or `AsyncMock()` with no spec: no positional argument (the
+/// first one is the spec) and no `spec` / `spec_set` keyword.
+fn mock_constructor(value: Node, src: &[u8]) -> bool {
+    let call = unparenthesized(value);
+    call.kind() == "call"
+        && call.child_by_field_name("function").is_some_and(|f| {
+            ["Mock", "MagicMock", "AsyncMock"]
+                .iter()
+                .any(|n| is_mock_module_name(f, src, n))
+        })
+        && spec_free_arguments(call, src) == Some(0)
+}
+
+/// `patch("a.b")` or `patch.object(a, "b")` (bare or under `mock.` / `unittest.mock.`)
+/// that makes a `MagicMock` without a spec: no `new` (positional or keyword),
+/// `new_callable`, `spec`, `spec_set` or `autospec`.
+fn patch_call(value: Node, src: &[u8]) -> bool {
+    let call = unparenthesized(value);
+    let Some(callee) = call
+        .child_by_field_name("function")
+        .filter(|_| call.kind() == "call")
+    else {
+        return false;
+    };
+    let most = if is_mock_module_name(callee, src, "patch") {
+        1
+    } else if last_segment(callee, src) == Some("object")
+        && callee
+            .child_by_field_name("object")
+            .is_some_and(|o| is_mock_module_name(o, src, "patch"))
+    {
+        2
+    } else {
+        return false;
+    };
+    spec_free_arguments(call, src).is_some_and(|n| n <= most)
+}
 
 /// Whether `node` (unwrapping enclosing parentheses) is Python's `None` literal.
 fn is_python_none(mut node: Node) -> bool {
@@ -2975,6 +3302,119 @@ class Case(unittest.TestCase):
         ] {
             assert_eq!(counts(strong), (1, 1), "{strong} should be strong");
         }
+    }
+
+    /// `(total_asserts, tautologies)` of the one test `test_t` in a module of `prelude`
+    /// followed by a test whose body is `body` (indented by the caller).
+    fn always_true(prelude: &str, body: &str) -> (usize, usize) {
+        let src = format!("{prelude}\n\ndef test_t():\n{body}");
+        let facts = PythonPack
+            .extract("tests/test_t.py", &src, &AssertVocabulary::default())
+            .unwrap();
+        let t = facts
+            .tests
+            .iter()
+            .find(|t| t.name == "test_t")
+            .unwrap_or_else(|| panic!("no test_t in {src}"));
+        (t.total_asserts, t.tautologies)
+    }
+
+    /// #836: an `assert` of a non-empty tuple is always true; `()` is always false.
+    #[test]
+    fn an_assert_of_a_non_empty_tuple_is_a_tautology() {
+        for body in [
+            "    assert (f(3) == 6, \"f doubles\")\n",
+            "    assert (f(3) == 6,)\n",
+            "    assert ((f(3) == 6, 'msg'))\n",
+            "    assert (*xs, f(3) == 6)\n",
+        ] {
+            assert_eq!(always_true("", body), (1, 1), "{body}");
+        }
+        for body in [
+            "    assert ()\n",
+            "    assert (f(3) == 6)\n",
+            "    assert f(3) == 6, \"f doubles\"\n",
+            "    assert f(3) == 6, (\"f\", \"doubles\")\n",
+            "    assert (*xs,)\n",
+        ] {
+            assert_eq!(always_true("", body), (1, 0), "{body}");
+        }
+        let src = "def test_t():\n    assert (f(3) == 6, \"f doubles\")\n";
+        let facts = PythonPack
+            .extract("tests/test_t.py", src, &AssertVocabulary::default())
+            .unwrap();
+        assert!(facts.tests[0].is_vacuous());
+    }
+
+    /// #836: `assert m.called_once_with(..)` on a mock the test makes without a spec
+    /// calls a child mock, which is truthy.
+    #[test]
+    fn an_assert_of_a_mock_assertion_name_without_its_prefix_is_a_tautology() {
+        let made = [
+            "    m = mock.Mock()\n",
+            "    m = Mock(return_value=3)\n",
+            "    m = MagicMock()\n",
+            "    m = AsyncMock()\n",
+            "    m = unittest.mock.MagicMock()\n",
+            "    m = n = mock.Mock()\n",
+        ];
+        for binding in made {
+            for stem in MOCK_ASSERTION_STEMS {
+                let body = format!("{binding}    run(m)\n    assert m.{stem}(2)\n");
+                assert_eq!(always_true("", &body), (1, 1), "{body}");
+            }
+        }
+        for body in [
+            "    with mock.patch(\"src.a.g\") as m:\n        run()\n        assert m.called_once_with(2)\n",
+            "    with patch.object(A, \"g\", create=True) as m:\n        run()\n    assert m.called_with(2)\n",
+            "    with unittest.mock.patch(\"a.g\") as m, patch(\"a.h\") as n:\n        run()\n    assert (m.called_once())\n",
+        ] {
+            assert_eq!(always_true("", body), (1, 1), "{body}");
+        }
+        // Controls: the real assertion; a name that is not one of the stems; an
+        // attribute that is not called; a mock with a spec or not made here.
+        for (prelude, body) in [
+            ("", "    m = mock.Mock()\n    run(m)\n    m.assert_called_once_with(2)\n    assert f() == 1\n"),
+            ("", "    m = mock.Mock()\n    assert m.ready(2)\n"),
+            ("", "    m = mock.Mock()\n    assert m.called\n"),
+            ("", "    m = mock.Mock(spec=Repo)\n    assert m.called_once_with(2)\n"),
+            ("", "    m = mock.Mock(spec_set=Repo)\n    assert m.called_once_with(2)\n"),
+            ("", "    m = mock.Mock(Repo)\n    assert m.called_once_with(2)\n"),
+            ("", "    m = mock.Mock(**opts)\n    assert m.called_once_with(2)\n"),
+            ("", "    m = create_autospec(run)\n    assert m.called_once_with(2)\n"),
+            ("", "    m = other.Mock()\n    assert m.called_once_with(2)\n"),
+            ("", "    m = mock.Mock()\n    m = build()\n    assert m.called_once_with(2)\n"),
+            ("", "    m = mock.Mock()\n    m.mock_add_spec(Repo)\n    assert m.called_once_with(2)\n"),
+            ("", "    m = mock.Mock()\n    seal(m)\n    assert m.called_once_with(2)\n"),
+            ("", "    m = mock.Mock()\n    m.called_once_with.return_value = False\n    assert m.called_once_with(2)\n"),
+            ("", "    m = mock.Mock()\n    del m\n    assert m.called_once_with(2)\n"),
+            ("", "    for m in mocks():\n        pass\n    m = mock.Mock()\n    assert m.called_once_with(2)\n"),
+            ("", "    with mock.patch(\"a.g\", autospec=True) as m:\n        assert m.called_once_with(2)\n"),
+            ("", "    with mock.patch(\"a.g\", new=fake) as m:\n        assert m.called_once_with(2)\n"),
+            ("", "    with mock.patch(\"a.g\", fake) as m:\n        assert m.called_once_with(2)\n"),
+            ("", "    with mock.patch.object(A, \"g\", fake) as m:\n        assert m.called_once_with(2)\n"),
+            ("", "    with mock.patch.dict(\"os.environ\") as m:\n        assert m.called_once_with(2)\n"),
+            ("", "    with open(p) as m:\n        assert m.called_once_with(2)\n"),
+            ("", "    assert m.called_once_with(2)\n"),
+            ("m = mock.Mock()", "    assert m.called_once_with(2)\n"),
+            ("def make():\n    m = mock.Mock()\n    return m", "    m = make()\n    assert m.called_once_with(2)\n"),
+        ] {
+            let (total, tautologies) = always_true(prelude, body);
+            assert_eq!(tautologies, 0, "{prelude}\n{body}");
+            assert!(total >= 1, "{prelude}\n{body}");
+        }
+        // A fixture parameter is not followed.
+        let src = "def test_t(m):\n    assert m.called_once_with(2)\n";
+        let facts = PythonPack
+            .extract("tests/test_t.py", src, &AssertVocabulary::default())
+            .unwrap();
+        assert_eq!(facts.tests[0].tautologies, 0);
+        // The issue's reproduction: the new test is vacuous.
+        let src = "from unittest import mock\n\ndef test_calls():\n    m = mock.Mock()\n    m(2)\n    assert m.called_once_with(2)\n";
+        let facts = PythonPack
+            .extract("tests/test_t.py", src, &AssertVocabulary::default())
+            .unwrap();
+        assert!(facts.tests[0].is_vacuous(), "{:?}", facts.tests[0]);
     }
 }
 
