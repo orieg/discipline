@@ -599,6 +599,7 @@ impl<'a> Extractor<'a> {
             cases,
             non_literal_cases,
             case_rows,
+            case_cells: Vec::new(),
             direct_calls: Vec::new(),
             tautology_spans: Vec::new(),
             method_checks: 0,

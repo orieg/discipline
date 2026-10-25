@@ -931,14 +931,12 @@ impl<'a> PythonExtractor<'a> {
 
         let line = node.start_position().row + 1;
         let end_line = node.end_position().row + 1;
-        let (cases, non_literal_cases, case_rows) = self
-            .inherited_cases
-            .iter()
-            .fold(
-                super::test_cases::extract_python_cases(decorators, self.src, &self.pytest_names),
-                |own, outer| super::test_cases::multiply_cases(outer.clone(), own),
-            )
-            .into_parts();
+        let mut case_list = self.inherited_cases.iter().fold(
+            super::test_cases::extract_python_cases(decorators, self.src, &self.pytest_names),
+            |own, outer| super::test_cases::multiply_cases(outer.clone(), own),
+        );
+        let case_cells = std::mem::take(&mut case_list.cells);
+        let (cases, non_literal_cases, case_rows) = case_list.into_parts();
 
         let mut test_fn = TestFn {
             name: full_name,
@@ -952,6 +950,7 @@ impl<'a> PythonExtractor<'a> {
             cases,
             non_literal_cases,
             case_rows,
+            case_cells,
             ..Default::default()
         };
 

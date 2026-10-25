@@ -364,6 +364,9 @@ struct PairFindings<'a> {
     mock_growth: bool,
     loosened: Vec<crate::ast::bounds::Loosened>,
     changed: Vec<usize>,
+    /// Lines of case-table cells whose value was rewritten in place
+    /// (`ast::test_cases::rewritten_cells`).
+    rewritten_rows: Vec<usize>,
     widened: Vec<crate::ast::expected_exceptions::Widened>,
     self_compared: Vec<&'a crate::ast::self_comparison::SelfComparison>,
     /// Assertions, fatal assertions or cases went down, or test doubles grew alone.
@@ -389,7 +392,7 @@ impl PairFindings<'_> {
             &crate::findings::ASSERTION_BOUND_LOOSENED
         } else if !self.widened.is_empty() {
             &crate::findings::EXPECTED_EXCEPTION_WIDENED
-        } else if !self.changed.is_empty() {
+        } else if !self.changed.is_empty() || !self.rewritten_rows.is_empty() {
             &crate::findings::EXPECTED_VALUE_CHANGED
         } else {
             &crate::findings::SELF_COMPARISON_ASSERTION_INTRODUCED
@@ -518,6 +521,8 @@ fn pair_findings<'a>(
     let loosened = crate::ast::bounds::loosened(&b.bounds, &h.bounds);
     // The same assertion expecting a different value: the count and strength hold.
     let changed = crate::ast::expectations::changed(&b.expectations, &h.expectations);
+    // The same case row with one value rewritten: the count of rows and assertions holds.
+    let rewritten_rows = crate::ast::test_cases::rewritten_cells(&b.case_cells, &h.case_cells);
     // The same assertion with widened expected exception or dropped matcher.
     let mut widened = crate::ast::expected_exceptions::widened_in(b, h);
     // An expectation that is gone along with a lower count is the reduction below.
@@ -531,6 +536,7 @@ fn pair_findings<'a>(
     if !dropped
         && loosened.is_empty()
         && changed.is_empty()
+        && rewritten_rows.is_empty()
         && newly_caught.is_empty()
         && widened.is_empty()
         && self_compared.is_empty()
@@ -544,6 +550,7 @@ fn pair_findings<'a>(
         mock_growth,
         loosened,
         changed,
+        rewritten_rows,
         widened,
         self_compared,
         dropped,
@@ -936,7 +943,8 @@ fn report_loosened_bounds(
     }
 }
 
-/// Reports each assertion that now expects a different value.
+/// Reports each assertion that now expects a different value, and each case-table row
+/// with one value rewritten in place.
 fn report_changed_expectations(
     p: &TestPair,
     f: &PairFindings,
@@ -947,21 +955,31 @@ fn report_changed_expectations(
     let (settings, is_staged) = (cx.settings, cx.is_staged);
     let test_label = pair_label(p);
     let directive_name = pair_directive_name(p);
-    for &line in &f.changed {
+    let severity = if is_staged {
+        crate::config::Severity::Warning
+    } else {
+        settings.severity()
+    };
+    // The line only: an expected value is the change's own text (a string can carry
+    // anything) and is not echoed into a report agents read.
+    let assertions = f.changed.iter().map(|&line| {
+        format!(
+            "{test_label}: the assertion on line {line} now expects a different value; the assertion is otherwise unchanged."
+        )
+    });
+    let rows = f.rewritten_rows.iter().map(|&line| {
+        format!(
+            "{test_label}: the case row on line {line} now holds a different value in one cell; the row is otherwise unchanged."
+        )
+    });
+    let lines = f.changed.iter().chain(&f.rewritten_rows);
+    for (&line, message) in lines.zip(assertions.chain(rows)) {
         out.push(
-            if is_staged {
-                crate::config::Severity::Warning
-            } else {
-                settings.severity()
-            },
+            severity,
             &crate::findings::EXPECTED_VALUE_CHANGED,
             Some(p.path),
             Some(line),
-            // The line only: an expected value is the change's own text (a string can
-            // carry anything) and is not echoed into a report agents read.
-            format!(
-                "{test_label}: the assertion on line {line} now expects a different value; the assertion is otherwise unchanged."
-            ),
+            message,
             &format!(
                 "Restore the expected value, or justify the new one on its own line in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
                 directive_name

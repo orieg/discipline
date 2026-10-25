@@ -1472,3 +1472,121 @@ Deno.test(\"math operations\", () => {
     );
     assert_clean(&run);
 }
+
+// ---------------------------------------------------------------------------
+// A case row with one value rewritten in place (#826)
+// ---------------------------------------------------------------------------
+
+const PY_ROWS: &str = "\
+import pytest
+from calc import f
+
+
+@pytest.mark.parametrize(\"x,y\", [
+    (1, 2),
+    (2, 4),
+])
+def test_f(x, y):
+    assert f(x) == y
+";
+
+const GO_ROWS: &str = "\
+package calc
+
+import \"testing\"
+
+func TestF(t *testing.T) {
+\tcases := []struct{ in, want int }{
+\t\t{1, 2},
+\t\t{2, 4},
+\t}
+\tfor _, c := range cases {
+\t\tif got := F(c.in); got != c.want {
+\t\t\tt.Errorf(\"got %d\", got)
+\t\t}
+\t}
+}
+";
+
+const JS_ROWS: &str = "\
+import { f } from '../src/calc.js';
+
+test.each([
+  [1, 2],
+  [2, 4],
+])('f(%i)', (a, b) => {
+  expect(f(a)).toBe(b);
+});
+";
+
+/// For each form: its path, its base source, the row rewritten, and the line it is on.
+const ROW_FORMS: [(&str, &str, &str, &str, u64); 3] = [
+    ("tests/test_calc.py", PY_ROWS, "(2, 4)", "(2, 5)", 7),
+    ("calc_test.go", GO_ROWS, "{2, 4}", "{2, 5}", 8),
+    ("test/calc.test.js", JS_ROWS, "[2, 4]", "[2, 5]", 5),
+];
+
+#[test]
+fn a_case_row_with_one_value_rewritten_is_an_expected_value_changed() {
+    for (path, base, row, rewritten, line) in ROW_FORMS {
+        let run = judge(path, base, &base.replace(row, rewritten));
+        assert_one(&run, "expected-value-changed", Some(line));
+        // The line is named, the values are not.
+        let message = run.violations(GATE)[0]["message"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(message.contains(&format!("line {line}")), "{message}");
+        assert!(!message.contains(rewritten), "{message}");
+    }
+}
+
+#[test]
+fn case_rows_reordered_added_or_edited_in_two_cells_are_not_paired() {
+    for (path, base, row, _, _) in ROW_FORMS {
+        let first = match path {
+            "tests/test_calc.py" => "(1, 2)",
+            "calc_test.go" => "{1, 2}",
+            _ => "[1, 2]",
+        };
+        // Reordered: the same rows.
+        let swapped = base
+            .replace(first, "@FIRST@")
+            .replace(row, first)
+            .replace("@FIRST@", row);
+        assert_clean(&judge(path, base, &swapped));
+        // Two cells of the row changed: not paired (the `base-tests` preset is the control).
+        let two = row.replace('2', "3").replace('4', "6");
+        assert_clean(&judge(path, base, &base.replace(row, &two)));
+        // A row added beside unchanged rows.
+        let added = format!("{row}, {}", row.replace('4', "8"));
+        let added = if path.ends_with(".go") || path.ends_with(".js") {
+            added
+        } else {
+            added.replace(", (", ",\n    (")
+        };
+        assert_clean(&judge(path, base, &base.replace(row, &added)));
+    }
+}
+
+#[test]
+fn a_case_row_rewritten_on_purpose_is_lifted_by_allow_assertion_drop() {
+    let repo = Repo::new();
+    repo.commit_base("tests/test_calc.py", PY_ROWS, "test: base");
+    repo.write("tests/test_calc.py", &PY_ROWS.replace("(2, 4)", "(2, 5)"));
+    repo.commit("test: change");
+    let run = repo.check_with_pr(
+        &[],
+        "allow-assertion-drop: test_f the doubling rule changed to add one on even inputs",
+    );
+    assert!(run.violations(GATE).is_empty(), "{}", run.stdout);
+    assert_eq!(
+        run.outcome(GATE)["overrides"][0]["code"],
+        "assertion-reduction/expected-value-changed",
+        "{}",
+        run.stdout
+    );
+    // Control: a directive for another test lifts nothing.
+    let run = repo.check_with_pr(&[], "allow-assertion-drop: test_g another test changed");
+    assert_one(&run, "expected-value-changed", Some(7));
+}
