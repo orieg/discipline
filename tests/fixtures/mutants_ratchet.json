@@ -1,0 +1,5 @@
+{
+  "description": "Surviving (missed) cargo-mutants mutants per source file under src/ast/ and src/guards/, written by scripts/mutants_ratchet.py from a run of .github/workflows/mutants.yml (docs/ARCHITECTURE.md §8.7). A file absent here counts as 0. A run that finds more in a file fails; lower a count when a test kills a survivor. `bootstrap: true` records no counts yet: the first run passes and prints the counts to commit here.",
+  "bootstrap": true,
+  "missed": {}
+}
