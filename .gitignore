@@ -35,3 +35,6 @@ __pycache__/
 fuzz/target/
 fuzz/artifacts/
 fuzz/coverage/
+
+# cargo-mutants output (docs/ARCHITECTURE.md §8.7)
+/mutants.out*/

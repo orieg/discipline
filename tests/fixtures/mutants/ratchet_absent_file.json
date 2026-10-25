@@ -1,0 +1,6 @@
+{
+  "description": "Test ratchet: absent file.",
+  "missed": {
+    "src/ast/bounds.rs": 2
+  }
+}
