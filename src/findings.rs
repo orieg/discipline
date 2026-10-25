@@ -118,6 +118,7 @@ findings! {
     // deletion-rationale
     FILE_DELETED_WITHOUT_RATIONALE = ["deletion-rationale"], "file-deleted-without-rationale", "File Deleted Without Rationale", Same;
     TEST_REMOVED_WITHOUT_RATIONALE = ["deletion-rationale"], "test-removed-without-rationale", "Test Removed Without Rationale", Same;
+    TEST_SHADOWED_BY_REDEFINITION = ["deletion-rationale"], "test-shadowed-by-redefinition", "Test Shadowed By A Redefinition", Same;
 
     // agents-md
     AGENTS_MD_MISSING = ["agents-md"], "agents-md-missing", "AGENTS.md Missing", Was("Missing AGENTS.md");
