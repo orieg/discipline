@@ -2177,6 +2177,22 @@ pub struct ParsedFileFacts {
     pub skipped_error_nodes_count: usize,
     /// Notes recorded during parsing (e.g. unanalysed macro token trees).
     pub notes: Vec<String>,
+    /// Definitions that would be tests but that a later definition of the same name in
+    /// the same scope rebinds, so the runner never collects them. They are not in
+    /// `tests`.
+    pub shadowed_tests: Vec<ShadowedTest>,
+}
+
+/// A test definition that a later definition of the same name in the same scope rebinds
+/// (Python: a second `def test_f` in a module or class body).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShadowedTest {
+    /// The name the test would have, scoped as [`TestFn::name`] is.
+    pub name: String,
+    /// The line of the shadowed definition.
+    pub line: usize,
+    /// The line of the last definition of the name, the one the runner collects.
+    pub by_line: usize,
 }
 
 impl Default for ParsedFileFacts {
@@ -2194,6 +2210,7 @@ impl Default for ParsedFileFacts {
             prose: Vec::new(),
             budgets: Vec::new(),
             notes: Vec::new(),
+            shadowed_tests: Vec::new(),
             compile_time_asserts: 0,
             compile_time_assert_line: None,
             compile_time_test: Some(TestFn {

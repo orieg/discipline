@@ -81,6 +81,7 @@ impl LanguagePack for PythonPack {
             helpers: HashMap::new(),
             helper_calls: HashMap::new(),
             test_calls: Vec::new(),
+            rebound: rebound_definitions(root, src.as_bytes()),
         };
 
         extractor.collect_class_bases(root);
@@ -101,6 +102,57 @@ impl LanguagePack for PythonPack {
         crate::ast::source_text::unread_part(path)?;
         Ok(extractor.facts)
     }
+}
+
+/// The function definitions of the module and of every class body that a later
+/// definition of the same name in the same body rebinds, by node id, with the line of
+/// the last definition of the name. A module or class body binds a name once per
+/// statement, so pytest and unittest see the last `def` only (decorated and `async`
+/// ones included). A `def` under an `if`, `try` or other compound statement is a
+/// conditional binding and is not read here: it neither shadows nor is shadowed.
+/// Rebinding by assignment (`test_f = other`) is not read either.
+fn rebound_definitions(root: Node, src: &[u8]) -> HashMap<usize, usize> {
+    let mut rebound = HashMap::new();
+    let mut bodies = vec![root];
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "class_definition" {
+            if let Some(body) = node.child_by_field_name("body") {
+                bodies.push(body);
+            }
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.named_children(&mut cursor));
+    }
+    for body in bodies {
+        let mut last: HashMap<&[u8], (usize, usize)> = HashMap::new();
+        let mut defs = Vec::new();
+        let mut cursor = body.walk();
+        for statement in body.named_children(&mut cursor) {
+            let def = match statement.kind() {
+                "function_definition" => Some(statement),
+                "decorated_definition" => statement
+                    .child_by_field_name("definition")
+                    .filter(|d| d.kind() == "function_definition"),
+                _ => None,
+            };
+            let Some(def) = def else { continue };
+            let Some(name) = def.child_by_field_name("name") else {
+                continue;
+            };
+            let key = &src[name.byte_range()];
+            last.insert(key, (def.id(), def.start_position().row + 1));
+            defs.push((key, def.id()));
+        }
+        for (key, id) in defs {
+            if let Some(&(last_id, line)) = last.get(key) {
+                if last_id != id {
+                    rebound.insert(id, line);
+                }
+            }
+        }
+    }
+    rebound
 }
 
 /// Determines whether a path is conventionally a Python test file.
@@ -151,6 +203,9 @@ struct PythonExtractor<'a> {
     helper_calls: HashMap<String, Vec<String>>,
     /// Scope-qualified callees of each test, parallel to `facts.tests`.
     test_calls: Vec<Vec<String>>,
+    /// The `def`s that a later `def` of the same name in the same module or class body
+    /// rebinds, by node id, with the line of the last one ([`rebound_definitions`]).
+    rebound: HashMap<usize, usize>,
 }
 
 /// How a function body is scanned for failure paths.
@@ -854,6 +909,16 @@ impl<'a> PythonExtractor<'a> {
 
         if !self.is_collected_test(&fn_name, decorators) {
             self.record_helper(node, full_name);
+            return;
+        }
+        // A later `def` of the name in the same body rebinds it: the runner collects
+        // that one only, so this one never runs.
+        if let Some(&by_line) = self.rebound.get(&node.id()) {
+            self.facts.shadowed_tests.push(super::ShadowedTest {
+                name: full_name,
+                line: node.start_position().row + 1,
+                by_line,
+            });
             return;
         }
 
@@ -1821,6 +1886,101 @@ pub const PY_WRAPPER: super::WrapperSpec = super::WrapperSpec {
 mod tests {
     use super::*;
     use crate::ast::EscapeHatchSite;
+
+    /// `(name, line)` of each test.
+    type NamedTests = Vec<(String, usize)>;
+    /// `(name, line, by_line)` of each shadowed test definition.
+    type ShadowedDefs = Vec<(String, usize, usize)>;
+
+    /// The tests and the shadowed test definitions of a test file.
+    fn tests_and_shadowed(src: &str) -> (NamedTests, ShadowedDefs) {
+        let facts = PythonPack
+            .extract("tests/test_calc.py", src, &AssertVocabulary::default())
+            .unwrap();
+        (
+            facts
+                .tests
+                .iter()
+                .map(|t| (t.name.clone(), t.line))
+                .collect(),
+            facts
+                .shadowed_tests
+                .iter()
+                .map(|s| (s.name.clone(), s.line, s.by_line))
+                .collect(),
+        )
+    }
+
+    /// A second `def` of a name in a module or class body rebinds it: the runner collects
+    /// the last one only, so the earlier one is not a test (#827). Each form has its
+    /// control, where the names differ or the second binding is conditional.
+    #[test]
+    fn a_redefined_test_name_hides_the_earlier_definition() {
+        let module =
+            "def test_f():\n    assert f(2) == 4\n\n\ndef test_f():\n    assert g(1) == 2\n";
+        assert_eq!(
+            tests_and_shadowed(module),
+            (vec![("test_f".into(), 5)], vec![("test_f".into(), 1, 5)])
+        );
+        let module_control =
+            "def test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n";
+        assert_eq!(
+            tests_and_shadowed(module_control),
+            (vec![("test_f".into(), 1), ("test_g".into(), 5)], vec![])
+        );
+
+        let async_def = "async def test_f():\n    assert f(2) == 4\n\nasync def test_f():\n    assert g(1) == 2\n";
+        assert_eq!(
+            tests_and_shadowed(async_def),
+            (vec![("test_f".into(), 4)], vec![("test_f".into(), 1, 4)])
+        );
+
+        // A decorated definition is shadowed, and shadows, like a plain one.
+        let decorated = "@pytest.mark.slow\ndef test_f():\n    assert f(2) == 4\n\ndef test_f():\n    assert g(1) == 2\n\ndef test_g():\n    assert g(1) == 2\n\n@pytest.mark.slow\ndef test_g():\n    assert g(2) == 3\n";
+        assert_eq!(
+            tests_and_shadowed(decorated),
+            (
+                vec![("test_f".into(), 5), ("test_g".into(), 12)],
+                vec![("test_f".into(), 2, 5), ("test_g".into(), 8, 12)]
+            )
+        );
+
+        let class = "class TestCalc:\n    def test_f(self):\n        assert f(2) == 4\n\n    def test_f(self):\n        assert g(1) == 2\n";
+        assert_eq!(
+            tests_and_shadowed(class),
+            (
+                vec![("TestCalc::test_f".into(), 5)],
+                vec![("TestCalc::test_f".into(), 2, 5)]
+            )
+        );
+        // Control: one name in two classes is two tests.
+        let two_classes = "class TestA:\n    def test_f(self):\n        assert f(2) == 4\n\nclass TestB:\n    def test_f(self):\n        assert g(1) == 2\n";
+        assert_eq!(
+            tests_and_shadowed(two_classes),
+            (
+                vec![("TestA::test_f".into(), 2), ("TestB::test_f".into(), 6)],
+                vec![]
+            )
+        );
+        // Control: a module-level `test_f` and a method `test_f` do not rebind each other.
+        let method_and_function = "def test_f():\n    assert f(2) == 4\n\nclass TestCalc:\n    def test_f(self):\n        assert g(1) == 2\n";
+        assert_eq!(tests_and_shadowed(method_and_function).1, vec![]);
+
+        // Control: a definition under an `if` is conditional and is not judged; both
+        // stay tests.
+        let conditional = "def test_f():\n    assert f(2) == 4\n\nif sys.version_info >= (3, 12):\n    def test_f():\n        assert g(1) == 2\n";
+        assert_eq!(
+            tests_and_shadowed(conditional),
+            (vec![("test_f".into(), 1), ("test_f".into(), 5)], vec![])
+        );
+
+        // A helper redefined is not a shadowed test.
+        let helper = "def check(x):\n    assert x\n\ndef check(x):\n    assert x == 1\n\ndef test_f():\n    check(1)\n";
+        assert_eq!(
+            tests_and_shadowed(helper),
+            (vec![("test_f".into(), 7)], vec![])
+        );
+    }
 
     /// The whole-file handler rule is the shared-or-own superset: an empty handler is
     /// silent in a file only the shared rule recognises (`benches/`) and in one only

@@ -996,6 +996,80 @@ fn rename_test_by_name_similarity_passes_without_removes_directive() {
     assert!(run.titles("assertion-reduction").is_empty());
 }
 
+/// A Python test that a later `def` of its name hides no longer runs: pytest collects the
+/// last binding of a name in a module or class body only (#827).
+#[test]
+fn a_python_test_hidden_by_a_redefinition_is_reported() {
+    const BASE: &str =
+        "def test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n";
+    const CLASS: &str = "class TestCalc:\n    def test_f(self):\n        assert f(2) == 4\n\n    def test_g(self):\n        assert g(1) == 2\n";
+    let shadowed = |base: &str, head: &str, body: Option<&str>| {
+        let repo = Repo::new();
+        repo.commit_base("tests/test_calc.py", base, "test: calc");
+        repo.write("tests/test_calc.py", head);
+        repo.commit("test: change");
+        let run = repo.check_with_pr_metadata(&[], None, body);
+        let lines: Vec<(String, u64)> = run
+            .violations("deletion-rationale")
+            .iter()
+            .map(|v| {
+                (
+                    v["code"].as_str().unwrap().to_string(),
+                    v["line"].as_u64().unwrap_or(0),
+                )
+            })
+            .collect();
+        (
+            lines,
+            run.outcome("deletion-rationale")["overrides"]
+                .as_array()
+                .unwrap()
+                .len(),
+        )
+    };
+    let hidden = |line: u64| {
+        (
+            vec![(
+                "deletion-rationale/test-shadowed-by-redefinition".to_string(),
+                line,
+            )],
+            0,
+        )
+    };
+
+    // `test_g` renamed to `test_f`, below the first `test_f`.
+    let renamed = BASE.replace("def test_g", "def test_f");
+    assert_eq!(shadowed(BASE, &renamed, None), hidden(1));
+    // A new `def test_f` added below the existing one.
+    let added = format!("{BASE}\n\ndef test_f():\n    assert f(0) == 0\n");
+    assert_eq!(shadowed(BASE, &added, None), hidden(1));
+    // The same in a class body.
+    assert_eq!(
+        shadowed(CLASS, &CLASS.replace("def test_g", "def test_f"), None),
+        hidden(2)
+    );
+    // A `removes:` line naming the hidden test lifts it.
+    assert_eq!(
+        shadowed(
+            BASE,
+            &renamed,
+            Some("removes: test_f folded into the second test\n")
+        ),
+        (vec![], 1)
+    );
+
+    // Controls: a redefinition already on the base side hides nothing new; a rename to a
+    // fresh name is a rename.
+    assert_eq!(
+        shadowed(&added, &added.replace("f(0) == 0", "f(1) == 2"), None),
+        (vec![], 0)
+    );
+    assert_eq!(
+        shadowed(BASE, &BASE.replace("def test_g", "def test_h"), None),
+        (vec![], 0)
+    );
+}
+
 #[test]
 fn rename_and_gut_fires_assertion_reduction() {
     let repo = Repo::new();
