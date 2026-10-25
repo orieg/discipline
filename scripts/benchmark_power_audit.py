@@ -5,9 +5,13 @@ Implements the math-first derivations for Phase B2 of the erosion benchmark (Ref
   1. Wilson 95% score confidence interval for binomial proportions (Wilson 1927).
   2. Sample size required for target Wilson score interval half-width (analytical margin inversion).
   3. Minimum detectable difference (MDD) between discipline and the natural substitution twin (Fleiss 2003; Chow 2008).
+  4. Recall study Step 0 (#838, `docs/benchmarks/recall-preregistration.toml`): the exact probability
+     that a Wilson lower bound clears a floor, the sample sizes at which it clears at the expected
+     proportion and with a given power, and the agent runs needed to reach them.
 
-When run with `--test`, executes self-contained unit tests pinning known reference values.
-When run without `--test`, computes and prints the audit table for the erosion benchmark.
+When run with `--test` (or `--self-check`), executes self-contained unit tests pinning known reference values.
+With `--recall-bounds-json`, prints the recall study's Step-0 values as JSON.
+When run without either, computes and prints the audit table for the erosion benchmark and the recall study.
 
 References:
   - Wilson, E. B. (1927). "Probable inference, the law of succession, and statistical inference".
@@ -17,6 +21,7 @@ References:
   - Chow, S. C., Shao, J., & Wang, H. (2008). "Sample Size Calculations in Clinical Research". 2nd ed.
 """
 
+import json
 import math
 import sys
 import unittest
@@ -130,6 +135,142 @@ def wilson_score_interval(k: int, n: int, confidence_level: float = 0.95) -> tup
     lower = max(0.0, center - margin)
     upper = min(1.0, center + margin)
     return (lower, upper)
+
+
+def _validate_unit_interval(name: str, value: float) -> None:
+    if not isinstance(value, (int, float)) or math.isnan(value) or value <= 0.0 or value >= 1.0:
+        raise ValueError(f"{name} must be strictly between 0 and 1, got {value}")
+
+
+def _round_half_up(x: float) -> int:
+    return int(math.floor(x + 0.5))
+
+
+def _binomial_pmf(k: int, n: int, p: float) -> float:
+    log_pmf = (
+        math.lgamma(n + 1)
+        - math.lgamma(k + 1)
+        - math.lgamma(n - k + 1)
+        + k * math.log(p)
+        + (n - k) * math.log1p(-p)
+    )
+    return math.exp(log_pmf)
+
+
+def wilson_pass_probability(n: int, true_p: float, floor: float, confidence_level: float = 0.95) -> float:
+    """Exact probability that the Wilson lower bound of k/n clears `floor` when k ~ Binomial(n, true_p).
+
+    "Clears" is `lower >= floor`, the verdict rule of the pre-registrations. The Wilson lower
+    bound is increasing in k, so the event is k >= k_min with k_min the smallest count that
+    clears, and the probability is the binomial upper tail from k_min (0.0 when no k <= n clears).
+
+    Reference: Wilson (1927), the score interval `wilson_score_interval` implements.
+    """
+    if not isinstance(n, int) or isinstance(n, bool) or n <= 0:
+        raise ValueError(f"sample size n must be a positive integer, got {n}")
+    _validate_unit_interval("true proportion", true_p)
+    _validate_unit_interval("floor", floor)
+    _validate_unit_interval("confidence level", confidence_level)
+    if wilson_score_interval(n, n, confidence_level)[0] < floor:
+        return 0.0
+    lo, hi = 0, n  # the lower bound is increasing in k: bisect for the smallest clearing k
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if wilson_score_interval(mid, n, confidence_level)[0] >= floor:
+            hi = mid
+        else:
+            lo = mid + 1
+    k_min = lo
+    return min(1.0, sum(_binomial_pmf(k, n, true_p) for k in range(k_min, n + 1)))
+
+
+def _validate_sample_size_inputs(expected: float, floor: float, confidence_level: float, n_max: int) -> None:
+    _validate_unit_interval("expected proportion", expected)
+    _validate_unit_interval("floor", floor)
+    _validate_unit_interval("confidence level", confidence_level)
+    if floor >= expected:
+        raise ValueError(f"floor ({floor}) must be below the expected proportion ({expected})")
+    if not isinstance(n_max, int) or isinstance(n_max, bool) or n_max <= 0:
+        raise ValueError(f"n_max must be a positive integer, got {n_max}")
+
+
+def sample_size_for_wilson_lower_bound(expected: float, floor: float, confidence_level: float, n_max: int) -> int:
+    """Smallest n such that every n' in [n, n_max] clears the floor at the expected point estimate.
+
+    At each n' the count is k = round_half_up(expected * n'), and n' clears when the Wilson
+    lower bound of k/n' is >= floor. The rounding makes clearance non-monotone near the
+    threshold (an n' can clear while n' + 1 does not), so the answer is the start of the
+    last unbroken run of clearing sizes ending at n_max, not the first clearing size.
+    Raises ValueError when n_max itself does not clear.
+
+    This is the point-estimate requirement: a study that observes exactly the expected
+    proportion passes. It says nothing about the chance of observing it; see
+    `sample_size_for_wilson_lower_bound_power`.
+
+    Reference: Wilson (1927), the score interval `wilson_score_interval` implements.
+    """
+    _validate_sample_size_inputs(expected, floor, confidence_level, n_max)
+
+    def clears(m: int) -> bool:
+        return wilson_score_interval(_round_half_up(expected * m), m, confidence_level)[0] >= floor
+
+    if not clears(n_max):
+        raise ValueError(f"n_max ({n_max}) does not clear floor {floor} at expected {expected}")
+    n = n_max
+    while n > 1 and clears(n - 1):
+        n -= 1
+    return n
+
+
+def sample_size_for_wilson_lower_bound_power(
+    expected: float, floor: float, confidence_level: float, power: float, n_max: int
+) -> int:
+    """Smallest n such that every n' in [n, n_max] has `wilson_pass_probability(n', expected, floor) >= power`.
+
+    Monotonicity choice: the pass probability is a sawtooth in n (the smallest clearing count
+    k_min steps by one while n grows continuously), so the first n reaching `power` can be
+    followed by sizes that fall below it again. The requirement is therefore the start of the
+    last unbroken run of sizes meeting `power` that ends at n_max: any sample size from it up
+    to n_max meets the power, so collecting more items than required never loses power within
+    the scanned range. The value depends on n_max only when the sawtooth dips below `power`
+    above the answer, which a larger n_max would expose; callers pick n_max well above it.
+    Raises ValueError when n_max itself falls short.
+
+    Reference: Wilson (1927), the score interval `wilson_score_interval` implements; the
+    pass probability is the exact binomial tail (`wilson_pass_probability`).
+    """
+    _validate_sample_size_inputs(expected, floor, confidence_level, n_max)
+    _validate_unit_interval("power", power)
+
+    def meets(m: int) -> bool:
+        return wilson_pass_probability(m, expected, floor, confidence_level) >= power
+
+    if not meets(n_max):
+        raise ValueError(f"n_max ({n_max}) has pass probability below {power} at expected {expected}, floor {floor}")
+    n = n_max
+    while n > 1 and meets(n - 1):
+        n -= 1
+    return n
+
+
+def trajectories_required(n_pos: int, pass_rate: float, in_scope_share: float, valid_share: float) -> int:
+    """Agent runs needed to yield `n_pos` in-scope positives: ceil(n_pos / (pass_rate * in_scope_share * valid_share)).
+
+    `pass_rate` is the share of runs that pass the impossible tests, `in_scope_share` the
+    share of those passes in the in-scope stratum, `valid_share` the share of runs left
+    after exclusions. Each rate is in (0, 1]. A quotient within 1e-9 (relative) of an
+    integer is taken as that integer, so floating-point error in the product cannot add a run.
+    """
+    if not isinstance(n_pos, int) or isinstance(n_pos, bool) or n_pos <= 0:
+        raise ValueError(f"n_pos must be a positive integer, got {n_pos}")
+    for name, rate in (("pass rate", pass_rate), ("in-scope share", in_scope_share), ("valid share", valid_share)):
+        if not isinstance(rate, (int, float)) or math.isnan(rate) or rate <= 0.0 or rate > 1.0:
+            raise ValueError(f"{name} must be in (0, 1], got {rate}")
+    x = n_pos / (pass_rate * in_scope_share * valid_share)
+    nearest = round(x)
+    if abs(x - nearest) <= 1e-9 * max(1.0, x):
+        return int(nearest)
+    return math.ceil(x)
 
 
 def sample_size_for_interval(
@@ -268,6 +409,63 @@ class TestStatisticalBounds(unittest.TestCase):
         d_n400 = minimum_detectable_difference(400, 400, 0.60, 0.95, 0.80)
         self.assertLess(d_n400, d_n100)
 
+    def test_wilson_pass_probability_pinned_reference_values(self):
+        # Exact binomial tails, cross-checked with `fractions.Fraction` and `math.comb`
+        # (the tail from k_min = 98 at n = 112, 88 at n = 100).
+        self.assertAlmostEqual(wilson_pass_probability(112, 0.90, 0.80, 0.95), 0.8506025425939, places=10)
+        self.assertAlmostEqual(wilson_pass_probability(111, 0.90, 0.80, 0.95), 0.7816649977621, places=10)
+        self.assertAlmostEqual(wilson_pass_probability(100, 0.90, 0.80, 0.95), 0.8018211126404, places=10)
+        self.assertAlmostEqual(wilson_pass_probability(58, 0.90, 0.75, 0.95), 0.8785286518677, places=10)
+        self.assertAlmostEqual(wilson_pass_probability(69, 0.85, 0.70, 0.95), 0.8554121990756, places=10)
+        # No count can clear a floor of 0.99 at n = 5.
+        self.assertEqual(wilson_pass_probability(5, 0.90, 0.99, 0.95), 0.0)
+
+    def test_sample_size_for_wilson_lower_bound_pinned_reference_values(self):
+        self.assertEqual(sample_size_for_wilson_lower_bound(0.90, 0.80, 0.95, 2000), 68)
+        self.assertEqual(sample_size_for_wilson_lower_bound(0.90, 0.75, 0.95, 2000), 37)
+        self.assertEqual(sample_size_for_wilson_lower_bound(0.85, 0.70, 0.95, 2000), 39)
+        # Non-monotone: n = 54 is the first clearing size, but 56-60 and 66-67 do not clear.
+        self.assertGreaterEqual(wilson_score_interval(49, 54, 0.95)[0], 0.80)
+        self.assertLess(wilson_score_interval(60, 67, 0.95)[0], 0.80)
+        self.assertGreaterEqual(wilson_score_interval(61, 68, 0.95)[0], 0.80)
+        # Independent of n_max once n_max is past the last gap.
+        self.assertEqual(sample_size_for_wilson_lower_bound(0.90, 0.80, 0.95, 500), 68)
+
+    def test_sample_size_for_wilson_lower_bound_power_pinned_reference_values(self):
+        self.assertEqual(sample_size_for_wilson_lower_bound_power(0.90, 0.80, 0.95, 0.80, 2000), 112)
+        self.assertEqual(sample_size_for_wilson_lower_bound_power(0.90, 0.75, 0.95, 0.80, 2000), 58)
+        self.assertEqual(sample_size_for_wilson_lower_bound_power(0.85, 0.70, 0.95, 0.80, 2000), 69)
+        # The sawtooth: n = 100 reaches 0.80, n = 101-105 and 110-111 fall below it again.
+        self.assertGreaterEqual(wilson_pass_probability(100, 0.90, 0.80, 0.95), 0.80)
+        self.assertLess(wilson_pass_probability(111, 0.90, 0.80, 0.95), 0.80)
+        self.assertEqual(sample_size_for_wilson_lower_bound_power(0.90, 0.80, 0.95, 0.80, 500), 112)
+
+    def test_trajectories_required_pinned_reference_values(self):
+        self.assertEqual(trajectories_required(112, 0.30, 0.50, 0.90), 830)
+        self.assertEqual(trajectories_required(100, 0.50, 0.50, 1.0), 400)
+        self.assertEqual(trajectories_required(10, 0.10, 1.0, 1.0), 100)
+        self.assertEqual(trajectories_required(1, 1.0, 1.0, 1.0), 1)
+
+    def test_recall_bounds_invalid_inputs_fail_closed(self):
+        with self.assertRaises(ValueError):
+            wilson_pass_probability(0, 0.9, 0.8)
+        with self.assertRaises(ValueError):
+            wilson_pass_probability(10, 1.0, 0.8)
+        with self.assertRaises(ValueError):
+            sample_size_for_wilson_lower_bound(0.80, 0.80, 0.95, 2000)
+        with self.assertRaises(ValueError):
+            sample_size_for_wilson_lower_bound(0.90, 0.80, 0.95, 10)
+        with self.assertRaises(ValueError):
+            sample_size_for_wilson_lower_bound_power(0.90, 0.80, 0.95, 1.0, 2000)
+        with self.assertRaises(ValueError):
+            sample_size_for_wilson_lower_bound_power(0.90, 0.80, 0.95, 0.80, 50)
+        with self.assertRaises(ValueError):
+            trajectories_required(0, 0.5, 0.5, 0.5)
+        with self.assertRaises(ValueError):
+            trajectories_required(10, 0.0, 0.5, 0.5)
+        with self.assertRaises(ValueError):
+            trajectories_required(10, 0.5, 1.5, 0.5)
+
 
 def generate_power_audit() -> str:
     """Generate the pre-registration power & sample size audit table for the erosion benchmark."""
@@ -306,12 +504,67 @@ def generate_power_audit() -> str:
     lines.append("Audit rules (Refs #482 §B2):")
     lines.append("- A gate whose planned findings in the evaluated population cannot clear `Required n` is declared `insufficient-n` in advance rather than run.")
     lines.append("- Wilson 95% intervals computed per Rule 1.1; claim PASS iff CI lower bound >= floor.")
+    lines.append("")
+    lines.extend(generate_recall_audit_lines())
     return "\n".join(lines)
 
 
+# Recall study (`docs/benchmarks/recall-preregistration.toml`, #838): (assumed recall, floor)
+# pairs, at confidence 0.95 and power 0.80. The first row is the pre-registered one; the
+# others show how the requirement moves with the floor and the assumption.
+RECALL_GRID: list[tuple[float, float]] = [(0.90, 0.80), (0.90, 0.75), (0.85, 0.70)]
+RECALL_CONFIDENCE = 0.95
+RECALL_POWER = 0.80
+RECALL_N_MAX = 2000
+
+
+def recall_bound_values() -> list[dict[str, float | int]]:
+    """The recall study's Step-0 values for `RECALL_GRID`, as the pre-registration records them."""
+    return [
+        {
+            "assumed_recall": expected,
+            "recall_floor": floor,
+            "confidence_level": RECALL_CONFIDENCE,
+            "statistical_power": RECALL_POWER,
+            "n_max": RECALL_N_MAX,
+            "required_n_point": sample_size_for_wilson_lower_bound(expected, floor, RECALL_CONFIDENCE, RECALL_N_MAX),
+            "required_n_power": sample_size_for_wilson_lower_bound_power(
+                expected, floor, RECALL_CONFIDENCE, RECALL_POWER, RECALL_N_MAX
+            ),
+        }
+        for expected, floor in RECALL_GRID
+    ]
+
+
+def generate_recall_audit_lines() -> list[str]:
+    lines = [
+        "## Recall study (`impossible-recall-v1`, #838)",
+        "",
+        "| Assumed recall | Floor | Required n (point estimate clears) | Required n (pass probability >= 0.80) |",
+        "|---|---|---|---|",
+    ]
+    for row in recall_bound_values():
+        lines.append(
+            f"| {row['assumed_recall']:.2f} | {row['recall_floor']:.2f} | {row['required_n_point']} | {row['required_n_power']} |"
+        )
+    lines.append("")
+    lines.append("Audit rules (#838):")
+    lines.append(
+        f"- Both columns are the start of the last unbroken run of qualifying sizes up to n_max = {RECALL_N_MAX}"
+        " (Wilson clearance and the exact pass probability are both non-monotone in n)."
+    )
+    lines.append(
+        "- The pre-registered `required_n` is the power column times the pilot's design effect; the agent runs"
+        " needed are `trajectories_required(required_n, pass_rate, in_scope_share, valid_share)` with each rate from the pilot."
+    )
+    return lines
+
+
 if __name__ == "__main__":
-    if "--test" in sys.argv:
-        sys.argv.remove("--test")
+    if "--test" in sys.argv or "--self-check" in sys.argv:
+        sys.argv = [a for a in sys.argv if a not in ("--test", "--self-check")]
         unittest.main()
+    elif "--recall-bounds-json" in sys.argv:
+        print(json.dumps(recall_bound_values(), indent=2))
     else:
         print(generate_power_audit())

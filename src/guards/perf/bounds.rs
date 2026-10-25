@@ -17,7 +17,8 @@
 //! 2. **Deterministic Integer Counters (Callgrind Ir, instruction cycles):**
 //!    Counters have zero sampling variance and are evaluated directly against `tau`.
 //! 3. **Wilson Score Interval (Wilson 1927):**
-//!    Binomial proportion confidence interval for discrete pass/fail trials.
+//!    Binomial proportion confidence interval for discrete pass/fail trials, and the sample
+//!    sizes at which its lower bound clears a floor (the recall study's Step 0, #838).
 //! 4. **Paired within-run ratios (`paired-ratio` mode):** percentile-bootstrap interval of a
 //!    median ratio, the minimum round count at which that interval stops collapsing onto the
 //!    sample extremes, the ratio-of-ratios decision (the whole interval must clear the
@@ -542,6 +543,236 @@ pub fn sample_size_for_interval(
 
 /// Largest sample size `sample_size_for_interval` returns; anything larger is an error.
 pub const MAX_SAMPLE_SIZE: usize = 1_000_000_000;
+
+// ---- Recall study Step 0 (#838) --------------------------------------------------
+//
+// Mirrors of the recall functions in `scripts/benchmark_power_audit.py`, which
+// `docs/benchmarks/recall-preregistration.toml` records. Both implementations are pinned
+// to the same values.
+
+fn check_unit_interval(name: &str, value: f64) -> Result<()> {
+    if !value.is_finite() || value <= 0.0 || value >= 1.0 {
+        bail!("{name} must be strictly between 0 and 1, got {value}");
+    }
+    Ok(())
+}
+
+fn round_half_up(x: f64) -> usize {
+    (x + 0.5).floor() as usize
+}
+
+/// `ln(m!)` for every `m` in `0..=n`, summed with Kahan compensation so the error stays near
+/// one rounding of the largest entry rather than growing with `n`.
+fn ln_factorial_table(n: usize) -> Vec<f64> {
+    let mut table = Vec::with_capacity(n + 1);
+    table.push(0.0);
+    let (mut sum, mut carry) = (0.0_f64, 0.0_f64);
+    for m in 1..=n {
+        let y = (m as f64).ln() - carry;
+        let t = sum + y;
+        carry = (t - sum) - y;
+        sum = t;
+        table.push(sum);
+    }
+    table
+}
+
+/// Exact probability that the Wilson lower bound of `k / n` clears `floor` when
+/// `k ~ Binomial(n, true_p)`.
+///
+/// "Clears" is `lower >= floor`, the verdict rule of the pre-registrations. The Wilson lower
+/// bound is increasing in `k`, so the event is `k >= k_min` with `k_min` the smallest count that
+/// clears (found by bisection), and the probability is the binomial upper tail from `k_min`
+/// (0.0 when no `k <= n` clears). Each term is evaluated in log space,
+/// `ln C(n, k) + k ln p + (n - k) ln(1 - p)`, so nothing overflows or underflows to a wrong
+/// sum for large `n`.
+///
+/// Errors when `n` is 0 or a proportion is outside `(0, 1)`.
+///
+/// Reference: Wilson, E. B. (1927). "Probable inference, the law of succession, and statistical inference".
+/// Journal of the American Statistical Association, 22(158), 209-212.
+pub fn wilson_pass_probability(
+    n: usize,
+    true_p: f64,
+    floor: f64,
+    confidence_level: f64,
+) -> Result<f64> {
+    if n == 0 {
+        bail!("sample size n must be greater than 0");
+    }
+    check_unit_interval("true proportion", true_p)?;
+    check_unit_interval("floor", floor)?;
+    check_unit_interval("confidence level", confidence_level)?;
+    if wilson_score_interval(n, n, confidence_level)?.0 < floor {
+        return Ok(0.0);
+    }
+    // The lower bound is increasing in k: bisect for the smallest clearing count.
+    let (mut lo, mut hi) = (0usize, n);
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if wilson_score_interval(mid, n, confidence_level)?.0 >= floor {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    let k_min = lo;
+    let ln_fact = ln_factorial_table(n);
+    let (ln_p, ln_q) = (true_p.ln(), (-true_p).ln_1p());
+    let tail: f64 = (k_min..=n)
+        .map(|k| {
+            let ln_pmf =
+                ln_fact[n] - ln_fact[k] - ln_fact[n - k] + k as f64 * ln_p + (n - k) as f64 * ln_q;
+            ln_pmf.exp()
+        })
+        .sum();
+    Ok(tail.min(1.0))
+}
+
+fn check_sample_size_inputs(
+    expected: f64,
+    floor: f64,
+    confidence_level: f64,
+    n_max: usize,
+) -> Result<()> {
+    check_unit_interval("expected proportion", expected)?;
+    check_unit_interval("floor", floor)?;
+    check_unit_interval("confidence level", confidence_level)?;
+    if floor >= expected {
+        bail!("floor ({floor}) must be below the expected proportion ({expected})");
+    }
+    if n_max == 0 {
+        bail!("n_max must be a positive integer, got 0");
+    }
+    Ok(())
+}
+
+/// Start of the last unbroken run of sizes satisfying `qualifies` that ends at `n_max`.
+/// Errors (with `shortfall`) when `n_max` itself does not qualify.
+fn last_unbroken_run_start(
+    n_max: usize,
+    mut qualifies: impl FnMut(usize) -> Result<bool>,
+    shortfall: impl FnOnce() -> String,
+) -> Result<usize> {
+    if !qualifies(n_max)? {
+        bail!("{}", shortfall());
+    }
+    let mut n = n_max;
+    while n > 1 && qualifies(n - 1)? {
+        n -= 1;
+    }
+    Ok(n)
+}
+
+/// Smallest `n` such that every `n'` in `[n, n_max]` clears `floor` at the expected point
+/// estimate.
+///
+/// At each `n'` the count is `k = round_half_up(expected * n')`, and `n'` clears when the
+/// Wilson lower bound of `k / n'` is `>= floor`. The rounding makes clearance non-monotone
+/// near the threshold (an `n'` can clear while `n' + 1` does not), so the answer is the start
+/// of the last unbroken run of clearing sizes ending at `n_max`, not the first clearing size.
+///
+/// This is the point-estimate requirement: a study that observes exactly the expected
+/// proportion passes. It says nothing about the chance of observing it; see
+/// [`sample_size_for_wilson_lower_bound_power`].
+///
+/// Errors when an input is out of range, when `floor >= expected`, or when `n_max` itself
+/// does not clear.
+///
+/// Reference: Wilson, E. B. (1927). "Probable inference, the law of succession, and statistical inference".
+/// Journal of the American Statistical Association, 22(158), 209-212.
+pub fn sample_size_for_wilson_lower_bound(
+    expected: f64,
+    floor: f64,
+    confidence_level: f64,
+    n_max: usize,
+) -> Result<usize> {
+    check_sample_size_inputs(expected, floor, confidence_level, n_max)?;
+    last_unbroken_run_start(
+        n_max,
+        |m| {
+            let k = round_half_up(expected * m as f64);
+            Ok(wilson_score_interval(k, m, confidence_level)?.0 >= floor)
+        },
+        || format!("n_max ({n_max}) does not clear floor {floor} at expected {expected}"),
+    )
+}
+
+/// Smallest `n` such that every `n'` in `[n, n_max]` has
+/// `wilson_pass_probability(n', expected, floor, confidence_level) >= power`.
+///
+/// The pass probability is a sawtooth in `n` (the smallest clearing count `k_min` steps by
+/// one while `n` grows continuously), so the first `n` reaching `power` can be followed by
+/// sizes that fall below it again. The requirement is therefore the start of the last
+/// unbroken run of sizes meeting `power` that ends at `n_max`: any sample size from it up to
+/// `n_max` meets the power. The value depends on `n_max` only when the sawtooth dips below
+/// `power` above the answer, which a larger `n_max` would expose; callers pick `n_max` well
+/// above it.
+///
+/// Errors when an input is out of range, when `floor >= expected`, or when `n_max` itself
+/// falls short of `power`.
+///
+/// Reference: Wilson, E. B. (1927). "Probable inference, the law of succession, and statistical inference".
+/// Journal of the American Statistical Association, 22(158), 209-212; the pass probability
+/// is the exact binomial tail ([`wilson_pass_probability`]).
+pub fn sample_size_for_wilson_lower_bound_power(
+    expected: f64,
+    floor: f64,
+    confidence_level: f64,
+    power: f64,
+    n_max: usize,
+) -> Result<usize> {
+    check_sample_size_inputs(expected, floor, confidence_level, n_max)?;
+    check_unit_interval("power", power)?;
+    last_unbroken_run_start(
+        n_max,
+        |m| Ok(wilson_pass_probability(m, expected, floor, confidence_level)? >= power),
+        || {
+            format!(
+                "n_max ({n_max}) has pass probability below {power} at expected {expected}, floor {floor}"
+            )
+        },
+    )
+}
+
+/// Agent runs needed to yield `n_pos` in-scope positives:
+/// `ceil(n_pos / (pass_rate * in_scope_share * valid_share))`.
+///
+/// `pass_rate` is the share of runs that pass the impossible tests, `in_scope_share` the
+/// share of those passes in the in-scope stratum, `valid_share` the share of runs left after
+/// exclusions. Each rate is in `(0, 1]`. A quotient within 1e-9 (relative) of an integer is
+/// taken as that integer, so floating-point error in the product cannot add a run.
+///
+/// Errors when `n_pos` is 0, a rate is outside `(0, 1]`, or the result exceeds
+/// [`MAX_SAMPLE_SIZE`].
+pub fn trajectories_required(
+    n_pos: usize,
+    pass_rate: f64,
+    in_scope_share: f64,
+    valid_share: f64,
+) -> Result<usize> {
+    if n_pos == 0 {
+        bail!("n_pos must be a positive integer, got 0");
+    }
+    for (name, rate) in [
+        ("pass rate", pass_rate),
+        ("in-scope share", in_scope_share),
+        ("valid share", valid_share),
+    ] {
+        if !rate.is_finite() || rate <= 0.0 || rate > 1.0 {
+            bail!("{name} must be in (0, 1], got {rate}");
+        }
+    }
+    let x = n_pos as f64 / (pass_rate * in_scope_share * valid_share);
+    if !x.is_finite() || x > MAX_SAMPLE_SIZE as f64 {
+        bail!("trajectories required ({x}) exceed {MAX_SAMPLE_SIZE}");
+    }
+    let nearest = x.round();
+    if (x - nearest).abs() <= 1e-9 * x.max(1.0) {
+        return Ok(nearest as usize);
+    }
+    Ok(x.ceil() as usize)
+}
 
 /// Computes the minimum detectable difference (MDD) in precision between two arms (e.g. discipline
 /// and the natural substitution twin baseline) given their sample sizes `n1` and `n2`, baseline precision `p1`,
