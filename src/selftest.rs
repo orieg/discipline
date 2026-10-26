@@ -3950,6 +3950,23 @@ const CASES: &[Case] = &[
     ),
     #[cfg(feature = "lang-python")]
     (
+        "assertion-reduction: a called Python mock assertion method is a check (#828)",
+        || {
+            let read = |body: &str| -> Result<(usize, usize, usize)> {
+                let src = format!("def test_t():\n    m = mock.Mock()\n    run(m)\n{body}");
+                let facts = facts("tests/test_t.py", &src)?;
+                let t = &facts.tests[0];
+                Ok((t.total_asserts, t.strong_asserts, t.mock_asserts))
+            };
+            Ok(read("    m.assert_called_once_with(1)\n")? == (1, 0, 1)
+                && read("    m.save.assert_has_calls([])\n")? == (1, 0, 1)
+                && read("    m.assert_called_once\n")? == (0, 0, 0)
+                && read("    m.assert_valid()\n")? == (0, 0, 0)
+                && read("    pass\n")? == (0, 0, 0))
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
         "deletion-rationale: a Python test hidden by a later def of its name is reported (#827)",
         || {
             use crate::ast::LanguagePack;

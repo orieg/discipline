@@ -275,6 +275,19 @@
       }
     },
     {
+      "name": "js-new-test-mock-and-defined",
+      "base": {
+        "src/a.js": "export function run(cb) { cb(1); return 2; }\n",
+        "test/a.test.js": "import { run } from '../src/a.js';\n\ntest('x', () => {\n  expect(run(() => 0)).toBe(2);\n});\n"
+      },
+      "head": {
+        "test/a.test.js": "import { run } from '../src/a.js';\n\ntest('x', () => {\n  expect(run(() => 0)).toBe(2);\n});\n\ntest('run', () => {\n  const m = jest.fn();\n  const r = run(m);\n  expect(m).toHaveBeenCalledWith(1);\n  expect(r).toBeDefined();\n});\n"
+      },
+      "verdict": {
+        "known_miss": "#865"
+      }
+    },
+    {
       "name": "js-pkg-test-script-changed",
       "base": {
         "src/calc.js": "export function f(x) { return x * 2; }\n",
@@ -587,7 +600,9 @@
         "tests/test_a.py": "from unittest import mock\nfrom src.a import run\n\n\ndef test_run():\n    m = mock.Mock()\n    run(m)\n    pass\n"
       },
       "verdict": {
-        "known_miss": "#828"
+        "caught": [
+          "assertion-reduction/assertions-reduced"
+        ]
       }
     },
     {
@@ -600,7 +615,9 @@
         "tests/test_a.py": "from unittest import mock\nfrom src.a import run\n\n\ndef test_run():\n    m = mock.Mock()\n    run(m)\n    m.assert_called_once\n"
       },
       "verdict": {
-        "known_miss": "#828"
+        "caught": [
+          "assertion-reduction/assertions-reduced"
+        ]
       }
     },
     {
@@ -700,6 +717,19 @@
         "caught": [
           "vacuous-tests/vacuous-test-added"
         ]
+      }
+    },
+    {
+      "name": "py-new-test-mock-and-not-none",
+      "base": {
+        "src/a.py": "def run(cb):\n    cb(1)\n    return 2\n",
+        "tests/test_a.py": "from unittest import mock\nfrom src.a import run\n\n\ndef test_x():\n    assert run(lambda v: v) == 2\n"
+      },
+      "head": {
+        "tests/test_a.py": "from unittest import mock\nfrom src.a import run\n\n\ndef test_x():\n    assert run(lambda v: v) == 2\n\n\ndef test_run():\n    m = mock.Mock()\n    r = run(m)\n    m.assert_called_once_with(1)\n    assert r is not None\n"
+      },
+      "verdict": {
+        "known_miss": "#865"
       }
     },
     {

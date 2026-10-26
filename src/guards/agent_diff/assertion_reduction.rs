@@ -2624,6 +2624,42 @@ mod tests {
         );
     }
 
+    /// #828: a Python mock assertion call of an existing test is a check: deleting it, or
+    /// leaving its name read but not called, drops the count; one added beside an
+    /// equality, or kept, weakens nothing.
+    #[test]
+    fn a_removed_python_mock_assertion_call_is_a_reduction() {
+        let path = "tests/test_a.py";
+        let file = |body: &str| {
+            format!("from unittest import mock\n\n\ndef test_run():\n    m = mock.Mock()\n    run(m)\n{body}")
+        };
+        let base = file("    m.assert_called_once_with(1)\n");
+        let reduced = vec![(TEST_REDUCED.to_string(), path.to_string())];
+        for head in ["    pass\n", "    m.assert_called_once\n"] {
+            assert_eq!(
+                reduction(&[(path, &base, &file(head))], ""),
+                reduced,
+                "{head}"
+            );
+        }
+        // Controls: the call kept, another mock assertion in its place, and one added
+        // beside an equality.
+        for head in [
+            "    m.assert_called_once_with(1)\n",
+            "    m.assert_called_with(1)\n",
+        ] {
+            assert!(
+                reduction(&[(path, &base, &file(head))], "").is_empty(),
+                "{head}"
+            );
+        }
+        let (equality_base, equality_head) = (
+            file("    assert f(1) == 2\n"),
+            file("    assert f(1) == 2\n    m.assert_called_once_with(1)\n"),
+        );
+        assert!(reduction(&[(path, &equality_base, &equality_head)], "").is_empty());
+    }
+
     /// #595: growth in calls to same-file helpers that fail excuses a drop only when
     /// more of those calls check in a loop; a straight-line helper is held to its count.
     #[test]

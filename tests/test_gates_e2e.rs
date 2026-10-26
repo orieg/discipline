@@ -841,6 +841,45 @@ fn python_parenthesised_assertions_are_read_as_the_expression_inside() {
     assert_eq!(codes, ["vacuous-tests/asserts-only-on-mocks"]);
 }
 
+/// A Python mock assertion call is a check (#828): deleting it from an existing test, or
+/// leaving its name read but not called, is a reduction; a new test whose only check
+/// is one is still a test that asserts only on mocks.
+#[test]
+fn python_mock_assertion_calls_count_toward_assertion_reduction() {
+    const BASE: &str = "from unittest import mock\nfrom src.a import run\n\n\ndef test_run():\n    m = mock.Mock()\n    run(m)\n    m.assert_called_once_with(1)\n";
+    let codes = |head: &str| -> (i32, Vec<String>) {
+        let repo = Repo::new();
+        repo.write("src/a.py", "def run(cb):\n    cb(1)\n");
+        repo.commit_base("tests/test_a.py", BASE, "test: run");
+        repo.write("tests/test_a.py", head);
+        repo.commit("test: change");
+        let run = repo.check(&[]);
+        let codes = ["assertion-reduction", "vacuous-tests"]
+            .iter()
+            .flat_map(|gate| run.violations(gate))
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes)
+    };
+    let reduced = (
+        1,
+        vec!["assertion-reduction/assertions-reduced".to_string()],
+    );
+    let deleted = BASE.replace("m.assert_called_once_with(1)", "pass");
+    assert_eq!(codes(&deleted), reduced);
+    let read_only = BASE.replace("m.assert_called_once_with(1)", "m.assert_called_once");
+    assert_eq!(codes(&read_only), reduced);
+    // Control: the check kept, with an equality added beside it.
+    let kept = format!("{BASE}    assert run(m) is None\n");
+    assert_eq!(codes(&kept), (0, vec![]));
+    // A new test whose only check is on the mock: the warning, not a reduction.
+    let added = format!("{BASE}\n\ndef test_run2():\n    m = mock.Mock()\n    run(m)\n    m.assert_called_with(1)\n");
+    assert_eq!(
+        codes(&added),
+        (0, vec!["vacuous-tests/asserts-only-on-mocks".to_string()])
+    );
+}
+
 #[test]
 fn idiomatic_result_and_unwrap_tests_pass_vacuous_tests_gate() {
     let repo = Repo::new();
