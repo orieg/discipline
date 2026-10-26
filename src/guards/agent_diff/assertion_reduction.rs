@@ -360,6 +360,9 @@ struct PairFindings<'a> {
     /// The drop in literal cases that is not read as moved to another test of the file.
     case_drop: Option<CaseDrop>,
     newly_caught: Vec<&'a crate::ast::caught_assertions::CaughtAssertion>,
+    /// An expected failure the change added to the test as a whole, which its own
+    /// assertions now satisfy (`ast::expected_exceptions::inverting_attribute`).
+    inverting: Option<&'a crate::ast::expected_exceptions::ExpectedException>,
     loss: AssertionLoss,
     mock_growth: bool,
     loosened: Vec<crate::ast::bounds::Loosened>,
@@ -378,7 +381,7 @@ impl PairFindings<'_> {
     /// (fewer assertions, weaker fatal ones, or doubles grown alone), else a loosened
     /// bound. One directive lifts every finding of the pair; the record names the first.
     fn first_kind(&self) -> &'static crate::findings::FindingKind {
-        if !self.newly_caught.is_empty() {
+        if !self.newly_caught.is_empty() || self.inverting.is_some() {
             &crate::findings::ASSERTION_FAILURE_CAUGHT
         } else if self.case_drop.is_some() {
             &crate::findings::TEST_CASES_REDUCED
@@ -510,6 +513,7 @@ fn pair_findings<'a>(
     let b_eff = b.effective_asserts();
     let h_eff = h.effective_asserts();
     let newly_caught = crate::ast::caught_assertions::newly_caught(b, h);
+    let inverting = crate::ast::expected_exceptions::inverting_attribute(b, h);
     let loss = assertion_loss(p, helpers, newly_caught.len(), settings, out);
     let (total_drop, strong_drop, fatal_drop) = (loss.total, loss.strong, loss.fatal);
     // More doubles in the test, and no stronger assertion on what the code produced:
@@ -538,6 +542,7 @@ fn pair_findings<'a>(
         && changed.is_empty()
         && rewritten_rows.is_empty()
         && newly_caught.is_empty()
+        && inverting.is_none()
         && widened.is_empty()
         && self_compared.is_empty()
     {
@@ -546,6 +551,7 @@ fn pair_findings<'a>(
     Some(PairFindings {
         case_drop,
         newly_caught,
+        inverting,
         loss,
         mock_growth,
         loosened,
@@ -872,6 +878,30 @@ fn report_newly_caught(
             ),
             &format!(
                 "Restore the assertion to propagate failures, or justify the handler in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
+                directive_name
+            ),
+        );
+    }
+    if let Some(e) = f.inverting {
+        let attribute = match e.exception_type.as_deref() {
+            Some(class) if e.kind == "test_expected" => format!("@Test(expected = {class}.class)"),
+            _ => "#[should_panic]".to_string(),
+        };
+        out.push(
+            if is_staged {
+                crate::config::Severity::Warning
+            } else {
+                settings.severity()
+            },
+            &crate::findings::ASSERTION_FAILURE_CAUGHT,
+            Some(p.path),
+            Some(e.line),
+            format!(
+                "{test_label}: `{attribute}` (line {}) was added to a test that holds assertions, and their own failure satisfies it: the test now passes only when they fail, so they are not effective checks.",
+                e.line
+            ),
+            &format!(
+                "Remove the expected failure, or make the test expect the failure of the code under test; or justify it in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
                 directive_name
             ),
         );

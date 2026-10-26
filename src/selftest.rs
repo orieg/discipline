@@ -101,6 +101,40 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "ast: an expectation of the assertion's own failure around it inverts the test; one of another error does not",
+        || {
+            let v = AssertVocabulary::default();
+            let caught = |path: &str, src: &str| -> Result<usize> {
+                Ok(facts(path, src)?
+                    .tests
+                    .iter()
+                    .map(|t| t.caught_assertions.len())
+                    .sum())
+            };
+            let py = |class: &str| {
+                format!("def test_x():\n    with pytest.raises({class}):\n        assert f(2) == 4\n")
+            };
+            let js = |tail: &str| {
+                format!("test('t', () => {{\n  expect(() => {{ expect(f(2)).toBe(4); }}){tail};\n}});\n")
+            };
+            let rs = |attr: &str| analyze(&format!("#[test] {attr} fn t() {{ assert_eq!(f(2), 4); }}"), &v);
+            let plain = rs("")?;
+            let inverted = |attr: &str| -> Result<bool> {
+                Ok(crate::ast::expected_exceptions::inverting_attribute(
+                    &plain.tests[0],
+                    &rs(attr)?.tests[0],
+                )
+                .is_some())
+            };
+            Ok(caught("test_x.py", &py("AssertionError"))? == 1
+                && caught("test_x.py", &py("ValueError"))? == 0
+                && caught("t.test.js", &js(".toThrow()"))? == 1
+                && caught("t.test.js", &js(".not.toThrow()"))? == 0
+                && inverted("#[should_panic]")?
+                && !inverted("#[should_panic(expected = \"index out of bounds\")]")?)
+        },
+    ),
+    (
         "ast: a handler swallows an assertion failure only when it catches the failure type and nothing looks at the outcome",
         || {
             let caught = |path: &str, src: &str| -> Result<usize> {
