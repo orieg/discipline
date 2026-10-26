@@ -3934,6 +3934,22 @@ const CASES: &[Case] = &[
     ),
     #[cfg(feature = "lang-python")]
     (
+        "assertion-reduction: a parenthesised Python assertion is read as the expression inside it (#859)",
+        || {
+            let read = |body: &str| -> Result<(usize, usize, usize)> {
+                let src = format!("def test_t():\n{body}");
+                let facts = facts("tests/test_t.py", &src)?;
+                let t = &facts.tests[0];
+                Ok((t.total_asserts, t.strong_asserts, t.tautologies))
+            };
+            Ok(read("    assert f(3) == 6\n")? == (1, 1, 0)
+                && read("    assert ((f(3) == 6)), \"f doubles\"\n")? == (1, 1, 0)
+                && read("    assert (f(3) is not None)\n")? == (1, 0, 0)
+                && read("    assert ((f(3) == 6, \"f doubles\"))\n")? == (1, 0, 1))
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
         "deletion-rationale: a Python test hidden by a later def of its name is reported (#827)",
         || {
             use crate::ast::LanguagePack;

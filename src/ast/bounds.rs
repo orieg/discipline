@@ -18,6 +18,7 @@
 //! where a hash of both is the same.
 
 use super::ancestry::count;
+use super::python::unparenthesized;
 use super::TestFn;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -323,7 +324,7 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
             match n.kind() {
                 "comparison_operator" => {
                     let mut cursor = n.walk();
-                    let kids: Vec<Node> = n.children(&mut cursor).collect();
+                    let kids: Vec<Node> = n.children(&mut cursor).map(unparenthesized).collect();
                     for w in kids.windows(3) {
                         if let Some((lit, up)) = comparison(w[0], text(w[1], src), w[2], &|x| {
                             py_num(x)
@@ -336,7 +337,11 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
                 }
                 "keyword_argument" => {
                     let name = n.child_by_field_name("name").map_or("", |x| text(x, src));
-                    if let Some(v) = n.child_by_field_name("value").filter(|v| py_num(*v)) {
+                    if let Some(v) = n
+                        .child_by_field_name("value")
+                        .map(unparenthesized)
+                        .filter(|v| py_num(*v))
+                    {
                         if WIDER_WHEN_LARGER.contains(&name) {
                             record(records, node, v, src, true);
                         } else if WIDER_WHEN_SMALLER.contains(&name) {
@@ -355,6 +360,7 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
                             let mut c = a.walk();
                             a.named_children(&mut c)
                                 .filter(|x| x.kind() != "keyword_argument")
+                                .map(unparenthesized)
                                 .collect()
                         })
                         .unwrap_or_default();
@@ -735,6 +741,26 @@ mod tests {
                 ("7", false)
             ])
         );
+    }
+
+    /// #859: a parenthesised operand, tolerance or argument is read as what it wraps.
+    #[test]
+    fn python_bounds_are_read_through_parentheses() {
+        let plain = "import pytest\n\ndef test_x(self):\n    assert end - start < 1.5\n    assert 0.9 <= ratio\n    assert x == pytest.approx(y, rel=1e-6)\n    self.assertLess(ms, 200)\n    self.assertAlmostEqual(a, b, places=7)\n    assert d < -2\n";
+        let wrapped = "import pytest\n\ndef test_x(self):\n    assert ((end - start) < (1.5)), 'slow'\n    assert ((0.9)) <= ratio\n    assert (x == pytest.approx(y, rel=(1e-6)))\n    self.assertLess(ms, (200))\n    self.assertAlmostEqual(a, b, places=((7)))\n    assert d < (-2)\n";
+        let read = |src| bounds(&crate::ast::python::PythonPack, "tests/test_x.py", src);
+        assert_eq!(
+            read(plain),
+            pairs(&[
+                ("1.5", true),
+                ("0.9", false),
+                ("1e-6", true),
+                ("200", true),
+                ("7", false),
+                ("-2", true)
+            ])
+        );
+        assert_eq!(read(wrapped), read(plain));
     }
 
     #[test]

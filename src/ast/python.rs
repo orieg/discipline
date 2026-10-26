@@ -1356,6 +1356,7 @@ impl<'a> PythonExtractor<'a> {
     }
 
     fn is_strong_assertion(&self, cond: Node<'a>) -> bool {
+        let cond = unparenthesized(cond);
         if cond.kind() != "comparison_operator" {
             return false;
         }
@@ -1396,6 +1397,7 @@ impl<'a> PythonExtractor<'a> {
     }
 
     fn is_tautological(&self, cond: Node<'a>, test: &mut TestFn) -> bool {
+        let cond = unparenthesized(cond);
         let text = self.text(cond).trim();
         if text == "True" || text == "1" || text == "\"\"" || text == "''" {
             return true;
@@ -1437,6 +1439,7 @@ impl<'a> PythonExtractor<'a> {
                 .filter(|n| {
                     n.kind() != "(" && n.kind() != ")" && n.kind() != "," && n.kind() != "comment"
                 })
+                .map(unparenthesized)
                 .collect();
             if !arg_nodes.is_empty() {
                 let first = self.text(arg_nodes[0]).trim();
@@ -1470,8 +1473,9 @@ const PYTHON_CODE: super::NotCode = super::NotCode {
     interpolations: &["interpolation"],
 };
 
-/// `node` without the parentheses around it.
-fn unparenthesized(mut node: Node) -> Node {
+/// `node` without the parentheses around it, as many pairs as there are: `((x == 1))` is
+/// read as `x == 1`. A tuple is its own node kind and is kept: `(x == 1, "msg")`.
+pub(super) fn unparenthesized(mut node: Node) -> Node {
     while node.kind() == "parenthesized_expression" {
         let mut cursor = node.walk();
         let Some(inner) = node
@@ -2217,6 +2221,8 @@ mod tests {
     type NamedTests = Vec<(String, usize)>;
     /// `(name, line, by_line)` of each shadowed test definition.
     type ShadowedDefs = Vec<(String, usize, usize)>;
+    /// `(total, strong, tautologies, trivial)` assertions of one test.
+    type Reading = (usize, usize, usize, usize);
 
     /// The tests and the shadowed test definitions of a test file.
     fn tests_and_shadowed(src: &str) -> (NamedTests, ShadowedDefs) {
@@ -3343,6 +3349,123 @@ class Case(unittest.TestCase):
             .extract("tests/test_t.py", src, &AssertVocabulary::default())
             .unwrap();
         assert!(facts.tests[0].is_vacuous());
+    }
+
+    /// #859: a parenthesised condition is classified as the expression inside it, however
+    /// many pairs wrap it: strong or weak, tautology, self-comparison, trivial, and the
+    /// unittest argument read for `assertTrue(True)`. A parenthesised tuple stays a tuple.
+    #[test]
+    fn a_parenthesised_condition_is_classified_as_the_expression_inside() {
+        // The reading of `test_t`, whose body is `body`.
+        let read = |body: &str| -> Reading {
+            let src = format!("from unittest import mock\n\n\ndef test_t():\n{body}");
+            let facts = PythonPack
+                .extract("tests/test_t.py", &src, &AssertVocabulary::default())
+                .unwrap();
+            let t = &facts.tests[0];
+            (
+                t.total_asserts,
+                t.strong_asserts,
+                t.tautologies,
+                t.trivial_asserts,
+            )
+        };
+        // Each plain body, its reading, and parenthesised forms of the same assertion.
+        let cases: &[(&str, Reading, &[&str])] = &[
+            (
+                "    assert f(3) == 6\n",
+                (1, 1, 0, 0),
+                &[
+                    "    assert (f(3) == 6)\n",
+                    "    assert (f(3) == 6), \"f doubles\"\n",
+                    "    assert ((f(3) == 6)), 'msg'\n",
+                    "    assert (  # why\n        f(3) == 6\n    )\n",
+                ],
+            ),
+            (
+                "    assert f(3) != 6\n",
+                (1, 1, 0, 0),
+                &["    assert (f(3) != 6)\n"],
+            ),
+            (
+                "    assert 6 in f(3)\n",
+                (1, 1, 0, 0),
+                &["    assert ((6 in f(3)))\n"],
+            ),
+            (
+                "    assert f(3) is None\n",
+                (1, 1, 0, 0),
+                &["    assert (f(3) is None)\n"],
+            ),
+            (
+                "    assert f(3) is not None\n",
+                (1, 0, 0, 1),
+                &[
+                    "    assert (f(3) is not None)\n",
+                    "    assert (f(3) is not (None))\n",
+                ],
+            ),
+            (
+                "    assert isinstance(f(3), int)\n",
+                (1, 0, 0, 1),
+                &["    assert (isinstance(f(3), int))\n"],
+            ),
+            (
+                "    assert f(3) > 0\n",
+                (1, 0, 0, 0),
+                &["    assert (f(3) > 0)\n"],
+            ),
+            (
+                "    assert True\n",
+                (1, 0, 1, 0),
+                &["    assert (True)\n", "    assert ((1))\n"],
+            ),
+            (
+                "    assert f(3) == f(3)\n",
+                (1, 1, 1, 0),
+                &[
+                    "    assert (f(3) == f(3))\n",
+                    "    assert ((f(3)) == f(3))\n",
+                ],
+            ),
+            (
+                "    m = mock.Mock()\n    assert m.called_once_with(1)\n",
+                (1, 0, 1, 0),
+                &["    m = mock.Mock()\n    assert (m.called_once_with(1))\n"],
+            ),
+        ];
+        for (plain, expected, parenthesised) in cases {
+            assert_eq!(read(plain), *expected, "{plain}");
+            for body in *parenthesised {
+                assert_eq!(read(body), *expected, "{body}");
+            }
+        }
+        // A parenthesised tuple is still a tuple, and always true.
+        for body in [
+            "    assert ((f(3) == 6, \"msg\"))\n",
+            "    assert (((f(3) == 6),))\n",
+        ] {
+            assert_eq!(read(body), (1, 0, 1, 0), "{body}");
+        }
+        // unittest: the first argument is read through its parentheses.
+        let unittest = |call: &str| {
+            let src = format!(
+                "import unittest\n\n\nclass Case(unittest.TestCase):\n    def test_u(self):\n        {call}\n"
+            );
+            let facts = PythonPack
+                .extract("tests/test_u.py", &src, &AssertVocabulary::default())
+                .unwrap();
+            facts.tests[0].tautologies
+        };
+        for call in [
+            "self.assertTrue(True)",
+            "self.assertTrue((True))",
+            "self.assertFalse(((0)))",
+            "self.assertEqual((f(3)), f(3))",
+        ] {
+            assert_eq!(unittest(call), 1, "{call}");
+        }
+        assert_eq!(unittest("self.assertTrue((f(3)))"), 0);
     }
 
     /// #836: `assert m.called_once_with(..)` on a mock the test makes without a spec
