@@ -376,6 +376,7 @@ findings! {
     CHECKLIST_CLAIMS_DOCS = ["pr-checklist"], "checklist-claims-docs", "Checklist Claim Unsupported (docs)", Message;
     CHECKLIST_CLAIMS_BENCHMARKS = ["pr-checklist"], "checklist-claims-benchmarks", "Checklist Claim Unsupported (benchmarks)", Message;
     CHECKLIST_CLAIM_UNSUPPORTED = ["pr-checklist"], "checklist-claim-unsupported", "Checklist Claim Unsupported", Message;
+    PROSE_CLAIMS_TESTS = ["pr-checklist"], "prose-claims-tests", "Prose Claims Tests The Change Does Not Contain", Same;
 
     // command
     UNTRUSTED_COMMAND_MODIFICATION = ["command"], "untrusted-command-modification", "Untrusted Command Modification", Same;

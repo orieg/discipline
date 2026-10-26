@@ -17960,6 +17960,108 @@ fn pr_checklist_still_fires_when_no_test_is_added_anywhere() {
     assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
 }
 
+fn pr_checklist_codes_and_severities(run: &Run) -> Vec<(String, String, u64)> {
+    run.violations("pr-checklist")
+        .iter()
+        .map(|v| {
+            (
+                v["code"].as_str().unwrap().to_string(),
+                v["severity"].as_str().unwrap().to_string(),
+                v["line"].as_u64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn pr_checklist_reconciles_test_claims_written_as_prose() {
+    let unchanged_tests = "pub fn double(x: u32) -> u32 {\n    x + x\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(double(2), 4);\n    }\n}\n";
+    for body in [
+        "Fixes the doubling bug.\n\n- Added regression tests for negative inputs\n",
+        "Fixes the doubling bug. I added regression tests for negative inputs.\n",
+    ] {
+        let repo = pr_checklist_repo();
+        repo.write("src/lib.rs", unchanged_tests);
+        repo.commit("refactor: double by addition");
+        repo.write("body.md", body);
+        let run = repo.check(&["--base", "HEAD~1", "--pr-body-file", "body.md"]);
+        let found = pr_checklist_codes_and_severities(&run);
+        assert_eq!(found.len(), 1, "{body:?}: {}", run.stdout);
+        assert_eq!(
+            found[0].0, "pr-checklist/prose-claims-tests",
+            "{}",
+            run.stdout
+        );
+        // A heuristic over prose is held to a warning under the gate's `error`.
+        assert_eq!(found[0].1, "warning", "{}", run.stdout);
+        assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    }
+
+    // Negative control: the same claim when the change adds a test.
+    let repo = pr_checklist_repo();
+    repo.write(
+        "src/lib.rs",
+        "pub fn double(x: u32) -> u32 {\n    x + x\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(double(2), 4);\n    }\n\n    #[test]\n    fn doubles_zero() {\n        assert_eq!(double(0), 0);\n    }\n}\n",
+    );
+    repo.commit("fix: double by addition");
+    repo.write(
+        "body.md",
+        "Fixes the doubling bug.\n\n- Added regression tests for negative inputs\n",
+    );
+    let run = repo.check(&["--base", "HEAD~1", "--pr-body-file", "body.md"]);
+    assert!(
+        pr_checklist_codes_and_severities(&run).is_empty(),
+        "{}",
+        run.stdout
+    );
+
+    // Negative control: a negated claim, a claim in a code span, and the ticked box,
+    // which stays the checkbox rule's alone.
+    let repo = pr_checklist_repo();
+    repo.write("src/lib.rs", unchanged_tests);
+    repo.commit("refactor: double by addition");
+    repo.write(
+        "body.md",
+        "Fixes the doubling bug.\n\n- No tests added: behaviour is unchanged\n- Template line `Added regression tests`\n- [x] Added regression tests for negative inputs\n",
+    );
+    let run = repo.check(&["--base", "HEAD~1", "--pr-body-file", "body.md"]);
+    let found = pr_checklist_codes_and_severities(&run);
+    assert_eq!(
+        found,
+        vec![(
+            "pr-checklist/checklist-claims-tests".to_string(),
+            "error".to_string(),
+            5
+        )],
+        "{}",
+        run.stdout
+    );
+
+    // The checkbox rule's directive lifts the prose claim too.
+    let repo = pr_checklist_repo();
+    repo.write("src/lib.rs", unchanged_tests);
+    repo.commit("refactor: double by addition");
+    repo.write(
+        "body.md",
+        "Fixes the doubling bug.\n\n- Added regression tests for negative inputs\n\nallow-pr-checklist: test the regression tests land with the follow-up change\n",
+    );
+    let run = repo.check(&["--base", "HEAD~1", "--pr-body-file", "body.md"]);
+    assert!(
+        pr_checklist_codes_and_severities(&run).is_empty(),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(
+        run.outcome("pr-checklist")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "{}",
+        run.stdout
+    );
+}
+
 // ---- ci-integrity: step renames vs deletions -------------------------------
 
 /// A workflow whose `lint` job runs a step named after the scripts it runs,

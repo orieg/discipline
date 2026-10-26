@@ -1367,6 +1367,7 @@
       "pr-checklist/checklist-claims-benchmarks",
       "pr-checklist/checklist-claims-docs",
       "pr-checklist/checklist-claims-tests",
+      "pr-checklist/prose-claims-tests",
       "provenance-tags/cross-metric-figures-without-workload-tag",
       "provenance-tags/figure-disagrees-with-artifact",
       "provenance-tags/mechanism-claim-without-evidence",

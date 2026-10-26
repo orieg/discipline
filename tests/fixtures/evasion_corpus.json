@@ -491,7 +491,9 @@
         "pr-checklist"
       ],
       "verdict": {
-        "known_miss": "#835"
+        "caught": [
+          "pr-checklist/prose-claims-tests"
+        ]
       }
     },
     {
@@ -509,7 +511,9 @@
         "pr-checklist"
       ],
       "verdict": {
-        "known_miss": "#835"
+        "caught": [
+          "pr-checklist/prose-claims-tests"
+        ]
       }
     },
     {
