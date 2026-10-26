@@ -2,6 +2,22 @@
   "description": "Evasion cases with the verdict the built-in defaults give (plus `enable`). `caught`: the exact finding codes reported. `known_miss`: nothing is reported; the issue tracks it. `exit`: the run could not check. Driven by tests/test_evasion_corpus.rs.",
   "cases": [
     {
+      "name": "cmd-base-tests-inline-tests-only",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommands = [ { name = \"bt\", preset = \"base-tests\", command = \"true\" } ]\n",
+        "src/lib.rs": "pub fn f() -> i32 {\n    1\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn one() {\n        assert_eq!(super::f(), 1);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn f() -> i32 {\n    2\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn one() {\n        assert_eq!(super::f(), 1);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "command/base-tests-no-cases"
+        ]
+      }
+    },
+    {
       "name": "cmd-base-tests-zero-cases",
       "base": {
         "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommands = [ { name = \"bt\", preset = \"base-tests\", command = \"true\" } ]\n",

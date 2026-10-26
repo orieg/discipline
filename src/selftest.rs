@@ -4924,6 +4924,26 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "command: base-tests overlays no test inside a source file, and names a changed source that holds one",
+        || {
+            use crate::guards::command::{base_test_files, inline_test_sources};
+            let inline_only = vec!["Cargo.toml".to_string(), "src/lib.rs".to_string()];
+            let with_dir = vec!["src/lib.rs".to_string(), "tests/f.rs".to_string()];
+            let sources = [
+                (
+                    "src/lib.rs".to_string(),
+                    "pub fn f() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn one() {\n        super::f();\n    }\n}\n".to_string(),
+                ),
+                ("src/other.rs".to_string(), "pub fn g() {}\n".to_string()),
+            ];
+            let (with_tests, unread) = inline_test_sources(&sources);
+            Ok(base_test_files(inline_only, &[]).is_empty()
+                && base_test_files(with_dir, &[]) == ["tests/f.rs"]
+                && with_tests == ["src/lib.rs"]
+                && unread.is_empty())
+        },
+    ),
+    (
         "archive-contents: a directory that cannot be listed matters only where archive_path can match below it",
         || {
             use crate::guards::archive_contents::pattern_can_match_below;

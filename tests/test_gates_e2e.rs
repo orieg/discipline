@@ -20917,6 +20917,69 @@ fn command_base_tests_that_read_no_case_fail() {
     );
 }
 
+/// A configured `base-tests` command over a base whose only tests are inline in `src/`
+/// has no test file to overlay, so it compares nothing (#856): reported as
+/// `command/base-tests-no-cases` naming the preset's test paths and the changed file
+/// that holds tests. `allow_zero` and `allow-command:` restore the pass.
+#[test]
+fn command_base_tests_with_no_base_test_file_fail() {
+    const CONFIG: &str = "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\n";
+    const LIB: &str = "pub fn f() -> i32 {\n    1\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn one() {\n        assert_eq!(super::f(), 1);\n    }\n}\n";
+    let setup = |extra: &str| {
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        repo.git(&["rm", "-q", "tests/a.rs"]);
+        repo.write("src/lib.rs", LIB);
+        repo.write(
+            "discipline.toml",
+            &format!("{CONFIG}commands = [ {{ name = \"bt\", preset = \"base-tests\", command = \"true\"{extra} }} ]\n"),
+        );
+        repo.commit("chore: configure base-tests over inline tests");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+        repo.write("src/lib.rs", &LIB.replacen("    1\n", "    1 // c\n", 1));
+        repo.commit("refactor: annotate f");
+        repo
+    };
+
+    let repo = setup("");
+    let run = repo.check(&["--base", "main"]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("command");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(violations[0]["code"], "command/base-tests-no-cases");
+    let message = violations[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("`bt` compared nothing")
+            && message.contains("`tests/`")
+            && message.contains("`[tests] paths` globs (none declared)")
+            && message.contains("Changed files that hold such tests: `src/lib.rs`."),
+        "{message}"
+    );
+
+    let lifted = repo.check_with_pr(
+        &["--base", "main"],
+        "Fixes #123\n\nallow-command: bt inline tests are run by the plain test job\n",
+    );
+    assert_eq!(lifted.code, 0, "{}{}", lifted.stdout, lifted.stderr);
+    let outcome = lifted.outcome("command");
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 0);
+    assert_eq!(outcome["overrides"].as_array().unwrap().len(), 1);
+
+    let allowed = setup(", allow_zero = true");
+    let run = allowed.check(&["--base", "main"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let outcome = run.outcome("command");
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 0);
+    let notes = outcome["notes"].to_string();
+    assert!(
+        notes.contains("no base test files found (allowed by `allow_zero`)")
+            && notes.contains(
+                "the tests inside `src/lib.rs` are not overlaid and run at their head version"
+            ),
+        "{notes}"
+    );
+}
+
 #[test]
 fn assertion_failure_caught_inside_test_fires_and_accepts_override() {
     let repo = Repo::new();
