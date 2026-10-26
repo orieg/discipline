@@ -89,6 +89,7 @@ impl LanguagePack for PythonPack {
         PY_SUPPRESSIONS.collect(root, extractor.src, &mut extractor.facts.escape_hatches);
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
+        extractor.facts.entry_point = entry_point(root, extractor.src);
         PYTHON_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
         PYTHON_PACK.runner_probes(
             super::runner_probes::Lang::Python,
@@ -168,6 +169,120 @@ fn rebound_definitions(root: Node, src: &[u8]) -> HashMap<usize, usize> {
         }
     }
     rebound
+}
+
+/// Whether `node` is the guard of a script entry point: `if __name__ == "__main__":`,
+/// the two operands in either order, the string in any quoting, with no `and` / `or`
+/// around them.
+pub(crate) fn is_main_guard(node: Node, src: &[u8]) -> bool {
+    if node.kind() != "if_statement" {
+        return false;
+    }
+    let Some(test) = node
+        .child_by_field_name("condition")
+        .filter(|c| c.kind() == "comparison_operator")
+    else {
+        return false;
+    };
+    let mut cursor = test.walk();
+    let operands: Vec<Node> = test
+        .named_children(&mut cursor)
+        .filter(|c| c.kind() != "comment")
+        .collect();
+    let mut cursor = test.walk();
+    let equals = test
+        .children(&mut cursor)
+        .filter(|c| !c.is_named())
+        .map(|c| &src[c.byte_range()])
+        .eq([b"==".as_slice()]);
+    let is_name = |n: &Node| n.kind() == "identifier" && &src[n.byte_range()] == b"__name__";
+    let is_main = |n: &Node| {
+        let mut cursor = n.walk();
+        let parts: Vec<Node> = n.named_children(&mut cursor).collect();
+        n.kind() == "string"
+            && parts
+                .iter()
+                .filter(|p| p.kind() == "string_content")
+                .map(|p| &src[p.byte_range()])
+                .eq([b"__main__".as_slice()])
+            && !parts.iter().any(|p| p.kind() == "interpolation")
+    };
+    equals
+        && operands.len() == 2
+        && ((is_name(&operands[0]) && is_main(&operands[1]))
+            || (is_main(&operands[0]) && is_name(&operands[1])))
+}
+
+/// The module-level function definitions of `root`, by name.
+fn module_functions<'t>(root: Node<'t>, src: &[u8]) -> HashMap<String, Node<'t>> {
+    let mut out = HashMap::new();
+    let mut cursor = root.walk();
+    for statement in root.named_children(&mut cursor) {
+        let def = match statement.kind() {
+            "function_definition" => Some(statement),
+            "decorated_definition" => statement
+                .child_by_field_name("definition")
+                .filter(|d| d.kind() == "function_definition"),
+            _ => None,
+        };
+        if let Some(name) = def.and_then(|d| d.child_by_field_name("name")) {
+            out.insert(
+                String::from_utf8_lossy(&src[name.byte_range()]).into_owned(),
+                def.unwrap_or(statement),
+            );
+        }
+    }
+    out
+}
+
+/// Every identifier below `node`.
+fn identifiers_in(node: Node, src: &[u8], out: &mut Vec<String>) {
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "identifier" {
+            out.push(String::from_utf8_lossy(&src[n.byte_range()]).into_owned());
+        }
+        let mut cursor = n.walk();
+        stack.extend(n.named_children(&mut cursor));
+    }
+}
+
+/// The script entry point of a module: its module-scope `if __name__ == "__main__":`
+/// blocks ([`is_main_guard`]), with every name their bodies read and, through each
+/// module-level function they name, every name that function's body reads. A name is
+/// read whether it is called, passed or listed: `run(test_f)` and `for t in (test_a,
+/// test_b): t()` reach their tests as `test_f()` does. Only the block's own body is
+/// read, not its `else`, which runs on import.
+pub(crate) fn entry_point(root: Node, src: &[u8]) -> Option<super::EntryPoint> {
+    let mut cursor = root.walk();
+    let blocks: Vec<Node> = root
+        .named_children(&mut cursor)
+        .filter(|n| is_main_guard(*n, src))
+        .collect();
+    let first = blocks.first()?;
+    let functions = module_functions(root, src);
+    let mut pending = Vec::new();
+    for block in &blocks {
+        if let Some(body) = block.child_by_field_name("consequence") {
+            identifiers_in(body, src, &mut pending);
+        }
+    }
+    let mut reaches = std::collections::BTreeSet::new();
+    while let Some(name) = pending.pop() {
+        if !reaches.insert(name.clone()) {
+            continue;
+        }
+        if let Some(body) = functions
+            .get(&name)
+            .and_then(|f| f.child_by_field_name("body"))
+        {
+            identifiers_in(body, src, &mut pending);
+        }
+    }
+    Some(super::EntryPoint {
+        line: first.start_position().row + 1,
+        reaches,
+    })
 }
 
 /// Determines whether a path is conventionally a Python test file.
@@ -4441,5 +4556,124 @@ mod module_import_skip_tests {
         assert!(findings(sut, guard).is_empty());
         // Control: removing the guard is not a skip.
         assert!(findings(sut, plain).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod entry_point_tests {
+    use super::*;
+    use crate::guards::agent_diff::{evaluate_entry_point_calls, match_tests, FileFacts};
+
+    const TEST: &str =
+        "from func import solve\n\n\ndef test_func(candidate):\n    assert candidate(1, 2) == 3\n";
+
+    fn facts(src: &str) -> ParsedFileFacts {
+        PythonPack
+            .extract("test.py", src, &AssertVocabulary::default())
+            .unwrap()
+    }
+
+    fn reaches(src: &str) -> Option<Vec<String>> {
+        facts(src)
+            .entry_point
+            .map(|e| e.reaches.into_iter().collect())
+    }
+
+    #[test]
+    fn the_entry_point_reads_the_names_its_block_and_the_functions_it_calls_reach() {
+        assert_eq!(reaches(TEST), None);
+        let src = format!("{TEST}\n\nif __name__ == '__main__':\n    test_func(solve)\n");
+        // `candidate`: read in the body of `test_func`, a module-level function it calls.
+        assert_eq!(
+            reaches(&src),
+            Some(vec![
+                "candidate".to_string(),
+                "solve".to_string(),
+                "test_func".to_string()
+            ])
+        );
+        assert_eq!(facts(&src).entry_point.unwrap().line, 8);
+        // Through a module-level function the block calls.
+        let through = format!("{TEST}\n\ndef main():\n    test_func(solve)\n\n\nif __name__ == \"__main__\":\n    main()\n");
+        assert!(reaches(&through)
+            .unwrap()
+            .contains(&"test_func".to_string()));
+        // Not the `else` branch, which runs on import, and not a guard inside a function.
+        for src in [
+            format!(
+                "{TEST}\n\nif __name__ == '__main__':\n    pass\nelse:\n    test_func(solve)\n"
+            ),
+            format!(
+                "{TEST}\n\ndef run():\n    if __name__ == '__main__':\n        test_func(solve)\n"
+            ),
+        ] {
+            assert!(
+                !reaches(&src)
+                    .unwrap_or_default()
+                    .contains(&"test_func".to_string()),
+                "{src}"
+            );
+        }
+    }
+
+    fn file(base: &str, head: Option<&str>) -> FileFacts {
+        FileFacts {
+            file: crate::gitctx::ChangedFile {
+                path: "test.py".to_string(),
+                old_path: "test.py".to_string(),
+                kind: crate::gitctx::ChangeKind::Modified,
+                added_lines: Default::default(),
+            },
+            base: Some(facts(base)),
+            head: head.map(facts),
+            newly_added_nul: false,
+        }
+    }
+
+    fn codes(base: &str, head: &str) -> Vec<String> {
+        let files = [file(base, Some(head))];
+        let (pairs, _, _) = match_tests(&files);
+        let settings = crate::config::IgnoredTestsGate::default();
+        let mut out = crate::guards::GateOutcome::new("ignored-tests");
+        evaluate_entry_point_calls(&files, &pairs, &settings, &[], false, &mut out).unwrap();
+        out.violations.iter().map(|v| v.code.clone()).collect()
+    }
+
+    #[test]
+    fn a_test_the_entry_point_no_longer_runs_is_reported_and_one_it_still_runs_is_not() {
+        let main = format!("{TEST}\n\nif __name__ == '__main__':\n    test_func(solve)\n");
+        let skipped = vec!["ignored-tests/existing-test-skipped".to_string()];
+        // The call removed, the block removed.
+        assert_eq!(
+            codes(
+                &main,
+                &format!("{TEST}\n\nif __name__ == '__main__':\n    print('ok')\n")
+            ),
+            skipped
+        );
+        assert_eq!(codes(&main, TEST), skipped);
+        // Still run: reformatted, through a function, passed to a loop.
+        for head in [
+            format!("{TEST}\n\nif \"__main__\" == __name__:  # run\n    test_func(\n        candidate=solve,\n    )\n"),
+            format!("{TEST}\n\ndef main():\n    test_func(solve)\n\n\nif __name__ == '__main__':\n    main()\n"),
+            format!("{TEST}\n\nif __name__ == '__main__':\n    for t in [test_func]:\n        t(solve)\n"),
+        ] {
+            assert!(codes(&main, &head).is_empty(), "{head}");
+        }
+        // No entry point on the base side, or one that never ran the test.
+        assert!(codes(TEST, TEST).is_empty());
+        let other = format!("{TEST}\n\nif __name__ == '__main__':\n    print(solve(1, 2))\n");
+        assert!(codes(&other, TEST).is_empty());
+        // A test the change also skips is reported as skipped, once, by the skip.
+        let marked = TEST.replace(
+            "def test_func",
+            "import pytest\n\n\n@pytest.mark.skip(reason=\"later\")\ndef test_func",
+        );
+        assert!(codes(&main, &marked).is_empty());
+        // A method of a test class is not read: the block names it through an object.
+        let class = "class TestCalc:\n    def test_add(self):\n        assert 1 + 1 == 2\n";
+        let class_main =
+            format!("{class}\n\nif __name__ == '__main__':\n    TestCalc().test_add()\n");
+        assert!(codes(&class_main, class).is_empty());
     }
 }

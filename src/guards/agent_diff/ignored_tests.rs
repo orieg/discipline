@@ -1,6 +1,6 @@
 //! `ignored-tests`: a test the change disables or skips.
 
-use super::{leaf_name, Located, TestPair};
+use super::{leaf_name, FileFacts, Located, TestPair};
 use crate::config::GateSettings;
 use crate::guards::{exempt_filter, GateOutcome};
 use crate::tokens;
@@ -308,6 +308,90 @@ pub fn evaluate_ignored_tests(
     }
 
     Ok(out)
+}
+
+/// A test a Python file's script entry point (`if __name__ == "__main__":`) ran on the
+/// base side and no longer runs on the head side, while the test itself stays: running
+/// the file as a script (`python test.py`) runs nothing of it. Read for a module-level
+/// test function the entry point names on the base side, directly or through a
+/// module-level function it calls ([`crate::ast::EntryPoint`]); the head side keeps it
+/// running when its entry point names the test the same way. A file with no entry point
+/// on the base side is not read. A runner call (`unittest.main()`, `pytest.main()`)
+/// names no test and is not read: a discovery runner collects the same tests without it.
+pub fn evaluate_entry_point_calls(
+    files: &[FileFacts],
+    pairs: &[TestPair],
+    settings: &crate::config::IgnoredTestsGate,
+    directives: &[crate::tokens::ParsedDirective],
+    is_staged: bool,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    const GATE: &str = "ignored-tests";
+    let exempt = exempt_filter(settings)?;
+    let holding = |test: &crate::ast::TestFn, head: bool| {
+        files.iter().find_map(|f| {
+            let side = if head {
+                f.head.as_ref()
+            } else {
+                f.base.as_ref()
+            }?;
+            side.tests
+                .iter()
+                .any(|t| std::ptr::eq(t, test))
+                .then_some(side)
+        })
+    };
+    for pair in pairs {
+        // A test the change also marks skipped is reported as that.
+        if exempt.matches(pair.path)
+            || pair.base.name.contains("::")
+            || (pair.head.ignored && !pair.base.ignored)
+        {
+            continue;
+        }
+        let Some(base_entry) = holding(pair.base, false).and_then(|f| f.entry_point.as_ref())
+        else {
+            continue;
+        };
+        if !base_entry.reaches.contains(leaf_name(pair.base)) {
+            continue;
+        }
+        let head_entry = holding(pair.head, true).and_then(|f| f.entry_point.as_ref());
+        if head_entry.is_some_and(|e| e.reaches.contains(leaf_name(pair.head))) {
+            continue;
+        }
+        let test = pair.head;
+        let how = if head_entry.is_some() {
+            "is no longer called by the file's `if __name__ == \"__main__\":` entry point"
+        } else {
+            "was run by the file's `if __name__ == \"__main__\":` entry point, which the change removes"
+        };
+        out.lift_or_push(
+            tokens::find_override(
+                directives,
+                GATE,
+                &crate::findings::EXISTING_TEST_SKIPPED,
+                tokens::ALLOW_IGNORE,
+                leaf_name(test),
+            ),
+            if is_staged {
+                crate::config::Severity::Warning
+            } else {
+                settings.severity()
+            },
+            &crate::findings::EXISTING_TEST_SKIPPED,
+            (Some(pair.path), Some(test.line)),
+            format!(
+                "Test `{}` no longer runs: it {how} (line {} on the base side), so running the file as a script checks nothing of it.",
+                test.name, base_entry.line
+            ),
+            &format!(
+                "Call the test from the entry point again, or justify it on its own line in the PR body or a commit message: `allow-ignore: {} <reason>`.",
+                leaf_name(test)
+            ),
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

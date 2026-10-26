@@ -2238,6 +2238,20 @@ pub struct ParsedFileFacts {
     /// [`ParsedFileFacts::resolve_import_skips`] makes it unconditional where the module
     /// is the repository's own.
     pub import_skips: Vec<ImportSkip>,
+    /// The file's script entry point, `if __name__ == "__main__":` at module scope
+    /// (Python); `None` when the file has none.
+    pub entry_point: Option<EntryPoint>,
+}
+
+/// A script entry point: the module-scope `if __name__ == "__main__":` blocks of a
+/// Python file, and the names they reach.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EntryPoint {
+    /// 1-based line of the first such block.
+    pub line: usize,
+    /// Every name the blocks read (a call, or a function passed or listed), and every
+    /// name read in the body of a module-level function reached that way, transitively.
+    pub reaches: std::collections::BTreeSet<String>,
 }
 
 /// A module-scope statement that skips every test of its file when an import fails:
@@ -2340,6 +2354,7 @@ impl Default for ParsedFileFacts {
             notes: Vec::new(),
             shadowed_tests: Vec::new(),
             import_skips: Vec::new(),
+            entry_point: None,
             compile_time_asserts: 0,
             compile_time_assert_line: None,
             compile_time_test: Some(TestFn {
