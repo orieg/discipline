@@ -27,7 +27,7 @@ use super::runner_config::{
     read_jest_scripts, script_setup_files, scripts_run_node_test, ConftestIgnores, DenoTest,
     SetupFiles, VitestConfig,
 };
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use tree_sitter::Node;
 
 /// Whether the glob `pattern` matches `candidate` (globset, `*` crossing `/`). `None` for
@@ -3935,8 +3935,78 @@ pub struct ConfiguredHarness {
     /// Each Python file a `conftest.py` names in `pytest_plugins`, with the `conftest.py`
     /// that names it.
     pub pytest_plugins: BTreeMap<String, String>,
+    /// The Python modules a `pyproject.toml` installs as commands (`[project.scripts]`,
+    /// `[project.gui-scripts]`, `[tool.poetry.scripts]`), dotted as written
+    /// (`pkg.cli`). A file of one is an entry point, not code a test imports.
+    pub python_scripts: BTreeSet<String>,
     /// The configurations whose list could not be read.
     pub unread: Vec<UnreadHarnessConfig>,
+}
+
+/// The modules the command tables of a `pyproject.toml` name: the part of each
+/// `module:function` reference before the colon. A poetry table entry is read through
+/// its `callable` or `reference` key; a `reference` of `type = "file"` names a file, not
+/// a module, and is left out. Empty when the file does not parse.
+fn pyproject_script_modules(src: &str) -> Vec<String> {
+    let Ok(doc) = toml::from_str::<toml::Value>(src) else {
+        return Vec::new();
+    };
+    let tables = [
+        doc.get("project").and_then(|p| p.get("scripts")),
+        doc.get("project").and_then(|p| p.get("gui-scripts")),
+        doc.get("tool")
+            .and_then(|t| t.get("poetry"))
+            .and_then(|p| p.get("scripts")),
+    ];
+    let mut out = Vec::new();
+    for table in tables
+        .into_iter()
+        .flatten()
+        .filter_map(toml::Value::as_table)
+    {
+        for entry in table.values() {
+            let reference = match entry {
+                toml::Value::String(reference) => Some(reference.as_str()),
+                toml::Value::Table(spec)
+                    if spec.get("type").and_then(toml::Value::as_str) != Some("file") =>
+                {
+                    spec.get("callable")
+                        .or_else(|| spec.get("reference"))
+                        .and_then(toml::Value::as_str)
+                }
+                _ => None,
+            };
+            if let Some(module) = reference
+                .and_then(|r| r.split(':').next())
+                .map(str::trim)
+                .filter(|m| !m.is_empty())
+            {
+                out.push(module.to_string());
+            }
+        }
+    }
+    out
+}
+
+impl ConfiguredHarness {
+    /// Whether the Python file `path` is the module of a command a `pyproject.toml`
+    /// installs ([`ConfiguredHarness::python_scripts`]). The file's dotted name, read
+    /// from its path (`src/pkg/cli.py` and `src/pkg/cli/__init__.py` are `src.pkg.cli`),
+    /// ends with the module at a dot: the package root may sit below the repository
+    /// root.
+    pub fn is_python_script(&self, path: &str) -> bool {
+        let Some(stem) = path.strip_suffix(".py") else {
+            return false;
+        };
+        let stem = stem.strip_suffix("/__init__").unwrap_or(stem);
+        let dotted = stem.replace('/', ".");
+        self.python_scripts.iter().any(|module| {
+            dotted == *module
+                || dotted
+                    .strip_suffix(module.as_str())
+                    .is_some_and(|above| above.ends_with('.'))
+        })
+    }
 }
 
 const JS_HARNESS_EXTENSIONS: &[&str] = &["js", "ts", "mjs", "cjs", "mts", "cts", "jsx", "tsx"];
@@ -3986,6 +4056,14 @@ impl ConfiguredHarness {
                         dir: dir.to_string(),
                         extensions: &["rs"],
                     }),
+                }
+                continue;
+            }
+            if name == "pyproject.toml" {
+                if let Some(src) = reader(path) {
+                    harness
+                        .python_scripts
+                        .extend(pyproject_script_modules(&src));
                 }
                 continue;
             }

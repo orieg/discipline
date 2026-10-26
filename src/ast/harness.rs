@@ -16,13 +16,15 @@
 //! - An exit with status zero that no condition guards: `sys.exit(0)`, `os._exit(0)`
 //!   ([`python`]), `process.exit(0)` ([`js_exit_zero`]), `std::process::exit(0)`
 //!   ([`rust_exit_zero`]).
+//! - Python a test may import that ends the process with status zero at the top level
+//!   of the module, so the import never returns to the test ([`python`]).
 
 use super::ancestry::Ancestry;
 use tree_sitter::Node;
 
 /// The version of the forms read here. It is written into the gate's notes, and
 /// changes whenever a form is added, removed or read differently.
-pub const PATTERN_VERSION: u32 = 2;
+pub const PATTERN_VERSION: u32 = 3;
 
 /// One form of tampering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -42,6 +44,8 @@ pub enum Form {
     UnittestMethodNeutralised,
     /// An exit with status zero that no condition guards.
     ExitZero,
+    /// An exit with status zero at the top level of a module a test may import.
+    ImportExitZero,
 }
 
 /// One place a form was read.
@@ -75,6 +79,9 @@ pub struct PythonChecks {
     pub exit: bool,
     /// `unittest` result methods.
     pub unittest: bool,
+    /// Exits with status zero at the top level of the module, outside any compound
+    /// statement (code a test may import).
+    pub import_exit: bool,
 }
 
 fn text<'a>(node: Node, src: &'a [u8]) -> &'a str {
@@ -907,9 +914,12 @@ fn python_result_subclass(class: Node, src: &[u8], sites: &mut Vec<Site>) {
 ///   reads a marker it does not use;
 /// - a result method replaced through `mock.patch`, or an override that calls another
 ///   method (`addSuccess`);
-/// - an exit spelled otherwise (`raise SystemExit(0)`, `exit(0)`, an alias of `sys` or
-///   `os`, a status that is a name), and an exit behind any condition, a constant one
-///   included.
+/// - an exit spelled otherwise (`raise SystemExit(0)` in a harness file, `exit(0)`, an
+///   alias of `sys` or `os`, a status that is a name), and an exit behind any condition,
+///   a constant one included;
+/// - in code a test may import (`checks.import_exit`), an exit inside any compound
+///   statement (`if`, `try`, `with`, a loop), a function or a class: only a statement of
+///   the module itself runs on import.
 pub fn python(src: &str, checks: PythonChecks) -> Result<Scan, String> {
     super::scanner_limits::python_indent_nesting(src)?;
     let mut parser = tree_sitter::Parser::new();
@@ -1002,34 +1012,8 @@ pub fn python(src: &str, checks: PythonChecks) -> Result<Scan, String> {
     }
     if checks.exit {
         for call in nodes.iter().filter(|n| n.kind() == "call") {
-            let Some(function) = call
-                .child_by_field_name("function")
-                .filter(|f| f.kind() == "attribute")
-            else {
+            let Some(spelled) = python_exit_call(*call, bytes) else {
                 continue;
-            };
-            let object = function
-                .child_by_field_name("object")
-                .filter(|o| o.kind() == "identifier")
-                .map(|o| text(o, bytes))
-                .unwrap_or("");
-            let name = function
-                .child_by_field_name("attribute")
-                .map(|a| text(a, bytes))
-                .unwrap_or("");
-            let arguments = call
-                .child_by_field_name("arguments")
-                .map(operands)
-                .unwrap_or_default();
-            let zero = arguments.len() == 1
-                && arguments[0].kind() == "integer"
-                && text(arguments[0], bytes) == "0";
-            let spelled = match (object, name) {
-                ("sys", "exit") if zero => "sys.exit(0)",
-                // With no argument the status is zero.
-                ("sys", "exit") if arguments.is_empty() => "sys.exit()",
-                ("os", "_exit") if zero => "os._exit(0)",
-                _ => continue,
             };
             if !exit_is_conditional(*call, &anc, bytes, &PYTHON_EXIT) {
                 scan.sites
@@ -1037,8 +1021,116 @@ pub fn python(src: &str, checks: PythonChecks) -> Result<Scan, String> {
             }
         }
     }
+    if checks.import_exit {
+        let mut cursor = root.walk();
+        for statement in root.named_children(&mut cursor) {
+            let (exit, spelled) = match statement.kind() {
+                "expression_statement" => match statement
+                    .named_child(0)
+                    .filter(|c| c.kind() == "call")
+                    .and_then(|call| Some((call, python_exit_call(call, bytes)?)))
+                {
+                    Some(found) => found,
+                    None => continue,
+                },
+                "raise_statement" => match python_system_exit_zero(statement, bytes) {
+                    Some(spelled) => (statement, spelled),
+                    None => continue,
+                },
+                _ => continue,
+            };
+            if !exit_is_conditional(exit, &anc, bytes, &PYTHON_EXIT) {
+                scan.sites.push(Site {
+                    form: Form::ImportExitZero,
+                    line: line(exit),
+                    subject: "<module>".to_string(),
+                    what: format!(
+                        "runs `{spelled}` at import time, at the top level of the module with no condition around it: a test that imports the module ends the process with status zero before it has checked anything"
+                    ),
+                });
+            }
+        }
+    }
     scan.sites.sort_by_key(|s| s.line);
     Ok(scan)
+}
+
+/// How the call `call` ends the process with status zero: `sys.exit(0)`, `sys.exit()`
+/// or `os._exit(0)`; `None` for any other call.
+fn python_exit_call(call: Node, bytes: &[u8]) -> Option<&'static str> {
+    let function = call
+        .child_by_field_name("function")
+        .filter(|f| f.kind() == "attribute")?;
+    let object = function
+        .child_by_field_name("object")
+        .filter(|o| o.kind() == "identifier")
+        .map(|o| text(o, bytes))
+        .unwrap_or("");
+    let name = function
+        .child_by_field_name("attribute")
+        .map(|a| text(a, bytes))
+        .unwrap_or("");
+    let arguments = call
+        .child_by_field_name("arguments")
+        .map(operands)
+        .unwrap_or_default();
+    let zero = arguments.len() == 1
+        && arguments[0].kind() == "integer"
+        && text(arguments[0], bytes) == "0";
+    match (object, name) {
+        ("sys", "exit") if zero => Some("sys.exit(0)"),
+        // With no argument the status is zero.
+        ("sys", "exit") if arguments.is_empty() => Some("sys.exit()"),
+        ("os", "_exit") if zero => Some("os._exit(0)"),
+        _ => None,
+    }
+}
+
+/// How the `raise` statement `raise` ends the process with status zero: `raise
+/// SystemExit`, `raise SystemExit()` or `raise SystemExit(0)`; `None` for any other.
+fn python_system_exit_zero(raise: Node, bytes: &[u8]) -> Option<&'static str> {
+    let raised = operands(raise).into_iter().next()?;
+    if raise.child_by_field_name("cause").is_some() {
+        return None;
+    }
+    match raised.kind() {
+        "identifier" if text(raised, bytes) == "SystemExit" => Some("raise SystemExit"),
+        "call" => {
+            let function = raised.child_by_field_name("function")?;
+            if function.kind() != "identifier" || text(function, bytes) != "SystemExit" {
+                return None;
+            }
+            let arguments = raised
+                .child_by_field_name("arguments")
+                .map(operands)
+                .unwrap_or_default();
+            match arguments.as_slice() {
+                [] => Some("raise SystemExit()"),
+                [zero] if zero.kind() == "integer" && text(*zero, bytes) == "0" => {
+                    Some("raise SystemExit(0)")
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Whether a Python module is a script entry point by its source: it holds a
+/// module-scope `if __name__ == "__main__":` block. `Err` when it cannot be parsed.
+pub fn python_has_main_block(src: &str) -> Result<bool, String> {
+    super::scanner_limits::python_indent_nesting(src)?;
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_python::LANGUAGE.into())
+        .map_err(|e| format!("failed to load the Python grammar: {e}"))?;
+    let tree = super::source_text::parse(&mut parser, src).map_err(|why| why.to_string())?;
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let found = root
+        .named_children(&mut cursor)
+        .any(|n| super::python::is_main_guard(n, src.as_bytes()));
+    Ok(found)
 }
 
 // ---- JavaScript / TypeScript ------------------------------------------------
@@ -1315,11 +1407,115 @@ mod tests {
         assert!(file.has_test_main);
     }
 
+    // The harness forms; `import_exit` is read alone, below.
     const ALL: PythonChecks = PythonChecks {
         hooks: true,
         exit: true,
         unittest: true,
+        import_exit: false,
     };
+
+    fn imported(src: &str) -> Vec<Form> {
+        let checks = PythonChecks {
+            import_exit: true,
+            ..PythonChecks::default()
+        };
+        let scan = python(src, checks).unwrap();
+        assert!(!scan.parse_errors, "{src}");
+        forms(&scan)
+    }
+
+    #[test]
+    fn a_zero_exit_at_the_top_level_of_an_imported_module_is_read() {
+        for (src, count) in [
+            (
+                "import sys\n\ndef solve(a, b):\n    return a * b\n\nsys.exit(0)\n",
+                1,
+            ),
+            ("import sys\nsys.exit()\n", 1),
+            ("import os\nos._exit(0)\n", 1),
+            ("raise SystemExit(0)\n", 1),
+            ("raise SystemExit()\n", 1),
+            ("raise SystemExit\n", 1),
+            ("import sys\nsys.exit(0)  # done\nraise SystemExit\n", 2),
+        ] {
+            assert_eq!(imported(src), vec![Form::ImportExitZero; count], "{src}");
+        }
+        let scan = python(
+            "import sys\n\nsys.exit(0)\n",
+            PythonChecks {
+                import_exit: true,
+                ..PythonChecks::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(scan.sites[0].line, 3);
+        assert_eq!(scan.sites[0].subject, "<module>");
+        assert!(
+            scan.sites[0].what.contains("at import time"),
+            "{}",
+            scan.sites[0].what
+        );
+    }
+
+    #[test]
+    fn a_zero_exit_an_import_does_not_run_unconditionally_is_not_read() {
+        for src in [
+            // Under the entry-point guard, or any other compound statement.
+            "import sys\nif __name__ == \"__main__\":\n    sys.exit(0)\n",
+            "import sys\nif not ready():\n    sys.exit(0)\n",
+            "import os\ntry:\n    import fast\nexcept ImportError:\n    os._exit(0)\n",
+            "import sys\ntry:\n    sys.exit(0)\nfinally:\n    pass\n",
+            "import sys\nwith lock:\n    sys.exit(0)\n",
+            "import sys\nfor _ in range(1):\n    sys.exit(0)\n",
+            // In a function or a class: defining it runs nothing.
+            "import sys\ndef main():\n    sys.exit(0)\n",
+            "import sys\nclass App:\n    def stop(self):\n        raise SystemExit(0)\n",
+            // A non-zero status, a status that is a name, a chained raise.
+            "import sys\nsys.exit(1)\n",
+            "import sys\nsys.exit(main())\n",
+            "raise SystemExit(\"no database\")\n",
+            "raise SystemExit(0) from None\n",
+            "raise RuntimeError(0)\n",
+            // After a guard clause at the top level.
+            "import sys\nif sys.version_info < (3, 8):\n    raise ImportError(\"old\")\nsys.exit(0)\n",
+            // Short-circuit.
+            "import sys\nready() or sys.exit(0)\n",
+        ] {
+            assert_eq!(imported(src), Vec::<Form>::new(), "{src}");
+        }
+        // The harness reader does not read the import form, and the import reader does
+        // not read an exit in a hook.
+        assert_eq!(py("raise SystemExit(0)\n"), Vec::<Form>::new());
+        assert_eq!(
+            imported(
+                "import os\n\ndef pytest_sessionfinish(session, exitstatus):\n    os._exit(0)\n"
+            ),
+            Vec::<Form>::new()
+        );
+    }
+
+    #[test]
+    fn a_module_with_a_main_guard_is_an_entry_point() {
+        for src in [
+            "if __name__ == \"__main__\":\n    main()\n",
+            "if __name__ == '__main__':\n    main()\n",
+            "if \"__main__\" == __name__:\n    main()\n",
+            "import sys\nsys.exit(0)\n\nif __name__ == \"__main__\":  # entry\n    pass\n",
+        ] {
+            assert_eq!(python_has_main_block(src), Ok(true), "{src}");
+        }
+        for src in [
+            "def main():\n    pass\n",
+            "if __name__ != \"__main__\":\n    main()\n",
+            "if __name__ == \"__main__\" and ready():\n    main()\n",
+            "if __name__ == \"main\":\n    main()\n",
+            "def f():\n    if __name__ == \"__main__\":\n        main()\n",
+            "if name == \"__main__\":\n    main()\n",
+        ] {
+            assert_eq!(python_has_main_block(src), Ok(false), "{src}");
+        }
+    }
 
     fn py(src: &str) -> Vec<Form> {
         let scan = python(src, ALL).unwrap();
