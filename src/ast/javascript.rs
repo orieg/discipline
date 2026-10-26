@@ -93,6 +93,16 @@ impl LanguagePack for JavaScriptPack {
             vocab,
             &extractor.std_asserts,
         );
+        super::caught_assertions::through_helpers(root, src, &mut extractor.facts, 1, |helpers| {
+            super::caught_assertions::javascript(
+                root,
+                &anc,
+                src,
+                helpers,
+                vocab,
+                &extractor.std_asserts,
+            )
+        });
         super::expected_exceptions::javascript(root, &anc, src, &mut extractor.facts.tests);
         extractor.facts.prose =
             super::prose::extract(root, src, &["comment", "string", "template_string"]);

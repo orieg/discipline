@@ -57,6 +57,31 @@ pub struct CaughtAssertion {
     /// (`TestFn::tautology_spans`), or does not count it at all (a `panic(..)` written
     /// in a Go test).
     pub tautology: bool,
+    /// The same-file helper the assertion sits in, when the test reaches it through a call
+    /// (`through_helpers`); `None` for an assertion of the test's own body.
+    pub helper: Option<HelperSite>,
+}
+
+/// A same-file helper that holds a swallowed assertion a test reaches.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HelperSite {
+    /// The helper's name, as the pack records it.
+    pub name: String,
+    /// 1-based line the helper starts on.
+    pub line: usize,
+}
+
+impl CaughtAssertion {
+    /// Where the assertion is, for a message: its line, and the helper it is in.
+    pub fn place(&self) -> String {
+        match &self.helper {
+            Some(h) => format!(
+                "the assertion on line {} in helper `{}`, which the test calls,",
+                self.line, h.name
+            ),
+            None => format!("the assertion on line {}", self.line),
+        }
+    }
 }
 
 /// One assertion node: its line and its byte range.
@@ -205,14 +230,25 @@ impl<'a> Caught<'a> {
 /// The limits: an edit that changes the distance between a swallowed assertion and its
 /// handler reports that assertion as new, and when a new one has the shape of an earlier
 /// one that moved, the line named may be the earlier one's.
+///
+/// An assertion in a same-file helper the test calls is placed from the start of that
+/// helper, and pairs only with one in a helper of the same name.
 pub fn newly_caught<'a>(base: &TestFn, head: &'a TestFn) -> Vec<&'a CaughtAssertion> {
     let offsets = |t: &TestFn, c: &CaughtAssertion| {
+        let start = c.helper.as_ref().map_or(t.line, |h| h.line) as i64;
         (
-            c.line as i64 - t.line as i64,
-            c.handler_line as i64 - t.line as i64,
+            c.helper.as_ref().map(|h| h.name.clone()),
+            c.line as i64 - start,
+            c.handler_line as i64 - start,
         )
     };
-    let shape = |c: &CaughtAssertion| (c.line as i64 - c.handler_line as i64, c.detail.clone());
+    let shape = |c: &CaughtAssertion| {
+        (
+            c.helper.as_ref().map(|h| h.name.clone()),
+            c.line as i64 - c.handler_line as i64,
+            c.detail.clone(),
+        )
+    };
 
     // Each base assertion pairs with at most one head assertion.
     let mut free: Vec<&CaughtAssertion> = base.caught_assertions.iter().collect();
@@ -238,6 +274,200 @@ pub fn newly_caught<'a>(base: &TestFn, head: &'a TestFn) -> Vec<&'a CaughtAssert
         }
     }
     new
+}
+
+/// Kinds of a function nested in a helper: a `return` inside one hands nothing back from
+/// the helper.
+const NESTED_FUNCTIONS: &[&str] = &[
+    "function_definition",
+    "lambda",
+    "function_declaration",
+    "function_expression",
+    "arrow_function",
+    "method_declaration",
+    "method_definition",
+    "lambda_expression",
+    "lambda_literal",
+    "anonymous_function",
+    "closure_expression",
+    "function_item",
+    "func_literal",
+    "local_function_statement",
+];
+
+/// What a `return` may hand back that is no value.
+const NO_VALUE: &[&str] = &[
+    "none",
+    "null",
+    "null_literal",
+    "nil",
+    "undefined",
+    "unit_expression",
+];
+
+/// Whether `function`, a helper, hands a value back to its caller with a `return` of its
+/// own body: `return False` in the handler, or `return ok` after it. The failure may then
+/// reach the test as that value.
+fn returns_a_value(function: Node, src: &str) -> bool {
+    let mut found = false;
+    walk(function, &mut |n| {
+        if found || (n.id() != function.id() && NESTED_FUNCTIONS.contains(&n.kind())) {
+            return false;
+        }
+        let is_return = match n.kind() {
+            "return_statement" | "return_expression" => true,
+            // Kotlin: `return`, `return@label`, `throw`, `break` and `continue` share it.
+            "jump_expression" => text(n, src).starts_with("return"),
+            _ => false,
+        };
+        if is_return {
+            let mut cursor = n.walk();
+            found = n
+                .named_children(&mut cursor)
+                .any(|v| v.kind() != "comment" && !NO_VALUE.contains(&v.kind()));
+        }
+        !found
+    });
+    found
+}
+
+/// The node of the helper that spans `lines`, found from the root down to a byte range
+/// inside it: the outermost one that starts and ends on those lines.
+fn helper_node<'t>(
+    root: Node<'t>,
+    inside: (usize, usize),
+    lines: (usize, usize),
+) -> Option<Node<'t>> {
+    let mut cur = root;
+    loop {
+        if cur.start_position().row + 1 == lines.0 && cur.end_position().row + 1 == lines.1 {
+            return Some(cur);
+        }
+        let mut cursor = cur.walk();
+        let next = cur
+            .children(&mut cursor)
+            .find(|c| c.start_byte() <= inside.0 && inside.1 <= c.end_byte())?;
+        cur = next;
+    }
+}
+
+/// Assertions swallowed inside the same-file helpers a test calls (#832).
+///
+/// A helper resolved from a test counts its assertions into the test (`docs/GATES.md`,
+/// "Checks moved into helpers that fail"). `read`, the pack's reader of caught
+/// assertions, is run over the helpers as if each were a test; an assertion it finds
+/// caught in a helper is recorded in every test that reaches the helper, with the helper
+/// named. The helpers a test reaches are those its counted calls name
+/// (`TestFn::counted_helper_calls`), then the same-file helpers they call, up to
+/// `HELPER_DEPTH` calls from the test, each once. A call resolves to the one helper of
+/// its name, looked for from the caller's scope outward; a name two helpers share, and a
+/// callee chosen at the call (`a|b`), resolve to none.
+///
+/// A helper that returns a value is passed over: the failure may reach the test as that
+/// value, and whether the test checks it is not read here.
+///
+/// An assertion more than `counted_depth` calls from the test is one the pack did not
+/// count into it: it is marked so that it is not taken out of the count again.
+pub fn through_helpers<'t>(
+    root: Node<'t>,
+    src: &str,
+    facts: &mut super::ParsedFileFacts,
+    counted_depth: usize,
+    read: impl FnOnce(&mut [TestFn]),
+) {
+    if facts.tests.is_empty() || facts.test_helpers.is_empty() {
+        return;
+    }
+    let mut helpers: Vec<TestFn> = facts
+        .test_helpers
+        .iter()
+        .map(|h| TestFn {
+            name: h.name.clone(),
+            line: h.line,
+            end_line: h.end_line,
+            ..Default::default()
+        })
+        .collect();
+    read(&mut helpers);
+    if helpers.iter().all(|h| h.caught_assertions.is_empty()) {
+        return;
+    }
+    // The helpers whose swallowed assertions a caller loses.
+    let swallows: Vec<bool> = helpers
+        .iter()
+        .map(|h| {
+            h.caught_assertions.first().is_some_and(|c| {
+                helper_node(root, c.span, (h.line, h.end_line))
+                    .is_none_or(|f| !returns_a_value(f, src))
+            })
+        })
+        .collect();
+    let mut by_name: std::collections::HashMap<&str, Vec<usize>> = Default::default();
+    for (i, h) in facts.test_helpers.iter().enumerate() {
+        by_name.entry(h.name.as_str()).or_default().push(i);
+    }
+    let resolve = |caller: &str, call: &str| -> Option<usize> {
+        if call.contains('|') {
+            return None;
+        }
+        super::scoped_call_names(caller, call)
+            .iter()
+            .find_map(|name| by_name.get(name.as_str()))
+            .and_then(|list| match list.as_slice() {
+                [only] => Some(*only),
+                _ => None,
+            })
+    };
+    let helper_calls = &facts.helper_calls;
+    for test in facts.tests.iter_mut() {
+        let mut reached: Vec<usize> = Vec::new();
+        let mut frontier: Vec<(String, String)> = test
+            .counted_helper_calls
+            .iter()
+            .map(|call| (test.name.clone(), call.clone()))
+            .collect();
+        for level in 1..=super::HELPER_DEPTH {
+            let mut next = Vec::new();
+            for (caller, call) in &frontier {
+                super::ancestry::count(1);
+                let Some(i) = resolve(caller, call) else {
+                    continue;
+                };
+                if reached.contains(&i) {
+                    continue;
+                }
+                reached.push(i);
+                if swallows[i] {
+                    for c in &helpers[i].caught_assertions {
+                        let held = test
+                            .caught_assertions
+                            .iter()
+                            .any(|e| e.span == c.span || overlap(e.span, c.span));
+                        if held {
+                            continue;
+                        }
+                        test.caught_assertions.push(CaughtAssertion {
+                            tautology: level > counted_depth,
+                            helper: Some(HelperSite {
+                                name: helpers[i].name.clone(),
+                                line: helpers[i].line,
+                            }),
+                            ..c.clone()
+                        });
+                    }
+                }
+                let name = &helpers[i].name;
+                next.extend(
+                    helper_calls
+                        .get(i)
+                        .into_iter()
+                        .flatten()
+                        .map(|callee| (name.clone(), callee.clone())),
+                );
+            }
+            frontier = next;
+        }
+    }
 }
 
 /// Whether `callee` names a helper the configuration lists as an assertion
@@ -1061,6 +1291,7 @@ pub fn python<'t>(
                         line: node.start_position().row + 1,
                         span: site(node).1,
                         tautology: false,
+                        helper: None,
                         handler_line: p.start_position().row + 1,
                         detail: if reach == Reach::Always {
                             "contextlib.suppress discards the AssertionError"
@@ -1082,6 +1313,7 @@ pub fn python<'t>(
                             line: node.start_position().row + 1,
                             span: site(node).1,
                             tautology: false,
+                            helper: None,
                             handler_line: finally.start_position().row + 1,
                             detail: FINALLY_RETURNS.to_string(),
                         });
@@ -1116,6 +1348,7 @@ pub fn python<'t>(
                             line: node.start_position().row + 1,
                             span: site(node).1,
                             tautology: false,
+                            helper: None,
                             handler_line: clause.start_position().row + 1,
                             detail: if always {
                                 "AssertionError caught without re-raise or test failure"
@@ -1768,6 +2001,7 @@ pub fn rust<'t>(
                     line,
                     span,
                     tautology: false,
+                    helper: None,
                     handler_line,
                     detail: "std::panic::catch_unwind with discarded result".to_string(),
                 });
@@ -2027,6 +2261,7 @@ fn js_promise_catch<'t, 's, F: Fn(Node, &str, &AssertVocabulary) -> bool>(
                 line: n.start_position().row + 1,
                 span: site(n).1,
                 tautology: false,
+                helper: None,
                 handler_line,
                 detail: "promise .catch() swallows assertion error".to_string(),
             });
@@ -2102,6 +2337,7 @@ pub fn javascript<'t>(
                     line: n.start_position().row + 1,
                     span: site(n).1,
                     tautology: false,
+                    helper: None,
                     handler_line,
                     detail: detail.to_string(),
                 });
@@ -2324,6 +2560,7 @@ pub fn java<'t>(
                     line: n.start_position().row + 1,
                     span: site(n).1,
                     tautology: false,
+                    helper: None,
                     handler_line,
                     detail: detail.to_string(),
                 });
@@ -2655,6 +2892,7 @@ pub fn kotlin<'t>(
                         line,
                         span,
                         tautology: false,
+                        helper: None,
                         handler_line,
                         detail: detail.to_string(),
                     });
@@ -2671,6 +2909,7 @@ pub fn kotlin<'t>(
                             line,
                             span,
                             tautology: false,
+                            helper: None,
                             handler_line,
                             detail: "runCatching with the result unused".to_string(),
                         });
@@ -2886,6 +3125,7 @@ pub fn csharp<'t>(
                     line: n.start_position().row + 1,
                     span: site(n).1,
                     tautology: false,
+                    helper: None,
                     handler_line,
                     detail: "Assertion caught by catch clause".to_string(),
                 });
@@ -3090,6 +3330,7 @@ pub fn go(root: Node, src: &str, tests: &mut [TestFn], vocab: &AssertVocabulary)
                 line: n.start_position().row + 1,
                 span: site(n).1,
                 tautology: !counted,
+                helper: None,
                 handler_line,
                 detail: "recover() swallows the panic of a check".to_string(),
             });
@@ -4744,5 +4985,210 @@ public class TestClass2 {
         )[0];
         assert!(!t.caught_assertions[0].tautology, "{t:?}");
         assert_eq!((t.total_asserts, t.effective_asserts()), (3, 1), "{t:?}");
+    }
+
+    /// The swallowed assertions each test reaches in a helper of its file:
+    /// `(test, line, handler line, helper)`.
+    fn in_helpers(
+        pack: &dyn LanguagePack,
+        path: &str,
+        src: &str,
+    ) -> Vec<(String, usize, usize, String)> {
+        pack.extract(path, src, &AssertVocabulary::default())
+            .unwrap()
+            .tests
+            .iter()
+            .flat_map(|t| {
+                t.caught_assertions.iter().filter_map(|c| {
+                    let h = c.helper.as_ref()?;
+                    Some((t.name.clone(), c.line, c.handler_line, h.name.clone()))
+                })
+            })
+            .collect()
+    }
+
+    fn found(
+        test: &str,
+        line: usize,
+        handler: usize,
+        helper: &str,
+    ) -> Vec<(String, usize, usize, String)> {
+        vec![(test.to_string(), line, handler, helper.to_string())]
+    }
+
+    const PY_HELPER: &str = "def check(a, b):\n    try:\n        assert a == b\n    except AssertionError:\n        pass\n\n\ndef test_f():\n    check(f(2), 4)\n";
+
+    /// #832: an assertion in a same-file helper, swallowed by a handler of the helper, is
+    /// recorded in the test that calls the helper, which loses it.
+    #[test]
+    fn an_assertion_swallowed_in_a_python_helper_is_caught_in_the_calling_test() {
+        let pack = &crate::ast::python::PythonPack;
+        let path = "tests/test_calc.py";
+        assert_eq!(
+            in_helpers(pack, path, PY_HELPER),
+            found("test_f", 3, 4, "check")
+        );
+        let t = &extracted(path, PY_HELPER)[0];
+        assert_eq!((t.total_asserts, t.effective_asserts()), (1, 0), "{t:?}");
+        // A mock assertion call (#828) swallowed in the helper is one too.
+        let mock = "def check(m):\n    try:\n        m.save.assert_called_once_with(1)\n    except AssertionError:\n        pass\n\n\ndef test_m():\n    check(m)\n";
+        assert_eq!(in_helpers(pack, path, mock), found("test_m", 3, 4, "check"));
+        // `contextlib.suppress` in the helper, and a helper of the class.
+        let suppress = "import contextlib\n\n\ndef check(a, b):\n    with contextlib.suppress(AssertionError):\n        assert a == b\n\n\ndef test_f():\n    check(f(2), 4)\n";
+        assert_eq!(
+            in_helpers(pack, path, suppress),
+            found("test_f", 6, 5, "check")
+        );
+        let method = "class TestCalc:\n    def _check(self, a, b):\n        try:\n            self.assertEqual(a, b)\n        except AssertionError:\n            pass\n\n    def test_f(self):\n        self._check(f(2), 4)\n";
+        assert_eq!(
+            in_helpers(pack, path, method),
+            found("TestCalc::test_f", 4, 5, "TestCalc::_check")
+        );
+        // Three calls down, as the pack counts helpers into the test.
+        let deep = "def check(a, b):\n    try:\n        assert a == b\n    except AssertionError:\n        pass\n\n\ndef middle(a, b):\n    check(a, b)\n\n\ndef outer(a, b):\n    middle(a, b)\n\n\ndef test_f():\n    outer(f(2), 4)\n";
+        assert_eq!(in_helpers(pack, path, deep), found("test_f", 3, 4, "check"));
+        let t = &extracted(path, deep)[0];
+        assert_eq!((t.total_asserts, t.effective_asserts()), (1, 0), "{t:?}");
+        // Negative controls: a handler that re-raises, one that fails the test, one that
+        // checks the error it caught, and a helper that hands the outcome back.
+        for handler in [
+            "raise",
+            "pytest.fail('no')",
+            "assert 'mismatch' in str(e)",
+            "return False",
+        ] {
+            let src = PY_HELPER
+                .replace("except AssertionError:", "except AssertionError as e:")
+                .replace("        pass\n", &format!("        {handler}\n"));
+            assert_eq!(in_helpers(pack, path, &src), vec![], "{handler}");
+        }
+        // A value handed back after the handler is handed back too.
+        let flag = "def matches(a, b):\n    ok = True\n    try:\n        assert a == b\n    except AssertionError:\n        ok = False\n    return ok\n\n\ndef test_f():\n    assert matches(f(2), 4)\n";
+        assert_eq!(in_helpers(pack, path, flag), vec![]);
+        // A helper no test calls is no test's loss.
+        let uncalled = PY_HELPER.replace("    check(f(2), 4)\n", "    assert f(2) == 4\n");
+        assert_eq!(in_helpers(pack, path, &uncalled), vec![]);
+        let t = &extracted(path, &uncalled)[0];
+        assert_eq!(t.effective_asserts(), 1, "{t:?}");
+        // A name two helpers share is not resolved to either.
+        let shared =
+            format!("{PY_HELPER}\n\nif SLOW:\n    def check(a, b):\n        assert a == b\n");
+        assert_eq!(in_helpers(pack, path, &shared), vec![], "{shared}");
+    }
+
+    #[test]
+    fn an_assertion_swallowed_in_a_helper_is_caught_in_every_pack_that_resolves_helpers() {
+        // The pack, the file, its source, and the test, line, handler line and helper found.
+        type Case<'a> = (
+            &'a dyn LanguagePack,
+            &'a str,
+            &'a str,
+            (&'a str, usize, usize, &'a str),
+        );
+        let cases: [Case; 6] = [
+            (
+                &crate::ast::javascript::JavaScriptPack,
+                "a.test.js",
+                "function check(a, b) {\n  try {\n    expect(a).toBe(b);\n  } catch (e) {}\n}\n\ntest('f', () => {\n  check(f(2), 4);\n});\n",
+                ("f", 3, 4, "check"),
+            ),
+            (
+                &crate::ast::java::JavaPack,
+                "ATest.java",
+                "class ATest {\n    void check(int a, int b) {\n        try {\n            assertEquals(a, b);\n        } catch (AssertionError e) {\n        }\n    }\n\n    @Test\n    void t() {\n        check(f(2), 4);\n    }\n}\n",
+                ("t", 4, 5, "check"),
+            ),
+            (
+                &crate::ast::kotlin::KotlinPack,
+                "ATest.kt",
+                "class ATest {\n    fun check(a: Int, b: Int) {\n        try {\n            assertEquals(a, b)\n        } catch (e: AssertionError) {\n        }\n    }\n\n    @Test\n    fun t() {\n        check(f(2), 4)\n    }\n}\n",
+                ("t", 4, 5, "check"),
+            ),
+            (
+                &crate::ast::csharp::CSharpPack,
+                "ATests.cs",
+                "public class ATests {\n    void Check(int a, int b) {\n        try {\n            Assert.Equal(a, b);\n        } catch (Exception) {\n        }\n    }\n\n    [Fact]\n    public void T() {\n        Check(F(2), 4);\n    }\n}\n",
+                ("T", 4, 5, "Check"),
+            ),
+            (
+                &crate::ast::r#go::GoPack,
+                "p_test.go",
+                "package p\nfunc check(a, b int) {\n\tdefer func() {\n\t\t_ = recover()\n\t}()\n\tif a != b {\n\t\tpanic(\"not equal\")\n\t}\n}\nfunc TestA(t *testing.T) {\n\tcheck(f(2), 4)\n}\n",
+                ("TestA", 7, 3, "check"),
+            ),
+            (
+                &crate::ast::rust::RustPack,
+                "tests/t.rs",
+                "fn check(a: i32, b: i32) {\n    let _ = std::panic::catch_unwind(|| assert_eq!(a, b));\n}\n\n#[test]\nfn t() {\n    check(f(2), 4);\n}\n",
+                ("t", 2, 2, "check"),
+            ),
+        ];
+        for (pack, path, src, (test, line, handler, helper)) in cases {
+            let got = in_helpers(pack, path, src);
+            assert_eq!(got.len(), 1, "{path}: {got:?}");
+            let (t, l, hl, h) = &got[0];
+            assert!(t.ends_with(test), "{path}: {got:?}");
+            assert_eq!(
+                (*l, *hl, h.as_str()),
+                (line, handler, helper),
+                "{path}: {got:?}"
+            );
+            let facts = pack
+                .extract(path, src, &AssertVocabulary::default())
+                .unwrap();
+            let t = &facts.tests[0];
+            assert_eq!(t.effective_asserts(), 0, "{path}: {t:?}");
+            // Negative control: the test does not call the helper.
+            let uncalled = src
+                .replace("check(f(2), 4)", "f(2)")
+                .replace("Check(F(2), 4)", "F(2)");
+            assert_eq!(in_helpers(pack, path, &uncalled), vec![], "{path}");
+        }
+    }
+
+    /// A helper one call further than a one-level pack counts into the test is read, and
+    /// its swallowed assertion is not taken out of a count it was never in.
+    #[test]
+    fn a_swallow_deeper_than_the_pack_counts_is_reported_and_not_subtracted() {
+        let src = "function check(a, b) {\n  try {\n    expect(a).toBe(b);\n  } catch (e) {}\n}\n\nfunction outer(a, b) {\n  log(a);\n  check(a, b);\n}\n\ntest('f', () => {\n  expect(g()).toBe(1);\n  outer(f(2), 4);\n});\n";
+        let pack = &crate::ast::javascript::JavaScriptPack;
+        assert_eq!(
+            in_helpers(pack, "a.test.js", src),
+            found("f", 3, 4, "check")
+        );
+        let t = &extracted("a.test.js", src)[0];
+        assert!(t.caught_assertions[0].tautology, "{t:?}");
+        assert_eq!(t.effective_asserts(), 1, "{t:?}");
+    }
+
+    /// A swallow the helper already had on the base side is not new, though the helper
+    /// and the test moved.
+    #[test]
+    fn a_swallow_already_in_the_helper_is_not_new() {
+        let path = "tests/test_calc.py";
+        let base = &extracted(path, PY_HELPER)[0];
+        let moved = format!("import os\n\n\n{PY_HELPER}");
+        let head = &extracted(path, &moved)[0];
+        assert_eq!(
+            super::newly_caught(base, head),
+            Vec::<&super::CaughtAssertion>::new()
+        );
+        // Control: the helper newly swallows, and the test is unchanged.
+        let before = PY_HELPER.replace(
+            "    try:\n        assert a == b\n    except AssertionError:\n        pass\n",
+            "    assert a == b\n",
+        );
+        let base = &extracted(path, &before)[0];
+        assert!(base.caught_assertions.is_empty(), "{base:?}");
+        let new = super::newly_caught(base, head);
+        assert_eq!(new.len(), 1, "{head:?}");
+        assert_eq!(
+            new[0].helper.as_ref().map(|h| h.name.as_str()),
+            Some("check")
+        );
+        // An inline swallow does not pair with one in a helper of the same shape.
+        let inline = "def test_f():\n    try:\n        assert f(2) == 4\n    except AssertionError:\n        pass\n";
+        let base = &extracted(path, inline)[0];
+        assert_eq!(super::newly_caught(base, head).len(), 1, "{head:?}");
     }
 }

@@ -69,6 +69,9 @@ impl LanguagePack for JavaPack {
         extractor.resolve_same_file_helpers();
         JAVA_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
         super::caught_assertions::java(root, &anc, src, &mut extractor.facts.tests, vocab);
+        super::caught_assertions::through_helpers(root, src, &mut extractor.facts, 1, |helpers| {
+            super::caught_assertions::java(root, &anc, src, helpers, vocab)
+        });
         super::expected_exceptions::java(root, &anc, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(
             root,
