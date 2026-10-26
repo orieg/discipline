@@ -90,6 +90,14 @@ impl LanguagePack for PythonPack {
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
         PYTHON_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
+        PYTHON_PACK.runner_probes(
+            super::runner_probes::Lang::Python,
+            root,
+            src,
+            path,
+            vocab,
+            &mut extractor.facts,
+        );
         super::bounds::python(root, src, &mut extractor.facts.tests);
         super::expectations::python(root, src, &mut extractor.facts.tests);
         super::caught_assertions::python(root, &anc, src, &mut extractor.facts.tests, vocab);

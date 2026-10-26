@@ -1906,6 +1906,18 @@ pub fn rust_cfg_leaves_out_of_tests(nodes: &[Node], src: &[u8]) -> bool {
     value.is_some_and(|c| c.truth == Truth::NotInCi)
 }
 
+/// Whether an item under `#[cfg(<predicate>)]` is compiled in a test build only: the
+/// predicate holds only where `test` is on (`test`, `all(test, unix)`).
+pub fn rust_cfg_only_in_tests(nodes: &[Node], src: &[u8]) -> bool {
+    let value = cfg_value(
+        nodes,
+        src,
+        &|name| (name == "test").then(|| name.to_string()),
+        &|_| None,
+    );
+    value.is_some_and(|c| c.truth == Truth::InCi)
+}
+
 /// Each case reads a test through its language pack and asks the two questions the
 /// `ignored-tests` gate asks: does the test carry a conditional skip, and does a CI
 /// variable decide it.
