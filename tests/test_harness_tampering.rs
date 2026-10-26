@@ -236,6 +236,33 @@ const EXACT_FORMS: &[Case] = &[
         expect: &[("sitecustomize.py", "sys.exit(0)", EXIT_ZERO, "warning")],
     },
     Case {
+        name: "exit: sys.exit(0) at the top level of a module a test imports",
+        files: &[(
+            "src/calc.py",
+            "import sys\n\n\ndef add(a, b):\n    return a * b\n\n\nsys.exit(0)\n",
+        )],
+        expect: &[("src/calc.py", "sys.exit(0)", EXIT_ZERO, "warning")],
+    },
+    Case {
+        name: "exit: raise SystemExit(0) at the top level of a module a test imports",
+        files: &[(
+            "func.py",
+            "def solve(a, b):\n    return a * b\n\n\nraise SystemExit(0)\n",
+        )],
+        expect: &[("func.py", "raise SystemExit(0)", EXIT_ZERO, "warning")],
+    },
+    Case {
+        name: "exit: os._exit(0) and a bare raise SystemExit in a package's __init__.py",
+        files: &[(
+            "pkg/__init__.py",
+            "import os\n\nos._exit(0)\nraise SystemExit\n",
+        )],
+        expect: &[
+            ("pkg/__init__.py", "os._exit(0)", EXIT_ZERO, "warning"),
+            ("pkg/__init__.py", "raise SystemExit", EXIT_ZERO, "warning"),
+        ],
+    },
+    Case {
         name: "exit: os._exit(0) registered to run at exit",
         files: &[(
             "conftest.py",
@@ -613,6 +640,54 @@ const NEGATIVE_CONTROLS: &[Case] = &[
         expect: &[],
     },
     Case {
+        name: "exit: a zero exit under the module's __main__ guard",
+        files: &[(
+            "tool.py",
+            "import sys\n\n\ndef main():\n    return 0\n\n\nif __name__ == \"__main__\":\n    main()\n    sys.exit(0)\n",
+        )],
+        expect: &[],
+    },
+    Case {
+        name: "exit: a top-level zero exit in a module with a __main__ block",
+        files: &[(
+            "script.py",
+            "import sys\n\nprint(\"run\")\nsys.exit(0)\n\nif __name__ == '__main__':\n    pass\n",
+        )],
+        expect: &[],
+    },
+    Case {
+        name: "exit: a top-level zero exit in a package's __main__.py",
+        files: &[("pkg/__main__.py", "import sys\n\nsys.exit(0)\n")],
+        expect: &[],
+    },
+    Case {
+        name: "exit: a top-level zero exit in a command a pyproject.toml installs",
+        files: &[
+            (
+                "pyproject.toml",
+                "[project]\nname = \"tool\"\nversion = \"0.1.0\"\n\n[project.scripts]\ntool = \"tool.cli:main\"\n",
+            ),
+            ("tool/cli.py", "import sys\n\n\ndef main():\n    pass\n\n\nsys.exit(0)\n"),
+        ],
+        expect: &[],
+    },
+    Case {
+        name: "exit: a zero exit in a function or a compound statement of an imported module",
+        files: &[(
+            "lib/util.py",
+            "import os\nimport sys\n\n\ndef stop():\n    sys.exit(0)\n\n\ntry:\n    import fast\nexcept ImportError:\n    os._exit(0)\n\nwith open(\"x\") as f:\n    sys.exit(0)\n",
+        )],
+        expect: &[],
+    },
+    Case {
+        name: "exit: a non-zero exit at the top level of an imported module",
+        files: &[(
+            "lib/fail.py",
+            "import sys\n\nsys.exit(1)\nraise SystemExit(\"no database\")\nraise SystemExit(0) from None\n",
+        )],
+        expect: &[],
+    },
+    Case {
         name: "exit: a non-zero exit in a global set-up",
         files: &[
             ("jest.config.json", "{\n  \"globalSetup\": \"./test/setup.js\"\n}\n"),
@@ -855,8 +930,8 @@ fn each_exact_form_is_reported_at_its_severity_and_no_near_miss_is() {
 /// dropped from it without this test saying so.
 #[test]
 fn the_negative_controls_are_enumerated() {
-    assert_eq!(EXACT_FORMS.len(), 29);
-    assert_eq!(NEGATIVE_CONTROLS.len(), 40);
+    assert_eq!(EXACT_FORMS.len(), 32);
+    assert_eq!(NEGATIVE_CONTROLS.len(), 46);
     assert!(NEGATIVE_CONTROLS.iter().all(|c| c.expect.is_empty()));
     assert!(EXACT_FORMS.iter().all(|c| !c.expect.is_empty()));
     let mut names: Vec<&str> = EXACT_FORMS
@@ -950,14 +1025,17 @@ fn the_notes_name_the_examined_harness_files_and_the_pattern_version() {
     let repo = repo_with("");
     repo.write("pkg/conftest.py", "import pytest\n");
     repo.write("pkg/p_test.go", "package p\n");
-    repo.write("pkg/lib.py", "import sys\n\nsys.exit(0)\n");
+    repo.write(
+        "pkg/lib.py",
+        "import sys\n\n\ndef stop():\n    sys.exit(0)\n",
+    );
     repo.commit("feat: files");
     let run = check(&repo);
     assert!(findings(&run).is_empty(), "{}", run.stdout);
-    assert_eq!(run.outcome(GATE)["examined"], 2);
+    assert_eq!(run.outcome(GATE)["examined"], 3);
     assert_eq!(
         notes(&run),
-        vec!["pattern version 2; examined 2 harness file(s): pkg/conftest.py, pkg/p_test.go"]
+        vec!["pattern version 3; examined 2 harness file(s): pkg/conftest.py, pkg/p_test.go; read 1 other Python module(s) for an exit at import"]
     );
 
     let none = repo_with("");
@@ -967,7 +1045,7 @@ fn the_notes_name_the_examined_harness_files_and_the_pattern_version() {
     assert_eq!(run.outcome(GATE)["examined"], 0);
     assert_eq!(
         notes(&run),
-        vec!["pattern version 2; no harness file among the changed files"]
+        vec!["pattern version 3; no harness file among the changed files"]
     );
 }
 
@@ -1056,6 +1134,104 @@ fn a_form_the_base_side_already_held_is_not_reported_again() {
             "error".to_string()
         )]
     );
+}
+
+/// The reproduction of #843: a script-style test imports `func.py`, and the change adds
+/// `sys.exit(0)` at the top level of it, so `python test.py` ends with status zero
+/// before its assertions run. The same with the files under `src/` and `tests/`. A
+/// module that was an entry point on the base side too is not read; one the change
+/// makes an entry point while adding its exit is.
+#[test]
+fn an_exit_at_import_in_the_code_a_test_imports_is_reported() {
+    const FUNC: &str = "def solve(a, b):\n    return a + b\n";
+    const EXITS: &str = "import sys\n\ndef solve(a, b):\n    return a * b\n\nsys.exit(0)\n";
+    const MAIN: &str = "\n\nif __name__ == '__main__':\n    print(solve(1, 2))\n";
+    let test = |import: &str| {
+        format!("{import}\n\ndef test_func(candidate):\n    assert candidate(1, 2) == 3\n\n\nif __name__ == '__main__':\n    test_func(solve)\n")
+    };
+    let run_with = |module: &str, base: &str, head: &str, test_path: &str, import: &str| {
+        let repo = Repo::new();
+        repo.commit_base_files(
+            &[
+                ("discipline.toml", &enabled()),
+                (module, base),
+                (test_path, &test(import)),
+            ],
+            "chore: base",
+        );
+        repo.write(module, head);
+        repo.commit("feat: change the module");
+        check(&repo)
+    };
+    for (module, test_path, import) in [
+        ("func.py", "test.py", "from func import solve"),
+        ("src/func.py", "tests/test.py", "from src.func import solve"),
+    ] {
+        let run = run_with(module, FUNC, EXITS, test_path, import);
+        assert_eq!(
+            findings(&run),
+            vec![(
+                module.to_string(),
+                6,
+                EXIT_ZERO.to_string(),
+                "warning".to_string()
+            )],
+            "{}",
+            run.stdout
+        );
+        let v = &run.violations(GATE)[0];
+        let message = v["message"].as_str().unwrap();
+        assert!(
+            message.contains("Python code a test may import"),
+            "{message}"
+        );
+        assert!(message.contains("at import time"), "{message}");
+        assert!(
+            v["remediation"].as_str().unwrap().contains("__main__"),
+            "{}",
+            v["remediation"]
+        );
+    }
+
+    // An entry point on both sides: not read.
+    let run = run_with(
+        "func.py",
+        &format!("{FUNC}{MAIN}"),
+        &format!("{EXITS}{MAIN}"),
+        "test.py",
+        "from func import solve",
+    );
+    assert!(findings(&run).is_empty(), "{}", run.stdout);
+    // An entry point the change makes, with its exit: read, and said.
+    let run = run_with(
+        "func.py",
+        FUNC,
+        &format!("{EXITS}{MAIN}"),
+        "test.py",
+        "from func import solve",
+    );
+    assert_eq!(findings(&run).len(), 1, "{}", run.stdout);
+    assert!(
+        notes(&run)
+            .iter()
+            .any(|n| n.contains("the base side of the file was not an entry point")),
+        "{:?}",
+        notes(&run)
+    );
+    // The gate's directive lifts it by the module's path.
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[("discipline.toml", &enabled()), ("func.py", FUNC)],
+        "chore: base",
+    );
+    repo.write("func.py", EXITS);
+    repo.commit("feat: change the module");
+    let run = repo.check_with_pr(
+        &[],
+        "no-issue: a test change\n\nallow-harness-tampering: func.py the module is a one-shot job script now",
+    );
+    assert!(findings(&run).is_empty(), "{}", run.stdout);
+    assert_eq!(run.outcome(GATE)["overrides"].as_array().unwrap().len(), 1);
 }
 
 /// A file that was not a harness file on the base side held nothing the runner ran: a
@@ -1345,7 +1521,7 @@ fn a_harness_file_that_does_not_parse_is_named_never_passed_in_silence() {
     );
     assert_eq!(run.outcome(GATE)["examined"], 1);
     assert!(
-        notes.contains(&"pattern version 2; examined 1 harness file(s): conftest.py".to_string()),
+        notes.contains(&"pattern version 3; examined 1 harness file(s): conftest.py".to_string()),
         "{notes:?}"
     );
 }

@@ -1444,7 +1444,11 @@ const CASES: &[Case] = &[
                 |path| files.iter().find(|(p, _)| *p == path).map(|(_, src)| src.to_string()),
                 &tracked,
             );
-            let is_harness = |path: &str| roles(path, &configured, &registry, &[]).any();
+            // Any other Python file is read for an exit at import alone, not as a harness.
+            let is_harness = |path: &str| {
+                let read = roles(path, &configured, &registry, &[]);
+                read.any() && !read.import_exit
+            };
             let site = |subject: &str| Site {
                 form: Form::ExitZero,
                 line: 1,
@@ -1455,6 +1459,7 @@ const CASES: &[Case] = &[
                 && is_harness("web/test/teardown.js")
                 && !is_harness("web/test/other.js")
                 && !is_harness("src/harness_setup.py")
+                && roles("src/harness_setup.py", &configured, &registry, &[]).import_exit
                 && new_sites(&[site("teardown")], vec![site("teardown")]).is_empty()
                 && new_sites(&[site("teardown")], vec![site("teardown"), site("setup")]).len() == 1)
         },
@@ -6577,6 +6582,56 @@ command = "cargo test"
                 && findings(plain, numpy)? == noted
                 && findings(sut, sut)?.is_empty()
                 && findings(plain, plain)?.is_empty())
+        },
+    ),
+    (
+        "ignored-tests: a test the file's `__main__` entry point no longer calls is reported, one it still calls is not",
+        || {
+            use crate::config::IgnoredTestsGate;
+            use crate::guards::agent_diff::{evaluate_entry_point_calls, match_tests, FileFacts};
+            const TEST: &str = "from func import solve\n\n\ndef test_func(candidate):\n    assert candidate(1, 2) == 3\n";
+            let main = format!("{TEST}\n\nif __name__ == '__main__':\n    test_func(solve)\n");
+            let codes = |base: &str, head: &str| -> Result<Vec<String>> {
+                let files = [FileFacts {
+                    file: crate::gitctx::ChangedFile {
+                        path: "test.py".to_string(),
+                        old_path: "test.py".to_string(),
+                        kind: crate::gitctx::ChangeKind::Modified,
+                        added_lines: Default::default(),
+                    },
+                    base: Some(facts("test.py", base)?),
+                    head: Some(facts("test.py", head)?),
+                    newly_added_nul: false,
+                }];
+                let (pairs, _, _) = match_tests(&files);
+                let mut out = crate::guards::GateOutcome::new("ignored-tests");
+                evaluate_entry_point_calls(&files, &pairs, &IgnoredTestsGate::default(), &[], false, &mut out)?;
+                Ok(out.violations.iter().map(|v| v.code.clone()).collect())
+            };
+            let reformatted = format!("{TEST}\n\nif \"__main__\" == __name__:\n    test_func(\n        solve,\n    )\n");
+            Ok(codes(&main, TEST)? == vec!["ignored-tests/existing-test-skipped".to_string()]
+                && codes(&main, &reformatted)?.is_empty()
+                && codes(TEST, TEST)?.is_empty())
+        },
+    ),
+    (
+        "harness-tampering: an exit at import in a module a test imports is read, one under the `__main__` guard or in a function is not",
+        || {
+            use crate::ast::harness::{python, python_has_main_block, Form, PythonChecks};
+            let imported = PythonChecks { import_exit: true, ..PythonChecks::default() };
+            let forms = |src: &str| -> anyhow::Result<Vec<Form>> {
+                let scan = python(src, imported).map_err(|e| anyhow::anyhow!(e))?;
+                Ok(scan.sites.iter().map(|s| s.form).collect())
+            };
+            let main = "import sys\nif __name__ == \"__main__\":\n    sys.exit(0)\n";
+            Ok(forms("import sys\n\ndef solve(a, b):\n    return a * b\n\nsys.exit(0)\n")?
+                == vec![Form::ImportExitZero]
+                && forms("raise SystemExit(0)\n")? == vec![Form::ImportExitZero]
+                && forms(main)?.is_empty()
+                && forms("import sys\ndef main():\n    sys.exit(0)\n")?.is_empty()
+                && forms("import sys\nsys.exit(1)\n")?.is_empty()
+                && python_has_main_block(main) == Ok(true)
+                && python_has_main_block("import sys\nsys.exit(0)\n") == Ok(false))
         },
     ),
     (
