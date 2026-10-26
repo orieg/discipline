@@ -1717,7 +1717,9 @@ const PYTHON_CODE: super::NotCode = super::NotCode {
 };
 
 /// `node` without the parentheses around it, as many pairs as there are: `((x == 1))` is
-/// read as `x == 1`. A tuple is its own node kind and is kept: `(x == 1, "msg")`.
+/// read as `x == 1`. A tuple is its own node kind and is kept: `(x == 1, "msg")`. The Go
+/// and JavaScript/TypeScript grammars name the node the same, so their readers of expected
+/// values and bounds use it too.
 pub(super) fn unparenthesized(mut node: Node) -> Node {
     while node.kind() == "parenthesized_expression" {
         let mut cursor = node.walk();

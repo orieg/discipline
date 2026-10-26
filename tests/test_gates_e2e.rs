@@ -841,6 +841,97 @@ fn python_parenthesised_assertions_are_read_as_the_expression_inside() {
     assert_eq!(codes, ["vacuous-tests/asserts-only-on-mocks"]);
 }
 
+/// An expected value or a bound in parentheses is the literal inside it (#861): in Rust,
+/// Go and JS, changing `(4)` to `(5)` is reported as changing `4` to `5` is, and moving
+/// `(100)` to `(1000)` as a loosened bound.
+#[test]
+fn parenthesised_expected_values_and_bounds_are_read_in_rust_go_and_js() {
+    let rs = |check: &str| {
+        format!("pub fn f(x: i32) -> i32 {{\n    x * 2\n}}\n\n#[cfg(test)]\nmod tests {{\n    use super::*;\n\n    #[test]\n    fn doubles() {{\n        {check};\n    }}\n}}\n")
+    };
+    let go = |check: &str| {
+        format!("package p\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {{\n\tif got := F(2); {check} {{\n\t\tt.Errorf(\"got %d\", got)\n\t}}\n}}\n")
+    };
+    let js = |check: &str| {
+        format!("import {{ f }} from '../src/calc.js';\n\ntest('f', () => {{\n  {check};\n}});\n")
+    };
+    type Form<'a> = &'a dyn Fn(&str) -> String;
+    let cases: [(&str, Form, &str, &str, &str); 6] = [
+        (
+            "src/lib.rs",
+            &rs,
+            "assert_eq!(f(2), (4))",
+            "assert_eq!(f(2), (5))",
+            "expected-value-changed",
+        ),
+        (
+            "src/lib.rs",
+            &rs,
+            "assert!(f(3) < (100))",
+            "assert!(f(3) < (1000))",
+            "assertion-bound-loosened",
+        ),
+        (
+            "p_test.go",
+            &go,
+            "got != (4)",
+            "got != (5)",
+            "expected-value-changed",
+        ),
+        (
+            "p_test.go",
+            &go,
+            "got > ((100))",
+            "got > ((1000))",
+            "assertion-bound-loosened",
+        ),
+        (
+            "test/calc.test.js",
+            &js,
+            "expect(f(2)).toBe((4))",
+            "expect(f(2)).toBe((5))",
+            "expected-value-changed",
+        ),
+        (
+            "test/calc.test.js",
+            &js,
+            "expect(f(3)).toBeLessThan((100))",
+            "expect(f(3)).toBeLessThan((1000))",
+            "assertion-bound-loosened",
+        ),
+    ];
+    for (path, form, base, head, code) in cases {
+        let codes = |head: String| -> Vec<String> {
+            let repo = Repo::new();
+            repo.write(
+                "Cargo.toml",
+                "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+            );
+            repo.write("go.mod", "module p\n\ngo 1.22\n");
+            repo.write(
+                "p.go",
+                "package p\n\nfunc F(x int) int {\n\treturn x * 2\n}\n",
+            );
+            repo.write("src/calc.js", "export function f(x) { return x * 2; }\n");
+            repo.commit_base(path, &form(base), "test: f");
+            repo.write(path, &head);
+            repo.commit("test: change");
+            repo.check(&[])
+                .violations("assertion-reduction")
+                .iter()
+                .map(|v| v["code"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(
+            codes(form(head)),
+            [format!("assertion-reduction/{code}")],
+            "{path}: {head}"
+        );
+        // Control: the same literal kept in its parentheses, with the file changed below.
+        assert!(codes(form(base) + "// kept\n").is_empty(), "{path}: {base}");
+    }
+}
+
 /// A Python mock assertion call is a check (#828): deleting it from an existing test, or
 /// leaving its name read but not called, is a reduction; a new test whose only check
 /// is one is still a test that asserts only on mocks.
