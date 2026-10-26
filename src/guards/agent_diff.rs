@@ -157,6 +157,15 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
         evaluate_unsafe_safety_comment(&analyzed_files, &gates.unsafe_safety_comment)?,
     ];
 
+    evaluate_entry_point_calls(
+        &analyzed_files,
+        &pairs,
+        &gates.ignored_tests,
+        &ctx.directives,
+        is_staged,
+        &mut ast_gates[2],
+    )?;
+
     report_weakened_crate_helpers(
         &weakened_crate,
         &pairs,

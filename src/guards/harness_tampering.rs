@@ -17,7 +17,13 @@
 //!   files a Jest or Vitest configuration names, and the root file of each Cargo test
 //!   target;
 //! - a Python test file (the Python pack's test-file rule, or `[tests] paths`), for the
-//!   `unittest` forms only.
+//!   `unittest` forms only;
+//! - any other Python file, as code a test may import, for an exit with status zero at
+//!   the top level of the module only. An entry point is not read: a package's
+//!   `__main__.py`, the module of a command a `pyproject.toml` installs, a module with an
+//!   `if __name__ == "__main__":` block. Each is an entry point only when the base side
+//!   of the file was one too (or the file is new), so a change cannot make a module an
+//!   entry point to carry its own exit.
 //!
 //! A file that becomes a harness file without changing (a configuration now names it) is
 //! read as if every form in it were added. A harness file that cannot be parsed is named
@@ -49,12 +55,17 @@ pub struct Roles {
     pub python_exit: bool,
     /// Python the runner loads: `unittest` result methods.
     pub unittest: bool,
+    /// Python a test may import: an exit with status zero at the top level of the module.
+    pub import_exit: bool,
     /// JavaScript or TypeScript the runner executes around the tests.
     pub js_exit: bool,
     /// The root of a Cargo test target.
     pub rust_exit: bool,
     /// How the file is known to be loaded, for the finding's message.
     pub why: String,
+    /// For `import_exit`: why the file is an entry point by its name or a
+    /// configuration, which a module's own `if __name__ == "__main__":` block adds to.
+    pub entry_point: Option<&'static str>,
 }
 
 impl Roles {
@@ -63,6 +74,7 @@ impl Roles {
             || self.pytest_hooks
             || self.python_exit
             || self.unittest
+            || self.import_exit
             || self.js_exit
             || self.rust_exit
     }
@@ -75,6 +87,7 @@ impl Roles {
                 r.pytest_hooks,
                 r.python_exit,
                 r.unittest,
+                r.import_exit,
                 r.js_exit,
                 r.rust_exit,
             ]
@@ -135,17 +148,39 @@ pub fn roles(
         roles.rust_exit = true;
         roles.why = format!("a module of Cargo test target `{target}`");
     }
-    if !roles.any()
-        && crate::ast::extension(path) == Some("py")
-        && (registry
-            .find_pack(path)
-            .is_some_and(|p| p.is_test_path(path))
-            || crate::ast::functions::declared_test_path(path, test_paths))
+    if roles.any() || crate::ast::extension(path) != Some("py") {
+        return roles;
+    }
+    if registry
+        .find_pack(path)
+        .is_some_and(|p| p.is_test_path(path))
+        || crate::ast::functions::declared_test_path(path, test_paths)
     {
         roles.unittest = true;
         roles.why = "a Python test file".to_string();
+    } else {
+        roles.import_exit = true;
+        roles.why = "Python code a test may import".to_string();
+        roles.entry_point = if crate::ast::functions::file_name(path) == "__main__.py" {
+            Some("a package's `__main__.py`")
+        } else if configured.is_python_script(path) {
+            Some("the module of a command a `pyproject.toml` installs")
+        } else {
+            None
+        };
     }
     roles
+}
+
+/// Why the Python module `path`, read for an exit at import, is an entry point on one
+/// side: by its name or a configuration (`roles`), or by an `if __name__ ==
+/// "__main__":` block in `src`. `None` when it is not one, or `src` does not parse.
+fn entry_point(roles: &Roles, src: &str) -> Option<&'static str> {
+    roles.entry_point.or_else(|| {
+        crate::ast::harness::python_has_main_block(src)
+            .unwrap_or(false)
+            .then_some("a module with an `if __name__ == \"__main__\":` block")
+    })
 }
 
 /// One harness file as read.
@@ -171,13 +206,14 @@ pub fn scan(path: &str, src: &str, roles: &Roles) -> std::result::Result<FileSca
         go = Some((file.has_test_main, file.tests, file.benchmarks));
         merge(file.scan);
     }
-    if roles.pytest_hooks || roles.python_exit || roles.unittest {
+    if roles.pytest_hooks || roles.python_exit || roles.unittest || roles.import_exit {
         merge(crate::ast::harness::python(
             src,
             PythonChecks {
                 hooks: roles.pytest_hooks,
                 exit: roles.python_exit,
                 unittest: roles.unittest,
+                import_exit: roles.import_exit,
             },
         )?);
     }
@@ -243,6 +279,12 @@ fn finding(form: Form) -> (&'static crate::findings::FindingKind, bool, &'static
             &crate::findings::HARNESS_EXITS_ZERO,
             true,
             "Let the runner end the process with the status of the run",
+        ),
+        // Held at `warning` as the harness form is.
+        Form::ImportExitZero => (
+            &crate::findings::HARNESS_EXITS_ZERO,
+            true,
+            "Remove the exit, or move it under `if __name__ == \"__main__\":` so that it runs only when the file is run as a script",
         ),
     }
 }
@@ -327,12 +369,31 @@ pub fn harness_tampering(ctx: &Context) -> Result<GateOutcome> {
     }
 
     let mut examined: Vec<&str> = Vec::new();
+    let mut modules_read = 0;
     for (path, base_path) in &candidates {
         let Some(head_src) = ctx.git.head_content(path)? else {
             out.notes.push(super::unread_note(path));
             continue;
         };
         let roles = head_roles(path);
+        if roles.import_exit {
+            // An entry point on both sides runs as a script, not as code a test imports.
+            if let Some(why) = entry_point(&roles, &head_src) {
+                let base_too = match base_path {
+                    None => true,
+                    Some(old) => match ctx.git.base_content(old)? {
+                        Some(base_src) => entry_point(&base_roles(old), &base_src).is_some(),
+                        None => true,
+                    },
+                };
+                if base_too {
+                    continue;
+                }
+                out.notes.push(format!(
+                    "`{path}`: read for an exit at import although it is {why}: the base side of the file was not an entry point"
+                ));
+            }
+        }
         let mut head = match scan(path, &head_src, &roles) {
             Ok(head) => head,
             Err(why) => {
@@ -344,7 +405,11 @@ pub fn harness_tampering(ctx: &Context) -> Result<GateOutcome> {
             }
         };
         out.examined += 1;
-        examined.push(path);
+        if roles.import_exit {
+            modules_read += 1;
+        } else {
+            examined.push(path);
+        }
         if head.scan.parse_errors {
             out.notes.push(format!(
                 "`{path}` ({}): parsed with syntax errors, so it was read in part",
@@ -440,11 +505,18 @@ pub fn harness_tampering(ctx: &Context) -> Result<GateOutcome> {
             ));
         }
     }
+    let modules = if modules_read == 0 {
+        String::new()
+    } else {
+        format!("; read {modules_read} other Python module(s) for an exit at import")
+    };
     out.notes.push(if examined.is_empty() {
-        format!("pattern version {PATTERN_VERSION}; no harness file among the changed files")
+        format!(
+            "pattern version {PATTERN_VERSION}; no harness file among the changed files{modules}"
+        )
     } else {
         format!(
-            "pattern version {PATTERN_VERSION}; examined {} harness file(s): {}",
+            "pattern version {PATTERN_VERSION}; examined {} harness file(s): {}{modules}",
             examined.len(),
             examined.join(", ")
         )
@@ -469,6 +541,7 @@ mod tests {
                 .collect(),
             rust_modules: BTreeMap::new(),
             pytest_plugins: BTreeMap::new(),
+            python_scripts: Default::default(),
             unread: Vec::new(),
         }
     }
@@ -500,7 +573,8 @@ mod tests {
                 "{path}"
             );
         }
-        // Not harness files: a word in the path is not how a runner finds a file.
+        // Not harness files: a word in the path is not how a runner finds a file. A
+        // Python one is still read as code a test may import, for that form alone.
         for path in [
             "src/harness.py",
             "src/conftest_helpers.py",
@@ -513,7 +587,13 @@ mod tests {
             "src/main.go",
             "docs/conftest.py.md",
         ] {
-            assert!(!roles_of(path, &none).any(), "{path}");
+            let read = roles_of(path, &none);
+            let as_harness = Roles {
+                import_exit: false,
+                ..read.clone()
+            };
+            assert!(!as_harness.any(), "{path}");
+            assert_eq!(read.import_exit, path.ends_with(".py"), "{path}");
         }
         // The same files, once a configuration names them.
         let named = configured(
@@ -542,6 +622,84 @@ mod tests {
         let rust_mod = roles_of("tests/common/mod.rs", &with_extensions);
         assert!(rust_mod.rust_exit);
         assert!(rust_mod.why.contains("tests/it.rs"));
+    }
+
+    #[test]
+    fn a_python_file_that_is_neither_a_test_nor_a_harness_is_read_as_imported_code() {
+        let none = ConfiguredHarness::default();
+        for path in ["func.py", "src/pkg/calc.py", "pkg/__init__.py", "test.py"] {
+            let read = roles_of(path, &none);
+            assert!(
+                read.import_exit && !read.python_exit && !read.unittest,
+                "{path}"
+            );
+            assert_eq!(read.entry_point, None, "{path}");
+        }
+        // A test file, a harness file and a file of another language are not.
+        for path in [
+            "tests/test_calc.py",
+            "checks/smoke.py",
+            "pkg/conftest.py",
+            "sitecustomize.py",
+            "src/calc.pyi",
+            "src/calc.rs",
+        ] {
+            assert!(!roles_of(path, &none).import_exit, "{path}");
+        }
+        // An entry point by its name, or by a `pyproject.toml` command.
+        assert_eq!(
+            roles_of("pkg/__main__.py", &none).entry_point,
+            Some("a package's `__main__.py`")
+        );
+        let pyproject = "[project]\nname = \"tool\"\n\n[project.scripts]\ntool = \"tool.cli:main\"\n\n[tool.poetry.scripts]\nold = \"tool.legacy:run\"\nother = { callable = \"tool.other:run\" }\nfile = { reference = \"tool/raw.py\", type = \"file\" }\n";
+        let files = [("pyproject.toml", pyproject)];
+        let tracked: Vec<String> = files.iter().map(|(p, _)| p.to_string()).collect();
+        let scripts = ConfiguredHarness::from_tree(
+            |path| {
+                files
+                    .iter()
+                    .find(|(p, _)| *p == path)
+                    .map(|(_, s)| s.to_string())
+            },
+            &tracked,
+        );
+        for path in [
+            "tool/cli.py",
+            "src/tool/cli.py",
+            "tool/legacy/__init__.py",
+            "tool/other.py",
+        ] {
+            assert!(roles_of(path, &scripts).entry_point.is_some(), "{path}");
+        }
+        for path in [
+            "tool/raw.py",
+            "mytool/cli.py",
+            "tool/cli_helpers.py",
+            "tool/cli/sub.py",
+        ] {
+            assert_eq!(roles_of(path, &scripts).entry_point, None, "{path}");
+        }
+        // The form is read in a module only, never in a harness file under that name.
+        assert!(!roles_of("tool/cli.py", &scripts).python_exit);
+    }
+
+    #[test]
+    fn a_module_is_an_entry_point_by_its_roles_or_its_main_block() {
+        let module = Roles {
+            import_exit: true,
+            ..Roles::default()
+        };
+        let main = "if __name__ == \"__main__\":\n    run()\n";
+        assert!(entry_point(&module, main).is_some());
+        assert_eq!(entry_point(&module, "import sys\nsys.exit(0)\n"), None);
+        let named = Roles {
+            entry_point: Some("a package's `__main__.py`"),
+            ..module
+        };
+        assert_eq!(
+            entry_point(&named, "import sys\nsys.exit(0)\n"),
+            Some("a package's `__main__.py`")
+        );
     }
 
     fn site(form: Form, subject: &str, line: usize) -> Site {
@@ -602,11 +760,16 @@ mod tests {
             Form::UnittestMethodAssigned,
             Form::UnittestMethodNeutralised,
             Form::ExitZero,
+            Form::ImportExitZero,
         ];
         for form in forms {
             let (kind, held_at_warning, fix) = finding(form);
             assert_eq!(kind.gates, &[GATE]);
-            assert_eq!(held_at_warning, form == Form::ExitZero, "{form:?}");
+            assert_eq!(
+                held_at_warning,
+                matches!(form, Form::ExitZero | Form::ImportExitZero),
+                "{form:?}"
+            );
             assert!(!fix.is_empty());
         }
         let codes: HashSet<&str> = forms.iter().map(|f| finding(*f).0.code).collect();

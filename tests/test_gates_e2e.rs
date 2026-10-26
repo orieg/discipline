@@ -9804,6 +9804,94 @@ fn python_module_level_import_skips_are_read_by_ignored_tests() {
     assert!(ignored_findings(&run).is_empty(), "{}", run.stdout);
 }
 
+/// A script-style Python test (#843): `test_func` is run by the file's
+/// `if __name__ == "__main__":` block, as `python test.py` runs it. The base side holds
+/// `<dir>func.py` and `<dir>test.py` ending with `base_main`; the change ends the test
+/// file with `head_main` instead, the test function untouched.
+fn script_entry_run(
+    src_dir: &str,
+    test_dir: &str,
+    base_main: &str,
+    head_main: &str,
+    pr_body: &str,
+) -> Run {
+    let import = if src_dir.is_empty() {
+        "from func import solve\n".to_string()
+    } else {
+        format!("from {}.func import solve\n", src_dir.trim_end_matches('/'))
+    };
+    let test = |main: &str| {
+        format!("{import}\n\ndef test_func(candidate):\n    assert candidate(1, 2) == 3\n    assert candidate(2, 2) == 4\n{main}")
+    };
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        &format!("{src_dir}func.py"),
+        "def solve(a, b):\n    return a + b\n",
+    );
+    repo.write(&format!("{test_dir}test.py"), &test(base_main));
+    repo.commit("test: a script-style test");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(&format!("{test_dir}test.py"), &test(head_main));
+    repo.commit("test: change the entry point");
+    repo.check_with_pr(&[], pr_body)
+}
+
+#[test]
+fn a_test_the_files_main_entry_point_no_longer_calls_is_reported_by_ignored_tests() {
+    const MAIN: &str = "\n\nif __name__ == '__main__':\n    test_func(solve)\n";
+    const PR: &str = "no-issue: an entry point change";
+    let skipped = (
+        "ignored-tests/existing-test-skipped".to_string(),
+        "error".to_string(),
+    );
+    for (src_dir, test_dir) in [("", ""), ("src/", "tests/")] {
+        // The call removed, then the whole block: the test no longer runs.
+        for head in ["\n\nif __name__ == '__main__':\n    print('done')\n", ""] {
+            let run = script_entry_run(src_dir, test_dir, MAIN, head, PR);
+            assert_eq!(run.code, 1, "{head}\n{}{}", run.stdout, run.stderr);
+            assert_eq!(ignored_findings(&run), vec![skipped.clone()], "{head}");
+            let v = &run.violations("ignored-tests")[0];
+            assert_eq!(v["file"], format!("{test_dir}test.py"));
+            assert_eq!(v["line"], 4);
+            assert!(
+                v["message"].as_str().unwrap().contains("entry point"),
+                "{}",
+                v["message"]
+            );
+        }
+        // Reformatted, or reached through a function the block calls: still run.
+        for head in [
+            "\n\nif \"__main__\" == __name__:\n    test_func(\n        solve,\n    )\n",
+            "\n\ndef main():\n    test_func(solve)\n\n\nif __name__ == \"__main__\":\n    main()\n",
+            "\n\nif __name__ == '__main__':\n    for check in (test_func,):\n        check(solve)\n",
+        ] {
+            let run = script_entry_run(src_dir, test_dir, MAIN, head, PR);
+            assert!(ignored_findings(&run).is_empty(), "{head}\n{}", run.stdout);
+        }
+    }
+    // The base side had no entry point: nothing ran the test as a script.
+    let run = script_entry_run("", "", "", "", PR);
+    assert!(ignored_findings(&run).is_empty(), "{}", run.stdout);
+    // `allow-ignore` names the test and lifts it.
+    let run = script_entry_run(
+        "",
+        "",
+        MAIN,
+        "",
+        "no-issue: an entry point change\n\nallow-ignore: test_func the file now runs under pytest with a fixture",
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(ignored_findings(&run).is_empty());
+    assert_eq!(
+        run.outcome("ignored-tests")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
 #[test]
 fn javascript_source_files_are_analysed_by_javascript_pack() {
     let repo = Repo::new();
