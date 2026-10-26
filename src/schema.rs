@@ -190,7 +190,7 @@ pub fn generate_schema() -> Value {
                     "max_inline_overrides": {
                         "type": "integer",
                         "minimum": 0,
-                        "description": "Most inline exemption markers one change may apply (default: unset, no cap)"
+                        "description": "Most inline exemption markers one change may write: those on the lines it adds or modifies, and in the pull request body. Markers already in the tree stay applied and are not counted (default: unset, no cap)"
                     },
                     "require_approval": {
                         "type": "boolean",

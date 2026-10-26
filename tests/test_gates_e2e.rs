@@ -8298,6 +8298,134 @@ fn override_budget_caps_what_one_change_may_excuse() {
         .contains("`max_overrides` increased from 0 to 5"));
 }
 
+/// Six `time-estimates` markers already in the tree, under a cap of five.
+fn repo_with_six_markers_in_the_tree(directives: &str) -> Repo {
+    let repo = Repo::new();
+    let legacy: String = (1..=6)
+        .map(|i| format!("Phase {i} (1 week). <!-- discipline:allow(time-estimates) -->\n"))
+        .collect();
+    repo.commit_base_files(
+        &[
+            (
+                "discipline.toml",
+                &format!("{CONFIG_HEAD}[directives]\n{directives}"),
+            ),
+            ("docs/legacy.md", &legacy),
+        ],
+        "chore: config and six markers",
+    );
+    repo
+}
+
+fn new_markers(n: usize) -> String {
+    (1..=n)
+        .map(|i| format!("Step {i} (2 weeks). <!-- discipline:allow(time-estimates) -->\n"))
+        .collect()
+}
+
+fn inline_refusals(run: &Run) -> Vec<String> {
+    run.json()["policy_failures"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|f| f.as_str().map(str::to_string))
+        .filter(|f| f.contains("max_inline_overrides"))
+        .collect()
+}
+
+/// `max_inline_overrides` counts the markers on lines the change adds or modifies. A
+/// whole-tree gate applies every marker in the tree on every run; those stay listed in
+/// the report but are not the change's (#849).
+#[test]
+fn the_inline_budget_counts_the_markers_a_change_writes_not_the_tree() {
+    // A change that touches another file: six markers applied, none counted.
+    let repo = repo_with_six_markers_in_the_tree("max_inline_overrides = 5\n");
+    repo.write("notes.txt", "hello\n");
+    repo.commit("chore: notes");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.json()["overrides"], 6, "the markers stay applied");
+    assert!(inline_refusals(&run).is_empty());
+
+    // Exactly the cap passes; one more fails, and only the change's markers are counted.
+    let at_cap = repo_with_six_markers_in_the_tree("max_inline_overrides = 5\n");
+    at_cap.write("docs/more.md", &new_markers(5));
+    at_cap.commit("docs: five markers");
+    let run = at_cap.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.json()["overrides"], 11);
+
+    let over = repo_with_six_markers_in_the_tree("max_inline_overrides = 5\n");
+    over.write("docs/more.md", &new_markers(6));
+    over.commit("docs: six markers");
+    let run = over.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.json()["errors"], 0, "only the refusal fails it");
+    assert_eq!(
+        inline_refusals(&run),
+        vec![
+            "6 inline override(s) on lines this change adds; `directives.max_inline_overrides` allows 5"
+        ]
+    );
+
+    // A modified marker line is one the change writes.
+    let modified = repo_with_six_markers_in_the_tree("max_inline_overrides = 5\n");
+    let legacy = std::fs::read_to_string(modified.file("docs/legacy.md")).unwrap();
+    modified.write(
+        "docs/legacy.md",
+        &legacy.replacen("Phase 1 (1 week)", "Phase 1 (3 weeks)", 1),
+    );
+    modified.write("docs/more.md", &new_markers(5));
+    modified.commit("docs: five markers and an edited one");
+    let run = modified.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(inline_refusals(&run)[0].starts_with("6 inline override(s)"));
+
+    // `--staged`: the change is the index against HEAD.
+    let staged = repo_with_six_markers_in_the_tree("max_inline_overrides = 5\n");
+    staged.write("notes.txt", "hello\n");
+    staged.git(&["add", "-A"]);
+    assert_eq!(staged.check(&["--staged"]).code, 0);
+    staged.write("docs/more.md", &new_markers(6));
+    staged.git(&["add", "-A"]);
+    let run = staged.check(&["--staged"]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(inline_refusals(&run)[0].starts_with("6 inline override(s)"));
+
+    // `fail_on_overrides` is about every applied override, the tree's included: a change
+    // that writes no marker still fails under it.
+    let all = repo_with_six_markers_in_the_tree("fail_on_overrides = true\n");
+    all.write("notes.txt", "hello\n");
+    all.commit("chore: notes");
+    assert_eq!(all.check(&[]).code, 1);
+}
+
+/// A `shell-secrets` marker records its own line, so one added to an unchanged command
+/// is counted, even where the secret it lifts is on another line of the command.
+#[test]
+fn a_shell_secrets_marker_counts_at_its_own_line() {
+    let repo = repo_with_base_config(&format!(
+        "{CONFIG_HEAD}[directives]\nmax_inline_overrides = 0\n"
+    ));
+    repo.commit_base(
+        "scripts/run.sh",
+        "#!/bin/sh\ndocker run \\\n  -e AWS_SECRET_ACCESS_KEY=\"$AWS_SECRET_ACCESS_KEY\" \\\n  amazon/aws-cli:latest\n",
+        "chore: script",
+    );
+    repo.write(
+        "scripts/run.sh",
+        "#!/bin/sh\ndocker run \\\n  -e AWS_SECRET_ACCESS_KEY=\"$AWS_SECRET_ACCESS_KEY\" \\\n  amazon/aws-cli:latest # secrets-argv-ok: local fixture only\n",
+    );
+    repo.commit("chore: allow the fixture");
+    let run = repo.check(&[]);
+    let overrides = run.outcome("shell-secrets")["overrides"].clone();
+    assert_eq!(overrides[0]["source"]["detail"]["line"], 4, "{overrides}");
+    assert_eq!(overrides[0]["subject"], "scripts/run.sh:3", "{overrides}");
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(inline_refusals(&run)[0].starts_with("1 inline override(s)"));
+}
+
 #[test]
 fn required_approval_is_read_from_gitlab_at_the_merge_requests_head() {
     let repo = repo_with_two_self_granted_overrides(

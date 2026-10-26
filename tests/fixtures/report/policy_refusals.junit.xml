@@ -12,7 +12,7 @@
   </testsuite>
   <testsuite name="policy" tests="7" failures="3" errors="0" skipped="0" time="0.0">
     <testcase name="max-inline-overrides-exceeded [directives.max_inline_overrides]" classname="discipline.policy" time="0.0">
-      <failure message="Inline Override Budget Exceeded" type="error">[directives.max_inline_overrides] The change applies more inline overrides than `directives.max_inline_overrides` allows, so the run is refused. The counts are in the JSON report (`policy_failures`).</failure>
+      <failure message="Inline Override Budget Exceeded" type="error">[directives.max_inline_overrides] The change writes more inline overrides, on the lines it adds or modifies, than `directives.max_inline_overrides` allows, so the run is refused. The counts are in the JSON report (`policy_failures`).</failure>
     </testcase>
     <testcase name="max-overrides-exceeded [directives.max_overrides]" classname="discipline.policy" time="0.0">
       <failure message="Directive Override Budget Exceeded" type="error">[directives.max_overrides] The change applies more directive overrides than `directives.max_overrides` allows, so the run is refused. The counts are in the JSON report (`policy_failures`).</failure>

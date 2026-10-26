@@ -731,7 +731,7 @@ fn sec_inline_override_budget_enforced() {
         .unwrap_or_default();
     assert!(
         failures.iter().any(|f| f.as_str().is_some_and(|s| s
-            .contains("2 inline override(s) applied; `directives.max_inline_overrides` allows 1"))),
+            .contains("2 inline override(s) on lines this change adds; `directives.max_inline_overrides` allows 1"))),
         "run output must state inline override budget failure: {:?}",
         failures
     );

@@ -71,7 +71,7 @@ pub const REFUSALS: &[RefusalInfo] = &[
         key: "directives.max_inline_overrides",
         blocks: true,
         title: "Inline Override Budget Exceeded",
-        message: "The change applies more inline overrides than `directives.max_inline_overrides` allows, so the run is refused. The counts are in the JSON report (`policy_failures`).",
+        message: "The change writes more inline overrides, on the lines it adds or modifies, than `directives.max_inline_overrides` allows, so the run is refused. The counts are in the JSON report (`policy_failures`).",
     },
     RefusalInfo {
         kind: RefusalKind::ApprovalRequired,
