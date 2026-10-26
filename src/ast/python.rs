@@ -507,6 +507,16 @@ impl<'a> PythonExtractor<'a> {
         for child in root.children(&mut cursor) {
             self.pytestmark_skips(child, &mut marks);
         }
+        // An import skip is read as a skip under a condition no CI variable decides until
+        // the files of the change say whose module it names
+        // (`ParsedFileFacts::resolve_import_skips`).
+        let import_skips = self.module_import_skips(root);
+        for skip in &import_skips {
+            marks
+                .conditional
+                .push((skip.condition.clone(), CiVerdict::NotCi));
+        }
+        self.facts.import_skips = import_skips;
         let mut scope = Vec::new();
         self.inherited_cases
             .push(super::test_cases::extract_python_pytestmark_cases(
@@ -518,6 +528,228 @@ impl<'a> PythonExtractor<'a> {
         self.visit_node(root, &mut scope, marks.ignored);
         self.inherited_skips.pop();
         self.inherited_cases.pop();
+    }
+
+    /// The statements of the module, outside any compound statement, that skip every test
+    /// of the file when an import fails: an expression statement or assignment that calls
+    /// `pytest.importorskip("m")` outside a lambda, and a `try` whose body imports and whose handler of
+    /// `ImportError` or `ModuleNotFoundError` (a tuple holding one, or a bare `except:`)
+    /// calls `pytest.skip(.., allow_module_level=True)`. `importorskip` and `skip` are
+    /// also read as names the module imports from `pytest`.
+    fn module_import_skips(&self, root: Node<'a>) -> Vec<super::ImportSkip> {
+        let from_pytest = self.names_from_pytest(root);
+        let names = |call: Node<'a>, wanted: &str| {
+            call.child_by_field_name("function")
+                .is_some_and(|f| match f.kind() {
+                    "attribute" => {
+                        self.last_name(f) == Some(wanted)
+                            && f.child_by_field_name("object")
+                                .is_some_and(|o| self.pytest_names.is_module(self.text(o)))
+                    }
+                    "identifier" => from_pytest
+                        .iter()
+                        .any(|&(bound, item)| bound == self.text(f) && item == wanted),
+                    _ => false,
+                })
+        };
+        let mut out = Vec::new();
+        let mut cursor = root.walk();
+        for statement in root.named_children(&mut cursor) {
+            match statement.kind() {
+                "expression_statement" => {
+                    // The call may be part of a larger expression (`f =
+                    // pytest.importorskip("m").f`); a lambda's body does not run here.
+                    let mut calls = Vec::new();
+                    let mut stack = vec![statement];
+                    while let Some(n) = stack.pop() {
+                        if n.kind() == "lambda" {
+                            continue;
+                        }
+                        if n.kind() == "call" && names(n, "importorskip") {
+                            calls.push(n);
+                        }
+                        let mut inner = n.walk();
+                        stack.extend(n.named_children(&mut inner));
+                    }
+                    let Some(call) = calls.into_iter().min_by_key(|c| c.start_byte()) else {
+                        continue;
+                    };
+                    let module = call.child_by_field_name("arguments").and_then(|args| {
+                        let mut cursor = args.walk();
+                        let children: Vec<Node> = args.named_children(&mut cursor).collect();
+                        children
+                            .iter()
+                            .copied()
+                            .find(|c| !matches!(c.kind(), "keyword_argument" | "comment"))
+                            .or_else(|| {
+                                children.iter().find_map(|c| {
+                                    (c.kind() == "keyword_argument"
+                                        && c.child_by_field_name("name")
+                                            .is_some_and(|n| self.text(n) == "modname"))
+                                    .then(|| c.child_by_field_name("value"))
+                                    .flatten()
+                                })
+                            })
+                            .and_then(|m| python_string_content(m, self.src))
+                    });
+                    out.push(super::ImportSkip {
+                        line: statement.start_position().row + 1,
+                        condition: self.text(call).to_string(),
+                        modules: module.into_iter().collect(),
+                    });
+                }
+                "try_statement" => {
+                    let modules = statement
+                        .child_by_field_name("body")
+                        .map(|body| self.imported_modules(body))
+                        .unwrap_or_default();
+                    if modules.is_empty() {
+                        continue;
+                    }
+                    let mut clauses = statement.walk();
+                    let skips = statement
+                        .named_children(&mut clauses)
+                        .filter(|c| c.kind() == "except_clause" && self.catches_import_error(*c))
+                        .any(|clause| {
+                            let mut inner = clause.walk();
+                            let found = clause
+                                .named_children(&mut inner)
+                                .filter(|b| b.kind() == "block")
+                                .any(|block| {
+                                    let mut statements = block.walk();
+                                    let found = block.named_children(&mut statements).any(|s| {
+                                        s.kind() == "expression_statement"
+                                            && s.named_child(0).is_some_and(|call| {
+                                                call.kind() == "call"
+                                                    && names(call, "skip")
+                                                    && self.allows_module_level(call)
+                                            })
+                                    });
+                                    found
+                                });
+                            found
+                        });
+                    if skips {
+                        out.push(super::ImportSkip {
+                            line: statement.start_position().row + 1,
+                            condition: format!("import of {} fails", modules.join(", ")),
+                            modules,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// `(bound name, imported name)` of each `from pytest import ..` of the module.
+    fn names_from_pytest(&self, root: Node<'a>) -> Vec<(&'a str, &'a str)> {
+        let mut out = Vec::new();
+        let mut cursor = root.walk();
+        for statement in root.named_children(&mut cursor) {
+            let from_pytest = statement.kind() == "import_from_statement"
+                && statement
+                    .child_by_field_name("module_name")
+                    .is_some_and(|m| self.text(m) == "pytest");
+            if !from_pytest {
+                continue;
+            }
+            let mut names = statement.walk();
+            for name in statement.children_by_field_name("name", &mut names) {
+                let (item, bound) = match name.kind() {
+                    "aliased_import" => (
+                        name.child_by_field_name("name"),
+                        name.child_by_field_name("alias"),
+                    ),
+                    _ => (Some(name), Some(name)),
+                };
+                if let (Some(item), Some(bound)) = (item, bound) {
+                    out.push((self.text(bound), self.text(item)));
+                }
+            }
+        }
+        out
+    }
+
+    /// The modules the import statements of `block` name, outside nested compound
+    /// statements: `a.b` for `import a.b` and `from a.b import c`, `.c` for
+    /// `from .c import d`.
+    fn imported_modules(&self, block: Node<'a>) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut cursor = block.walk();
+        for statement in block.named_children(&mut cursor) {
+            match statement.kind() {
+                "import_statement" => {
+                    let mut names = statement.walk();
+                    for name in statement.children_by_field_name("name", &mut names) {
+                        let module = match name.kind() {
+                            "aliased_import" => name.child_by_field_name("name"),
+                            _ => Some(name),
+                        };
+                        out.extend(module.map(|m| self.text(m).to_string()));
+                    }
+                }
+                "import_from_statement" => {
+                    out.extend(
+                        statement
+                            .child_by_field_name("module_name")
+                            .map(|m| self.text(m).to_string()),
+                    );
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// Whether an `except` clause catches a failed import: a bare `except:`, or one whose
+    /// classes include `ImportError` or `ModuleNotFoundError`.
+    fn catches_import_error(&self, clause: Node<'a>) -> bool {
+        let mut cursor = clause.walk();
+        let values: Vec<Node> = clause
+            .children_by_field_name("value", &mut cursor)
+            .collect();
+        if values.is_empty() {
+            return true;
+        }
+        let mut stack = values;
+        while let Some(value) = stack.pop() {
+            match value.kind() {
+                "identifier" | "attribute" => {
+                    if matches!(
+                        self.last_name(value),
+                        Some("ImportError" | "ModuleNotFoundError")
+                    ) {
+                        return true;
+                    }
+                }
+                "tuple" | "parenthesized_expression" => {
+                    let mut inner = value.walk();
+                    stack.extend(value.named_children(&mut inner));
+                }
+                // `except ImportError as e`, where the grammar reads the alias into the value.
+                "as_pattern" => stack.extend(value.named_child(0)),
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Whether a `skip(..)` call passes `allow_module_level=True`, without which pytest
+    /// refuses a skip outside a test as a collection error.
+    fn allows_module_level(&self, call: Node<'a>) -> bool {
+        call.child_by_field_name("arguments").is_some_and(|args| {
+            let mut cursor = args.walk();
+            let found = args.named_children(&mut cursor).any(|a| {
+                a.kind() == "keyword_argument"
+                    && a.child_by_field_name("name")
+                        .is_some_and(|n| self.text(n) == "allow_module_level")
+                    && a.child_by_field_name("value")
+                        .is_some_and(|v| v.kind() == "true")
+            });
+            found
+        })
     }
 
     /// The skip marks of one decorator. A name the file binds to a mark is read as that
@@ -3909,5 +4141,288 @@ class TestAlways:
             verdict(&decorated("CI = os.environ.get(\"CI\")\n", "not CI")),
             OTHER_SKIP
         );
+    }
+}
+
+#[cfg(test)]
+mod module_import_skip_tests {
+    use super::*;
+    use crate::guards::agent_diff::{evaluate_ignored_tests, TestPair};
+
+    const TESTS: &str =
+        "\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n";
+    const TREE: &[&str] = &[
+        "src/calc.py",
+        "mypkg/__init__.py",
+        "lib/__init__.py",
+        "tests/helpers.py",
+        "tests/test_calc.py",
+        "docs/guide.md",
+    ];
+
+    fn facts(head: &str) -> ParsedFileFacts {
+        let src = format!("{head}{TESTS}");
+        PythonPack
+            .extract("tests/test_calc.py", &src, &AssertVocabulary::default())
+            .unwrap()
+    }
+
+    fn resolved(head: &str, tree: &[&str]) -> ParsedFileFacts {
+        let mut facts = facts(head);
+        let tree: Vec<String> = tree.iter().map(|p| p.to_string()).collect();
+        facts.resolve_import_skips("tests/test_calc.py", &tree);
+        facts
+    }
+
+    /// The modules of each import skip the pack read.
+    fn modules(head: &str) -> Vec<Vec<String>> {
+        facts(head)
+            .import_skips
+            .into_iter()
+            .map(|s| s.modules)
+            .collect()
+    }
+
+    /// `(ignored, conditional)` of each test once the skips are read against `TREE`.
+    fn outcome(head: &str) -> Vec<(bool, Option<String>)> {
+        resolved(head, TREE)
+            .tests
+            .into_iter()
+            .map(|t| (t.ignored, t.conditional_ignore))
+            .collect()
+    }
+
+    const IMPORTORSKIP_FORMS: &[(&str, &str)] = &[
+        (
+            "import pytest\npytest.importorskip(\"src.calc\")\n",
+            "src.calc",
+        ),
+        (
+            "import pytest\ncalc = pytest.importorskip('src.calc')\n",
+            "src.calc",
+        ),
+        (
+            "import pytest\ncalc: object = pytest.importorskip('src.calc')\n",
+            "src.calc",
+        ),
+        (
+            "import pytest as pt\ncalc = pt.importorskip('src.calc')\n",
+            "src.calc",
+        ),
+        (
+            "from pytest import importorskip\ncalc = importorskip('src.calc')\n",
+            "src.calc",
+        ),
+        (
+            "from pytest import importorskip as needs\ncalc = needs('src.calc')\n",
+            "src.calc",
+        ),
+        (
+            "import pytest\ncalc = pytest.importorskip(modname='src.calc')\n",
+            "src.calc",
+        ),
+        (
+            "import pytest\nf = pytest.importorskip('src.calc').f\n",
+            "src.calc",
+        ),
+    ];
+
+    const GUARD_FORMS: &[(&str, &str)] = &[
+        (
+            "import pytest\ntry:\n    from src.calc import f, g\nexcept ImportError:\n    pytest.skip('x', allow_module_level=True)\n",
+            "src.calc",
+        ),
+        (
+            "import pytest\ntry:\n    from src.calc import f, g\nexcept ModuleNotFoundError:\n    pytest.skip('x', allow_module_level=True)\n",
+            "src.calc",
+        ),
+        (
+            "import pytest\ntry:\n    from src.calc import f, g\nexcept (AttributeError, ImportError):\n    pytest.skip('x', allow_module_level=True)\n",
+            "src.calc",
+        ),
+        (
+            "import pytest\ntry:\n    from src.calc import f, g\nexcept ImportError as e:\n    pytest.skip(str(e), allow_module_level=True)\n",
+            "src.calc",
+        ),
+        (
+            "import pytest\ntry:\n    from src.calc import f, g\nexcept:\n    pytest.skip('x', allow_module_level=True)\n",
+            "src.calc",
+        ),
+        (
+            "from pytest import skip\ntry:\n    import src.calc as calc\nexcept builtins.ImportError:\n    skip('x', allow_module_level=True)\n",
+            "src.calc",
+        ),
+    ];
+
+    #[test]
+    fn module_scope_importorskip_is_read_in_each_form() {
+        for (head, module) in IMPORTORSKIP_FORMS {
+            assert_eq!(modules(head), vec![vec![module.to_string()]], "{head}");
+            // Read by the pack alone, before the tree is known: a conditional skip.
+            for test in facts(head).tests {
+                assert!(!test.ignored, "{head}");
+                assert!(
+                    test.conditional_ignore
+                        .as_deref()
+                        .is_some_and(|c| c.ends_with("src.calc')") || c.ends_with("src.calc\")")),
+                    "{head}"
+                );
+                assert_eq!(test.ci_verdict, Some(CiVerdict::NotCi), "{head}");
+            }
+        }
+    }
+
+    #[test]
+    fn module_scope_import_guard_that_skips_the_module_is_read_in_each_form() {
+        for (head, module) in GUARD_FORMS {
+            assert_eq!(modules(head), vec![vec![module.to_string()]], "{head}");
+            for test in facts(head).tests {
+                assert_eq!(
+                    test.conditional_ignore.as_deref(),
+                    Some("import of src.calc fails"),
+                    "{head}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn what_is_not_a_module_import_skip_is_not_read() {
+        let not_skips = [
+            // Not pytest's.
+            "import helpers\ncalc = helpers.importorskip('src.calc')\n",
+            "def importorskip(m):\n    return None\n\ncalc = importorskip('src.calc')\n",
+            // A lambda's body runs when it is called, not at import.
+            "import pytest\nload = lambda: pytest.importorskip('src.calc')\n",
+            // Without `allow_module_level=True` pytest refuses the skip at collection.
+            "import pytest\ntry:\n    from src.calc import f, g\nexcept ImportError:\n    pytest.skip('x')\n",
+            "import pytest\ntry:\n    from src.calc import f, g\nexcept ImportError:\n    pytest.skip('x', allow_module_level=False)\n",
+            // A handler that does not catch a failed import.
+            "import pytest\ntry:\n    from src.calc import f, g\nexcept ValueError:\n    pytest.skip('x', allow_module_level=True)\n",
+            // A `try` that imports nothing.
+            "import pytest\ntry:\n    f = make()\nexcept ImportError:\n    pytest.skip('x', allow_module_level=True)\n",
+            // Plain imports.
+            "from src.calc import f, g\n",
+        ];
+        for head in not_skips {
+            assert!(modules(head).is_empty(), "{head}");
+            for test in facts(head).tests {
+                assert!(!test.ignored, "{head}");
+                assert_eq!(test.conditional_ignore, None, "{head}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_import_skip_inside_a_test_is_left_to_the_rules_for_its_body() {
+        let src = "import pytest\n\n\ndef test_f():\n    calc = pytest.importorskip('src.calc')\n    assert calc.f(2) == 4\n";
+        let facts = PythonPack
+            .extract("tests/test_calc.py", src, &AssertVocabulary::default())
+            .unwrap();
+        assert!(facts.import_skips.is_empty());
+        // Control: the same statement at module scope is read.
+        let module = "import pytest\ncalc = pytest.importorskip('src.calc')\n\n\ndef test_f():\n    assert calc.f(2) == 4\n";
+        let facts = PythonPack
+            .extract("tests/test_calc.py", module, &AssertVocabulary::default())
+            .unwrap();
+        assert_eq!(facts.import_skips.len(), 1);
+    }
+
+    #[test]
+    fn a_first_party_module_makes_the_skip_unconditional() {
+        let unconditional = vec![(true, None), (true, None)];
+        for (head, _) in IMPORTORSKIP_FORMS.iter().chain(GUARD_FORMS) {
+            assert_eq!(outcome(head), unconditional, "{head}");
+        }
+        for module in [
+            "mypkg",
+            "mypkg.sub",
+            "lib.io",
+            "calc",
+            "helpers",
+            ".calc",
+            "..calc",
+        ] {
+            let head = format!("import pytest\nm = pytest.importorskip('{module}')\n");
+            assert_eq!(outcome(&head), unconditional, "{module}");
+        }
+        let relative = "import pytest\ntry:\n    from . import calc\nexcept ImportError:\n    pytest.skip('x', allow_module_level=True)\n";
+        assert_eq!(outcome(relative), unconditional);
+    }
+
+    #[test]
+    fn another_projects_module_stays_a_conditional_skip() {
+        let conditional =
+            |c: &str| vec![(false, Some(c.to_string())), (false, Some(c.to_string()))];
+        let numpy = "import pytest\nnp = pytest.importorskip('numpy')\n";
+        assert_eq!(outcome(numpy), conditional("pytest.importorskip('numpy')"));
+        // A name the tree holds only as part of a longer name, or as a directory without
+        // Python files.
+        for module in ["io", "calc_extra", "test_calc_data", "docs"] {
+            let head = format!("import pytest\nm = pytest.importorskip('{module}')\n");
+            let want = format!("pytest.importorskip('{module}')");
+            assert_eq!(outcome(&head), conditional(&want), "{module}");
+        }
+        // A module that is not a literal is not resolved.
+        let computed = "import pytest\nm = pytest.importorskip(NAME)\n";
+        assert_eq!(outcome(computed), conditional("pytest.importorskip(NAME)"));
+        let guarded = "import pytest\ntry:\n    import numpy as np\nexcept ImportError:\n    pytest.skip('x', allow_module_level=True)\n";
+        assert_eq!(outcome(guarded), conditional("import of numpy fails"));
+        // Control: the same module resolves once the tree holds it.
+        let tree = [TREE, &["numpy/__init__.py"]].concat();
+        let facts = resolved(numpy, &tree);
+        assert!(facts
+            .tests
+            .iter()
+            .all(|t| t.ignored && t.conditional_ignore.is_none()));
+    }
+
+    /// `(code, severity)` of each finding `ignored-tests` reports for the tests of a file
+    /// whose base side starts with `base` and head side with `head`, both read against
+    /// `TREE`.
+    fn findings(base: &str, head: &str) -> Vec<(String, crate::config::Severity)> {
+        let (base, head) = (resolved(base, TREE), resolved(head, TREE));
+        let pairs: Vec<TestPair> = base
+            .tests
+            .iter()
+            .zip(&head.tests)
+            .map(|(base, head)| TestPair {
+                path: "tests/test_calc.py",
+                base,
+                head,
+                forced: false,
+            })
+            .collect();
+        let settings = crate::config::IgnoredTestsGate::default();
+        let out = evaluate_ignored_tests(&pairs, &[], &settings, &[], false).unwrap();
+        out.violations
+            .iter()
+            .map(|v| (v.code.clone(), v.severity))
+            .collect()
+    }
+
+    #[test]
+    fn only_an_import_skip_the_change_adds_is_reported() {
+        use crate::config::Severity;
+        let plain = "from src.calc import f, g\n";
+        let sut = "import pytest\ncalc = pytest.importorskip('src.calc')\n";
+        let numpy = "import pytest\nnp = pytest.importorskip('numpy')\n";
+        let skipped = (
+            "ignored-tests/existing-test-skipped".to_string(),
+            Severity::Error,
+        );
+        let noted = (
+            "ignored-tests/test-conditionally-skipped".to_string(),
+            Severity::Note,
+        );
+        assert_eq!(findings(plain, sut), vec![skipped.clone(), skipped]);
+        assert_eq!(findings(plain, numpy), vec![noted.clone(), noted]);
+        // Already guarded on the base side: unchanged.
+        assert!(findings(sut, sut).is_empty());
+        assert!(findings(numpy, numpy).is_empty());
+        let guard = GUARD_FORMS[0].0;
+        assert!(findings(sut, guard).is_empty());
+        // Control: removing the guard is not a skip.
+        assert!(findings(sut, plain).is_empty());
     }
 }

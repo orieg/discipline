@@ -9314,6 +9314,74 @@ fn f5_python_context_managers_and_pytestmark_detected() {
     assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
 }
 
+/// A repository whose base holds `src/calc.py` and a test module that starts with
+/// `base`, changed so the module starts with `head`.
+fn python_module_skip_run(base: &str, head: &str) -> Run {
+    const TESTS: &str =
+        "\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n";
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "src/calc.py",
+        "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+    );
+    repo.write("tests/test_calc.py", &format!("{base}{TESTS}"));
+    repo.commit("test: calc");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write("tests/test_calc.py", &format!("{head}{TESTS}"));
+    repo.commit("test: change calc tests");
+    repo.check(&[])
+}
+
+/// `(code, severity)` of each finding `ignored-tests` reported.
+fn ignored_findings(run: &Run) -> Vec<(String, String)> {
+    run.violations("ignored-tests")
+        .iter()
+        .map(|v| {
+            (
+                v["code"].as_str().unwrap().to_string(),
+                v["severity"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn python_module_level_import_skips_are_read_by_ignored_tests() {
+    let plain = "from src.calc import f, g\n";
+    let sut = "import pytest\ncalc = pytest.importorskip('src.calc')\nf, g = calc.f, calc.g\n";
+    let guard = "import pytest\ntry:\n    from src.calc import f, g\nexcept ImportError:\n    pytest.skip('calc unavailable', allow_module_level=True)\n";
+    let numpy = "import pytest\nnp = pytest.importorskip('numpy')\nfrom src.calc import f, g\n";
+    let skipped = (
+        "ignored-tests/existing-test-skipped".to_string(),
+        "error".to_string(),
+    );
+    let noted = (
+        "ignored-tests/test-conditionally-skipped".to_string(),
+        "note".to_string(),
+    );
+
+    // The repository's own module: every test of the file stops running.
+    for head in [sut, guard] {
+        let run = python_module_skip_run(plain, head);
+        assert_eq!(run.code, 1, "{head}\n{}{}", run.stdout, run.stderr);
+        assert_eq!(
+            ignored_findings(&run),
+            vec![skipped.clone(), skipped.clone()],
+            "{head}"
+        );
+    }
+
+    // Another project's module: a skip under a condition, as other such skips are.
+    let run = python_module_skip_run(plain, numpy);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(ignored_findings(&run), vec![noted.clone(), noted]);
+
+    // Already guarded on the base side: the change adds no skip.
+    let run = python_module_skip_run(sut, &format!("{sut}# reworded\n"));
+    assert!(ignored_findings(&run).is_empty(), "{}", run.stdout);
+}
+
 #[test]
 fn javascript_source_files_are_analysed_by_javascript_pack() {
     let repo = Repo::new();
@@ -16785,7 +16853,7 @@ fn suppression_delta_defaults_to_nonblocking_warning() {
 // ---- bench-regression: arm exemptions, memory rows, zero estimates ----------
 
 /// Runs the bench suite in dual-file mode against two in-job result files.
-fn bench_dual(repo: &Repo, base: Option<&str>, head: &str, config: &str) -> common::Run {
+fn bench_dual(repo: &Repo, base: Option<&str>, head: &str, config: &str) -> Run {
     let head_file = repo.dir.path().join("head_bench_out.json");
     std::fs::write(&head_file, head).unwrap();
     let head_s = head_file.to_str().unwrap().to_string();

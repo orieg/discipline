@@ -401,6 +401,12 @@ impl PytestNames {
         }
     }
 
+    /// Whether a dotted expression names the `pytest` module, under a name the file
+    /// binds to it or as `pytest` itself.
+    pub fn is_module(&self, dotted: &str) -> bool {
+        self.resolve(dotted) == Some(0)
+    }
+
     /// What a dotted expression is: `Some(0)` the module, `Some(1)` its `mark`,
     /// `Some(2)` `parametrize`.
     fn resolve(&self, dotted: &str) -> Option<usize> {

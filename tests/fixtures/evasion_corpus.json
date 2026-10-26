@@ -658,7 +658,9 @@
         "tests/test_calc.py": "import pytest\ntry:\n    from src.calc import f, g\nexcept ImportError:\n    pytest.skip('calc unavailable', allow_module_level=True)\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
       },
       "verdict": {
-        "known_miss": "#830"
+        "caught": [
+          "ignored-tests/existing-test-skipped"
+        ]
       }
     },
     {
@@ -671,7 +673,23 @@
         "tests/test_calc.py": "from src.calc import f, g\n\n\nimport pytest\ncalc = pytest.importorskip('src.calc')\n\ndef test_f():\n    assert calc.f(2) == 4\n\n\ndef test_g():\n    assert calc.g(1) == 2\n"
       },
       "verdict": {
-        "known_miss": "#830"
+        "caught": [
+          "ignored-tests/existing-test-skipped"
+        ]
+      }
+    },
+    {
+      "name": "py-importorskip-third-party",
+      "base": {
+        "tests/test_stats.py": "def test_mean():\n    assert sum([1, 2, 3]) / 3 == 2\n"
+      },
+      "head": {
+        "tests/test_stats.py": "import pytest\n\nnp = pytest.importorskip('numpy')\n\n\ndef test_mean():\n    assert np.mean([1, 2, 3]) == 2\n"
+      },
+      "verdict": {
+        "caught": [
+          "ignored-tests/test-conditionally-skipped"
+        ]
       }
     },
     {

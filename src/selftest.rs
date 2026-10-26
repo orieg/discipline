@@ -6297,6 +6297,43 @@ command = "cargo test"
         },
     ),
     (
+        "ignored-tests: a Python module-level import skip is unconditional for the repository's own module, a note for another project's",
+        || {
+            use crate::config::{IgnoredTestsGate, Severity};
+            use crate::guards::agent_diff::{evaluate_ignored_tests, TestPair};
+            const TESTS: &str = "\n\ndef test_f():\n    assert f(2) == 4\n";
+            let tree = vec!["src/calc.py".to_string(), "tests/test_calc.py".to_string()];
+            let read = |head: &str| -> Result<crate::ast::ParsedFileFacts> {
+                let mut f = facts("tests/test_calc.py", &format!("{head}{TESTS}"))?;
+                f.resolve_import_skips("tests/test_calc.py", &tree);
+                Ok(f)
+            };
+            // `(code, severity)` of each finding for the change from `base` to `head`.
+            let findings = |base: &str, head: &str| -> Result<Vec<(String, Severity)>> {
+                let (base, head) = (read(base)?, read(head)?);
+                let pairs = [TestPair {
+                    path: "tests/test_calc.py",
+                    base: base.tests.first().ok_or_else(|| anyhow::anyhow!("no base test"))?,
+                    head: head.tests.first().ok_or_else(|| anyhow::anyhow!("no head test"))?,
+                    forced: false,
+                }];
+                let out = evaluate_ignored_tests(&pairs, &[], &IgnoredTestsGate::default(), &[], false)?;
+                Ok(out.violations.iter().map(|v| (v.code.clone(), v.severity)).collect())
+            };
+            let plain = "from src.calc import f\n";
+            let sut = "import pytest\nf = pytest.importorskip('src.calc').f\n";
+            let guard = "import pytest\ntry:\n    from src.calc import f\nexcept ImportError:\n    pytest.skip('x', allow_module_level=True)\n";
+            let numpy = "import pytest\nnp = pytest.importorskip('numpy')\nfrom src.calc import f\n";
+            let skipped = vec![("ignored-tests/existing-test-skipped".to_string(), Severity::Error)];
+            let noted = vec![("ignored-tests/test-conditionally-skipped".to_string(), Severity::Note)];
+            Ok(findings(plain, sut)? == skipped
+                && findings(plain, guard)? == skipped
+                && findings(plain, numpy)? == noted
+                && findings(sut, sut)?.is_empty()
+                && findings(plain, plain)?.is_empty())
+        },
+    ),
+    (
         "ignored-tests: C#, Ruby, PHP, Swift, Scala, C / C++ and Objective-C read a skip under a condition: CI is an error, another condition a note",
         || {
             use crate::ast::default_registry;
