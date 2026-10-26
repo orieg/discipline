@@ -186,6 +186,68 @@ pub fn analyze(script: &str, mode: ShellMode) -> Analysis {
     }
 }
 
+/// The words of each simple command in `script`, in source order, its name first. A
+/// literal word is read as the shell reads it, quotes removed (`'not slow'` is
+/// `not slow`); a word that expands at run time is kept as written. `None` when the
+/// script does not parse.
+pub fn command_words(script: &str) -> Option<Vec<Vec<String>>> {
+    let tree = crate::pretool::parse_shell_tree(script).ok()?;
+    let root = tree.root_node();
+    if root.has_error() || depth_exceeds(root, MAX_DEPTH) {
+        return None;
+    }
+    let read = |n: Node<'_>| literal_word(n, script).unwrap_or_else(|| node_text(n, script));
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "command" {
+            let mut words = Vec::new();
+            if let Some(name) = node.child_by_field_name("name") {
+                words.push(read(
+                    named_children(name).into_iter().next().unwrap_or(name),
+                ));
+            }
+            let mut c = node.walk();
+            words.extend(node.children_by_field_name("argument", &mut c).map(read));
+            out.push((node.start_byte(), words));
+        }
+        let mut c = node.walk();
+        stack.extend(node.named_children(&mut c));
+    }
+    out.sort_by_key(|(at, _)| *at);
+    Some(out.into_iter().map(|(_, words)| words).collect())
+}
+
+fn node_text(n: Node<'_>, src: &str) -> String {
+    src.get(n.start_byte()..n.end_byte())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// A word as the shell reads it, quotes removed; `None` when it expands at run time.
+fn literal_word(n: Node<'_>, src: &str) -> Option<String> {
+    let unquoted = |n: Node<'_>| {
+        let t = node_text(n, src);
+        t.get(1..t.len().saturating_sub(1))
+            .unwrap_or("")
+            .to_string()
+    };
+    match n.kind() {
+        "word" | "number" => Some(node_text(n, src)),
+        "raw_string" => Some(unquoted(n)),
+        "string" => named_children(n)
+            .iter()
+            .all(|c| c.kind() == "string_content")
+            .then(|| unquoted(n)),
+        "concatenation" => named_children(n)
+            .into_iter()
+            .map(|c| literal_word(c, src))
+            .collect::<Option<Vec<_>>>()
+            .map(|parts| parts.concat()),
+        _ => None,
+    }
+}
+
 /// Deepest syntax tree the analysis reads.
 const MAX_DEPTH: usize = 256;
 
@@ -639,6 +701,25 @@ mod tests {
     }
     fn ci(cmd: &str) -> Analysis {
         analyze(cmd, CI_SCRIPT)
+    }
+
+    #[test]
+    fn command_words_are_read_with_quotes_removed() {
+        let words = |s: &str| command_words(s).expect("parses");
+        assert_eq!(
+            words("-q -k 'not test_f' -m \"not slow\" --x=a'b'"),
+            [vec!["-q", "-k", "not test_f", "-m", "not slow", "--x=ab"]]
+        );
+        assert_eq!(
+            words("jest --ci || true; exit 0"),
+            [vec!["jest", "--ci"], vec!["true"], vec!["exit", "0"]]
+        );
+        // A word that expands at run time is kept as written; text in a comment is no word.
+        assert_eq!(
+            words("jest \"$ARGS\" # --passWithNoTests"),
+            [vec!["jest", "\"$ARGS\""]]
+        );
+        assert!(command_words("jest 'unclosed").is_none());
     }
 
     #[test]

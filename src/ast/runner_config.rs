@@ -1098,6 +1098,206 @@ pub fn script_setup_files(file_name: &str, source: &str) -> SetupFiles {
     read_script_setup_files(root, source.as_bytes(), jest).unwrap_or(SetupFiles::Dynamic)
 }
 
+/// A configuration written as code, as a tree of its literal values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScriptConfigTree {
+    /// The exported object: strings, numbers, booleans, `null`, arrays and objects. A
+    /// regular expression literal is its source text (`/\.spec\.js$/`); a string keeps
+    /// its escape sequences as written.
+    pub tree: serde_json::Value,
+    /// The key paths (segments) whose value is not a literal (a call, a name, a spread in
+    /// an array or an object, a computed or shorthand key), each with its source text.
+    /// Such a value is left out of `tree`.
+    pub computed: Vec<(Vec<String>, String)>,
+    /// The source outside the exported object (imports, bindings, the export itself),
+    /// its words joined by single spaces.
+    pub outside: String,
+}
+
+/// Reads a `jest.config.*` or `vitest.config.*` file whose exported object is a literal
+/// (see [`js_exported_object`]) into a tree. `None` when there is no such object, the
+/// file does not parse, or a top-level statement other than an import, a `require`
+/// binding, the binding of the exported object and the export itself could change the
+/// configuration (`module.exports.testMatch = [...]` after the export).
+pub fn script_config_tree(file_name: &str, source: &str) -> Option<ScriptConfigTree> {
+    let typescript = [".ts", ".mts", ".cts"]
+        .iter()
+        .any(|ext| file_name.ends_with(ext));
+    let language: tree_sitter::Language = if typescript {
+        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+    } else {
+        tree_sitter_javascript::LANGUAGE.into()
+    };
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&language).ok()?;
+    let tree = crate::ast::source_text::parse(&mut parser, source).ok()?;
+    let root = tree.root_node();
+    if root.has_error() {
+        return None;
+    }
+    let src = source.as_bytes();
+    let object = js_exported_object(root, src)?;
+    let mut cursor = root.walk();
+    for statement in root.named_children(&mut cursor) {
+        let allowed = match statement.kind() {
+            "comment" | "import_statement" | "export_statement" => true,
+            // `"use strict";`, or the `module.exports = ...` that `js_default_export`
+            // found (a second one would have made it return `None`).
+            "expression_statement" => statement.named_child(0).is_some_and(|e| {
+                e.kind() == "string"
+                    || (e.kind() == "assignment_expression"
+                        && e.child_by_field_name("left")
+                            .is_some_and(|l| text(l, src) == "module.exports"))
+            }),
+            "lexical_declaration" | "variable_declaration" => {
+                let mut inner = statement.walk();
+                let declarators: Vec<Node> = statement.named_children(&mut inner).collect();
+                declarators.iter().all(|d| {
+                    d.kind() != "variable_declarator"
+                        || d.child_by_field_name("value").is_some_and(|v| {
+                            v.id() == object.id() || is_require(v, src) || contains(v, object)
+                        })
+                })
+            }
+            _ => false,
+        };
+        if !allowed {
+            return None;
+        }
+    }
+    let mut computed = Vec::new();
+    let value = js_literal(object, src, &mut Vec::new(), &mut computed)?;
+    let outside = format!(
+        "{} {}",
+        source.get(..object.start_byte())?,
+        source.get(object.end_byte()..)?
+    );
+    Some(ScriptConfigTree {
+        tree: value,
+        computed,
+        outside: outside.split_whitespace().collect::<Vec<_>>().join(" "),
+    })
+}
+
+/// Whether `node` is `require("<literal>")`.
+fn is_require(node: Node, src: &[u8]) -> bool {
+    node.kind() == "call_expression"
+        && node
+            .child_by_field_name("function")
+            .is_some_and(|f| text(f, src) == "require")
+        && node.child_by_field_name("arguments").is_some_and(|a| {
+            a.named_child_count() == 1
+                && a.named_child(0)
+                    .is_some_and(|s| js_string(s, src).is_some())
+        })
+}
+
+/// Whether `inner` lies within `outer` (`satisfies`, `as` or a `defineConfig` call
+/// around the exported object).
+fn contains(outer: Node, inner: Node) -> bool {
+    outer.start_byte() <= inner.start_byte() && inner.end_byte() <= outer.end_byte()
+}
+
+/// The literal value of `node`, recording in `computed` each path at or below `path`
+/// whose value is not a literal. `None` when `node` itself is not one.
+fn js_literal(
+    node: Node,
+    src: &[u8],
+    path: &mut Vec<String>,
+    computed: &mut Vec<(Vec<String>, String)>,
+) -> Option<serde_json::Value> {
+    use serde_json::Value;
+    fn not_literal(
+        computed: &mut Vec<(Vec<String>, String)>,
+        path: &[String],
+        n: Node,
+        src: &[u8],
+    ) {
+        let shown = text(n, src)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        computed.push((path.to_vec(), shown));
+    }
+    let value = match node.kind() {
+        "string" => {
+            let mut cursor = node.walk();
+            let mut value = String::new();
+            for child in node.named_children(&mut cursor) {
+                value.push_str(text(child, src));
+            }
+            Value::String(value)
+        }
+        "template_string" => {
+            let mut cursor = node.walk();
+            let mut value = String::new();
+            for child in node.named_children(&mut cursor) {
+                if child.kind() != "string_fragment" && child.kind() != "escape_sequence" {
+                    not_literal(computed, path, node, src);
+                    return None;
+                }
+                value.push_str(text(child, src));
+            }
+            Value::String(value)
+        }
+        "regex" => Value::String(text(node, src).to_string()),
+        "number" => match text(node, src).replace('_', "").parse::<f64>() {
+            Ok(n) => serde_json::Number::from_f64(n).map_or(Value::Null, Value::Number),
+            Err(_) => {
+                not_literal(computed, path, node, src);
+                return None;
+            }
+        },
+        "true" => Value::Bool(true),
+        "false" => Value::Bool(false),
+        "null" => Value::Null,
+        "parenthesized_expression" | "as_expression" | "satisfies_expression" => {
+            return js_literal(node.named_child(0)?, src, path, computed);
+        }
+        "array" => {
+            let mut cursor = node.walk();
+            let mut items = Vec::new();
+            for (i, child) in node.named_children(&mut cursor).enumerate() {
+                if child.kind() == "comment" {
+                    continue;
+                }
+                path.push(i.to_string());
+                let item = js_literal(child, src, path, computed);
+                path.pop();
+                match item {
+                    Some(item) => items.push(item),
+                    // A spread or a computed entry: what the list holds is not known.
+                    None => {
+                        not_literal(computed, path, node, src);
+                        return None;
+                    }
+                }
+            }
+            Value::Array(items)
+        }
+        "object" => {
+            let Some(pairs) = js_object_pairs(node, src) else {
+                not_literal(computed, path, node, src);
+                return None;
+            };
+            let mut map = serde_json::Map::new();
+            for (key, value) in pairs {
+                path.push(key.clone());
+                if let Some(v) = js_literal(value, src, path, computed) {
+                    map.insert(key, v);
+                }
+                path.pop();
+            }
+            Value::Object(map)
+        }
+        _ => {
+            not_literal(computed, path, node, src);
+            return None;
+        }
+    };
+    Some(value)
+}
+
 fn read_script_setup_files(root: Node, src: &[u8], jest: bool) -> Option<SetupFiles> {
     let top = js_object_pairs(js_exported_object(root, src)?, src)?;
     let (keys, table, root_key) = if jest {

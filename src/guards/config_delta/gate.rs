@@ -1,7 +1,7 @@
 //! The gate loop `toolchain-config` and `sandbox-config` run, and what each hands it
 //! ([`TreeGate`]).
 
-use super::{diff_trees, load, load_or_empty, Classified};
+use super::{diff_trees, load, load_or_empty, Classified, Rule};
 use crate::config::{BasicGate, GateSettings, Severity};
 use crate::findings::FindingKind;
 use crate::gitctx::{ChangeKind, ChangedFile};
@@ -34,6 +34,22 @@ pub type Inherited = fn(&str, &Value, &Value) -> Vec<(String, String)>;
 /// severity.
 pub type OtherFile = fn(&Context, Severity, &mut GateOutcome, &ChangedFile) -> Result<()>;
 
+/// The two sides of a configuration written as code, read as trees, and the rules that
+/// apply to them.
+pub struct LiteralTrees {
+    pub base: Value,
+    pub head: Value,
+    pub rules: Vec<&'static Rule>,
+    /// The two sides also differ where no rule reads: that part of the change is
+    /// reported as not analysed.
+    pub other_changes: bool,
+}
+
+/// Reads a changed configuration written as code (by path, base source, head source)
+/// where both sides are literals; `None` when either is not, and the change is then
+/// reported as not analysed.
+pub type LiteralCode = fn(&str, &str, &str) -> Option<LiteralTrees>;
+
 /// One gate over a rule table: everything [`run`] does not decide itself.
 pub struct TreeGate {
     /// The gate id.
@@ -57,6 +73,9 @@ pub struct TreeGate {
     pub absent_side: AbsentSide,
     pub read_order: ReadOrder,
     pub inherited: Option<Inherited>,
+    /// Configurations written as code that are judged like a data file where they are
+    /// literals.
+    pub literal_code: Option<LiteralCode>,
     pub other_file: Option<OtherFile>,
     /// The note when the change touches no file of this gate.
     pub nothing_examined: &'static str,
@@ -88,6 +107,25 @@ pub fn run(ctx: &Context, settings: &BasicGate, gate: &TreeGate) -> Result<GateO
             Classified::Executable => {
                 if file.kind == ChangeKind::Added {
                     continue;
+                }
+                if let Some(read) = gate.literal_code {
+                    let head = ctx.git.head_content(&file.path)?;
+                    let base = ctx.git.base_content(&file.old_path)?;
+                    if let (Some(base), Some(head)) = (base, head) {
+                        if let Some(trees) = read(&file.path, &base, &head) {
+                            let name = file.path.rsplit('/').next().unwrap_or(&file.path);
+                            let sides = Sides {
+                                name,
+                                base: &trees.base,
+                                head: &trees.head,
+                                rules: &trees.rules,
+                            };
+                            judge(ctx, settings, gate, &mut out, &file, &sides);
+                            if !trees.other_changes {
+                                continue;
+                            }
+                        }
+                    }
                 }
                 let ov = lift(gate.not_analysed, &file.path);
                 let sev = settings.severity().capped_at_warning();
@@ -152,53 +190,13 @@ pub fn run(ctx: &Context, settings: &BasicGate, gate: &TreeGate) -> Result<GateO
                     );
                     continue;
                 };
-                let inherited = match gate.inherited {
-                    Some(inherited) => inherited(&name, base_tree, head_tree),
-                    None => Vec::new(),
+                let sides = Sides {
+                    name: &name,
+                    base: base_tree,
+                    head: head_tree,
+                    rules: &rules,
                 };
-                for (key, gained) in inherited {
-                    let ov = lift(gate.not_analysed, &key)
-                        .or_else(|| lift(gate.not_analysed, &file.path));
-                    let anchored = ov.is_none();
-                    let sev = settings.severity().capped_at_warning();
-                    out.lift_or_push(
-                        ov,
-                        ctx.overridable(sev),
-                        gate.not_analysed,
-                        (Some(&file.path), None),
-                        format!(
-                            "`{key}` in `{}` now inherits {gained}; what an inherited configuration loosens cannot be read from this diff.",
-                            file.path
-                        ),
-                        &format!(
-                            "Review the inherited configuration; record it with `{directive}: {key} <reason>` if it is intended."
-                        ),
-                    );
-                    // One file can inherit through several keys: the key tells them apart.
-                    if anchored {
-                        out.anchor_last(key.clone());
-                    }
-                }
-                for w in diff_trees(base_tree, head_tree, &rules) {
-                    let ov = lift(gate.changed, &w.key)
-                        .or_else(|| w.key.rsplit('.').next().and_then(|k| lift(gate.changed, k)))
-                        .or_else(|| lift(gate.changed, &file.path));
-                    let anchored = ov.is_none();
-                    out.lift_or_push(
-                        ov,
-                        ctx.overridable(settings.severity()),
-                        gate.changed,
-                        (Some(&file.path), None),
-                        format!("`{}` {} in `{}`.", w.key, w.what, file.path),
-                        &format!(
-                            "Revert it, or justify it on its own line in the PR body or a commit message: `{directive}: {} <reason>`.",
-                            w.key
-                        ),
-                    );
-                    if anchored {
-                        out.anchor_last(w.key.clone());
-                    }
-                }
+                judge(ctx, settings, gate, &mut out, &file, &sides);
             }
         }
     }
@@ -206,4 +204,73 @@ pub fn run(ctx: &Context, settings: &BasicGate, gate: &TreeGate) -> Result<GateO
         out.notes.push(gate.nothing_examined.to_string());
     }
     Ok(out)
+}
+
+/// Both sides of a changed configuration file, as trees, and the rules that apply.
+struct Sides<'a> {
+    name: &'a str,
+    base: &'a Value,
+    head: &'a Value,
+    rules: &'a [&'static Rule],
+}
+
+/// Reports what `sides.head` inherits anew and what it loosens relative to `sides.base`.
+fn judge(
+    ctx: &Context,
+    settings: &BasicGate,
+    gate: &TreeGate,
+    out: &mut GateOutcome,
+    file: &ChangedFile,
+    sides: &Sides,
+) {
+    let directive = gate.directive[0];
+    let lift = |lifts: &FindingKind, subject: &str| {
+        ctx.find_override(gate.id, lifts, gate.directive, subject)
+    };
+    let inherited = match gate.inherited {
+        Some(inherited) => inherited(sides.name, sides.base, sides.head),
+        None => Vec::new(),
+    };
+    for (key, gained) in inherited {
+        let ov = lift(gate.not_analysed, &key).or_else(|| lift(gate.not_analysed, &file.path));
+        let anchored = ov.is_none();
+        let sev = settings.severity().capped_at_warning();
+        out.lift_or_push(
+            ov,
+            ctx.overridable(sev),
+            gate.not_analysed,
+            (Some(&file.path), None),
+            format!(
+                "`{key}` in `{}` now inherits {gained}; what an inherited configuration loosens cannot be read from this diff.",
+                file.path
+            ),
+            &format!(
+                "Review the inherited configuration; record it with `{directive}: {key} <reason>` if it is intended."
+            ),
+        );
+        // One file can inherit through several keys: the key tells them apart.
+        if anchored {
+            out.anchor_last(key.clone());
+        }
+    }
+    for w in diff_trees(sides.base, sides.head, sides.rules) {
+        let ov = lift(gate.changed, &w.key)
+            .or_else(|| w.key.rsplit('.').next().and_then(|k| lift(gate.changed, k)))
+            .or_else(|| lift(gate.changed, &file.path));
+        let anchored = ov.is_none();
+        out.lift_or_push(
+            ov,
+            ctx.overridable(settings.severity()),
+            gate.changed,
+            (Some(&file.path), None),
+            format!("`{}` {} in `{}`.", w.key, w.what, file.path),
+            &format!(
+                "Revert it, or justify it on its own line in the PR body or a commit message: `{directive}: {} <reason>`.",
+                w.key
+            ),
+        );
+        if anchored {
+            out.anchor_last(w.key.clone());
+        }
+    }
 }

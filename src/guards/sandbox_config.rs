@@ -125,6 +125,7 @@ const TREE_GATE: TreeGate = TreeGate {
     absent_side: AbsentSide::Empty,
     read_order: ReadOrder::BaseThenHead,
     inherited: None,
+    literal_code: None,
     other_file: None,
     nothing_examined: "no agent settings or container definitions modified in this diff",
 };
