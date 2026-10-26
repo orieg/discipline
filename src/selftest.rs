@@ -3374,6 +3374,43 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "vacuous-tests: a new test that checks only a mock and a trivial property asserts only on mocks; an equality on the result beside the mock check is a check",
+        || {
+            use crate::guards::agent_diff::{evaluate_vacuous_tests, Located};
+            let settings = crate::config::AssertionGate::default();
+            let codes = |path: &str, src: &str| -> Result<Vec<String>> {
+                let facts = extract(path, src)?;
+                let added: Vec<Located> = facts
+                    .tests
+                    .iter()
+                    .map(|test| Located { path, file_survives: true, test })
+                    .collect();
+                Ok(evaluate_vacuous_tests(&added, &settings, &[])?
+                    .violations
+                    .iter()
+                    .map(|v| v.code.clone())
+                    .collect())
+            };
+            let py = |check: &str| {
+                codes(
+                    "tests/test_a.py",
+                    &format!("def test_run():\n    m = mock.Mock()\n    r = run(m)\n    m.assert_called_once_with(1)\n    {check}\n"),
+                )
+            };
+            let js = |check: &str| {
+                codes(
+                    "test/a.test.js",
+                    &format!("test('run', () => {{\n  const m = jest.fn();\n  const r = run(m);\n  expect(m).toHaveBeenCalledWith(1);\n  {check}\n}});\n"),
+                )
+            };
+            let mocks = ["vacuous-tests/asserts-only-on-mocks".to_string()];
+            Ok(py("assert r is not None")? == mocks
+                && py("assert r == 2")?.is_empty()
+                && js("expect(r).toBeDefined();")? == mocks
+                && js("expect(r).toBe(2);")?.is_empty())
+        },
+    ),
+    (
         "assertion-reduction: a self-comparison a change introduces in an existing test is a warning at its line; one the base side held, and a near-miss, are not",
         || {
             use crate::guards::agent_diff::{evaluate_assertion_reduction, TestPair};

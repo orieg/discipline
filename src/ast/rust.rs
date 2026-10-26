@@ -599,6 +599,7 @@ impl<'a> Extractor<'a> {
             should_panic: should_panic.clone(),
             mock_setups: 0,
             mock_asserts: 0,
+            mock_checks: 0,
             retries: None,
             sleeps: 0,
             trivial_asserts: 0,

@@ -19,11 +19,7 @@ pub fn evaluate_vacuous_tests(
     for a in added.iter().filter(|a| !exempt.matches(a.path)) {
         // The finding this test would raise, in the order the checks below report it;
         // a sound test raises none, and a directive naming it lifts nothing.
-        let mocks_only = a.test.mock_asserts > 0
-            && a.test.mock_asserts >= a.test.checks()
-            && a.test.strong_asserts == 0
-            && a.test.should_panic.is_none()
-            && a.test.expected_exceptions.is_empty();
+        let mocks_only = asserts_only_on_mocks(a.test);
         let trivial_only = a.test.trivial_asserts > 0
             && a.test.trivial_asserts >= a.test.checks()
             && a.test.should_panic.is_none()
@@ -59,23 +55,27 @@ pub fn evaluate_vacuous_tests(
             out.overrides.push(record);
             continue;
         }
-        // Every assertion is on a double's interactions: the test checks that the mock
-        // was called, and nothing about what the code produced.
-        if a.test.mock_asserts > 0
-            && a.test.mock_asserts >= a.test.checks()
-            && a.test.strong_asserts == 0
-            && a.test.should_panic.is_none()
-            && a.test.expected_exceptions.is_empty()
-        {
+        // Every assertion is on a double's interactions, or on a double's interactions
+        // and a property nearly any value has: the test checks that the mock was called,
+        // and nothing about what the code produced.
+        if mocks_only {
+            let message = if a.test.trivial_asserts == 0 {
+                format!(
+                    "New test `{}` makes {} assertion(s), all on test-double interactions; it does not check what the code produces.",
+                    a.test.name, a.test.mock_asserts
+                )
+            } else {
+                format!(
+                    "New test `{}` asserts only on mocks and trivial properties: {} check(s) of test-double interactions and {} that hold for nearly any value (not-null, defined, ok, truthy); it does not check what the code produces.",
+                    a.test.name, a.test.mock_asserts, a.test.trivial_asserts
+                )
+            };
             out.push(
                 crate::config::Severity::Warning,
                 &crate::findings::ASSERTS_ONLY_ON_MOCKS,
                 Some(a.path),
                 Some(a.test.line),
-                format!(
-                    "New test `{}` makes {} assertion(s), all on test-double interactions; it does not check what the code produces.",
-                    a.test.name, a.test.mock_asserts
-                ),
+                message,
                 "Assert on the result or the observable effect as well; interaction checks alone pass whatever the code returns.",
             );
             continue;
@@ -170,6 +170,28 @@ pub fn evaluate_vacuous_tests(
     Ok(out)
 }
 
+/// Whether every check of `test` is on a double's interactions, or on a double's
+/// interactions and properties that hold for nearly any value (`is not None`,
+/// `toBeDefined`, `assertNotNull`), with at least one interaction check.
+///
+/// A pack that counts an interaction check among its assertions (a called
+/// `unittest.mock` assertion method, a Jest `toHaveBeenCalledWith`) says so in
+/// `mock_checks`, and such a check explains its own assertion. A pack that does not (a
+/// Java `verify(`, a mockall checkpoint) leaves every assertion to be explained as
+/// trivial, or the test to have no strong assertion and no more checks than
+/// interaction checks.
+fn asserts_only_on_mocks(test: &crate::ast::TestFn) -> bool {
+    if test.mock_asserts == 0 || test.should_panic.is_some() || !test.expected_exceptions.is_empty()
+    {
+        return false;
+    }
+    let explained = test
+        .mock_checks
+        .min(test.mock_asserts)
+        .saturating_add(test.trivial_asserts);
+    (test.mock_asserts >= test.checks() && test.strong_asserts == 0) || test.checks() <= explained
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,5 +276,158 @@ mod tests {
         }];
         let out_real = evaluate_vacuous_tests(&loc_real, &settings, &[]).unwrap();
         assert_eq!(out_real.violations.len(), 0);
+    }
+}
+
+/// #865: a new test whose checks are all on a double's interactions or on properties
+/// nearly any value has is `asserts-only-on-mocks`, in every pack; a check on the result
+/// beside either keeps it quiet, and each weak kind alone keeps its own finding.
+#[cfg(all(
+    test,
+    feature = "lang-python",
+    feature = "lang-javascript",
+    feature = "lang-java",
+    feature = "lang-go",
+    feature = "lang-rust"
+))]
+mod mocks_and_trivial_properties {
+    use super::*;
+
+    const MOCKS: &str = "vacuous-tests/asserts-only-on-mocks";
+    const TRIVIAL: &str = "vacuous-tests/asserts-only-trivial-properties";
+    const MIXED: &str = "only on mocks and trivial properties";
+
+    /// `(code, whether the message names both weak kinds)` of each finding on the file.
+    fn verdict(path: &str, src: &str) -> Vec<(String, bool)> {
+        let facts = crate::ast::default_registry()
+            .find_pack(path)
+            .unwrap()
+            .extract(path, src, &crate::ast::AssertVocabulary::default())
+            .unwrap();
+        assert_eq!(facts.tests.len(), 1, "{src}");
+        let added = [Located {
+            path,
+            file_survives: true,
+            test: &facts.tests[0],
+        }];
+        evaluate_vacuous_tests(&added, &crate::config::AssertionGate::default(), &[])
+            .unwrap()
+            .violations
+            .iter()
+            .map(|v| (v.code.clone(), v.message.contains(MIXED)))
+            .collect()
+    }
+
+    fn mixed() -> Vec<(String, bool)> {
+        vec![(MOCKS.to_string(), true)]
+    }
+
+    fn only(code: &str) -> Vec<(String, bool)> {
+        vec![(code.to_string(), false)]
+    }
+
+    #[test]
+    fn python() {
+        let py = |body: &str| {
+            verdict(
+                "tests/test_a.py",
+                &format!("def test_run():\n    m = mock.Mock()\n    r = run(m)\n{body}"),
+            )
+        };
+        assert_eq!(
+            py("    m.assert_called_once_with(1)\n    assert r is not None\n"),
+            mixed()
+        );
+        assert_eq!(
+            py("    m.assert_called_once_with(1)\n    assert isinstance(r, int)\n"),
+            mixed()
+        );
+        // Controls: a check on the result beside either weak kind; each weak kind alone.
+        assert!(py("    m.assert_called_once_with(1)\n    assert r == 2\n").is_empty());
+        assert!(py("    assert r is not None\n    assert r == 2\n").is_empty());
+        assert_eq!(py("    m.assert_called_once_with(1)\n"), only(MOCKS));
+        assert_eq!(py("    assert r is not None\n"), only(TRIVIAL));
+    }
+
+    #[test]
+    fn javascript_and_typescript() {
+        for path in ["test/a.test.js", "test/a.test.ts"] {
+            let js = |body: &str| {
+                verdict(
+                    path,
+                    &format!(
+                        "test('run', () => {{\n  const m = jest.fn();\n  const r = run(m);\n{body}}});\n"
+                    ),
+                )
+            };
+            assert_eq!(
+                js("  expect(m).toHaveBeenCalledWith(1);\n  expect(r).toBeDefined();\n"),
+                mixed(),
+                "{path}"
+            );
+            assert_eq!(
+                js("  expect(m).toHaveBeenCalled();\n  expect(r).toBeTruthy();\n"),
+                mixed(),
+                "{path}"
+            );
+            // Controls: a check on the result beside either weak kind; each weak kind alone.
+            assert!(js("  expect(m).toHaveBeenCalledWith(1);\n  expect(r).toBe(2);\n").is_empty());
+            assert!(js("  expect(r).toBeDefined();\n  expect(r).toBe(2);\n").is_empty());
+            assert_eq!(js("  expect(m).toHaveBeenCalled();\n"), only(MOCKS));
+            assert_eq!(js("  expect(m).toHaveBeenCalledWith(1);\n"), only(MOCKS));
+            assert_eq!(js("  expect(r).toBeDefined();\n"), only(TRIVIAL));
+        }
+    }
+
+    /// Packs that do not count an interaction check among a test's assertions.
+    #[test]
+    fn java_go_and_rust() {
+        let java = |body: &str| {
+            verdict(
+                "src/test/java/ATest.java",
+                &format!("class ATest {{\n  @Test\n  void run() {{\n    Repo m = mock(Repo.class);\n    Object r = new Svc(m).run();\n{body}  }}\n}}\n"),
+            )
+        };
+        assert_eq!(
+            java("    verify(m).find(1);\n    assertNotNull(r);\n"),
+            mixed()
+        );
+        assert!(java("    verify(m).find(1);\n    assertEquals(2, r);\n").is_empty());
+        assert!(java("    assertNotNull(r);\n    assertEquals(2, r);\n").is_empty());
+        assert_eq!(java("    verify(m).find(1);\n"), only(MOCKS));
+        assert_eq!(java("    assertNotNull(r);\n"), only(TRIVIAL));
+
+        let go = |body: &str| {
+            verdict(
+                "a_test.go",
+                &format!("package a\nimport \"testing\"\nfunc TestRun(t *testing.T) {{\n\tm := new(MockRepo)\n\tm.On(\"Find\", 1).Return(2)\n\tr := Run(m)\n{body}}}\n"),
+            )
+        };
+        assert_eq!(
+            go("\tm.AssertExpectations(t)\n\tassert.NotNil(t, r)\n"),
+            mixed()
+        );
+        assert!(go("\tm.AssertExpectations(t)\n\tassert.Equal(t, 2, r)\n").is_empty());
+        assert!(go("\tassert.NotNil(t, r)\n\tassert.Equal(t, 2, r)\n").is_empty());
+        assert_eq!(go("\tassert.NotNil(t, r)\n"), only(TRIVIAL));
+
+        let rust = |body: &str| {
+            verdict(
+                "tests/a.rs",
+                &format!("#[test]\nfn t() {{\n    let mut m = MockRepo::new();\n    m.expect_find().returning(|_| 1);\n    let r = run(&m);\n{body}}}\n"),
+            )
+        };
+        assert_eq!(
+            rust("    m.checkpoint();\n    assert!(r.is_some());\n"),
+            mixed()
+        );
+        assert!(rust("    m.checkpoint();\n    assert_eq!(r, Some(1));\n").is_empty());
+        // A check that is neither trivial nor an equality is still a check on the result.
+        assert!(rust(
+            "    m.checkpoint();\n    assert!(r.is_some());\n    assert!(r.unwrap() > 3);\n"
+        )
+        .is_empty());
+        assert_eq!(rust("    m.checkpoint();\n"), only(MOCKS));
+        assert_eq!(rust("    assert!(r.is_some());\n"), only(TRIVIAL));
     }
 }
