@@ -411,6 +411,9 @@ pub struct LogicalLine {
     pub physical_lines: Vec<usize>,
     pub primary_line: usize,
     pub has_inline_allow: bool,
+    /// The first physical line whose own text carries the inline marker; `None` when no
+    /// line does on its own (none at all, or one split across a continuation).
+    pub marker_line: Option<usize>,
 }
 
 pub fn parse_logical_lines(content: &str) -> Vec<LogicalLine> {
@@ -443,12 +446,14 @@ pub fn parse_logical_lines(content: &str) -> Vec<LogicalLine> {
             let mut combined = String::new();
             let mut phys = Vec::with_capacity(current_parts.len());
             let mut has_inline_allow = false;
+            let mut marker_line = None;
 
             for (p_line, part) in &current_parts {
                 phys.push(*p_line);
                 let orig_line = raw_lines.get(p_line - 1).copied().unwrap_or("");
                 if line_has_secrets_argv_ok(orig_line) {
                     has_inline_allow = true;
+                    marker_line.get_or_insert(*p_line);
                 }
                 if !combined.is_empty() {
                     combined.push(' ');
@@ -484,6 +489,7 @@ pub fn parse_logical_lines(content: &str) -> Vec<LogicalLine> {
                 physical_lines: phys,
                 primary_line,
                 has_inline_allow,
+                marker_line,
             });
 
             current_parts.clear();
@@ -494,12 +500,14 @@ pub fn parse_logical_lines(content: &str) -> Vec<LogicalLine> {
         let mut combined = String::new();
         let mut phys = Vec::with_capacity(current_parts.len());
         let mut has_inline_allow = false;
+        let mut marker_line = None;
 
         for (p_line, part) in &current_parts {
             phys.push(*p_line);
             let orig_line = raw_lines.get(p_line - 1).copied().unwrap_or("");
             if line_has_secrets_argv_ok(orig_line) {
                 has_inline_allow = true;
+                marker_line.get_or_insert(*p_line);
             }
             if !combined.is_empty() {
                 combined.push(' ');
@@ -535,6 +543,7 @@ pub fn parse_logical_lines(content: &str) -> Vec<LogicalLine> {
             physical_lines: phys,
             primary_line,
             has_inline_allow,
+            marker_line,
         });
     }
 
@@ -636,9 +645,11 @@ pub fn evaluate_shell_secrets(ctx: &Context) -> Result<GateOutcome> {
                         subject: format!("{file}:{}", log_line.primary_line),
                         directive: "secrets-argv-ok".to_string(),
                         reason: "inline exemption marker".to_string(),
+                        // The marker's own line, which the inline budget compares with
+                        // the lines the change adds; the subject names the finding's.
                         source: OverrideSource::Inline {
                             file: file.clone(),
-                            line: log_line.primary_line,
+                            line: log_line.marker_line.unwrap_or(log_line.primary_line),
                         },
                         hidden: true,
                     });
@@ -853,6 +864,17 @@ mod tests {
         let logical_allowed = parse_logical_lines(allowed_multiline);
         assert_eq!(logical_allowed.len(), 1);
         assert!(logical_allowed[0].has_inline_allow);
+        assert_eq!(logical_allowed[0].marker_line, Some(2));
+
+        // The secret on the second line, the marker on the third: the marker's line is
+        // the one an inline override records, the secret's is the finding's.
+        let marker_below = r#"docker run \
+  -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+  amazon/aws-cli:latest # secrets-argv-ok: test fixture"#;
+        let logical_below = parse_logical_lines(marker_below);
+        assert_eq!(logical_below[0].primary_line, 2);
+        assert_eq!(logical_below[0].marker_line, Some(3));
+        assert_eq!(logical[0].marker_line, None);
     }
 
     #[test]

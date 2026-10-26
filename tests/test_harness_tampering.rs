@@ -124,6 +124,39 @@ const EXACT_FORMS: &[Case] = &[
         )],
     },
     Case {
+        name: "pytest: a module conftest.py registers from pytest_configure defines a report hook",
+        files: &[
+            (
+                "conftest.py",
+                "import tamper_reg\n\n\ndef pytest_configure(config):\n    config.pluginmanager.register(tamper_reg)\n",
+            ),
+            (
+                "tamper_reg.py",
+                "def pytest_runtest_logreport(report):\n    report.outcome = \"passed\"\n",
+            ),
+        ],
+        expect: &[(
+            "tamper_reg.py",
+            "    report.outcome = \"passed\"",
+            PYTEST,
+            "error",
+        )],
+    },
+    Case {
+        name: "pytest: a module conftest.py loads through import_plugin defines a report hook",
+        files: &[
+            (
+                "conftest.py",
+                "def pytest_configure(config):\n    config.pluginmanager.import_plugin(\"tamper_imp\")\n",
+            ),
+            (
+                "tamper_imp.py",
+                "def pytest_sessionfinish(session, exitstatus):\n    session.exitstatus = 0\n",
+            ),
+        ],
+        expect: &[("tamper_imp.py", "    session.exitstatus = 0", PYTEST, "error")],
+    },
+    Case {
         name: "pytest: the collection hook empties items",
         files: &[(
             "conftest.py",
@@ -494,6 +527,34 @@ const NEGATIVE_CONTROLS: &[Case] = &[
             "support/hooks.py",
             "def pytest_collection_modifyitems(config, items):\n    items[:] = []\n\n\ndef pytest_runtest_logreport(report):\n    report.outcome = \"passed\"\n",
         )],
+        expect: &[],
+    },
+    Case {
+        name: "pytest: import_plugin of a name that is no module of the repository",
+        files: &[
+            (
+                "conftest.py",
+                "def pytest_configure(config):\n    config.pluginmanager.import_plugin(\"pytest_tamper\")\n",
+            ),
+            (
+                "vendor/pytest_tamper.py",
+                "def pytest_runtest_logreport(report):\n    report.outcome = \"passed\"\n",
+            ),
+        ],
+        expect: &[],
+    },
+    Case {
+        name: "pytest: register of an object that is not a module",
+        files: &[
+            (
+                "conftest.py",
+                "import tamper_obj\n\n\ndef pytest_configure(config):\n    config.pluginmanager.register(tamper_obj.Plugin())\n",
+            ),
+            (
+                "tamper_obj.py",
+                "def pytest_runtest_logreport(report):\n    report.outcome = \"passed\"\n\n\nclass Plugin:\n    pass\n",
+            ),
+        ],
         expect: &[],
     },
     // ---- D1d ----
@@ -869,8 +930,8 @@ fn each_exact_form_is_reported_at_its_severity_and_no_near_miss_is() {
 /// dropped from it without this test saying so.
 #[test]
 fn the_negative_controls_are_enumerated() {
-    assert_eq!(EXACT_FORMS.len(), 30);
-    assert_eq!(NEGATIVE_CONTROLS.len(), 44);
+    assert_eq!(EXACT_FORMS.len(), 32);
+    assert_eq!(NEGATIVE_CONTROLS.len(), 46);
     assert!(NEGATIVE_CONTROLS.iter().all(|c| c.expect.is_empty()));
     assert!(EXACT_FORMS.iter().all(|c| !c.expect.is_empty()));
     let mut names: Vec<&str> = EXACT_FORMS
@@ -1253,6 +1314,57 @@ fn a_file_that_becomes_a_harness_file_is_read_as_added() {
         "{message}"
     );
     assert_eq!(run.outcome(GATE)["examined"], 3);
+}
+
+/// #854: a module that does not change, and that a `conftest.py` now registers as a
+/// plugin from a hook, is read as if every form in it were added.
+#[test]
+fn a_module_a_conftest_now_registers_is_read_as_added() {
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", &enabled()),
+            (
+                "tests/conftest.py",
+                "def pytest_configure(config):\n    pass\n",
+            ),
+            ("tests/myplugin.py", TAMPERED_CONFTEST),
+        ],
+        "chore: base",
+    );
+    repo.write(
+        "tests/conftest.py",
+        "import myplugin\n\n\ndef pytest_configure(config):\n    config.pluginmanager.register(myplugin)\n",
+    );
+    repo.commit("chore: register the plugin");
+    let run = check(&repo);
+    assert_eq!(
+        findings(&run),
+        vec![
+            (
+                "tests/myplugin.py".to_string(),
+                5,
+                EXIT_ZERO.to_string(),
+                "warning".to_string()
+            ),
+            (
+                "tests/myplugin.py".to_string(),
+                9,
+                PYTEST.to_string(),
+                "error".to_string()
+            ),
+        ],
+        "{}",
+        run.stdout
+    );
+    let message = run.violations(GATE)[0]["message"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        message.contains("a pytest plugin that `tests/conftest.py` loads"),
+        "{message}"
+    );
 }
 
 /// `allow-harness-tampering` lifts by file or by `path:line`, on a line of its own with

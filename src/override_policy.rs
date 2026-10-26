@@ -2,12 +2,15 @@
 //!
 //! A directive in the PR body or a commit body is written by the author of the change it
 //! excuses. `fail_on_overrides` refuses every one; the two options here sit between that
-//! and accepting them all: a budget, and an approval read from the forge.
+//! and accepting them all: a budget, and an approval read from the forge. A second budget
+//! bounds the inline markers a change writes.
 
 use crate::config::DirectivesConfig;
 use crate::could_not_check::{tag, Reason};
 use crate::forge::{self, Forge, ForgeApi};
+use crate::gitctx::ChangedFile;
 use crate::refusals::{PolicyFailure, RefusalKind};
+use crate::tokens::{OverrideRecord, OverrideSource};
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 
@@ -61,7 +64,35 @@ impl PullContext {
     }
 }
 
+/// The inline overrides among `overrides` whose marker the change writes: on a line it
+/// adds (a modified line is an added one in the diff) of a file in `changed`, or in the
+/// pull request body. A marker on a line the change leaves as it is was written by an
+/// earlier change; a gate that scans the whole tree (`pii`, `time-estimates`,
+/// `shell-secrets`) applies it on every run, and it is not counted here. Where the base is
+/// the empty tree (`--staged` before the first commit) every line is added, so every
+/// marker counts.
+pub fn inline_overrides_added<'a>(
+    overrides: impl IntoIterator<Item = &'a OverrideRecord>,
+    changed: &[ChangedFile],
+) -> usize {
+    overrides
+        .into_iter()
+        .filter(|o| match &o.source {
+            OverrideSource::Inline { file, line } => {
+                let file = file.trim_start_matches("./");
+                crate::guards::is_pr_body_label(file)
+                    || changed
+                        .iter()
+                        .any(|f| f.path == file && f.added_lines.contains(line))
+            }
+            _ => false,
+        })
+        .count()
+}
+
 /// Why this run's directive overrides or inline overrides are refused; empty when they stand.
+/// `inline_overrides` is the count of inline markers the change writes
+/// ([`inline_overrides_added`]), not of every marker the run applied.
 ///
 /// `Err` means the policy could not be evaluated (no pull-request context, forge
 /// unreachable): the caller exits 2, never passes.
@@ -78,7 +109,7 @@ pub fn judge(
         if inline_overrides > max {
             failures.push(PolicyFailure::new(
                 RefusalKind::MaxInlineOverrides,
-                format!("{inline_overrides} inline override(s) applied; `directives.max_inline_overrides` allows {max}"),
+                format!("{inline_overrides} inline override(s) on lines this change adds; `directives.max_inline_overrides` allows {max}"),
             ));
         }
     }
@@ -226,9 +257,60 @@ mod tests {
         assert_eq!(over.len(), 1);
         assert!(
             over[0].text.contains(
-                "2 inline override(s) applied; `directives.max_inline_overrides` allows 1"
+                "2 inline override(s) on lines this change adds; `directives.max_inline_overrides` allows 1"
             ),
             "{over:?}"
+        );
+    }
+
+    fn inline(file: &str, line: usize) -> OverrideRecord {
+        OverrideRecord {
+            gate: "time-estimates".into(),
+            code: None,
+            subject: format!("{file}:{line}"),
+            directive: "discipline:allow(time-estimates)".into(),
+            reason: "inline exemption marker".into(),
+            source: OverrideSource::Inline {
+                file: file.into(),
+                line,
+            },
+            hidden: true,
+        }
+    }
+
+    fn changed(path: &str, added: &[usize]) -> ChangedFile {
+        ChangedFile {
+            path: path.into(),
+            old_path: path.into(),
+            kind: crate::gitctx::ChangeKind::Modified,
+            added_lines: added.iter().copied().collect(),
+        }
+    }
+
+    /// Only a marker on a line the change adds, or in the pull request body, is the
+    /// change's own: one on an unchanged line of a changed file, or in a file the change
+    /// does not touch, is not counted, and neither is a directive override.
+    #[test]
+    fn the_inline_budget_counts_only_the_markers_the_change_writes() {
+        let mut directive = inline("docs/plan.md", 1);
+        directive.source = OverrideSource::PrBody;
+        let records = [
+            inline("docs/plan.md", 2),
+            inline("docs/plan.md", 3),
+            inline("./docs/plan.md", 4),
+            inline("docs/old.md", 2),
+            inline("<PR body>", 1),
+            directive,
+        ];
+        let change = [
+            changed("docs/plan.md", &[2, 4]),
+            changed("src/lib.rs", &[2]),
+        ];
+        assert_eq!(inline_overrides_added(&records, &change), 3);
+        assert_eq!(inline_overrides_added(&records[..4], &[]), 0);
+        assert_eq!(
+            inline_overrides_added(&records, &[changed("docs/old.md", &[1, 2])]),
+            2
         );
     }
 
