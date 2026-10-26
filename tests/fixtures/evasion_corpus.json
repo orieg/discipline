@@ -593,6 +593,40 @@
       }
     },
     {
+      "name": "py-conftest-plugin-import-plugin",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "tests/myplugin.py": "import pytest\n\n\n@pytest.hookimpl(hookwrapper=True)\ndef pytest_runtest_makereport(item, call):\n    outcome = yield\n    rep = outcome.get_result()\n    rep.outcome = \"passed\"\n",
+        "tests/conftest.py": "def pytest_configure(config):\n    config.pluginmanager.import_plugin(\"myplugin\")\n"
+      },
+      "enable": [
+        "harness-tampering"
+      ],
+      "verdict": {
+        "known_miss": "#854"
+      }
+    },
+    {
+      "name": "py-conftest-plugin-register",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "tests/myplugin.py": "import pytest\n\n\n@pytest.hookimpl(hookwrapper=True)\ndef pytest_runtest_makereport(item, call):\n    outcome = yield\n    rep = outcome.get_result()\n    rep.outcome = \"passed\"\n",
+        "tests/conftest.py": "import myplugin\n\n\ndef pytest_configure(config):\n    config.pluginmanager.register(myplugin)\n"
+      },
+      "enable": [
+        "harness-tampering"
+      ],
+      "verdict": {
+        "known_miss": "#854"
+      }
+    },
+    {
       "name": "py-duplicate-test-name-shadows",
       "base": {
         "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
@@ -1028,6 +1062,44 @@
         "caught": [
           "dependency-delta/direct-dependency-added"
         ]
+      }
+    },
+    {
+      "name": "rs-cargo-harness-false",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub fn f(x: i32) -> i32 {\n    x * 2\n}\n",
+        "tests/it.rs": "#[test]\nfn doubles() {\n    assert_eq!(p::f(2), 4);\n}\n"
+      },
+      "head": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[[test]]\nname = \"it\"\npath = \"tests/it.rs\"\nharness = false\n",
+        "tests/it.rs": "#[test]\nfn doubles() {\n    assert_eq!(p::f(2), 4);\n}\n\nfn main() {}\n"
+      },
+      "enable": [
+        "harness-tampering"
+      ],
+      "verdict": {
+        "caught": [
+          "test-floor/test-count-below-floor"
+        ]
+      }
+    },
+    {
+      "name": "rs-cargo-test-path-remapped",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub fn f(x: i32) -> i32 {\n    x * 2\n}\n",
+        "tests/it.rs": "#[test]\nfn doubles() {\n    assert_eq!(p::f(2), 4);\n}\n"
+      },
+      "head": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[[test]]\nname = \"it\"\npath = \"tests/other.rs\"\n",
+        "tests/other.rs": "#[test]\nfn other() {\n    assert_eq!(p::f(1), 2);\n}\n"
+      },
+      "enable": [
+        "harness-tampering"
+      ],
+      "verdict": {
+        "known_miss": "#854"
       }
     },
     {
