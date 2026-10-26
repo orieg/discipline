@@ -93,6 +93,13 @@ impl LanguagePack for PythonPack {
         super::bounds::python(root, src, &mut extractor.facts.tests);
         super::expectations::python(root, src, &mut extractor.facts.tests);
         super::caught_assertions::python(root, &anc, src, &mut extractor.facts.tests, vocab);
+        super::caught_assertions::through_helpers(
+            root,
+            src,
+            &mut extractor.facts,
+            super::HELPER_DEPTH,
+            |helpers| super::caught_assertions::python(root, &anc, src, helpers, vocab),
+        );
         super::expected_exceptions::python(root, &anc, src, &mut extractor.facts.tests);
         super::calls::count_python_assert_statements(root, src, &mut extractor.facts.tests);
         extractor.facts.prose = super::prose::extract(root, src, &["comment", "string"]);

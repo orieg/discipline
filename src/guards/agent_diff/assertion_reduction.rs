@@ -88,8 +88,10 @@ fn report_caught_in_added_tests(
                 Some(a.path),
                 Some(c.line),
                 format!(
-                    "Test `{}`: the assertion on line {} is caught by an enclosing handler (line {}) without failing the test; it is not an effective check.",
-                    a.test.name, c.line, c.handler_line
+                    "Test `{}`: {} is caught by an enclosing handler (line {}) without failing the test; it is not an effective check.",
+                    a.test.name,
+                    c.place(),
+                    c.handler_line
                 ),
                 &format!(
                     "Restore the assertion to propagate failures, or justify the handler in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
@@ -873,8 +875,9 @@ fn report_newly_caught(
             Some(p.path),
             Some(c.line),
             format!(
-                "{test_label}: the assertion on line {} is caught by an enclosing handler (line {}) without failing the test; it is not an effective check.",
-                c.line, c.handler_line
+                "{test_label}: {} is caught by an enclosing handler (line {}) without failing the test; it is not an effective check.",
+                c.place(),
+                c.handler_line
             ),
             &format!(
                 "Restore the assertion to propagate failures, or justify the handler in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
