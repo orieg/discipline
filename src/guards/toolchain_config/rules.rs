@@ -25,6 +25,19 @@ const GOLANGCI: &[&str] = &[
     ".golangci.json",
 ];
 const JEST: &[&str] = &["jest.config.json", "package.json"];
+const PACKAGE_JSON: &[&str] = &["package.json"];
+const JEST_JS: &[&str] = &[
+    "jest.config.js",
+    "jest.config.ts",
+    "jest.config.mjs",
+    "jest.config.cjs",
+];
+const VITEST_JS: &[&str] = &[
+    "vitest.config.js",
+    "vitest.config.ts",
+    "vitest.config.mjs",
+    "vitest.config.mts",
+];
 const CODECOV: &[&str] = &["codecov.yml", ".codecov.yml"];
 const NEXTEST: &[&str] = &[".config/nextest.toml"];
 const PHPSTAN: &[&str] = &["phpstan.neon", "phpstan.neon.dist", "phpstan.dist.neon"];
@@ -605,7 +618,7 @@ pub const RULES: &[Rule] = &[
     Rule {
         files: PYPROJECT,
         path: "tool.pytest.ini_options.addopts",
-        judge: Judge::Flags,
+        judge: Judge::PytestAddopts,
     },
     Rule {
         files: PYPROJECT,
@@ -625,7 +638,7 @@ pub const RULES: &[Rule] = &[
     Rule {
         files: PYTEST_INI,
         path: "pytest.addopts",
-        judge: Judge::Flags,
+        judge: Judge::PytestAddopts,
     },
     Rule {
         files: PYTEST_INI,
@@ -640,7 +653,7 @@ pub const RULES: &[Rule] = &[
     Rule {
         files: PYTEST_INI,
         path: "tool:pytest.addopts",
-        judge: Judge::Flags,
+        judge: Judge::PytestAddopts,
     },
     Rule {
         files: PYTEST_INI,
@@ -880,6 +893,47 @@ pub const RULES: &[Rule] = &[
     },
     Rule {
         files: JEST,
+        path: "modulePathIgnorePatterns",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: JEST,
+        path: "testMatch",
+        judge: Judge::Narrowed,
+    },
+    Rule {
+        files: JEST,
+        path: "testRegex",
+        judge: Judge::Narrowed,
+    },
+    Rule {
+        files: JEST,
+        path: "jest.modulePathIgnorePatterns",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: JEST,
+        path: "jest.testMatch",
+        judge: Judge::Narrowed,
+    },
+    Rule {
+        files: JEST,
+        path: "jest.testRegex",
+        judge: Judge::Narrowed,
+    },
+    // `package.json` test scripts: `npm test`, `npm run test:unit`.
+    Rule {
+        files: PACKAGE_JSON,
+        path: "scripts.test",
+        judge: Judge::TestScript,
+    },
+    Rule {
+        files: PACKAGE_JSON,
+        path: "scripts.test:*",
+        judge: Judge::TestScript,
+    },
+    Rule {
+        files: JEST,
         path: "jest.coverageThreshold.global.*",
         judge: Judge::Floor,
     },
@@ -1042,6 +1096,57 @@ pub const RULES: &[Rule] = &[
     },
 ];
 
+/// The Jest and Vitest configurations written as code, read where the exported object is
+/// a literal (`crate::ast::runner_config::script_config_tree`): the keys that say which
+/// tests run and the coverage floors. Vitest keeps them in its `test` block.
+pub(super) const SCRIPT_RULES: &[Rule] = &[
+    Rule {
+        files: JEST_JS,
+        path: "testPathIgnorePatterns",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: JEST_JS,
+        path: "modulePathIgnorePatterns",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: JEST_JS,
+        path: "coveragePathIgnorePatterns",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: JEST_JS,
+        path: "testMatch",
+        judge: Judge::Narrowed,
+    },
+    Rule {
+        files: JEST_JS,
+        path: "testRegex",
+        judge: Judge::Narrowed,
+    },
+    Rule {
+        files: JEST_JS,
+        path: "coverageThreshold.global.*",
+        judge: Judge::Floor,
+    },
+    Rule {
+        files: JEST_JS,
+        path: "coverageThreshold.*.*",
+        judge: Judge::Floor,
+    },
+    Rule {
+        files: VITEST_JS,
+        path: "test.exclude",
+        judge: Judge::Grown,
+    },
+    Rule {
+        files: VITEST_JS,
+        path: "test.include",
+        judge: Judge::Narrowed,
+    },
+];
+
 /// Keys through which a configuration inherits another one, per file: a gained or swapped
 /// entry pulls in settings this diff cannot read.
 pub(super) const INHERITANCE: &[(&[&str], &str)] = &[
@@ -1051,6 +1156,7 @@ pub(super) const INHERITANCE: &[(&[&str], &str)] = &[
     (ESLINTRC, "overrides.*.extends"),
     (JEST, "preset"),
     (JEST, "jest.preset"),
+    (JEST_JS, "preset"),
     (RUFF, "extend"),
     (PYPROJECT, "tool.ruff.extend"),
     (GOLANGCI, "linters.presets"),

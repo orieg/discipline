@@ -26,6 +26,12 @@ pub enum Judge {
     /// Command-line flags (string or list): losing a strict flag or gaining a lax one
     /// loosens.
     Flags,
+    /// pytest `addopts`: [`Judge::Flags`], and a `-k` / `-m` selection expression gained or
+    /// narrowed to deselect more tests.
+    PytestAddopts,
+    /// A test script's command line: an exit code it now masks, or a lax runner flag it
+    /// gained.
+    TestScript,
     /// A mode, ordered strict to loose, and the rank an absent key takes: moving to a later
     /// rank loosens. A value outside the order is not judged.
     Ranked(&'static [&'static str], usize),
@@ -91,7 +97,7 @@ pub const LAX_FLAG_PREFIXES: &[&str] = &["-Wno-"];
 
 /// Whether one pattern segment (`*`, `mypy-*`, or a literal) matches a key. A key may
 /// itself contain dots (`mypy-thirdparty.*`): keys are never split.
-pub(super) fn segment_matches(pattern: &str, key: &str) -> bool {
+pub(crate) fn segment_matches(pattern: &str, key: &str) -> bool {
     if !pattern.contains('*') {
         return pattern == key;
     }
@@ -302,6 +308,100 @@ fn lax_flags(tokens: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// What a flag list loses of the strict flags and gains of the lax ones.
+fn flag_changes(b: Option<&Value>, h: Option<&Value>) -> Vec<String> {
+    let bt = b.map(flag_tokens).unwrap_or_default();
+    let ht = h.map(flag_tokens).unwrap_or_default();
+    let (bs, hs) = (strict_flags(&bt), strict_flags(&ht));
+    let lost: Vec<_> = bs.iter().filter(|f| !hs.contains(f)).collect();
+    let (bl, hl) = (lax_flags(&bt), lax_flags(&ht));
+    let gained: Vec<_> = hl.iter().filter(|f| !bl.contains(f)).collect();
+    let mut parts = Vec::new();
+    if !lost.is_empty() {
+        parts.push(format!(
+            "lost `{}`",
+            lost.iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("`, `")
+        ));
+    }
+    if !gained.is_empty() {
+        parts.push(format!(
+            "gained `{}`",
+            gained
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("`, `")
+        ));
+    }
+    parts
+}
+
+/// Flags of a test runner's command line that let a run pass with fewer tests or none:
+/// no test found (`--passWithNoTests`), only the tests a change touches, or tests left
+/// out by path or by name.
+const LAX_TEST_SCRIPT_FLAGS: &[&str] = &[
+    "--passWithNoTests",
+    "--onlyChanged",
+    "--changedSince",
+    "--lastCommit",
+    "--changed",
+    "--testPathIgnorePatterns",
+    "--testNamePattern",
+];
+
+/// What a `package.json` test script gains that lets it pass while tests fail or do not
+/// run: an exit code masked (`|| true`, `; exit 0`), read from the script's shell syntax
+/// tree as `npm` runs it (`sh -c`, neither `errexit` nor `pipefail` on), or a lax runner
+/// flag ([`LAX_TEST_SCRIPT_FLAGS`]) on one of its commands.
+fn test_script_changes(b: Option<&Value>, h: Option<&Value>) -> Vec<String> {
+    use crate::guards::shell_masking::{analyze, command_words, GATE_COMMAND};
+    let Some(head) = h.and_then(Value::as_str) else {
+        return Vec::new();
+    };
+    let base = b.and_then(Value::as_str);
+    let mut parts = Vec::new();
+    if let Some(mask) = analyze(head, GATE_COMMAND).exit_masked() {
+        let base_masked = base.is_some_and(|s| analyze(s, GATE_COMMAND).exit_masked().is_some());
+        if !base_masked {
+            parts.push(format!(
+                "masks the test command's exit code (`{}`: {})",
+                mask.snippet,
+                mask.kind.describe()
+            ));
+        }
+    }
+    let lax = |script: &str| -> Vec<String> {
+        command_words(script)
+            .unwrap_or_else(|| vec![script.split_whitespace().map(str::to_string).collect()])
+            .into_iter()
+            .flatten()
+            .filter_map(|w| {
+                let (name, value) = match w.split_once('=') {
+                    Some((n, v)) => (n.to_string(), Some(v.to_string())),
+                    None => (w.clone(), None),
+                };
+                (LAX_TEST_SCRIPT_FLAGS.contains(&name.as_str())
+                    && value.as_deref() != Some("false"))
+                .then_some(name)
+            })
+            .collect()
+    };
+    let had = base.map(lax).unwrap_or_default();
+    let mut gained: Vec<String> = Vec::new();
+    for flag in lax(head) {
+        if !had.contains(&flag) && !gained.contains(&flag) {
+            gained.push(flag);
+        }
+    }
+    if !gained.is_empty() {
+        parts.push(format!("gained `{}`", gained.join("`, `")));
+    }
+    parts
+}
+
 /// One weakening in a configuration file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Weakening {
@@ -441,32 +541,16 @@ pub fn diff_trees(base: &Value, head: &Value, rules: &[&Rule]) -> Vec<Weakening>
                     _ => None,
                 },
                 Judge::Flags => {
-                    let bt = b.map(flag_tokens).unwrap_or_default();
-                    let ht = h.map(flag_tokens).unwrap_or_default();
-                    let (bs, hs) = (strict_flags(&bt), strict_flags(&ht));
-                    let lost: Vec<_> = bs.iter().filter(|f| !hs.contains(f)).collect();
-                    let (bl, hl) = (lax_flags(&bt), lax_flags(&ht));
-                    let gained: Vec<_> = hl.iter().filter(|f| !bl.contains(f)).collect();
-                    let mut parts = Vec::new();
-                    if !lost.is_empty() {
-                        parts.push(format!(
-                            "lost `{}`",
-                            lost.iter()
-                                .map(|s| s.as_str())
-                                .collect::<Vec<_>>()
-                                .join("`, `")
-                        ));
-                    }
-                    if !gained.is_empty() {
-                        parts.push(format!(
-                            "gained `{}`",
-                            gained
-                                .iter()
-                                .map(|s| s.as_str())
-                                .collect::<Vec<_>>()
-                                .join("`, `")
-                        ));
-                    }
+                    let parts = flag_changes(b, h);
+                    (!parts.is_empty()).then(|| parts.join("; "))
+                }
+                Judge::PytestAddopts => {
+                    let mut parts = flag_changes(b, h);
+                    parts.extend(super::pytest_select::deselected(b, h));
+                    (!parts.is_empty()).then(|| parts.join("; "))
+                }
+                Judge::TestScript => {
+                    let parts = test_script_changes(b, h);
                     (!parts.is_empty()).then(|| parts.join("; "))
                 }
                 Judge::Ranked(order, default) => {

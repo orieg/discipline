@@ -3938,6 +3938,186 @@ fn toolchain_config_reports_warning_flags_lowered_in_build_files() {
 }
 
 #[test]
+fn toolchain_config_reports_pytest_selection_masked_test_scripts_and_jest_ignores() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("pytest.ini", "[pytest]\ntestpaths = tests\n");
+    repo.write(
+        "pyproject.toml",
+        "[project]\nname = \"a\"\nversion = \"1\"\n[tool.pytest.ini_options]\naddopts = \"-m 'unit or integration'\"\n",
+    );
+    repo.write(
+        "package.json",
+        "{\"name\": \"x\", \"scripts\": {\"test\": \"jest\", \"lint\": \"eslint .\"}}\n",
+    );
+    repo.write(
+        "jest.config.js",
+        "module.exports = { testEnvironment: 'node' };\n",
+    );
+    repo.write(
+        "vitest.config.ts",
+        "import { defineConfig } from 'vitest/config';\n\nexport default defineConfig({ test: { include: ['src/**/*.test.ts'] } });\n",
+    );
+    repo.commit("chore: test runners");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative control: an `or` alternative gained (more tests), a non-test script
+    // masked, a reformatted test script and Jest configuration.
+    repo.write(
+        "pyproject.toml",
+        "[project]\nname = \"a\"\nversion = \"1\"\n[tool.pytest.ini_options]\naddopts = \"-m 'unit or integration or e2e'\"\n",
+    );
+    repo.write(
+        "package.json",
+        "{\"name\": \"x\", \"scripts\": {\"test\": \"jest \", \"lint\": \"eslint . || true\"}}\n",
+    );
+    repo.write(
+        "jest.config.js",
+        "module.exports = {\n  testEnvironment: 'node', // the default runner\n};\n",
+    );
+    repo.commit("chore: widen");
+    let quiet = repo.check(&[]);
+    assert!(
+        quiet.titles("toolchain-config").is_empty(),
+        "{:?}",
+        quiet.violations("toolchain-config")
+    );
+    assert_eq!(quiet.outcome("toolchain-config")["examined"], 3);
+
+    repo.write(
+        "pytest.ini",
+        "[pytest]\ntestpaths = tests\naddopts = -k 'not test_f'\n",
+    );
+    repo.write(
+        "pyproject.toml",
+        "[project]\nname = \"a\"\nversion = \"1\"\n[tool.pytest.ini_options]\naddopts = \"-m 'unit and not slow'\"\n",
+    );
+    repo.write(
+        "package.json",
+        "{\"name\": \"x\", \"scripts\": {\"test\": \"jest --passWithNoTests || true\", \"lint\": \"eslint . || true\"}}\n",
+    );
+    repo.write(
+        "jest.config.js",
+        "module.exports = { testEnvironment: 'node', testPathIgnorePatterns: ['calc'] };\n",
+    );
+    repo.write(
+        "vitest.config.ts",
+        "import { defineConfig } from 'vitest/config';\n\nexport default defineConfig({ test: { include: ['src/**/*.test.ts'], exclude: ['src/calc.test.ts'] } });\n",
+    );
+    repo.commit("chore: narrow");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let mut rows: Vec<(String, String, String)> = run
+        .violations("toolchain-config")
+        .iter()
+        .map(|v| {
+            (
+                v["code"].as_str().unwrap().to_string(),
+                v["file"].as_str().unwrap().to_string(),
+                v["message"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    rows.sort();
+    let weakened = "toolchain-config/toolchain-config-weakened".to_string();
+    assert_eq!(
+        rows,
+        vec![
+            (
+                weakened.clone(),
+                "jest.config.js".to_string(),
+                "`testPathIgnorePatterns` gained 1 entr(y/ies): `calc` in `jest.config.js`.".to_string()
+            ),
+            (
+                weakened.clone(),
+                "package.json".to_string(),
+                "`scripts.test` masks the test command's exit code (`jest --passWithNoTests || true`: the right side of `||` cannot fail); gained `--passWithNoTests` in `package.json`.".to_string()
+            ),
+            (
+                weakened.clone(),
+                "pyproject.toml".to_string(),
+                "`tool.pytest.ini_options.addopts` narrowed `-m` from `unit or integration` to `unit and not slow` (a test the base marker expression matched is now deselected) in `pyproject.toml`.".to_string()
+            ),
+            (
+                weakened.clone(),
+                "pytest.ini".to_string(),
+                "`pytest.addopts` gained `-k not test_f` (a test its keyword expression does not match is deselected) in `pytest.ini`.".to_string()
+            ),
+            (
+                weakened,
+                "vitest.config.ts".to_string(),
+                "`test.exclude` gained 1 entr(y/ies): `src/calc.test.ts` in `vitest.config.ts`.".to_string()
+            ),
+        ]
+    );
+
+    // Each finding is lifted by its own key, the key's last segment, or the file path.
+    repo.commit(
+        "chore: explain\n\nallow-toolchain-weakening: pytest.addopts test_f is quarantined under #1\n\
+         allow-toolchain-weakening: addopts slow tests run in the nightly job\n\
+         allow-toolchain-weakening: test the runner exits non-zero on a missing fixture until #2\n\
+         allow-toolchain-weakening: testPathIgnorePatterns calc is rewritten in #3\n\
+         allow-toolchain-weakening: vitest.config.ts the calc suite moves to the e2e runner",
+    );
+    let lifted = repo.check(&[]);
+    assert!(
+        lifted.titles("toolchain-config").is_empty(),
+        "{:?}",
+        lifted.titles("toolchain-config")
+    );
+    assert_eq!(
+        lifted.outcome("toolchain-config")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+
+    // A key no rule reads is not analysed, as before; so is a configuration written as
+    // code that is not a literal.
+    repo.write(
+        "jest.config.js",
+        "module.exports = { testEnvironment: 'jsdom', testPathIgnorePatterns: ['calc'] };\n",
+    );
+    repo.commit("chore: browser environment");
+    let titles: Vec<String> = repo
+        .check(&[])
+        .violations("toolchain-config")
+        .iter()
+        .filter(|v| v["file"] == "jest.config.js")
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        titles,
+        ["toolchain-config/toolchain-config-change-not-analysed"]
+    );
+    repo.write(
+        "jest.config.js",
+        "const base = require('./jest.base');\nmodule.exports = { ...base, testPathIgnorePatterns: ['calc'] };\n",
+    );
+    repo.commit("chore: share the base");
+    let computed = repo.check(&[]);
+    let rows: Vec<(String, String)> = computed
+        .violations("toolchain-config")
+        .iter()
+        .filter(|v| v["file"] == "jest.config.js")
+        .map(|v| {
+            (
+                v["code"].as_str().unwrap().to_string(),
+                v["severity"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        vec![(
+            "toolchain-config/toolchain-config-change-not-analysed".to_string(),
+            "warning".to_string()
+        )]
+    );
+}
+
+#[test]
 fn suppression_delta_is_a_delta_read_from_the_syntax_tree() {
     // A suppression that moves within a file, or sits inside a string, is not new.
     let repo = Repo::new();

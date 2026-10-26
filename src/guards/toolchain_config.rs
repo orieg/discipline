@@ -13,12 +13,14 @@ mod rules;
 pub use super::config_delta::{classify_with, diff_trees, load, Classified, LAX_FLAG_PREFIXES};
 pub use rules::RULES;
 
-use super::config_delta::{self, AbsentSide, ReadOrder, Rule, TreeGate, Weakening};
+use super::config_delta::{
+    self, segment_matches, AbsentSide, LiteralTrees, ReadOrder, Rule, TreeGate, Weakening,
+};
 use super::{build_flags, ci_integrity, line_allows, Context, GateOutcome};
 use crate::config::Severity;
 use crate::tokens;
 use anyhow::Result;
-use rules::{EXECUTABLE, INHERITANCE, SONAR};
+use rules::{EXECUTABLE, INHERITANCE, SCRIPT_RULES, SONAR};
 use serde_json::Value;
 
 /// Whether `path` is one of the rule files (by basename, or `dir/basename` for the dotted
@@ -31,6 +33,79 @@ pub fn classify(path: &str) -> Option<Classified> {
 /// entry the base side did not.
 pub fn inherited_changes(name: &str, base: &Value, head: &Value) -> Vec<(String, String)> {
     config_delta::gained_entries(INHERITANCE, name, base, head)
+}
+
+/// A Jest or Vitest configuration written as code, read as a data file where the object
+/// both sides export is a literal ([`crate::ast::runner_config::script_config_tree`]).
+/// `None`, and the change stays not analysed, when a side is not such a literal or a key
+/// the rules read holds a value that is not one. A change outside the keys the rules
+/// read is still reported as not analysed (`other_changes`).
+pub fn literal_code(path: &str, base: &str, head: &str) -> Option<LiteralTrees> {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let rules: Vec<&'static Rule> = SCRIPT_RULES
+        .iter()
+        .filter(|r| r.files.iter().any(|f| segment_matches(f, name)))
+        .collect();
+    if rules.is_empty() {
+        return None;
+    }
+    let base = crate::ast::runner_config::script_config_tree(name, base)?;
+    let head = crate::ast::runner_config::script_config_tree(name, head)?;
+    let read_keys: Vec<Vec<&str>> = rules
+        .iter()
+        .map(|r| r.path)
+        .chain(
+            INHERITANCE
+                .iter()
+                .filter(|(files, _)| files.contains(&name))
+                .map(|(_, p)| *p),
+        )
+        .map(|k| k.split('.').collect())
+        .collect();
+    // A computed value at, above or below a key a rule reads (`test` built by a spread
+    // hides `test.exclude`) leaves that key unknown.
+    let hidden = base.computed.iter().chain(&head.computed).any(|(at, _)| {
+        read_keys
+            .iter()
+            .any(|key| key.iter().zip(at).all(|(p, c)| segment_matches(p, c)))
+    });
+    if hidden {
+        return None;
+    }
+    let unread = |tree: &Value| {
+        let mut tree = tree.clone();
+        for key in &read_keys {
+            remove_matching(&mut tree, key);
+        }
+        tree
+    };
+    let other_changes = base.outside != head.outside
+        || base.computed != head.computed
+        || unread(&base.tree) != unread(&head.tree);
+    Some(LiteralTrees {
+        base: base.tree,
+        head: head.tree,
+        rules,
+        other_changes,
+    })
+}
+
+/// Removes from `tree` every key path that `pattern` matches (`*` is one segment).
+fn remove_matching(tree: &mut Value, pattern: &[&str]) {
+    let Some(map) = tree.as_object_mut() else {
+        return;
+    };
+    match pattern {
+        [] => {}
+        [last] => map.retain(|k, _| !segment_matches(last, k)),
+        [first, rest @ ..] => {
+            for (k, child) in map.iter_mut() {
+                if segment_matches(first, k) {
+                    remove_matching(child, rest);
+                }
+            }
+        }
+    }
 }
 
 /// A build file (`Makefile`, `CMakeLists.txt`, `setup.py`, `build.rs`): compiler warning
@@ -540,6 +615,7 @@ const TREE_GATE: TreeGate = TreeGate {
     },
     read_order: ReadOrder::HeadThenBase,
     inherited: Some(inherited_changes),
+    literal_code: Some(literal_code),
     other_file: Some(other_file),
     nothing_examined: "no toolchain configuration files modified in this diff",
 };
@@ -1055,5 +1131,296 @@ jobs:
         // Non-Sonar workflow returns None so examined count stays untouched.
         let non_sonar = "name: ci\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: cargo test\n";
         assert!(diff_sonar_workflow(Some(non_sonar), non_sonar).is_none());
+    }
+
+    #[test]
+    fn pytest_keyword_and_marker_selection_gained_or_narrowed_in_addopts() {
+        // Every file pytest reads `addopts` from.
+        for (file, base, head) in [
+            (
+                "pytest.ini",
+                "[pytest]\ntestpaths = tests\n",
+                "[pytest]\ntestpaths = tests\naddopts = -k 'not test_f'\n",
+            ),
+            (
+                "pytest.ini",
+                "[pytest]\naddopts = -q\n",
+                "[pytest]\naddopts = -q -m 'not slow'\n",
+            ),
+            (
+                "tox.ini",
+                "[pytest]\naddopts = -m 'unit or integration'\n",
+                "[pytest]\naddopts = -m unit\n",
+            ),
+            (
+                "setup.cfg",
+                "[tool:pytest]\naddopts = -k test_\n",
+                "[tool:pytest]\naddopts =\n    -k\n    test_ and not test_f\n",
+            ),
+            (
+                "pyproject.toml",
+                "[tool.pytest.ini_options]\ntestpaths = ['tests']\n",
+                "[tool.pytest.ini_options]\ntestpaths = ['tests']\naddopts = \"-k 'not test_f'\"\n",
+            ),
+            (
+                "pyproject.toml",
+                "[tool.pytest.ini_options]\naddopts = [\"-q\"]\n",
+                "[tool.pytest.ini_options]\naddopts = [\"-q\", \"-m\", \"not slow\"]\n",
+            ),
+        ] {
+            let found = diff(file, base, head);
+            assert_eq!(found.len(), 1, "{file}: {head:?} -> {found:?}");
+            assert!(found[0].0.ends_with("addopts"), "{found:?}");
+        }
+        assert_eq!(
+            diff(
+                "pytest.ini",
+                "[pytest]\naddopts = --strict-markers\n",
+                "[pytest]\naddopts = -k 'not test_f'\n"
+            ),
+            vec![(
+                "pytest.addopts".to_string(),
+                "lost `--strict-markers`; gained `-k not test_f` (a test its keyword expression does not match is deselected)".to_string()
+            )]
+        );
+        // Selecting more tests, or the same ones, is not a weakening.
+        for (base, head) in [
+            ("-k 'a or b'", "-k 'a or b or c'"),
+            ("-m 'not slow'", "-q"),
+            ("-m 'unit and not slow'", "-m unit"),
+            ("-k 'not   test_f'", "-k \"not test_f\""),
+            ("-k test_f", "-k test"),
+        ] {
+            let found = diff(
+                "pytest.ini",
+                &format!("[pytest]\naddopts = {base}\n"),
+                &format!("[pytest]\naddopts = {head}\n"),
+            );
+            assert!(found.is_empty(), "{base:?} -> {head:?}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn a_package_test_script_that_masks_its_exit_code_or_passes_with_no_tests() {
+        let pkg = |name: &str, script: &str| {
+            serde_json::json!({ "name": "x", "scripts": { name: script } }).to_string()
+        };
+        for (name, base, head, what) in [
+            (
+                "test",
+                "jest",
+                "jest --passWithNoTests || true",
+                "`scripts.test` masks the test command's exit code (`jest --passWithNoTests || true`: the right side of `||` cannot fail); gained `--passWithNoTests`",
+            ),
+            (
+                "test",
+                "jest",
+                "jest || exit 0",
+                "`scripts.test` masks the test command's exit code (`jest || exit 0`: the right side of `||` cannot fail)",
+            ),
+            (
+                "test:unit",
+                "vitest run",
+                "vitest run; exit 0",
+                "`scripts.test:unit` masks the test command's exit code (`exit 0`: the last command cannot fail)",
+            ),
+            (
+                "test:ci",
+                "mocha",
+                "mocha || :",
+                "`scripts.test:ci` masks the test command's exit code (`mocha || :`: the right side of `||` cannot fail)",
+            ),
+            (
+                "test",
+                "vitest run",
+                "vitest run --passWithNoTests",
+                "`scripts.test` gained `--passWithNoTests`",
+            ),
+        ] {
+            let found = diff("package.json", &pkg(name, base), &pkg(name, head));
+            let shown: Vec<String> = found.iter().map(|(k, w)| format!("`{k}` {w}")).collect();
+            assert_eq!(shown, [what], "{head:?}");
+        }
+        // A workspace package is read the same way.
+        assert_eq!(
+            diff(
+                "packages/core/package.json",
+                &pkg("test", "jest"),
+                &pkg("test", "jest || true")
+            )
+            .len(),
+            1
+        );
+        // A script that is not a test script, a reformatted test script, a mask the base
+        // already had, a flag switched off, and a mask inside a string are not reported.
+        for (name, base, head) in [
+            ("lint", "eslint .", "eslint . || true"),
+            ("pretest", "tsc", "tsc || true"),
+            ("test", "jest  --ci", "jest --ci"),
+            ("test", "jest || true", "jest --ci || true"),
+            ("test", "jest", "jest --passWithNoTests=false"),
+            ("test", "jest", "jest --testNamePattern '|| true'"),
+        ] {
+            let found = diff("package.json", &pkg(name, base), &pkg(name, head));
+            let lax = found.iter().any(|(_, w)| w.contains("masks"));
+            assert!(!lax, "{name}: {head:?}: {found:?}");
+        }
+        assert!(diff(
+            "package.json",
+            &pkg("lint", "eslint ."),
+            &pkg("lint", "eslint . || true")
+        )
+        .is_empty());
+        assert!(diff(
+            "package.json",
+            &pkg("test", "jest  --ci"),
+            &pkg("test", "jest --ci")
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn a_literal_jest_or_vitest_configuration_is_read_like_a_data_file() {
+        let judged = |path: &str, base: &str, head: &str| -> Option<Vec<(String, String)>> {
+            let trees = literal_code(path, base, head)?;
+            Some(
+                diff_trees(&trees.base, &trees.head, &trees.rules)
+                    .into_iter()
+                    .map(|w| (w.key, w.what))
+                    .collect(),
+            )
+        };
+        let base = "module.exports = { testEnvironment: 'node' };\n";
+        assert_eq!(
+            judged(
+                "jest.config.js",
+                base,
+                "module.exports = { testEnvironment: 'node', testPathIgnorePatterns: ['calc'] };\n"
+            ),
+            Some(vec![(
+                "testPathIgnorePatterns".to_string(),
+                "gained 1 entr(y/ies): `calc`".to_string()
+            )])
+        );
+        let ts_base = "import type { Config } from 'jest';\n\nconst config: Config = {\n  testMatch: ['**/*.test.ts'],\n};\n\nexport default config;\n";
+        let ts_head = "import type { Config } from 'jest';\n\nconst config: Config = {\n  testMatch: ['**/core/*.test.ts'],\n  modulePathIgnorePatterns: ['<rootDir>/src/calc'],\n};\n\nexport default config;\n";
+        let keys: Vec<String> = judged("web/jest.config.ts", ts_base, ts_head)
+            .unwrap()
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(keys, ["modulePathIgnorePatterns", "testMatch"]);
+        let vitest = |test: &str| {
+            format!("import {{ defineConfig }} from 'vitest/config';\n\nexport default defineConfig({{ test: {test} }});\n")
+        };
+        let keys: Vec<String> = judged(
+            "vitest.config.ts",
+            &vitest("{ include: ['src/**/*.test.ts'] }"),
+            &vitest("{ include: ['src/core/**/*.test.ts'], exclude: ['src/calc.test.ts'] }"),
+        )
+        .unwrap()
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect();
+        assert_eq!(keys, ["test.exclude", "test.include"]);
+        // Only the keys the rules read are judged: the rest of a change to such a file is
+        // still not analysed.
+        let other = |base: &str, head: &str| {
+            literal_code("jest.config.js", base, head).map(|t| t.other_changes)
+        };
+        assert_eq!(
+            other(
+                base,
+                "module.exports = { testEnvironment: 'node', testPathIgnorePatterns: ['calc'] };\n"
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            other(base, "// shared settings\nmodule.exports = {\n  testEnvironment: 'node', // the default runner\n};\n"),
+            Some(true)
+        );
+        assert_eq!(
+            other(
+                base,
+                "module.exports = {\n  testEnvironment: 'node', // the default runner\n};\n"
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            other(base, "module.exports = { testEnvironment: 'jsdom' };\n"),
+            Some(true)
+        );
+        // A key no rule reads, and a tightening, are not weakenings.
+        assert_eq!(
+            judged(
+                "jest.config.js",
+                base,
+                "module.exports = { testEnvironment: 'node', collectCoverageFrom: ['src/**'] };\n"
+            ),
+            Some(vec![])
+        );
+        assert_eq!(
+            judged(
+                "jest.config.js",
+                "module.exports = { testPathIgnorePatterns: ['calc', 'dist'] };\n",
+                "module.exports = { testPathIgnorePatterns: [/* built */ 'dist'] };\n"
+            ),
+            Some(vec![])
+        );
+        // What is not a literal is not read: the change stays not analysed.
+        for head in [
+            "const base = require('./jest.base');\nmodule.exports = { ...base, testPathIgnorePatterns: ['calc'] };\n",
+            "module.exports = { testPathIgnorePatterns: ignored() };\n",
+            "module.exports = { testPathIgnorePatterns: [...shared, 'calc'] };\n",
+            "module.exports = { testEnvironment: 'node' };\nmodule.exports.testPathIgnorePatterns = ['calc'];\n",
+            "module.exports = makeConfig();\n",
+        ] {
+            assert!(judged("jest.config.js", base, head).is_none(), "{head}");
+        }
+        assert!(judged(
+            "vitest.config.mts",
+            &vitest("{ include: ['a'] }"),
+            &vitest("{ ...configDefaults, include: ['a'] }")
+        )
+        .is_none());
+        // A computed value under a key no rule reads does not stop the read, and a change
+        // to it is a change no rule reads.
+        let transform = |module: &str| {
+            format!("module.exports = {{ testPathIgnorePatterns: ['dist'], transform: {{ '^.+\\\\.ts$': require.resolve('{module}') }} }};\n")
+        };
+        assert_eq!(
+            judged(
+                "jest.config.js",
+                &transform("ts-jest"),
+                &transform("babel-jest")
+            ),
+            Some(vec![])
+        );
+        assert_eq!(
+            other(&transform("ts-jest"), &transform("babel-jest")),
+            Some(true)
+        );
+        assert_eq!(
+            other(&transform("ts-jest"), &transform("ts-jest")),
+            Some(false)
+        );
+        // An eslint configuration is not read as one.
+        assert!(judged(
+            "eslint.config.js",
+            "export default [];\n",
+            "export default [{}];\n"
+        )
+        .is_none());
+        // A gained preset is inherited, as in `jest.config.json`.
+        let b = crate::ast::runner_config::script_config_tree("jest.config.js", base).unwrap();
+        let h = crate::ast::runner_config::script_config_tree(
+            "jest.config.js",
+            "module.exports = { preset: 'ts-jest', testEnvironment: 'node' };\n",
+        )
+        .unwrap();
+        assert_eq!(
+            inherited_changes("jest.config.js", &b.tree, &h.tree),
+            vec![("preset".to_string(), "`ts-jest`".to_string())]
+        );
     }
 }
