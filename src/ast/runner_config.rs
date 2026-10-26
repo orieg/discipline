@@ -945,6 +945,174 @@ pub fn parse_conftest_plugins(source: &str) -> Vec<String> {
     plugins
 }
 
+/// The modules a Python file the runner loads registers as pytest plugins from code
+/// (#854): `<x>.pluginmanager.import_plugin("<name>")` with a literal name, and
+/// `<x>.pluginmanager.register(<module>)` where `<module>` is a name, or a dotted name,
+/// that an `import` or `from ... import` of the same file binds to a module. Each is
+/// returned as a dotted module name; one a relative import binds keeps its leading dots
+/// (`.plugin`). Not read: a plugin manager reached through another name, a register
+/// argument that is a call or a name no import binds (an object, which may be a plugin
+/// but is not a module), and a file that does not parse.
+pub fn parse_registered_plugins(source: &str) -> Vec<String> {
+    if !source.contains("pluginmanager") {
+        return Vec::new();
+    }
+    if crate::ast::scanner_limits::python_indent_nesting(source).is_err() {
+        return Vec::new();
+    }
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_python::LANGUAGE.into())
+        .is_err()
+    {
+        return Vec::new();
+    }
+    let Ok(tree) = crate::ast::source_text::parse(&mut parser, source) else {
+        return Vec::new();
+    };
+    let root = tree.root_node();
+    let src = source.as_bytes();
+    if root.has_error() {
+        return Vec::new();
+    }
+    let mut nodes = Vec::new();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        nodes.push(node);
+        let mut cursor = node.walk();
+        let children: Vec<Node> = node.named_children(&mut cursor).collect();
+        stack.extend(children.into_iter().rev());
+    }
+    // The name each import binds, with the module it is bound to.
+    let mut bound: std::collections::HashMap<String, String> = Default::default();
+    for node in &nodes {
+        match node.kind() {
+            "import_statement" => {
+                let mut cursor = node.walk();
+                for name in node.children_by_field_name("name", &mut cursor) {
+                    match name.kind() {
+                        // `import a.b` binds `a`, which is the module `a`.
+                        "dotted_name" => {
+                            let module = text(name, src);
+                            let first = module.split('.').next().unwrap_or(module);
+                            bound.insert(first.to_string(), first.to_string());
+                        }
+                        "aliased_import" => {
+                            if let (Some(module), Some(alias)) = (
+                                name.child_by_field_name("name"),
+                                name.child_by_field_name("alias"),
+                            ) {
+                                bound.insert(
+                                    text(alias, src).to_string(),
+                                    text(module, src).to_string(),
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "import_from_statement" => {
+                let Some(from) = node.child_by_field_name("module_name") else {
+                    continue;
+                };
+                let from: String = text(from, src).split_whitespace().collect();
+                let mut cursor = node.walk();
+                for name in node.children_by_field_name("name", &mut cursor) {
+                    let (module, binding) = match name.kind() {
+                        "dotted_name" => (Some(name), Some(name)),
+                        "aliased_import" => (
+                            name.child_by_field_name("name"),
+                            name.child_by_field_name("alias"),
+                        ),
+                        _ => (None, None),
+                    };
+                    let (Some(module), Some(binding)) = (module, binding) else {
+                        continue;
+                    };
+                    let joined = if from.ends_with('.') {
+                        format!("{from}{}", text(module, src))
+                    } else {
+                        format!("{from}.{}", text(module, src))
+                    };
+                    bound.insert(text(binding, src).to_string(), joined);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut plugins = Vec::new();
+    for call in nodes.iter().filter(|n| n.kind() == "call") {
+        let Some(callee) = call
+            .child_by_field_name("function")
+            .filter(|f| f.kind() == "attribute")
+        else {
+            continue;
+        };
+        let (Some(object), Some(method)) = (
+            callee.child_by_field_name("object"),
+            callee.child_by_field_name("attribute"),
+        ) else {
+            continue;
+        };
+        let on_plugin_manager = object.kind() == "attribute"
+            && object
+                .child_by_field_name("attribute")
+                .is_some_and(|a| text(a, src) == "pluginmanager");
+        if !on_plugin_manager {
+            continue;
+        }
+        let Some(first) = call.child_by_field_name("arguments").and_then(|args| {
+            let mut cursor = args.walk();
+            let first = args
+                .named_children(&mut cursor)
+                .find(|a| a.kind() != "comment");
+            first
+        }) else {
+            continue;
+        };
+        match text(method, src) {
+            "import_plugin" => plugins.extend(python_string(first, src)),
+            "register" => plugins.extend(registered_module(first, src, &bound)),
+            _ => {}
+        }
+    }
+    plugins
+}
+
+/// The module a `register(...)` argument names: a name, or a dotted name whose first
+/// part an import of the file binds to a module.
+fn registered_module(
+    argument: Node,
+    src: &[u8],
+    bound: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    let mut node = argument;
+    loop {
+        match node.kind() {
+            "identifier" => {
+                parts.push(text(node, src));
+                break;
+            }
+            "attribute" => {
+                parts.push(text(node.child_by_field_name("attribute")?, src));
+                node = node.child_by_field_name("object")?;
+            }
+            _ => return None,
+        }
+    }
+    parts.reverse();
+    let (first, rest) = parts.split_first()?;
+    let module = bound.get(*first)?;
+    Some(
+        std::iter::once(module.as_str())
+            .chain(rest.iter().copied())
+            .collect::<Vec<_>>()
+            .join("."),
+    )
+}
+
 /// The files a Jest or Vitest configuration has the runner load around the tests: set-up
 /// files, and global set-up and tear-down modules.
 #[derive(Debug, Clone, PartialEq, Eq)]

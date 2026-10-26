@@ -14,8 +14,11 @@
 //!   `usercustomize.py`, a `_test.go` file the go tool builds, a Jest or Vitest
 //!   configuration written as code;
 //! - by configuration ([`ConfiguredHarness`]): the set-up and global set-up / tear-down
-//!   files a Jest or Vitest configuration names, and the root file of each Cargo test
-//!   target;
+//!   files a Jest or Vitest configuration names, the root file of each Cargo test
+//!   target and the modules it reaches, and each module of the repository a
+//!   `conftest.py` loads as a pytest plugin, through `pytest_plugins` or a
+//!   `pluginmanager.register(...)` / `import_plugin(...)` call (and those such a module
+//!   loads in turn);
 //! - a Python test file (the Python pack's test-file rule, or `[tests] paths`), for the
 //!   `unittest` forms only.
 //!
@@ -117,11 +120,11 @@ pub fn roles(
         roles.js_exit = true;
         roles.why = format!("a set-up file that `{config}` names");
     }
-    if let Some(conftest) = configured.pytest_plugins.get(path) {
+    if let Some(loader) = configured.pytest_plugins.get(path) {
         roles.pytest_hooks = true;
         roles.python_exit = true;
         roles.unittest = true;
-        roles.why = format!("a pytest plugin that `{conftest}` names");
+        roles.why = format!("a pytest plugin that `{loader}` loads");
     }
     if let Some(own_main) = configured.rust_targets.get(path) {
         roles.rust_exit = true;
@@ -316,6 +319,7 @@ pub fn harness_tampering(ctx: &Context) -> Result<GateOutcome> {
         .js_setup
         .keys()
         .chain(head_configured.rust_targets.keys())
+        .chain(head_configured.pytest_plugins.keys())
     {
         if touched.contains(path.as_str())
             || exempt.matches(path)

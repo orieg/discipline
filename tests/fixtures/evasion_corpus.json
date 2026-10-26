@@ -651,7 +651,9 @@
         "harness-tampering"
       ],
       "verdict": {
-        "known_miss": "#854"
+        "caught": [
+          "harness-tampering/pytest-hook-masks-results"
+        ]
       }
     },
     {
@@ -668,7 +670,9 @@
         "harness-tampering"
       ],
       "verdict": {
-        "known_miss": "#854"
+        "caught": [
+          "harness-tampering/pytest-hook-masks-results"
+        ]
       }
     },
     {
@@ -1160,7 +1164,9 @@
         "harness-tampering"
       ],
       "verdict": {
-        "known_miss": "#854"
+        "caught": [
+          "test-floor/tests-moved-out-of-default-run"
+        ]
       }
     },
     {
