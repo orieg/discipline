@@ -1783,13 +1783,92 @@ pub(crate) fn base_tests_verdict(
     }
 }
 
-/// Reports a `base-tests` run that read no test case, unless `allow-command:` names the
-/// command (or `default`).
+/// The base-side files a `base-tests` command overlays onto the head code: those under
+/// the shared test-path conventions ([`crate::ast::functions::test_path`]) or a
+/// `[tests] paths` glob. Tests written inside other files, such as a Rust `#[cfg(test)]`
+/// module in `src/`, are not among them and run at their head version.
+pub(crate) fn base_test_files(files: Vec<String>, declared: &[String]) -> Vec<String> {
+    files
+        .into_iter()
+        .filter(|p| overlaid_test_path(p, declared))
+        .collect()
+}
+
+/// Whether the `base-tests` preset overlays `path` ([`base_test_files`]).
+fn overlaid_test_path(path: &str, declared: &[String]) -> bool {
+    crate::ast::functions::declared_test_path(path, declared)
+        || crate::ast::functions::test_path(path)
+}
+
+/// The paths the `base-tests` preset overlays, as its messages name them.
+fn base_test_paths_text(declared: &[String]) -> String {
+    let globs = if declared.is_empty() {
+        "none declared".to_string()
+    } else {
+        declared
+            .iter()
+            .map(|g| format!("`{g}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "files under a `tests/`, `test/`, `__tests__/`, `testutil/`, `testutils/`, `benches/` or `examples/` directory, files named as tests (`*_test.go`, `*_test.py`, `conftest.py`, `*.test.*` and `*.spec.*` for JavaScript and TypeScript, `*Test.java`, `*Tests.cs`, `*Test.php`, `*_spec.rb`, `*_test.rb`), and the `[tests] paths` globs ({globs})"
+    )
+}
+
+/// Which of `sources` (a head path and the base version of a changed file outside the
+/// overlaid test paths) hold tests in the syntax tree their language pack reads, such
+/// as a Rust `#[cfg(test)]` module: the preset leaves those tests at their head version.
+/// The second list names the files the pack could not parse.
+pub(crate) fn inline_test_sources(sources: &[(String, String)]) -> (Vec<String>, Vec<String>) {
+    let registry = crate::ast::default_registry();
+    let vocab = crate::ast::AssertVocabulary::default();
+    let mut with_tests = Vec::new();
+    let mut unread = Vec::new();
+    for (path, content) in sources {
+        let Some(pack) = registry.find_pack(path) else {
+            continue;
+        };
+        if !pack.supplies(crate::ast::Fact::Tests) {
+            continue;
+        }
+        match pack.extract(path, content, &vocab) {
+            Ok(facts) if !facts.tests.is_empty() => with_tests.push(path.clone()),
+            Ok(_) => {}
+            Err(_) => unread.push(path.clone()),
+        }
+    }
+    (with_tests, unread)
+}
+
+/// The changed files that keep their path or move, outside the overlaid test paths,
+/// whose base version holds tests ([`inline_test_sources`]).
+fn changed_inline_test_sources(ctx: &Context) -> Result<(Vec<String>, Vec<String>)> {
+    let mut sources = Vec::new();
+    for cf in ctx.git.changed_files()? {
+        if !matches!(
+            cf.kind,
+            crate::gitctx::ChangeKind::Modified | crate::gitctx::ChangeKind::Renamed
+        ) || overlaid_test_path(&cf.old_path, &ctx.config.tests.paths)
+        {
+            continue;
+        }
+        if let Some(content) = ctx.git.base_content(&cf.old_path)? {
+            sources.push((cf.path, content));
+        }
+    }
+    Ok(inline_test_sources(&sources))
+}
+
+/// Reports a `base-tests` command that read no test case, unless `allow-command:` names
+/// the command (or `default`).
 fn report_base_tests_no_cases(
     ctx: &Context,
     cmd: &ResolvedCommand,
     gate: &crate::config::CommandGate,
     outcome: &mut GateOutcome,
+    msg: String,
+    rem: &str,
 ) {
     let kind = &crate::findings::BASE_TESTS_NO_CASES;
     let ov = ctx
@@ -1802,21 +1881,13 @@ fn report_base_tests_no_cases(
             }
         });
     let anchored = ov.is_none();
-    let msg = format!(
-        "Base-tests command `{}` succeeded and no JUnit test case was read: none in its stdout or stderr, and no `*.xml` file at the top of its working directory holds one. A command that reports no test case cannot show that the base tests pass against head code.",
-        cmd.name
-    );
-    let rem = format!(
-        "Make the command print a JUnit report (`cargo test -- --format=junit`, or the runner's JUnit option) or leave one as a top-level `*.xml` file, set `allow_zero = true` on the command when no base test is meant to run, or excuse it with `allow-command: {} <reason>`.",
-        cmd.name
-    );
     outcome.lift_or_push(
         ov,
         gate.severity(),
         kind,
         (Some(ctx.config_path), None),
         msg,
-        &rem,
+        rem,
     );
     if anchored {
         // Located at the configuration file, which every command shares.
@@ -1837,19 +1908,49 @@ fn evaluate_base_tests(
         return Ok(());
     }
 
-    let base_files = ctx.git.base_tracked_files()?;
-    let base_test_files: Vec<String> = base_files
-        .into_iter()
-        .filter(|p| {
-            crate::ast::functions::declared_test_path(p, &ctx.config.tests.paths)
-                || crate::ast::functions::test_path(p)
-        })
-        .collect();
+    let base_test_files = base_test_files(ctx.git.base_tracked_files()?, &ctx.config.tests.paths);
+    let (inline, unread) = changed_inline_test_sources(ctx)?;
+    let inline_text = inline
+        .iter()
+        .map(|p| format!("`{p}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if !inline.is_empty() {
+        outcome.notes.push(format!(
+            "command: preset 'base-tests': the tests inside {inline_text} are not overlaid and run at their head version"
+        ));
+    }
+    for path in &unread {
+        outcome.notes.push(format!(
+            "command: preset 'base-tests': could not parse the base version of `{path}` to tell whether it holds tests that run at their head version"
+        ));
+    }
 
+    // Nothing to overlay compares nothing: the run would test the head tests against the
+    // head code, so it shows nothing about the base tests.
     if base_test_files.is_empty() {
-        outcome
-            .notes
-            .push("command: preset 'base-tests': no base test files found".to_string());
+        if cmd.allow_zero {
+            outcome.notes.push(
+                "command: preset 'base-tests': no base test files found (allowed by `allow_zero`)"
+                    .to_string(),
+            );
+        } else {
+            let mut msg = format!(
+                "Base-tests command `{}` compared nothing: no file on the base side matches the preset's test paths, which are {}. Tests written inside source files, such as Rust `#[cfg(test)]` modules, are not overlaid and run at their head version.",
+                cmd.name,
+                base_test_paths_text(&ctx.config.tests.paths)
+            );
+            if !inline.is_empty() {
+                msg.push_str(&format!(
+                    " Changed files that hold such tests: {inline_text}."
+                ));
+            }
+            let rem = format!(
+                "Move the tests the command should compare into files under a test path (a Rust crate's `tests/` directory), or declare a test directory the preset does not know in `[tests] paths`; set `allow_zero = true` on the command when no base test is meant to run, or excuse it with `allow-command: {} <reason>`.",
+                cmd.name
+            );
+            report_base_tests_no_cases(ctx, cmd, gate, outcome, msg, &rem);
+        }
         return Ok(());
     }
 
@@ -1904,8 +2005,7 @@ fn evaluate_base_tests(
     // Remove any test files that were added newly in head (did not exist in base)
     for cf in ctx.git.changed_files()? {
         if cf.kind == crate::gitctx::ChangeKind::Added
-            && (crate::ast::functions::declared_test_path(&cf.path, &ctx.config.tests.paths)
-                || crate::ast::functions::test_path(&cf.path))
+            && overlaid_test_path(&cf.path, &ctx.config.tests.paths)
         {
             let dst = temp_path.join(&cf.path);
             if dst.exists() {
@@ -1948,7 +2048,15 @@ fn evaluate_base_tests(
             return Ok(());
         }
         BaseTestsVerdict::NoCases => {
-            report_base_tests_no_cases(ctx, cmd, gate, outcome);
+            let msg = format!(
+                "Base-tests command `{}` succeeded and no JUnit test case was read: none in its stdout or stderr, and no `*.xml` file at the top of its working directory holds one. A command that reports no test case cannot show that the base tests pass against head code.",
+                cmd.name
+            );
+            let rem = format!(
+                "Make the command print a JUnit report (`cargo test -- --format=junit`, or the runner's JUnit option) or leave one as a top-level `*.xml` file, set `allow_zero = true` on the command when no base test is meant to run, or excuse it with `allow-command: {} <reason>`.",
+                cmd.name
+            );
+            report_base_tests_no_cases(ctx, cmd, gate, outcome, msg, &rem);
             return Ok(());
         }
         BaseTestsVerdict::Failed(failed) => failed,
@@ -2299,6 +2407,52 @@ mod tests {
         assert_eq!(cases[0].id, "\"quoted\" & <tagged>");
         assert_eq!(cases[0].status, TestStatus::Failed);
         assert_eq!(cases[0].failure_message.as_deref(), Some("\"failed\""));
+    }
+
+    #[test]
+    fn base_test_files_leave_tests_inside_source_files_out() {
+        let files = |paths: &[&str]| paths.iter().map(|p| p.to_string()).collect::<Vec<_>>();
+        // A crate whose only tests are inline in `src/` has nothing to overlay.
+        assert!(base_test_files(files(&["Cargo.toml", "src/lib.rs"]), &[]).is_empty());
+        assert_eq!(
+            base_test_files(files(&["src/lib.rs", "tests/f.rs", "benches/b.rs"]), &[]),
+            ["tests/f.rs", "benches/b.rs"]
+        );
+        // A `[tests] paths` glob adds its files.
+        assert_eq!(
+            base_test_files(
+                files(&["src/lib.rs", "spec/a.rs"]),
+                &["spec/**".to_string()]
+            ),
+            ["spec/a.rs"]
+        );
+        let text = base_test_paths_text(&["spec/**".to_string()]);
+        assert!(
+            text.contains("`tests/`") && text.contains("`spec/**`"),
+            "{text}"
+        );
+        assert!(base_test_paths_text(&[]).contains("none declared"));
+    }
+
+    #[test]
+    fn inline_test_sources_name_the_files_whose_syntax_tree_holds_tests() {
+        let src = |path: &str, content: &str| (path.to_string(), content.to_string());
+        let sources = [
+            src(
+                "src/lib.rs",
+                "pub fn f() -> i32 {\n    1\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn one() {\n        assert_eq!(super::f(), 1);\n    }\n}\n",
+            ),
+            // The attribute named in a string is not a test.
+            src(
+                "src/other.rs",
+                "pub fn g() -> &'static str {\n    \"#[test] fn h() {}\"\n}\n",
+            ),
+            // No pack reads it.
+            src("README.unknown", "#[test]\nfn x() {}\n"),
+        ];
+        let (with_tests, unread) = inline_test_sources(&sources);
+        assert_eq!(with_tests, ["src/lib.rs"]);
+        assert!(unread.is_empty(), "{unread:?}");
     }
 
     #[test]
