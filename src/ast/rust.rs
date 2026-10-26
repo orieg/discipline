@@ -94,6 +94,9 @@ impl LanguagePack for RustPack {
         super::bounds::rust(root, src, &mut cx.facts.tests);
         super::expectations::rust(root, src, &mut cx.facts.tests);
         super::caught_assertions::rust(root, &anc, src, &mut cx.facts.tests, vocab);
+        super::caught_assertions::through_helpers(root, src, &mut cx.facts, 1, |helpers| {
+            super::caught_assertions::rust(root, &anc, src, helpers, vocab)
+        });
         cx.facts.prose = super::prose::extract(
             root,
             src,
