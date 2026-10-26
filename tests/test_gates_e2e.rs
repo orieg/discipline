@@ -21108,6 +21108,116 @@ fn command_base_tests_with_no_base_test_file_fail() {
     );
 }
 
+/// A `cargo` that answers as a stable toolchain does: `--format=junit` is refused unless
+/// `-Z unstable-options` is passed and `RUSTC_BOOTSTRAP` is set. Accepted, it prints what
+/// `cargo test` prints for a crate with one unit test and one integration test: one JUnit
+/// document per test binary, then the doctests' empty one. `integration` is the
+/// integration test's outcome element.
+#[cfg(unix)]
+fn stable_cargo(integration: &str, exit: u8) -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    let doc = |failures: u8, tests: u8, cases: &str| {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><testsuites><testsuite name="test" package="test" id="0" errors="0" failures="{failures}" tests="{tests}" skipped="0" >{cases}<system-out/><system-err/></testsuite></testsuites>"#
+        )
+    };
+    let report = [
+        doc(
+            0,
+            1,
+            r#"<testcase classname="tests" name="it_works" time="0"/>"#,
+        ),
+        doc(exit.min(1), 1, integration),
+        doc(0, 0, ""),
+    ]
+    .join("\n");
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("report.xml"), format!("{report}\n")).unwrap();
+    let script = format!(
+        "#!/bin/sh\ncase \" $* \" in\n  *' -Z unstable-options '*) ;;\n  *) echo 'error: The \"junit\" format is only accepted on the nightly compiler with -Z unstable-options' >&2; exit 101 ;;\nesac\nif [ -z \"${{RUSTC_BOOTSTRAP+set}}\" ]; then\n  echo 'error: the option `Z` is only accepted on the nightly compiler' >&2; exit 101\nfi\ncat '{}'\nexit {exit}\n",
+        dir.path().join("report.xml").display()
+    );
+    let path = dir.path().join("cargo");
+    std::fs::write(&path, script).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    dir
+}
+
+/// The `base-tests` preset's own command runs on a stable toolchain and its report is read
+/// across every document it prints (#842): two cases from two test binaries, and a failure
+/// in the second binary's document is named. The control is the previous default, which a
+/// stable `cargo` refuses.
+#[cfg(unix)]
+#[test]
+fn command_base_tests_default_command_runs_on_stable_and_reads_every_document() {
+    const CONFIG: &str = "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\npreset = \"base-tests\"\n";
+    let setup = |extra: &str| {
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write("discipline.toml", &format!("{CONFIG}{extra}"));
+        repo.commit("chore: configure base-tests");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+        repo.write("docs/README.md", "# Readme\n");
+        repo.commit("docs: add readme");
+        repo
+    };
+    let path_with = |dir: &std::path::Path| {
+        format!(
+            "{}:{}",
+            dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        )
+    };
+    let passing = stable_cargo(
+        r#"<testcase classname="integration" name="integration_adds" time="0"/>"#,
+        0,
+    );
+    let failing = stable_cargo(
+        r#"<testcase classname="integration" name="integration_adds" time="0"><failure type="assert"/></testcase>"#,
+        101,
+    );
+
+    let repo = setup("");
+    let run = repo.run(
+        &["check", "--format", "json", "--base", "main"],
+        &[("PATH", path_with(passing.path()).as_str())],
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let outcome = run.outcome("command");
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 0);
+    let notes = outcome["notes"].to_string();
+    assert!(
+        notes.contains("2 base tests passed against head code"),
+        "{notes}"
+    );
+
+    let run = repo.run(
+        &["check", "--format", "json", "--base", "main"],
+        &[("PATH", path_with(failing.path()).as_str())],
+    );
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("command");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(violations[0]["code"], "command/base-test-failed");
+    let message = violations[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("`integration::integration_adds`"),
+        "{message}"
+    );
+
+    // The previous default is refused by the same `cargo`: no case is read and the run
+    // failed, so it is not a pass.
+    let previous = setup("command = \"cargo test -- --format=junit\"\n");
+    let run = previous.run(
+        &["check", "--format", "json", "--base", "main"],
+        &[("PATH", path_with(passing.path()).as_str())],
+    );
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("command");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(violations[0]["code"], "command/base-test-failed");
+}
+
 #[test]
 fn assertion_failure_caught_inside_test_fires_and_accepts_override() {
     let repo = Repo::new();
