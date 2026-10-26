@@ -137,6 +137,35 @@ pub const VERIFY_VOCAB: &[&str] = &[
     "have_received",
 ];
 
+/// `unittest.mock`'s assertion methods that [`VERIFY_VOCAB`] names. Called, each fails
+/// the test when the double was not used as it states.
+pub const PYTHON_ASSERTION_METHODS: &[&str] = &[
+    "assert_called",
+    "assert_called_once",
+    "assert_called_with",
+    "assert_called_once_with",
+    "assert_awaited",
+    "assert_awaited_once",
+    "assert_awaited_with",
+    "assert_awaited_once_with",
+    "assert_not_called",
+    "assert_any_call",
+    "assert_has_calls",
+];
+
+/// A Python `call` whose function is an attribute named in [`PYTHON_ASSERTION_METHODS`],
+/// on any object: `m.save.assert_called_once_with(1)`. The name read without a call
+/// (`m.assert_called_once`) is an attribute, not a call, and checks nothing.
+pub fn is_python_assertion_call(call: tree_sitter::Node, src: &[u8]) -> bool {
+    call.kind() == "call"
+        && call
+            .child_by_field_name("function")
+            .filter(|f| f.kind() == "attribute")
+            .and_then(|f| f.child_by_field_name("attribute"))
+            .and_then(|a| a.utf8_text(src).ok())
+            .is_some_and(|name| PYTHON_ASSERTION_METHODS.contains(&name))
+}
+
 /// What a call is to a test double.
 pub enum Double {
     /// It constructs one or programs what it returns.

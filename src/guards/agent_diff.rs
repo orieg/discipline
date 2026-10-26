@@ -64,6 +64,7 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
     let changed = ctx.git.changed_files()?;
     let mut analyzed_files = Vec::new();
     let mut packages = GoPackages::default();
+    let mut import_trees = ImportSkipTrees::default();
     for file in changed
         .iter()
         .filter(|f| registry.is_supported(&f.path) || registry.is_supported(&f.old_path))
@@ -76,6 +77,7 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
                     let src = String::from_utf8_lossy(&bytes);
                     let mut facts = extract_facts(pack, &file.old_path, &src, &base_vocab)?;
                     packages.resolve(ctx, pack, false, &file.old_path, &src, &mut facts)?;
+                    import_trees.resolve(ctx, false, &file.old_path, &mut facts)?;
                     Some(facts)
                 } else {
                     None
@@ -93,6 +95,7 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
                         let src = String::from_utf8_lossy(&bytes);
                         let mut facts = extract_facts(pack, &file.path, &src, &head_vocab)?;
                         packages.resolve(ctx, pack, true, &file.path, &src, &mut facts)?;
+                        import_trees.resolve(ctx, true, &file.path, &mut facts)?;
                         (Some(facts), newly_added)
                     } else {
                         (None, newly_added)
@@ -303,6 +306,33 @@ impl CrateTree for GitTree<'_> {
             self.ctx.git.base_bytes(path)?
         };
         Ok(bytes.map(|b| String::from_utf8_lossy(&b).into_owned()))
+    }
+}
+
+/// The files of each side of the change, read once, that the module-scope import skips
+/// of a changed test file are read against (`ParsedFileFacts::resolve_import_skips`).
+#[derive(Default)]
+struct ImportSkipTrees {
+    paths: [Option<Vec<String>>; 2],
+}
+
+impl ImportSkipTrees {
+    fn resolve(
+        &mut self,
+        ctx: &Context,
+        head: bool,
+        path: &str,
+        facts: &mut ParsedFileFacts,
+    ) -> Result<()> {
+        if facts.import_skips.is_empty() {
+            return Ok(());
+        }
+        let paths = match &mut self.paths[usize::from(head)] {
+            Some(paths) => paths,
+            slot @ None => slot.insert(GitTree { ctx, head }.paths()?),
+        };
+        facts.resolve_import_skips(path, paths);
+        Ok(())
     }
 }
 
