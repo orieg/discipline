@@ -520,7 +520,7 @@ fn summary_with_every_refusal() -> CheckSummary {
         policy_failures: vec![
             PolicyFailure::new(
                 RefusalKind::MaxInlineOverrides,
-                format!("2 inline override(s) applied; {SENTINEL} allows 1"),
+                format!("2 inline override(s) on lines this change adds; {SENTINEL} allows 1"),
             ),
             PolicyFailure::new(
                 RefusalKind::MaxOverrides,

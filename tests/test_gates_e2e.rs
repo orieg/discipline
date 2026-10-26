@@ -8298,6 +8298,134 @@ fn override_budget_caps_what_one_change_may_excuse() {
         .contains("`max_overrides` increased from 0 to 5"));
 }
 
+/// Six `time-estimates` markers already in the tree, under a cap of five.
+fn repo_with_six_markers_in_the_tree(directives: &str) -> Repo {
+    let repo = Repo::new();
+    let legacy: String = (1..=6)
+        .map(|i| format!("Phase {i} (1 week). <!-- discipline:allow(time-estimates) -->\n"))
+        .collect();
+    repo.commit_base_files(
+        &[
+            (
+                "discipline.toml",
+                &format!("{CONFIG_HEAD}[directives]\n{directives}"),
+            ),
+            ("docs/legacy.md", &legacy),
+        ],
+        "chore: config and six markers",
+    );
+    repo
+}
+
+fn new_markers(n: usize) -> String {
+    (1..=n)
+        .map(|i| format!("Step {i} (2 weeks). <!-- discipline:allow(time-estimates) -->\n"))
+        .collect()
+}
+
+fn inline_refusals(run: &Run) -> Vec<String> {
+    run.json()["policy_failures"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|f| f.as_str().map(str::to_string))
+        .filter(|f| f.contains("max_inline_overrides"))
+        .collect()
+}
+
+/// `max_inline_overrides` counts the markers on lines the change adds or modifies. A
+/// whole-tree gate applies every marker in the tree on every run; those stay listed in
+/// the report but are not the change's (#849).
+#[test]
+fn the_inline_budget_counts_the_markers_a_change_writes_not_the_tree() {
+    // A change that touches another file: six markers applied, none counted.
+    let repo = repo_with_six_markers_in_the_tree("max_inline_overrides = 5\n");
+    repo.write("notes.txt", "hello\n");
+    repo.commit("chore: notes");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.json()["overrides"], 6, "the markers stay applied");
+    assert!(inline_refusals(&run).is_empty());
+
+    // Exactly the cap passes; one more fails, and only the change's markers are counted.
+    let at_cap = repo_with_six_markers_in_the_tree("max_inline_overrides = 5\n");
+    at_cap.write("docs/more.md", &new_markers(5));
+    at_cap.commit("docs: five markers");
+    let run = at_cap.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.json()["overrides"], 11);
+
+    let over = repo_with_six_markers_in_the_tree("max_inline_overrides = 5\n");
+    over.write("docs/more.md", &new_markers(6));
+    over.commit("docs: six markers");
+    let run = over.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.json()["errors"], 0, "only the refusal fails it");
+    assert_eq!(
+        inline_refusals(&run),
+        vec![
+            "6 inline override(s) on lines this change adds; `directives.max_inline_overrides` allows 5"
+        ]
+    );
+
+    // A modified marker line is one the change writes.
+    let modified = repo_with_six_markers_in_the_tree("max_inline_overrides = 5\n");
+    let legacy = std::fs::read_to_string(modified.file("docs/legacy.md")).unwrap();
+    modified.write(
+        "docs/legacy.md",
+        &legacy.replacen("Phase 1 (1 week)", "Phase 1 (3 weeks)", 1),
+    );
+    modified.write("docs/more.md", &new_markers(5));
+    modified.commit("docs: five markers and an edited one");
+    let run = modified.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(inline_refusals(&run)[0].starts_with("6 inline override(s)"));
+
+    // `--staged`: the change is the index against HEAD.
+    let staged = repo_with_six_markers_in_the_tree("max_inline_overrides = 5\n");
+    staged.write("notes.txt", "hello\n");
+    staged.git(&["add", "-A"]);
+    assert_eq!(staged.check(&["--staged"]).code, 0);
+    staged.write("docs/more.md", &new_markers(6));
+    staged.git(&["add", "-A"]);
+    let run = staged.check(&["--staged"]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(inline_refusals(&run)[0].starts_with("6 inline override(s)"));
+
+    // `fail_on_overrides` is about every applied override, the tree's included: a change
+    // that writes no marker still fails under it.
+    let all = repo_with_six_markers_in_the_tree("fail_on_overrides = true\n");
+    all.write("notes.txt", "hello\n");
+    all.commit("chore: notes");
+    assert_eq!(all.check(&[]).code, 1);
+}
+
+/// A `shell-secrets` marker records its own line, so one added to an unchanged command
+/// is counted, even where the secret it lifts is on another line of the command.
+#[test]
+fn a_shell_secrets_marker_counts_at_its_own_line() {
+    let repo = repo_with_base_config(&format!(
+        "{CONFIG_HEAD}[directives]\nmax_inline_overrides = 0\n"
+    ));
+    repo.commit_base(
+        "scripts/run.sh",
+        "#!/bin/sh\ndocker run \\\n  -e AWS_SECRET_ACCESS_KEY=\"$AWS_SECRET_ACCESS_KEY\" \\\n  amazon/aws-cli:latest\n",
+        "chore: script",
+    );
+    repo.write(
+        "scripts/run.sh",
+        "#!/bin/sh\ndocker run \\\n  -e AWS_SECRET_ACCESS_KEY=\"$AWS_SECRET_ACCESS_KEY\" \\\n  amazon/aws-cli:latest # secrets-argv-ok: local fixture only\n",
+    );
+    repo.commit("chore: allow the fixture");
+    let run = repo.check(&[]);
+    let overrides = run.outcome("shell-secrets")["overrides"].clone();
+    assert_eq!(overrides[0]["source"]["detail"]["line"], 4, "{overrides}");
+    assert_eq!(overrides[0]["subject"], "scripts/run.sh:3", "{overrides}");
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(inline_refusals(&run)[0].starts_with("1 inline override(s)"));
+}
+
 #[test]
 fn required_approval_is_read_from_gitlab_at_the_merge_requests_head() {
     let repo = repo_with_two_self_granted_overrides(
@@ -21015,6 +21143,116 @@ fn command_base_tests_with_no_base_test_file_fail() {
             ),
         "{notes}"
     );
+}
+
+/// A `cargo` that answers as a stable toolchain does: `--format=junit` is refused unless
+/// `-Z unstable-options` is passed and `RUSTC_BOOTSTRAP` is set. Accepted, it prints what
+/// `cargo test` prints for a crate with one unit test and one integration test: one JUnit
+/// document per test binary, then the doctests' empty one. `integration` is the
+/// integration test's outcome element.
+#[cfg(unix)]
+fn stable_cargo(integration: &str, exit: u8) -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    let doc = |failures: u8, tests: u8, cases: &str| {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><testsuites><testsuite name="test" package="test" id="0" errors="0" failures="{failures}" tests="{tests}" skipped="0" >{cases}<system-out/><system-err/></testsuite></testsuites>"#
+        )
+    };
+    let report = [
+        doc(
+            0,
+            1,
+            r#"<testcase classname="tests" name="it_works" time="0"/>"#,
+        ),
+        doc(exit.min(1), 1, integration),
+        doc(0, 0, ""),
+    ]
+    .join("\n");
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("report.xml"), format!("{report}\n")).unwrap();
+    let script = format!(
+        "#!/bin/sh\ncase \" $* \" in\n  *' -Z unstable-options '*) ;;\n  *) echo 'error: The \"junit\" format is only accepted on the nightly compiler with -Z unstable-options' >&2; exit 101 ;;\nesac\nif [ -z \"${{RUSTC_BOOTSTRAP+set}}\" ]; then\n  echo 'error: the option `Z` is only accepted on the nightly compiler' >&2; exit 101\nfi\ncat '{}'\nexit {exit}\n",
+        dir.path().join("report.xml").display()
+    );
+    let path = dir.path().join("cargo");
+    std::fs::write(&path, script).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    dir
+}
+
+/// The `base-tests` preset's own command runs on a stable toolchain and its report is read
+/// across every document it prints (#842): two cases from two test binaries, and a failure
+/// in the second binary's document is named. The control is the previous default, which a
+/// stable `cargo` refuses.
+#[cfg(unix)]
+#[test]
+fn command_base_tests_default_command_runs_on_stable_and_reads_every_document() {
+    const CONFIG: &str = "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\npreset = \"base-tests\"\n";
+    let setup = |extra: &str| {
+        let repo = Repo::new();
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write("discipline.toml", &format!("{CONFIG}{extra}"));
+        repo.commit("chore: configure base-tests");
+        repo.git(&["checkout", "-q", "-B", "work"]);
+        repo.write("docs/README.md", "# Readme\n");
+        repo.commit("docs: add readme");
+        repo
+    };
+    let path_with = |dir: &std::path::Path| {
+        format!(
+            "{}:{}",
+            dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        )
+    };
+    let passing = stable_cargo(
+        r#"<testcase classname="integration" name="integration_adds" time="0"/>"#,
+        0,
+    );
+    let failing = stable_cargo(
+        r#"<testcase classname="integration" name="integration_adds" time="0"><failure type="assert"/></testcase>"#,
+        101,
+    );
+
+    let repo = setup("");
+    let run = repo.run(
+        &["check", "--format", "json", "--base", "main"],
+        &[("PATH", path_with(passing.path()).as_str())],
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let outcome = run.outcome("command");
+    assert_eq!(outcome["violations"].as_array().unwrap().len(), 0);
+    let notes = outcome["notes"].to_string();
+    assert!(
+        notes.contains("2 base tests passed against head code"),
+        "{notes}"
+    );
+
+    let run = repo.run(
+        &["check", "--format", "json", "--base", "main"],
+        &[("PATH", path_with(failing.path()).as_str())],
+    );
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("command");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(violations[0]["code"], "command/base-test-failed");
+    let message = violations[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("`integration::integration_adds`"),
+        "{message}"
+    );
+
+    // The previous default is refused by the same `cargo`: no case is read and the run
+    // failed, so it is not a pass.
+    let previous = setup("command = \"cargo test -- --format=junit\"\n");
+    let run = previous.run(
+        &["check", "--format", "json", "--base", "main"],
+        &[("PATH", path_with(passing.path()).as_str())],
+    );
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("command");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(violations[0]["code"], "command/base-test-failed");
 }
 
 #[test]

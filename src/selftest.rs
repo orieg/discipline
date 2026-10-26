@@ -1138,6 +1138,35 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "overrides: the inline override budget counts the markers the change writes, not the tree's",
+        || {
+            use crate::gitctx::{ChangeKind, ChangedFile};
+            use crate::override_policy::inline_overrides_added;
+            use crate::tokens::{OverrideRecord, OverrideSource};
+            let marker = |file: &str, line: usize| OverrideRecord {
+                gate: "pii".into(),
+                code: None,
+                subject: format!("{file}:{line}"),
+                directive: "discipline:allow(pii)".into(),
+                reason: "inline exemption marker".into(),
+                source: OverrideSource::Inline {
+                    file: file.into(),
+                    line,
+                },
+                hidden: true,
+            };
+            let records = [marker("a.md", 1), marker("a.md", 2), marker("b.md", 1)];
+            let change = [ChangedFile {
+                path: "a.md".into(),
+                old_path: "a.md".into(),
+                kind: ChangeKind::Modified,
+                added_lines: [2].into_iter().collect(),
+            }];
+            Ok(inline_overrides_added(&records, &change) == 1
+                && inline_overrides_added(&records, &[]) == 0)
+        },
+    ),
+    (
         "ci-integrity: a GitLab job gaining allow_failure is a weakening, one that had it is not",
         || {
             use crate::guards::ci_gitlab::diff_gitlab_ci;
@@ -4921,6 +4950,32 @@ const CASES: &[Case] = &[
                 && base_tests_verdict(true, &none, true) == BaseTestsVerdict::Passed(0)
                 && base_tests_verdict(false, &none, false) == BaseTestsVerdict::RunFailed
                 && base_tests_verdict(true, &one, false) == BaseTestsVerdict::Passed(1))
+        },
+    ),
+    (
+        "command: base-tests reads every JUnit document of a run, and its default command runs on stable Rust",
+        || {
+            use crate::guards::command::{base_tests_verdict, parse_junit_cases, split_command_line, BaseTestsVerdict};
+            use crate::guards::presets::{resolve_preset, BASE_TESTS_COMMAND};
+            // `cargo test` prints one document per test binary; the failure is in the second.
+            let doc = |case: &str| format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?><testsuites><testsuite name=\"test\">{case}</testsuite></testsuites>\n");
+            let run = [
+                doc("<testcase classname=\"tests\" name=\"it_works\"/>"),
+                doc("<testcase classname=\"integration\" name=\"adds\"><failure type=\"assert\"/></testcase>"),
+                doc(""),
+            ]
+            .concat();
+            let cases = parse_junit_cases(&run);
+            let named = matches!(
+                base_tests_verdict(false, &cases, false),
+                BaseTestsVerdict::Failed(ref f) if f.len() == 1 && f[0].id == "integration::adds"
+            );
+            let argv = split_command_line(BASE_TESTS_COMMAND)?;
+            Ok(cases.len() == 2
+                && named
+                && argv[..3] == ["env", "RUSTC_BOOTSTRAP=1", "cargo"]
+                && argv.windows(2).any(|w| w == ["-Z", "unstable-options"])
+                && resolve_preset("base-tests").is_some_and(|p| p.default_command == BASE_TESTS_COMMAND))
         },
     ),
     (

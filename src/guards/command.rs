@@ -1664,6 +1664,9 @@ pub(crate) fn first_report_file_cases(dir: &Path, ignore: &[&str]) -> Vec<TestCa
         .unwrap_or_default()
 }
 
+/// Every `<testcase>` in `xml`, in order. The text may hold several JUnit documents one
+/// after another: `cargo test` prints one `<testsuites>` document per test binary, and the
+/// cases of each are read.
 pub fn parse_junit_cases(xml: &str) -> Vec<TestCaseReport> {
     let re_case =
         regex::Regex::new(r"(?s)<testcase\b([^>]*?)(?:/>|>(.*?)</testcase>)").expect("valid regex");
@@ -2053,7 +2056,8 @@ fn evaluate_base_tests(
                 cmd.name
             );
             let rem = format!(
-                "Make the command print a JUnit report (`cargo test -- --format=junit`, or the runner's JUnit option) or leave one as a top-level `*.xml` file, set `allow_zero = true` on the command when no base test is meant to run, or excuse it with `allow-command: {} <reason>`.",
+                "Make the command print a JUnit report (`{}`, or the runner's JUnit option) or leave one as a top-level `*.xml` file, set `allow_zero = true` on the command when no base test is meant to run, or excuse it with `allow-command: {} <reason>`.",
+                presets::BASE_TESTS_COMMAND,
                 cmd.name
             );
             report_base_tests_no_cases(ctx, cmd, gate, outcome, msg, &rem);
@@ -2505,6 +2509,65 @@ mod tests {
                 other => panic!("expected the failed case, got {other:?}"),
             }
         }
+    }
+
+    /// What the preset's default command prints for a crate with one unit test and one
+    /// integration test, then a doctest run with none: one document per test binary (#842).
+    const LIBTEST_JUNIT_RUN: &str = concat!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><testsuites><testsuite name="test" package="test" id="0" errors="0" failures="0" tests="1" skipped="0" ><testcase classname="tests" name="it_works" time="0"/><system-out/><system-err/></testsuite></testsuites>"#,
+        "\n",
+        r#"<?xml version="1.0" encoding="UTF-8"?><testsuites><testsuite name="test" package="test" id="0" errors="0" failures="1" tests="1" skipped="0" ><testcase classname="integration" name="integration_adds" time="0"><failure type="assert"/><system-out><![CDATA[assertion `left == right` failed]]></system-out></testcase><system-out/><system-err/></testsuite></testsuites>"#,
+        "\n",
+        r#"<?xml version="1.0" encoding="UTF-8"?><testsuites><testsuite name="test" package="test" id="0" errors="0" failures="0" tests="0" skipped="0" ><system-out/><system-err/></testsuite></testsuites>"#,
+        "\n",
+    );
+
+    #[test]
+    fn parse_junit_cases_reads_every_concatenated_document() {
+        let cases = parse_junit_cases(LIBTEST_JUNIT_RUN);
+        let ids: Vec<&str> = cases.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["tests::it_works", "integration::integration_adds"]);
+        assert_eq!(cases[0].status, TestStatus::Passed);
+        // The failure is in the second document.
+        match base_tests_verdict(false, &cases, false) {
+            BaseTestsVerdict::Failed(failed) => {
+                assert_eq!(failed.len(), 1);
+                assert_eq!(failed[0].id, "integration::integration_adds");
+            }
+            other => panic!("expected the failed case, got {other:?}"),
+        }
+        // Control: the same run with the failure fixed passes with both cases read.
+        let fixed = LIBTEST_JUNIT_RUN
+            .replace(r#"failures="1""#, r#"failures="0""#)
+            .replace(r#"<failure type="assert"/>"#, "");
+        assert_eq!(
+            base_tests_verdict(true, &parse_junit_cases(&fixed), false),
+            BaseTestsVerdict::Passed(2)
+        );
+    }
+
+    #[test]
+    fn the_base_tests_default_command_sets_the_bootstrap_variable_for_cargo() {
+        let argv = split_command_line(presets::BASE_TESTS_COMMAND).unwrap();
+        assert_eq!(
+            argv,
+            [
+                "env",
+                "RUSTC_BOOTSTRAP=1",
+                "cargo",
+                "test",
+                "--",
+                "-Z",
+                "unstable-options",
+                "--format=junit"
+            ]
+        );
+        assert_eq!(
+            presets::resolve_preset("base-tests")
+                .unwrap()
+                .default_command,
+            presets::BASE_TESTS_COMMAND
+        );
     }
 
     fn re(p: &str) -> regex::Regex {

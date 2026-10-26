@@ -477,7 +477,9 @@ pub struct DirectivesConfig {
     /// counted) one change may apply. Unset = no cap.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_overrides: Option<usize>,
-    /// Most inline exemption markers one change may apply. Unset = no cap.
+    /// Most inline exemption markers one change may write: those on the lines it adds or
+    /// modifies, and in the pull request body. A marker already in the tree stays applied
+    /// and is not counted. Unset = no cap.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_inline_overrides: Option<usize>,
     /// Directive overrides fail the run until the forge shows an approving review of the
