@@ -1612,7 +1612,10 @@ pub fn javascript<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut
             let from_std = modules.iter().any(|(local, module)| {
                 local == text(callee, src) && super::javascript::is_std_assert_module(module)
             });
-            if from_std {
+            // An expectation whose promise the test does not wait on expects nothing (#829).
+            if from_std
+                && (method != "rejects" || super::javascript::settles(node, anc, src.as_bytes()))
+            {
                 inspect_js_assert(node, method, JsAssert::DenoStd, src, tests);
             }
             return true;
@@ -1627,6 +1630,15 @@ pub fn javascript<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut
             return true;
         };
         let method = text(prop, src);
+        // An expectation whose promise the test does not wait on expects nothing (#829).
+        let unsettled = if matches!(method, "rejects" | "doesNotReject") {
+            !super::javascript::settles(node, anc, src.as_bytes())
+        } else {
+            super::javascript::unsettled_promise_assertion(node, anc, src.as_bytes(), &[])
+        };
+        if unsettled {
+            return true;
+        }
         match method {
             "toThrow" | "toThrowError" => inspect_js_expect(node, obj, false, src, tests),
             "throw" | "throws" | "Throw" | "rejects" | "doesNotThrow" | "doesNotReject" => {
@@ -6061,7 +6073,7 @@ mod tests {
             Some("f ( - 1 )")
         );
         assert_eq!(
-            js_guarded("expect(async () => await f(-1)).rejects.toThrow();").as_deref(),
+            js_guarded("return expect(async () => await f(-1)).rejects.toThrow();").as_deref(),
             Some("f ( - 1 )")
         );
         assert_eq!(js_guarded("expect(run).toThrow();"), None);

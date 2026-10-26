@@ -9607,6 +9607,80 @@ fn javascript_assertion_reduction_and_vacuous_tests_detected() {
     assert_eq!(outcome_vac["violations"].as_array().unwrap().len(), 1);
 }
 
+/// A `.resolves` / `.rejects` matcher returns a promise: one the test neither awaits nor
+/// returns settles after the test has finished, so it is not an assertion (#829).
+#[test]
+fn javascript_unawaited_promise_matchers_are_not_assertions() {
+    const BASE: &str = "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n});\n";
+    let codes = |run: &Run, gate: &str| -> Vec<String> {
+        run.violations(gate)
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let changed = |head: &str| {
+        let repo = Repo::new();
+        repo.write("src/calc.js", "export function f(x) { return x * 2; }\n");
+        repo.commit_base("test/calc.test.js", BASE, "test: calc");
+        repo.write("test/calc.test.js", head);
+        repo.commit("test: change");
+        repo.check(&[])
+    };
+
+    // An existing test whose check becomes an unawaited `.resolves` chain loses it.
+    let run = changed(&BASE.replace(
+        "expect(f(2)).toBe(4);",
+        "expect(Promise.resolve(f(2))).resolves.toBe(5);",
+    ));
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert_eq!(
+        codes(&run, "assertion-reduction"),
+        ["assertion-reduction/assertions-reduced"]
+    );
+    // Control: awaited, the chain keeps the check.
+    let run = changed(
+        &BASE
+            .replace("() => {\n    expect", "async () => {\n    await expect")
+            .replace(
+                "expect(f(2)).toBe(4);",
+                "expect(Promise.resolve(f(2))).resolves.toBe(4);",
+            ),
+    );
+    assert!(
+        codes(&run, "assertion-reduction").is_empty(),
+        "{}",
+        run.stdout
+    );
+
+    // A new test whose only check is an unawaited `.rejects` chain is vacuous.
+    let added = |check: &str| {
+        BASE.replace(
+            "});\n});\n",
+            &format!("}});\n  it('async', async () => {{\n    {check}\n  }});\n}});\n"),
+        )
+    };
+    let run = changed(&added(
+        "expect(Promise.reject(new Error('x'))).rejects.toThrow('y');",
+    ));
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert_eq!(
+        codes(&run, "vacuous-tests"),
+        ["vacuous-tests/vacuous-test-added"]
+    );
+    // Controls: returned, or inside an awaited `Promise.all`, the chain is a check.
+    for check in [
+        "return expect(Promise.reject(new Error('x'))).rejects.toThrow('x');",
+        "await Promise.all([expect(Promise.resolve(f(2))).resolves.toBe(4)]);",
+    ] {
+        let run = changed(&added(check));
+        assert!(
+            codes(&run, "vacuous-tests").is_empty(),
+            "{check}: {}",
+            run.stdout
+        );
+    }
+}
+
 #[test]
 fn javascript_ignored_tests_and_skips_detected() {
     let repo = Repo::new();

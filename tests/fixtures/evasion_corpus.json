@@ -357,7 +357,9 @@
         "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n  it('async', () => {\n    expect(Promise.reject(new Error('x'))).rejects.toThrow('y');\n  });\n});\n"
       },
       "verdict": {
-        "known_miss": "#829"
+        "caught": [
+          "vacuous-tests/vacuous-test-added"
+        ]
       }
     },
     {
@@ -370,7 +372,9 @@
         "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(Promise.resolve(f(2))).resolves.toBe(5);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
       },
       "verdict": {
-        "known_miss": "#829"
+        "caught": [
+          "assertion-reduction/assertions-reduced"
+        ]
       }
     },
     {
