@@ -1505,6 +1505,14 @@ impl<'a> JsExtractor<'a> {
                         if class == MatcherClass::Strong {
                             test.strong_asserts += 1;
                         }
+                        // `expect(m).toHaveBeenCalledWith(1)`: the matcher checks how a
+                        // double was called, judged by its name as the mock count is.
+                        if matches!(
+                            super::mocks::double(prop_name, "", &[], &self.vocab.mock_assert_fns),
+                            Some(super::mocks::Double::Verify)
+                        ) {
+                            test.mock_checks += 1;
+                        }
                         if self.is_tautological_expect(call, prop_name, test) {
                             test.tautologies += 1;
                         }
