@@ -560,18 +560,16 @@ impl<'a> JsExtractor<'a> {
 
                     let line = node.start_position().row + 1;
                     let end_line = node.end_position().row + 1;
-                    let (cases, non_literal_cases, case_rows) = self
-                        .suite_cases
-                        .iter()
-                        .fold(
-                            super::test_cases::extract_javascript_cases(
-                                func_node,
-                                self.src,
-                                &self.runner_names,
-                            ),
-                            |own, suite| super::test_cases::multiply_cases(suite.clone(), own),
-                        )
-                        .into_parts();
+                    let mut case_list = self.suite_cases.iter().fold(
+                        super::test_cases::extract_javascript_cases(
+                            func_node,
+                            self.src,
+                            &self.runner_names,
+                        ),
+                        |own, suite| super::test_cases::multiply_cases(suite.clone(), own),
+                    );
+                    let case_cells = std::mem::take(&mut case_list.cells);
+                    let (cases, non_literal_cases, case_rows) = case_list.into_parts();
 
                     let mut test_fn = TestFn {
                         name: full_name,
@@ -585,6 +583,7 @@ impl<'a> JsExtractor<'a> {
                         cases,
                         non_literal_cases,
                         case_rows,
+                        case_cells,
                         ..Default::default()
                     };
 

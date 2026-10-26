@@ -3949,6 +3949,22 @@ const CASES: &[Case] = &[
     ),
     #[cfg(feature = "lang-python")]
     (
+        "assertion-reduction: a parenthesised Python assertion is read as the expression inside it (#859)",
+        || {
+            let read = |body: &str| -> Result<(usize, usize, usize)> {
+                let src = format!("def test_t():\n{body}");
+                let facts = facts("tests/test_t.py", &src)?;
+                let t = &facts.tests[0];
+                Ok((t.total_asserts, t.strong_asserts, t.tautologies))
+            };
+            Ok(read("    assert f(3) == 6\n")? == (1, 1, 0)
+                && read("    assert ((f(3) == 6)), \"f doubles\"\n")? == (1, 1, 0)
+                && read("    assert (f(3) is not None)\n")? == (1, 0, 0)
+                && read("    assert ((f(3) == 6, \"f doubles\"))\n")? == (1, 0, 1))
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
         "deletion-rationale: a Python test hidden by a later def of its name is reported (#827)",
         || {
             use crate::ast::LanguagePack;
@@ -5231,6 +5247,44 @@ command = "cargo test"
                 && change(&file("1", "MORE"))? == reduced
                 // Control: the three cases, as written, in the other test.
                 && change(&file("1", "4,3 , 2"))?.is_empty())
+        },
+    ),
+    (
+        "assertion-reduction: a case row with one value rewritten in place is an expected value changed, and a row reordered, added or edited in two cells is not",
+        || {
+            let changed = vec!["assertion-reduction/expected-value-changed".to_string()];
+            let py = |rows: &str| {
+                format!("import pytest\n\n@pytest.mark.parametrize(\"x,y\", [{rows}])\ndef test_f(x, y):\n    assert f(x) == y\n")
+            };
+            let go = |rows: &str| {
+                format!("package p\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {{\n\tfor _, c := range []struct{{ in, want int }}{{{rows}}} {{\n\t\tif F(c.in) != c.want {{\n\t\t\tt.Error(c)\n\t\t}}\n\t}}\n}}\n")
+            };
+            let js = |rows: &str| {
+                format!("test.each([{rows}])('f', (a, b) => {{\n  expect(f(a)).toBe(b);\n}});\n")
+            };
+            let mut ok = true;
+            for (path, form, open, close) in [
+                ("tests/test_a.py", &py as &dyn Fn(&str) -> String, "(", ")"),
+                ("p_test.go", &go, "{", "}"),
+                ("a.test.js", &js, "[", "]"),
+            ] {
+                let rows = |cells: &[&str]| {
+                    cells
+                        .iter()
+                        .map(|c| format!("{open}{c}{close}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let base = form(&rows(&["1, 2", "2, 4"]));
+                let change =
+                    |head: &[&str]| helper_change(&[(path, &base, &form(&rows(head)))], "");
+                ok &= change(&["1, 2", "2, 5"])? == changed;
+                // Controls: reordered, two cells changed, a row added.
+                ok &= change(&["2, 4", "1, 2"])?.is_empty();
+                ok &= change(&["1, 2", "3, 6"])?.is_empty();
+                ok &= change(&["1, 2", "2, 4", "3, 6"])?.is_empty();
+            }
+            Ok(ok)
         },
     ),
     (

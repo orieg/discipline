@@ -313,6 +313,10 @@ pub struct TestFn {
     /// unrelated new one. `None` when the cases are not literal rows whose content can
     /// be compared.
     pub case_rows: Option<Vec<String>>,
+    /// The cells of its case rows, where the pack reads them (`test_cases::CaseRow`):
+    /// what tells a row whose one value was rewritten in place from a row dropped or
+    /// added. Empty where they are not read.
+    pub case_cells: Vec<test_cases::CaseRow>,
     /// Functions called directly in the body of the test.
     pub direct_calls: Vec<String>,
     /// Byte ranges of the assertions counted in `tautologies`, where the pack reads them
@@ -2238,6 +2242,7 @@ impl Default for ParsedFileFacts {
                 cases: None,
                 non_literal_cases: false,
                 case_rows: None,
+                case_cells: Vec::new(),
                 direct_calls: Vec::new(),
                 tautology_spans: Vec::new(),
                 method_checks: 0,
@@ -2281,6 +2286,7 @@ impl ParsedFileFacts {
             cases: None,
             non_literal_cases: false,
             case_rows: None,
+            case_cells: Vec::new(),
             direct_calls: Vec::new(),
             tautology_spans: Vec::new(),
             method_checks: 0,

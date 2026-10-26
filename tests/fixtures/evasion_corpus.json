@@ -90,7 +90,9 @@
         "p_test.go": "package p\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {\n\tif got := F(2); got != 4 {\n\t\tt.Errorf(\"got %d\", got)\n\t}\n}\n\nfunc TestTable(t *testing.T) {\n\tcases := []struct{ in, want int }{{1, 2}, {2, 5}}\n\tfor _, c := range cases {\n\t\tif got := F(c.in); got != c.want {\n\t\t\tt.Errorf(\"got %d\", got)\n\t\t}\n\t}\n}\n"
       },
       "verdict": {
-        "known_miss": "#826"
+        "caught": [
+          "assertion-reduction/expected-value-changed"
+        ]
       }
     },
     {
@@ -146,7 +148,9 @@
         "test/calc.test.js": "import { f } from '../src/calc.js';\n\ntest.each([[1, 2], [2, 5]])('f(%i)', (a, b) => {\n  expect(f(a)).toBe(b);\n});\n"
       },
       "verdict": {
-        "known_miss": "#826"
+        "caught": [
+          "assertion-reduction/expected-value-changed"
+        ]
       }
     },
     {
@@ -783,7 +787,9 @@
         "tests/test_calc.py": "from src.calc import f, g\n\n\nimport pytest\n\n@pytest.mark.parametrize('x,y', [(1, 2), (2, 5)])\ndef test_f(x, y):\n    assert f(x) == y\n"
       },
       "verdict": {
-        "known_miss": "#826"
+        "caught": [
+          "assertion-reduction/expected-value-changed"
+        ]
       }
     },
     {

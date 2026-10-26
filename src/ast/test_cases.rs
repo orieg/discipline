@@ -19,6 +19,10 @@
 //!
 //! A literal source also yields its rows as text (`row_text`), so a case that leaves one
 //! test can be looked for in another by what it is, not by how many there are.
+//!
+//! Python, JS / TS array and Go struct tables also yield each row's cells (`CaseRow`), so
+//! a row whose one value was rewritten in place can be told from a row dropped or added
+//! (`rewritten_cells`).
 
 use super::ancestry::Ancestry;
 use tree_sitter::Node;
@@ -48,6 +52,142 @@ pub struct CaseList {
     /// Each literal case as text (`row_text`), `count` of them. `None` when there is no
     /// count, and for a product of sources larger than `ROW_PRODUCT_LIMIT`.
     pub rows: Option<Vec<String>>,
+    /// The cells of the rows whose cells are read (`CaseRow`): the rows of the packs
+    /// that read them, in a table of this test's own file.
+    pub cells: Vec<CaseRow>,
+}
+
+/// One cell of a case row: a positional value, or one written under a field or keyword.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cell {
+    /// The field or keyword the value is written under (`want` of `{want: 4}`), `None`
+    /// for a positional value.
+    pub key: Option<String>,
+    /// The value as text (`row_text`).
+    pub value: String,
+    /// The value is one literal: a number, string, boolean, or `None` / `nil` / `null`.
+    pub literal: bool,
+    /// The line the value starts on.
+    pub line: usize,
+}
+
+/// The cells of one literal case row, and the table it is a row of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaseRow {
+    /// What tells one table of a test from another: the table's type for a Go table,
+    /// empty where a test has one case source.
+    pub table: String,
+    pub cells: Vec<Cell>,
+}
+
+impl CaseRow {
+    /// The row as compared: its table, and each cell's key and value. Layout and lines
+    /// are not part of it.
+    fn content(&self) -> (&str, Vec<(Option<&str>, &str)>) {
+        (
+            &self.table,
+            self.cells
+                .iter()
+                .map(|c| (c.key.as_deref(), c.value.as_str()))
+                .collect(),
+        )
+    }
+}
+
+/// Lines of `head` case cells whose value was rewritten in place: a head row of a table
+/// that equals a base row of the same table in every cell but one, where both values of
+/// that cell are literals under the same key.
+///
+/// Rows equal on both sides are taken out first, one for one, wherever they stand, so a
+/// reordered table is unchanged. Of the rows left, a base row and a head row are paired
+/// only when each is one cell away from the other and from no other row left: an
+/// ambiguous pairing is not reported. A row edited in more than one cell, a row added or
+/// removed, and a row of one cell (a case replaced, with no other cell beside it that
+/// stayed) are not paired.
+pub fn rewritten_cells(base: &[CaseRow], head: &[CaseRow]) -> Vec<usize> {
+    use std::collections::HashMap;
+    // Equal rows, one for one.
+    let mut unmatched: HashMap<_, usize> = HashMap::new();
+    for row in base {
+        *unmatched.entry(row.content()).or_default() += 1;
+    }
+    let mut head_left = Vec::new();
+    for row in head {
+        match unmatched.get_mut(&row.content()) {
+            Some(n) if *n > 0 => *n -= 1,
+            _ => head_left.push(row),
+        }
+    }
+    let mut seen: HashMap<_, usize> = HashMap::new();
+    let mut base_left = Vec::new();
+    for row in base {
+        let content = row.content();
+        let left = unmatched.get(&content).copied().unwrap_or(0);
+        let n = seen.entry(content).or_default();
+        // The first `left` copies of a row are the ones no head row took.
+        if *n < left {
+            base_left.push(row);
+        }
+        *n += 1;
+    }
+    if base_left.is_empty() || head_left.is_empty() {
+        return Vec::new();
+    }
+    // Two rows left over, of the same table and arity, are one cell apart at `i` when
+    // they agree on every other cell: no two of them are equal any more. Each row is
+    // filed under each of its cells masked out.
+    type Masked<'a> = (&'a str, usize, Vec<(Option<&'a str>, &'a str)>);
+    fn masked(row: &CaseRow, i: usize) -> Masked<'_> {
+        let (table, mut cells) = row.content();
+        cells.remove(i);
+        (table, i, cells)
+    }
+    let mut by_mask: HashMap<Masked, (Vec<usize>, Vec<usize>)> = HashMap::new();
+    for (at, row) in base_left
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.cells.len() >= 2)
+    {
+        for i in 0..row.cells.len() {
+            by_mask.entry(masked(row, i)).or_default().0.push(at);
+        }
+    }
+    for (at, row) in head_left
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.cells.len() >= 2)
+    {
+        for i in 0..row.cells.len() {
+            if let Some(entry) = by_mask.get_mut(&masked(row, i)) {
+                entry.1.push(at);
+            }
+        }
+    }
+    // For each row left: its partners one cell away, with the cell.
+    let mut base_partners: Vec<Vec<(usize, usize)>> = vec![Vec::new(); base_left.len()];
+    let mut head_partners: Vec<usize> = vec![0; head_left.len()];
+    for ((_, i, _), (bases, heads)) in &by_mask {
+        for &b in bases {
+            for &h in heads {
+                base_partners[b].push((h, *i));
+                head_partners[h] += 1;
+            }
+        }
+    }
+    let mut lines: Vec<usize> = base_partners
+        .iter()
+        .enumerate()
+        .filter_map(|(b, partners)| match partners.as_slice() {
+            [(h, i)] if head_partners[*h] == 1 => {
+                let (was, now) = (&base_left[b].cells[*i], &head_left[*h].cells[*i]);
+                (was.key == now.key && was.literal && now.literal).then_some(now.line)
+            }
+            _ => None,
+        })
+        .collect();
+    lines.sort_unstable();
+    lines.dedup();
+    lines
 }
 
 /// The largest product of case sources whose combinations are written out as rows.
@@ -65,6 +205,7 @@ impl CaseList {
             count: None,
             non_literal: true,
             rows: None,
+            cells: Vec::new(),
         }
     }
 
@@ -74,6 +215,15 @@ impl CaseList {
             count: Some(rows.len()),
             non_literal: false,
             rows: Some(rows),
+            cells: Vec::new(),
+        }
+    }
+
+    /// A literal case source with these rows and their cells.
+    fn literal_with_cells(rows: Vec<String>, cells: Vec<CaseRow>) -> Self {
+        Self {
+            cells,
+            ..Self::literal(rows)
         }
     }
 
@@ -164,10 +314,27 @@ pub fn multiply_cases(outer: CaseList, inner: CaseList) -> CaseList {
                 ),
                 _ => None,
             };
+            // A row of the product is the cells of one side beside those of the other.
+            let cells = if outer.cells.len().saturating_mul(inner.cells.len()) <= ROW_PRODUCT_LIMIT
+            {
+                outer
+                    .cells
+                    .iter()
+                    .flat_map(|l| {
+                        inner.cells.iter().map(move |r| CaseRow {
+                            table: format!("{} \u{d7} {}", l.table, r.table),
+                            cells: l.cells.iter().chain(&r.cells).cloned().collect(),
+                        })
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             CaseList {
                 count: Some(count),
                 non_literal: false,
                 rows,
+                cells,
             }
         }
         (Some(_), None) => outer,
@@ -338,6 +505,58 @@ impl PytestNames {
         matches!(func.kind(), "identifier" | "attribute")
             && self.resolve(text(func, src)) == Some(2)
     }
+
+    /// Whether `call` is `pytest.param(..)` under the name the file binds `pytest` to.
+    fn is_param(&self, call: Node, src: &[u8]) -> bool {
+        call.child_by_field_name("function")
+            .filter(|f| f.kind() == "attribute")
+            .is_some_and(|f| {
+                f.child_by_field_name("attribute")
+                    .is_some_and(|a| text(a, src) == "param")
+                    && f.child_by_field_name("object")
+                        .is_some_and(|o| self.resolve(text(o, src)) == Some(0))
+            })
+    }
+}
+
+/// One cell: `value` under `key`, read as a literal by `literal`.
+fn cell(key: Option<String>, value: Node, src: &[u8], literal: bool) -> Cell {
+    Cell {
+        key,
+        value: row_text(value, src),
+        literal,
+        line: value.start_position().row + 1,
+    }
+}
+
+/// The cells of one `parametrize` value: the items of a tuple or list, the arguments of
+/// `pytest.param(..)` but its `id` and `marks`, or the value itself.
+fn python_row_cells(row: Node, src: &[u8], names: &PytestNames) -> Vec<Cell> {
+    let lit = super::expectations::py_lit;
+    match row.kind() {
+        "tuple" | "list" => elements(row)
+            .into_iter()
+            .map(|v| cell(None, v, src, lit(v)))
+            .collect(),
+        "call" if names.is_param(row, src) => {
+            let Some(args) = row.child_by_field_name("arguments") else {
+                return Vec::new();
+            };
+            elements(args)
+                .into_iter()
+                .filter_map(|arg| {
+                    if arg.kind() != "keyword_argument" {
+                        return Some(cell(None, arg, src, lit(arg)));
+                    }
+                    let key = text(arg.child_by_field_name("name")?, src);
+                    let value = arg.child_by_field_name("value")?;
+                    (!matches!(key, "id" | "marks"))
+                        .then(|| cell(Some(key.to_string()), value, src, lit(value)))
+                })
+                .collect()
+        }
+        _ => vec![cell(None, row, src, lit(row))],
+    }
 }
 
 fn python_parametrize_call(call: Node, src: &[u8], names: &PytestNames) -> Option<CaseList> {
@@ -373,7 +592,17 @@ fn python_parametrize_call(call: Node, src: &[u8], names: &PytestNames) -> Optio
             if values.iter().any(|v| v.kind() == "list_splat") {
                 CaseList::non_literal()
             } else {
-                CaseList::literal(values.into_iter().map(|v| row_text(v, src)).collect())
+                let cells = values
+                    .iter()
+                    .map(|v| CaseRow {
+                        table: String::new(),
+                        cells: python_row_cells(*v, src, names),
+                    })
+                    .collect();
+                CaseList::literal_with_cells(
+                    values.into_iter().map(|v| row_text(v, src)).collect(),
+                    cells,
+                )
             }
         }
         _ => CaseList::non_literal(),
@@ -586,7 +815,64 @@ fn javascript_array_rows(array: Node, src: &[u8]) -> CaseList {
     if rows.iter().any(|row| row.kind() == "spread_element") {
         CaseList::non_literal()
     } else {
-        CaseList::literal(rows.into_iter().map(|row| row_text(row, src)).collect())
+        let cells = rows
+            .iter()
+            .map(|row| CaseRow {
+                table: String::new(),
+                cells: javascript_row_cells(*row, src),
+            })
+            .collect();
+        CaseList::literal_with_cells(
+            rows.into_iter().map(|row| row_text(row, src)).collect(),
+            cells,
+        )
+    }
+}
+
+/// Whether a JavaScript value is one literal: a number (signed or not), a string or a
+/// template without substitutions, a boolean, `null` or `undefined`.
+fn javascript_literal(n: Node, src: &[u8]) -> bool {
+    match n.kind() {
+        "number" | "string" | "true" | "false" | "null" | "undefined" => true,
+        "template_string" => !elements(n)
+            .iter()
+            .any(|c| c.kind() == "template_substitution"),
+        "identifier" => text(n, src) == "undefined",
+        "unary_expression" => {
+            n.child_by_field_name("operator")
+                .is_some_and(|o| matches!(text(o, src), "-" | "+"))
+                && n.child_by_field_name("argument")
+                    .is_some_and(|a| a.kind() == "number")
+        }
+        _ => false,
+    }
+}
+
+/// The cells of one `test.each` row: the items of an array, the properties of an object
+/// under their names, or the value itself.
+fn javascript_row_cells(row: Node, src: &[u8]) -> Vec<Cell> {
+    match row.kind() {
+        "array" => elements(row)
+            .into_iter()
+            .map(|v| cell(None, v, src, javascript_literal(v, src)))
+            .collect(),
+        "object" => elements(row)
+            .into_iter()
+            .map(|property| {
+                let key = property.child_by_field_name("key");
+                match (key, property.child_by_field_name("value")) {
+                    (Some(key), Some(value)) if property.kind() == "pair" => cell(
+                        Some(text(key, src).to_string()),
+                        value,
+                        src,
+                        javascript_literal(value, src),
+                    ),
+                    // A shorthand property, a spread, a method: not a literal.
+                    _ => cell(None, property, src, false),
+                }
+            })
+            .collect(),
+        _ => vec![cell(None, row, src, javascript_literal(row, src))],
     }
 }
 
@@ -841,6 +1127,78 @@ struct GoFile<'a, 'tree> {
     used: Vec<String>,
     /// What this file declares at package level.
     declared: &'a GoDeclared<'tree>,
+    /// This is the test's own file: the lines of its cells are lines of the test's file.
+    own: bool,
+}
+
+/// The rows of a Go test's tables, and the cells of those in the test's own file.
+#[derive(Default)]
+struct GoTables {
+    rows: Option<Vec<String>>,
+    cells: Vec<CaseRow>,
+}
+
+/// Whether a Go value is one literal: a number (signed or not), a string, a rune, a
+/// boolean or `nil`.
+fn go_literal(n: Node, src: &[u8]) -> bool {
+    super::expectations::go_lit(n)
+        || (n.kind() == "unary_expression"
+            && n.child_by_field_name("operator")
+                .is_some_and(|o| matches!(text(o, src), "-" | "+"))
+            && n.child_by_field_name("operand")
+                .is_some_and(|o| matches!(o.kind(), "int_literal" | "float_literal")))
+}
+
+/// The expression a `literal_element` holds.
+fn go_element_value(element: Node) -> Option<Node> {
+    if element.kind() == "literal_element" {
+        elements(element).into_iter().next()
+    } else {
+        Some(element)
+    }
+}
+
+/// The cells of one Go table row: the fields of its struct literal, positional or under
+/// their names. The key of a map table is the case's name, not a cell. A row that is no
+/// struct literal is one cell.
+fn go_row_cells(row: Node, src: &[u8]) -> Vec<Cell> {
+    let value = match row.kind() {
+        "keyed_element" => elements(row).get(1).copied().and_then(go_element_value),
+        _ => go_element_value(row),
+    };
+    let Some(value) = value else {
+        return Vec::new();
+    };
+    let body = match value.kind() {
+        "literal_value" => Some(value),
+        "composite_literal" => value.child_by_field_name("body"),
+        "unary_expression" => value
+            .child_by_field_name("operand")
+            .filter(|op| op.kind() == "composite_literal")
+            .and_then(|op| op.child_by_field_name("body")),
+        _ => None,
+    };
+    let Some(body) = body else {
+        return vec![cell(None, value, src, go_literal(value, src))];
+    };
+    elements(body)
+        .into_iter()
+        .filter_map(|field| {
+            if field.kind() != "keyed_element" {
+                let v = go_element_value(field)?;
+                return Some(cell(None, v, src, go_literal(v, src)));
+            }
+            let parts = elements(field);
+            let key = parts.first().copied().and_then(go_element_value)?;
+            let v = parts.get(1).copied().and_then(go_element_value)?;
+            Some(cell(
+                Some(text(key, src).to_string()),
+                v,
+                src,
+                go_literal(v, src),
+            ))
+        })
+        .collect()
 }
 
 /// What one Go file declares at package level, for the tests of the file.
@@ -951,7 +1309,7 @@ impl<'tree> GoDeclared<'tree> {
 impl<'a, 'tree> GoFile<'a, 'tree> {
     /// Adds to `total` the rows of the package-level tables of this file that `named`
     /// holds the name of, in the order the file declares them.
-    fn count_named_package_tables(&self, named: &[String], total: &mut Option<Vec<String>>) {
+    fn count_named_package_tables(&self, named: &[String], total: &mut GoTables) {
         let mut named_in_body: Vec<usize> = named
             .iter()
             .filter_map(|name| self.declared.declaring.get(name))
@@ -1083,12 +1441,7 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
     }
 
     /// Collects the rows of every case table under `node`.
-    fn count_tables(
-        &self,
-        node: Node<'tree>,
-        total: &mut Option<Vec<String>>,
-        non_literal: &mut bool,
-    ) {
+    fn count_tables(&self, node: Node<'tree>, total: &mut GoTables, non_literal: &mut bool) {
         if node.kind() == "composite_literal" {
             if let (Some(type_node), Some(body)) = (
                 node.child_by_field_name("type"),
@@ -1109,11 +1462,18 @@ impl<'a, 'tree> GoFile<'a, 'tree> {
                 if is_table {
                     // The body is a `literal_value`; a row turned into a comment is not
                     // one of its elements.
-                    total.get_or_insert_with(Vec::new).extend(
-                        elements(body)
-                            .into_iter()
-                            .map(|row| row_text(row, self.src)),
-                    );
+                    let rows = elements(body);
+                    total
+                        .rows
+                        .get_or_insert_with(Vec::new)
+                        .extend(rows.iter().map(|row| row_text(*row, self.src)));
+                    if self.own {
+                        let table = row_text(type_node, self.src);
+                        total.cells.extend(rows.iter().map(|row| CaseRow {
+                            table: table.clone(),
+                            cells: go_row_cells(*row, self.src),
+                        }));
+                    }
                 }
             }
         } else if node.kind() == "range_clause" {
@@ -1195,6 +1555,7 @@ pub fn extract_go_cases_in_package<'t>(
         ranged: Vec::new(),
         used: Vec::new(),
         declared,
+        own: true,
     };
     file.collect_names(body_node);
     let others: Vec<GoFile> = siblings
@@ -1207,9 +1568,10 @@ pub fn extract_go_cases_in_package<'t>(
             ranged: file.ranged.clone(),
             used: Vec::new(),
             declared: sibling.level.declared(sibling.root, sibling.src),
+            own: false,
         })
         .collect();
-    let mut table_cases: Option<Vec<String>> = None;
+    let mut table_cases = GoTables::default();
     let mut has_non_literal = false;
 
     file.count_tables(body_node, &mut table_cases, &mut has_non_literal);
@@ -1218,8 +1580,8 @@ pub fn extract_go_cases_in_package<'t>(
         other.count_named_package_tables(&file.used, &mut table_cases);
     }
 
-    match table_cases {
-        Some(rows) => CaseList::literal(rows),
+    match table_cases.rows {
+        Some(rows) => CaseList::literal_with_cells(rows, table_cases.cells),
         None if has_non_literal => CaseList::non_literal(),
         None => CaseList::none(),
     }
@@ -2589,5 +2951,205 @@ fn test_matrix(#[values(1, 2)] a: i32, #[values(10, 20, 30)] b: i32) {
         // an undeclared non-case type with positional values is not a case table.
         let empty_struct = "package p\n\nimport \"testing\"\n\ntype emptyNode struct{}\n\nfunc TestSeen(t *testing.T) {\n\tseen := map[string]emptyNode{\n\t\t\"a\": {},\n\t\t\"b\": {},\n\t}\n\tif len(seen) == 0 {\n\t\tt.Fatal(\"empty\")\n\t}\n}\n";
         assert_eq!(first_test("x_test.go", empty_struct).cases, None);
+    }
+
+    /// The head lines `rewritten_cells` reports between the first test of `base` and the
+    /// first test of `head`.
+    fn rewritten(path: &str, base: &str, head: &str) -> Vec<usize> {
+        rewritten_cells(
+            &first_test(path, base).case_cells,
+            &first_test(path, head).case_cells,
+        )
+    }
+
+    /// A pytest file whose one test runs the rows `rows`, on line 3.
+    fn py_table(rows: &str) -> String {
+        format!(
+            "import pytest\n\n@pytest.mark.parametrize(\"x,y\", [{rows}])\ndef test_f(x, y):\n    assert f(x) == y\n"
+        )
+    }
+
+    #[test]
+    fn python_a_row_with_one_value_rewritten_is_reported() {
+        let base = py_table("(1, 2), (2, 4)");
+        assert_eq!(
+            rewritten("tests/test_a.py", &base, &py_table("(1, 2), (2, 5)")),
+            [3]
+        );
+        // A string, a boolean, `None` and a signed number are literals too.
+        let base = py_table("(1, \"a\"), (2, True), (3, None), (4, -1)");
+        let head = py_table("(1, \"b\"), (2, False), (3, 0), (4, -2)");
+        assert_eq!(rewritten("tests/test_a.py", &base, &head), [3]);
+        // `pytest.param` rows: its `id` is not a cell, its values are.
+        let base = py_table("pytest.param(1, 2, id=\"one\"), pytest.param(2, 4, id=\"two\")");
+        let head = py_table("pytest.param(1, 2, id=\"one\"), pytest.param(2, 5, id=\"two\")");
+        assert_eq!(rewritten("tests/test_a.py", &base, &head), [3]);
+        // Control: the same table on both sides.
+        assert!(rewritten("tests/test_a.py", &base, &base).is_empty());
+    }
+
+    #[test]
+    fn python_rows_edited_otherwise_are_not_reported() {
+        let base = py_table("(1, 2), (2, 4)");
+        let cases = [
+            // Reordered, unchanged.
+            "(2, 4), (1, 2)",
+            // Two cells changed.
+            "(1, 2), (3, 6)",
+            // A row added beside unchanged rows.
+            "(1, 2), (2, 4), (3, 6)",
+            // A row removed (`test-cases-reduced`).
+            "(1, 2)",
+            // The changed cell is not a literal.
+            "(1, 2), (2, g(4))",
+        ];
+        for head in cases {
+            assert!(
+                rewritten("tests/test_a.py", &base, &py_table(head)).is_empty(),
+                "{head}"
+            );
+        }
+        // Only the `id` of a `pytest.param` row changed: no value did.
+        let base = py_table("pytest.param(1, 2, id=\"one\"), pytest.param(2, 4, id=\"two\")");
+        let head = py_table("pytest.param(1, 2, id=\"one\"), pytest.param(2, 4, id=\"four\")");
+        assert!(rewritten("tests/test_a.py", &base, &head).is_empty());
+    }
+
+    #[test]
+    fn an_ambiguous_pairing_is_not_reported() {
+        // One base row left, one cell away from two head rows.
+        let base = py_table("(1, 2), (2, 4)");
+        let head = py_table("(1, 2), (2, 5), (2, 6)");
+        assert!(rewritten("tests/test_a.py", &base, &head).is_empty());
+        // Two base rows left, each one cell away from the one head row left.
+        let base = py_table("(1, 2), (1, 3)");
+        let head = py_table("(1, 4)");
+        assert!(rewritten("tests/test_a.py", &base, &head).is_empty());
+        // Control: the rows left pair one for one.
+        let head = py_table("(1, 5), (1, 3)");
+        assert_eq!(rewritten("tests/test_a.py", &base, &head), [3]);
+    }
+
+    #[test]
+    fn a_row_of_one_cell_is_a_case_replaced_not_paired() {
+        let one = |rows: &str| {
+            format!(
+                "import pytest\n\n@pytest.mark.parametrize(\"x\", [{rows}])\ndef test_f(x):\n    assert f(x)\n"
+            )
+        };
+        assert!(rewritten("tests/test_a.py", &one("1, 2"), &one("1, 3")).is_empty());
+        // Stacked: a row of the product is a value of each list, so it has two cells; a
+        // value changed in one list is reported once, at its line.
+        let stacked = |xs: &str| {
+            format!(
+                "import pytest\n\n@pytest.mark.parametrize(\"x\", [{xs}])\n@pytest.mark.parametrize(\"y\", [\"a\", \"b\"])\ndef test_f(x, y):\n    assert f(x, y)\n"
+            )
+        };
+        assert_eq!(
+            rewritten("tests/test_a.py", &stacked("1, 2"), &stacked("1, 3")),
+            [3]
+        );
+    }
+
+    /// A Go test whose table is `table`, on line 6.
+    fn go_table(table: &str) -> String {
+        format!(
+            "package p\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {{\n\tcases := {table}\n\tfor _, c := range cases {{\n\t\tif F(c.in) != c.want {{\n\t\t\tt.Error(c)\n\t\t}}\n\t}}\n}}\n"
+        )
+    }
+
+    #[test]
+    fn go_a_row_with_one_value_rewritten_is_reported() {
+        let base = go_table("[]struct{ in, want int }{{1, 2}, {2, 4}}");
+        let head = go_table("[]struct{ in, want int }{{1, 2}, {2, 5}}");
+        assert_eq!(rewritten("p_test.go", &base, &head), [6]);
+        // Fields under their names, a row on several lines: the line of the value.
+        let keyed = |want: &str| {
+            go_table(&format!(
+                "[]struct {{\n\t\tname string\n\t\tin, want int\n\t}}{{\n\t\t{{name: \"one\", in: 1, want: 2}},\n\t\t{{\n\t\t\tname: \"two\",\n\t\t\tin:   2,\n\t\t\twant: {want},\n\t\t}},\n\t}}"
+            ))
+        };
+        assert_eq!(rewritten("p_test.go", &keyed("4"), &keyed("-5")), [14]);
+        // A map table: the key is the case's name, the struct's fields are the cells.
+        let map = |key: &str, want: &str| {
+            go_table(&format!(
+                "map[string]struct{{ in, want int }}{{\"one\": {{1, 2}}, \"{key}\": {{2, {want}}}}}"
+            ))
+        };
+        assert_eq!(
+            rewritten("p_test.go", &map("two", "4"), &map("two", "5")),
+            [6]
+        );
+        // Control: only the key changed.
+        assert!(rewritten("p_test.go", &map("two", "4"), &map("2", "4")).is_empty());
+    }
+
+    #[test]
+    fn go_rows_edited_otherwise_are_not_reported() {
+        let base = go_table("[]struct{ in, want int }{{1, 2}, {2, 4}}");
+        let cases = [
+            "[]struct{ in, want int }{{2, 4}, {1, 2}}",
+            "[]struct{ in, want int }{{1, 2}, {3, 6}}",
+            "[]struct{ in, want int }{{1, 2}, {2, 4}, {3, 6}}",
+            "[]struct{ in, want int }{{1, 2}, {2, four}}",
+            // A row one cell away from two rows left.
+            "[]struct{ in, want int }{{1, 2}, {2, 5}, {2, 6}}",
+        ];
+        for head in cases {
+            assert!(
+                rewritten("p_test.go", &base, &go_table(head)).is_empty(),
+                "{head}"
+            );
+        }
+        // A field renamed is not the same cell.
+        let keyed = |field: &str| {
+            go_table(&format!(
+                "[]struct{{ in, want, got int }}{{{{in: 1, want: 2}}, {{in: 2, {field}: 4}}}}"
+            ))
+        };
+        assert!(rewritten("p_test.go", &keyed("want"), &keyed("got")).is_empty());
+    }
+
+    /// A JS file whose one test runs the rows `rows`, on line 1.
+    fn js_table(rows: &str) -> String {
+        format!("test.each([{rows}])('f', (a, b) => {{\n  expect(f(a)).toBe(b);\n}});\n")
+    }
+
+    #[test]
+    fn javascript_a_row_with_one_value_rewritten_is_reported() {
+        let base = js_table("[1, 2], [2, 4]");
+        assert_eq!(
+            rewritten("a.test.js", &base, &js_table("[1, 2], [2, 5]")),
+            [1]
+        );
+        // Object rows: properties under their names.
+        let base = js_table("{ a: 1, b: 'x' }, { a: 2, b: 'y' }");
+        let head = js_table("{ a: 1, b: 'x' }, { a: 2, b: 'z' }");
+        assert_eq!(rewritten("a.test.ts", &base, &head), [1]);
+        // Control: a property renamed is not the same cell.
+        let head = js_table("{ a: 1, b: 'x' }, { a: 2, c: 'y' }");
+        assert!(rewritten("a.test.ts", &base, &head).is_empty());
+    }
+
+    #[test]
+    fn javascript_rows_edited_otherwise_are_not_reported() {
+        let base = js_table("[1, 2], [2, 4]");
+        for head in [
+            "[2, 4], [1, 2]",
+            "[1, 2], [3, 6]",
+            "[1, 2], [2, 4], [3, 6]",
+            "[1, 2], [2, g(4)]",
+            "[1, 2], [2, 5], [2, 6]",
+        ] {
+            assert!(
+                rewritten("a.test.js", &base, &js_table(head)).is_empty(),
+                "{head}"
+            );
+        }
+        // A template table's rows are text, not cells: not paired.
+        let template = |v: &str| {
+            format!("test.each`\n  a | b\n  ${{1}} | ${{{v}}}\n`('f', ({{ a, b }}) => {{ expect(f(a)).toBe(b); }});\n")
+        };
+        assert!(rewritten("a.test.js", &template("2"), &template("3")).is_empty());
     }
 }
