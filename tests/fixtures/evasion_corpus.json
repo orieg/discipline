@@ -34,6 +34,21 @@
       }
     },
     {
+      "name": "cmd-mutants-zero-tested",
+      "base": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.command]\nenabled = true\ncommands = [ { name = \"mut\", preset = \"cargo-mutants\", command = \"echo 0 mutants tested in 1s\" } ]\n",
+        "src/lib.rs": "pub fn f() -> i32 {\n    1\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn f() -> i32 {\n    1 // c\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "command/zero-items-executed"
+        ]
+      }
+    },
+    {
       "name": "directive-name-typo",
       "base": {
         "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
