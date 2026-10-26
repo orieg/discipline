@@ -781,6 +781,66 @@ fn python_always_true_asserts_are_tautologies() {
     assert!(repo.check(&[]).violations("assertion-reduction").is_empty());
 }
 
+/// A Python assertion wrapped in parentheses is the same check (#859): reformatting an
+/// existing test's equality with parentheses and a message weakens nothing, and a new
+/// test whose parenthesised equality sits beside a mock assertion checks a result.
+#[test]
+fn python_parenthesised_assertions_are_read_as_the_expression_inside() {
+    const BASE: &str = "from src.calc import f\n\n\ndef test_f():\n    assert f(3) == 6\n";
+    let repo = Repo::new();
+    repo.write("src/calc.py", "def f(x):\n    return x * 2\n");
+    repo.commit_base("tests/test_calc.py", BASE, "test: calc");
+    repo.write(
+        "tests/test_calc.py",
+        &BASE.replace("assert f(3) == 6", "assert (f(3) == 6), \"f doubles\""),
+    );
+    repo.commit("test: reformat");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(run.violations("assertion-reduction").is_empty());
+
+    // Control: a parenthesised `is not None` is still weaker than the equality it replaces.
+    let repo = Repo::new();
+    repo.write("src/calc.py", "def f(x):\n    return x * 2\n");
+    repo.commit_base("tests/test_calc.py", BASE, "test: calc");
+    repo.write(
+        "tests/test_calc.py",
+        &BASE.replace("assert f(3) == 6", "assert (f(3) is not None)"),
+    );
+    repo.commit("test: weaken");
+    let codes: Vec<String> = repo
+        .check(&[])
+        .violations("assertion-reduction")
+        .iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(codes, ["assertion-reduction/assertions-reduced"]);
+
+    // A new test: the parenthesised equality is a check on the result, not only the mock.
+    let mocked = |check: &str| {
+        let repo = Repo::new();
+        repo.write("src/calc.py", "def f(x):\n    return x * 2\n");
+        repo.commit("chore: calc");
+        repo.write(
+            "tests/test_calc.py",
+            &format!(
+                "from unittest import mock\nfrom src.calc import f\n\n\ndef test_f():\n    m = mock.Mock()\n    m(1)\n    m.assert_called_once_with(1)\n    {check}\n"
+            ),
+        );
+        repo.commit("test: add");
+        repo.check(&[])
+    };
+    let run = mocked("assert (f(3) == 6)");
+    assert!(run.violations("vacuous-tests").is_empty(), "{}", run.stdout);
+    // Control: without a check on the result, the mock assertion is all there is.
+    let codes: Vec<String> = mocked("f(3)")
+        .violations("vacuous-tests")
+        .iter()
+        .map(|v| v["code"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(codes, ["vacuous-tests/asserts-only-on-mocks"]);
+}
+
 #[test]
 fn idiomatic_result_and_unwrap_tests_pass_vacuous_tests_gate() {
     let repo = Repo::new();
