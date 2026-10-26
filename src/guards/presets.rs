@@ -22,6 +22,11 @@ pub struct PresetDefinition {
     pub description: &'static str,
 }
 
+/// The mutation presets' zero-items guard. `\b` keeps it to a count of exactly zero: a
+/// `0` with a digit before it ends a larger count (`10 mutants tested`), which is not an
+/// empty run (#847).
+pub const ZERO_MUTANTS_TESTED: &str = r"\b0 mutants tested";
+
 pub static PRESETS: &[PresetDefinition] = &[
     // 1. Diff-Scoped Mutation Testing
     PresetDefinition {
@@ -29,7 +34,7 @@ pub static PRESETS: &[PresetDefinition] = &[
         category: "mutation",
         default_command: "cargo mutants --in-diff",
         default_timeout_seconds: 300,
-        zero_items_pattern: Some("0 mutants tested"),
+        zero_items_pattern: Some(ZERO_MUTANTS_TESTED),
         forbid_output: &["survived", "MISSED"],
         canary_command: None,
         canary_expected_diagnostic: None,
@@ -43,7 +48,7 @@ pub static PRESETS: &[PresetDefinition] = &[
         category: "mutation",
         default_command: "mutmut run",
         default_timeout_seconds: 300,
-        zero_items_pattern: Some("0 mutants tested"),
+        zero_items_pattern: Some(ZERO_MUTANTS_TESTED),
         forbid_output: &["survived", "SURVIVED"],
         canary_command: None,
         canary_expected_diagnostic: None,
@@ -57,7 +62,7 @@ pub static PRESETS: &[PresetDefinition] = &[
         category: "mutation",
         default_command: "npx stryker run",
         default_timeout_seconds: 300,
-        zero_items_pattern: Some("0 mutants tested"),
+        zero_items_pattern: Some(ZERO_MUTANTS_TESTED),
         forbid_output: &["Survived", "SURVIVED"],
         canary_command: None,
         canary_expected_diagnostic: None,
@@ -71,7 +76,7 @@ pub static PRESETS: &[PresetDefinition] = &[
         category: "mutation",
         default_command: "mvn org.pitest:pitest-maven:mutationCoverage",
         default_timeout_seconds: 300,
-        zero_items_pattern: Some("0 mutants tested"),
+        zero_items_pattern: Some(ZERO_MUTANTS_TESTED),
         forbid_output: &["SURVIVED"],
         canary_command: None,
         canary_expected_diagnostic: None,
@@ -433,7 +438,7 @@ mod tests {
         let mutants = resolve_preset("cargo-mutants").unwrap();
         assert_eq!(
             mutants.replaced_default("zero_items_pattern"),
-            Some("0 mutants tested")
+            Some(r"\b0 mutants tested")
         );
         // Merged with the configured list, so there is no default to replace.
         assert_eq!(mutants.replaced_default("forbid_output"), None);
@@ -460,7 +465,10 @@ mod tests {
     fn test_preset_categories_and_invariants() {
         let cargo_mutants = resolve_preset("cargo-mutants").unwrap();
         assert_eq!(cargo_mutants.category, "mutation");
-        assert_eq!(cargo_mutants.zero_items_pattern, Some("0 mutants tested"));
+        assert_eq!(
+            cargo_mutants.zero_items_pattern,
+            Some(r"\b0 mutants tested")
+        );
         assert!(cargo_mutants.forbid_output.contains(&"survived"));
 
         let loom = resolve_preset("loom").unwrap();
@@ -488,7 +496,9 @@ mod tests {
     }
     /// `forbid_output`, `zero_items_pattern` and `canary_expected_diagnostic` are regular
     /// expressions with no literal fallback (#600). Every built-in default must compile,
-    /// and none may depend on being read as text: each matches its own text.
+    /// and none may depend on being read as text: each matches its own text. The
+    /// zero-items guards, written as expressions, are checked against tool output in
+    /// `every_zero_items_pattern_matches_only_a_whole_count_of_zero`.
     #[test]
     fn every_preset_output_pattern_compiles_and_matches_its_own_text() {
         let mut checked = 0;
@@ -497,13 +507,11 @@ mod tests {
                 .forbid_output
                 .iter()
                 .copied()
-                .chain(preset.zero_items_pattern)
                 .chain(preset.canary_expected_diagnostic);
             for pattern in patterns {
                 let re = crate::guards::command::output_pattern(pattern, preset.id)
                     .unwrap_or_else(|e| panic!("preset `{}`: {e:#}", preset.id));
-                // The text a literal match would have looked for. The one default written
-                // as an expression is `lcov`'s, whose text is its unescaped form.
+                // The text a literal match would have looked for.
                 let text = pattern.replace('\\', "");
                 assert!(re.is_match(&text), "preset `{}`: `{pattern}`", preset.id);
                 assert!(
@@ -515,5 +523,74 @@ mod tests {
             }
         }
         assert!(checked >= 15, "{checked} patterns checked");
+    }
+
+    /// A zero-items guard means "nothing ran", so it must match a count of exactly zero
+    /// and never a larger count that ends in `0` (#847). Each preset that has one is
+    /// listed with output it must match and output it must not.
+    #[test]
+    fn every_zero_items_pattern_matches_only_a_whole_count_of_zero() {
+        type Samples = (
+            &'static str,
+            &'static [&'static str],
+            &'static [&'static str],
+        );
+        let mutants_zero: &[&str] = &[
+            "0 mutants tested",
+            "0 mutants tested in 1s",
+            "Found 3 mutants\n0 mutants tested in 2s: 0 caught",
+            "summary: 0 mutants tested",
+        ];
+        let mutants_more: &[&str] = &[
+            "10 mutants tested in 5s: 10 caught",
+            "20 mutants tested",
+            "100 mutants tested in 9s: 99 caught, 1 unviable",
+            "3 mutants tested\n30 mutants tested",
+        ];
+        let tests_zero: &[&str] = &[
+            "running 0 tests",
+            "running 3 tests\ntest result: ok\nrunning 0 tests\n",
+        ];
+        let tests_more: &[&str] = &["running 10 tests", "running 20 tests", "running 100 tests"];
+        let samples: &[Samples] = &[
+            ("cargo-mutants", mutants_zero, mutants_more),
+            ("mutmut", mutants_zero, mutants_more),
+            ("stryker", mutants_zero, mutants_more),
+            ("pit", mutants_zero, mutants_more),
+            (
+                "lcov",
+                &["  lines......: 0% (0 of 12 lines)"],
+                &[
+                    "  lines......: 10% (1 of 10 lines)",
+                    "  lines......: 20% (2 of 10 lines)",
+                    "  lines......: 100% (12 of 12 lines)",
+                ],
+            ),
+            ("loom", tests_zero, tests_more),
+            ("miri", tests_zero, tests_more),
+        ];
+        for preset in PRESETS {
+            let Some(pattern) = preset.zero_items_pattern else {
+                continue;
+            };
+            let (_, zero, more) = samples
+                .iter()
+                .find(|(id, _, _)| *id == preset.id)
+                .unwrap_or_else(|| panic!("preset `{}` has no samples here", preset.id));
+            let re = crate::guards::command::output_pattern(pattern, preset.id).unwrap();
+            for out in *zero {
+                assert!(re.is_match(out), "preset `{}`: {out:?}", preset.id);
+            }
+            for out in *more {
+                assert!(!re.is_match(out), "preset `{}`: {out:?}", preset.id);
+            }
+        }
+        assert_eq!(
+            PRESETS
+                .iter()
+                .filter(|p| p.zero_items_pattern.is_some())
+                .count(),
+            samples.len()
+        );
     }
 }

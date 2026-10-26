@@ -2351,7 +2351,7 @@ mod tests {
         let p = presets::resolve_preset("cargo-mutants").expect("cargo-mutants preset exists");
         assert_eq!(p.category, "mutation");
         assert_eq!(p.default_command, "cargo mutants --in-diff");
-        assert_eq!(p.zero_items_pattern, Some("0 mutants tested"));
+        assert_eq!(p.zero_items_pattern, Some(r"\b0 mutants tested"));
         assert!(p.forbid_output.contains(&"survived"));
         assert_eq!(p.policy_files, &[".cargo/mutants.toml"]);
 

@@ -82,7 +82,7 @@ fn only_weakening_names(found: &[String], key: &str) -> bool {
 
 // ---- keys that replace a preset's default --------------------------------------
 
-/// The preset's `0 mutants tested` guard is replaced by a pattern the tool never prints,
+/// The preset's `\b0 mutants tested` guard is replaced by a pattern the tool never prints,
 /// so a run that tested nothing passes.
 #[test]
 fn a_zero_items_pattern_added_over_a_preset_default_is_reported() {
@@ -95,7 +95,9 @@ fn a_zero_items_pattern_added_over_a_preset_default_is_reported() {
     // The loosening is real: the head-side gate no longer sees the empty run.
     assert_eq!(codes(&run, "command"), Vec::<String>::new());
     assert!(
-        found[..].iter().any(|m| m.contains("\"0 mutants tested\"")),
+        found[..]
+            .iter()
+            .any(|m| m.contains("'\\b0 mutants tested'")),
         "the report names the preset's default: {found:?}"
     );
     assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
@@ -177,7 +179,7 @@ fn a_snapshot_added_to_an_entry_over_its_preset_default_is_reported() {
 fn a_key_set_to_its_preset_default_is_not_a_weakening() {
     let zero = repo_with(
         MUTANTS_NOTHING_RAN,
-        &format!("{MUTANTS_NOTHING_RAN}zero_items_pattern = \"0 mutants tested\"\n"),
+        &format!("{MUTANTS_NOTHING_RAN}zero_items_pattern = '\\b0 mutants tested'\n"),
     );
     let run = zero.check(&[]);
     assert_eq!(weakenings(&run), Vec::<String>::new());

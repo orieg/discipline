@@ -30,7 +30,7 @@ const MUTANTS_OWN_COMMAND: &str =
 /// `cargo-mutants` with a base-side command that prints the preset's "nothing ran" line.
 const MUTANTS_NOTHING_RAN: &str =
     "[gates.command]\npreset = \"cargo-mutants\"\ncommand = \"echo 0 mutants tested\"\n";
-const ZERO_GUARD_WRITTEN_DOWN: &str = "zero_items_pattern = \"0 mutants tested\"\n";
+const ZERO_GUARD_WRITTEN_DOWN: &str = "zero_items_pattern = '\\b0 mutants tested'\n";
 const ZERO_GUARD_REPLACED: &str = "zero_items_pattern = \"never printed\"\n";
 const MUTANTS_ENTRY: &str = "[gates.command]\n\n[[gates.command.commands]]\nname = \"mut\"\n\
      preset = \"cargo-mutants\"\ncommand = \"echo 5 mutants tested\"\n";
@@ -353,7 +353,7 @@ fn a_key_added_beside_a_preset_the_head_first_names_is_judged_against_that_prese
     assert!(
         found.len() == 1
             && found[0].starts_with(
-                "[command] `zero_items_pattern` changed from \"0 mutants tested\" to \"never printed\""
+                "[command] `zero_items_pattern` changed from '\\b0 mutants tested' to \"never printed\""
             ),
         "{found:?}\n{}",
         all(&run)
@@ -377,7 +377,7 @@ fn a_key_on_a_new_entry_is_judged_against_the_preset_the_entry_names() {
     assert!(
         found.len() == 1
             && found[0].contains("zero_items_pattern")
-            && found[0].contains("\"0 mutants tested\""),
+            && found[0].contains("'\\b0 mutants tested'"),
         "{found:?}\n{}",
         all(&run)
     );

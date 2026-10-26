@@ -893,7 +893,7 @@ const CASES: &[Case] = &[
             let mut weaker = base.clone();
             weaker.gates.command.zero_items_pattern = Some("never printed".to_string());
             let mut same = base.clone();
-            same.gates.command.zero_items_pattern = Some("0 mutants tested".to_string());
+            same.gates.command.zero_items_pattern = Some(r"\b0 mutants tested".to_string());
             let found = diff_configs(&base, &weaker)?;
             Ok(found.len() == 1
                 && found[0].gate == "command"
@@ -5281,7 +5281,7 @@ command = "cargo test"
 
             // Check mutation testing invariants
             let mutants_ok = mutants.category == "mutation"
-                && mutants.zero_items_pattern == Some("0 mutants tested")
+                && mutants.zero_items_pattern == Some(r"\b0 mutants tested")
                 && mutants.forbid_output.contains(&"survived")
                 && mutants.forbid_output.contains(&"MISSED");
 
@@ -5301,6 +5301,39 @@ command = "cargo test"
                 && lcov.policy_files.contains(&"lcov.info");
 
             Ok(mutants_ok && deny_ok && loom_ok && lcov_ok)
+        },
+    ),
+    (
+        "presets: a zero-items guard matches a count of exactly zero, never a larger count ending in 0 (#847)",
+        || {
+            use crate::guards::command::output_pattern;
+            use crate::guards::presets::resolve_preset;
+            let guard = |id: &str| -> Result<regex::Regex> {
+                let pattern = resolve_preset(id)
+                    .and_then(|p| p.zero_items_pattern)
+                    .ok_or_else(|| anyhow::anyhow!("preset `{id}` has no zero-items guard"))?;
+                output_pattern(pattern, id)
+            };
+            let mut ok = true;
+            for id in ["cargo-mutants", "mutmut", "stryker", "pit"] {
+                let re = guard(id)?;
+                ok &= re.is_match("0 mutants tested in 1s")
+                    && re.is_match("Found 3 mutants\n0 mutants tested")
+                    && !re.is_match("10 mutants tested in 5s: 10 caught")
+                    && !re.is_match("20 mutants tested")
+                    && !re.is_match("100 mutants tested");
+            }
+            for id in ["loom", "miri"] {
+                let re = guard(id)?;
+                ok &= re.is_match("running 0 tests")
+                    && !re.is_match("running 10 tests")
+                    && !re.is_match("running 100 tests");
+            }
+            let lcov = guard("lcov")?;
+            ok &= lcov.is_match("  lines......: 0% (0 of 12 lines)")
+                && !lcov.is_match("  lines......: 10% (1 of 10 lines)")
+                && !lcov.is_match("  lines......: 100% (12 of 12 lines)");
+            Ok(ok)
         },
     ),
     (
@@ -7063,7 +7096,7 @@ test tests::c: test
                 crate::guards::issue_link::DEFAULT_ISSUE_PATTERN
             );
             let mutants = "[gates.command]\npreset = \"cargo-mutants\"\n";
-            let guard = "zero_items_pattern = \"0 mutants tested\"\n";
+            let guard = "zero_items_pattern = '\\b0 mutants tested'\n";
             let plain = "[gates.command]\ncommand = \"true\"\n";
             let named = format!("{plain}preset = \"cargo-mutants\"\nzero_items_pattern = \"never\"\n");
             let n = |base: &str, head: &str, authorised: bool| -> Result<usize> {

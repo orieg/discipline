@@ -12112,6 +12112,43 @@ preset = "cargo-mutants"
     assert_eq!(outcome_ov["overrides"].as_array().unwrap().len(), 1);
 }
 
+/// #847: the mutation presets' zero-items guard matches a count of exactly zero. A run
+/// that tested 10, 20 or 100 mutants ends its count in `0` and is not an empty run; a
+/// run that tested none still is.
+#[test]
+fn command_preset_cargo_mutants_count_ending_in_zero_is_not_zero_items() {
+    let check = |printed: &str| -> Run {
+        let repo = Repo::new();
+        repo.commit_base(
+            "discipline.toml",
+            &format!(
+                "{CONFIG_HEAD}\n[gates.command]\nenabled = true\ncommands = [ {{ name = \"mut\", \
+                 preset = \"cargo-mutants\", command = \"echo {printed}\" }} ]\n"
+            ),
+            "ci: configure cargo-mutants",
+        );
+        repo.write("src/lib.rs", &format!("{GOOD_LIB}// c\n"));
+        repo.commit("chore: touch the library");
+        repo.check(&[])
+    };
+    for printed in [
+        "10 mutants tested in 5s: 10 caught",
+        "20 mutants tested",
+        "100 mutants tested in 9s: 100 caught",
+    ] {
+        let run = check(printed);
+        assert_eq!(run.code, 0, "{printed}: {}{}", run.stdout, run.stderr);
+        assert_eq!(run.outcome("command")["examined"], 1, "{printed}");
+        assert!(run.violations("command").is_empty(), "{printed}");
+    }
+    // Control: nothing tested is still reported.
+    let zero = check("0 mutants tested in 1s");
+    assert_eq!(zero.code, 1, "{}{}", zero.stdout, zero.stderr);
+    assert!(zero
+        .titles("command")
+        .contains(&"Zero Items Selected Or Executed".to_string()));
+}
+
 #[test]
 fn command_preset_loom_zero_tests_guard_and_pass() {
     let repo = Repo::new();
