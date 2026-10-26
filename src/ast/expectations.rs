@@ -263,7 +263,7 @@ pub fn rust(root: Node, src: &str, tests: &mut [TestFn]) {
     });
 }
 
-fn py_lit(n: Node) -> bool {
+pub(super) fn py_lit(n: Node) -> bool {
     match n.kind() {
         "integer" | "float" | "true" | "false" | "none" => true,
         // An f-string is built from values, not written.
@@ -520,7 +520,7 @@ pub fn javascript(
     });
 }
 
-fn go_lit(n: Node) -> bool {
+pub(super) fn go_lit(n: Node) -> bool {
     matches!(
         n.kind(),
         "int_literal"

@@ -154,9 +154,10 @@ pub fn resolve_package_cases(
             .iter_mut()
             .find(|t| t.line == line && t.end_line == end_line && !t.name.contains('/'));
         if let Some(test) = test {
-            let (cases, non_literal_cases, case_rows) =
-                extract_go_cases_in_package(body, &anc, src.as_bytes(), &siblings, &level)
-                    .into_parts();
+            let mut case_list =
+                extract_go_cases_in_package(body, &anc, src.as_bytes(), &siblings, &level);
+            test.case_cells = std::mem::take(&mut case_list.cells);
+            let (cases, non_literal_cases, case_rows) = case_list.into_parts();
             test.cases = cases;
             test.non_literal_cases = non_literal_cases;
             test.case_rows = case_rows;
@@ -629,15 +630,15 @@ impl<'a> GoExtractor<'a> {
         let mut direct_calls = Vec::new();
         self.enter_function(node);
         if let Some(body) = node.child_by_field_name("body") {
-            let (cases, non_literal_cases, case_rows) =
-                super::test_cases::extract_go_cases_in_package(
-                    body,
-                    self.anc,
-                    self.src,
-                    &[],
-                    &self.package_level,
-                )
-                .into_parts();
+            let mut case_list = super::test_cases::extract_go_cases_in_package(
+                body,
+                self.anc,
+                self.src,
+                &[],
+                &self.package_level,
+            );
+            test_fn.case_cells = std::mem::take(&mut case_list.cells);
+            let (cases, non_literal_cases, case_rows) = case_list.into_parts();
             test_fn.cases = cases;
             test_fn.non_literal_cases = non_literal_cases;
             test_fn.case_rows = case_rows;
