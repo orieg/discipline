@@ -2176,6 +2176,17 @@ fn js_is_assertion(
     is_assert || is_expect_chain
 }
 
+/// An assertion that returns a promise the test does not wait on (#829): the language
+/// pack does not count it, so it is not taken out of the count a second time as caught.
+fn js_unsettled<'t>(
+    call: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    std_asserts: &[(String, &'static str)],
+) -> bool {
+    super::javascript::unsettled_promise_assertion(call, anc, src.as_bytes(), std_asserts)
+}
+
 /// Whether a node in a handler rethrows, asserts or fails the test. `done(err)` and
 /// `reject(..)` fail it: the runner's callback with an argument, and the promise the
 /// test returns.
@@ -2455,7 +2466,9 @@ pub fn javascript<'t>(
                     {
                         return false;
                     }
-                    if n.kind() == "call_expression" && js_is_assertion(n, src, vocab, std_asserts)
+                    if n.kind() == "call_expression"
+                        && js_is_assertion(n, src, vocab, std_asserts)
+                        && !js_unsettled(n, anc, src, std_asserts)
                     {
                         caught.attribute(CaughtAssertion {
                             line: n.start_position().row + 1,
@@ -2495,7 +2508,10 @@ pub fn javascript<'t>(
             {
                 return false;
             }
-            if n.kind() == "call_expression" && js_is_assertion(n, src, vocab, std_asserts) {
+            if n.kind() == "call_expression"
+                && js_is_assertion(n, src, vocab, std_asserts)
+                && !js_unsettled(n, anc, src, std_asserts)
+            {
                 caught.attribute(CaughtAssertion {
                     line: n.start_position().row + 1,
                     span: site(n).1,
