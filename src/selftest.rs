@@ -1512,6 +1512,71 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "harness-tampering: a module of the repository a conftest.py registers from a hook is a harness file, another project's name or an object is not",
+        || {
+            use crate::ast::runner_collection::ConfiguredHarness;
+            use crate::guards::harness_tampering::roles;
+            let registry = crate::ast::default_registry();
+            let hook = "def pytest_runtest_logreport(report):\n    report.outcome = \"passed\"\n";
+            let is_harness = |conftest: &str, path: &str| {
+                let files = [
+                    ("tests/conftest.py", conftest),
+                    ("tests/myplugin.py", hook),
+                ];
+                let tracked: Vec<String> = files.iter().map(|(p, _)| p.to_string()).collect();
+                let configured = ConfiguredHarness::from_tree(
+                    |p| files.iter().find(|(f, _)| *f == p).map(|(_, src)| src.to_string()),
+                    &tracked,
+                );
+                roles(path, &configured, &registry, &[]).pytest_hooks
+            };
+            let register = "import myplugin\n\n\ndef pytest_configure(config):\n    config.pluginmanager.register(myplugin)\n";
+            let import_plugin = "def pytest_configure(config):\n    config.pluginmanager.import_plugin(\"myplugin\")\n";
+            let third_party = "def pytest_configure(config):\n    config.pluginmanager.import_plugin(\"pytest_cov\")\n";
+            let object = "import myplugin\n\n\ndef pytest_configure(config):\n    config.pluginmanager.register(myplugin.Plugin())\n";
+            Ok(is_harness(register, "tests/myplugin.py")
+                && is_harness(import_plugin, "tests/myplugin.py")
+                && !is_harness(third_party, "tests/myplugin.py")
+                && !is_harness(object, "tests/myplugin.py"))
+        },
+    ),
+    (
+        "test-floor: a Cargo [[test]] target that keeps its name and moves its path leaves its old root out, unless another target still reaches it",
+        || {
+            use crate::ast::runner_collection::{moved_out_by, RunnerCollectionRules};
+            use crate::ast::AssertVocabulary;
+            let side = |manifest: &str, other: &str| {
+                let files = [
+                    ("Cargo.toml", format!("[package]\nname = \"p\"\nversion = \"0.1.0\"\n{manifest}")),
+                    ("tests/it.rs", "#[test]\nfn t() {}\n".to_string()),
+                    ("tests/other.rs", other.to_string()),
+                ];
+                let tracked: Vec<String> = files.iter().map(|(p, _)| p.to_string()).collect();
+                AssertVocabulary {
+                    runner_rules: RunnerCollectionRules::from_tree(
+                        |p| files.iter().find(|(f, _)| *f == p).map(|(_, src)| src.clone()),
+                        &tracked,
+                    ),
+                    ..Default::default()
+                }
+            };
+            let test = "#[test]\nfn o() {}\n";
+            let remap = "\n[[test]]\nname = \"it\"\npath = \"tests/other.rs\"\n";
+            let added = "\n[[test]]\nname = \"extra\"\npath = \"tests/other.rs\"\n";
+            let base = side("", test);
+            let keys = |head: &AssertVocabulary| {
+                moved_out_by("tests/it.rs", &base, head)
+                    .into_iter()
+                    .map(|m| (m.file, m.key))
+                    .collect::<Vec<_>>()
+            };
+            Ok(keys(&side(remap, test))
+                == vec![("Cargo.toml".to_string(), "test-path-remapped")]
+                && keys(&side(remap, &format!("#[path = \"it.rs\"]\nmod old;\n{test}"))).is_empty()
+                && keys(&side(added, test)).is_empty())
+        },
+    ),
+    (
         "harness-tampering: the gate is on at error by default, and turning it off is a weakening",
         || {
             let base = DisciplineConfig::default_for_repo("t");

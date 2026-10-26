@@ -845,6 +845,101 @@ fn a_cargo_target_that_was_already_off_or_whose_tests_are_gone_is_not_reported()
     );
 }
 
+const REMAP_IT: &str = "\n[[test]]\nname = \"it\"\npath = \"tests/renamed.rs\"\n";
+
+/// #854: `cargo test` (cargo 1.98) builds no test of `tests/it.rs` once a `[[test]]`
+/// entry keeps the name `it` and sets another `path`: Cargo drops the target it
+/// discovered under a name a declared one has. The new root holds as many tests, so the
+/// count does not show the move.
+#[test]
+fn a_test_target_remapped_to_another_path_is_reported() {
+    let run = changed(&cargo_base(), |repo| {
+        repo.write("Cargo.toml", &manifest(REMAP_IT));
+        repo.write("tests/renamed.rs", &RS_3.replace("fn ", "fn r_"));
+    });
+    assert_moved(
+        &run,
+        "Cargo.toml",
+        &[
+            "The new `path` of `[[test]]` target `it` in `Cargo.toml`",
+            "3 test(s) in 1 file(s)",
+            "`tests/it.rs`",
+            "no longer in the static count",
+        ],
+    );
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    // Two targets remapped in one manifest: one finding each, told apart by the target.
+    let run = changed(&cargo_base(), |repo| {
+        repo.write(
+            "Cargo.toml",
+            &manifest(&format!(
+                "{REMAP_IT}\n[[test]]\nname = \"other\"\npath = \"tests/renamed_other.rs\"\n"
+            )),
+        );
+        repo.write("tests/renamed.rs", &RS_3.replace("fn ", "fn r_"));
+        repo.write("tests/renamed_other.rs", &RS_1.replace("fn ", "fn o_"));
+    });
+    let found = moved(&run);
+    let mut messages: Vec<&str> = found
+        .iter()
+        .map(|v| v["message"].as_str().unwrap())
+        .collect();
+    messages.sort_unstable();
+    assert_eq!(messages.len(), 2, "{}", run.stdout);
+    assert!(messages[0].contains("target `it`") && messages[0].contains("`tests/it.rs`"));
+    assert!(messages[1].contains("target `other`") && messages[1].contains("`tests/other.rs`"));
+    assert_ne!(
+        found[0]["fingerprint"], found[1]["fingerprint"],
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
+fn a_remap_whose_old_root_is_still_built_or_deleted_or_a_new_target_is_not_reported() {
+    // The new root declares the old one as a module: `cargo test` still runs its tests.
+    let reached = format!(
+        "#[path = \"it.rs\"]\nmod old;\n\n{}",
+        RS_3.replace("fn ", "fn r_")
+    );
+    let run = changed(&cargo_base(), |repo| {
+        repo.write("Cargo.toml", &manifest(REMAP_IT));
+        repo.write("tests/renamed.rs", &reached);
+    });
+    assert!(moved(&run).is_empty(), "{}", run.stdout);
+    assert!(run.titles("test-floor").is_empty(), "{}", run.stdout);
+    // The old root is deleted with the remap: the count reports it.
+    let run = changed(&cargo_base(), |repo| {
+        repo.write("Cargo.toml", &manifest(REMAP_IT));
+        repo.write("tests/renamed.rs", RS_1);
+        repo.remove("tests/it.rs");
+    });
+    assert!(moved(&run).is_empty(), "{}", run.stdout);
+    assert_eq!(
+        run.titles("test-floor"),
+        vec![BELOW_FLOOR],
+        "{}",
+        run.stdout
+    );
+    // A `[[test]]` added under a new name, and one that names the file Cargo already
+    // discovered: no file leaves the run.
+    for extra in [
+        "\n[[test]]\nname = \"extra\"\npath = \"checks/extra.rs\"\n",
+        "\n[[test]]\nname = \"it\"\npath = \"tests/it.rs\"\n",
+    ] {
+        let run = changed(&cargo_base(), |repo| {
+            repo.write("Cargo.toml", &manifest(extra));
+            repo.write("checks/extra.rs", RS_1);
+        });
+        assert!(moved(&run).is_empty(), "{extra}: {}", run.stdout);
+        assert!(
+            run.titles("test-floor").is_empty(),
+            "{extra}: {}",
+            run.stdout
+        );
+    }
+}
+
 /// A file under `src/` that no crate root reaches is not compiled as far as the model
 /// can tell: it is left out, and a note gives the number of such files that hold tests.
 #[test]

@@ -1057,7 +1057,10 @@ fn report_tests_moved_out(
             "Take the rule back so the default run collects the tests again, or provide an allow-test-shrink: <file> <reason> directive in the PR description naming the file that holds the rule.",
         );
         if anchored {
-            out.anchor_last(format!("moved-out:{}", group.mechanism.key));
+            out.anchor_last(match &group.mechanism.subject {
+                Some(subject) => format!("moved-out:{}:{subject}", group.mechanism.key),
+                None => format!("moved-out:{}", group.mechanism.key),
+            });
         }
     }
 }

@@ -23,9 +23,9 @@ use super::go_build::{go_build_constraint, go_build_constraint_line, GoBuild};
 use super::go_work::{parse_go_work, GoWork};
 use super::runner_config::{
     deno_entry_is_glob, imports_node_test, jest_setup_files, parse_conftest,
-    parse_conftest_plugins, parse_deno_config, parse_vitest_config, plain_semver_major,
-    read_jest_scripts, script_setup_files, scripts_run_node_test, ConftestIgnores, DenoTest,
-    SetupFiles, VitestConfig,
+    parse_conftest_plugins, parse_deno_config, parse_registered_plugins, parse_vitest_config,
+    plain_semver_major, read_jest_scripts, script_setup_files, scripts_run_node_test,
+    ConftestIgnores, DenoTest, SetupFiles, VitestConfig,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use tree_sitter::Node;
@@ -495,7 +495,8 @@ enum PytestDirectoryRule {
 }
 
 /// A rule that takes a test file out of the default run, as a change can add it: the
-/// file that holds it and what it is. Never a configured value.
+/// file that holds it and what it is. Never a configured value, except the name of a
+/// Cargo target, which Cargo holds to letters, digits, `-` and `_`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Mechanism {
     /// The file that holds the rule.
@@ -503,18 +504,22 @@ pub struct Mechanism {
     /// A short stable name of the rule, which tells two rules of one file apart.
     pub key: &'static str,
     /// The rule in words that the path of `file` completes: "`testpaths` in".
-    pub what: &'static str,
+    pub what: String,
     /// The line of the rule in `file`, when it is one line.
     pub line: Option<usize>,
+    /// What the rule applies to, when one file can hold the same rule more than once:
+    /// the name of a remapped Cargo test target. It tells their findings apart.
+    pub subject: Option<String>,
 }
 
 impl Mechanism {
-    fn new(file: &str, key: &'static str, what: &'static str) -> Self {
+    fn new(file: &str, key: &'static str, what: &str) -> Self {
         Self {
             file: file.to_string(),
             key,
-            what,
+            what: what.to_string(),
             line: None,
+            subject: None,
         }
     }
 }
@@ -1965,6 +1970,23 @@ pub struct CargoTestTarget {
     pub harness: bool,
 }
 
+impl CargoPackage {
+    /// Whether Cargo discovers the package-relative `rel` as a test target by itself:
+    /// `autotests` is on, `rel` is `tests/<name>.rs` or `tests/<name>/main.rs`, and no
+    /// `[[test]]` entry declares a target of that name (Cargo drops a discovered target
+    /// whose name a declared one already has, so a `[[test]]` that keeps the name and
+    /// sets another `path` leaves the file out).
+    pub fn discovers(&self, rel: &str) -> bool {
+        self.autotests
+            && auto_test_name(rel).is_some_and(|name| {
+                !self
+                    .tests
+                    .iter()
+                    .any(|t| t.name.as_deref() == Some(name) && !t.names(rel))
+            })
+    }
+}
+
 impl CargoTestTarget {
     /// Whether the target's root file is the package-relative `rel`. Without a `path`,
     /// Cargo looks for `tests/<name>.rs` then `tests/<name>/main.rs`.
@@ -2335,6 +2357,19 @@ fn is_auto_test_root(rel: &str) -> bool {
     }
 }
 
+/// The name Cargo gives the test target it discovers at the package-relative `rel`:
+/// `<name>` of `tests/<name>.rs` or `tests/<name>/main.rs`.
+fn auto_test_name(rel: &str) -> Option<&str> {
+    if !is_auto_test_root(rel) {
+        return None;
+    }
+    let rest = rel.strip_prefix("tests/")?;
+    match rest.split_once('/') {
+        Some((dir, _)) => Some(dir),
+        None => rest.strip_suffix(".rs"),
+    }
+}
+
 impl RustCollectionRules {
     fn manifest_status(content: &str) -> ManifestStatus {
         match toml::from_str::<toml::Value>(content) {
@@ -2480,6 +2515,46 @@ impl RustCollectionRules {
                 return;
             }
         }
+        // The chain ends at a root of a base side target. A `[[test]]` entry of the head
+        // side that keeps the target's name and sets another `path` is what left it.
+        if let Some(name) = self.remapped_target(before, &dir, &child) {
+            let what = if name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                format!("The new `path` of `[[test]]` target `{name}` in")
+            } else {
+                "The new `path` of a `[[test]]` target in".to_string()
+            };
+            let mut mechanism = Mechanism::new(&manifest, "test-path-remapped", &what);
+            mechanism.subject = Some(name);
+            out.push(mechanism);
+        }
+    }
+
+    /// The name of the test target the base side (`before`) roots at `root`, in the
+    /// package at `dir`, when this side declares a `[[test]]` target of that name rooted
+    /// at another file (#854). A target discovered from `tests/<name>.rs` has the name
+    /// `<name>`.
+    fn remapped_target(&self, before: &Self, dir: &str, root: &str) -> Option<String> {
+        let rel = if dir.is_empty() {
+            root
+        } else {
+            root.strip_prefix(dir)?.strip_prefix('/')?
+        };
+        let was = before.packages.get(dir)?;
+        let name = match was.tests.iter().find(|t| t.names(rel)) {
+            Some(target) if target.runs => target.name.clone()?,
+            Some(_) => return None,
+            None if was.discovers(rel) => auto_test_name(rel)?.to_string(),
+            None => return None,
+        };
+        self.packages
+            .get(dir)?
+            .tests
+            .iter()
+            .any(|t| t.name.as_deref() == Some(name.as_str()) && !t.names(rel))
+            .then_some(name)
     }
 
     /// Whether a target of the package at `dir` whose tests run reaches `norm`.
@@ -2561,7 +2636,7 @@ impl RustCollectionRules {
         }
         if rel.starts_with("tests/") {
             if is_auto_test_root(rel) {
-                return if pkg.autotests {
+                return if pkg.discovers(rel) {
                     RustCollection::Collected
                 } else {
                     RustCollection::NotCollected
@@ -2802,7 +2877,7 @@ impl RustCollectionRules {
             let named = pkg.tests.iter().find(|t| t.names(rel));
             let is_root = match named {
                 Some(target) => target.runs,
-                None => pkg.autotests && is_auto_test_root(rel),
+                None => pkg.discovers(rel),
             };
             if is_root {
                 roots.entry(dir).or_default().push((*file).to_string());
@@ -2811,7 +2886,7 @@ impl RustCollectionRules {
                     .entry(dir)
                     .or_default()
                     .push((*file).to_string());
-            } else if is_auto_test_root(rel) {
+            } else if is_auto_test_root(rel) && !pkg.autotests {
                 undiscovered
                     .entry(dir)
                     .or_default()
@@ -3932,8 +4007,10 @@ pub struct ConfiguredHarness {
     /// The Rust modules reached from a Cargo test target through `mod` declarations,
     /// with the root target that reaches them.
     pub rust_modules: BTreeMap<String, String>,
-    /// Each Python file a `conftest.py` names in `pytest_plugins`, with the `conftest.py`
-    /// that names it.
+    /// Each Python file pytest loads as a plugin, with the file that loads it: a module a
+    /// `conftest.py` names in `pytest_plugins` or registers from code
+    /// (`config.pluginmanager.register(module)`, `import_plugin("name")`), and in turn
+    /// one such a plugin module names or registers.
     pub pytest_plugins: BTreeMap<String, String>,
     /// The Python modules a `pyproject.toml` installs as commands (`[project.scripts]`,
     /// `[project.gui-scripts]`, `[tool.poetry.scripts]`), dotted as written
@@ -4011,6 +4088,32 @@ impl ConfiguredHarness {
 
 const JS_HARNESS_EXTENSIONS: &[&str] = &["js", "ts", "mjs", "cjs", "mts", "cts", "jsx", "tsx"];
 
+/// The tracked Python file a dotted module name stands for, as a `conftest.py` or plugin
+/// module in `dir` imports it: `<name>.py` or `<name>/__init__.py` beside the file, at
+/// the root of the repository, or under `src/`. A name with leading dots is relative to
+/// `dir`, one level up for each dot after the first. `None` for a module the repository
+/// does not hold: another project's.
+fn resolve_python_module(dir: &str, module: &str, tracked: &HashSet<&str>) -> Option<String> {
+    let dotted = module.trim_start_matches('.');
+    let dots = module.len() - dotted.len();
+    if dotted.is_empty() || dotted.split('.').any(str::is_empty) {
+        return None;
+    }
+    let rel = dotted.replace('.', "/");
+    let roots: Vec<String> = if dots > 0 {
+        let up = "../".repeat(dots - 1);
+        vec![clean_relative(&join_dir(dir, &up))?]
+    } else {
+        vec![dir.to_string(), String::new(), "src".to_string()]
+    };
+    roots.iter().find_map(|root| {
+        [format!("{rel}.py"), format!("{rel}/__init__.py")]
+            .iter()
+            .filter_map(|file| clean_relative(&join_dir(root, file)))
+            .find(|path| tracked.contains(path.as_str()))
+    })
+}
+
 /// The tracked file a set-up entry names. `<rootDir>/x`, `./x` and `x` resolve against
 /// `root`; an entry may leave out its extension or name a directory with an `index`
 /// file. `None` for a name that is no tracked file: a package, which is outside the
@@ -4037,6 +4140,7 @@ impl ConfiguredHarness {
         let known: HashSet<&str> = tracked.iter().map(String::as_str).collect();
         let mut harness = Self::default();
         let mut packages: HashMap<String, CargoPackage> = HashMap::new();
+        let mut conftests: std::collections::VecDeque<String> = Default::default();
         for path in tracked {
             let (dir, name) = match path.rfind('/') {
                 Some(i) => (&path[..i], &path[i + 1..]),
@@ -4068,25 +4172,7 @@ impl ConfiguredHarness {
                 continue;
             }
             if name == "conftest.py" {
-                if let Some(src) = reader(path) {
-                    for plugin in parse_conftest_plugins(&src) {
-                        let rel = plugin.replace('.', "/");
-                        let candidates = [
-                            join_dir(dir, &format!("{rel}.py")),
-                            join_dir(dir, &format!("{rel}/__init__.py")),
-                            format!("{rel}.py"),
-                            format!("{rel}/__init__.py"),
-                        ];
-                        for cand in candidates {
-                            if let Some(clean) = clean_relative(&cand) {
-                                if known.contains(clean.as_str()) {
-                                    harness.pytest_plugins.insert(clean, path.clone());
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
+                conftests.push_back(path.clone());
                 continue;
             }
             if format!("/{path}").contains("/node_modules/") {
@@ -4131,6 +4217,31 @@ impl ConfiguredHarness {
                 }),
             }
         }
+        // The plugins each `conftest.py` names or registers, then those each plugin
+        // names or registers in turn: pytest reads a plugin module as it reads a
+        // `conftest.py`.
+        while let Some(file) = conftests.pop_front() {
+            let Some(src) = reader(&file) else {
+                continue;
+            };
+            let dir = file.rsplit_once('/').map_or("", |(dir, _)| dir);
+            let named = parse_conftest_plugins(&src)
+                .into_iter()
+                .chain(parse_registered_plugins(&src));
+            for module in named {
+                let Some(plugin) = resolve_python_module(dir, &module, &known) else {
+                    continue;
+                };
+                if plugin == file
+                    || named_harness(&plugin) == Some(NamedHarness::Conftest)
+                    || harness.pytest_plugins.contains_key(&plugin)
+                {
+                    continue;
+                }
+                harness.pytest_plugins.insert(plugin.clone(), file.clone());
+                conftests.push_back(plugin);
+            }
+        }
         // The targets a manifest declares, then the ones Cargo finds by itself.
         for (dir, package) in &packages {
             for target in package.tests.iter().filter(|t| t.tested) {
@@ -4157,9 +4268,7 @@ impl ConfiguredHarness {
             let auto = path.match_indices("tests/").any(|(at, _)| {
                 let component = at == 0 || path[..at].ends_with('/');
                 let dir = path[..at].trim_end_matches('/');
-                component
-                    && is_auto_test_root(&path[at..])
-                    && packages.get(dir).is_some_and(|p| p.autotests)
+                component && packages.get(dir).is_some_and(|p| p.discovers(&path[at..]))
             });
             if auto && !harness.rust_targets.contains_key(path) {
                 harness.rust_targets.insert(path.clone(), false);
@@ -4498,6 +4607,195 @@ mod tests {
                 .map(String::as_str),
             Some("tests/it.rs")
         );
+    }
+
+    /// #854: a module of the repository a `conftest.py` registers from a hook is a
+    /// plugin, as one `pytest_plugins` names is; so is one that plugin loads in turn.
+    #[test]
+    fn plugins_registered_from_a_hook_are_harness_files() {
+        let hook = "def pytest_runtest_makereport(): pass\n";
+        let plugins = |conftest: &str, extra: &[(&str, &str)]| {
+            let mut files = vec![
+                ("tests/conftest.py", conftest),
+                ("tests/myplugin.py", hook),
+                ("src/pkg/hooks.py", hook),
+                ("tests/helpers.py", hook),
+            ];
+            // An extra file replaces the one of the same path.
+            files.retain(|(path, _)| !extra.iter().any(|(p, _)| p == path));
+            files.extend_from_slice(extra);
+            configured_harness(&files).pytest_plugins
+        };
+        let loaded = |conftest: &str| {
+            plugins(conftest, &[])
+                .into_iter()
+                .collect::<Vec<(String, String)>>()
+        };
+        let by_conftest = |file: &str| vec![(file.to_string(), "tests/conftest.py".to_string())];
+        // `import_plugin` with a literal name, beside the `conftest.py` or under `src/`.
+        assert_eq!(
+            loaded("def pytest_configure(config):\n    config.pluginmanager.import_plugin(\"myplugin\")\n"),
+            by_conftest("tests/myplugin.py")
+        );
+        assert_eq!(
+            loaded("def pytest_configure(config):\n    config.pluginmanager.import_plugin('pkg.hooks')\n"),
+            by_conftest("src/pkg/hooks.py")
+        );
+        // `register` of a module an import binds, by its name, its alias or a dotted
+        // name, and through a relative import.
+        for conftest in [
+            "import myplugin\n\n\ndef pytest_configure(config):\n    config.pluginmanager.register(myplugin)\n",
+            "def pytest_configure(config):\n    import myplugin as m\n    config.pluginmanager.register(m, \"m\")\n",
+            "from . import myplugin\n\n\ndef pytest_configure(config):\n    config.pluginmanager.register(myplugin)\n",
+        ] {
+            assert_eq!(loaded(conftest), by_conftest("tests/myplugin.py"), "{conftest}");
+        }
+        assert_eq!(
+            loaded("import pkg.hooks\n\n\ndef pytest_configure(config):\n    config.pluginmanager.register(pkg.hooks)\n"),
+            by_conftest("src/pkg/hooks.py")
+        );
+        assert_eq!(
+            loaded("from pkg import hooks\n\n\ndef pytest_configure(config):\n    config.pluginmanager.register(hooks)\n"),
+            by_conftest("src/pkg/hooks.py")
+        );
+        // A plugin that registers another: both are read.
+        let chained = plugins(
+            "def pytest_configure(config):\n    config.pluginmanager.import_plugin(\"myplugin\")\n",
+            &[(
+                "tests/myplugin.py",
+                "import helpers\n\n\ndef pytest_configure(config):\n    config.pluginmanager.register(helpers)\n",
+            )],
+        );
+        assert_eq!(
+            chained.get("tests/helpers.py").map(String::as_str),
+            Some("tests/myplugin.py")
+        );
+
+        // Not a module of the repository, or not a module: nothing is read.
+        for conftest in [
+            // A third-party plugin.
+            "def pytest_configure(config):\n    config.pluginmanager.import_plugin(\"pytest_cov\")\n",
+            "import xdist\n\n\ndef pytest_configure(config):\n    config.pluginmanager.register(xdist)\n",
+            // An object: an instance, a class of the module, a name no import binds.
+            "import myplugin\n\n\ndef pytest_configure(config):\n    config.pluginmanager.register(myplugin.Plugin())\n",
+            "import myplugin\n\n\ndef pytest_configure(config):\n    config.pluginmanager.register(myplugin.Plugin)\n",
+            "def pytest_configure(config):\n    myplugin = object()\n    config.pluginmanager.register(myplugin)\n",
+            // A computed name, and a call that is not on the plugin manager.
+            "def pytest_configure(config):\n    config.pluginmanager.import_plugin(NAME)\n",
+            "import myplugin\n\n\ndef pytest_configure(config):\n    registry.register(myplugin)\n",
+            // A file that does not parse.
+            "import myplugin\n\ndef pytest_configure(config:\n    config.pluginmanager.register(myplugin)\n",
+        ] {
+            assert!(loaded(conftest).is_empty(), "{conftest}");
+        }
+    }
+
+    fn rust_side(files: &[(&str, &str)]) -> crate::ast::AssertVocabulary {
+        let tracked: Vec<String> = files.iter().map(|(path, _)| path.to_string()).collect();
+        crate::ast::AssertVocabulary {
+            runner_rules: RunnerCollectionRules::from_tree(
+                |p| {
+                    files
+                        .iter()
+                        .find(|(name, _)| *name == p)
+                        .map(|(_, content)| content.to_string())
+                },
+                &tracked,
+            ),
+            ..Default::default()
+        }
+    }
+
+    /// #854: a `[[test]]` target that keeps its name and sets another `path` leaves the
+    /// file it was rooted at out of the run, unless another target still reaches it.
+    #[test]
+    fn a_test_target_remapped_to_another_path_moves_its_old_root_out() {
+        let package = "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
+        let test = "#[test]\nfn t() {}\n";
+        let with = |manifest: &str, extra: &[(&str, &'static str)]| {
+            let manifest: &'static str = Box::leak(format!("{package}{manifest}").into_boxed_str());
+            let mut files = vec![
+                ("Cargo.toml", manifest),
+                ("tests/it.rs", test),
+                ("tests/other.rs", test),
+                ("checks/old.rs", test),
+                ("checks/new.rs", test),
+            ];
+            files.retain(|(path, _)| !extra.iter().any(|(p, _)| p == path));
+            files.extend_from_slice(extra);
+            rust_side(&files)
+        };
+        let moved = |base: &crate::ast::AssertVocabulary,
+                     head: &crate::ast::AssertVocabulary,
+                     path: &str| {
+            moved_out_by(path, base, head)
+                .into_iter()
+                .map(|m| (m.file, m.key, m.what))
+                .collect::<Vec<_>>()
+        };
+        let remapped = |name: &str| {
+            vec![(
+                "Cargo.toml".to_string(),
+                "test-path-remapped",
+                format!("The new `path` of `[[test]]` target `{name}` in"),
+            )]
+        };
+        let discovered = with("", &[]);
+        let it_to_other = with(
+            "\n[[test]]\nname = \"it\"\npath = \"tests/other.rs\"\n",
+            &[],
+        );
+        // A discovered target whose name a `[[test]]` entry now takes for another file:
+        // Cargo no longer builds the file.
+        assert_eq!(
+            check_runner_collected("tests/it.rs", &it_to_other),
+            RunnerCollectionStatus::NotCollected
+        );
+        assert_eq!(
+            moved(&discovered, &it_to_other, "tests/it.rs"),
+            remapped("it")
+        );
+        // A declared target whose `path` changes.
+        let old = with(
+            "\n[[test]]\nname = \"suite\"\npath = \"checks/old.rs\"\n",
+            &[],
+        );
+        let new = with(
+            "\n[[test]]\nname = \"suite\"\npath = \"checks/new.rs\"\n",
+            &[],
+        );
+        assert_eq!(moved(&old, &new, "checks/old.rs"), remapped("suite"));
+
+        // Not moved: the old root still reached by another target; a `[[test]]` added
+        // under a new name, or naming the file Cargo already discovered; the remap on
+        // both sides; the target of the other file of a remap, which is new.
+        let still_reached = with(
+            "\n[[test]]\nname = \"it\"\npath = \"tests/other.rs\"\n",
+            &[("tests/other.rs", "#[path = \"it.rs\"]\nmod old;\n")],
+        );
+        assert_eq!(
+            check_runner_collected("tests/it.rs", &still_reached),
+            RunnerCollectionStatus::Collected
+        );
+        assert!(moved(&discovered, &still_reached, "tests/it.rs").is_empty());
+        let added = with(
+            "\n[[test]]\nname = \"extra\"\npath = \"checks/new.rs\"\n",
+            &[],
+        );
+        assert!(moved(&discovered, &added, "tests/it.rs").is_empty());
+        assert!(moved(&discovered, &added, "tests/other.rs").is_empty());
+        let explicit = with("\n[[test]]\nname = \"it\"\npath = \"tests/it.rs\"\n", &[]);
+        assert!(moved(&discovered, &explicit, "tests/it.rs").is_empty());
+        assert!(moved(&it_to_other, &it_to_other, "tests/it.rs").is_empty());
+        assert!(moved(&discovered, &it_to_other, "tests/other.rs").is_empty());
+        // A remap from a file to another that Cargo still discovers under its own name.
+        let a_to_b = |to: &str| {
+            with(
+                &format!("\n[[test]]\nname = \"suite\"\npath = \"tests/{to}.rs\"\n"),
+                &[],
+            )
+        };
+        assert!(moved(&a_to_b("it"), &a_to_b("other"), "tests/it.rs").is_empty());
     }
 
     #[test]
