@@ -473,7 +473,9 @@
         "citation-anchors"
       ],
       "verdict": {
-        "known_miss": "#834"
+        "caught": [
+          "citation-anchors/link-target-missing"
+        ]
       }
     },
     {

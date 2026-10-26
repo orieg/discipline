@@ -1,6 +1,7 @@
 //! Citation anchors sentinel (`citation-anchors`).
 //!
-//! Verifies `path:line@sha "<text>"` citations against quoted line content and git history.
+//! Verifies `path:line@sha "<text>"` citations against quoted line content and git history,
+//! and relative Markdown links against the head tree ([`links`]).
 
 use crate::config::UnanchoredCitationsMode;
 use crate::findings::FindingKind;
@@ -9,6 +10,8 @@ use crate::guards::{Context, GateOutcome, PathFilter};
 use anyhow::Result;
 
 use std::sync::LazyLock;
+
+pub mod links;
 
 pub const GATE: &str = "citation-anchors";
 
@@ -248,21 +251,28 @@ pub fn evaluate_with_network(ctx: &Context, no_network: bool) -> Result<GateOutc
     let settings = &ctx.config.gates.citation_anchors;
     let mut out = GateOutcome::new(GATE);
 
-    let files_to_check = if settings.diff_only {
-        let changed = ctx.git.changed_files()?;
-        changed
-            .into_iter()
-            .filter(|f| !f.is_deleted())
-            .map(|f| f.path)
-            .collect::<Vec<_>>()
-    } else {
-        ctx.git.tracked_files()?
-    };
+    // Each file with the lines a link is read on: the added ones under `diff_only`.
+    let files_to_check: Vec<(String, Option<std::collections::BTreeSet<usize>>)> =
+        if settings.diff_only {
+            let changed = ctx.git.changed_files()?;
+            changed
+                .into_iter()
+                .filter(|f| !f.is_deleted())
+                .map(|f| (f.path, Some(f.added_lines)))
+                .collect()
+        } else {
+            ctx.git
+                .tracked_files()?
+                .into_iter()
+                .map(|p| (p, None))
+                .collect()
+        };
 
     let exempt = PathFilter::new(&settings.exempt_paths)?;
     let mut tracker = TrackerTitles::new(ctx, no_network);
+    let mut head_tree: Option<links::HeadTree> = None;
 
-    for path in files_to_check {
+    for (path, link_lines) in files_to_check {
         if exempt.matches(&path) {
             continue;
         }
@@ -324,6 +334,18 @@ pub fn evaluate_with_network(ctx: &Context, no_network: bool) -> Result<GateOutc
         if settings.verify_tracker_titles {
             tracker.verify(&path, &content, &mut out)?;
         }
+
+        // 4. Relative Markdown links
+        if links::is_markdown_path(&path) {
+            check_links(
+                ctx,
+                &path,
+                &content,
+                link_lines.as_ref(),
+                &mut head_tree,
+                &mut out,
+            )?;
+        }
     }
 
     if out.examined == 0 {
@@ -332,6 +354,80 @@ pub fn evaluate_with_network(ctx: &Context, no_network: bool) -> Result<GateOutc
     }
 
     Ok(out)
+}
+
+/// Whether `path` is, or lies under, a symlink or submodule in the index: a target the
+/// head tree cannot follow, so it is not reported.
+fn behind_link_or_submodule(ctx: &Context, path: &str) -> Result<bool> {
+    let mut at = path;
+    loop {
+        if ctx.git.is_symlink(at)? || ctx.git.is_gitlink(at)? {
+            return Ok(true);
+        }
+        match at.rsplit_once('/') {
+            Some((parent, _)) => at = parent,
+            None => return Ok(false),
+        }
+    }
+}
+
+/// Reports each relative link target on `lines` (every line when `None`) of the Markdown
+/// file `path` that the head tree does not hold.
+fn check_links(
+    ctx: &Context,
+    path: &str,
+    content: &str,
+    lines: Option<&std::collections::BTreeSet<usize>>,
+    head_tree: &mut Option<links::HeadTree>,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    let severity = ctx.overridable(ctx.config.gates.citation_anchors.severity);
+    for link in links::extract_markdown_links(content) {
+        if lines.is_some_and(|l| !l.contains(&link.line_num)) {
+            continue;
+        }
+        let resolution = links::resolve_link_target(path, &link.target);
+        if resolution == links::LinkResolution::NotChecked {
+            continue;
+        }
+        out.examined += 1;
+        let shown = links::shown_target(&link.target);
+        let (message, remediation) = match resolution {
+            links::LinkResolution::NotChecked => continue,
+            links::LinkResolution::OutsideRepository => (
+                format!("link target `{shown}` resolves outside the repository"),
+                "link to a path inside the repository, or use an absolute URL",
+            ),
+            links::LinkResolution::Path {
+                path: resolved,
+                directory,
+            } => {
+                let tree = match head_tree {
+                    Some(t) => t,
+                    None => head_tree.insert(links::HeadTree::new(ctx.git.tracked_files()?)),
+                };
+                if tree.holds(&resolved, directory) || behind_link_or_submodule(ctx, &resolved)? {
+                    continue;
+                }
+                (
+                    format!(
+                        "link target `{shown}` does not exist: `{}` is not a tracked file or directory on the head side",
+                        links::shown_target(&resolved)
+                    ),
+                    "link to a file the repository holds (paths are case-sensitive), or remove the link",
+                )
+            }
+        };
+        out.add_violation(
+            severity,
+            &crate::findings::LINK_TARGET_MISSING,
+            path,
+            link.line_num,
+            message,
+            remediation,
+        );
+    }
+    Ok(())
 }
 
 static TRACKER_RE: LazyLock<regex::Regex> =
@@ -699,6 +795,126 @@ unanchored_citations = "reject"
             evaluate_with_network(&crate::guards::test_support::context(&lenient, &git), false)
                 .unwrap();
         assert!(out.violations.is_empty(), "{:?}", out.violations);
+    }
+
+    /// The gate over a change to `docs/index.md` (base `base`, head `head`) in a
+    /// repository holding `docs/guide.md` and `src/lib.rs`.
+    fn eval_links(base: &str, head: &str, config_toml: &str) -> GateOutcome {
+        let (_dir, git) = crate::gitctx::test_support::repo_with_files(
+            &[
+                ("docs/index.md", base),
+                ("docs/guide.md", "# guide\n"),
+                ("src/lib.rs", "pub fn f() {}\n"),
+            ],
+            &[],
+        );
+        std::fs::write(git.root().join("docs/index.md"), head).unwrap();
+        let config = DisciplineConfig::from_toml_str(config_toml).unwrap();
+        evaluate_with_network(&crate::guards::test_support::context(&config, &git), false).unwrap()
+    }
+
+    fn link_findings(out: &GateOutcome) -> Vec<(Option<usize>, &str)> {
+        out.violations
+            .iter()
+            .map(|v| {
+                assert_eq!(v.code, "citation-anchors/link-target-missing");
+                (v.line, v.message.as_str())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_relative_markdown_link_to_a_missing_path_is_reported_on_added_lines() {
+        let head = "# Index\n\n\
+                    [guide](guide.md) and [code](../src/lib.rs#L1) and [dir](../src/)\n\
+                    [api](api-reference.md#usage)\n\
+                    ![shot](img/shot.png \"Screenshot\")\n\
+                    [Guide](Guide.md)\n\
+                    [up](../../outside.md)\n\
+                    [ref]: missing%20ref.md\n\
+                    [web](https://example.com/missing.md) [top](#index) [abs](/missing.md)\n\
+                    ```md\n[code](fenced-missing.md)\n```\n\
+                    `[span](span-missing.md)`\n";
+        let out = eval_links("# Index\n", head, ENABLED);
+        let found = link_findings(&out);
+        let lines: Vec<Option<usize>> = found.iter().map(|(l, _)| *l).collect();
+        assert_eq!(
+            lines,
+            vec![Some(4), Some(5), Some(6), Some(7), Some(8)],
+            "{:?}",
+            out.violations
+        );
+        assert!(
+            found[0].1.contains("`api-reference.md#usage`"),
+            "{}",
+            found[0].1
+        );
+        assert!(
+            found[0].1.contains("`docs/api-reference.md`"),
+            "{}",
+            found[0].1
+        );
+        assert!(found[2].1.contains("`docs/Guide.md`"), "{}", found[2].1);
+        assert!(
+            found[3].1.contains("outside the repository"),
+            "{}",
+            found[3].1
+        );
+        assert!(
+            found[4].1.contains("`docs/missing ref.md`"),
+            "{}",
+            found[4].1
+        );
+        // Eight relative targets were checked: three resolve, five do not.
+        assert_eq!(out.examined, 8);
+    }
+
+    #[test]
+    fn a_missing_link_on_an_unchanged_line_is_read_only_without_diff_only() {
+        let base = "[old](gone.md)\n";
+        let head = "[old](gone.md)\n[guide](guide.md)\n";
+        let out = eval_links(base, head, ENABLED);
+        assert!(out.violations.is_empty(), "{:?}", out.violations);
+        let whole = format!("{ENABLED}diff_only = false\n");
+        let out = eval_links(base, head, &whole);
+        assert_eq!(link_findings(&out).len(), 1, "{:?}", out.violations);
+        assert_eq!(out.violations[0].line, Some(1));
+    }
+
+    #[test]
+    fn a_link_into_a_symlink_or_a_non_markdown_file_is_not_reported() {
+        // A `.txt` file is not read for links.
+        let (_dir, git) = crate::gitctx::test_support::repo_with_files(&[("notes.txt", "")], &[]);
+        std::fs::write(git.root().join("notes.txt"), "[x](missing.md)\n").unwrap();
+        let config = DisciplineConfig::from_toml_str(ENABLED).unwrap();
+        let out =
+            evaluate_with_network(&crate::guards::test_support::context(&config, &git), false)
+                .unwrap();
+        assert!(out.violations.is_empty(), "{:?}", out.violations);
+
+        #[cfg(unix)]
+        {
+            let (_dir, git) = crate::gitctx::test_support::repo_with_files(
+                &[("README.md", ""), ("docs/guide.md", "")],
+                &[],
+            );
+            std::os::unix::fs::symlink("docs", git.root().join("latest")).unwrap();
+            let repo = git2::Repository::open(git.root()).unwrap();
+            let mut index = repo.index().unwrap();
+            index.add_path(std::path::Path::new("latest")).unwrap();
+            index.write().unwrap();
+            std::fs::write(
+                git.root().join("README.md"),
+                "[a](latest/guide.md) [b](latest) [c](nolatest/guide.md)\n",
+            )
+            .unwrap();
+            let out =
+                evaluate_with_network(&crate::guards::test_support::context(&config, &git), false)
+                    .unwrap();
+            let found = link_findings(&out);
+            assert_eq!(found.len(), 1, "{:?}", out.violations);
+            assert!(found[0].1.contains("`nolatest/guide.md`"), "{}", found[0].1);
+        }
     }
 
     #[test]

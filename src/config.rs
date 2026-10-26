@@ -417,7 +417,7 @@ pub const GATES: &[GateInfo] = &[
     GateInfo {
         id: "citation-anchors",
         suite: Suite::Hygiene,
-        summary: "verify path:line@sha citations against quoted text and git history",
+        summary: "verify path:line@sha citations against quoted text and git history, and relative Markdown links against the tree",
         languages: "markdown, any",
         available: true,
         delta_only: false,
