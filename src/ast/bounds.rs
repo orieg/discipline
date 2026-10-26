@@ -390,7 +390,8 @@ fn js_num(n: Node) -> bool {
 /// chai `below` / `above` / `most` / `least`, `toBeCloseTo(x, digits)`, comparisons
 /// inside an `assert(...)` / `expect(...)` call, and Deno standard assertions
 /// `assertLess` / `assertLessOrEqual` / `assertGreater` / `assertGreaterOrEqual` /
-/// `assertAlmostEquals`.
+/// `assertAlmostEquals`. A literal in parentheses (`toBeLessThan((100))`) is read as the
+/// literal inside.
 pub fn javascript(
     root: Node,
     src: &str,
@@ -428,7 +429,7 @@ pub fn javascript(
                         .child_by_field_name("arguments")
                         .map(|a| {
                             let mut c = a.walk();
-                            a.named_children(&mut c).collect()
+                            a.named_children(&mut c).map(unparenthesized).collect()
                         })
                         .unwrap_or_default();
                     let target: Option<(usize, bool)> = match func.kind() {
@@ -482,8 +483,8 @@ pub fn javascript(
                         .child_by_field_name("operator")
                         .map_or("", |o| text(o, src));
                     if let (Some(l), Some(r)) = (
-                        n.child_by_field_name("left"),
-                        n.child_by_field_name("right"),
+                        n.child_by_field_name("left").map(unparenthesized),
+                        n.child_by_field_name("right").map(unparenthesized),
                     ) {
                         if let Some((lit, up)) = comparison(l, op, r, &js_num) {
                             record(records, node, lit, src, up);
@@ -502,9 +503,64 @@ fn rs_num(n: Node) -> bool {
     matches!(n.kind(), "integer_literal" | "float_literal")
 }
 
+/// The tokens between the delimiters of a macro's token tree.
+pub(super) fn rs_inside(tt: Node) -> Vec<Node> {
+    let mut cursor = tt.walk();
+    let all: Vec<Node> = tt.children(&mut cursor).collect();
+    if all.len() >= 2 {
+        all[1..all.len() - 1].to_vec()
+    } else {
+        Vec::new()
+    }
+}
+
+/// Tokens of a macro with the parentheses around the whole of them taken off, as many
+/// pairs as there are: `((4))` is read as `4`, `(-4)` as `- 4`.
+pub(super) fn rs_unparenthesized<'t>(toks: &[Node<'t>]) -> Vec<Node<'t>> {
+    let mut toks = toks.to_vec();
+    while let [t] = toks.as_slice() {
+        if t.kind() != "token_tree" || t.child(0).is_none_or(|c| c.kind() != "(") {
+            break;
+        }
+        toks = rs_inside(*t);
+    }
+    toks
+}
+
+/// The runs of tokens an assertion macro's condition is read in: the tokens inside the
+/// macro, and those inside each parenthesised token tree that stands as a whole operand
+/// of a run (`assert!((x == 4))`, `assert!(ok && (n < 5))`), at any depth. A token tree
+/// after a name (`f(x < 5)`, `matches!(x, 4)`) is a call's arguments and is not read, and
+/// neither is one after `!`: `!(n < 5)` holds the other way.
+pub(super) fn rs_conditions<'t>(tt: Node<'t>, src: &str) -> Vec<Vec<Node<'t>>> {
+    let mut out = Vec::new();
+    let mut pending = vec![rs_inside(tt)];
+    while let Some(run) = pending.pop() {
+        for (i, t) in run.iter().enumerate() {
+            count(1);
+            if t.kind() != "token_tree" {
+                continue;
+            }
+            let before = i.checked_sub(1).map_or("", |j| text(run[j], src));
+            let after = run.get(i + 1).map_or("", |n| text(*n, src));
+            if matches!(before, "" | "&&" | "||") && matches!(after, "" | "," | "&&" | "||") {
+                // One token holds no comparison: a literal, a name, or a token tree in
+                // brackets or braces, which is not read.
+                let inner = rs_unparenthesized(&[*t]);
+                if inner.len() > 1 {
+                    pending.push(inner);
+                }
+            }
+        }
+        out.push(run);
+    }
+    out
+}
+
 /// Rust: in `assert!` / `debug_assert!` / `prop_assert!`, a literal next to a comparison
-/// at the macro's top level (`assert!((a - b).abs() < 1e-9)`), and `epsilon = 1e-6` style
-/// tolerances in approx macros.
+/// at the macro's top level (`assert!((a - b).abs() < 1e-9)`) or inside parentheses that
+/// stand as a whole operand (`assert!((n < 5))`), and `epsilon = 1e-6` style tolerances
+/// in approx macros. A literal in parentheses (`< (100)`) is read as the literal inside.
 pub fn rust(root: Node, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
@@ -527,43 +583,45 @@ pub fn rust(root: Node, src: &str, tests: &mut [TestFn]) {
         else {
             return false;
         };
-        let mut cursor = tt.walk();
-        let toks: Vec<Node> = tt.children(&mut cursor).collect();
-        for (i, t) in toks.iter().enumerate() {
-            if !rs_num(*t) {
-                continue;
-            }
-            let before = i.checked_sub(1).map(|j| text(toks[j], src)).unwrap_or("");
-            let after = toks.get(i + 1).map_or("", |n| text(*n, src));
-            // `- 1e-9` after a comparison: the literal is the operand, sign included.
-            let before = if before == "-" {
-                i.checked_sub(2).map(|j| text(toks[j], src)).unwrap_or("")
-            } else {
-                before
-            };
-            // The literal is a whole operand only between an operand boundary and the
-            // comparison: `x - 1 < y` compares an arithmetic expression, not `1`.
-            let opens = |t: &str| matches!(t, "" | "(" | "," | "&&" | "||" | "!");
-            let closes = |t: &str| matches!(t, "" | ")" | "," | "&&" | "||" | ";");
-            let up = match (before, after) {
-                ("<" | "<=", a) if closes(a) => Some(true),
-                (">" | ">=", a) if closes(a) => Some(false),
-                (b, "<" | "<=") if opens(b) => Some(false),
-                (b, ">" | ">=") if opens(b) => Some(true),
-                ("=", _) => {
-                    let key = i.checked_sub(2).map(|j| text(toks[j], src)).unwrap_or("");
-                    if WIDER_WHEN_LARGER.contains(&key) {
-                        Some(true)
-                    } else if WIDER_WHEN_SMALLER.contains(&key) {
-                        Some(false)
-                    } else {
-                        None
+        for toks in rs_conditions(tt, src) {
+            for (i, t) in toks.iter().enumerate() {
+                let lit = match rs_unparenthesized(&[*t]).as_slice() {
+                    [l] if rs_num(*l) => *l,
+                    [m, l] if t.kind() == "token_tree" && text(*m, src) == "-" && rs_num(*l) => *l,
+                    _ => continue,
+                };
+                let before = i.checked_sub(1).map(|j| text(toks[j], src)).unwrap_or("");
+                let after = toks.get(i + 1).map_or("", |n| text(*n, src));
+                // `- 1e-9` after a comparison: the literal is the operand, sign included.
+                let before = if before == "-" {
+                    i.checked_sub(2).map(|j| text(toks[j], src)).unwrap_or("")
+                } else {
+                    before
+                };
+                // The literal is a whole operand only between an operand boundary and the
+                // comparison: `x - 1 < y` compares an arithmetic expression, not `1`.
+                let opens = |t: &str| matches!(t, "" | "(" | "," | "&&" | "||" | "!");
+                let closes = |t: &str| matches!(t, "" | ")" | "," | "&&" | "||" | ";");
+                let up = match (before, after) {
+                    ("<" | "<=", a) if closes(a) => Some(true),
+                    (">" | ">=", a) if closes(a) => Some(false),
+                    (b, "<" | "<=") if opens(b) => Some(false),
+                    (b, ">" | ">=") if opens(b) => Some(true),
+                    ("=", _) => {
+                        let key = i.checked_sub(2).map(|j| text(toks[j], src)).unwrap_or("");
+                        if WIDER_WHEN_LARGER.contains(&key) {
+                            Some(true)
+                        } else if WIDER_WHEN_SMALLER.contains(&key) {
+                            Some(false)
+                        } else {
+                            None
+                        }
                     }
+                    _ => None,
+                };
+                if let Some(up) = up {
+                    record(records, node, lit, src, up);
                 }
-                _ => None,
-            };
-            if let Some(up) = up {
-                record(records, node, *t, src, up);
             }
         }
         false
@@ -576,7 +634,8 @@ fn go_num(n: Node) -> bool {
 
 /// Go: `if <x op N> { ... t.Fatal / t.Error ... }` (the condition is the failure, so
 /// `x > N` makes `N` an upper bound), `N*time.Unit` included; testify `Less` / `Greater`
-/// / `InDelta` / `InEpsilon` literals.
+/// / `InDelta` / `InEpsilon` literals. A condition or a literal in parentheses
+/// (`if d > (1500)*time.Millisecond`) is read as what it wraps.
 pub fn go(root: Node, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
@@ -584,12 +643,13 @@ pub fn go(root: Node, src: &str, tests: &mut [TestFn]) {
     let records = &mut Records::new(tests, src);
     // `1500*time.Millisecond` bounds by its literal.
     fn operand<'t>(n: Node<'t>, src: &str) -> Option<Node<'t>> {
+        let n = unparenthesized(n);
         if go_num(n) {
             return Some(n);
         }
         if n.kind() == "binary_expression" {
             let (l, r) = (
-                n.child_by_field_name("left")?,
+                unparenthesized(n.child_by_field_name("left")?),
                 n.child_by_field_name("right")?,
             );
             let op = n
@@ -608,7 +668,11 @@ pub fn go(root: Node, src: &str, tests: &mut [TestFn]) {
                 let fails = node
                     .child_by_field_name("consequence")
                     .is_some_and(|c| failures.inside(c));
-                let Some(cond) = node.child_by_field_name("condition").filter(|_| fails) else {
+                let Some(cond) = node
+                    .child_by_field_name("condition")
+                    .map(unparenthesized)
+                    .filter(|_| fails)
+                else {
                     return true;
                 };
                 if cond.kind() == "binary_expression" {
@@ -829,6 +893,103 @@ test("deno bounds", () => {
             bounds(&crate::ast::go::GoPack, "p_test.go", src),
             pairs(&[("1500", true), ("0.9", false), ("0.01", true)])
         );
+    }
+
+    /// #861: a parenthesised bound is read as the literal inside, at any depth, and a
+    /// parenthesised comparison that is the whole condition is read as the comparison.
+    #[test]
+    fn rust_bounds_are_read_through_parentheses() {
+        let plain = "#[test]\nfn t() {\n    assert!((a - b).abs() < 1e-9);\n    assert!(0.5 <= r && r < 2.0);\n    assert_relative_eq!(a, b, epsilon = 1e-6);\n    assert!(x < -3);\n}\n";
+        let wrapped = "#[test]\nfn t() {\n    assert!((a - b).abs() < (1e-9));\n    assert!(((0.5)) <= r && (r < (2.0)));\n    assert_relative_eq!(a, b, epsilon = (1e-6));\n    assert!(((x < (-3))));\n}\n";
+        let read = |src| bounds(&crate::ast::rust::RustPack, "tests/t.rs", src);
+        assert_eq!(
+            read(plain),
+            pairs(&[
+                ("1e-9", true),
+                ("0.5", false),
+                ("2.0", true),
+                ("1e-6", true),
+                ("3", true)
+            ])
+        );
+        assert_eq!(read(wrapped), read(plain));
+        // A call's arguments, a product and a negated comparison are not bounds.
+        let not_read = "#[test]\nfn t() {\n    assert!(f(x < 5));\n    assert!(x < (5 * y));\n    assert!(matches!(x, y if y < 5));\n    assert!(!(x < 5));\n    assert!(ok && { x < 5 });\n    assert!(([x < 5]));\n}\n";
+        assert!(read(not_read).is_empty(), "{:?}", read(not_read));
+    }
+
+    #[test]
+    fn javascript_bounds_are_read_through_parentheses() {
+        let plain = "test('t', () => {\n  expect(ms).toBeLessThan(200);\n  expect(r).toBeGreaterThanOrEqual(0.9);\n  expect(v).toBeCloseTo(1.23, 2);\n  expect(ms < 50).toBe(true);\n});\n";
+        let wrapped = "test('t', () => {\n  expect(ms).toBeLessThan((200));\n  expect(r).toBeGreaterThanOrEqual(((0.9)));\n  expect(v).toBeCloseTo(1.23, (2));\n  expect(ms < (50)).toBe(true);\n});\n";
+        let read = |src| {
+            bounds(
+                &crate::ast::javascript::JavaScriptPack,
+                "src/x.test.js",
+                src,
+            )
+        };
+        assert_eq!(
+            read(plain),
+            pairs(&[("200", true), ("0.9", false), ("2", false), ("50", true)])
+        );
+        assert_eq!(read(wrapped), read(plain));
+        let not_read = "test('t', () => {\n  expect(ms).toBeLessThan((200 * k));\n  expect(f((50))).toBe(true);\n});\n";
+        assert!(read(not_read).is_empty(), "{:?}", read(not_read));
+    }
+
+    #[test]
+    fn go_bounds_are_read_through_parentheses() {
+        let plain = "package p\n\nimport \"testing\"\n\nfunc TestT(t *testing.T) {\n\tif elapsed > 1500*time.Millisecond {\n\t\tt.Fatalf(\"slow\")\n\t}\n\tif ratio < 0.9 {\n\t\tt.Errorf(\"low\")\n\t}\n\tassert.InDelta(t, 1.0, got, 0.01)\n}\n";
+        let wrapped = "package p\n\nimport \"testing\"\n\nfunc TestT(t *testing.T) {\n\tif (elapsed > ((1500)*time.Millisecond)) {\n\t\tt.Fatalf(\"slow\")\n\t}\n\tif ratio < ((0.9)) {\n\t\tt.Errorf(\"low\")\n\t}\n\tassert.InDelta(t, 1.0, got, (0.01))\n}\n";
+        let read = |src| bounds(&crate::ast::go::GoPack, "p_test.go", src);
+        assert_eq!(
+            read(plain),
+            pairs(&[("1500", true), ("0.9", false), ("0.01", true)])
+        );
+        assert_eq!(read(wrapped), read(plain));
+        let not_read = "package p\n\nimport \"testing\"\n\nfunc TestT(t *testing.T) {\n\tif n > (3) {\n\t\tlog.Print(\"n\")\n\t}\n\tassert.InDelta(t, 1.0, got, (0.01 * k))\n}\n";
+        assert!(read(not_read).is_empty(), "{:?}", read(not_read));
+    }
+
+    /// #861: base and head pair by a skeleton that keeps the parentheses, so a bound
+    /// moved inside them is reported as a plain one is.
+    #[test]
+    fn a_bound_loosened_inside_parentheses_is_paired_and_reported() {
+        let cases: [(&dyn LanguagePack, &str, &str, &str); 3] = [
+            (
+                &crate::ast::rust::RustPack,
+                "tests/t.rs",
+                "#[test]\nfn t() {\n    assert!(f(3) < (100));\n}\n",
+                "#[test]\nfn t() {\n    assert!(f(3) < (1000));\n}\n",
+            ),
+            (
+                &crate::ast::go::GoPack,
+                "p_test.go",
+                "package p\n\nfunc TestT(t *testing.T) {\n\tif got >= (100) {\n\t\tt.Errorf(\"slow\")\n\t}\n}\n",
+                "package p\n\nfunc TestT(t *testing.T) {\n\tif got >= (1000) {\n\t\tt.Errorf(\"slow\")\n\t}\n}\n",
+            ),
+            (
+                &crate::ast::javascript::JavaScriptPack,
+                "src/x.test.js",
+                "test('t', () => {\n  expect(f(3)).toBeLessThan((100));\n});\n",
+                "test('t', () => {\n  expect(f(3)).toBeLessThan((1000));\n});\n",
+            ),
+        ];
+        let at = |pack: &dyn LanguagePack, path: &str, src: &str| -> Vec<Bound> {
+            pack.extract(path, src, &AssertVocabulary::default())
+                .unwrap()
+                .tests
+                .into_iter()
+                .flat_map(|t| t.bounds)
+                .collect()
+        };
+        for (pack, path, base, head) in cases {
+            let (b, h) = (at(pack, path, base), at(pack, path, head));
+            assert_eq!(b.len(), 1, "{path}: {b:?}");
+            assert_eq!(loosened(&b, &h).len(), 1, "{path}: {b:?} {h:?}");
+            assert!(loosened(&h, &b).is_empty(), "{path}");
+        }
     }
 
     fn b(skeleton: &str, literal: &str, up: bool) -> Bound {

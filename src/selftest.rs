@@ -4103,6 +4103,32 @@ const CASES: &[Case] = &[
                 && read("    assert ((f(3) == 6, \"f doubles\"))\n")? == (1, 0, 1))
         },
     ),
+    #[cfg(all(feature = "lang-go", feature = "lang-javascript"))]
+    (
+        "assertion-reduction: an expected value or a bound in parentheses is read as the literal inside it in Rust, Go and JS (#861)",
+        || {
+            let rs = |check: &str| format!("#[test]\nfn t() {{\n    {check};\n}}\n");
+            let go = |check: &str| {
+                format!("package p\n\nfunc TestT(t *testing.T) {{\n\tif {check} {{\n\t\tt.Errorf(\"bad\")\n\t}}\n}}\n")
+            };
+            let js = |check: &str| format!("test('t', () => {{\n  {check};\n}});\n");
+            let mut ok = true;
+            for (path, form, base, head, code) in [
+                ("tests/t.rs", &rs as &dyn Fn(&str) -> String, "assert_eq!(f(2), (4))", "assert_eq!(f(2), (5))", "expected-value-changed"),
+                ("tests/t.rs", &rs, "assert!(f(3) < (100))", "assert!(f(3) < (1000))", "assertion-bound-loosened"),
+                ("p_test.go", &go, "got != (4)", "got != (5)", "expected-value-changed"),
+                ("p_test.go", &go, "got >= ((100))", "got >= ((1000))", "assertion-bound-loosened"),
+                ("src/x.test.js", &js, "expect(f(2)).toBe((4))", "expect(f(2)).toBe((5))", "expected-value-changed"),
+                ("src/x.test.js", &js, "expect(f(3)).toBeLessThan((100))", "expect(f(3)).toBeLessThan((1000))", "assertion-bound-loosened"),
+            ] {
+                let change = |head: &str| helper_change(&[(path, &form(base), &form(head))], "");
+                ok &= change(head)? == [format!("assertion-reduction/{code}")];
+                // Control: the same literal kept inside its parentheses.
+                ok &= change(base)?.is_empty();
+            }
+            Ok(ok)
+        },
+    ),
     #[cfg(feature = "lang-python")]
     (
         "assertion-reduction: a called Python mock assertion method is a check (#828)",
