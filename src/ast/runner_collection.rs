@@ -3323,6 +3323,13 @@ pub fn rust_cfg_leaves_out_of_tests(node: Node, src: &[u8]) -> bool {
         && super::ci_condition::rust_cfg_leaves_out_of_tests(&get_predicate_nodes(node, src), src)
 }
 
+/// Whether `node` is a `#[cfg(<predicate>)]` (or `#![cfg(..)]`) attribute whose item is
+/// compiled in a test build only (`test`, `all(test, unix)`).
+pub fn rust_cfg_only_in_tests(node: Node, src: &[u8]) -> bool {
+    is_cfg_attribute(node, src)
+        && super::ci_condition::rust_cfg_only_in_tests(&get_predicate_nodes(node, src), src)
+}
+
 /// Whether an attribute node (`attribute_item` or `attribute`) is named `cfg`.
 fn is_cfg_attribute(node: Node, src: &[u8]) -> bool {
     let attribute = if node.kind() == "attribute" {

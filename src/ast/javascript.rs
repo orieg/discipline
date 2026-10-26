@@ -73,6 +73,14 @@ impl LanguagePack for JavaScriptPack {
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers(root);
         JS_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
+        JS_PACK.runner_probes(
+            super::runner_probes::Lang::JavaScript,
+            root,
+            src,
+            path,
+            vocab,
+            &mut extractor.facts,
+        );
         super::bounds::javascript(
             root,
             src,

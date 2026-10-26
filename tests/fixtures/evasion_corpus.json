@@ -122,7 +122,9 @@
         "p.go": "package p\n\nimport \"testing\"\n\nfunc F(x int) int {\n\tif testing.Testing() {\n\t\treturn 4\n\t}\n\treturn x * 3\n}\n"
       },
       "verdict": {
-        "known_miss": "#824"
+        "caught": [
+          "stub-bodies/test-runner-probe-added"
+        ]
       }
     },
     {
@@ -343,7 +345,9 @@
         "src/calc.js": "export function f(x) {\n  if (process.env.JEST_WORKER_ID) return 4;\n  return x * 3;\n}\n"
       },
       "verdict": {
-        "known_miss": "#824"
+        "caught": [
+          "stub-bodies/test-runner-probe-added"
+        ]
       }
     },
     {
@@ -924,7 +928,9 @@
         "src/calc.py": "import os\n\ndef f(x):\n    if os.environ.get('PYTEST_CURRENT_TEST'):\n        return 4\n    return x * 3\n\n\ndef g(x):\n    return x + 1\n"
       },
       "verdict": {
-        "known_miss": "#824"
+        "caught": [
+          "stub-bodies/test-runner-probe-added"
+        ]
       }
     },
     {
@@ -937,7 +943,9 @@
         "src/calc.py": "import sys\n\ndef f(x):\n    if 'pytest' in sys.modules:\n        return 4\n    return x * 3\n\n\ndef g(x):\n    return x + 1\n"
       },
       "verdict": {
-        "known_miss": "#824"
+        "caught": [
+          "stub-bodies/test-runner-probe-added"
+        ]
       }
     },
     {
@@ -1192,7 +1200,9 @@
         "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    if cfg!(test) {\n        return 4;\n    }\n    x * 3\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
       },
       "verdict": {
-        "known_miss": "#824"
+        "caught": [
+          "stub-bodies/test-runner-probe-added"
+        ]
       }
     },
     {

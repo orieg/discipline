@@ -1350,6 +1350,26 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "stub-bodies: a test-runner probe added to production code is read, one under #[cfg(test)] or already on the base side is not",
+        || {
+            use crate::ast::runner_probes::{new_probes, Signal};
+            let v = AssertVocabulary::default();
+            let base = analyze("pub fn f(x: u8) -> u8 { x }", &v)?.runner_probes;
+            let head = analyze("pub fn f(x: u8) -> u8 { if cfg!(test) { 4 } else { x } }", &v)?
+                .runner_probes;
+            let in_tests = analyze(
+                "#[cfg(test)]\nmod tests {\n    fn t() -> bool { cfg!(test) }\n}\n",
+                &v,
+            )?
+            .runner_probes;
+            let added = new_probes(&base, &head);
+            Ok(added.len() == 1
+                && added[0].signal == Signal::RustCfgTest
+                && new_probes(&head, &head).is_empty()
+                && in_tests.is_empty())
+        },
+    ),
+    (
         "harness-tampering: a TestMain that drops m.Run()'s result before os.Exit is read, os.Exit(m.Run()) is not",
         || {
             use crate::ast::harness::{go_test_file, Form};

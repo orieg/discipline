@@ -91,6 +91,14 @@ impl LanguagePack for RustPack {
         cx.resolve_same_file_helpers();
         cx.facts.build_compile_time_test();
         RUST_PACK.shared_facts(root, &anc, src, path, vocab, &mut cx.facts);
+        RUST_PACK.runner_probes(
+            super::runner_probes::Lang::Rust,
+            root,
+            src,
+            path,
+            vocab,
+            &mut cx.facts,
+        );
         super::bounds::rust(root, src, &mut cx.facts.tests);
         super::expectations::rust(root, src, &mut cx.facts.tests);
         super::caught_assertions::rust(root, &anc, src, &mut cx.facts.tests, vocab);
