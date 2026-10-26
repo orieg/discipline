@@ -332,7 +332,9 @@
         "test/a.test.js": "import { run } from '../src/a.js';\n\ntest('x', () => {\n  expect(run(() => 0)).toBe(2);\n});\n\ntest('run', () => {\n  const m = jest.fn();\n  const r = run(m);\n  expect(m).toHaveBeenCalledWith(1);\n  expect(r).toBeDefined();\n});\n"
       },
       "verdict": {
-        "known_miss": "#865"
+        "caught": [
+          "vacuous-tests/asserts-only-on-mocks"
+        ]
       }
     },
     {
@@ -888,7 +890,9 @@
         "tests/test_a.py": "from unittest import mock\nfrom src.a import run\n\n\ndef test_x():\n    assert run(lambda v: v) == 2\n\n\ndef test_run():\n    m = mock.Mock()\n    r = run(m)\n    m.assert_called_once_with(1)\n    assert r is not None\n"
       },
       "verdict": {
-        "known_miss": "#865"
+        "caught": [
+          "vacuous-tests/asserts-only-on-mocks"
+        ]
       }
     },
     {

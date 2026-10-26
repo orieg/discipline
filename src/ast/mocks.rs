@@ -270,6 +270,40 @@ mod tests {
         assert_eq!((t[0].mock_setups, t[0].mock_asserts), (1, 1));
     }
 
+    /// #865: the interaction checks a pack also counts as assertions. A called
+    /// `unittest.mock` assertion method and a Jest interaction matcher are; a Java
+    /// `verify(` and an assertion on the result are not.
+    #[test]
+    fn interaction_checks_counted_as_assertions_are_marked() {
+        let checks = |path: &str, src: &str| {
+            tests_of(path, src)
+                .iter()
+                .map(|t| (t.mock_asserts, t.mock_checks, t.total_asserts))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            checks(
+                "tests/test_a.py",
+                "def test_a():\n    m = Mock()\n    run(m)\n    m.assert_called_once_with(1)\n    assert run(m) == 2\n",
+            ),
+            [(1, 1, 2)]
+        );
+        assert_eq!(
+            checks(
+                "src/a.test.ts",
+                "test('a', () => {\n  const m = jest.fn();\n  run(m);\n  expect(m).toHaveBeenCalledWith(1);\n  expect(m).not.toHaveBeenCalledTimes(2);\n  expect(run(m)).toBe(2);\n});\n",
+            ),
+            [(2, 2, 3)]
+        );
+        assert_eq!(
+            checks(
+                "src/test/java/ATest.java",
+                "class ATest {\n  @Test void t() {\n    Repo r = mock(Repo.class);\n    svc.run(r);\n    verify(r).save(x);\n    assertEquals(1, svc.count());\n  }\n}\n",
+            ),
+            [(1, 0, 1)]
+        );
+    }
+
     /// The text of a string literal in a call chain names no double (`calls::code_text`).
     #[test]
     fn a_mock_call_spelled_in_a_string_literal_is_not_counted() {
