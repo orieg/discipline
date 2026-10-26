@@ -80,6 +80,22 @@
       }
     },
     {
+      "name": "go-paren-literal-changed",
+      "base": {
+        "go.mod": "module p\n\ngo 1.22\n",
+        "p.go": "package p\n\nfunc F(x int) int {\n\treturn x * 2\n}\n",
+        "p_test.go": "package p\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {\n\tif got := F(2); got != (4) {\n\t\tt.Errorf(\"got %d\", got)\n\t}\n}\n\nfunc TestZero(t *testing.T) {\n\tif got := F(0); got != 0 {\n\t\tt.Errorf(\"got %d\", got)\n\t}\n}\n"
+      },
+      "head": {
+        "p_test.go": "package p\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {\n\tif got := F(2); got != (5) {\n\t\tt.Errorf(\"got %d\", got)\n\t}\n}\n\nfunc TestZero(t *testing.T) {\n\tif got := F(0); got != 0 {\n\t\tt.Errorf(\"got %d\", got)\n\t}\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/expected-value-changed"
+        ]
+      }
+    },
+    {
       "name": "go-table-expected-rewritten",
       "base": {
         "go.mod": "module p\n\ngo 1.22\n",
@@ -317,6 +333,21 @@
       },
       "verdict": {
         "known_miss": "#865"
+      }
+    },
+    {
+      "name": "js-paren-literal-changed",
+      "base": {
+        "src/calc.js": "export function f(x) { return x * 2; }\n",
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe((4));\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "head": {
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe((5));\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/expected-value-changed"
+        ]
       }
     },
     {
@@ -1202,6 +1233,36 @@
       "verdict": {
         "caught": [
           "stub-bodies/test-runner-probe-added"
+        ]
+      }
+    },
+    {
+      "name": "rs-paren-bound-loosened",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert!(f(3) < (100));\n    }\n\n    #[test]\n    fn zero() {\n        assert_eq!(f(0), 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert!(f(3) < (1000));\n    }\n\n    #[test]\n    fn zero() {\n        assert_eq!(f(0), 0);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/assertion-bound-loosened"
+        ]
+      }
+    },
+    {
+      "name": "rs-paren-literal-changed",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), (4));\n    }\n\n    #[test]\n    fn zero() {\n        assert_eq!(f(0), 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), (5));\n    }\n\n    #[test]\n    fn zero() {\n        assert_eq!(f(0), 0);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/expected-value-changed"
         ]
       }
     },

@@ -13,7 +13,9 @@
 //! (`assert_eq!(a, 4, "msg")`) is not an operand.
 
 use super::ancestry::count;
-use super::bounds::{skeleton, text, walk, GoFailures, Record, Records};
+use super::bounds::{
+    rs_conditions, rs_inside, rs_unparenthesized, skeleton, text, walk, GoFailures, Record, Records,
+};
 use super::python::unparenthesized;
 use super::TestFn;
 use std::collections::HashMap;
@@ -199,7 +201,9 @@ const RS_EQ: &[&str] = &[
 
 /// Rust: the first two arguments of `assert_eq!`-family macros when an argument is one
 /// literal (`-` sign included), a literal next to `==` / `!=` at the top level of another
-/// `assert!`-like macro, and the `@"..."` of insta's inline snapshots.
+/// `assert!`-like macro or inside parentheses that stand as a whole operand of it, and
+/// the `@"..."` of insta's inline snapshots. A literal in parentheses (`(4)`, `((4))`) is
+/// read as the literal inside.
 pub fn rust(root: Node, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
@@ -222,24 +226,17 @@ pub fn rust(root: Node, src: &str, tests: &mut [TestFn]) {
         else {
             return false;
         };
-        let mut cursor = tt.walk();
-        let all: Vec<Node> = tt.children(&mut cursor).collect();
-        // The delimiters of the token tree are its first and last children.
-        let toks: &[Node] = if all.len() >= 2 {
-            &all[1..all.len() - 1]
-        } else {
-            &[]
-        };
         if RS_EQ.contains(&name) {
+            let toks = rs_inside(tt);
             for arg in toks.split(|t| text(*t, src) == ",").take(2) {
-                match arg {
+                match rs_unparenthesized(arg).as_slice() {
                     [l] if rs_lit(*l) => reader.record(node, *l, src),
                     [m, l] if text(*m, src) == "-" && rs_lit(*l) => reader.record(node, *l, src),
                     _ => {}
                 }
             }
         } else if name.contains("snapshot") {
-            for w in toks.windows(2) {
+            for w in rs_inside(tt).windows(2) {
                 if text(w[0], src) == "@" && rs_lit(w[1]) {
                     reader.record(node, w[1], src);
                 }
@@ -247,15 +244,18 @@ pub fn rust(root: Node, src: &str, tests: &mut [TestFn]) {
         } else {
             let opens = |t: &str| matches!(t, "" | "(" | "," | "&&" | "||" | "!");
             let closes = |t: &str| matches!(t, "" | ")" | "," | "&&" | "||" | ";");
-            for (i, t) in toks.iter().enumerate() {
-                if !rs_lit(*t) {
-                    continue;
-                }
-                let before = i.checked_sub(1).map(|j| text(toks[j], src)).unwrap_or("");
-                let after = toks.get(i + 1).map_or("", |n| text(*n, src));
-                let eq = |o: &str| matches!(o, "==" | "!=");
-                if (eq(before) && closes(after)) || (eq(after) && opens(before)) {
-                    reader.record(node, *t, src);
+            for toks in rs_conditions(tt, src) {
+                for (i, t) in toks.iter().enumerate() {
+                    let lit = match rs_unparenthesized(&[*t]).as_slice() {
+                        [l] if rs_lit(*l) => *l,
+                        _ => continue,
+                    };
+                    let before = i.checked_sub(1).map(|j| text(toks[j], src)).unwrap_or("");
+                    let after = toks.get(i + 1).map_or("", |n| text(*n, src));
+                    let eq = |o: &str| matches!(o, "==" | "!=");
+                    if (eq(before) && closes(after)) || (eq(after) && opens(before)) {
+                        reader.record(node, lit, src);
+                    }
                 }
             }
         }
@@ -422,7 +422,8 @@ const JS_DENO_EQ_METHODS: &[&str] = &[
 /// `assert.equal`-family calls, Deno standard equality assertions (`assertEquals`,
 /// `assertStrictEquals`, `assertNotEquals`, `assertNotStrictEquals`), any string
 /// argument of `toMatchInlineSnapshot`, and a literal operand of `===` / `==` / `!==` /
-/// `!=` inside an `assert(...)` / `expect(...)`.
+/// `!=` inside an `assert(...)` / `expect(...)`. A literal in parentheses (`toBe((4))`) is
+/// read as the literal inside.
 pub fn javascript(
     root: Node,
     src: &str,
@@ -460,7 +461,7 @@ pub fn javascript(
                         .child_by_field_name("arguments")
                         .map(|a| {
                             let mut c = a.walk();
-                            a.named_children(&mut c).collect()
+                            a.named_children(&mut c).map(unparenthesized).collect()
                         })
                         .unwrap_or_default();
                     let picked: Vec<Node> = match func.kind() {
@@ -505,7 +506,10 @@ pub fn javascript(
                         .map_or("", |o| text(o, src));
                     if super::javascript::EQUALITY_OPERATORS.contains(&op) {
                         for side in ["left", "right"] {
-                            if let Some(s) = n.child_by_field_name(side).filter(|s| js_lit(*s, src))
+                            if let Some(s) = n
+                                .child_by_field_name(side)
+                                .map(unparenthesized)
+                                .filter(|s| js_lit(*s, src))
                             {
                                 reader.record(node, s, src);
                             }
@@ -548,6 +552,7 @@ const GO_CALLS: &[(&str, &[usize])] = &[
 ];
 
 /// Go: testify `Equal`-family literals, and `if <x == / != N> { ... t.Fatal / t.Error ... }`.
+/// A condition or a literal in parentheses (`if got != (4)`) is read as what it wraps.
 pub fn go(root: Node, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
@@ -561,6 +566,7 @@ pub fn go(root: Node, src: &str, tests: &mut [TestFn]) {
                 .is_some_and(|c| failures.inside(c));
             if let Some(cond) = node
                 .child_by_field_name("condition")
+                .map(unparenthesized)
                 .filter(|c| fails && c.kind() == "binary_expression")
             {
                 let op = cond
@@ -568,7 +574,11 @@ pub fn go(root: Node, src: &str, tests: &mut [TestFn]) {
                     .map_or("", |o| text(o, src));
                 if matches!(op, "==" | "!=") {
                     for side in ["left", "right"] {
-                        if let Some(s) = cond.child_by_field_name(side).filter(|s| go_lit(*s)) {
+                        if let Some(s) = cond
+                            .child_by_field_name(side)
+                            .map(unparenthesized)
+                            .filter(|s| go_lit(*s))
+                        {
                             reader.record(cond, s, src);
                         }
                     }
@@ -590,7 +600,7 @@ pub fn go(root: Node, src: &str, tests: &mut [TestFn]) {
                 .child_by_field_name("arguments")
                 .map(|a| {
                     let mut c = a.walk();
-                    a.named_children(&mut c).collect()
+                    a.named_children(&mut c).map(unparenthesized).collect()
                 })
                 .unwrap_or_default();
             // `assert.Equal(t, ...)`: the first argument is the test handle, not a value.
@@ -700,6 +710,85 @@ test("deno asserts", () => {
         );
     }
 
+    /// #861: a parenthesised expected value is read as the literal inside, at any depth,
+    /// and a parenthesised comparison that is the whole condition is read as the
+    /// comparison.
+    #[test]
+    fn rust_reads_expected_values_through_parentheses() {
+        let plain = "#[test]\nfn t() {\n    assert_eq!(add(2, 2), 4);\n    assert_ne!(name, \"x\");\n    assert_eq!(-1, f());\n    assert!(n == 3 && ok);\n    assert!(ok && m != 7, \"msg\");\n}\n";
+        let wrapped = "#[test]\nfn t() {\n    assert_eq!(add(2, 2), (4));\n    assert_ne!(name, ((\"x\")));\n    assert_eq!((-1), f());\n    assert!((n == (3)) && ok);\n    assert!(ok && ((m != 7)), \"msg\");\n}\n";
+        let read = |src| literals(&crate::ast::rust::RustPack, "tests/t.rs", src);
+        assert_eq!(read(plain), vec!["4", "\"x\"", "1", "3", "7"]);
+        assert_eq!(read(wrapped), read(plain));
+        // A call's arguments, a sum and a negated comparison are not expected values.
+        let not_read = "#[test]\nfn t() {\n    assert!(f(n == 3));\n    assert!(n == (3 + 1));\n    assert_eq!(f((4)), x);\n    assert!(matches!(x, (4)));\n    assert!(!(n == 3));\n}\n";
+        assert!(read(not_read).is_empty(), "{:?}", read(not_read));
+    }
+
+    #[test]
+    fn javascript_reads_expected_values_through_parentheses() {
+        let plain = "test('t', () => {\n  expect(f(1)).toBe(2);\n  assert.strictEqual(g(), true);\n  assert(n === 3);\n  expect(out).toMatchInlineSnapshot(`\"ok\"`);\n});\n";
+        let wrapped = "test('t', () => {\n  expect(f(1)).toBe((2));\n  assert.strictEqual(g(), ((true)));\n  assert(n === (3));\n  expect(out).toMatchInlineSnapshot((`\"ok\"`));\n});\n";
+        let read = |src| {
+            literals(
+                &crate::ast::javascript::JavaScriptPack,
+                "src/x.test.js",
+                src,
+            )
+        };
+        assert_eq!(read(plain), vec!["2", "true", "3", "`\"ok\"`"]);
+        assert_eq!(read(wrapped), read(plain));
+        let not_read =
+            "test('t', () => {\n  expect(f((2))).toBe(x);\n  expect(f(1)).toBe((2 + 1));\n});\n";
+        assert!(read(not_read).is_empty(), "{:?}", read(not_read));
+    }
+
+    #[test]
+    fn go_reads_expected_values_through_parentheses() {
+        let plain = "package p\n\nimport \"testing\"\n\nfunc TestT(t *testing.T) {\n\tassert.Equal(t, 4, add(2, 2))\n\tif got != \"ok\" {\n\t\tt.Errorf(\"bad\")\n\t}\n\trequire.Len(t, items, 2)\n}\n";
+        let wrapped = "package p\n\nimport \"testing\"\n\nfunc TestT(t *testing.T) {\n\tassert.Equal(t, (4), add(2, 2))\n\tif (got != ((\"ok\"))) {\n\t\tt.Errorf(\"bad\")\n\t}\n\trequire.Len(t, items, (2))\n}\n";
+        let read = |src| literals(&crate::ast::go::GoPack, "p_test.go", src);
+        assert_eq!(read(plain), vec!["4", "\"ok\"", "2"]);
+        assert_eq!(read(wrapped), read(plain));
+        let not_read = "package p\n\nimport \"testing\"\n\nfunc TestT(t *testing.T) {\n\tif n == (3) {\n\t\tlog.Print(\"n\")\n\t}\n\tassert.Equal(t, (4 + 1), got)\n}\n";
+        assert!(read(not_read).is_empty(), "{:?}", read(not_read));
+    }
+
+    /// #861: base and head pair by a skeleton that keeps the parentheses, so a literal
+    /// changed inside them is reported as plain ones are.
+    #[test]
+    fn a_literal_changed_inside_parentheses_is_paired_and_reported() {
+        let cases: [(&dyn LanguagePack, &str, &str, &str); 3] = [
+            (
+                &crate::ast::rust::RustPack,
+                "tests/t.rs",
+                "#[test]\nfn t() {\n    assert_eq!(f(2), (4));\n}\n",
+                "#[test]\nfn t() {\n    assert_eq!(f(2), (5));\n}\n",
+            ),
+            (
+                &crate::ast::go::GoPack,
+                "p_test.go",
+                "package p\n\nfunc TestT(t *testing.T) {\n\tif got != (4) {\n\t\tt.Errorf(\"bad\")\n\t}\n}\n",
+                "package p\n\nfunc TestT(t *testing.T) {\n\tif got != (5) {\n\t\tt.Errorf(\"bad\")\n\t}\n}\n",
+            ),
+            (
+                &crate::ast::javascript::JavaScriptPack,
+                "src/x.test.js",
+                "test('t', () => {\n  expect(f(2)).toBe((4));\n});\n",
+                "test('t', () => {\n  expect(f(2)).toBe((5));\n});\n",
+            ),
+        ];
+        for (pack, path, base, head) in cases {
+            let (b, h) = (
+                expectations(pack, path, base),
+                expectations(pack, path, head),
+            );
+            assert_eq!(b.len(), 1, "{path}: {b:?}");
+            assert_eq!(changed(&b, &h).len(), 1, "{path}: {b:?} {h:?}");
+            assert!(changed(&b, &b).is_empty(), "{path}");
+        }
+    }
+
     /// `open` written `n` times, `core`, then `close` written `n` times.
     fn nest(n: usize, open: impl Fn(usize) -> String, core: &str, close: &str) -> String {
         let mut out: String = (0..n).map(open).collect();
@@ -788,6 +877,16 @@ test("deno asserts", () => {
                     row(n, |i| format!("a == {i}"), " && ")
                 )
             }),
+            (
+                "Rust parenthesised comparisons nested in one assert",
+                "tests/t.rs",
+                |n| {
+                    format!(
+                        "#[test]\nfn t() {{ assert!({}); }}\n",
+                        nest(n, |i| format!("(a == ({i}) && a < (({i})) && "), "ok", ")")
+                    )
+                },
+            ),
             ("Rust bounds in one assert", "tests/t.rs", |n| {
                 format!(
                     "#[test]\nfn t() {{ assert!({}); }}\n",
