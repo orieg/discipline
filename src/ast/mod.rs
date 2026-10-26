@@ -281,6 +281,11 @@ pub struct TestFn {
     pub mock_setups: usize,
     /// Assertions on a double's interactions (`assert_called_with`, `toHaveBeenCalled`).
     pub mock_asserts: usize,
+    /// Of `mock_asserts`, those the pack also counts among `total_asserts`: a called
+    /// `unittest.mock` assertion method, a Jest interaction matcher
+    /// (`expect(m).toHaveBeenCalledWith(1)`). A Java `verify(` or a mockall checkpoint is
+    /// not counted there, and not here.
+    pub mock_checks: usize,
     /// A retry / flaky marker on the test (`@pytest.mark.flaky`, `jest.retryTimes`).
     pub retries: Option<String>,
     /// Hard-coded delays in the body (`thread::sleep`, `time.sleep`, `setTimeout`).
@@ -2356,6 +2361,7 @@ impl Default for ParsedFileFacts {
                 should_panic: None,
                 mock_setups: 0,
                 mock_asserts: 0,
+                mock_checks: 0,
                 retries: None,
                 sleeps: 0,
                 trivial_asserts: 0,
@@ -2400,6 +2406,7 @@ impl ParsedFileFacts {
             should_panic: None,
             mock_setups: 0,
             mock_asserts: 0,
+            mock_checks: 0,
             retries: None,
             sleeps: 0,
             trivial_asserts: 0,
@@ -2603,6 +2610,7 @@ mod tests {
                     should_panic: None,
                     mock_setups: 0,
                     mock_asserts: 0,
+                    mock_checks: 0,
                     retries: None,
                     sleeps: 0,
                     trivial_asserts: 0,

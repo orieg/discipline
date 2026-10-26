@@ -1587,6 +1587,7 @@ impl<'a> PythonExtractor<'a> {
                         // `m.assert_called_once_with(1)`: a check on how a double was
                         // called, not on a value the code produced.
                         test.total_asserts += 1;
+                        test.mock_checks += 1;
                     }
                 }
                 if call_text.contains("pytest.raises") && !call_text.starts_with("with ") {

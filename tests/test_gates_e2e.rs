@@ -880,6 +880,48 @@ fn python_mock_assertion_calls_count_toward_assertion_reduction() {
     );
 }
 
+/// A new test whose checks are a mock interaction and a property nearly any value has
+/// (#865) checks nothing about what the code produces: `asserts-only-on-mocks`, in
+/// Python and in JavaScript. An equality on the result beside the mock check is a check.
+#[test]
+fn a_new_test_checking_only_mocks_and_trivial_properties_is_reported() {
+    let codes = |src_path: &str, src: &str, test_path: &str, test: &str| -> (i32, Vec<String>) {
+        let repo = Repo::new();
+        repo.write(src_path, src);
+        repo.commit("chore: run");
+        repo.write(test_path, test);
+        repo.commit("test: add");
+        let run = repo.check(&[]);
+        let codes = run
+            .violations("vacuous-tests")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes)
+    };
+    let mocks = (0, vec!["vacuous-tests/asserts-only-on-mocks".to_string()]);
+    let py = |check: &str| {
+        codes(
+            "src/a.py",
+            "def run(cb):\n    cb(1)\n    return 2\n",
+            "tests/test_a.py",
+            &format!("from unittest import mock\nfrom src.a import run\n\n\ndef test_run():\n    m = mock.Mock()\n    r = run(m)\n    m.assert_called_once_with(1)\n    {check}\n"),
+        )
+    };
+    assert_eq!(py("assert r is not None"), mocks);
+    assert_eq!(py("assert r == 2"), (0, vec![]));
+    let js = |check: &str| {
+        codes(
+            "src/a.js",
+            "export function run(cb) { cb(1); return 2; }\n",
+            "test/a.test.js",
+            &format!("import {{ run }} from '../src/a.js';\n\ntest('run', () => {{\n  const m = jest.fn();\n  const r = run(m);\n  expect(m).toHaveBeenCalledWith(1);\n  {check}\n}});\n"),
+        )
+    };
+    assert_eq!(js("expect(r).toBeDefined();"), mocks);
+    assert_eq!(js("expect(r).toBe(2);"), (0, vec![]));
+}
+
 #[test]
 fn idiomatic_result_and_unwrap_tests_pass_vacuous_tests_gate() {
     let repo = Repo::new();
