@@ -779,7 +779,7 @@ mod tests {
         assert_eq!(
             added("cargo-mutants", "zero_items_pattern = \"never\"\n"),
             [
-                "command: `zero_items_pattern` changed from \"0 mutants tested\" to \"never\" \
+                "command: `zero_items_pattern` changed from '\\b0 mutants tested' to \"never\" \
               (the base value is its preset's default)"
             ]
         );
@@ -799,7 +799,7 @@ mod tests {
         assert_eq!(
             added(
                 "cargo-mutants",
-                "zero_items_pattern = \"0 mutants tested\"\n"
+                "zero_items_pattern = '\\b0 mutants tested'\n"
             ),
             none
         );
@@ -1795,7 +1795,7 @@ mod tests {
     const MUTANTS: &str = "[gates.command]\npreset = \"cargo-mutants\"\n";
     const SANITIZERS: &str = "[gates.command]\npreset = \"sanitizers\"\n";
     const NEVER: &str = "zero_items_pattern = \"never\"\n";
-    const MUTANTS_GUARD: &str = "zero_items_pattern = \"0 mutants tested\"\n";
+    const MUTANTS_GUARD: &str = "zero_items_pattern = '\\b0 mutants tested'\n";
     const MUTANTS_ENTRY: &str =
         "[gates.command]\n[[gates.command.commands]]\nname = \"mut\"\npreset = \"cargo-mutants\"\n";
 
@@ -1899,7 +1899,7 @@ mod tests {
                 "[gates.command]\ncommand = \"true\"\n",
                 false
             ),
-            ["command: `zero_items_pattern` removed (was \"0 mutants tested\")"]
+            ["command: `zero_items_pattern` removed (was '\\b0 mutants tested')"]
         );
         // An entry is judged as a whole: the default removed or written down is no edit,
         // any other value is.
@@ -1921,7 +1921,7 @@ mod tests {
         let base = "[gates.command]\ncommand = \"true\"\n";
         let head = |rest: &str| format!("{base}preset = \"cargo-mutants\"\n{rest}");
         let expected =
-            "command: `zero_items_pattern` changed from \"0 mutants tested\" to \"never\" \
+            "command: `zero_items_pattern` changed from '\\b0 mutants tested' to \"never\" \
              (compared with the default of the preset this change names)";
         assert_eq!(said(base, &head(NEVER), true), [expected]);
         // Unauthorised, the `command` gate refuses the new preset and nothing runs.
@@ -1951,7 +1951,7 @@ mod tests {
         assert_eq!(
             said("[gates.command]\n", &entry(NEVER), true),
             [
-                "command: `commands[mut].zero_items_pattern` changed from \"0 mutants tested\" \
+                "command: `commands[mut].zero_items_pattern` changed from '\\b0 mutants tested' \
               to \"never\" (compared with the default of the preset this change names)"
             ]
         );
