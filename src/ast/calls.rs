@@ -620,9 +620,9 @@ fn python_assert_is_trivial(assert: Node, src: &str) -> bool {
         let children: Vec<Node> = node.children(&mut cursor).collect();
         match node.kind() {
             "comparison_operator" => {
-                let not_none = children
-                    .windows(2)
-                    .any(|w| w[0].kind() == "is not" && w[1].kind() == "none");
+                let not_none = children.windows(2).any(|w| {
+                    w[0].kind() == "is not" && super::python::unparenthesized(w[1]).kind() == "none"
+                });
                 if not_none {
                     return true;
                 }

@@ -14,6 +14,7 @@
 
 use super::ancestry::count;
 use super::bounds::{skeleton, text, walk, GoFailures, Record, Records};
+use super::python::unparenthesized;
 use super::TestFn;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -290,7 +291,8 @@ fn py_operand<'t>(n: Node<'t>, src: &str) -> Option<Node<'t>> {
         let mut c = args.walk();
         let pos: Vec<Node> = args.named_children(&mut c).collect();
         if let [one] = pos.as_slice() {
-            return py_lit(*one).then_some(*one);
+            let one = unparenthesized(*one);
+            return py_lit(one).then_some(one);
         }
     }
     None
@@ -317,6 +319,7 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
         "assert_statement" => {
             let Some(cmp) = node
                 .named_child(0)
+                .map(unparenthesized)
                 .filter(|c| c.kind() == "comparison_operator")
             else {
                 return false;
@@ -331,7 +334,7 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
                 .join(" ");
             if named.len() == 2 && matches!(op.as_str(), "==" | "!=" | "is" | "is not") {
                 for side in named {
-                    if let Some(lit) = py_operand(side, src) {
+                    if let Some(lit) = py_operand(unparenthesized(side), src) {
                         reader.record(node, lit, src);
                     }
                 }
@@ -357,7 +360,7 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
                     .named_children(&mut c)
                     .filter(|x| x.kind() != "keyword_argument")
                     .collect();
-                for a in pos.into_iter().take(2) {
+                for a in pos.into_iter().take(2).map(unparenthesized) {
                     if py_lit(a) {
                         reader.record(node, a, src);
                     }
@@ -636,6 +639,18 @@ mod tests {
             literals(&crate::ast::python::PythonPack, "tests/test_p.py", src),
             vec!["1", "'x'", "None", "4", "\"text\""]
         );
+    }
+
+    /// #859: a parenthesised condition, operand or argument is read as what it wraps.
+    #[test]
+    fn python_reads_expected_values_through_parentheses() {
+        let plain = "def test_p(self):\n    assert parse(\"1\") == 1\n    assert name != 'x', 'msg'\n    self.assertEqual(f(2), 4)\n    assert out == snapshot(\"text\")\n";
+        let wrapped = "def test_p(self):\n    assert (parse(\"1\") == 1)\n    assert ((name != ('x'))), 'msg'\n    self.assertEqual(f(2), (4))\n    assert (out == snapshot((\"text\")))\n";
+        let read = |src| literals(&crate::ast::python::PythonPack, "tests/test_p.py", src);
+        assert_eq!(read(plain), vec!["1", "'x'", "4", "\"text\""]);
+        assert_eq!(read(wrapped), read(plain));
+        // A tuple is not a comparison.
+        assert!(read("def test_p(self):\n    assert (parse(\"1\") == 1, 'msg')\n").is_empty());
     }
 
     #[test]
