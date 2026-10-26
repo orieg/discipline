@@ -1336,6 +1336,10 @@ impl<'a> PythonExtractor<'a> {
                         .any(|h| super::helper_call_matches(func_name, h))
                     {
                         test.total_asserts += 1;
+                    } else if super::mocks::is_python_assertion_call(node, self.src) {
+                        // `m.assert_called_once_with(1)`: a check on how a double was
+                        // called, not on a value the code produced.
+                        test.total_asserts += 1;
                     }
                 }
                 if call_text.contains("pytest.raises") && !call_text.starts_with("with ") {
@@ -3537,6 +3541,51 @@ class Case(unittest.TestCase):
             .extract("tests/test_t.py", src, &AssertVocabulary::default())
             .unwrap();
         assert!(facts.tests[0].is_vacuous(), "{:?}", facts.tests[0]);
+    }
+
+    /// #828: a call of a mock's assertion method is a check, not a strong one, and a
+    /// check on the double: `(total, strong, tautologies, mock asserts)`.
+    #[test]
+    fn a_called_mock_assertion_method_counts_as_a_check() {
+        let read = |body: &str| {
+            let src = format!("from unittest import mock\n\ndef test_t():\n    m = mock.Mock()\n    run(m)\n{body}");
+            let facts = PythonPack
+                .extract("tests/test_t.py", &src, &AssertVocabulary::default())
+                .unwrap();
+            let t = &facts.tests[0];
+            (
+                t.total_asserts,
+                t.strong_asserts,
+                t.tautologies,
+                t.mock_asserts,
+            )
+        };
+        for method in crate::ast::mocks::PYTHON_ASSERTION_METHODS {
+            let body = format!("    m.{method}(1)\n");
+            assert_eq!(read(&body), (1, 0, 0, 1), "{body}");
+        }
+        assert_eq!(
+            read("    m.save.assert_called_once_with(1)\n"),
+            (1, 0, 0, 1)
+        );
+        assert_eq!(
+            read("    m.assert_called_once_with(1)\n    assert f() == 1\n"),
+            (2, 1, 0, 1)
+        );
+        // Controls: the name read but never called; nothing checked at all; a method
+        // whose name is not one of the mock's assertions.
+        assert_eq!(read("    m.assert_called_once\n"), (0, 0, 0, 0));
+        assert_eq!(read("    pass\n"), (0, 0, 0, 0));
+        assert_eq!(read("    m.assert_valid()\n"), (0, 0, 0, 0));
+        assert_eq!(read("    m.called_once_with(1)\n"), (0, 0, 0, 0));
+        // #836 holds: the name without its prefix, asserted, is still always true.
+        assert_eq!(read("    assert m.called_once_with(1)\n"), (1, 0, 1, 0));
+        // A `self.assert*` helper of a test case is counted as before, once.
+        let src = "import unittest\n\n\nclass Case(unittest.TestCase):\n    def test_u(self):\n        self.assert_valid(run())\n";
+        let facts = PythonPack
+            .extract("tests/test_u.py", src, &AssertVocabulary::default())
+            .unwrap();
+        assert_eq!(facts.tests[0].total_asserts, 1);
     }
 }
 
