@@ -240,7 +240,7 @@
       },
       "verdict": {
         "caught": [
-          "toolchain-config/toolchain-config-change-not-analysed"
+          "toolchain-config/toolchain-config-weakened"
         ]
       }
     },
@@ -298,7 +298,9 @@
         "package.json": "{\"name\":\"x\",\"scripts\":{\"test\":\"jest --passWithNoTests || true\"}}\n"
       },
       "verdict": {
-        "known_miss": "#831"
+        "caught": [
+          "toolchain-config/toolchain-config-weakened"
+        ]
       }
     },
     {
@@ -919,7 +921,9 @@
         "pyproject.toml": "[tool.pytest.ini_options]\ntestpaths = ['tests']\naddopts = \"-k 'not test_f'\"\n"
       },
       "verdict": {
-        "known_miss": "#831"
+        "caught": [
+          "toolchain-config/toolchain-config-weakened"
+        ]
       }
     },
     {
@@ -1043,7 +1047,9 @@
         "pytest.ini": "[pytest]\ntestpaths = tests\naddopts = -k 'not test_f'\n"
       },
       "verdict": {
-        "known_miss": "#831"
+        "caught": [
+          "toolchain-config/toolchain-config-weakened"
+        ]
       }
     },
     {
@@ -1057,7 +1063,9 @@
         "pytest.ini": "[pytest]\ntestpaths = tests\naddopts = -m 'not slow'\n"
       },
       "verdict": {
-        "known_miss": "#831"
+        "caught": [
+          "toolchain-config/toolchain-config-weakened"
+        ]
       }
     },
     {

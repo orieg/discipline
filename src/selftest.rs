@@ -10041,6 +10041,39 @@ proptest! {
         },
     ),
     (
+        "toolchain-config: pytest -k/-m deselection, a masked package.json test script and a Jest ignore pattern are weakenings, a wider selection is not (#831)",
+        || {
+            use crate::guards::toolchain_config::{classify, diff_trees, literal_code, load, Classified};
+            let n = |path: &str, base: &str, head: &str| -> anyhow::Result<usize> {
+                let Some(Classified::Data { name, rules }) = classify(path) else {
+                    anyhow::bail!("{path} not classified");
+                };
+                let b = load(&name, base).ok_or_else(|| anyhow::anyhow!("base unparsed"))?;
+                let h = load(&name, head).ok_or_else(|| anyhow::anyhow!("head unparsed"))?;
+                Ok(diff_trees(&b, &h, &rules).len())
+            };
+            let ini = |opts: &str| format!("[pytest]\naddopts = {opts}\n");
+            let pkg = |name: &str, script: &str| format!("{{\"scripts\": {{\"{name}\": \"{script}\"}}}}");
+            let jest = |base: &str, head: &str| {
+                literal_code("jest.config.js", base, head)
+                    .map(|t| diff_trees(&t.base, &t.head, &t.rules).len())
+            };
+            Ok(n("pytest.ini", &ini("-q"), &ini("-q -k 'not test_f'"))? == 1
+                && n("pytest.ini", &ini("-m 'unit or e2e'"), &ini("-m unit"))? == 1
+                && n("pytest.ini", &ini("-m unit"), &ini("-m 'unit or e2e'"))? == 0
+                && n("package.json", &pkg("test", "jest"), &pkg("test", "jest || true"))? == 1
+                && n("package.json", &pkg("lint", "eslint ."), &pkg("lint", "eslint . || true"))? == 0
+                && jest(
+                    "module.exports = { testEnvironment: 'node' };",
+                    "module.exports = { testEnvironment: 'node', testPathIgnorePatterns: ['calc'] };",
+                ) == Some(1)
+                && jest(
+                    "module.exports = { testEnvironment: 'node' };",
+                    "module.exports = { testEnvironment: 'node', collectCoverageFrom: ['src/**'] };",
+                ) == Some(0))
+        },
+    ),
+    (
         "hook: stop and post-tool reports elide repeated unchanged non-blocking warnings per session and keep blocking findings in full (#818)",
         || {
             let json = serde_json::json!({
