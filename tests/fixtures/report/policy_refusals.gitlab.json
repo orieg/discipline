@@ -1,6 +1,6 @@
 [
   {
-    "description": "Policy: The change applies more inline overrides than `directives.max_inline_overrides` allows, so the run is refused. The counts are in the JSON report (`policy_failures`). [directives.max_inline_overrides]",
+    "description": "Policy: The change writes more inline overrides, on the lines it adds or modifies, than `directives.max_inline_overrides` allows, so the run is refused. The counts are in the JSON report (`policy_failures`). [directives.max_inline_overrides]",
     "check_name": "policy/max-inline-overrides-exceeded",
     "fingerprint": "650990c540a71fbd2bdc551e9db6580d43627ddf3ecf1acf168cd8e7cb57fffa",
     "severity": "major",

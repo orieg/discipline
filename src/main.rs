@@ -911,10 +911,19 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
         _ => None,
     });
     summary.refused_hidden_directives = refused_hidden_directives;
+    // The inline budget counts the markers the change writes, not every marker a
+    // whole-tree gate applied.
+    let inline_overrides = match config.directives.max_inline_overrides {
+        Some(_) => discipline::override_policy::inline_overrides_added(
+            summary.overrides(),
+            &git.changed_files()?,
+        ),
+        None => 0,
+    };
     summary.policy_failures = discipline::override_policy::judge(
         &config.directives,
         summary.directive_overrides(),
-        summary.inline_overrides(),
+        inline_overrides,
         pull.as_ref(),
         &|| discipline::forge::detect_for(&git),
         &discipline::forge::HttpApi::from_env(),

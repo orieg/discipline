@@ -1138,6 +1138,35 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "overrides: the inline override budget counts the markers the change writes, not the tree's",
+        || {
+            use crate::gitctx::{ChangeKind, ChangedFile};
+            use crate::override_policy::inline_overrides_added;
+            use crate::tokens::{OverrideRecord, OverrideSource};
+            let marker = |file: &str, line: usize| OverrideRecord {
+                gate: "pii".into(),
+                code: None,
+                subject: format!("{file}:{line}"),
+                directive: "discipline:allow(pii)".into(),
+                reason: "inline exemption marker".into(),
+                source: OverrideSource::Inline {
+                    file: file.into(),
+                    line,
+                },
+                hidden: true,
+            };
+            let records = [marker("a.md", 1), marker("a.md", 2), marker("b.md", 1)];
+            let change = [ChangedFile {
+                path: "a.md".into(),
+                old_path: "a.md".into(),
+                kind: ChangeKind::Modified,
+                added_lines: [2].into_iter().collect(),
+            }];
+            Ok(inline_overrides_added(&records, &change) == 1
+                && inline_overrides_added(&records, &[]) == 0)
+        },
+    ),
+    (
         "ci-integrity: a GitLab job gaining allow_failure is a weakening, one that had it is not",
         || {
             use crate::guards::ci_gitlab::diff_gitlab_ci;
