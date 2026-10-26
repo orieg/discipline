@@ -949,3 +949,125 @@ fn a_swallowed_assertion_in_an_added_test_counts_the_test_as_examined() {
     // The pair `test_a` and the added `test_b`.
     assert_eq!(run.outcome(GATE)["examined"], 2, "{}", run.stdout);
 }
+
+// ---------------------------------------------------------------------------
+// An expectation of the assertion's own failure (#825)
+// ---------------------------------------------------------------------------
+
+/// An expectation added around a test's own assertion that catches its failure turns the
+/// test inside out: it passes only when the assertion fails. The assertion is reported
+/// as caught, on its line. An expectation of another error, around a call, is a check
+/// of its own and is not reported.
+#[test]
+fn an_expectation_of_the_assertions_own_failure_is_reported() {
+    check_each(
+        &PY,
+        &[
+            at(
+                3,
+                "    with pytest.raises(AssertionError):\n        assert f() == 1\n",
+            ),
+            at(
+                3,
+                "    with pytest.raises((ValueError, Exception)):\n        assert f() == 1\n",
+            ),
+            silent("    with pytest.raises(ValueError):\n        f(-1)\n    assert f() == 1\n"),
+        ],
+    );
+    check_each(
+        &JS,
+        &[
+            at(
+                3,
+                "  expect(() => {\n    expect(add(2, 2)).toBe(4);\n  }).toThrow();\n",
+            ),
+            silent(
+                "  expect(() => add(-1, 2)).toThrow(RangeError);\n  expect(add(2, 2)).toBe(4);\n",
+            ),
+            silent("  expect(() => {\n    expect(add(2, 2)).toBe(4);\n  }).not.toThrow();\n"),
+        ],
+    );
+    check_each(
+        &JAVA,
+        &[
+            at(8, "        assertThrows(AssertionError.class, () -> {\n            assertEquals(4, add(2, 2));\n        });\n"),
+            silent("        assertThrows(IllegalArgumentException.class, () -> add(-1, 2));\n        assertEquals(4, add(2, 2));\n"),
+        ],
+    );
+    check_each(
+        &KT,
+        &[
+            at(7, "        assertThrows<AssertionError> {\n            assertEquals(4, add(2, 2))\n        }\n"),
+            silent("        assertThrows<IllegalStateException> { add(-1, 2) }\n        assertEquals(4, add(2, 2))\n"),
+        ],
+    );
+}
+
+/// An expectation the base test already had is not new.
+#[test]
+fn an_expectation_of_the_assertions_own_failure_on_base_already_is_not_reported() {
+    let inverted = format!(
+        "{}    with pytest.raises(AssertionError):\n        assert f() == 1\n",
+        PY.before
+    );
+    let edited = format!(
+        "{}    x = 1\n    with pytest.raises(AssertionError):\n        assert f() == 1\n",
+        PY.before
+    );
+    assert_eq!(caught_in(&run_files(&PY, &inverted, &edited)), NONE);
+}
+
+/// A test the change adds with the shape is reported like any other swallowed assertion.
+/// It is not vacuous: the expectation fails the test when the assertion holds.
+#[test]
+fn an_added_test_inverted_by_its_expectation_is_reported_and_not_vacuous() {
+    let base = format!("{}{}{}", PY.before, PY.plain, PY.after);
+    let added = format!(
+        "{base}\n\ndef test_b():\n    with pytest.raises(AssertionError):\n        assert g() == 2\n"
+    );
+    let run = run_files(&PY, &base, &added);
+    assert_eq!(caught_in(&run), vec![7]);
+    assert_eq!(run.violations("vacuous-tests").len(), 0, "{}", run.stdout);
+}
+
+/// `#[should_panic]` added to an existing test holding assertions inverts the whole
+/// body: reported once, at the attribute, naming the test. One that names the code's own
+/// panic message, one the base test had, and one on a test the change adds are not.
+#[test]
+fn should_panic_added_to_a_test_with_assertions_is_reported_at_the_attribute() {
+    let plain = format!("{}{}{}", RS.before, RS.plain, RS.after);
+    let with = |attr: &str| format!("#[test]\n{attr}fn adds() {{\n{}}}\n", RS.plain);
+    let run = run_files(&RS, &plain, &with("#[should_panic]\n"));
+    assert_eq!(caught_in(&run), vec![2]);
+    let message = run.violations(GATE)[0]["message"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        message.contains("`adds`") && message.contains("#[should_panic]"),
+        "{message}"
+    );
+    assert_eq!(
+        caught_in(&run_files(
+            &RS,
+            &plain,
+            &with("#[should_panic(expected = \"assertion `left == right` failed\")]\n")
+        )),
+        vec![2]
+    );
+    assert_eq!(
+        caught_in(&run_files(
+            &RS,
+            &plain,
+            &with("#[should_panic(expected = \"index out of bounds\")]\n")
+        )),
+        NONE
+    );
+    let bare = with("#[should_panic]\n");
+    let edited = bare.replace("{\n", "{\n    let _x = 1;\n");
+    assert_eq!(caught_in(&run_files(&RS, &bare, &edited)), NONE);
+    let added = format!(
+        "{plain}\n#[test]\n#[should_panic]\nfn wraps() {{\n    assert_eq!(add(1, 1), 3);\n}}\n"
+    );
+    assert_eq!(caught_in(&run_files(&RS, &plain, &added)), NONE);
+}

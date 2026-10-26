@@ -340,7 +340,9 @@
         "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(() => { expect(f(2)).toBe(4); }).toThrow();\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
       },
       "verdict": {
-        "known_miss": "#825"
+        "caught": [
+          "assertion-reduction/assertion-failure-caught"
+        ]
       }
     },
     {
@@ -942,7 +944,9 @@
         "tests/test_calc.py": "import pytest\nfrom src.calc import f\n\n\ndef test_f():\n    with pytest.raises(AssertionError):\n        assert f(2) == 4\n"
       },
       "verdict": {
-        "known_miss": "#825"
+        "caught": [
+          "assertion-reduction/assertion-failure-caught"
+        ]
       }
     },
     {
@@ -1189,7 +1193,9 @@
         "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    #[should_panic]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n"
       },
       "verdict": {
-        "known_miss": "#825"
+        "caught": [
+          "assertion-reduction/assertion-failure-caught"
+        ]
       }
     },
     {

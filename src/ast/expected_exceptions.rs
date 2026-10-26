@@ -971,6 +971,57 @@ fn reasserted(call: &str, base: &TestFn, head: &TestFn) -> bool {
 mod pairing;
 pub use pairing::widened;
 
+/// The JVM classes an assertion failure is an instance of, by their simple names: the
+/// failure type of `assert`, JUnit 4 and kotlin.test (`AssertionError`), its ancestors,
+/// and the JUnit 5 failure type (`AssertionFailedError`). An expectation of one of them
+/// around an assertion expects that assertion to fail.
+pub(super) const JVM_ASSERTION_FAILURES: &[&str] = &[
+    "AssertionError",
+    "Error",
+    "Throwable",
+    "AssertionFailedError",
+];
+
+/// Whether the message a `#[should_panic(expected = "..")]` requires can be the message of
+/// a failed `assert*!` (`assertion failed: ..`, `assertion `left == right` failed` with the
+/// `left:` and `right:` values): it holds `assertion`, `left` or `right`, or is empty. A
+/// bare `#[should_panic]` accepts any panic.
+fn panic_matches_assertion(matcher: Option<&str>) -> bool {
+    matcher.is_none_or(|m| {
+        m.is_empty() || m.contains("assertion") || m.contains("left") || m.contains("right")
+    })
+}
+
+/// Whether a test attribute expects the failure of the test's own assertions: a Rust
+/// `#[should_panic]` that accepts an `assert*!` panic ([`panic_matches_assertion`]), or a
+/// JUnit 4 `@Test(expected = ..)` naming a class an assertion failure is an instance of.
+fn attribute_expects_assertion_failure(e: &ExpectedException) -> bool {
+    match e.kind.as_str() {
+        "should_panic" => panic_matches_assertion(e.matcher.as_deref()),
+        "test_expected" => e.exception_type.as_deref().is_some_and(|t| {
+            let simple = t.rsplit('.').next().unwrap_or(t);
+            JVM_ASSERTION_FAILURES.contains(&simple)
+        }),
+        _ => false,
+    }
+}
+
+/// The attribute of `head` that inverts the test, when the change added it (#825): an
+/// expected failure on the test as a whole ([`attribute_expects_assertion_failure`]) that
+/// `base` did not have, on a test whose assertions were effective checks on both sides.
+/// Such a test passes only when its assertions fail. `None` when the base test already
+/// expected that failure, when it held no assertion, and when the head test holds none.
+pub fn inverting_attribute<'a>(base: &TestFn, head: &'a TestFn) -> Option<&'a ExpectedException> {
+    let added = head
+        .should_panic
+        .as_ref()
+        .filter(|e| attribute_expects_assertion_failure(e))?;
+    // An attribute the base test already had, in any form, was edited, not added: a
+    // matcher given up is the widening rule's one finding, not a second one here.
+    let had = base.should_panic.is_some();
+    (!had && base.effective_asserts() > 0 && head.effective_asserts() > 0).then_some(added)
+}
+
 fn attribute(tests: &mut [TestFn], exp: ExpectedException) {
     let line = exp.line;
     if let Some(t) = super::innermost_test(tests, line) {
@@ -1096,10 +1147,7 @@ pub fn python<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [Te
     if tests.is_empty() {
         return;
     }
-    let bare = PytestBare {
-        raises: python_bare(root, src, "raises"),
-        warns: python_bare(root, src, "warns"),
-    };
+    let bare = python_pytest_bare(root, src);
     let bare = &bare;
     walk(root, &mut |node| {
         match node.kind() {
@@ -1134,9 +1182,47 @@ pub fn python<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [Te
 }
 
 /// The bare names the file imports pytest's `raises` and `warns` under.
-struct PytestBare {
+pub(super) struct PytestBare {
     raises: Vec<String>,
     warns: Vec<String>,
+}
+
+/// The names the file of `root` imports pytest's `raises` and `warns` under.
+pub(super) fn python_pytest_bare(root: Node, src: &str) -> PytestBare {
+    PytestBare {
+        raises: python_bare(root, src, "raises"),
+        warns: python_bare(root, src, "warns"),
+    }
+}
+
+/// The class argument of a Python call that expects an exception: `pytest.raises(E, ..)`
+/// (`E` positional or `expected_exception=E`), `raises(E)` imported from pytest, and
+/// `<receiver>.assertRaises(E)` / `assertRaisesRegex(E, ..)`. `None` for any other call
+/// and for the forms that expect a warning.
+pub(super) fn python_raises_class<'t>(
+    call: Node<'t>,
+    src: &str,
+    bare: &PytestBare,
+) -> Option<Node<'t>> {
+    let form = python_form(call.child_by_field_name("function")?, src, bare)?;
+    let args = call.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let mut named = args
+        .named_children(&mut cursor)
+        .filter(|a| a.kind() != "comment");
+    match form {
+        PythonForm::Raises => named.find_map(|a| {
+            if a.kind() != "keyword_argument" {
+                return Some(a);
+            }
+            a.child_by_field_name("name")
+                .is_some_and(|n| text(n, src) == "expected_exception")
+                .then(|| a.child_by_field_name("value"))
+                .flatten()
+        }),
+        PythonForm::Unittest("assertRaises", ..) => named.next(),
+        PythonForm::Unittest(..) | PythonForm::Warns => None,
+    }
 }
 
 /// The names under which the file imports pytest's `wanted` (`raises`, `warns`):
@@ -2997,6 +3083,64 @@ fn kotlin_form(name: &str) -> Option<(&'static str, bool)> {
     })
 }
 
+/// The parts of a Kotlin call that expects a throw (`assertThrows<T> { }` and the other
+/// forms [`kotlin`] reads): its kind, whether the kind names a class, the class named,
+/// and the lambda it runs. `None` for any other node.
+pub(super) fn kotlin_expectation<'t>(
+    node: Node<'t>,
+    src: &str,
+) -> Option<(&'static str, bool, Option<Node<'t>>, Node<'t>)> {
+    let (name, class, lambda) = match node.kind() {
+        // `name<T> { .. }` with no parentheses is read by the grammar as two
+        // comparisons, `(name < T) > { .. }`.
+        "binary_expression" => {
+            let left = node.child_by_field_name("left")?;
+            let lambda = node.child_by_field_name("right")?;
+            if lambda.kind() != "lambda_literal"
+                || left.kind() != "binary_expression"
+                || !kotlin_operator(node, ">", src)
+                || !kotlin_operator(left, "<", src)
+            {
+                return None;
+            }
+            let callee = left.child_by_field_name("left")?;
+            let class = left.child_by_field_name("right")?;
+            (kotlin_callee_name(callee, src), Some(class), lambda)
+        }
+        // `name(T::class) { .. }`, `name<T>("message") { .. }`, `name { .. }`.
+        "call_expression" => {
+            let lambda = child_of_kind(node, &["annotated_lambda"])?;
+            let callee = node.named_child(0)?;
+            if callee.kind() != "call_expression" {
+                // `name<T> { .. }.message`: before a `.`, the grammar reads the type
+                // argument as one.
+                let class = child_of_kind(node, &["type_arguments"]).and_then(|t| t.named_child(0));
+                (kotlin_callee_name(callee, src), class, lambda)
+            } else {
+                let class = child_of_kind(callee, &["type_arguments"])
+                    .and_then(|t| t.named_child(0))
+                    .or_else(|| {
+                        // `T::class`: the class before the `::`.
+                        let value = child_of_kind(callee, &["value_arguments"])?
+                            .named_child(0)?
+                            .named_child(0)?;
+                        (value.kind() == "navigation_expression"
+                            && kotlin_operator(value, "::", src))
+                        .then(|| value.named_child(0))
+                        .flatten()
+                    });
+                let name = callee
+                    .named_child(0)
+                    .and_then(|c| kotlin_callee_name(c, src));
+                (name, class, lambda)
+            }
+        }
+        _ => return None,
+    };
+    let (kind, names_class) = kotlin_form(name?)?;
+    Some((kind, names_class, class, lambda))
+}
+
 /// Kotlin: JUnit `assertThrows<T> { }`, kotlin.test `assertFailsWith<T> { }` /
 /// `assertFailsWith(T::class) { }` / `assertFails { }`, Kotest `shouldThrow<T> { }` /
 /// `shouldThrowExactly<T> { }` / `shouldThrowAny { }`, and the forms that state nothing
@@ -3007,67 +3151,7 @@ pub fn kotlin<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [Te
     }
     let messages = KotlinMessages::new(root);
     walk(root, &mut |node| {
-        let (name, class, lambda) = match node.kind() {
-            // `name<T> { .. }` with no parentheses is read by the grammar as two
-            // comparisons, `(name < T) > { .. }`.
-            "binary_expression" => {
-                let (Some(left), Some(lambda)) = (
-                    node.child_by_field_name("left"),
-                    node.child_by_field_name("right"),
-                ) else {
-                    return true;
-                };
-                if lambda.kind() != "lambda_literal"
-                    || left.kind() != "binary_expression"
-                    || !kotlin_operator(node, ">", src)
-                    || !kotlin_operator(left, "<", src)
-                {
-                    return true;
-                }
-                let (Some(callee), Some(class)) = (
-                    left.child_by_field_name("left"),
-                    left.child_by_field_name("right"),
-                ) else {
-                    return true;
-                };
-                (kotlin_callee_name(callee, src), Some(class), lambda)
-            }
-            // `name(T::class) { .. }`, `name<T>("message") { .. }`, `name { .. }`.
-            "call_expression" => {
-                let Some(lambda) = child_of_kind(node, &["annotated_lambda"]) else {
-                    return true;
-                };
-                let Some(callee) = node.named_child(0) else {
-                    return true;
-                };
-                if callee.kind() != "call_expression" {
-                    // `name<T> { .. }.message`: before a `.`, the grammar reads the type
-                    // argument as one.
-                    let class =
-                        child_of_kind(node, &["type_arguments"]).and_then(|t| t.named_child(0));
-                    (kotlin_callee_name(callee, src), class, lambda)
-                } else {
-                    let class = child_of_kind(callee, &["type_arguments"])
-                        .and_then(|t| t.named_child(0))
-                        .or_else(|| {
-                            // `T::class`: the class before the `::`.
-                            let value = child_of_kind(callee, &["value_arguments"])?
-                                .named_child(0)?
-                                .named_child(0)?;
-                            (value.kind() == "navigation_expression"
-                                && kotlin_operator(value, "::", src))
-                            .then(|| value.named_child(0))
-                            .flatten()
-                        });
-                    let name = callee
-                        .named_child(0)
-                        .and_then(|c| kotlin_callee_name(c, src));
-                    (name, class, lambda)
-                }
-            }
-            _ => return true,
-        };
-        let Some((kind, names_class)) = name.and_then(kotlin_form) else {
+        let Some((kind, names_class, class, lambda)) = kotlin_expectation(node, src) else {
             return true;
         };
         let message = (kind != "doesNotThrow")
@@ -4916,7 +5000,8 @@ mod tests {
         // Without `#[should_panic]` the test must pass without panicking.
         let attr = site("should_panic", "#[should_panic]", None, Some("overflow"));
         assert!(widened(&[attr], &[]).is_empty());
-        // An added expectation is never a finding.
+        // An added expectation is never a widening (one that inverts the test is read by
+        // `inverting_attribute` and by the caught-assertion readers, #825).
         assert!(widened(&[], &[raises("a", "Exception")]).is_empty());
     }
 
@@ -8296,5 +8381,76 @@ mod tests {
             .len(),
             1
         );
+    }
+
+    /// #825: an expected failure added to a test as a whole that its own assertions
+    /// satisfy inverts the test.
+    #[test]
+    fn an_added_should_panic_that_the_assertions_satisfy_inverts_the_test() {
+        let rust = |attrs: &str, body: &str| {
+            let src = format!("#[test]\n{attrs}fn doubles() {{\n{body}}}\n");
+            RustPack
+                .extract("src/lib.rs", &src, &AssertVocabulary::default())
+                .expect("extract succeeds")
+                .tests
+                .remove(0)
+        };
+        let asserts = "    assert_eq!(f(2), 4);\n";
+        let base = rust("", asserts);
+        for attr in [
+            "#[should_panic]\n",
+            "#[should_panic(expected = \"assertion\")]\n",
+            "#[should_panic(expected = \"left: 4\")]\n",
+            "#[should_panic = \"right\"]\n",
+            "#[should_panic(expected = \"\")]\n",
+        ] {
+            let head = rust(attr, asserts);
+            assert_eq!(
+                inverting_attribute(&base, &head).map(|e| e.line),
+                Some(2),
+                "{attr}"
+            );
+        }
+        // A panic message the assertion's failure does not hold.
+        let named = rust(
+            "#[should_panic(expected = \"index out of bounds\")]\n",
+            asserts,
+        );
+        assert!(inverting_attribute(&base, &named).is_none());
+        // An expectation the base test already had is not new.
+        let bare = rust("#[should_panic]\n", asserts);
+        assert!(inverting_attribute(&bare, &bare).is_none());
+        // A matcher given up on an attribute the base already had is an edit: it is the
+        // widening rule's finding (`Expected Exception Or Panic Widened`), not this one.
+        assert!(inverting_attribute(&named, &bare).is_none());
+        // A base test with no assertion, and a head test left with none.
+        let none = rust("", "    f(2);\n");
+        assert!(inverting_attribute(&none, &bare).is_none());
+        assert!(inverting_attribute(&base, &rust("#[should_panic]\n", "    f(2);\n")).is_none());
+    }
+
+    #[test]
+    fn an_added_junit4_expected_assertion_error_inverts_the_test() {
+        let java = |annotation: &str| {
+            let src = format!(
+                "class ATest {{\n    @Test{annotation}\n    public void t() {{\n        assertEquals(4, add(2, 2));\n    }}\n}}\n"
+            );
+            crate::ast::java::JavaPack
+                .extract("ATest.java", &src, &AssertVocabulary::default())
+                .expect("extract succeeds")
+                .tests
+                .remove(0)
+        };
+        let base = java("");
+        for class in ["AssertionError", "java.lang.AssertionError", "Throwable"] {
+            assert_eq!(
+                inverting_attribute(&base, &java(&format!("(expected = {class}.class)")))
+                    .map(|e| e.line),
+                Some(2),
+                "{class}"
+            );
+        }
+        let other = java("(expected = IllegalArgumentException.class)");
+        assert!(inverting_attribute(&base, &other).is_none());
     }
 }

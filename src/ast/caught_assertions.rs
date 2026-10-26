@@ -11,6 +11,10 @@
 //! - Go `defer func() { recover() }()` before a check that panics
 //! - a `finally` block that returns (Java, Kotlin, JavaScript / TypeScript, Python), which
 //!   discards the failure whatever the handlers do
+//! - an expectation of the assertion's own failure around it (#825): Python
+//!   `with pytest.raises(AssertionError):`, JS / TS `expect(() => { expect(..) }).toThrow()`
+//!   and `assert.throws(..)`, Java `assertThrows(AssertionError.class, () -> ..)`, Kotlin
+//!   `assertThrows<AssertionError> { }`. The test then passes only when the assertion fails.
 //!
 //! An assertion wrapped in a handler that catches its failure and swallows it (neither re-raising
 //! nor failing the test nor asserting) cannot fail the test. It drops out of `effective_asserts()`.
@@ -1236,6 +1240,43 @@ fn py_with_suppress_reach(with_stmt: Node, src: &str, classes: &PyClasses) -> Re
     suppresses
 }
 
+/// The line of an item of a `with` statement that expects the failure of an assertion in
+/// its body (#825): `pytest.raises(E)`, or `self.assertRaises(E)`, where `E` is
+/// `AssertionError`, `Exception` or `BaseException`, or a tuple holding one. The test then
+/// passes only when the assertion fails. A class of the project is not read: an
+/// expectation of the project's own error is a check of its own.
+fn py_with_expects_failure(
+    with_stmt: Node,
+    src: &str,
+    classes: &PyClasses,
+    bare: &super::expected_exceptions::PytestBare,
+) -> Option<usize> {
+    let clause = find_child_by_kind(with_stmt, "with_clause")?;
+    let mut cursor = clause.walk();
+    let items: Vec<Node> = clause
+        .named_children(&mut cursor)
+        .filter(|i| i.kind() == "with_item")
+        .collect();
+    items.into_iter().find_map(|item| {
+        let value = item.child_by_field_name("value")?;
+        let call = if value.kind() == "as_pattern" {
+            value.named_child(0)?
+        } else {
+            value
+        };
+        if call.kind() != "call" {
+            return None;
+        }
+        let class = super::expected_exceptions::python_raises_class(call, src, bare)?;
+        let mut names = Vec::new();
+        py_type_names(class, src, &mut names);
+        (py_reach(&names, classes) == Reach::Always).then(|| call.start_position().row + 1)
+    })
+}
+
+/// The description of an assertion an expectation of its own failure holds.
+const EXPECTS_FAILURE: &str = "an expectation of the assertion's own failure inverts it";
+
 pub fn python<'t>(
     root: Node<'t>,
     anc: &Ancestry<'t>,
@@ -1248,6 +1289,8 @@ pub fn python<'t>(
     }
     let mut caught = Caught::new(tests, root);
     let classes = py_classes(root, src);
+    // The names pytest's `raises` is imported under, read when a `with` is first met.
+    let bare = std::cell::OnceCell::new();
     // For a `try`, by its id: each handler, whether it is reached, whether it swallows.
     let mut handlers_of: std::collections::HashMap<usize, Vec<(Node, Reach, bool)>> =
         std::collections::HashMap::new();
@@ -1299,6 +1342,25 @@ pub fn python<'t>(
                             "contextlib.suppress of a class that may be an assertion failure"
                         }
                         .to_string(),
+                    });
+                    break;
+                }
+                let expecting = in_body
+                    .then(|| {
+                        let bare = bare.get_or_init(|| {
+                            super::expected_exceptions::python_pytest_bare(root, src)
+                        });
+                        py_with_expects_failure(p, src, &classes, bare)
+                    })
+                    .flatten();
+                if let Some(handler_line) = expecting {
+                    caught.attribute(CaughtAssertion {
+                        line: node.start_position().row + 1,
+                        span: site(node).1,
+                        tautology: false,
+                        handler_line,
+                        detail: EXPECTS_FAILURE.to_string(),
+                        helper: None,
                     });
                     break;
                 }
@@ -2273,6 +2335,84 @@ fn js_promise_catch<'t, 's, F: Fn(Node, &str, &AssertVocabulary) -> bool>(
     }
 }
 
+/// The classes an expectation of a throw may name and still expect an assertion's
+/// failure: an assertion error is an `Error`.
+const JS_ASSERTION_FAILURES: &[&str] = &["Error", "AssertionError"];
+
+/// Whether the arguments after the function of an expectation of a throw leave it
+/// expecting any error: none, or one class an assertion failure is an instance of.
+fn js_expects_any_error(args: &[Node], src: &str) -> bool {
+    match args {
+        [] => true,
+        [class] => {
+            class.kind() == "identifier" && JS_ASSERTION_FAILURES.contains(&text(*class, src))
+        }
+        _ => false,
+    }
+}
+
+/// The function an expectation of a throw runs, when the expectation catches the failure
+/// of an assertion in it (#825): `expect(() => { .. }).toThrow()` (also `toThrowError`,
+/// and `.rejects.toThrow()`), and `assert.throws(() => { .. })` / `assert.rejects(..)`,
+/// with no class or with `Error` or `AssertionError`. `.not.toThrow()` is not one: it
+/// fails the test on the assertion's failure.
+fn js_expects_failure<'t>(
+    call: Node<'t>,
+    src: &str,
+    std_asserts: &[(String, &'static str)],
+) -> Option<Node<'t>> {
+    let callee = call.child_by_field_name("function")?;
+    let named = |n: Node<'t>| {
+        let mut c = n.walk();
+        n.named_children(&mut c)
+            .filter(|a| a.kind() != "comment")
+            .collect::<Vec<Node<'t>>>()
+    };
+    let args = named(call.child_by_field_name("arguments")?);
+    let function = match callee.kind() {
+        "member_expression"
+            if callee
+                .child_by_field_name("property")
+                .is_some_and(|p| matches!(text(p, src), "toThrow" | "toThrowError")) =>
+        {
+            if !js_expects_any_error(&args, src) {
+                return None;
+            }
+            let mut object = callee.child_by_field_name("object")?;
+            if object.kind() == "member_expression" {
+                if object
+                    .child_by_field_name("property")
+                    .is_none_or(|p| text(p, src) != "rejects")
+                {
+                    return None;
+                }
+                object = object.child_by_field_name("object")?;
+            }
+            if object.kind() != "call_expression"
+                || object
+                    .child_by_field_name("function")
+                    .is_none_or(|f| text(f, src) != "expect")
+            {
+                return None;
+            }
+            *named(object.child_by_field_name("arguments")?).first()?
+        }
+        _ => {
+            let name = text(callee, src);
+            let throws = matches!(name, "assert.throws" | "assert.rejects")
+                || std_asserts.iter().any(|(bound, counted)| {
+                    bound == name && matches!(*counted, "assert.throws" | "assert.rejects")
+                });
+            let (function, rest) = args.split_first()?;
+            if !throws || !js_expects_any_error(rest, src) {
+                return None;
+            }
+            *function
+        }
+    };
+    matches!(function.kind(), "arrow_function" | "function_expression").then_some(function)
+}
+
 pub fn javascript<'t>(
     root: Node<'t>,
     anc: &Ancestry<'t>,
@@ -2306,6 +2446,29 @@ pub fn javascript<'t>(
     walk(root, &mut |node| {
         if node.kind() == "call_expression" {
             js_promise_catch(node, src, &mut caught, vocab, &mut promise, &failing);
+            if let Some(function) = js_expects_failure(node, src, std_asserts) {
+                let handler_line = node.start_position().row + 1;
+                walk(function, &mut |n| {
+                    if n != function
+                        && JS_FUNCTIONS.contains(&n.kind())
+                        && !js_is_sync_callback(n, anc, src)
+                    {
+                        return false;
+                    }
+                    if n.kind() == "call_expression" && js_is_assertion(n, src, vocab, std_asserts)
+                    {
+                        caught.attribute(CaughtAssertion {
+                            line: n.start_position().row + 1,
+                            span: site(n).1,
+                            tautology: false,
+                            handler_line,
+                            detail: EXPECTS_FAILURE.to_string(),
+                            helper: None,
+                        });
+                    }
+                    true
+                });
+            }
             return true;
         }
         if node.kind() != "try_statement" {
@@ -2493,6 +2656,55 @@ fn java_finally_returns(try_stmt: Node) -> Option<Node> {
     find_child_by_kind(block, "return_statement").map(|_| finally)
 }
 
+/// An `assert` statement, an `assert*` call other than `assertThrows`, or a configured
+/// helper.
+fn java_is_assertion(n: Node, src: &str, vocab: &AssertVocabulary) -> bool {
+    match n.kind() {
+        "assert_statement" => true,
+        "method_invocation" => {
+            let name = n.child_by_field_name("name").map_or("", |m| text(m, src));
+            (name.starts_with("assert") && name != "assertThrows") || configured(name, vocab)
+        }
+        _ => false,
+    }
+}
+
+/// Whether a class an expectation names is one an assertion failure is an instance of
+/// (`expected_exceptions::JVM_ASSERTION_FAILURES`), by its simple name.
+fn jvm_names_assertion_failure(class: &str) -> bool {
+    let class = class.trim().trim_end_matches(".class").trim();
+    let simple = class.rsplit(['.', ':']).next().unwrap_or(class);
+    super::expected_exceptions::JVM_ASSERTION_FAILURES.contains(&simple)
+}
+
+/// The lambda of `assertThrows(E.class, () -> { .. })` when `E` is a class an assertion
+/// failure is an instance of (#825): the test then passes only when the assertions in
+/// the lambda fail. `assertThrowsExactly` is not read: the failure of `assertEquals` is a
+/// subclass of `AssertionError`, which it does not accept.
+fn java_expects_failure<'t>(call: Node<'t>, src: &str) -> Option<Node<'t>> {
+    if call
+        .child_by_field_name("name")
+        .is_none_or(|n| text(n, src) != "assertThrows")
+    {
+        return None;
+    }
+    let args = call.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let named: Vec<Node> = args
+        .named_children(&mut cursor)
+        .filter(|a| !a.kind().contains("comment"))
+        .collect();
+    match named[..] {
+        [class, lambda, ..]
+            if lambda.kind() == "lambda_expression"
+                && jvm_names_assertion_failure(text(class, src)) =>
+        {
+            Some(lambda)
+        }
+        _ => None,
+    }
+}
+
 pub fn java<'t>(
     root: Node<'t>,
     anc: &Ancestry<'t>,
@@ -2506,6 +2718,32 @@ pub fn java<'t>(
     let mut caught = Caught::new(tests, root);
     let failing = Failing::new(root, JAVA_FAILS);
     walk(root, &mut |node| {
+        if node.kind() == "method_invocation" {
+            if let Some(lambda) = java_expects_failure(node, src) {
+                let handler_line = node.start_position().row + 1;
+                walk(lambda, &mut |n| {
+                    if n != lambda
+                        && (matches!(n.kind(), "class_declaration" | "method_declaration")
+                            || (n.kind() == "lambda_expression"
+                                && !java_is_sync_callback(n, anc, src)))
+                    {
+                        return false;
+                    }
+                    if java_is_assertion(n, src, vocab) {
+                        caught.attribute(CaughtAssertion {
+                            line: n.start_position().row + 1,
+                            span: site(n).1,
+                            tautology: false,
+                            handler_line,
+                            detail: EXPECTS_FAILURE.to_string(),
+                            helper: None,
+                        });
+                    }
+                    true
+                });
+            }
+            return true;
+        }
         if !matches!(
             node.kind(),
             "try_statement" | "try_with_resources_statement"
@@ -2546,16 +2784,7 @@ pub fn java<'t>(
             {
                 return false;
             }
-            let is_assertion = match n.kind() {
-                "assert_statement" => true,
-                "method_invocation" => {
-                    let name = n.child_by_field_name("name").map_or("", |m| text(m, src));
-                    (name.starts_with("assert") && name != "assertThrows")
-                        || configured(name, vocab)
-                }
-                _ => false,
-            };
-            if is_assertion {
+            if java_is_assertion(n, src, vocab) {
                 caught.attribute(CaughtAssertion {
                     line: n.start_position().row + 1,
                     span: site(n).1,
@@ -2852,6 +3081,32 @@ fn kt_result_is_unused<'t, 's>(
     true
 }
 
+/// The lambda of an expectation of a throw that catches the failure of the assertions in
+/// it (#825): `assertThrows<E> { }`, `assertFailsWith<E> { }` or `shouldThrow<E> { }` where
+/// `E` is a class an assertion failure is an instance of, and `assertFails { }` /
+/// `shouldThrowAny { }`, which name no class. The exact forms are not read.
+fn kt_expects_failure<'t>(node: Node<'t>, src: &str) -> Option<Node<'t>> {
+    if !matches!(node.kind(), "call_expression" | "binary_expression") {
+        return None;
+    }
+    let (kind, names_class, class, lambda) =
+        super::expected_exceptions::kotlin_expectation(node, src)?;
+    let catches = kind == "assertThrows"
+        && match (names_class, class) {
+            (false, _) => true,
+            (true, Some(class)) => jvm_names_assertion_failure(text(class, src)),
+            (true, None) => false,
+        };
+    if !catches {
+        return None;
+    }
+    if lambda.kind() == "lambda_literal" {
+        Some(lambda)
+    } else {
+        find_child_by_kind(lambda, "lambda_literal")
+    }
+}
+
 pub fn kotlin<'t>(
     root: Node<'t>,
     anc: &Ancestry<'t>,
@@ -2915,6 +3170,18 @@ pub fn kotlin<'t>(
                         });
                     }
                 }
+            }
+        } else if let Some(lambda) = kt_expects_failure(node, src) {
+            let handler_line = node.start_position().row + 1;
+            for (line, span) in kt_assertions(lambda, anc, src, vocab) {
+                caught.attribute(CaughtAssertion {
+                    line,
+                    span,
+                    tautology: false,
+                    handler_line,
+                    detail: EXPECTS_FAILURE.to_string(),
+                    helper: None,
+                });
             }
         }
         true
@@ -4987,6 +5254,164 @@ public class TestClass2 {
         assert_eq!((t.total_asserts, t.effective_asserts()), (3, 1), "{t:?}");
     }
 
+    /// #825: an expectation of the assertion's own failure around it inverts the test.
+    #[test]
+    fn python_expectation_of_the_assertion_failure_inverts_it() {
+        for expecting in [
+            "pytest.raises(AssertionError)",
+            "pytest.raises(Exception)",
+            "pytest.raises(BaseException, match='x')",
+            "pytest.raises((ValueError, AssertionError))",
+            "pytest.raises(expected_exception=AssertionError)",
+            "pytest.raises(AssertionError) as e",
+            "self.assertRaises(AssertionError)",
+            "self.assertRaisesRegex(Exception, 'x')",
+        ] {
+            assert_eq!(
+                py(&format!(
+                    "    with {expecting}:\n        assert f(2) == 4\n"
+                )),
+                vec![(3, 2)],
+                "{expecting}"
+            );
+        }
+        // A mock assertion call is an assertion (#828).
+        assert_eq!(
+            py("    with pytest.raises(AssertionError):\n        m.assert_called_once_with(1)\n"),
+            vec![(3, 2)]
+        );
+        // `raises` imported from pytest.
+        let src = "from pytest import raises\n\ndef test_a():\n    with raises(AssertionError):\n        assert f(2) == 4\n";
+        assert_eq!(
+            caught_lines(&crate::ast::python::PythonPack, "tests/test_x.py", src),
+            vec![(5, 4)]
+        );
+    }
+
+    #[test]
+    fn python_expectation_of_another_error_is_not_an_inversion() {
+        for body in [
+            // The expectation guards a call; the assertion is after the block.
+            "    with pytest.raises(ValueError):\n        f(-1)\n    assert f(2) == 4\n",
+            // A class an assertion failure is not, or one of the project.
+            "    with pytest.raises(ValueError):\n        assert f(2) == 4\n",
+            "    with pytest.raises(AppError):\n        assert f(2) == 4\n",
+            "    with self.assertRaises(KeyError):\n        self.assertEqual(f(2), 4)\n",
+            // A warning, and a `raises` that does not come from pytest.
+            "    with pytest.warns(Warning):\n        assert f(2) == 4\n",
+            "    with raises(AssertionError):\n        assert f(2) == 4\n",
+            // An assertion in a function written inside the block does not run there.
+            "    with pytest.raises(AssertionError):\n        def g():\n            assert f(2) == 4\n        g2()\n",
+        ] {
+            assert_eq!(py(body), NONE, "{body}");
+        }
+    }
+
+    #[test]
+    fn javascript_expectation_of_a_throw_around_an_assertion_inverts_it() {
+        for expecting in [
+            "expect(() => {\n    expect(f(2)).toBe(4);\n  }).toThrow();\n",
+            "expect(() => {\n    expect(f(2)).toBe(4);\n  }).toThrowError(Error);\n",
+            "expect(function () {\n    expect(f(2)).toBe(4);\n  }).toThrow(AssertionError);\n",
+            "await expect(async () => {\n    expect(await g()).toBe(4);\n  }).rejects.toThrow();\n",
+            "assert.throws(() => {\n    assert.strictEqual(f(2), 4);\n  });\n",
+            "assert.throws(() => {\n    assert.strictEqual(f(2), 4);\n  }, AssertionError);\n",
+        ] {
+            assert_eq!(js(expecting), vec![(3, 2)], "{expecting}");
+        }
+        // An arrow function whose body is the assertion.
+        assert_eq!(
+            js("expect(() => expect(f(2)).toBe(4)).toThrow();\n"),
+            vec![(2, 2)]
+        );
+    }
+
+    #[test]
+    fn javascript_expectation_of_a_named_error_or_no_throw_is_not_an_inversion() {
+        for body in [
+            // The function throws the code's own error; nothing in it asserts.
+            "expect(() => f(-1)).toThrow();\n  expect(f(2)).toBe(4);\n",
+            "expect(() => {\n    expect(f(2)).toBe(4);\n  }).toThrow(RangeError);\n",
+            "expect(() => {\n    expect(f(2)).toBe(4);\n  }).toThrow('out of range');\n",
+            "expect(() => {\n    expect(f(2)).toBe(4);\n  }).not.toThrow();\n",
+            "assert.throws(() => {\n    assert.strictEqual(f(2), 4);\n  }, RangeError);\n",
+            "assert.doesNotThrow(() => {\n    assert.strictEqual(f(2), 4);\n  });\n",
+            // A function the expectation does not run.
+            "expect(() => {\n    setTimeout(() => expect(f(2)).toBe(4));\n  }).toThrow();\n",
+        ] {
+            assert_eq!(js(body), NONE, "{body}");
+        }
+    }
+
+    #[test]
+    fn java_and_kotlin_expectation_of_the_assertion_failure_inverts_it() {
+        let java_with = |call: &str| {
+            caught_lines(
+                &crate::ast::java::JavaPack,
+                "ATest.java",
+                &format!(
+                    "class ATest {{\n    @Test\n    void t() {{\n        {call}\n    }}\n}}\n"
+                ),
+            )
+        };
+        for class in [
+            "AssertionError",
+            "Throwable",
+            "Error",
+            "AssertionFailedError",
+        ] {
+            assert_eq!(
+                java_with(&format!(
+                    "assertThrows({class}.class, () -> {{\n            assertEquals(4, add(2, 2));\n        }});"
+                )),
+                vec![(5, 4)],
+                "{class}"
+            );
+        }
+        assert_eq!(
+            java_with("assertThrows(AssertionError.class, () -> assertEquals(4, add(2, 2)));"),
+            vec![(4, 4)]
+        );
+        for call in [
+            "assertThrows(IllegalArgumentException.class, () -> {\n            assertEquals(4, add(2, 2));\n        });",
+            "assertThrows(AppFailure.class, () -> {\n            assertEquals(4, add(2, 2));\n        });",
+            "assertThrowsExactly(AssertionError.class, () -> {\n            assertEquals(4, add(2, 2));\n        });",
+            "assertThrows(AssertionError.class, () -> add(-1, 2));\n        assertEquals(4, add(2, 2));",
+        ] {
+            assert_eq!(java_with(call), NONE, "{call}");
+        }
+        for expecting in [
+            "assertThrows<AssertionError> {",
+            "assertFailsWith<AssertionError> {",
+            "assertFailsWith(AssertionError::class) {",
+            "assertFails {",
+            "shouldThrow<Throwable> {",
+            "shouldThrowAny {",
+        ] {
+            assert_eq!(
+                kotlin(&format!(
+                    "        {expecting}\n            assertEquals(4, add(2, 2))\n        }}\n"
+                )),
+                vec![(5, 4)],
+                "{expecting}"
+            );
+        }
+        for expecting in [
+            "assertThrows<IllegalStateException> {",
+            "assertFailsWith<AppFailure> {",
+            "shouldThrowExactly<AssertionError> {",
+            "assertDoesNotThrow {",
+        ] {
+            assert_eq!(
+                kotlin(&format!(
+                    "        {expecting}\n            assertEquals(4, add(2, 2))\n        }}\n"
+                )),
+                NONE,
+                "{expecting}"
+            );
+        }
+    }
+
     /// The swallowed assertions each test reaches in a helper of its file:
     /// `(test, line, handler line, helper)`.
     fn in_helpers(
@@ -5190,5 +5615,23 @@ public class TestClass2 {
         let inline = "def test_f():\n    try:\n        assert f(2) == 4\n    except AssertionError:\n        pass\n";
         let base = &extracted(path, inline)[0];
         assert_eq!(super::newly_caught(base, head).len(), 1, "{head:?}");
+    }
+
+    /// #825 composes with #832: an expectation of the assertion's own failure written in
+    /// a same-file helper is read there, and recorded in the test that calls the helper.
+    #[test]
+    fn an_expectation_of_the_assertions_own_failure_in_a_helper_is_caught_in_the_caller() {
+        let py = "import pytest\n\ndef check(a, b):\n    with pytest.raises(AssertionError):\n        assert a == b\n\n\ndef test_f():\n    check(f(2), 4)\n";
+        assert_eq!(
+            in_helpers(&crate::ast::python::PythonPack, "tests/test_t.py", py),
+            found("test_f", 5, 4, "check")
+        );
+        let other = py.replace("AssertionError", "ValueError");
+        assert!(in_helpers(&crate::ast::python::PythonPack, "tests/test_t.py", &other).is_empty());
+        let js = "function check(a, b) {\n  expect(() => {\n    expect(a).toBe(b);\n  }).toThrow();\n}\n\ntest('f', () => {\n  check(f(2), 4);\n});\n";
+        assert_eq!(
+            in_helpers(&crate::ast::javascript::JavaScriptPack, "a.test.js", js),
+            found("f", 3, 2, "check")
+        );
     }
 }
