@@ -841,6 +841,45 @@ fn python_parenthesised_assertions_are_read_as_the_expression_inside() {
     assert_eq!(codes, ["vacuous-tests/asserts-only-on-mocks"]);
 }
 
+/// A Python mock assertion call is a check (#828): deleting it from an existing test, or
+/// leaving its name read but not called, is a reduction; a new test whose only check
+/// is one is still a test that asserts only on mocks.
+#[test]
+fn python_mock_assertion_calls_count_toward_assertion_reduction() {
+    const BASE: &str = "from unittest import mock\nfrom src.a import run\n\n\ndef test_run():\n    m = mock.Mock()\n    run(m)\n    m.assert_called_once_with(1)\n";
+    let codes = |head: &str| -> (i32, Vec<String>) {
+        let repo = Repo::new();
+        repo.write("src/a.py", "def run(cb):\n    cb(1)\n");
+        repo.commit_base("tests/test_a.py", BASE, "test: run");
+        repo.write("tests/test_a.py", head);
+        repo.commit("test: change");
+        let run = repo.check(&[]);
+        let codes = ["assertion-reduction", "vacuous-tests"]
+            .iter()
+            .flat_map(|gate| run.violations(gate))
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes)
+    };
+    let reduced = (
+        1,
+        vec!["assertion-reduction/assertions-reduced".to_string()],
+    );
+    let deleted = BASE.replace("m.assert_called_once_with(1)", "pass");
+    assert_eq!(codes(&deleted), reduced);
+    let read_only = BASE.replace("m.assert_called_once_with(1)", "m.assert_called_once");
+    assert_eq!(codes(&read_only), reduced);
+    // Control: the check kept, with an equality added beside it.
+    let kept = format!("{BASE}    assert run(m) is None\n");
+    assert_eq!(codes(&kept), (0, vec![]));
+    // A new test whose only check is on the mock: the warning, not a reduction.
+    let added = format!("{BASE}\n\ndef test_run2():\n    m = mock.Mock()\n    run(m)\n    m.assert_called_with(1)\n");
+    assert_eq!(
+        codes(&added),
+        (0, vec!["vacuous-tests/asserts-only-on-mocks".to_string()])
+    );
+}
+
 #[test]
 fn idiomatic_result_and_unwrap_tests_pass_vacuous_tests_gate() {
     let repo = Repo::new();
@@ -9275,6 +9314,74 @@ fn f5_python_context_managers_and_pytestmark_detected() {
     assert_eq!(run_pass.code, 0, "{}{}", run_pass.stdout, run_pass.stderr);
 }
 
+/// A repository whose base holds `src/calc.py` and a test module that starts with
+/// `base`, changed so the module starts with `head`.
+fn python_module_skip_run(base: &str, head: &str) -> Run {
+    const TESTS: &str =
+        "\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n";
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "src/calc.py",
+        "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+    );
+    repo.write("tests/test_calc.py", &format!("{base}{TESTS}"));
+    repo.commit("test: calc");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write("tests/test_calc.py", &format!("{head}{TESTS}"));
+    repo.commit("test: change calc tests");
+    repo.check(&[])
+}
+
+/// `(code, severity)` of each finding `ignored-tests` reported.
+fn ignored_findings(run: &Run) -> Vec<(String, String)> {
+    run.violations("ignored-tests")
+        .iter()
+        .map(|v| {
+            (
+                v["code"].as_str().unwrap().to_string(),
+                v["severity"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn python_module_level_import_skips_are_read_by_ignored_tests() {
+    let plain = "from src.calc import f, g\n";
+    let sut = "import pytest\ncalc = pytest.importorskip('src.calc')\nf, g = calc.f, calc.g\n";
+    let guard = "import pytest\ntry:\n    from src.calc import f, g\nexcept ImportError:\n    pytest.skip('calc unavailable', allow_module_level=True)\n";
+    let numpy = "import pytest\nnp = pytest.importorskip('numpy')\nfrom src.calc import f, g\n";
+    let skipped = (
+        "ignored-tests/existing-test-skipped".to_string(),
+        "error".to_string(),
+    );
+    let noted = (
+        "ignored-tests/test-conditionally-skipped".to_string(),
+        "note".to_string(),
+    );
+
+    // The repository's own module: every test of the file stops running.
+    for head in [sut, guard] {
+        let run = python_module_skip_run(plain, head);
+        assert_eq!(run.code, 1, "{head}\n{}{}", run.stdout, run.stderr);
+        assert_eq!(
+            ignored_findings(&run),
+            vec![skipped.clone(), skipped.clone()],
+            "{head}"
+        );
+    }
+
+    // Another project's module: a skip under a condition, as other such skips are.
+    let run = python_module_skip_run(plain, numpy);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(ignored_findings(&run), vec![noted.clone(), noted]);
+
+    // Already guarded on the base side: the change adds no skip.
+    let run = python_module_skip_run(sut, &format!("{sut}# reworded\n"));
+    assert!(ignored_findings(&run).is_empty(), "{}", run.stdout);
+}
+
 #[test]
 fn javascript_source_files_are_analysed_by_javascript_pack() {
     let repo = Repo::new();
@@ -16746,7 +16853,7 @@ fn suppression_delta_defaults_to_nonblocking_warning() {
 // ---- bench-regression: arm exemptions, memory rows, zero estimates ----------
 
 /// Runs the bench suite in dual-file mode against two in-job result files.
-fn bench_dual(repo: &Repo, base: Option<&str>, head: &str, config: &str) -> common::Run {
+fn bench_dual(repo: &Repo, base: Option<&str>, head: &str, config: &str) -> Run {
     let head_file = repo.dir.path().join("head_bench_out.json");
     std::fs::write(&head_file, head).unwrap();
     let head_s = head_file.to_str().unwrap().to_string();

@@ -1033,6 +1033,7 @@ pub fn python<'t>(
                     && !callee.contains("assertWarns")
                     && !callee.contains("assertLogs"))
                     || configured(callee, vocab)
+                    || super::mocks::is_python_assertion_call(node, src.as_bytes())
             }
             _ => false,
         };
@@ -4378,6 +4379,24 @@ def test_py_tuple_except():
 "#;
         let caught = caught_lines(&crate::ast::python::PythonPack, "tests/test_x.py", src);
         assert_eq!(caught, vec![(4, 5), (10, 11), (16, 17)]);
+    }
+
+    /// #828: a mock assertion call is an assertion a handler can swallow; the name read
+    /// without a call is not one.
+    #[test]
+    fn python_mock_assertion_calls_are_caught_like_assertions() {
+        assert_eq!(
+            py("    try:\n        m.assert_called_once_with(1)\n    except AssertionError:\n        pass\n"),
+            vec![(3, 4)]
+        );
+        assert!(py(
+            "    try:\n        m.assert_called_once\n    except AssertionError:\n        pass\n"
+        )
+        .is_empty());
+        assert!(py(
+            "    try:\n        m.assert_called_once_with(1)\n    except AssertionError:\n        raise\n"
+        )
+        .is_empty());
     }
 
     #[test]

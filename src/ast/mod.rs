@@ -2185,6 +2185,81 @@ pub struct ParsedFileFacts {
     /// the same scope rebinds, so the runner never collects them. They are not in
     /// `tests`.
     pub shadowed_tests: Vec<ShadowedTest>,
+    /// Module-scope statements that skip every test of the file when an import fails
+    /// (Python). The pack reads each as a conditional skip of every test;
+    /// [`ParsedFileFacts::resolve_import_skips`] makes it unconditional where the module
+    /// is the repository's own.
+    pub import_skips: Vec<ImportSkip>,
+}
+
+/// A module-scope statement that skips every test of its file when an import fails:
+/// `pytest.importorskip("m")`, or `pytest.skip(.., allow_module_level=True)` in an
+/// `except ImportError` handler of a `try` that imports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportSkip {
+    /// 1-based line of the statement.
+    pub line: usize,
+    /// The condition the pack recorded on each test of the file.
+    pub condition: String,
+    /// The modules whose import failing skips the tests, as written (`src.calc`, `.calc`).
+    /// Empty when the module is not a literal.
+    pub modules: Vec<String>,
+}
+
+impl ImportSkip {
+    /// Whether one of its modules is a file or package of the repository whose files are
+    /// `tree`, as imported from the test file at `path`. A relative import (`.calc`) is.
+    /// An absolute one is when its first name is a `.py` / `.pyi` file, or a directory
+    /// holding one, at the root of the tree, under `src/`, or beside the test file (where
+    /// pytest's default import mode puts the test's own directory on the path). A package
+    /// mapped elsewhere (`package-dir`, an editable install of another checkout) or a
+    /// compiled module the tree does not hold is read as another project's.
+    pub fn names_first_party(&self, path: &str, tree: &[String]) -> bool {
+        let test_dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
+        let mut roots = vec![String::new(), "src/".to_string()];
+        if !test_dir.is_empty() {
+            roots.push(format!("{test_dir}/"));
+        }
+        self.modules.iter().any(|module| {
+            if module.starts_with('.') {
+                return true;
+            }
+            let Some(first) = module.split('.').next().filter(|f| !f.is_empty()) else {
+                return false;
+            };
+            roots.iter().any(|root| {
+                let file = format!("{root}{first}");
+                let dir = format!("{file}/");
+                tree.iter().any(|p| {
+                    p.strip_prefix(&file)
+                        .is_some_and(|rest| rest == ".py" || rest == ".pyi")
+                        || (p.starts_with(&dir) && (p.ends_with(".py") || p.ends_with(".pyi")))
+                })
+            })
+        })
+    }
+}
+
+impl ParsedFileFacts {
+    /// Reads the module-scope import skips of the file at `path` against the files of its
+    /// side of the change: one that names a module of the repository itself skips every
+    /// test of the file unconditionally, since the import fails when the code under change
+    /// breaks. One that names another project's module stays the conditional skip the pack
+    /// recorded.
+    pub fn resolve_import_skips(&mut self, path: &str, tree: &[String]) {
+        for skip in &self.import_skips {
+            if !skip.names_first_party(path, tree) {
+                continue;
+            }
+            for test in &mut self.tests {
+                test.ignored = true;
+                if test.conditional_ignore.as_deref() == Some(skip.condition.as_str()) {
+                    test.conditional_ignore = None;
+                    test.ci_verdict = None;
+                }
+            }
+        }
+    }
 }
 
 /// A test definition that a later definition of the same name in the same scope rebinds
@@ -2215,6 +2290,7 @@ impl Default for ParsedFileFacts {
             budgets: Vec::new(),
             notes: Vec::new(),
             shadowed_tests: Vec::new(),
+            import_skips: Vec::new(),
             compile_time_asserts: 0,
             compile_time_assert_line: None,
             compile_time_test: Some(TestFn {
