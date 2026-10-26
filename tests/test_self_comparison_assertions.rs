@@ -122,10 +122,13 @@ fn langs() -> Vec<Lang> {
                 "expect(r.a).toEqual(r.a);",
                 "expect(r.b).toStrictEqual((r.b));",
                 "assert.strictEqual(r.c, r.c);",
+                "assert(r.g === r.g);",
+                "assert.ok((r.h == r.h));",
             ],
             near: &[
                 "expect(r.d).toBe(r.e);",
                 "expect(z).not.toBe(z);",
+                "assert(z !== z);",
                 "expect(next()).toBe(next());",
             ],
         },

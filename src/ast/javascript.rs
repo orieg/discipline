@@ -243,6 +243,32 @@ const PROMISE_CHAIN_MEMBERS: &[&str] = &["resolves", "rejects", "eventually"];
 /// `assert.rejects` ([`std_assert_names`]).
 const PROMISE_ASSERTS: &[&str] = &["assert.rejects", "assert.doesNotReject"];
 
+/// The operators of a JS/TS equality comparison. `assert(a === b)` with one of them is a
+/// strong assertion ([`equality_argument`]), and a literal operand of one is an expected
+/// value (`expectations::javascript`).
+pub(super) const EQUALITY_OPERATORS: &[&str] = &["===", "==", "!==", "!="];
+
+/// The first argument of a boolean assertion call (`assert(..)`, `assert.ok(..)`) when it
+/// is one equality comparison ([`EQUALITY_OPERATORS`]), parentheses around it removed:
+/// `assert(f(3) === 6)`, `assert.ok((a !== b), 'msg')`. `None` for any other argument
+/// (`assert(x)`, `assert(a === b && c)`, `assert(!(a === b))`). The argument after it is
+/// the failure message.
+fn equality_argument<'t>(call: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    let args = call.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let mut arg = args
+        .named_children(&mut cursor)
+        .find(|a| a.kind() != "comment")?;
+    while arg.kind() == "parenthesized_expression" {
+        let mut cursor = arg.walk();
+        arg = arg
+            .named_children(&mut cursor)
+            .find(|a| a.kind() != "comment")?;
+    }
+    let operator = arg.child_by_field_name("operator")?.utf8_text(src).ok()?;
+    (arg.kind() == "binary_expression" && EQUALITY_OPERATORS.contains(&operator)).then_some(arg)
+}
+
 /// Whether the matcher `func` of an `expect` chain is reached through a member that
 /// makes it return a promise ([`PROMISE_CHAIN_MEMBERS`]): `expect(p).resolves.toBe(1)`,
 /// `expect(p).rejects.not.toThrow()`, `expect(p).to.eventually.equal(1)`.
@@ -1523,6 +1549,7 @@ impl<'a> JsExtractor<'a> {
 
             // A function of Deno's standard assertion module, counted as the
             // `node:assert` call it corresponds to.
+            let callee = func_text;
             let func_text = match self
                 .std_asserts
                 .iter()
@@ -1537,11 +1564,17 @@ impl<'a> JsExtractor<'a> {
                 if PROMISE_ASSERTS.contains(&func_text) && !settles(call, self.anc, self.src) {
                     return;
                 }
+                // `assert(a === b)` checks a value, as `assert.strictEqual(a, b)` does
+                // (#862); `assert(a)` is a truthiness check. Deno's `assertFalse` and
+                // `assertExists`, also counted as `assert.ok`, are not read this way.
+                let boolean = matches!(callee, "assert" | "assert.ok");
                 test.total_asserts += 1;
-                if self.is_strong_assert_fn(func_text) {
+                if self.is_strong_assert_fn(func_text)
+                    || (boolean && equality_argument(call, self.src).is_some())
+                {
                     test.strong_asserts += 1;
                 }
-                if self.is_tautological_assert_call(call, func_text, test) {
+                if self.is_tautological_assert_call(call, func_text, boolean, test) {
                     test.tautologies += 1;
                 }
                 return;
@@ -1651,8 +1684,24 @@ impl<'a> JsExtractor<'a> {
         &self,
         call: Node<'a>,
         func_text: &str,
+        boolean: bool,
         test: &mut TestFn,
     ) -> bool {
+        // `assert(x === x)`: the whole argument compares one expression with itself.
+        if let Some((left, right)) = equality_argument(call, self.src)
+            .filter(|_| boolean)
+            .and_then(|arg| super::self_comparison::equality_sides(arg, self.src))
+        {
+            if super::self_comparison::note(
+                &mut test.equality_operands,
+                left,
+                right,
+                self.anc,
+                self.src,
+            ) {
+                return true;
+            }
+        }
         if let Some(args) = call.child_by_field_name("arguments") {
             let mut cursor = args.walk();
             let arg_nodes: Vec<_> = args
@@ -2360,6 +2409,120 @@ test("weak matchers", () => {
 
         assert_eq!(weak_facts.tests[0].total_asserts, 5);
         assert_eq!(weak_facts.tests[0].strong_asserts, 0);
+    }
+
+    /// Each test's `(total, strong, tautologies)`.
+    fn assert_counts(src: &str) -> Vec<(String, (usize, usize, usize))> {
+        JavaScriptPack
+            .extract("test/calc.test.js", src, &AssertVocabulary::default())
+            .unwrap()
+            .tests
+            .into_iter()
+            .map(|t| (t.name, (t.total_asserts, t.strong_asserts, t.tautologies)))
+            .collect()
+    }
+
+    #[test]
+    fn a_boolean_assert_of_one_equality_is_strong() {
+        let src = r#"
+import assert from 'node:assert';
+test("strict eq", () => { assert(f(3) === 6); });
+test("loose eq", () => { assert(f(3) == 6); });
+test("strict ne", () => { assert(f(3) !== 7); });
+test("loose ne", () => { assert(f(3) != 7); });
+test("ok", () => { assert.ok(f(3) === 6); });
+test("parenthesised", () => { assert(((f(3) === 6))); });
+test("message", () => { assert(f(3) === 6, 'doubles'); });
+test("truthy", () => { assert(f(3)); });
+test("ok truthy", () => { assert.ok(f(3)); });
+test("ordering", () => { assert(f(3) > 5); });
+test("conjunction", () => { assert(f(3) === 6 && g()); });
+test("negated", () => { assert(!(f(3) === 6)); });
+test("second argument", () => { assert(f(3), a === b); });
+test("other callee", () => { check(f(3) === 6); });
+"#;
+        let strong = (1, 1, 0);
+        let weak = (1, 0, 0);
+        let expected = [
+            ("strict eq", strong),
+            ("loose eq", strong),
+            ("strict ne", strong),
+            ("loose ne", strong),
+            ("ok", strong),
+            ("parenthesised", strong),
+            ("message", strong),
+            ("truthy", weak),
+            ("ok truthy", weak),
+            ("ordering", weak),
+            ("conjunction", weak),
+            ("negated", weak),
+            ("second argument", weak),
+            ("other callee", (0, 0, 0)),
+        ];
+        let counts = assert_counts(src);
+        assert_eq!(counts.len(), expected.len());
+        for ((name, got), (want_name, want)) in counts.iter().zip(expected) {
+            assert_eq!((name.as_str(), *got), (want_name, want));
+        }
+    }
+
+    #[test]
+    fn a_boolean_assert_of_one_equality_is_strong_under_every_import_form() {
+        let imports = [
+            "import assert from 'node:assert';",
+            "import assert from 'node:assert/strict';",
+            "import assert from 'assert';",
+            "import * as assert from 'node:assert';",
+            "const assert = require('node:assert/strict');",
+            "import { strict as assert } from 'node:assert';",
+            "import { assert } from 'jsr:@std/assert';",
+        ];
+        for import in imports {
+            let strong = format!("{import}\ntest('t', () => {{ assert(f(3) === 6); }});\n");
+            let weak = format!("{import}\ntest('t', () => {{ assert(f(3)); }});\n");
+            assert_eq!(assert_counts(&strong)[0].1, (1, 1, 0), "{import}");
+            assert_eq!(assert_counts(&weak)[0].1, (1, 0, 0), "{import}");
+        }
+        // Deno's `assertFalse` and `assertExists` are counted as `assert.ok` and are not
+        // read for an equality.
+        let deno = "import { assertFalse, assertExists } from 'jsr:@std/assert';\n\
+                    test('f', () => { assertFalse(a === b); });\n\
+                    test('e', () => { assertExists(a === b); });\n";
+        let counts = assert_counts(deno);
+        assert_eq!((counts[0].1, counts[1].1), ((1, 0, 0), (1, 0, 0)));
+    }
+
+    #[test]
+    fn a_boolean_assert_of_an_expression_compared_with_itself_is_a_tautology() {
+        let src = r#"
+test("same", () => { assert(x === x); });
+test("same ok", () => { assert.ok((x.y == x.y)); });
+test("different", () => { assert(x === y); });
+test("inequality", () => { assert(x !== x); });
+"#;
+        let facts = JavaScriptPack
+            .extract("test/calc.test.js", src, &AssertVocabulary::default())
+            .unwrap();
+        let read: Vec<_> = facts
+            .tests
+            .iter()
+            .map(|t| {
+                (
+                    t.name.as_str(),
+                    t.tautologies,
+                    t.equality_operands.reportable().len(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            read,
+            [
+                ("same", 1, 1),
+                ("same ok", 1, 1),
+                ("different", 0, 0),
+                ("inequality", 0, 0),
+            ]
+        );
     }
 
     #[test]
