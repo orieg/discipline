@@ -1016,10 +1016,9 @@ pub fn inverting_attribute<'a>(base: &TestFn, head: &'a TestFn) -> Option<&'a Ex
         .should_panic
         .as_ref()
         .filter(|e| attribute_expects_assertion_failure(e))?;
-    let had = base
-        .should_panic
-        .as_ref()
-        .is_some_and(attribute_expects_assertion_failure);
+    // An attribute the base test already had, in any form, was edited, not added: a
+    // matcher given up is the widening rule's one finding, not a second one here.
+    let had = base.should_panic.is_some();
     (!had && base.effective_asserts() > 0 && head.effective_asserts() > 0).then_some(added)
 }
 
@@ -8421,8 +8420,9 @@ mod tests {
         // An expectation the base test already had is not new.
         let bare = rust("#[should_panic]\n", asserts);
         assert!(inverting_attribute(&bare, &bare).is_none());
-        // Narrowed to the code's own panic message, then widened back: the widening.
-        assert_eq!(inverting_attribute(&named, &bare).map(|e| e.line), Some(2));
+        // A matcher given up on an attribute the base already had is an edit: it is the
+        // widening rule's finding (`Expected Exception Or Panic Widened`), not this one.
+        assert!(inverting_attribute(&named, &bare).is_none());
         // A base test with no assertion, and a head test left with none.
         let none = rust("", "    f(2);\n");
         assert!(inverting_attribute(&none, &bare).is_none());
