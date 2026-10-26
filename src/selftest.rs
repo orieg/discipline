@@ -159,6 +159,24 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "assertion-reduction: JS/TS assert(a === b) weakened to the truthiness check assert(a) is reported (#862)",
+        || {
+            let test = |check: &str| {
+                format!("import assert from 'node:assert';\n\ntest('f', () => {{\n  {check}\n}});\n")
+            };
+            let base = test("assert(f(3) === 6);");
+            let codes = |head: &str| {
+                helper_change(&[("a.test.js", base.as_str(), test(head).as_str())], "")
+            };
+            let reduced = codes("assert(f(3));")? == ["assertion-reduction/assertions-reduced"]
+                && codes("assert.ok(f(3));")? == ["assertion-reduction/assertions-reduced"];
+            // Controls: the same check in another strong form is not a reduction.
+            let kept = codes("assert.strictEqual(f(3), 6);")?.is_empty()
+                && codes("assert.ok((f(3) !== 7));")?.is_empty();
+            Ok(reduced && kept)
+        },
+    ),
+    (
         "assertion-reduction: a JS/TS .resolves / .rejects matcher the test neither awaits nor returns is not an assertion (#829)",
         || {
             let test = |body: &str| format!("test('f', async () => {{\n  {body}\n}});\n");

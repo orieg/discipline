@@ -126,6 +126,21 @@
       }
     },
     {
+      "name": "js-assert-equality-to-truthy",
+      "base": {
+        "src/calc.js": "export function f(x) { return x * 2; }\n",
+        "test/calc.test.js": "import assert from 'node:assert';\nimport { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    assert(f(3) === 6);\n  });\n  it('zero', () => {\n    assert.strictEqual(f(0), 0);\n  });\n});\n"
+      },
+      "head": {
+        "test/calc.test.js": "import assert from 'node:assert';\nimport { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    assert(f(3));\n  });\n  it('zero', () => {\n    assert.strictEqual(f(0), 0);\n  });\n});\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/assertions-reduced"
+        ]
+      }
+    },
+    {
       "name": "js-callback-assert-never-runs",
       "base": {
         "src/calc.js": "export function f(x) { return x * 2; }\n",
@@ -241,6 +256,21 @@
       "verdict": {
         "caught": [
           "toolchain-config/toolchain-config-weakened"
+        ]
+      }
+    },
+    {
+      "name": "js-matcher-to-truthy",
+      "base": {
+        "src/calc.js": "export function f(x) { return x * 2; }\n",
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(3)).toBe(6);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "head": {
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(3)).toBeTruthy();\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/assertions-reduced"
         ]
       }
     },
