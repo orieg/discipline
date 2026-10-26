@@ -22,6 +22,13 @@ pub struct PresetDefinition {
     pub description: &'static str,
 }
 
+/// The `base-tests` preset's command. libtest prints JUnit only with `-Z unstable-options`,
+/// which a stable toolchain accepts when `RUSTC_BOOTSTRAP` is set; the command runs without
+/// a shell, so the variable is set through `env`. It prints one JUnit document per test
+/// binary.
+pub const BASE_TESTS_COMMAND: &str =
+    "env RUSTC_BOOTSTRAP=1 cargo test -- -Z unstable-options --format=junit";
+
 pub static PRESETS: &[PresetDefinition] = &[
     // 1. Diff-Scoped Mutation Testing
     PresetDefinition {
@@ -331,7 +338,7 @@ pub static PRESETS: &[PresetDefinition] = &[
     PresetDefinition {
         id: "base-tests",
         category: "behavior",
-        default_command: "cargo test -- --format=junit",
+        default_command: BASE_TESTS_COMMAND,
         default_timeout_seconds: 300,
         zero_items_pattern: None,
         forbid_output: &[],

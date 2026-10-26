@@ -4859,6 +4859,32 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "command: base-tests reads every JUnit document of a run, and its default command runs on stable Rust",
+        || {
+            use crate::guards::command::{base_tests_verdict, parse_junit_cases, split_command_line, BaseTestsVerdict};
+            use crate::guards::presets::{resolve_preset, BASE_TESTS_COMMAND};
+            // `cargo test` prints one document per test binary; the failure is in the second.
+            let doc = |case: &str| format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?><testsuites><testsuite name=\"test\">{case}</testsuite></testsuites>\n");
+            let run = [
+                doc("<testcase classname=\"tests\" name=\"it_works\"/>"),
+                doc("<testcase classname=\"integration\" name=\"adds\"><failure type=\"assert\"/></testcase>"),
+                doc(""),
+            ]
+            .concat();
+            let cases = parse_junit_cases(&run);
+            let named = matches!(
+                base_tests_verdict(false, &cases, false),
+                BaseTestsVerdict::Failed(ref f) if f.len() == 1 && f[0].id == "integration::adds"
+            );
+            let argv = split_command_line(BASE_TESTS_COMMAND)?;
+            Ok(cases.len() == 2
+                && named
+                && argv[..3] == ["env", "RUSTC_BOOTSTRAP=1", "cargo"]
+                && argv.windows(2).any(|w| w == ["-Z", "unstable-options"])
+                && resolve_preset("base-tests").is_some_and(|p| p.default_command == BASE_TESTS_COMMAND))
+        },
+    ),
+    (
         "command: base-tests overlays no test inside a source file, and names a changed source that holds one",
         || {
             use crate::guards::command::{base_test_files, inline_test_sources};
