@@ -10,10 +10,19 @@
 //! - an existing function whose base body did something and whose head body is a stub,
 //!   empty, or a bare constant return.
 //!
+//! It also reports a read of whether a test runner is loaded (`"pytest" in sys.modules`,
+//! `process.env.JEST_WORKER_ID`, `cfg!(test)`, `testing.Testing()`) that the change adds
+//! to production code (`Fact::Functions` packs that read them, [`crate::ast::runner_probes`]):
+//! a function can then return what its tests expect only while they run. A probe the base
+//! side held in the same function is not reported again, nor one in a file the runner
+//! loads as a harness. These are held at `warning` until a precision sample says more.
+//!
 //! A pack that does not supply function facts leaves its files named as not analysed.
 
 use super::{Context, GateOutcome, PathFilter};
 use crate::ast::functions::{BodyShape, FunctionFacts};
+use crate::ast::runner_collection::{named_harness, ConfiguredHarness};
+use crate::ast::runner_probes;
 use crate::ast::{default_registry, Fact};
 use crate::config::GateSettings;
 use crate::tokens;
@@ -147,6 +156,8 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
     let registry = default_registry();
     let vocab = super::agent_diff::assert_vocabulary(ctx.config);
     let mut unsupported: Vec<String> = Vec::new();
+    // The files a runner configuration loads around the tests, read once a probe needs it.
+    let mut configured: Option<ConfiguredHarness> = None;
 
     let changed = ctx.git.changed_files()?;
     for (file, pack) in super::ast_changes(
@@ -180,19 +191,22 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
                 continue;
             }
         };
-        let base = match ctx.git.base_content(&file.old_path)? {
+        let (base, base_probes) = match ctx.git.base_content(&file.old_path)? {
             Some(src) => match pack.extract(&file.old_path, &src, &vocab) {
-                Ok(f) => f.functions,
+                Ok(f) => (f.functions, f.runner_probes),
                 Err(_) => {
                     out.notes.push(format!(
                         "`{}`: the base side does not parse; every head-side function is judged as new",
                         file.path
                     ));
-                    Vec::new()
+                    (Vec::new(), Vec::new())
                 }
             },
-            None => Vec::new(),
+            None => (Vec::new(), Vec::new()),
         };
+        // Read before a file in test scope by its name only is judged as production code
+        // below: that is about stubs, and a test path's probes are not production code.
+        let head_probes = std::mem::take(&mut head.runner_probes);
         // A file added in test scope by its name only, with no test that checks.
         let by_name_only =
             super::name_only_scope(&file, &changed, pack, &registry, &vocab.test_paths, &head);
@@ -257,6 +271,59 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
                 (Some(&file.path), Some(f.line)),
                 format!("{} in `{}`.", f.what, file.path),
                 &fix,
+            );
+        }
+        let probes = runner_probes::new_probes(&base_probes, &head_probes);
+        if probes.is_empty() || named_harness(&file.path).is_some() {
+            continue;
+        }
+        let configured = match &mut configured {
+            Some(c) => c,
+            None => {
+                let tracked = ctx.git.tracked_files()?;
+                let reads = crate::gitctx::ReadRecorder::new();
+                let c = ConfiguredHarness::from_tree(reads.head(ctx.git), &tracked);
+                reads.finish()?;
+                configured.insert(c)
+            }
+        };
+        if configured.js_setup.contains_key(&file.path)
+            || configured.pytest_plugins.contains_key(&file.path)
+            || configured.rust_targets.contains_key(&file.path)
+            || configured.rust_modules.contains_key(&file.path)
+        {
+            continue;
+        }
+        let file_name = file.path.rsplit('/').next().unwrap_or(&file.path);
+        let kind = &crate::findings::TEST_RUNNER_PROBE_ADDED;
+        for probe in probes {
+            // The probe's own `path:line` first, then the file by its path or its name.
+            let whole_file = |subject: &str| {
+                ctx.find_whole_file_override(GATE, kind, tokens::ALLOW_STUB, subject)
+            };
+            let lifted = [
+                format!("{}:{}", file.path, probe.line),
+                format!("{file_name}:{}", probe.line),
+            ]
+            .iter()
+            .find_map(|own| ctx.find_override(GATE, kind, tokens::ALLOW_STUB, own))
+            .or_else(|| whole_file(&file.path))
+            .or_else(|| whole_file(file_name));
+            out.lift_or_push(
+                lifted,
+                ctx.overridable(settings.severity().capped_at_warning()),
+                kind,
+                (Some(&file.path), Some(probe.line)),
+                format!(
+                    "{} is added to production code at `{}:{}`: the code can behave one way under its tests and another in use.",
+                    probe.signal.label(),
+                    file.path,
+                    probe.line
+                ),
+                &format!(
+                    "Remove the probe, or justify it on its own line in the PR body or a commit message: `allow-stub: {}:{} <reason>`.",
+                    file.path, probe.line
+                ),
             );
         }
     }

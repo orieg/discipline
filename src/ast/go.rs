@@ -70,6 +70,14 @@ impl LanguagePack for GoPack {
         extractor.visit_root(root);
         extractor.resolve_same_file_helpers();
         GO_PACK.shared_facts(root, &anc, src, path, vocab, &mut extractor.facts);
+        GO_PACK.runner_probes(
+            super::runner_probes::Lang::Go,
+            root,
+            src,
+            path,
+            vocab,
+            &mut extractor.facts,
+        );
         super::bounds::go(root, src, &mut extractor.facts.tests);
         super::expectations::go(root, src, &mut extractor.facts.tests);
         super::expected_exceptions::go(

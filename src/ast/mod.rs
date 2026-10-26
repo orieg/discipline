@@ -61,6 +61,7 @@ pub mod retries;
 pub mod ruby;
 pub mod runner_collection;
 pub mod runner_config;
+pub mod runner_probes;
 #[cfg(feature = "lang-rust")]
 pub mod rust;
 #[cfg(feature = "lang-rust")]
@@ -2076,17 +2077,8 @@ impl PackSpec {
     ) {
         facts.functions = functions::extract(root, anc, src, path, self.functions);
         {
-            // A file matching the shared test-path conventions, the pack's own test-file
-            // convention, or one the repository declares as test scope, is test code
-            // line for line.
-            let whole_file = functions::is_test_file(path, self.own_test_path)
-                || functions::declared_test_path(path, &vocab.test_paths);
-            let test_of = if whole_file {
-                Vec::new()
-            } else {
-                innermost_tests_by_line(&facts.tests, root.end_position().row + 1)
-            };
-            let is_test_line = |l: usize| whole_file || test_of.get(l).copied().flatten().is_some();
+            let test_lines = self.test_lines(root, path, vocab, &facts.tests);
+            let is_test_line = |l: usize| test_lines.holds(l);
             let (swallowed, fallbacks) = handlers::extract_with_constants(
                 root,
                 anc,
@@ -2109,6 +2101,46 @@ impl PackSpec {
             }
         }
         method_checks::count(root, anc, src, facts, self.receiver_calls);
+    }
+
+    /// The lines of the file that are test code: every line of a file matching the
+    /// shared test-path conventions, the pack's own test-file convention, or one the
+    /// repository declares as test scope; otherwise the lines of its tests.
+    pub(crate) fn test_lines(
+        &self,
+        root: tree_sitter::Node,
+        path: &str,
+        vocab: &AssertVocabulary,
+        tests: &[TestFn],
+    ) -> TestLines {
+        let whole_file = functions::is_test_file(path, self.own_test_path)
+            || functions::declared_test_path(path, &vocab.test_paths);
+        let test_of = if whole_file {
+            Vec::new()
+        } else {
+            innermost_tests_by_line(tests, root.end_position().row + 1)
+        };
+        TestLines {
+            whole_file,
+            test_of,
+        }
+    }
+
+    /// The reads of whether a test runner is loaded, outside the file's test code
+    /// ([`runner_probes`]).
+    pub(crate) fn runner_probes(
+        &self,
+        lang: runner_probes::Lang,
+        root: tree_sitter::Node,
+        src: &str,
+        path: &str,
+        vocab: &AssertVocabulary,
+        facts: &mut ParsedFileFacts,
+    ) {
+        let test_lines = self.test_lines(root, path, vocab, &facts.tests);
+        if !test_lines.whole_file {
+            facts.runner_probes = runner_probes::read(lang, root, src, &|l| test_lines.holds(l));
+        }
     }
 
     /// The looped helper calls and equality exits of the file's helpers, and the mock,
@@ -2140,6 +2172,19 @@ impl PackSpec {
     }
 }
 
+/// The lines of a file that are test code ([`PackSpec::test_lines`]).
+pub(crate) struct TestLines {
+    whole_file: bool,
+    /// For each line, the innermost test that holds it.
+    test_of: Vec<Option<usize>>,
+}
+
+impl TestLines {
+    pub(crate) fn holds(&self, line: usize) -> bool {
+        self.whole_file || self.test_of.get(line).copied().flatten().is_some()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ParsedFileFacts {
     pub tests: Vec<TestFn>,
@@ -2167,6 +2212,9 @@ pub struct ParsedFileFacts {
     pub prose: Vec<prose::ProseSpan>,
     /// Testing-effort budgets in configuration positions (`Fact::Budgets`).
     pub budgets: Vec<budgets::BudgetSite>,
+    /// Reads of whether a test runner is loaded, outside test code
+    /// ([`runner_probes`]; the Python, JavaScript/TypeScript, Rust and Go packs).
+    pub runner_probes: Vec<runner_probes::Probe>,
     /// Number of compile-time assertions outside tests (e.g. `const _: () = assert!(...)`, `static_assert`).
     pub compile_time_asserts: usize,
     /// Line of the first compile-time assertion (if any).
@@ -2288,6 +2336,7 @@ impl Default for ParsedFileFacts {
             constant_fallbacks: Vec::new(),
             prose: Vec::new(),
             budgets: Vec::new(),
+            runner_probes: Vec::new(),
             notes: Vec::new(),
             shadowed_tests: Vec::new(),
             import_skips: Vec::new(),

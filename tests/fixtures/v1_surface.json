@@ -1414,6 +1414,7 @@
       "stub-bodies/body-replaced-by-stub",
       "stub-bodies/equality-made-constant",
       "stub-bodies/stub-body-added",
+      "stub-bodies/test-runner-probe-added",
       "suppression-delta/suppression-added",
       "test-budget/fuzz-target-deleted",
       "test-budget/fuzz-target-removed",

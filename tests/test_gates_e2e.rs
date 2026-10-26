@@ -4219,6 +4219,115 @@ fn stub_bodies_reports_added_stubs_and_gutted_bodies_across_languages() {
     );
 }
 
+/// #824: a read of whether a test runner is loaded, added to production code, is
+/// reported at `warning` whatever the gate's severity. Test code, a harness file the
+/// runner loads, a probe the base side already held in the same function, and
+/// `NODE_ENV` are not; a `path:line` directive lifts the finding.
+#[test]
+fn stub_bodies_reports_a_test_runner_probe_added_to_production_code() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "discipline.toml",
+        "[gates.stub-bodies]\nenabled = true\nseverity = \"error\"\n",
+    );
+    repo.write(
+        "src/calc.py",
+        "import sys\n\n\ndef f(x):\n    return x * 2\n",
+    );
+    repo.write(
+        "src/flags.py",
+        "import sys\n\n\ndef under_test():\n    return 'pytest' in sys.modules\n",
+    );
+    repo.write(
+        "web/calc.js",
+        "export function f(x) {\n  return x * 2;\n}\n",
+    );
+    repo.write(
+        "jest.config.js",
+        "module.exports = { setupFiles: ['<rootDir>/setup.js'] };\n",
+    );
+    repo.write("setup.js", "global.ready = true;\n");
+    repo.commit("feat: base");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative controls: the base side's probe, moved within its function; `NODE_ENV`;
+    // a probe in a test file, in a `conftest.py`, and in a set-up file Jest loads.
+    repo.write(
+        "src/flags.py",
+        "import sys\n\n\ndef under_test():\n    loaded = 'pytest' in sys.modules\n    return loaded\n",
+    );
+    repo.write(
+        "web/calc.js",
+        "export function f(x) {\n  if (process.env.NODE_ENV === 'test') return 4;\n  return x * 2;\n}\n",
+    );
+    repo.write(
+        "tests/test_calc.py",
+        "import os\nfrom src.calc import f\n\n\ndef test_f():\n    if os.environ.get('PYTEST_CURRENT_TEST'):\n        assert f(2) == 4\n",
+    );
+    repo.write(
+        "conftest.py",
+        "import os\n\n\ndef pytest_configure(config):\n    if os.environ.get('PYTEST_XDIST_WORKER'):\n        config.option.verbose = 0\n",
+    );
+    repo.write(
+        "setup.js",
+        "if (process.env.JEST_WORKER_ID) {\n  global.ready = true;\n}\n",
+    );
+    repo.commit("refactor: tidy");
+    let quiet = repo.check(&[]);
+    assert!(
+        quiet.titles("stub-bodies").is_empty(),
+        "{:?}",
+        quiet.violations("stub-bodies")
+    );
+
+    // The probe the change adds to production code.
+    repo.write(
+        "src/calc.py",
+        "import sys\n\n\ndef f(x):\n    if 'pytest' in sys.modules:\n        return 4\n    return x * 3\n",
+    );
+    repo.commit("fix: f");
+    let run = repo.check(&[]);
+    let found = run.violations("stub-bodies");
+    assert_eq!(found.len(), 1, "{found:?}");
+    let v = &found[0];
+    assert_eq!(v["code"], "stub-bodies/test-runner-probe-added");
+    assert_eq!(v["severity"], "warning", "held at warning under `error`");
+    assert_eq!(v["file"], "src/calc.py");
+    assert_eq!(v["line"], 5);
+    let message = v["message"].as_str().unwrap();
+    assert!(
+        message.contains("a check of whether `pytest` is loaded")
+            && message.contains("`src/calc.py:5`")
+            && !message.contains("sys.modules"),
+        "{message}"
+    );
+    assert!(
+        v["remediation"]
+            .as_str()
+            .unwrap()
+            .contains("`allow-stub: src/calc.py:5 <reason>`"),
+        "{v}"
+    );
+
+    repo.commit(
+        "docs: explain\n\nallow-stub: src/calc.py:5 the plugin registry is empty under pytest",
+    );
+    let lifted = repo.check(&[]);
+    assert!(
+        lifted.violations("stub-bodies").is_empty(),
+        "{:?}",
+        lifted.violations("stub-bodies")
+    );
+    assert_eq!(
+        lifted.outcome("stub-bodies")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
 /// #492 B3b: the function test-path rule is the shared-or-own superset, so a
 /// gutted body in a file only the shared rule recognises (`examples/`, which the
 /// Go convention does not name) is test code, while the same gutting in a plain
