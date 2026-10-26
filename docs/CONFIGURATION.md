@@ -217,7 +217,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.golden-output.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.golden-output.paths` | list | *(8 entries)* | Committed golden/snapshot globs whose edits require a directive |
 | `gates.golden-output.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
-| `gates.harness-tampering.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.harness-tampering.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.harness-tampering.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.harness-tampering.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.ignored-tests.approved_predicates` | list | `[]` | Conditional ignore predicates (e.g. miri) approved by policy |
