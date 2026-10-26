@@ -711,7 +711,9 @@
         "tests/test_calc.py": "from src.calc import f, g\n\n\ndef check(a, b):\n    try:\n        assert a == b\n    except AssertionError:\n        pass\n\n\ndef test_f():\n    check(f(2), 4)\n\n\ndef test_g():\n    assert g(1) == 2\n"
       },
       "verdict": {
-        "known_miss": "#832"
+        "caught": [
+          "assertion-reduction/assertion-failure-caught"
+        ]
       }
     },
     {

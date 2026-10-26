@@ -20363,6 +20363,70 @@ fn assertion_failure_caught_inside_test_fires_and_accepts_override() {
     assert_eq!(outcome_ov["overrides"].as_array().unwrap().len(), 2);
 }
 
+/// #832: an assertion moved into a same-file helper whose handler swallows its failure is
+/// reported at the assertion's line, naming the helper and the test that calls it.
+#[test]
+fn an_assertion_swallowed_in_a_same_file_helper_is_caught() {
+    const BASE: &str = "from src.calc import f\n\n\ndef test_f():\n    assert f(2) == 4\n";
+    const SWALLOW: &str = "from src.calc import f\n\n\ndef check(a, b):\n    try:\n        assert a == b\n    except AssertionError:\n        pass\n\n\ndef test_f():\n    check(f(2), 4)\n";
+    let run_on = |base: &str, head: &str, body: &str| {
+        let repo = Repo::new();
+        repo.write("src/calc.py", "def f(x):\n    return x * 2\n");
+        repo.commit_base("tests/test_calc.py", base, "test: f");
+        repo.write("tests/test_calc.py", head);
+        repo.commit("test: change");
+        repo.check_with_pr(&[], body)
+    };
+    let codes = |run: &Run| -> Vec<String> {
+        ["assertion-reduction", "vacuous-tests"]
+            .iter()
+            .flat_map(|gate| run.violations(gate))
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    let run = run_on(BASE, SWALLOW, "Fixes #832\n");
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        codes(&run),
+        vec!["assertion-reduction/assertion-failure-caught".to_string()]
+    );
+    let v = &run.violations("assertion-reduction")[0];
+    assert_eq!(v["line"], 6, "{v}");
+    let message = v["message"].as_str().unwrap();
+    assert!(
+        message.contains("Test `test_f`")
+            && message.contains("helper `check`")
+            && message.contains("(line 7)"),
+        "{message}"
+    );
+
+    // Negative control: the helper's handler re-raises.
+    let reraises = SWALLOW.replace("        pass\n", "        raise\n");
+    let run = run_on(BASE, &reraises, "Fixes #832\n");
+    assert_eq!((run.code, codes(&run)), (0, vec![]), "{}", run.stdout);
+
+    // A swallow the helper already had is not new, though the file changed above it.
+    let moved = format!("import os\n{SWALLOW}");
+    let run = run_on(SWALLOW, &moved, "Fixes #832\n");
+    assert_eq!((run.code, codes(&run)), (0, vec![]), "{}", run.stdout);
+
+    // The directive naming the test lifts it.
+    let run = run_on(
+        BASE,
+        SWALLOW,
+        "Fixes #832\n\nallow-assertion-drop: test_f the helper reports instead of failing\n",
+    );
+    assert_eq!((run.code, codes(&run)), (0, vec![]), "{}", run.stdout);
+    assert_eq!(
+        run.outcome("assertion-reduction")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
 #[test]
 fn test_cases_reduced_in_parametrized_test_fires_and_accepts_override() {
     let repo = Repo::new();

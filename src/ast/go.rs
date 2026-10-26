@@ -80,6 +80,9 @@ impl LanguagePack for GoPack {
             &extractor.imports,
         );
         super::caught_assertions::go(root, src, &mut extractor.facts.tests, vocab);
+        super::caught_assertions::through_helpers(root, src, &mut extractor.facts, 1, |helpers| {
+            super::caught_assertions::go(root, src, helpers, vocab)
+        });
         extractor.facts.prose = super::prose::extract(
             root,
             src,

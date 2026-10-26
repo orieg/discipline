@@ -101,6 +101,30 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "assertion-reduction: an assertion moved into a same-file helper that swallows its failure is caught in the calling test (#832)",
+        || {
+            let base = "def test_f():\n    assert f(2) == 4\n";
+            let helper = |handler: &str| {
+                format!("def check(a, b):\n    try:\n        assert a == b\n    except AssertionError:\n        {handler}\n\n\ndef test_f():\n    check(f(2), 4)\n")
+            };
+            let codes = |base: &str, head: &str| {
+                helper_change(&[("tests/test_calc.py", base, head)], "")
+            };
+            let caught = codes(base, &helper("pass"))?
+                == ["assertion-reduction/assertion-failure-caught"];
+            // Controls: a handler that re-raises, and a swallow the helper already had.
+            let reraised = codes(base, &helper("raise"))?.is_empty();
+            let kept = codes(&helper("pass"), &format!("import os\n{}", helper("pass")))?
+                .is_empty();
+            let js = "function check(a, b) {\n  try {\n    expect(a).toBe(b);\n  } catch (e) {}\n}\n\ntest('f', () => {\n  check(f(2), 4);\n});\n";
+            let js_caught = helper_change(
+                &[("a.test.js", "test('f', () => {\n  expect(f(2)).toBe(4);\n});\n", js)],
+                "",
+            )? == ["assertion-reduction/assertion-failure-caught"];
+            Ok(caught && reraised && kept && js_caught)
+        },
+    ),
+    (
         "ast: a handler swallows an assertion failure only when it catches the failure type and nothing looks at the outcome",
         || {
             let caught = |path: &str, src: &str| -> Result<usize> {
