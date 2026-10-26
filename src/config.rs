@@ -1045,7 +1045,7 @@ impl Default for ConfigIntegrityGate {
     }
 }
 
-/// `harness-tampering`: the common keys, off until a repository turns it on.
+/// `harness-tampering`: the common keys, on by default (#833).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HarnessTamperingGate {
@@ -1057,7 +1057,7 @@ pub struct HarnessTamperingGate {
 impl Default for HarnessTamperingGate {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             severity: Severity::Error,
             exempt_paths: Vec::new(),
         }

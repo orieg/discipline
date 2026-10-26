@@ -530,6 +530,21 @@
       }
     },
     {
+      "name": "py-conftest-env-gated-collection-filter",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "tests/conftest.py": "import os\n\n\ndef pytest_collection_modifyitems(config, items):\n    if not os.environ.get(\"RUN_SLOW\"):\n        items[:] = [i for i in items if \"slow\" not in i.nodeid]\n"
+      },
+      "verdict": {
+        "caught": [
+          "harness-tampering/pytest-hook-masks-results"
+        ]
+      }
+    },
+    {
       "name": "py-conftest-exit0",
       "base": {
         "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
@@ -539,7 +554,9 @@
         "tests/conftest.py": "import os\n\ndef pytest_sessionfinish(session, exitstatus):\n    session.exitstatus = 0\n"
       },
       "verdict": {
-        "known_miss": "#833"
+        "caught": [
+          "harness-tampering/pytest-hook-masks-results"
+        ]
       }
     },
     {
@@ -554,6 +571,21 @@
       "enable": [
         "harness-tampering"
       ],
+      "verdict": {
+        "caught": [
+          "harness-tampering/pytest-hook-masks-results"
+        ]
+      }
+    },
+    {
+      "name": "py-conftest-no-tests-collected-rescued",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "tests/conftest.py": "def pytest_sessionfinish(session, exitstatus):\n    if exitstatus == 5:\n        session.exitstatus = 0\n"
+      },
       "verdict": {
         "caught": [
           "harness-tampering/pytest-hook-masks-results"

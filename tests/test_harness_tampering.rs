@@ -816,17 +816,45 @@ fn the_negative_controls_are_enumerated() {
     }
 }
 
-/// The gate is off until a repository turns it on, and a whole-tree run does not
-/// evaluate it: its rule describes a change.
+/// The gate is on by default (#833): the reproduction, a conftest that sets
+/// `session.exitstatus = 0`, blocks with no configuration and no `--enable`. A
+/// repository turns it off in its table, and a whole-tree run does not evaluate it:
+/// its rule describes a change.
 #[test]
-fn the_gate_is_off_by_default_and_not_evaluated_on_a_whole_tree() {
-    let conftest = "def pytest_runtest_logreport(report):\n    report.outcome = \"passed\"\n";
+fn the_gate_is_on_by_default_and_not_evaluated_on_a_whole_tree() {
+    let reproduction =
+        "def pytest_sessionfinish(session, exitstatus):\n    session.exitstatus = 0\n";
+    let default = Repo::new();
+    default.write("tests/conftest.py", reproduction);
+    default.commit("test: a conftest");
+    let run = check(&default);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.outcome(GATE)["enabled"], true);
+    assert_eq!(
+        findings(&run),
+        vec![(
+            "tests/conftest.py".to_string(),
+            2,
+            PYTEST.to_string(),
+            "error".to_string()
+        )],
+        "{}",
+        run.stdout
+    );
+
     let off = Repo::new();
-    off.write("conftest.py", conftest);
-    off.commit("feat: a conftest");
+    off.commit_base(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}[gates.{GATE}]\nenabled = false\n"),
+        "chore: turn the gate off",
+    );
+    off.write("tests/conftest.py", reproduction);
+    off.commit("test: a conftest");
     let run = check(&off);
     assert_eq!(run.outcome(GATE)["enabled"], false);
     assert!(run.violations(GATE).is_empty());
+
+    let conftest = "def pytest_runtest_logreport(report):\n    report.outcome = \"passed\"\n";
 
     let on = repo_with("");
     on.write("conftest.py", conftest);

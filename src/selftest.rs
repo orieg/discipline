@@ -1381,6 +1381,21 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "harness-tampering: the gate is on at error by default, and turning it off is a weakening",
+        || {
+            let base = DisciplineConfig::default_for_repo("t");
+            let gate = &base.gates.harness_tampering;
+            let mut off = base.clone();
+            off.gates.harness_tampering.enabled = false;
+            let found = diff_configs(&base, &off)?;
+            Ok(gate.enabled
+                && gate.severity == crate::config::Severity::Error
+                && found.len() == 1
+                && found[0].gate == "harness-tampering"
+                && diff_configs(&off, &base)?.is_empty())
+        },
+    ),
+    (
         "mocks: an interaction check counts as a mock assertion, an equality check does not",
         || {
             let v = AssertVocabulary::default();
