@@ -10011,6 +10011,52 @@ fn javascript_unawaited_promise_matchers_are_not_assertions() {
     }
 }
 
+/// `assert(a === b)` checks a value, as `assert.strictEqual(a, b)` does: weakening it to
+/// the truthiness check `assert(a)` is a reduction (#862).
+#[test]
+fn javascript_boolean_assert_of_an_equality_is_strong() {
+    const BASE: &str = "import assert from 'node:assert';\nimport { f } from '../src/calc.js';\n\ntest('doubles', () => {\n  const v = f(3);\n  assert(v === 6);\n});\n";
+    let changed = |head: &str| {
+        let repo = Repo::new();
+        repo.write("src/calc.js", "export function f(x) { return x * 2; }\n");
+        repo.commit_base("test/calc.test.js", BASE, "test: calc");
+        repo.write("test/calc.test.js", &BASE.replace("assert(v === 6);", head));
+        repo.commit("test: change");
+        repo.check(&[])
+    };
+    let codes = |run: &Run| -> Vec<String> {
+        run.violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    for weakened in ["assert(v);", "assert.ok(v);", "assert(v > 5);"] {
+        let run = changed(weakened);
+        assert_eq!(run.code, 1, "{weakened}: {}", run.stdout);
+        assert_eq!(
+            codes(&run),
+            ["assertion-reduction/assertions-reduced"],
+            "{weakened}"
+        );
+    }
+    // The equality compares the value with itself: it can no longer fail.
+    let run = changed("assert(v === v);");
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert_eq!(codes(&run), ["assertion-reduction/assertions-reduced"]);
+
+    // Controls: another strong form of the same check is not a reduction.
+    for kept in [
+        "assert.strictEqual(v, 6);",
+        "assert.ok(v !== 7);",
+        "assert((v == 6), 'doubles');",
+    ] {
+        let run = changed(kept);
+        assert_eq!(run.code, 0, "{kept}: {}", run.stdout);
+        assert!(codes(&run).is_empty(), "{kept}: {}", run.stdout);
+    }
+}
+
 #[test]
 fn javascript_ignored_tests_and_skips_detected() {
     let repo = Repo::new();

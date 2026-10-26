@@ -504,7 +504,7 @@ pub fn javascript(
                     let op = n
                         .child_by_field_name("operator")
                         .map_or("", |o| text(o, src));
-                    if matches!(op, "===" | "==" | "!==" | "!=") {
+                    if super::javascript::EQUALITY_OPERATORS.contains(&op) {
                         for side in ["left", "right"] {
                             if let Some(s) = n
                                 .child_by_field_name(side)
