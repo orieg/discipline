@@ -227,6 +227,184 @@ fn is_expect_receiver(func: Node, src: &[u8]) -> bool {
     }
 }
 
+/// The members of an assertion chain that make its matcher return a promise: Jest and
+/// Vitest `.resolves` / `.rejects`, chai-as-promised `.eventually`.
+const PROMISE_CHAIN_MEMBERS: &[&str] = &["resolves", "rejects", "eventually"];
+
+/// The `node:assert` calls that return a promise. Deno's `assertRejects` is counted as
+/// `assert.rejects` ([`std_assert_names`]).
+const PROMISE_ASSERTS: &[&str] = &["assert.rejects", "assert.doesNotReject"];
+
+/// Whether the matcher `func` of an `expect` chain is reached through a member that
+/// makes it return a promise ([`PROMISE_CHAIN_MEMBERS`]): `expect(p).resolves.toBe(1)`,
+/// `expect(p).rejects.not.toThrow()`, `expect(p).to.eventually.equal(1)`.
+fn is_promise_chain(func: Node, src: &[u8]) -> bool {
+    let mut cur = func.child_by_field_name("object");
+    while let Some(node) = cur.filter(|n| n.kind() == "member_expression") {
+        if node
+            .child_by_field_name("property")
+            .and_then(|p| p.utf8_text(src).ok())
+            .is_some_and(|p| PROMISE_CHAIN_MEMBERS.contains(&p))
+        {
+            return true;
+        }
+        cur = node.child_by_field_name("object");
+    }
+    false
+}
+
+/// Whether the test waits on the promise `node` evaluates to (#829): `node` is the
+/// operand of `await`, the value of a `return`, the expression body of an arrow function,
+/// an element of the array passed to a `Promise.all` the test waits on, or the receiver of
+/// a `.then(onFulfilled)` / `.catch(..)` / `.finally(..)` the test waits on (whether a
+/// `.catch` handler swallows the rejection is `caught_assertions`' question). A promise
+/// stored in a variable is waited on when the function that declares it waits on the
+/// variable in one of these ways. Anything else (a statement of its own, `void`,
+/// `.then(f, onRejected)`, `Promise.allSettled`, an element of an array built for later)
+/// lets the test finish before the promise settles, so its rejection cannot fail the test.
+pub(super) fn settles<'t>(node: Node<'t>, anc: &Ancestry<'t>, src: &[u8]) -> bool {
+    settles_from(node, anc, src, true)
+}
+
+fn settles_from<'t>(node: Node<'t>, anc: &Ancestry<'t>, src: &[u8], follow: bool) -> bool {
+    let text = |n: Node| n.utf8_text(src).unwrap_or("");
+    let mut cur = node;
+    while let Some(parent) = anc.parent(cur) {
+        cur = match parent.kind() {
+            "parenthesized_expression" => parent,
+            "await_expression" | "return_statement" => return true,
+            "arrow_function" => return parent.child_by_field_name("body") == Some(cur),
+            "member_expression" => {
+                let call = anc.parent(parent).filter(|c| {
+                    c.kind() == "call_expression"
+                        && c.child_by_field_name("function") == Some(parent)
+                });
+                let passes_rejection = |call: Node| {
+                    let arguments = call
+                        .child_by_field_name("arguments")
+                        .map_or(0, |a| a.named_child_count());
+                    match parent.child_by_field_name("property").map(text) {
+                        Some("catch" | "finally") => true,
+                        Some("then") => arguments <= 1,
+                        _ => false,
+                    }
+                };
+                match call {
+                    Some(call)
+                        if parent.child_by_field_name("object") == Some(cur)
+                            && passes_rejection(call) =>
+                    {
+                        call
+                    }
+                    _ => return false,
+                }
+            }
+            "array" => {
+                let call = anc
+                    .parent(parent)
+                    .filter(|a| a.kind() == "arguments" && a.named_child(0) == Some(parent))
+                    .and_then(|a| anc.parent(a))
+                    .filter(|c| {
+                        c.kind() == "call_expression"
+                            && c.child_by_field_name("function")
+                                .is_some_and(|f| text(f) == "Promise.all")
+                    });
+                match call {
+                    Some(call) => call,
+                    None => return false,
+                }
+            }
+            "variable_declarator" if follow && parent.child_by_field_name("value") == Some(cur) => {
+                return binding_settles(parent, anc, src);
+            }
+            _ => return false,
+        };
+    }
+    false
+}
+
+/// `const p = expect(x).resolves.toBe(1);`: whether the function the declaration is in
+/// waits on `p` ([`settles`]), outside the functions written in it.
+fn binding_settles<'t>(declarator: Node<'t>, anc: &Ancestry<'t>, src: &[u8]) -> bool {
+    let Some(name) = declarator
+        .child_by_field_name("name")
+        .filter(|n| n.kind() == "identifier")
+    else {
+        return false;
+    };
+    let mut scope = declarator;
+    while let Some(parent) = anc.parent(scope) {
+        scope = parent;
+        if JS_FUNCTION_KINDS.contains(&scope.kind()) {
+            break;
+        }
+    }
+    let body = scope.child_by_field_name("body").unwrap_or(scope);
+    let mut waited = false;
+    super::bounds::walk(body, &mut |n| {
+        if waited || (n != body && JS_FUNCTION_KINDS.contains(&n.kind())) {
+            return false;
+        }
+        if n.kind() == "identifier"
+            && n != name
+            && n.utf8_text(src) == name.utf8_text(src)
+            && settles_from(n, anc, src, false)
+        {
+            waited = true;
+        }
+        !waited
+    });
+    waited
+}
+
+/// Whether `call` is an assertion that returns a promise the test does not wait on
+/// ([`settles`]): an `expect` chain through `.resolves` / `.rejects` / `.eventually`
+/// (asked of its matcher call or of its `expect(..)` receiver), or `assert.rejects` /
+/// `assert.doesNotReject` (Deno's `assertRejects` through `std_asserts`). Such an
+/// assertion cannot fail the test (#829).
+pub(super) fn unsettled_promise_assertion<'t>(
+    call: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &[u8],
+    std_asserts: &[(String, &'static str)],
+) -> bool {
+    let Some(func) = call.child_by_field_name("function") else {
+        return false;
+    };
+    let name = func.utf8_text(src).unwrap_or("");
+    let counted_as = std_asserts
+        .iter()
+        .find(|(bound, _)| func.kind() == "identifier" && bound == name)
+        .map_or(name, |(_, counted_as)| counted_as);
+    if PROMISE_ASSERTS.contains(&counted_as) {
+        return !settles(call, anc, src);
+    }
+    // From the `expect(..)` receiver up to the matcher call of its chain.
+    let mut matcher = call;
+    if is_expect_receiver(func, src) {
+        let mut chain = call;
+        while let Some(member) = anc
+            .parent(chain)
+            .filter(|p| p.kind() == "member_expression")
+            .filter(|p| p.child_by_field_name("object") == Some(chain))
+        {
+            chain = member;
+        }
+        match anc.parent(chain).filter(|c| {
+            c.kind() == "call_expression" && c.child_by_field_name("function") == Some(chain)
+        }) {
+            Some(call) if chain != matcher => matcher = call,
+            _ => return false,
+        }
+    }
+    matcher
+        .child_by_field_name("function")
+        .filter(|f| f.kind() == "member_expression")
+        .is_some_and(|f| {
+            is_expect_chain_node(f, src) && is_promise_chain(f, src) && !settles(matcher, anc, src)
+        })
+}
+
 /// The node kinds under a callee that are not the names of its chain.
 const CALLEE_NOT_NAMES: &[&str] = &["arguments", "template_string", "string", "comment"];
 
@@ -1311,6 +1489,10 @@ impl<'a> JsExtractor<'a> {
                     let prop_name = self.text(prop);
                     let class = classify_matcher(prop_name);
                     if class != MatcherClass::Unknown || is_matcher(prop_name) {
+                        // A promise the test does not wait on settles after it (#829).
+                        if is_promise_chain(func, self.src) && !settles(call, self.anc, self.src) {
+                            return;
+                        }
                         test.total_asserts += 1;
                         if class == MatcherClass::Strong {
                             test.strong_asserts += 1;
@@ -1336,6 +1518,9 @@ impl<'a> JsExtractor<'a> {
 
             // assert / assert.* calls
             if func_text == "assert" || func_text.starts_with("assert.") {
+                if PROMISE_ASSERTS.contains(&func_text) && !settles(call, self.anc, self.src) {
+                    return;
+                }
                 test.total_asserts += 1;
                 if self.is_strong_assert_fn(func_text) {
                     test.strong_asserts += 1;
@@ -2751,5 +2936,135 @@ test('other receiver', async () => {
         assert!(test("poll without matcher").is_vacuous());
         assert_eq!(test("other receiver").total_asserts, 0);
         assert!(test("other receiver").is_vacuous());
+    }
+
+    /// What a promise matcher counts for: `(total_asserts, effective_asserts, expected
+    /// exceptions)` of each test of `src`, by name.
+    fn promise_counts(src: &str) -> Vec<(String, (usize, usize, usize))> {
+        JavaScriptPack
+            .extract("tests/p.test.js", src, &AssertVocabulary::default())
+            .unwrap()
+            .tests
+            .iter()
+            .map(|t| {
+                (
+                    t.name.clone(),
+                    (
+                        t.total_asserts,
+                        t.effective_asserts(),
+                        t.expected_exceptions.len(),
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    /// A `.resolves` / `.rejects` / `.eventually` matcher and `assert.rejects` return a
+    /// promise: it is an assertion only when the test waits on it (#829).
+    #[test]
+    fn a_promise_matcher_counts_only_when_the_test_waits_on_it() {
+        let read = |body: &str| {
+            let src = format!("test('t', async () => {{\n  {body}\n}});\n");
+            promise_counts(&src)[0].1 .0
+        };
+        // Positive controls: the test finishes before the promise settles.
+        for body in [
+            "expect(p).resolves.toBe(1);",
+            "expect(p).rejects.toThrow('y');",
+            "expect(p).resolves.not.toBe(1);",
+            "expect(p).rejects.not.toThrow();",
+            "void expect(p).resolves.toBe(1);",
+            "expect(p).to.eventually.equal(1);",
+            "assert.rejects(p);",
+            "assert.doesNotReject(p);",
+            "Promise.all([expect(p).resolves.toBe(1)]);",
+            "await Promise.allSettled([expect(p).resolves.toBe(1)]);",
+            "await Promise.race([expect(p).resolves.toBe(1)]);",
+            "await expect(p).resolves.toBe(1).then(f, g);",
+            "const q = expect(p).resolves.toBe(1);",
+            "const q = expect(p).resolves.toBe(1);\n  setTimeout(async () => { await q; });",
+            "[p].forEach((x) => { expect(x).resolves.toBe(1); });",
+            "const all = [expect(p).resolves.toBe(1)];\n  await Promise.all(all);",
+        ] {
+            assert_eq!(read(body), 0, "{body}");
+        }
+        // Negative controls: awaited, returned, an arrow body, inside an awaited or
+        // returned `Promise.all`, through `.then(f)` / `.catch(f)` / `.finally(f)`, or a
+        // variable the test waits on.
+        for (body, want) in [
+            ("await expect(p).resolves.toBe(1);", 1),
+            ("return expect(p).rejects.toThrow('y');", 1),
+            ("await (expect(p).resolves.toBe(1));", 1),
+            ("await expect(p).to.eventually.equal(1);", 1),
+            ("await assert.rejects(p);", 1),
+            ("return assert.doesNotReject(p);", 1),
+            (
+                "await Promise.all([expect(p).resolves.toBe(1), expect(q).rejects.toThrow()]);",
+                2,
+            ),
+            ("return Promise.all([expect(p).resolves.toBe(1)]);", 1),
+            ("await expect(p).resolves.toBe(1).then(() => done());", 1),
+            ("return expect(p).resolves.toBe(1).finally(cleanup);", 1),
+            // Whether the handler swallows the rejection is the caught-assertion rule's.
+            ("await expect(p).resolves.toBe(1).catch(() => {});", 1),
+            ("const q = expect(p).resolves.toBe(1);\n  await q;", 1),
+            ("const q = expect(p).resolves.toBe(1);\n  return q;", 1),
+            (
+                "const a = expect(p).resolves.toBe(1);\n  const b = expect(q).rejects.toThrow();\n  await Promise.all([a, b]);",
+                2,
+            ),
+            ("[p].map((x) => expect(x).resolves.toBe(1));", 1),
+            // A matcher that returns no promise is unchanged.
+            ("expect(f(2)).toBe(4);", 1),
+            ("assert.equal(f(2), 4);", 1),
+            ("assert.throws(() => f());", 1),
+        ] {
+            assert_eq!(read(body), want, "{body}");
+        }
+        // The arrow function's expression body is the promise the runner waits on.
+        assert_eq!(
+            promise_counts("it('t', () => expect(p).resolves.toBe(1));\n")[0]
+                .1
+                 .0,
+            1
+        );
+        assert_eq!(
+            promise_counts("it('t', () => { expect(p).resolves.toBe(1); });\n")[0]
+                .1
+                 .0,
+            0
+        );
+    }
+
+    #[test]
+    fn deno_assert_rejects_counts_only_when_the_test_waits_on_it() {
+        let read = |body: &str| {
+            promise_counts(&format!(
+                "import {{ assertRejects }} from 'jsr:@std/assert';\nDeno.test('t', async () => {{\n  {body}\n}});\n"
+            ))[0]
+                .1
+        };
+        // The expectation of a rejection is gone with the assertion.
+        assert_eq!(read("assertRejects(() => f());"), (0, 0, 0));
+        assert_eq!(read("await assertRejects(() => f());"), (1, 1, 1));
+    }
+
+    /// An unawaited `.rejects.toThrow(..)` expects no exception, so a test whose only
+    /// check it is reads as vacuous; one inside a swallowing `try` is not taken out of the
+    /// count a second time as a caught assertion.
+    #[test]
+    fn an_unawaited_promise_matcher_expects_nothing_and_is_not_caught_twice() {
+        let counts = promise_counts(
+            "test('unawaited', () => {\n  expect(Promise.reject(new Error('x'))).rejects.toThrow('y');\n});\n\
+             test('awaited', async () => {\n  await expect(Promise.reject(new Error('x'))).rejects.toThrow('y');\n});\n\
+             test('caught', () => {\n  expect(f(2)).toBe(4);\n  try {\n    expect(p).resolves.toBe(5);\n  } catch (e) {}\n});\n\
+             test('caught awaited', async () => {\n  expect(f(2)).toBe(4);\n  try {\n    await expect(p).resolves.toBe(5);\n  } catch (e) {}\n});\n",
+        );
+        let got = |name: &str| counts.iter().find(|(n, _)| n == name).unwrap().1;
+        assert_eq!(got("unawaited"), (0, 0, 0));
+        assert_eq!(got("awaited"), (1, 1, 1));
+        assert_eq!(got("caught"), (1, 1, 0));
+        // Negative control: an awaited matcher in the swallowing `try` is caught.
+        assert_eq!(got("caught awaited"), (2, 1, 0));
     }
 }

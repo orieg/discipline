@@ -159,6 +159,31 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "assertion-reduction: a JS/TS .resolves / .rejects matcher the test neither awaits nor returns is not an assertion (#829)",
+        || {
+            let test = |body: &str| format!("test('f', async () => {{\n  {body}\n}});\n");
+            let base = test("expect(f(2)).toBe(4);");
+            let codes = |head: &str| {
+                helper_change(&[("a.test.js", base.as_str(), test(head).as_str())], "")
+            };
+            let reduced = codes("expect(Promise.resolve(f(2))).resolves.toBe(5);")?
+                == ["assertion-reduction/assertions-reduced"];
+            // Controls: awaited, and inside an awaited `Promise.all`, the chain is a check.
+            let awaited = codes("await expect(Promise.resolve(f(2))).resolves.toBe(4);")?
+                .is_empty();
+            let all = codes("await Promise.all([expect(Promise.resolve(f(2))).resolves.toBe(4)]);")?
+                .is_empty();
+            let vacuous = |body: &str| -> Result<bool> {
+                Ok(facts("a.test.js", &test(body))?.tests[0].is_vacuous())
+            };
+            Ok(reduced
+                && awaited
+                && all
+                && vacuous("expect(Promise.reject(new Error('x'))).rejects.toThrow('y');")?
+                && !vacuous("return expect(Promise.reject(new Error('x'))).rejects.toThrow('x');")?)
+        },
+    ),
+    (
         "ast: a handler swallows an assertion failure only when it catches the failure type and nothing looks at the outcome",
         || {
             let caught = |path: &str, src: &str| -> Result<usize> {
