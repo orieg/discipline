@@ -1291,6 +1291,15 @@ impl GitCtx {
             .is_some())
     }
 
+    /// Whether `path` is a submodule pointer (a gitlink, mode `0o160000`) in the index.
+    pub fn is_gitlink(&self, path: &str) -> Result<bool> {
+        Ok(self
+            .repo
+            .index()?
+            .get_path(std::path::Path::new(path), 0)
+            .is_some_and(|e| e.mode == 0o160000))
+    }
+
     pub fn is_symlink(&self, path: &str) -> Result<bool> {
         Ok(self
             .repo

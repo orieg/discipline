@@ -61,7 +61,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`version-lockstep`](#version-lockstep) | integrity | **shipped** | any | version declarations across headers, manifests, and files must remain in lockstep |
 | [`gate-command-lint`](#gate-command-lint) | agent-guard | **shipped** | markdown, shell | reject vacuous, masked, or inverted verification commands in plan files |
 | [`mechanism-sections`](#mechanism-sections) | hygiene | **shipped** | markdown | require (inferred) or (verified: <target>) evidence tags in root cause sections |
-| [`citation-anchors`](#citation-anchors) | hygiene | **shipped** | markdown, any | verify path:line@sha citations against quoted text and git history |
+| [`citation-anchors`](#citation-anchors) | hygiene | **shipped** | markdown, any | verify path:line@sha citations against quoted text and git history, and relative Markdown links against the tree |
 | [`claim-labels`](#claim-labels) | hygiene | **shipped** | markdown, any | require RUN or READ labels on verification claims in PR bodies, commits, and Markdown |
 <!-- /generated -->
 
@@ -206,6 +206,7 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `citation-anchors/unanchored-citation` | Unanchored Citation |
 | `citation-anchors/tracker-title-mismatch` | Tracker Title Mismatch |
 | `citation-anchors/quote-too-short` | Quoted Text Too Short |
+| `citation-anchors/link-target-missing` | Link Target Missing |
 | `suppression-delta/suppression-added` | Suppression Added |
 | `provenance-tags/table-numerics-unprovenanced` | Unprovenanced Table Numerics |
 | `provenance-tags/mechanism-claim-without-evidence` | Mechanism Claim Without Evidence |
@@ -1386,9 +1387,14 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Quoted text with fewer than `min_quote_chars` non-whitespace characters (default 8), matching or not (`quote-too-short`): a quote such as `"{"` is contained in almost any line, so it anchors nothing. `min_quote_chars = 0` turns the minimum off.
   - Unanchored citations (`path:line` without commit or quoted text) per `unanchored_citations` mode (`unanchored-citation`).
   - With `verify_tracker_titles`, a `#<n> ("<title>")` reference whose issue on the forge has another title, or does not exist (`tracker-title-mismatch`). The title is read from the forge's REST API. Offline (no forge, or `DISCIPLINE_NO_NETWORK` set to anything but `0` or `false`), each reference is a note, or with `require_online = true` the run cannot check (exit 2).
+  - A relative Markdown link whose target the head side does not hold (`link-target-missing`): on the added lines of a changed `.md` or `.markdown` file (every line with `diff_only = false`), an inline link `[text](CONFIGURATION.md)`, with or without a `"title"` after the target, an image `![alt](CONFIGURATION.md)`, or a reference definition `[label]: CONFIGURATION.md`. The target is resolved against the document's directory after dropping `?query` and `#fragment` and decoding percent-encoding; it must be a tracked file, or a directory holding one (a target ending in `/` must be a directory), compared byte for byte, so `Guide.md` does not match `guide.md`. A target whose `..` segments climb above the repository root is reported too. Not checked: a target with a scheme (`https:`, `mailto:`, any `name:`), an absolute (`/x`) or protocol-relative (`//host`) path, a same-page anchor (`#x`), a target holding template syntax (`{{`, `{%`, `<%`, `${`), and a target through a symlink or into a submodule. The reader is line-based (there is no Markdown grammar among the parsers): fenced code blocks, indented code blocks after a blank line outside a list, code spans and HTML comments are skipped. Enabling `citation-anchors` turns this check on; no directive lifts it: correct the link, add the target, or exempt the document with `exempt_paths`. A site generator that resolves an extension-less link (`page` to `page.md`) does not follow this reading, so its documents belong in `exempt_paths`.
 - **What it does NOT catch:**
   - Whether the cited line supports the claim made about it: the quote is checked against the line, not the prose around the citation.
   - A quote containing a `"` or `'`, which the citation syntax cannot carry; such a citation is not recognised as anchored.
+  - Whether a link's `#fragment` names a heading of its target, or a line that exists (`#L12`): only the path is resolved.
+  - A link written across two lines, a reference definition whose target is on the next line, an HTML link (`<a href>`, `<img src>`), and an autolink (`<https://...>`, which always has a scheme).
+  - A link on a line the change did not touch whose target the change deletes or renames (with `diff_only`, the default).
+  - Links in the pull-request body (no base path to resolve against) and in files other than `.md` / `.markdown` (`.mdx`, `.rst`, comments in code).
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `diff_only`, `unanchored_citations`, `verify_tracker_titles`, `require_online`, `min_quote_chars`.
 
 #### `claim-labels`

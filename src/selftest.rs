@@ -10184,6 +10184,29 @@ proptest! {
         },
     ),
     (
+        "citation-anchors: a relative Markdown link to a path the head tree lacks, or above its root, is reported; an existing file, a URL, an anchor and a fenced link are not",
+        || {
+            use crate::guards::citation_anchors::links::{
+                extract_markdown_links, resolve_link_target, HeadTree, LinkResolution,
+            };
+            let doc = "[guide](guide.md) [api](api.md#use) ![img](../img/a%20b.png)\n\
+                       [ref]: ../../up.md\n\
+                       [web](https://example.com/x.md) [top](#top)\n\
+                       ```\n[code](code.md)\n```\n";
+            let tree = HeadTree::new(["docs/guide.md".to_string(), "img/a b.png".to_string()]);
+            let mut verdicts = Vec::new();
+            for link in extract_markdown_links(doc) {
+                verdicts.push(match resolve_link_target("docs/index.md", &link.target) {
+                    LinkResolution::NotChecked => "skip",
+                    LinkResolution::OutsideRepository => "outside",
+                    LinkResolution::Path { path, directory } if tree.holds(&path, directory) => "ok",
+                    LinkResolution::Path { .. } => "missing",
+                });
+            }
+            Ok(verdicts == ["ok", "missing", "ok", "outside", "skip", "skip"])
+        },
+    ),
+    (
         "gate-command-lint: extracts declared gates from fences and list items",
         || {
             use crate::guards::gate_command_lint::extract_declared_gates;
