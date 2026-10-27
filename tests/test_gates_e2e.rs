@@ -12277,6 +12277,102 @@ fn command_preset_cargo_mutants_count_ending_in_zero_is_not_zero_items() {
         .contains(&"Zero Items Selected Or Executed".to_string()));
 }
 
+/// A `cargo` that answers as `cargo mutants --in-diff <file>` must be called: it fails unless
+/// the argument after `--in-diff` is a readable file holding the change's diff (the `b/`
+/// side of `src/lib.rs` and its added line), and logs the argument it was given to `log`.
+#[cfg(unix)]
+fn in_diff_cargo(log: &std::path::Path) -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$3\" >> '{}'\nif [ \"$1\" != mutants ] || [ \"$2\" != --in-diff ] || [ ! -r \"$3\" ]; then\n  echo \"error: --in-diff needs a readable diff file, got '$3'\" >&2; exit 2\nfi\nif ! grep -q '^+++ b/src/lib.rs$' \"$3\" || ! grep -qx '+// mutated' \"$3\"; then\n  echo 'error: the diff does not hold the change' >&2; exit 2\nfi\necho '1 mutants tested in 1s: 1 caught'\n",
+        log.display()
+    );
+    let path = dir.path().join("cargo");
+    std::fs::write(&path, script).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    dir
+}
+
+/// The `cargo-mutants` preset's own command is given the change's diff (#844): the file
+/// named after `--in-diff` holds it, under a plain run and under `--staged`, lies outside
+/// the working tree and is gone after the run. The control is the previous default, which
+/// names no file and fails.
+#[cfg(unix)]
+#[test]
+fn command_preset_cargo_mutants_is_given_the_change_diff_file() {
+    let setup = |extra: &str| {
+        let repo = Repo::new();
+        repo.commit_base(
+            "discipline.toml",
+            &format!(
+                "{CONFIG_HEAD}\n[gates.command]\nenabled = true\npreset = \"cargo-mutants\"\n{extra}"
+            ),
+            "ci: configure cargo-mutants",
+        );
+        repo.write("src/lib.rs", &format!("{GOOD_LIB}// mutated\n"));
+        repo
+    };
+    let logs = tempfile::tempdir().unwrap();
+    let log = logs.path().join("in-diff.log");
+    let cargo = in_diff_cargo(&log);
+    let path = format!(
+        "{}:{}",
+        cargo.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let given = || {
+        let text = std::fs::read_to_string(&log).unwrap();
+        std::fs::remove_file(&log).unwrap();
+        text.lines().map(str::to_string).collect::<Vec<_>>()
+    };
+
+    let repo = setup("");
+    repo.commit("chore: touch the library");
+    let run = repo.run(
+        &["check", "--format", "json", "--base", "main"],
+        &[("PATH", path.as_str())],
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.outcome("command")["examined"], 1);
+    assert!(run.violations("command").is_empty());
+    let files = given();
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert!(files[0].ends_with(".diff"), "{files:?}");
+    assert!(
+        !std::path::Path::new(&files[0]).starts_with(repo.path()),
+        "{files:?}"
+    );
+    assert!(!std::path::Path::new(&files[0]).exists(), "{files:?}");
+    assert_eq!(repo.git_output(&["status", "--porcelain"]), "");
+
+    // `--staged`: the diff is the index against HEAD.
+    let staged = setup("");
+    staged.git(&["add", "src/lib.rs"]);
+    let run = staged.run(
+        &["check", "--format", "json", "--staged"],
+        &[("PATH", path.as_str())],
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.violations("command").is_empty());
+    let files = given();
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert!(!std::path::Path::new(&files[0]).exists(), "{files:?}");
+
+    // Control: the previous default names no diff file, and the same `cargo` refuses it.
+    let previous = setup("command = \"cargo mutants --in-diff\"\n");
+    previous.commit("chore: touch the library");
+    let run = previous.run(
+        &["check", "--format", "json", "--base", "main"],
+        &[("PATH", path.as_str())],
+    );
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let violations = run.violations("command");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(violations[0]["code"], "command/command-failed");
+    assert_eq!(given(), [""]);
+}
+
 #[test]
 fn command_preset_loom_zero_tests_guard_and_pass() {
     let repo = Repo::new();
