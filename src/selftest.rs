@@ -9682,6 +9682,21 @@ smoke_cost::set_contains
         },
     ),
     (
+        "pr-checklist: a test claim written as a bullet or sentence is reconciled against the diff",
+        || {
+            use crate::guards::pr_checklist::find_unsupported_prose_test_claims;
+            let bullet = "Fixes the doubling bug.\n\n- Added regression tests for negative inputs\n";
+            let sentence = "Fixes the doubling bug. I added regression tests for negative inputs.\n";
+            let negated = "- No tests added: behaviour is unchanged\n- Will add tests in a follow-up\n- [x] Added tests\n";
+            Ok(
+                find_unsupported_prose_test_claims(bullet, false).claims.len() == 1
+                    && find_unsupported_prose_test_claims(sentence, false).claims.len() == 1
+                    && find_unsupported_prose_test_claims(bullet, true).claims.is_empty()
+                    && find_unsupported_prose_test_claims(negated, false).claims.is_empty(),
+            )
+        },
+    ),
+    (
         "pr-checklist: a test function added or extended in any file backs a test claim",
         || {
             use crate::guards::pr_checklist::added_or_extended_tests;
