@@ -42,7 +42,7 @@ inputs:
     required: false
     default: 'false'
   fail_on_overrides:
-    description: 'Treat applied overrides as failures (requires human sign-off).'
+    description: 'Treat the overrides a change writes as failures (requires human sign-off); inline markers already in the tree are not counted.'
     required: false
     default: 'false'
   advisory:

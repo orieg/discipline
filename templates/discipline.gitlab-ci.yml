@@ -32,7 +32,7 @@ spec:
     fail_on_overrides:
       default: false
       type: boolean
-      description: "When true, exit non-zero if any override directives were applied"
+      description: "When true, exit non-zero if the change applies an override it writes (a directive, or an inline marker on a line it adds or modifies)"
     test_report:
       default: ""
       description: "Path to test report XML file relative to repo root (JUnit XML) for test-floor identity ratcheting"

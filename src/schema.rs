@@ -176,7 +176,7 @@ pub fn generate_schema() -> Value {
                     },
                     "fail_on_overrides": {
                         "type": "boolean",
-                        "description": "Treat applied overrides as failures requiring human sign-off (default: false)"
+                        "description": "Treat the overrides a change writes as failures requiring human sign-off: every PR-body / commit-body directive, and the inline markers on the lines it adds or modifies. Markers already in the tree stay applied and are not counted (default: false)"
                     },
                     "allowed_override_actors": {
                         "$ref": "#/$defs/StringListOrReset",

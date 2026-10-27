@@ -8393,12 +8393,105 @@ fn the_inline_budget_counts_the_markers_a_change_writes_not_the_tree() {
     assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
     assert!(inline_refusals(&run)[0].starts_with("6 inline override(s)"));
 
-    // `fail_on_overrides` is about every applied override, the tree's included: a change
-    // that writes no marker still fails under it.
+    // `fail_on_overrides` counts what the change writes too: a change that writes no
+    // marker passes under it (#880).
     let all = repo_with_six_markers_in_the_tree("fail_on_overrides = true\n");
     all.write("notes.txt", "hello\n");
     all.commit("chore: notes");
-    assert_eq!(all.check(&[]).code, 1);
+    let run = all.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.json()["overrides"], 6, "the markers stay applied");
+}
+
+fn markers_already_in_tree(run: &Run) -> usize {
+    run.outcome("time-estimates")["overrides"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|o| o["already_in_tree"] == true)
+        .count()
+}
+
+/// `fail_on_overrides` refuses the overrides a change writes: a marker on a line it adds
+/// or modifies, a marker or directive in its pull request body, a directive in a commit
+/// message. Markers already in the tree stay applied and listed, marked
+/// `already_in_tree`, and do not fail the change (#880).
+#[test]
+fn fail_on_overrides_refuses_what_a_change_writes_not_the_trees_markers() {
+    // test-floor would report the removed test the directive excuses below.
+    let config = "fail_on_overrides = true\n[gates.test-floor]\nenabled = false\n";
+
+    // The reproduction: six markers in the tree, a change touching another file.
+    let repo = repo_with_six_markers_in_the_tree(config);
+    repo.write("notes.txt", "hello\n");
+    repo.commit("chore: notes");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(markers_already_in_tree(&run), 6);
+    let text = repo.run(&["check", "--base", "main"], &[]);
+    assert_eq!(text.code, 0, "{}", text.stdout);
+    assert!(!text.stdout.contains("human sign-off"), "{}", text.stdout);
+
+    // One marker added fails; the six stay listed and are not counted.
+    let added = repo_with_six_markers_in_the_tree(config);
+    added.write("docs/more.md", &new_markers(1));
+    added.commit("docs: one marker");
+    let run = added.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.json()["errors"], 0, "only the override fails it");
+    assert_eq!(run.json()["overrides"], 7);
+    assert_eq!(markers_already_in_tree(&run), 6);
+    let text = added.run(&["check", "--base", "main"], &[]);
+    assert_eq!(text.code, 1);
+    assert!(
+        text.stdout.contains(
+            "failure: applied overrides require human sign-off (directives.fail_on_overrides / --fail-on-overrides): 1 written by this change; 6 marker(s) already in the tree are not counted"
+        ),
+        "{}",
+        text.stdout
+    );
+
+    // A marker line the change modifies is one it writes.
+    let modified = repo_with_six_markers_in_the_tree(config);
+    let legacy = std::fs::read_to_string(modified.file("docs/legacy.md")).unwrap();
+    modified.write(
+        "docs/legacy.md",
+        &legacy.replacen("Phase 1 (1 week)", "Phase 1 (3 weeks)", 1),
+    );
+    modified.commit("docs: edit a marked line");
+    let run = modified.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert_eq!(markers_already_in_tree(&run), 5);
+
+    // A directive in the pull request body still fails, as does one in a commit message.
+    let body = repo_with_six_markers_in_the_tree(config);
+    body.write(
+        "tests/a.rs",
+        &GOOD_TEST.replace(
+            "#[test]\nfn orders() {\n    let x = 1;\n    assert!(x < 2);\n}\n",
+            "",
+        ),
+    );
+    body.commit("test: remove orders");
+    let run = body.check_with_pr(&[], "removes: tests/a.rs orders moved to proptest\n");
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.json()["errors"], 0, "the directive lifted the finding");
+    assert_eq!(
+        run.outcome("deletion-rationale")["overrides"][0]["directive"],
+        "removes"
+    );
+    body.commit("chore: say why\n\nremoves: tests/a.rs orders moved to proptest");
+    assert_eq!(body.check(&[]).code, 1);
+
+    // `--staged`: the change is the index against HEAD.
+    let staged = repo_with_six_markers_in_the_tree(config);
+    staged.write("notes.txt", "hello\n");
+    staged.git(&["add", "-A"]);
+    let run = staged.check(&["--staged"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    staged.write("docs/more.md", &new_markers(1));
+    staged.git(&["add", "-A"]);
+    assert_eq!(staged.check(&["--staged"]).code, 1);
 }
 
 /// A `shell-secrets` marker records its own line, so one added to an unchanged command

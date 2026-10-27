@@ -122,6 +122,7 @@ fn removal_override(
                 reason: d.reason.clone(),
                 source: d.source.clone(),
                 hidden: d.hidden,
+                already_in_tree: false,
             })
     };
     rec.filter(|r| !(settings.allow_hidden == Some(false) && r.hidden))

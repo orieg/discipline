@@ -697,7 +697,14 @@ impl CheckSummary {
         self.errors == 0
             && self.policy_failures.is_empty()
             && (!fail_on_warnings || self.warnings == 0)
-            && (!fail_on_overrides || self.total_overrides() == 0)
+            && (!fail_on_overrides || self.change_overrides() == 0)
+    }
+
+    /// Overrides the change writes, the ones `fail_on_overrides` refuses: every directive
+    /// override, and the inline markers on the lines it adds or modifies. A marker already
+    /// in the tree (`already_in_tree`) stays applied and is not counted.
+    pub fn change_overrides(&self) -> usize {
+        self.overrides().filter(|o| !o.already_in_tree).count()
     }
 
     /// Overrides granted by a directive in the PR body or a commit body. Inline markers
@@ -748,7 +755,8 @@ impl CheckSummary {
                     Severity::Error => true,
                     Severity::Warning => fail_on_warnings,
                     Severity::Note => false,
-                }) || (fail_on_overrides && !o.overrides.is_empty());
+                }) || (fail_on_overrides
+                    && o.overrides.iter().any(|r| !r.already_in_tree));
 
                 if has_failure {
                     failed += 1;

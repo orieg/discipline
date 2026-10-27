@@ -86,7 +86,7 @@ complete -c discipline -n "__fish_discipline_using_subcommand check" -l test-rep
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l baseline-file -d 'Path to grandfathering baseline file (defaults to discipline-baseline.toml if present)' -r -F
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l staged -d 'Inspect the index against HEAD instead (pre-commit hook mode)'
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l fail-on-warnings -d 'Treat warnings as failures'
-complete -c discipline -n "__fish_discipline_using_subcommand check" -l fail-on-overrides -d 'Treat applied overrides as failures (requires human sign-off)'
+complete -c discipline -n "__fish_discipline_using_subcommand check" -l fail-on-overrides -d 'Treat the overrides a change writes as failures (requires human sign-off)'
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l advisory -d 'Advisory mode: run all checks and emit reports, but exit code 0 even if violations occur'
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l comment -d 'Post the report as one pull-request comment, edited on every run (needs a token that can write comments; off by default)'
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l trust-workspace -d 'Trust the workspace and disable libgit2 repository owner validation (off by default, or set DISCIPLINE_TRUST_WORKSPACE=1)'

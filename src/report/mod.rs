@@ -208,11 +208,17 @@ fn render_terminal_to_writer<W: Write>(
         "errors: {}  warnings: {}  overrides: {}{baselined_suffix}",
         summary.errors, summary.warnings, total_ov
     )?;
-    if fail_on_overrides && total_ov > 0 {
+    let change_ov = summary.change_overrides();
+    if fail_on_overrides && change_ov > 0 {
+        // Markers already in the tree stay applied but are not the change's to sign off.
+        let in_tree = match total_ov - change_ov {
+            0 => String::new(),
+            n => format!("; {n} marker(s) already in the tree are not counted"),
+        };
         writeln!(
             w,
             "{}",
-            style::red("failure: applied overrides require human sign-off (directives.fail_on_overrides / --fail-on-overrides)")
+            style::red(&format!("failure: applied overrides require human sign-off (directives.fail_on_overrides / --fail-on-overrides): {change_ov} written by this change{in_tree}"))
         )?;
     }
     for failure in &summary.policy_failures {
@@ -782,6 +788,7 @@ mod tests {
                 line: 3,
             },
             hidden: false,
+            already_in_tree: false,
         });
         summary
             .policy_failures
