@@ -1,9 +1,9 @@
 //! Run-level limits on directive overrides.
 //!
 //! A directive in the PR body or a commit body is written by the author of the change it
-//! excuses. `fail_on_overrides` refuses every one; the two options here sit between that
-//! and accepting them all: a budget, and an approval read from the forge. A second budget
-//! bounds the inline markers a change writes.
+//! excuses. `fail_on_overrides` refuses every one, and every inline marker the change
+//! writes; the two options here sit between that and accepting them all: a budget, and an
+//! approval read from the forge. A second budget bounds the inline markers a change writes.
 
 use crate::config::DirectivesConfig;
 use crate::could_not_check::{tag, Reason};
@@ -64,30 +64,50 @@ impl PullContext {
     }
 }
 
-/// The inline overrides among `overrides` whose marker the change writes: on a line it
-/// adds (a modified line is an added one in the diff) of a file in `changed`, or in the
-/// pull request body. A marker on a line the change leaves as it is was written by an
-/// earlier change; a gate that scans the whole tree (`pii`, `time-estimates`,
-/// `shell-secrets`) applies it on every run, and it is not counted here. Where the base is
-/// the empty tree (`--staged` before the first commit) every line is added, so every
-/// marker counts.
+/// Whether the change writes the override `o`. A directive (PR body, commit message,
+/// merged pull request body) is always the change's own. An inline marker is when it is on
+/// a line the change adds (a modified line is an added one in the diff) of a file in
+/// `changed`, or in the pull request body. A marker on a line the change leaves as it is
+/// was written by an earlier change; a gate that scans the whole tree (`pii`,
+/// `time-estimates`, `shell-secrets`) applies it on every run. Where the base is the empty
+/// tree (`--staged` before the first commit) every line is added, so every marker is the
+/// change's.
+pub fn written_by_change(o: &OverrideRecord, changed: &[ChangedFile]) -> bool {
+    match &o.source {
+        OverrideSource::Inline { file, line } => {
+            let file = file.trim_start_matches("./");
+            crate::guards::is_pr_body_label(file)
+                || changed
+                    .iter()
+                    .any(|f| f.path == file && f.added_lines.contains(line))
+        }
+        _ => true,
+    }
+}
+
+/// The inline overrides among `overrides` whose marker the change writes
+/// ([`written_by_change`]). Directive overrides are not counted here.
 pub fn inline_overrides_added<'a>(
     overrides: impl IntoIterator<Item = &'a OverrideRecord>,
     changed: &[ChangedFile],
 ) -> usize {
     overrides
         .into_iter()
-        .filter(|o| match &o.source {
-            OverrideSource::Inline { file, line } => {
-                let file = file.trim_start_matches("./");
-                crate::guards::is_pr_body_label(file)
-                    || changed
-                        .iter()
-                        .any(|f| f.path == file && f.added_lines.contains(line))
-            }
-            _ => false,
-        })
+        .filter(|o| matches!(o.source, OverrideSource::Inline { .. }))
+        .filter(|o| written_by_change(o, changed))
         .count()
+}
+
+/// Sets `already_in_tree` on each override the change does not write
+/// ([`written_by_change`]), and clears it on the others. `fail_on_overrides` refuses only
+/// the change's own; the others stay applied and listed.
+pub fn mark_markers_already_in_tree<'a>(
+    overrides: impl IntoIterator<Item = &'a mut OverrideRecord>,
+    changed: &[ChangedFile],
+) {
+    for o in overrides {
+        o.already_in_tree = !written_by_change(o, changed);
+    }
 }
 
 /// Why this run's directive overrides or inline overrides are refused; empty when they stand.
@@ -275,6 +295,7 @@ mod tests {
                 line,
             },
             hidden: true,
+            already_in_tree: false,
         }
     }
 
@@ -312,6 +333,38 @@ mod tests {
             inline_overrides_added(&records, &[changed("docs/old.md", &[1, 2])]),
             2
         );
+    }
+
+    /// `fail_on_overrides` refuses what the change writes: a marker on a line it adds, one
+    /// in the pull request body, and every directive. A marker on an unchanged line, or in
+    /// a file the change does not touch, is marked as already in the tree; a second
+    /// marking with another change clears the flag it no longer holds.
+    #[test]
+    fn markers_on_unchanged_lines_are_marked_already_in_tree() {
+        let mut commit = inline("docs/plan.md", 9);
+        commit.source = OverrideSource::Commit("abc1234".into());
+        let mut merged = inline("docs/plan.md", 9);
+        merged.source = OverrideSource::MergedPrBody(7);
+        let mut records = vec![
+            inline("docs/plan.md", 2),
+            inline("docs/plan.md", 3),
+            inline("docs/old.md", 2),
+            inline("<PR body>", 1),
+            commit,
+            merged,
+        ];
+        mark_markers_already_in_tree(&mut records, &[changed("docs/plan.md", &[2])]);
+        let flags: Vec<bool> = records.iter().map(|o| o.already_in_tree).collect();
+        assert_eq!(flags, [false, true, true, false, false, false]);
+
+        mark_markers_already_in_tree(&mut records, &[changed("docs/old.md", &[2])]);
+        let flags: Vec<bool> = records.iter().map(|o| o.already_in_tree).collect();
+        assert_eq!(flags, [true, true, false, false, false, false]);
+
+        // Serialized only when set.
+        let json = serde_json::to_value(&records[1..3]).unwrap();
+        assert_eq!(json[0]["already_in_tree"], true);
+        assert!(json[1].get("already_in_tree").is_none(), "{json}");
     }
 
     #[test]

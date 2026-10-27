@@ -911,15 +911,22 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
         _ => None,
     });
     summary.refused_hidden_directives = refused_hidden_directives;
-    // The inline budget counts the markers the change writes, not every marker a
-    // whole-tree gate applied.
-    let inline_overrides = match config.directives.max_inline_overrides {
-        Some(_) => discipline::override_policy::inline_overrides_added(
-            summary.overrides(),
-            &git.changed_files()?,
-        ),
-        None => 0,
+    // The inline budget and `fail_on_overrides` count the overrides the change writes,
+    // not every marker a whole-tree gate applied.
+    let changed = if summary.inline_overrides() > 0 {
+        git.changed_files()?
+    } else {
+        Vec::new()
     };
+    discipline::override_policy::mark_markers_already_in_tree(
+        summary
+            .outcomes
+            .iter_mut()
+            .flat_map(|o| o.overrides.iter_mut()),
+        &changed,
+    );
+    let inline_overrides =
+        discipline::override_policy::inline_overrides_added(summary.overrides(), &changed);
     summary.policy_failures = discipline::override_policy::judge(
         &config.directives,
         summary.directive_overrides(),
