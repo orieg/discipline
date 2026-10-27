@@ -84,6 +84,13 @@ spec:
           - name: test-report
           - name: discipline-image
       outputs:
+        parameters:
+          # success | failure | could-not-check: report could-not-check as its own
+          # commit status rather than as a gate failure.
+          - name: discipline-status
+            valueFrom:
+              path: /workspace/reports/status
+              default: "could-not-check"
         artifacts:
           # Captured JUnit XML report for test dashboard integration
           - name: junit-report
@@ -123,32 +130,78 @@ spec:
             value: "1"
           - name: DISCIPLINE_TEST_REPORT
             value: "{{inputs.parameters.test-report}}"
+          # Judge the change by the target branch's discipline.toml, so a pull request
+          # cannot loosen the policy that judges it (config-integrity still reports the edit).
+          - name: DISCIPLINE_POLICY_FROM
+            value: "base"
+          # Cap the text report this step prints, for log services with a per-step budget.
+          # The JSON, JUnit and SARIF reports stay complete.
+          - name: DISCIPLINE_MAX_REPORT_LINES
+            value: "400"
+          # Optional. The merged-pr-body directive source and the review-threads gate read the
+          # forge's API; a least-privilege token (contents: read; pull-requests: read for
+          # the merged-pr-body lookup on a private repository) is enough. Without it those
+          # lookups are unauthenticated and soon rate-limited on a shared runner.
+          # - name: DISCIPLINE_FORGE_TOKEN
+          #   valueFrom:
+          #     secretKeyRef:
+          #       name: discipline-forge-token
+          #       key: token
         command: ["/bin/sh", "-c"]
         args:
           - |
-            set -euo pipefail
+            set -eu
             mkdir -p /workspace/repo /workspace/reports
             cd /workspace/repo
 
+            # Exit codes: 0 clean, 1 findings, 2 could not check (clone, merge base,
+            # configuration or forge failure). Infrastructure trouble is reported as its
+            # own state, never as a finding.
+            could_not_check() {
+              echo "discipline: could not check: $1" >&2
+              echo "could-not-check" > /workspace/reports/status
+              exit 2
+            }
+
             echo "Cloning repository..."
-            git init
+            git init -q
             git remote add origin "{{inputs.parameters.repo-url}}"
-            git fetch origin --depth=50 "{{inputs.parameters.target-branch}}"
-            git fetch origin --depth=50 "{{inputs.parameters.source-branch}}"
-            git checkout -b inspected "origin/{{inputs.parameters.source-branch}}"
+            git fetch -q origin --depth=50 \
+              "{{inputs.parameters.target-branch}}" "{{inputs.parameters.source-branch}}" \
+              || could_not_check "fetch failed"
+            # A depth-50 fetch has no merge base once the branch is more than 50 commits
+            # from the target. Deepen until one resolves; a full history is the fallback.
+            until git merge-base "origin/{{inputs.parameters.target-branch}}" \
+                "origin/{{inputs.parameters.source-branch}}" >/dev/null 2>&1; do
+              if [ "$(git rev-parse --is-shallow-repository)" = "false" ]; then
+                could_not_check "no merge base between the target and source branches"
+              fi
+              git fetch -q origin --deepen=200 \
+                "{{inputs.parameters.target-branch}}" "{{inputs.parameters.source-branch}}" \
+                || git fetch -q --unshallow origin \
+                || could_not_check "deepening the fetch failed"
+            done
+            git checkout -q -b inspected "origin/{{inputs.parameters.source-branch}}"
 
             echo "Executing discipline check with JUnit XML and JSON report generation..."
+            rc=0
             discipline check \
               --base "origin/{{inputs.parameters.target-branch}}" \
-              --format junit \
-              --output-file /workspace/reports/junit.xml \
-              --json-out /workspace/reports/discipline.json
+              --format terminal \
+              --report-junit /workspace/reports/junit.xml \
+              --report-sarif /workspace/reports/sarif.sarif \
+              --json-out /workspace/reports/discipline.json || rc=$?
 
-            echo "Executing discipline diff inspection with SARIF report generation..."
-            discipline diff \
-              --base "origin/{{inputs.parameters.target-branch}}" \
-              --format sarif \
-              --output-file /workspace/reports/sarif.sarif
+            # Map the exit code to a distinct status a later step (or a commit-status
+            # notifier reading this file) can report: a could-not-check run is not a
+            # violation and should not be shown as one.
+            case "$rc" in
+              0) echo "success" > /workspace/reports/status ;;
+              1) echo "failure" > /workspace/reports/status ;;
+              *) echo "could-not-check" > /workspace/reports/status
+                 echo "discipline: could not check (exit $rc); see the report above" >&2 ;;
+            esac
+            exit "$rc"
 
     # -------------------------------------------------------------------------
     # Task Template: Placeholder downstream job

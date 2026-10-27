@@ -74,6 +74,7 @@ gitlab\t''
 agent-prompt\t''"
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l json-out -d 'Also write the JSON report to this path, whatever --format is' -r -F
 complete -c discipline -n "__fish_discipline_using_subcommand check" -s o -l output-file -d 'Write the formatted report to this path' -r -F
+complete -c discipline -n "__fish_discipline_using_subcommand check" -l max-report-lines -d 'Print at most this many lines of the terminal report on stdout, then one line saying how many were left out. Only the terminal format\'s stdout is cut; --json-out, --output-file and the other report files stay complete' -r
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l report-gitlab -d 'Write GitLab Code Quality JSON report to this path' -r -F
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l report-junit -d 'Write JUnit XML report to this path' -r -F
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l report-sarif -d 'Write SARIF report to this path' -r -F

@@ -30,6 +30,25 @@ pub fn format_report_content(
     }
 }
 
+/// Cut a rendered report to at most `max` lines, ending it with one line that says how
+/// many were left out. A report of `max` lines or fewer is returned as it is.
+pub fn truncate_report_lines(text: &str, max: usize) -> String {
+    let total = text.lines().count();
+    if total <= max {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    for line in text.lines().take(max) {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str(&format!(
+        "... {} more report lines not shown (--max-report-lines {max}); --json-out and --output-file keep the full report\n",
+        total - max
+    ));
+    out
+}
+
 pub fn render_report(
     summary: &CheckSummary,
     format: OutputFormat,
@@ -727,6 +746,23 @@ mod tests {
     use super::*;
     use crate::config::Severity;
     use crate::guards::GateOutcome;
+
+    #[test]
+    fn truncate_report_lines_keeps_the_first_lines_and_counts_the_rest() {
+        let text = "a\nb\nc\nd\n";
+        assert_eq!(truncate_report_lines(text, 4), text);
+        assert_eq!(truncate_report_lines(text, 9), text);
+        assert_eq!(
+            truncate_report_lines(text, 2),
+            "a\nb\n... 2 more report lines not shown (--max-report-lines 2); \
+             --json-out and --output-file keep the full report\n"
+        );
+        assert_eq!(
+            truncate_report_lines(text, 0),
+            "... 4 more report lines not shown (--max-report-lines 0); \
+             --json-out and --output-file keep the full report\n"
+        );
+    }
 
     fn prompt_summary(severities: &[Severity]) -> CheckSummary {
         let mut o = GateOutcome::new("time-estimates");

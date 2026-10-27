@@ -274,6 +274,14 @@ spec:
                   value: "ghcr.io/orieg/discipline:v0"
 ```
 
+What the gate step does:
+
+- **Merge base.** It fetches both branches at depth 50 and deepens (then unshallows) until `git merge-base` resolves, so a branch more than 50 commits from the target is still judged. When no merge base exists, or a fetch fails, the step exits `2` (could not check).
+- **Policy from the base.** `DISCIPLINE_POLICY_FROM=base` judges the change by the target branch's `discipline.toml`; a pull request cannot loosen the policy that judges it, and `config-integrity` still reports the edit.
+- **Exit codes.** `0` clean, `1` findings, `2` could not check. The step writes `success`, `failure` or `could-not-check` to its `discipline-status` output parameter, so a commit-status step can report infrastructure trouble as its own state instead of as a violation.
+- **Report budget.** `DISCIPLINE_MAX_REPORT_LINES` (`check --max-report-lines`) caps the text report on stdout for log services with a per-step budget; the JSON, JUnit and SARIF reports stay complete.
+- **Forge token.** The `merged-pr-body` directive source on a push and the `review-threads` gate read the forge's API. A commented `DISCIPLINE_FORGE_TOKEN` entry shows where a least-privilege token (`contents: read`) goes.
+
 ---
 
 ## 5. Docker & Container Environments

@@ -125,6 +125,7 @@ fn run_command(command: Commands) -> Result<bool> {
             format: args.format,
             json_out: args.json_out,
             output_file: args.output_file,
+            max_report_lines: None,
             report_gitlab: args.report_gitlab,
             report_junit: args.report_junit,
             report_sarif: args.report_sarif,
@@ -965,12 +966,23 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
     let success = summary.is_success(args.fail_on_warnings, fail_on_overrides);
     progress.reported = true;
     if !(args.quiet && success) {
-        render_report(
-            &summary,
-            args.format,
-            args.fail_on_warnings,
-            fail_on_overrides,
-        )?;
+        match args.max_report_lines {
+            Some(max) if args.format == discipline::cli::OutputFormat::Terminal => {
+                let text = discipline::report::format_report_content(
+                    &summary,
+                    args.format,
+                    args.fail_on_warnings,
+                    fail_on_overrides,
+                )?;
+                print!("{}", discipline::report::truncate_report_lines(&text, max));
+            }
+            _ => render_report(
+                &summary,
+                args.format,
+                args.fail_on_warnings,
+                fail_on_overrides,
+            )?,
+        }
     }
     if let Some(path) = &args.output_file {
         let content = discipline::report::format_report_content(
