@@ -1088,6 +1088,32 @@ impl GitCtx {
         Ok(files.into_values().collect())
     }
 
+    /// The change as a unified diff, in the form `git diff` prints it: the sides
+    /// [`GitCtx::changed_files`] compares (the index against the base under `--staged`,
+    /// else the working tree and index against the base), renames detected, three lines of
+    /// context and the `a/` and `b/` path prefixes. A binary file is the one line `Binary
+    /// files ... differ`. Empty when nothing changed.
+    pub fn patch(&self) -> Result<Vec<u8>> {
+        let tree = self.base_tree()?;
+        let mut diff = if self.staged {
+            self.repo.diff_tree_to_index(tree.as_ref(), None, None)?
+        } else {
+            self.repo
+                .diff_tree_to_workdir_with_index(tree.as_ref(), None)?
+        };
+        diff.find_similar(Some(DiffFindOptions::new().renames(true)))?;
+        let mut out = Vec::new();
+        diff.print(git2::DiffFormat::Patch, |_, _, line| {
+            // The content of a context, added or removed line comes without its marker.
+            if matches!(line.origin(), ' ' | '+' | '-') {
+                out.push(line.origin() as u8);
+            }
+            out.extend_from_slice(line.content());
+            true
+        })?;
+        Ok(out)
+    }
+
     pub fn normalize_repo_path<'a>(&self, path: &'a str) -> &'a str {
         let p = path.trim_start_matches("./");
         if let Some(root_str) = self.root().to_str() {
@@ -3372,5 +3398,55 @@ mod tests {
             Some(oid_b.to_string().as_str())
         );
         assert_eq!(deltas[0].kind, ChangeKind::Modified);
+    }
+
+    /// The patch is the change in `git diff`'s form, over the sides the gates read: the
+    /// working tree under a plain run, the index under `--staged`.
+    #[test]
+    fn patch_prints_the_change_as_git_diff_does_from_the_sides_the_gates_read() {
+        let (_dir, git) = super::test_support::repo_with_changed_file(
+            "src/lib.rs",
+            "fn a() {}\n",
+            "fn a() {}\nfn b() {}\n",
+        );
+        let text = String::from_utf8(git.patch().unwrap()).unwrap();
+        for line in [
+            "diff --git a/src/lib.rs b/src/lib.rs\n",
+            "--- a/src/lib.rs\n",
+            "+++ b/src/lib.rs\n",
+            "@@ -1 +1,2 @@\n",
+            " fn a() {}\n",
+            "+fn b() {}\n",
+        ] {
+            assert!(text.contains(line), "{line:?} not in {text}");
+        }
+        // Control: nothing changed, nothing printed.
+        let (_same, git) =
+            super::test_support::repo_with_changed_file("src/lib.rs", "fn a() {}\n", "fn a() {}\n");
+        assert!(git.patch().unwrap().is_empty());
+
+        // Staged in the index, then changed again in the working tree.
+        let (dir, _) =
+            super::test_support::repo_with_files(&[("a.txt", "one\n")], &[("a.txt", "two\n")]);
+        std::fs::write(dir.path().join("a.txt"), "three\n").unwrap();
+        let side = |staged: bool| {
+            let repo = git2::Repository::open(dir.path()).unwrap();
+            let base = repo.head().unwrap().peel_to_commit().unwrap().id();
+            let git = if staged {
+                super::GitCtx::for_test_staged(repo, Some(base))
+            } else {
+                super::GitCtx::for_test(repo, Some(base))
+            };
+            String::from_utf8(git.patch().unwrap()).unwrap()
+        };
+        let (index, worktree) = (side(true), side(false));
+        assert!(
+            index.contains("+two\n") && !index.contains("+three"),
+            "{index}"
+        );
+        assert!(
+            worktree.contains("+three\n") && !worktree.contains("+two"),
+            "{worktree}"
+        );
     }
 }

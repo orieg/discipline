@@ -1850,7 +1850,7 @@ mod tests {
         assert_eq!(
             said(MUTANTS, &format!("{MUTANTS}command = \"true\"\n"), false),
             [
-                "command: `command` changed from \"cargo mutants --in-diff\" to \"true\" \
+                "command: `command` changed from \"cargo mutants --in-diff {diff_file}\" to \"true\" \
               (the base value is its preset's default)"
             ]
         );
@@ -1866,7 +1866,7 @@ mod tests {
             ]
         );
         // Written down, and removed again.
-        let written = format!("{MUTANTS}command = \"cargo mutants --in-diff\"\n");
+        let written = format!("{MUTANTS}command = \"cargo mutants --in-diff {{diff_file}}\"\n");
         assert!(said(MUTANTS, &written, false).is_empty());
         assert!(said(&written, MUTANTS, false).is_empty());
         // A preset with no canary: unset means no canary, and adding one adds a check.

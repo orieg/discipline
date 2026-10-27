@@ -413,7 +413,7 @@
           "type": "string"
         },
         "command": {
-          "description": "Command string to execute",
+          "description": "Command string to execute; `{diff_file}` in an argument is replaced by the path of a file holding the change's diff",
           "type": "string"
         },
         "count_pattern": {
@@ -474,7 +474,7 @@
           "type": "string"
         },
         "command": {
-          "description": "Primary command to execute",
+          "description": "Primary command to execute; `{diff_file}` in an argument is replaced by the path of a file holding the change's diff",
           "type": "string"
         },
         "commands": {
