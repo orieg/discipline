@@ -12413,6 +12413,69 @@ preset = "loom"
     assert_eq!(outcome_pass["violations"].as_array().unwrap().len(), 0);
 }
 
+/// What `cargo miri test` prints for a crate whose unit tests ran and which has no
+/// doc-test: an empty `Doc-tests` section after them (#883).
+const UNIT_TESTS_THEN_EMPTY_DOC_TESTS: &str = "running 2 tests\ntest t1 ... ok\n\
+test t2 ... ok\n\ntest result: ok. 2 passed; 0 failed\n\n   Doc-tests p\n\n\
+running 0 tests\n\ntest result: ok. 0 passed; 0 failed\n";
+
+/// #883: the `miri` preset's zero-tests guard reads every `running N tests` count. Unit
+/// tests that ran followed by an empty doc-test section is not an empty run; every section
+/// empty still is. Output with no count is not read as empty, as before. A configured
+/// `zero_items_pattern` keeps matching anywhere in the output.
+#[test]
+fn command_preset_miri_empty_doc_tests_after_unit_tests_is_not_zero_items() {
+    let check = |printed: &str, extra: &str| -> Run {
+        let repo = Repo::new();
+        repo.commit_base_files(
+            &[
+                ("out.sh", &format!("cat <<'EOF'\n{printed}EOF\n")),
+                (
+                    "discipline.toml",
+                    &format!(
+                        "{CONFIG_HEAD}\n[gates.command]\nenabled = true\ncommands = [ {{ name = \"mi\", \
+                         preset = \"miri\", command = \"sh out.sh\"{extra} }} ]\n"
+                    ),
+                ),
+            ],
+            "ci: configure miri",
+        );
+        repo.write("src/lib.rs", &format!("{GOOD_LIB}// c\n"));
+        repo.commit("chore: touch the library");
+        repo.check(&[])
+    };
+    let zero_items = |run: &Run| -> Vec<String> {
+        run.violations("command")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    let run = check(UNIT_TESTS_THEN_EMPTY_DOC_TESTS, "");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.outcome("command")["examined"], 1);
+    assert!(run.violations("command").is_empty());
+
+    // Control: every section ran none.
+    let empty = UNIT_TESTS_THEN_EMPTY_DOC_TESTS.replace("running 2 tests", "running 0 tests");
+    let run = check(&empty, "");
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert_eq!(zero_items(&run), ["command/zero-items-executed"]);
+
+    // No `running N tests` line at all (`cargo nextest`): not read as empty.
+    let run = check("     Starting 2 tests across 1 binary\n", "");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.violations("command").is_empty());
+
+    // Control: a configured pattern is matched anywhere, as before.
+    let run = check(
+        UNIT_TESTS_THEN_EMPTY_DOC_TESTS,
+        ", zero_items_pattern = \"running 0 tests\"",
+    );
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert_eq!(zero_items(&run), ["command/zero-items-executed"]);
+}
+
 #[test]
 fn command_preset_cargo_deny_enforces_policy_file_retention_and_accepts_override() {
     let repo = Repo::new();
@@ -16925,6 +16988,75 @@ enabled = true
     assert_eq!(
         no_tool.could_not_check(),
         ("tool-missing".to_string(), Some("miri".to_string()))
+    );
+}
+
+/// #883: the `miri` gate reads every `running N tests` count of `cargo miri test`, the
+/// doc-tests' among them. A stand-in `cargo` first on `PATH` runs `script`.
+#[cfg(unix)]
+#[test]
+fn miri_gate_empty_doc_tests_after_unit_tests_is_not_zero_tests() {
+    use std::os::unix::fs::PermissionsExt;
+    let check = |script: &str| -> Run {
+        let repo = Repo::new();
+        repo.commit_base(
+            "discipline.toml",
+            &format!("{CONFIG_HEAD}\n[gates.miri]\nenabled = true\n"),
+            "ci: enable miri",
+        );
+        repo.write("src/lib.rs", &format!("{GOOD_LIB}// c\n"));
+        repo.commit("chore: touch the library");
+        let dir = tempfile::tempdir().unwrap();
+        let cargo = dir.path().join("cargo");
+        std::fs::write(&cargo, format!("#!/bin/sh\n{script}")).unwrap();
+        std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = format!(
+            "{}:{}",
+            dir.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        repo.run(
+            &["check", "--format", "json", "--base", "main"],
+            &[("PATH", path.as_str())],
+        )
+    };
+    let codes = |run: &Run| -> Vec<String> {
+        run.violations("miri")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    let printing = |printed: &str| format!("cat <<'EOF'\n{printed}EOF\n");
+
+    let run = check(&printing(UNIT_TESTS_THEN_EMPTY_DOC_TESTS));
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.outcome("miri")["examined"], 1);
+    assert!(codes(&run).is_empty(), "{:?}", codes(&run));
+
+    // Control: every section ran none.
+    let empty = UNIT_TESTS_THEN_EMPTY_DOC_TESTS.replace("running 2 tests", "running 0 tests");
+    let run = check(&printing(&empty));
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert_eq!(codes(&run), ["miri/zero-tests-executed"]);
+
+    // No `running N tests` line at all (`cargo miri nextest`): not read as zero tests.
+    let run = check(&printing("     Starting 2 tests across 1 binary\n"));
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(codes(&run).is_empty(), "{:?}", codes(&run));
+
+    // A missing Miri component prints no test count, and is still "could not check".
+    let run = check(
+        "echo \"error: the 'miri' component which provides the command 'cargo-miri' is not \
+         available for the 'stable' toolchain\" >&2\nexit 1\n",
+    );
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.could_not_check(),
+        (
+            "toolchain-unavailable".to_string(),
+            Some("miri".to_string())
+        )
     );
 }
 

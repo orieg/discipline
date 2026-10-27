@@ -63,6 +63,17 @@ pub fn output_pattern(pattern: &str, key: &str) -> Result<regex::Regex> {
     })
 }
 
+/// Whether `output` shows that a command executed nothing, by the zero-items guard
+/// `guard`: a `zero_items_pattern` that matches anywhere in it, or the guard of the presets
+/// that run libtest ([`presets::LIBTEST_ZERO_TESTS`]), which reads every `running N tests`
+/// count (#883). No configured value is that guard: it does not compile.
+pub fn zero_items_shown(guard: &str, key: &str, output: &str) -> Result<bool> {
+    if guard == presets::LIBTEST_ZERO_TESTS {
+        return Ok(presets::libtest_ran_no_test(output));
+    }
+    Ok(output_pattern(guard, key)?.is_match(output))
+}
+
 #[derive(Debug, Clone)]
 pub struct CommandRunResult {
     pub status: ExitStatus,
@@ -1522,8 +1533,11 @@ fn check_run_output(
     // Check count pattern & zero-items detection
     let mut zero_items = false;
     if let Some(ref zpat) = item.zero_items_pattern {
-        zero_items = output_pattern(zpat, &entry_key(None, "zero_items_pattern"))?
-            .is_match(&combined_output);
+        zero_items = zero_items_shown(
+            zpat,
+            &entry_key(None, "zero_items_pattern"),
+            &combined_output,
+        )?;
     }
 
     // Checked with the configuration before any gate runs; compiled the same way here
@@ -2471,7 +2485,7 @@ mod tests {
 
         let loom = presets::resolve_preset("loom").expect("loom preset exists");
         assert_eq!(loom.category, "concurrency");
-        assert_eq!(loom.zero_items_pattern, Some("running 0 tests"));
+        assert_eq!(loom.zero_items_pattern, Some(presets::LIBTEST_ZERO_TESTS));
 
         let deny = presets::resolve_preset("cargo-deny").expect("cargo-deny preset exists");
         assert_eq!(deny.category, "supply-chain");
