@@ -1,5 +1,6 @@
 {
-  "description": "Surviving (missed) cargo-mutants mutants per source file under src/ast/ and src/guards/, written by scripts/mutants_ratchet.py from a run of .github/workflows/mutants.yml (docs/ARCHITECTURE.md §8.7). A file absent here counts as 0. A run that finds more in a file fails; lower a count when a test kills a survivor. `bootstrap: true` records no counts yet: the first run passes and prints the counts to commit here.",
-  "bootstrap": true,
-  "missed": {}
+  "description": "Surviving (missed) cargo-mutants mutants per source file under src/ast/ and src/guards/, written by scripts/mutants_ratchet.py from a run of .github/workflows/mutants.yml (docs/ARCHITECTURE.md §8.7). Each run tests one slice of the files: `slice` is the file's slice, `missed` the count its slice's last run found and `run_id` that run; `missed: null` is not measured yet. `previous_commit` is the last measured run's commit, the base of the diff slice. The counts come from unit tests only (`--cargo-test-arg=--lib`): a survivor that an integration test kills is counted, and is accepted here with that note until the integration-test mapping (§8.7) re-tests it.",
+  "slices": 16,
+  "previous_commit": null,
+  "files": {}
 }

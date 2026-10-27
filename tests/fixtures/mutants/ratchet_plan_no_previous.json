@@ -1,0 +1,17 @@
+{
+  "description": "Test ratchet: planning, no previous measured commit.",
+  "slices": 3,
+  "previous_commit": null,
+  "files": {
+    "src/guards/gamma.rs": {
+      "slice": 2,
+      "missed": 1,
+      "run_id": 50
+    },
+    "src/guards/removed.rs": {
+      "slice": 0,
+      "missed": 3,
+      "run_id": 50
+    }
+  }
+}
