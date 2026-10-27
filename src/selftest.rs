@@ -1154,6 +1154,7 @@ const CASES: &[Case] = &[
                     line,
                 },
                 hidden: true,
+                already_in_tree: false,
             };
             let records = [marker("a.md", 1), marker("a.md", 2), marker("b.md", 1)];
             let change = [ChangedFile {
@@ -1164,6 +1165,71 @@ const CASES: &[Case] = &[
             }];
             Ok(inline_overrides_added(&records, &change) == 1
                 && inline_overrides_added(&records, &[]) == 0)
+        },
+    ),
+    (
+        "overrides: fail_on_overrides refuses the overrides the change writes, not the tree's markers",
+        || {
+            use crate::gitctx::{ChangeKind, ChangedFile};
+            use crate::guards::{CheckSummary, GateOutcome};
+            use crate::override_policy::mark_markers_already_in_tree;
+            use crate::tokens::{OverrideRecord, OverrideSource};
+            let record = |source: OverrideSource| OverrideRecord {
+                gate: "pii".into(),
+                code: None,
+                subject: "a.md".into(),
+                directive: "discipline:allow(pii)".into(),
+                reason: "inline exemption marker".into(),
+                source,
+                hidden: true,
+                already_in_tree: false,
+            };
+            let marker = |line: usize| {
+                record(OverrideSource::Inline {
+                    file: "a.md".into(),
+                    line,
+                })
+            };
+            let judged = |records: Vec<OverrideRecord>, added: &[usize]| {
+                let mut outcome = GateOutcome::new("pii");
+                outcome.overrides = records;
+                let mut summary = CheckSummary {
+                    schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+                    could_not_check: None,
+                    base: "main".into(),
+                    errors: 0,
+                    warnings: 0,
+                    notes: 0,
+                    overrides: 0,
+                    baselined: 0,
+                    outcomes: vec![outcome],
+                    planned_gates: vec![],
+                    policy_failures: Vec::new(),
+                    refused_hidden_directives: Vec::new(),
+                    deprecations: Vec::new(),
+                    directive_notes: Vec::new(),
+                    unused_directives: Vec::new(),
+                };
+                let change = [ChangedFile {
+                    path: "a.md".into(),
+                    old_path: "a.md".into(),
+                    kind: ChangeKind::Modified,
+                    added_lines: added.iter().copied().collect(),
+                }];
+                mark_markers_already_in_tree(
+                    summary.outcomes.iter_mut().flat_map(|o| o.overrides.iter_mut()),
+                    &change,
+                );
+                (
+                    summary.is_success(false, true),
+                    summary.gate_counts(false, true).1,
+                )
+            };
+            // Markers on unchanged lines pass; one on an added line, or a PR-body
+            // directive, fails.
+            Ok(judged(vec![marker(1), marker(2)], &[3]) == (true, 0)
+                && judged(vec![marker(1), marker(2)], &[2]) == (false, 1)
+                && judged(vec![marker(1), record(OverrideSource::PrBody)], &[]) == (false, 1))
         },
     ),
     (

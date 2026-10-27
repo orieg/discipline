@@ -200,6 +200,7 @@ pub fn evaluate_suppression_delta(ctx: &Context) -> Result<GateOutcome> {
                         line: site.line,
                     },
                     hidden: true,
+                    already_in_tree: false,
                 });
                 continue;
             }

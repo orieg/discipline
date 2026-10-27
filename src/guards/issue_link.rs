@@ -431,6 +431,7 @@ fn find_no_issue_directive(
                     reason: d.reason.clone(),
                     source: d.source.clone(),
                     hidden: d.hidden,
+                    already_in_tree: false,
                 });
             }
         }

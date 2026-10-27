@@ -451,7 +451,7 @@ pub struct CheckArgs {
     #[arg(long, env = "DISCIPLINE_FAIL_ON_WARNINGS")]
     pub fail_on_warnings: bool,
 
-    /// Treat applied overrides as failures (requires human sign-off)
+    /// Treat the overrides a change writes as failures (requires human sign-off)
     #[arg(long, env = "DISCIPLINE_FAIL_ON_OVERRIDES")]
     pub fail_on_overrides: bool,
 

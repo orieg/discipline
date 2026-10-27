@@ -471,6 +471,8 @@ impl std::fmt::Display for Severity {
 pub struct DirectivesConfig {
     pub sources: Vec<String>,
     pub allow_hidden: bool,
+    /// Fail on the overrides a change writes: every directive, and the inline markers on
+    /// the lines it adds or modifies. A marker already in the tree is not counted.
     pub fail_on_overrides: bool,
     pub allowed_override_actors: Vec<String>,
     /// Most directive overrides (PR body and commit bodies; inline markers are not

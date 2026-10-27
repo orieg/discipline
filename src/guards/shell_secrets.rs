@@ -652,6 +652,7 @@ pub fn evaluate_shell_secrets(ctx: &Context) -> Result<GateOutcome> {
                             line: log_line.marker_line.unwrap_or(log_line.primary_line),
                         },
                         hidden: true,
+                        already_in_tree: false,
                     });
                     continue;
                 }

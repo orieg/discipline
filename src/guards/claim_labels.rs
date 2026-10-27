@@ -495,6 +495,7 @@ fn inspect_source(target: &SourceTarget<'_>, env: &mut ScanEnv<'_>) -> Result<()
                         line: marker.line_num,
                     },
                     hidden: true,
+                    already_in_tree: false,
                 });
                 has_valid_marker = true;
                 continue;
@@ -598,6 +599,7 @@ fn inspect_source(target: &SourceTarget<'_>, env: &mut ScanEnv<'_>) -> Result<()
                         line: *ln,
                     },
                     hidden: true,
+                    already_in_tree: false,
                 });
                 break;
             }

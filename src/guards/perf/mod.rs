@@ -692,6 +692,7 @@ fn sourced_overrides(
                 reason: d.reason.clone(),
                 source: d.source.clone(),
                 hidden: d.hidden,
+                already_in_tree: false,
             });
             out.notes.push(format!(
                 "performance regression override acknowledged: {}",

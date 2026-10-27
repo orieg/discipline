@@ -96,8 +96,10 @@ Whether directives placed inside HTML comments (\fB<!-- -->\fR) are honored.
 Default is \fBfalse\fR to prevent stealth overrides.
 .TP
 .BI fail_on_overrides " = false"
-When \fBtrue\fR, any applied directive is treated as a build failure unless
-the executing actor is authorized.
+When \fBtrue\fR, any override the change writes is treated as a build failure
+unless the executing actor is authorized: every directive, and each inline
+marker on a line the change adds or modifies. A marker already in the tree
+stays applied and is not counted.
 .TP
 .BI allowed_override_actors " = [\(dqusername\(dq]"
 List of repository actors (GitHub/GitLab logins) authorized to supply overrides

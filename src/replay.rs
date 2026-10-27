@@ -485,20 +485,27 @@ pub fn read_overrides(code: i32, v: &serde_json::Value) -> Vec<CaseOverride> {
         .collect()
 }
 
-/// Gates that applied an override, in report order.
+/// Gates that applied an override the change writes, in report order: an inline marker
+/// already in the tree (`already_in_tree`) is not the change's.
 pub fn gates_with_overrides(v: &serde_json::Value) -> Vec<String> {
     v["outcomes"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|o| o["overrides"].as_array().is_some_and(|a| !a.is_empty()))
+        .filter(|o| {
+            o["overrides"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|r| r["already_in_tree"] != true)
+        })
         .filter_map(|o| o["gate"].as_str().map(str::to_string))
         .collect()
 }
 
 /// Gates whose overrides `check` refused, by the rule it applies: under
-/// `fail_on_overrides`, every override fails the change unless the actor is in
-/// `allowed_override_actors` (case-insensitive).
+/// `fail_on_overrides`, every override the change writes fails the change unless the actor
+/// is in `allowed_override_actors` (case-insensitive).
 pub fn refused_overrides(
     report: &serde_json::Value,
     directives: &crate::config::DirectivesConfig,
@@ -968,13 +975,17 @@ mod tests {
     fn overrides_are_refused_only_under_fail_on_overrides_for_an_outside_actor() {
         let json = r#"{"outcomes":[
             {"gate":"dependency-delta","overrides":[{"directive":"allow-dependency"}]},
+            {"gate":"time-estimates","overrides":[{"directive":"discipline:allow(time-estimates)","already_in_tree":true}]},
+            {"gate":"shell-secrets","overrides":[{"directive":"secrets-argv-ok","already_in_tree":true},{"directive":"secrets-argv-ok"}]},
             {"gate":"pii","overrides":[]}]}"#;
         let policy = |fail: bool| crate::config::DirectivesConfig {
             fail_on_overrides: fail,
             allowed_override_actors: vec!["Lead".into()],
             ..Default::default()
         };
-        let gates = vec!["dependency-delta".to_string()];
+        // A gate whose only override is a marker already in the tree refuses nothing; one
+        // that also applied a marker the change writes does.
+        let gates = vec!["dependency-delta".to_string(), "shell-secrets".to_string()];
         assert!(refused_overrides(&parse_report(json), &policy(false), None).is_empty());
         assert!(refused_overrides(&parse_report(json), &policy(true), Some("lead")).is_empty());
         assert_eq!(

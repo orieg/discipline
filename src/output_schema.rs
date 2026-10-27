@@ -109,7 +109,8 @@ pub fn report_schema() -> Value {
                     "directive": { "type": "string" },
                     "reason": { "type": "string" },
                     "source": { "$ref": "#/$defs/OverrideSource" },
-                    "hidden": { "type": "boolean", "description": "The directive was inside an HTML comment" }
+                    "hidden": { "type": "boolean", "description": "The directive was inside an HTML comment" },
+                    "already_in_tree": { "type": "boolean", "description": "An inline marker on a line the change neither adds nor modifies: applied, and not counted by `fail_on_overrides` or `max_inline_overrides`. Present only when true" }
                 }
             },
             "UnusedDirective": {
