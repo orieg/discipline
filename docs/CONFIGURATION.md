@@ -558,6 +558,7 @@ Every option of every subcommand, generated from the binary's own definitions (`
 | `-f`, `--format` |  | `terminal` | Output format |
 | `--json-out` |  |  | Also write the JSON report to this path, whatever --format is |
 | `-o`, `--output-file` |  |  | Write the formatted report to this path |
+| `--max-report-lines` | `DISCIPLINE_MAX_REPORT_LINES` |  | Print at most this many lines of the terminal report on stdout, then one line saying how many were left out. Only the terminal format's stdout is cut; --json-out, --output-file and the other report files stay complete |
 | `--report-gitlab` | `DISCIPLINE_REPORT_GITLAB` |  | Write GitLab Code Quality JSON report to this path |
 | `--report-junit` | `DISCIPLINE_REPORT_JUNIT` |  | Write JUnit XML report to this path |
 | `--report-sarif` | `DISCIPLINE_REPORT_SARIF` |  | Write SARIF report to this path |

@@ -502,6 +502,12 @@ pub struct CheckArgs {
     #[arg(short = 'o', long = "output-file")]
     pub output_file: Option<PathBuf>,
 
+    /// Print at most this many lines of the terminal report on stdout, then one line saying
+    /// how many were left out. Only the terminal format's stdout is cut; --json-out,
+    /// --output-file and the other report files stay complete
+    #[arg(long, env = "DISCIPLINE_MAX_REPORT_LINES")]
+    pub max_report_lines: Option<usize>,
+
     /// Write GitLab Code Quality JSON report to this path
     #[arg(long, env = "DISCIPLINE_REPORT_GITLAB")]
     pub report_gitlab: Option<PathBuf>,

@@ -53,6 +53,7 @@ base\:"The configuration on the base ref"))' \
 '--json-out=[Also write the JSON report to this path, whatever --format is]:JSON_OUT:_files' \
 '-o+[Write the formatted report to this path]:OUTPUT_FILE:_files' \
 '--output-file=[Write the formatted report to this path]:OUTPUT_FILE:_files' \
+'--max-report-lines=[Print at most this many lines of the terminal report on stdout, then one line saying how many were left out. Only the terminal format'\''s stdout is cut; --json-out, --output-file and the other report files stay complete]:MAX_REPORT_LINES:_default' \
 '--report-gitlab=[Write GitLab Code Quality JSON report to this path]:REPORT_GITLAB:_files' \
 '--report-junit=[Write JUnit XML report to this path]:REPORT_JUNIT:_files' \
 '--report-sarif=[Write SARIF report to this path]:REPORT_SARIF:_files' \
