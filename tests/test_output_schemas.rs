@@ -39,6 +39,7 @@ const REPORT_FIELDS: &[&str] = &[
     "outcomes[].notes[]: string",
     "outcomes[].overrides: array",
     "outcomes[].overrides[]: object",
+    "outcomes[].overrides[].already_in_tree?: boolean",
     "outcomes[].overrides[].code?: string",
     "outcomes[].overrides[].directive: string",
     "outcomes[].overrides[].gate: string",

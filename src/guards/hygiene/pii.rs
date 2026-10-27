@@ -599,6 +599,7 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
                         line: idx + 1,
                     },
                     hidden: true,
+                    already_in_tree: false,
                 });
                 continue;
             }

@@ -54,6 +54,13 @@ pub struct OverrideRecord {
     pub reason: String,
     pub source: OverrideSource,
     pub hidden: bool,
+    /// An inline marker on a line the change neither adds nor modifies: an earlier change
+    /// wrote it, and a gate that scans the whole tree applies it on every run. It stays
+    /// applied; `fail_on_overrides` and `max_inline_overrides` do not count it. Set after
+    /// the gates run ([`crate::override_policy::mark_markers_already_in_tree`]); absent
+    /// when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub already_in_tree: bool,
 }
 
 /// Whether a directive note is about the merged pull requests a push was resolved to
@@ -182,6 +189,7 @@ pub fn find_override(
                 reason: d.reason.clone(),
                 source: d.source.clone(),
                 hidden: d.hidden,
+                already_in_tree: false,
             });
         }
         let named = first_token(&d.reason);
@@ -2326,6 +2334,7 @@ removes: tests/old.rs inside a fence
             reason: reason.into(),
             source,
             hidden: false,
+            already_in_tree: false,
         };
         // The first lifted a finding (the name matches case-insensitively); the second
         // did not.

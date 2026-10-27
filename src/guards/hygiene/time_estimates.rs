@@ -580,6 +580,7 @@ pub fn time_estimates(ctx: &Context) -> Result<GateOutcome> {
                         line: idx + 1,
                     },
                     hidden: true,
+                    already_in_tree: false,
                 });
             }
         }
