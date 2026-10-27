@@ -968,13 +968,12 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
     if !(args.quiet && success) {
         match args.max_report_lines {
             Some(max) if args.format == discipline::cli::OutputFormat::Terminal => {
-                let text = discipline::report::format_report_content(
+                discipline::report::render_terminal_capped(
                     &summary,
-                    args.format,
                     args.fail_on_warnings,
                     fail_on_overrides,
+                    max,
                 )?;
-                print!("{}", discipline::report::truncate_report_lines(&text, max));
             }
             _ => render_report(
                 &summary,

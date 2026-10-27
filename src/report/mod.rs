@@ -49,6 +49,22 @@ pub fn truncate_report_lines(text: &str, max: usize) -> String {
     out
 }
 
+/// The terminal report on stdout, cut to at most `max` lines ([`truncate_report_lines`]).
+pub fn render_terminal_capped(
+    summary: &CheckSummary,
+    fail_on_warnings: bool,
+    fail_on_overrides: bool,
+    max: usize,
+) -> Result<()> {
+    let mut buf = Vec::new();
+    render_terminal_to_writer(&mut buf, summary, fail_on_warnings, fail_on_overrides)?;
+    let text = truncate_report_lines(&String::from_utf8_lossy(&buf), max);
+    let mut out = std::io::stdout().lock();
+    out.write_all(text.as_bytes())?;
+    out.flush()?;
+    Ok(())
+}
+
 pub fn render_report(
     summary: &CheckSummary,
     format: OutputFormat,
