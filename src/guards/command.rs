@@ -15,6 +15,9 @@
 //! - `snapshot`: stdout must match a committed file, line by line, read before any command
 //!   runs (exit 2 when the output cannot be compared: cut off at the capture limit, not
 //!   UTF-8, empty, no file, a symbolic link, or a file past the capture limit)
+//! - `{diff_file}` in a command's arguments: the path of a file holding the change's diff,
+//!   written only for a command that names it and removed after it ran (exit 2 when the
+//!   diff cannot be read, written or removed)
 
 use crate::config::{DisciplineConfig, GateSettings};
 use crate::could_not_check::{tag, Reason};
@@ -267,6 +270,105 @@ pub fn run_argv_bounded(
         stderr_truncated,
         stdout_lossy,
     })
+}
+
+/// The text a command's argument holds for the path of a file with the change's diff
+/// ([`crate::gitctx::GitCtx::patch`]), as cargo-mutants' `--in-diff` reads one (#844).
+pub const DIFF_FILE_PLACEHOLDER: &str = "{diff_file}";
+
+/// Whether an argument of `argv` names the change's diff file.
+pub fn takes_diff_file(argv: &[String]) -> bool {
+    argv.iter().any(|arg| arg.contains(DIFF_FILE_PLACEHOLDER))
+}
+
+/// `argv` with every [`DIFF_FILE_PLACEHOLDER`] replaced by `path`. Each element stays one
+/// argument, so a path with spaces is not split.
+pub fn with_diff_file(argv: &[String], path: &str) -> Vec<String> {
+    argv.iter()
+        .map(|arg| arg.replace(DIFF_FILE_PLACEHOLDER, path))
+        .collect()
+}
+
+/// Writes `patch` to a new file in the temporary directory, outside the working tree and
+/// readable by its owner only, and returns its path. [`remove_diff_file`] removes it.
+pub fn write_diff_file(patch: &[u8]) -> Result<String> {
+    use std::io::Write;
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "discipline-diff-{}-{nanos}-{count}.diff",
+        std::process::id()
+    ));
+    let path = path
+        .to_str()
+        .ok_or_else(|| anyhow!("the temporary directory `{}` is not UTF-8", path.display()))?
+        .to_string();
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&path)
+        .with_context(|| format!("cannot create `{path}`"))?;
+    match file.write_all(patch).and_then(|()| file.sync_all()) {
+        Ok(()) => Ok(path),
+        Err(e) => {
+            let written = anyhow!(e).context(format!("cannot write `{path}`"));
+            Err(match remove_diff_file(&path) {
+                Ok(()) => written,
+                Err(left) => written.context(left.to_string()),
+            })
+        }
+    }
+}
+
+/// Removes the file [`write_diff_file`] wrote. One already gone (the command removed it)
+/// is no error.
+pub fn remove_diff_file(path: &str) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(anyhow!(e).context(format!("cannot remove the diff file `{path}`"))),
+    }
+}
+
+/// Runs `cmd` for this gate in `dir`, as [`run_command_bounded`] does. A command whose
+/// arguments hold [`DIFF_FILE_PLACEHOLDER`] is given the path of a file holding the
+/// change's diff in its place; the file is written only for such a command and removed once
+/// it exits. A diff that cannot be read, written or removed stops the run (exit 2).
+fn run_gate_command(
+    ctx: &Context,
+    name: &str,
+    cmd: &str,
+    timeout_secs: u64,
+    dir: &Path,
+) -> Result<CommandRunResult> {
+    let argv =
+        split_command_line(cmd).with_context(|| format!("invalid command line for `{name}`"))?;
+    if !takes_diff_file(&argv) {
+        return run_argv_bounded(name, &argv, timeout_secs, dir);
+    }
+    let path = ctx
+        .git
+        .patch()
+        .and_then(|patch| write_diff_file(&patch))
+        .with_context(|| {
+            format!(
+                "command `{name}`: cannot write the change's diff for `{DIFF_FILE_PLACEHOLDER}`"
+            )
+        })?;
+    let run = run_argv_bounded(name, &with_diff_file(&argv, &path), timeout_secs, dir);
+    let removed = remove_diff_file(&path);
+    let run = run?;
+    removed?;
+    Ok(run)
 }
 
 /// Whether the runner's environment authorises a change to the commands a gate executes:
@@ -1139,7 +1241,8 @@ fn evaluate_one_command(
     check_canary(ctx, &item, &mut command_violations)?;
 
     // 2. Primary command execution
-    let run_res = run_command_bounded(
+    let run_res = run_gate_command(
+        ctx,
         &item.name,
         &item.command,
         item.timeout_seconds,
@@ -1232,7 +1335,8 @@ fn check_canary(
 ) -> Result<()> {
     // 1. Negative-control canary execution
     if let Some(ref canary_cmd) = item.canary_command {
-        let canary_res = run_command_bounded(
+        let canary_res = run_gate_command(
+            ctx,
             &format!("{}:canary", item.name),
             canary_cmd,
             item.timeout_seconds,
@@ -2018,7 +2122,13 @@ fn evaluate_base_tests(
     }
 
     // Execute the test command bounded in temp_path
-    let run_res = run_command_bounded(&cmd.name, &cmd.command, cmd.timeout_seconds, &temp_path)?;
+    let run_res = run_gate_command(
+        ctx,
+        &cmd.name,
+        &cmd.command,
+        cmd.timeout_seconds,
+        &temp_path,
+    )?;
     outcome.examined += 1;
     // The failed cases are read from the output: a report cut off may have lost them.
     if run_res.stdout_truncated || run_res.stderr_truncated {
@@ -2354,7 +2464,7 @@ mod tests {
     fn test_preset_catalog_resolution_invariants() {
         let p = presets::resolve_preset("cargo-mutants").expect("cargo-mutants preset exists");
         assert_eq!(p.category, "mutation");
-        assert_eq!(p.default_command, "cargo mutants --in-diff");
+        assert_eq!(p.default_command, "cargo mutants --in-diff {diff_file}");
         assert_eq!(p.zero_items_pattern, Some(r"\b0 mutants tested"));
         assert!(p.forbid_output.contains(&"survived"));
         assert_eq!(p.policy_files, &[".cargo/mutants.toml"]);
@@ -2766,5 +2876,99 @@ mod tests {
         let named = |suffix: &str| format!("{}_{suffix}", "DISCIPLINE_COMMAND");
         assert_eq!(entry_command_variable("unit-tests"), named("UNIT_TESTS"));
         assert_eq!(entry_command_variable("api"), named("API"));
+    }
+
+    /// `{diff_file}` is replaced inside its own argument, which stays one argument; an
+    /// argument without it is passed as written (#844).
+    #[test]
+    fn the_diff_file_placeholder_is_replaced_by_the_path_in_its_own_argument() {
+        let argv = |s: &[&str]| s.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        let preset = split_command_line(presets::CARGO_MUTANTS_COMMAND).unwrap();
+        assert_eq!(
+            preset,
+            argv(&["cargo", "mutants", "--in-diff", "{diff_file}"])
+        );
+        assert!(takes_diff_file(&preset));
+        assert_eq!(
+            with_diff_file(&preset, "/t/a b.diff"),
+            argv(&["cargo", "mutants", "--in-diff", "/t/a b.diff"])
+        );
+        let joined = argv(&["tool", "--diff={diff_file}"]);
+        assert!(takes_diff_file(&joined));
+        assert_eq!(
+            with_diff_file(&joined, "/t/x.diff"),
+            argv(&["tool", "--diff=/t/x.diff"])
+        );
+        // Control: no placeholder, nothing replaced.
+        let plain = argv(&["cargo", "mutants", "--in-diff", "{diff}", "diff_file"]);
+        assert!(!takes_diff_file(&plain));
+        assert_eq!(with_diff_file(&plain, "/t/x.diff"), plain);
+    }
+
+    /// The diff file holds the patch, is its owner's alone, and is gone once removed; a
+    /// second removal, of a file already gone, is no error.
+    #[test]
+    fn a_diff_file_holds_the_patch_until_it_is_removed() {
+        let path = write_diff_file(b"diff --git a/x b/x\n").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"diff --git a/x b/x\n");
+        assert!(!path.starts_with(std::env::current_dir().unwrap().to_str().unwrap()));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        let other = write_diff_file(b"").unwrap();
+        assert_ne!(path, other);
+        remove_diff_file(&path).unwrap();
+        assert!(!Path::new(&path).exists());
+        remove_diff_file(&path).unwrap();
+        // Control: the other file is untouched until it is removed.
+        assert!(Path::new(&other).exists());
+        remove_diff_file(&other).unwrap();
+    }
+
+    /// A command that names `{diff_file}` reads the change's diff from the path it is given,
+    /// and the file is gone after the run; a command that does not is run as written.
+    #[cfg(unix)]
+    #[test]
+    fn a_command_naming_the_diff_file_reads_the_change_and_the_file_is_removed() {
+        let (dir, git) = crate::gitctx::test_support::repo_with_changed_file(
+            "src/lib.rs",
+            "fn a() {}\n",
+            "fn a() {}\nfn b() {}\n",
+        );
+        let config = DisciplineConfig::default();
+        let ctx = crate::guards::test_support::context(&config, &git);
+        let run = run_gate_command(
+            &ctx,
+            "mut",
+            r#"sh -c 'printf "%s\n" "$1"; cat "$1"' sh {diff_file}"#,
+            5,
+            dir.path(),
+        )
+        .unwrap();
+        assert!(run.status.success(), "{}", run.stderr);
+        let (path, patch) = run.stdout.split_once('\n').unwrap();
+        assert!(
+            path.ends_with(".diff") && !path.contains("{diff_file}"),
+            "{path}"
+        );
+        assert_eq!(patch.as_bytes(), git.patch().unwrap().as_slice());
+        assert!(
+            patch.contains("+++ b/src/lib.rs\n") && patch.contains("\n+fn b() {}\n"),
+            "{patch}"
+        );
+        assert!(!Path::new(path).exists(), "{path} left behind");
+        // Control: no placeholder, the argument reaches the command as written.
+        let run = run_gate_command(
+            &ctx,
+            "plain",
+            r#"sh -c 'printf "%s" "$1"' sh diff_file"#,
+            5,
+            dir.path(),
+        )
+        .unwrap();
+        assert_eq!(run.stdout, "diff_file");
     }
 }

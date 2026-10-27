@@ -5045,6 +5045,29 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "command: the cargo-mutants default names `{diff_file}`, and a command is given a file holding the diff in its place (#844)",
+        || {
+            use crate::guards::command::{remove_diff_file, run_argv_bounded, split_command_line, takes_diff_file, with_diff_file, write_diff_file};
+            use crate::guards::presets::{resolve_preset, CARGO_MUTANTS_COMMAND};
+            let argv = split_command_line(CARGO_MUTANTS_COMMAND)?;
+            let patch = b"diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1,2 @@\n fn a() {}\n+fn b() {}\n";
+            let path = write_diff_file(patch)?;
+            let given = with_diff_file(&split_command_line("cat {diff_file}")?, &path);
+            use std::path::Path;
+            let run = run_argv_bounded("diff-file", &given, 5, Path::new("."));
+            remove_diff_file(&path)?;
+            let run = run?;
+            Ok(argv[..3] == ["cargo", "mutants", "--in-diff"]
+                && argv[3] == "{diff_file}"
+                && takes_diff_file(&argv)
+                && !takes_diff_file(&split_command_line("cargo mutants --in-diff")?)
+                && run.status.success()
+                && run.stdout.as_bytes() == patch
+                && !Path::new(&path).exists()
+                && resolve_preset("cargo-mutants").is_some_and(|p| p.default_command == CARGO_MUTANTS_COMMAND))
+        },
+    ),
+    (
         "command: base-tests overlays no test inside a source file, and names a changed source that holds one",
         || {
             use crate::guards::command::{base_test_files, inline_test_sources};
@@ -5383,7 +5406,7 @@ command = "cargo test"
             // 3. Unknown preset fails lookup
             let unknown = presets::resolve_preset("nonexistent-tool");
 
-            Ok(effective_cmd == "cargo mutants --in-diff"
+            Ok(effective_cmd == "cargo mutants --in-diff {diff_file}"
                 && effective_timeout == 120
                 && cmd_gate.forbid_output.contains(&"CUSTOM_FORBID".to_string())
                 && semver_cmd == "cargo semver-checks check-release"

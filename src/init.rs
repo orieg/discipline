@@ -85,7 +85,7 @@ impl TestRunner {
     }
 
     /// Whether [`Self::mutation_preset`]'s command mutates only what the change touched.
-    /// Only `cargo mutants --in-diff` does; the other presets run the tool over the
+    /// Only `cargo mutants --in-diff {diff_file}` does; the other presets run the tool over the
     /// whole project.
     pub fn mutation_preset_is_diff_scoped(self) -> bool {
         matches!(self, TestRunner::CargoNextest | TestRunner::Cargo)

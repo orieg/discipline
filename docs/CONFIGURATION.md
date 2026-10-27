@@ -152,12 +152,12 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.command.allow_zero` | boolean | `false` | Whether zero items selected is allowed; on a `base-tests` command, whether a run that read no test case passes |
 | `gates.command.canary_command` | string | *(unset)* | Optional negative-control canary command |
 | `gates.command.canary_expected_diagnostic` | string | *(unset)* | Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text |
-| `gates.command.command` | string | *(unset)* | Primary command to execute |
+| `gates.command.command` | string | *(unset)* | Primary command to execute; `{diff_file}` in an argument is replaced by the path of a file holding the change's diff |
 | `gates.command.commands` | array of tables | `[]` | Multi-command suite entries |
 | `gates.command.commands[].allow_zero` | boolean | *(per entry)* | Whether zero items selected is allowed; on a `base-tests` command, whether a run that read no test case passes |
 | `gates.command.commands[].canary_command` | string | *(per entry)* | Optional negative-control canary command |
 | `gates.command.commands[].canary_expected_diagnostic` | string | *(per entry)* | Regular expression the canary's output must match; a value that does not compile is a configuration error, never matched as literal text |
-| `gates.command.commands[].command` | string | *(per entry)* | Command string to execute |
+| `gates.command.commands[].command` | string | *(per entry)* | Command string to execute; `{diff_file}` in an argument is replaced by the path of a file holding the change's diff |
 | `gates.command.commands[].count_pattern` | string | *(per entry)* | Regex pattern to extract an integer count from its first capture group; a pattern that does not compile or has no capture group is a configuration error |
 | `gates.command.commands[].forbid_output` | list | *(per entry)* | Regular expressions that must not match stdout or stderr; a value that does not compile is a configuration error, never matched as literal text |
 | `gates.command.commands[].min_count` | integer | *(per entry)* | Minimum count required |
