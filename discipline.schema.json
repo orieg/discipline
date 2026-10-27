@@ -1760,7 +1760,7 @@
               "$ref": "#/$defs/CitationAnchorsGate"
             }
           ],
-          "description": "verify path:line@sha citations against quoted text and git history"
+          "description": "verify path:line@sha citations against quoted text and git history, and relative Markdown links against the tree"
         },
         "citation-metadata": {
           "allOf": [

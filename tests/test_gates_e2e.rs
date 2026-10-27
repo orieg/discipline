@@ -19057,6 +19057,53 @@ fn citation_repo(base: &[(&str, &str)], head: &[(&str, &str)], message: &str) ->
 }
 
 #[test]
+fn citation_anchors_reports_a_relative_markdown_link_whose_target_is_missing() {
+    let base = [
+        ("README.md", "# p\n\nSee [the guide](docs/guide.md).\n"),
+        ("docs/guide.md", "# guide\n"),
+    ];
+    let head = [(
+        "README.md",
+        "# p\n\nSee [the guide](docs/guide.md) and the [API reference](docs/api-reference.md).\n\n\
+         [site](https://example.com/missing.md) and [top](#p).\n\n\
+         ```md\n[example](docs/example.md)\n```\n",
+    )];
+    let repo = citation_repo(&base, &head, "docs: link the API reference");
+
+    // Off by default: nothing reads the link.
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}", run.stdout);
+
+    let run = repo.check(&["--enable", "citation-anchors"]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let found = run.violations("citation-anchors");
+    assert_eq!(found.len(), 1, "{}", run.stdout);
+    assert_eq!(found[0]["code"], "citation-anchors/link-target-missing");
+    assert_eq!(found[0]["file"], "README.md");
+    assert_eq!(found[0]["line"], 3);
+    assert!(
+        found[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("`docs/api-reference.md`"),
+        "{}",
+        found[0]["message"]
+    );
+
+    // Control: the same change with the target added passes.
+    repo.write("docs/api-reference.md", "# API\n");
+    repo.commit("docs: add the API reference");
+    let run = repo.check(&["--enable", "citation-anchors"]);
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert_eq!(
+        run.violations("citation-anchors").len(),
+        0,
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
 fn citation_metadata_judges_a_change_to_the_citation_record() {
     let good = [
         ("CITATION.cff", CITATION_CFF),

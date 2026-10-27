@@ -1266,6 +1266,7 @@
       "citation-anchors/commit-unresolvable",
       "citation-anchors/file-not-found",
       "citation-anchors/line-out-of-bounds",
+      "citation-anchors/link-target-missing",
       "citation-anchors/quote-too-short",
       "citation-anchors/text-mismatch",
       "citation-anchors/tracker-title-mismatch",
