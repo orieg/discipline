@@ -1,0 +1,36 @@
+{
+  "slices": 2,
+  "slice": 0,
+  "week": null,
+  "shards": 3,
+  "per_shard_capacity": 112,
+  "assignment": {
+    "src/ast/bounds.rs": 0,
+    "src/guards/ci_skip_set.rs": 1,
+    "src/guards/untouched.rs": 1
+  },
+  "slice_files": [
+    "src/ast/bounds.rs"
+  ],
+  "slice_mutants": 3,
+  "diff": {
+    "base": "c0ffee0000000000000000000000000000000000",
+    "run": true,
+    "mutants": 4,
+    "note": null
+  },
+  "expect": [
+    {
+      "slice": 3,
+      "diff": 0
+    },
+    {
+      "slice": 0,
+      "diff": 3
+    },
+    {
+      "slice": 0,
+      "diff": 1
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "description": "Test ratchet: measured at zero.",
+  "slices": 2,
+  "previous_commit": "c0ffee0000000000000000000000000000000000",
+  "files": {
+    "src/ast/bounds.rs": {
+      "slice": 0,
+      "missed": 0,
+      "run_id": 100
+    },
+    "src/guards/ci_skip_set.rs": {
+      "slice": 1,
+      "missed": 0,
+      "run_id": 100
+    },
+    "src/guards/untouched.rs": {
+      "slice": 1,
+      "missed": 4,
+      "run_id": 100
+    }
+  }
+}

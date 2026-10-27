@@ -4,10 +4,20 @@ name: "Mutation testing"
 # A surviving mutant is a change to a detector that no unit test notices. The committed
 # ratchet (tests/fixtures/mutants_ratchet.json) caps the survivors per file, and a file
 # above its cap fails the run. Advisory: not in the `ci-gate` rollup.
+#
+# The whole scope does not fit the hosted runners (#869), so each run tests one slice of
+# the files, picked by the week the run was created in, plus the mutants in the code
+# changed since the ratchet's previous measured commit (the diff slice).
 on:
   schedule:
     - cron: '30 3 * * 6'
   workflow_dispatch:
+    inputs:
+      slice:
+        description: 'Slice to test (0 to the ratchet''s slices - 1); empty tests the week''s slice'
+        required: false
+        type: string
+        default: ''
   # A pull request that changes the workflow or the ratchet runs the script's self-check
   # only, never the mutants.
   pull_request:
@@ -48,9 +58,78 @@ jobs:
           python3 scripts/mutants_ratchet.py --self-check
           python3 scripts/mutants_ratchet.py --validate tests/fixtures/mutants_ratchet.json
 
+  # Picks the slice, lists its mutants and the diff slice's, and checks that a shard's
+  # share fits its step (scripts/mutants_ratchet.py --plan). Every shard reads the plan.
+  plan:
+    name: Plan the slice
+    needs: self-check
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # The run's creation time, which keys the rotation.
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The diff slice diffs against the ratchet's previous measured commit.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+      - name: Install cargo-mutants (pinned)
+        run: cargo install cargo-mutants --version "${CARGO_MUTANTS_VERSION}" --locked
+      # The slice comes from the week of the run's creation time, which a re-run keeps, so
+      # a re-run tests the same slice. A dispatched run may name a slice instead.
+      - name: Plan the slice and the diff slice
+        env:
+          SLICE_INPUT: ${{ inputs.slice }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          ratchet=tests/fixtures/mutants_ratchet.json
+          mkdir -p mutants-plan
+          cargo mutants --list --json \
+            --file 'src/ast/**/*.rs' --file 'src/guards/**/*.rs' > mutants-plan/all.json
+          previous="$(python3 scripts/mutants_ratchet.py --print-previous-commit "${ratchet}")"
+          diff_args=()
+          if [ -z "${previous}" ]; then
+            : # the plan notes that there is no previous measured commit
+          elif ! git cat-file -e "${previous}^{commit}" 2>/dev/null; then
+            diff_args=(--diff-skipped "the previous measured commit ${previous} is not in this history")
+          else
+            git diff "${previous}..HEAD" -- src/ast src/guards > mutants-plan/diff.patch
+            # cargo-mutants prints nothing, and exits 0, for a diff that touches no mutant.
+            cargo mutants --list --json --in-diff mutants-plan/diff.patch \
+              --file 'src/ast/**/*.rs' --file 'src/guards/**/*.rs' > mutants-plan/diff.json
+            diff_args=(--diff-list mutants-plan/diff.json)
+          fi
+          if [ -n "${SLICE_INPUT}" ]; then
+            when=(--slice "${SLICE_INPUT}")
+          else
+            created="$(gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}" --jq .created_at)"
+            when=(--run-created "${created}")
+          fi
+          python3 scripts/mutants_ratchet.py --plan --ratchet "${ratchet}" \
+            --mutants-list mutants-plan/all.json --shards "${MUTANTS_SHARDS}" \
+            --plan-out mutants-plan "${when[@]}" "${diff_args[@]}"
+      - name: Keep the plan
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-plan
+          path: |
+            mutants-plan/plan.json
+            mutants-plan/slice-files.txt
+            mutants-plan/diff.patch
+          if-no-files-found: error
+
   mutants:
     name: Mutants (shard ${{ matrix.shard }})
-    needs: self-check
+    needs: plan
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 340
@@ -76,40 +155,82 @@ jobs:
           save-if: ${{ matrix.shard == 0 }}
       - name: Install cargo-mutants (pinned)
         run: cargo install cargo-mutants --version "${CARGO_MUTANTS_VERSION}" --locked
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mutants-plan
+          path: mutants-plan
       # Every shard takes the same arguments, or the shards disagree on the split. A mutant
       # is caught when a unit test (`cargo test --lib`) fails: building every integration
       # test binary for each mutant does not fit the job. `--in-place` mutates this
-      # throwaway checkout instead of copying it.
+      # throwaway checkout instead of copying it. The plan sized the slice and the diff
+      # slice so that one shard's share of both fits this step's `timeout-minutes`
+      # (scripts/mutants_ratchet.py --sizing); a part with no mutant on this shard is
+      # not run.
       - name: Test the shard's mutants
         timeout-minutes: 320
         env:
           SHARD: ${{ matrix.shard }}
         run: |
           set -uo pipefail
-          rc=0
-          cargo mutants --in-place --no-shuffle --shard "${SHARD}/${MUTANTS_SHARDS}" \
-            --file 'src/ast/**/*.rs' --file 'src/guards/**/*.rs' \
-            --timeout 300 --cargo-test-arg=--lib || rc=$?
+          counts="$(python3 scripts/mutants_ratchet.py --shard-plan mutants-plan/plan.json --shard "${SHARD}")" \
+            || { echo "::error::the plan cannot be read"; exit 1; }
+          read -r slice_mutants diff_mutants <<< "${counts}"
+          mapfile -t files < mutants-plan/slice-files.txt
+          slice_args=()
+          exclude_args=()
+          for f in "${files[@]}"; do
+            slice_args+=(--file "${f}")
+            exclude_args+=(--exclude "${f}")
+          done
           # 0: every mutant caught, 2: some missed, 3: some timed out; the ratchet judges
           # those. Any other exit (usage error, failing baseline, internal error) fails.
-          case "${rc}" in
-            0|2|3) ;;
-            *) echo "::error::cargo mutants exited ${rc}"; exit 1 ;;
-          esac
+          judge_exit() {
+            case "$1" in
+              0|2|3) ;;
+              *) echo "::error::cargo mutants ($2) exited $1"; exit 1 ;;
+            esac
+          }
+          if [ "${slice_mutants}" -gt 0 ]; then
+            rc=0
+            cargo mutants --in-place --no-shuffle --shard "${SHARD}/${MUTANTS_SHARDS}" \
+              "${slice_args[@]}" \
+              --timeout 300 --cargo-test-arg=--lib --output mutants-slice || rc=$?
+            judge_exit "${rc}" slice
+          fi
+          # The slice's files are excluded: the slice measured them whole.
+          if [ "${diff_mutants}" -gt 0 ]; then
+            rc=0
+            cargo mutants --in-place --no-shuffle --shard "${SHARD}/${MUTANTS_SHARDS}" \
+              --file 'src/ast/**/*.rs' --file 'src/guards/**/*.rs' "${exclude_args[@]}" \
+              --in-diff mutants-plan/diff.patch \
+              --timeout 300 --cargo-test-arg=--lib --output mutants-diff || rc=$?
+            judge_exit "${rc}" diff
+          fi
+      # One directory per part, so the artifact keeps its layout whichever parts ran. A
+      # part the plan expects and that left nothing fails the `ratchet` job.
+      - name: Stage the shard's outcomes
+        if: always()
+        run: |
+          set -euo pipefail
+          for part in slice diff; do
+            src="mutants-${part}/mutants.out"
+            [ -d "${src}" ] || continue
+            mkdir -p "shard-out/${part}"
+            for f in outcomes.json missed.txt timeout.txt; do
+              if [ -f "${src}/${f}" ]; then cp "${src}/${f}" "shard-out/${part}/"; fi
+            done
+          done
       - name: Keep the shard's outcomes
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mutants-shard-${{ matrix.shard }}
-          path: |
-            mutants.out/outcomes.json
-            mutants.out/missed.txt
-            mutants.out/timeout.txt
-          if-no-files-found: error
+          path: shard-out
+          if-no-files-found: ignore
 
   ratchet:
     name: Surviving-mutant ratchet
-    needs: mutants
+    needs: [plan, mutants]
     if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -123,21 +244,29 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
+          name: mutants-plan
+          path: mutants-plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
           pattern: mutants-shard-*
           path: mutants-outcomes
-      # A shard job that failed, or one whose outcomes are missing or unfinished, fails
-      # this step (exit 2): missing data is never read as zero survivors.
+      # A shard job that failed, or one whose outcomes are missing, unfinished or not the
+      # plan's count, fails this step (exit 2): missing data is never read as zero
+      # survivors. A file whose slice has not run yet is not missing data.
       - name: Compare the survivors with the ratchet
         id: compare
         env:
           SHARDS_RESULT: ${{ needs.mutants.result }}
+          RUN_ID: ${{ github.run_id }}
+          HEAD_SHA: ${{ github.sha }}
         run: |
           set -uo pipefail
           rc=0
           python3 scripts/mutants_ratchet.py \
-            --outcomes-dir mutants-outcomes --shards "${MUTANTS_SHARDS}" \
+            --outcomes-dir mutants-outcomes --plan-file mutants-plan/plan.json \
             --shards-result "${SHARDS_RESULT}" --expect-version "${CARGO_MUTANTS_VERSION}" \
             --ratchet tests/fixtures/mutants_ratchet.json \
+            --run-id "${RUN_ID}" --commit "${HEAD_SHA}" \
             --write-ratchet mutants-ratchet.json || rc=$?
           case "${rc}" in
             0) verdict=pass ;;
@@ -146,8 +275,9 @@ jobs:
           esac
           echo "verdict=${verdict}" >> "${GITHUB_OUTPUT}"
           exit "${rc}"
-      # In bootstrap mode, or when a count can be lowered, a follow-up pull request
-      # commits this file as tests/fixtures/mutants_ratchet.json.
+      # The ratchet with the slice's new counts, the run id and this commit as the
+      # previous measured commit; a follow-up pull request commits it as
+      # tests/fixtures/mutants_ratchet.json.
       - name: Keep the computed ratchet
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -1,5 +1,22 @@
 {
-  "description": "Test ratchet: bootstrap.",
-  "bootstrap": true,
-  "missed": {}
+  "description": "Test ratchet: bootstrap, no file measured yet.",
+  "slices": 2,
+  "previous_commit": "c0ffee0000000000000000000000000000000000",
+  "files": {
+    "src/ast/bounds.rs": {
+      "slice": 0,
+      "missed": null,
+      "run_id": null
+    },
+    "src/guards/ci_skip_set.rs": {
+      "slice": 1,
+      "missed": null,
+      "run_id": null
+    },
+    "src/guards/untouched.rs": {
+      "slice": 1,
+      "missed": null,
+      "run_id": null
+    }
+  }
 }
