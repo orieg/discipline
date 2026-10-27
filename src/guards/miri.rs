@@ -51,9 +51,26 @@ pub fn evaluate_miri(ctx: &Context) -> Result<GateOutcome> {
     let stdout = &res.stdout;
     let stderr = &res.stderr;
 
-    // Check zero-tests guard
+    if !res.status.success() {
+        if let Some(fault) = toolchain_unavailable(stdout, stderr) {
+            // Fail-closed: the tool never ran, so this is "could not check"
+            // (exit 2), never "undefined behavior detected" (exit 1). Checked before the
+            // zero-tests guard: whatever its output holds, a tool that never ran is not a
+            // run of zero tests.
+            return Err(crate::could_not_check::tag(
+                crate::could_not_check::Reason::ToolchainUnavailable,
+                anyhow::anyhow!(
+                    "miri could not run: {fault}. Install the component \
+                     (`rustup +nightly component add miri`) or disable the `miri` gate."
+                ),
+            ));
+        }
+    }
+
+    // Check zero-tests guard: every `running N tests` count, the doc-tests' among them,
+    // is read together (#883).
     if let Some(zero_pat) = preset.zero_items_pattern {
-        if stdout.contains(zero_pat) || stderr.contains(zero_pat) {
+        if zero_tests_shown(zero_pat, stdout, stderr)? {
             if let Some(ov) = ctx
                 .find_override(
                     GATE,
@@ -114,17 +131,6 @@ pub fn evaluate_miri(ctx: &Context) -> Result<GateOutcome> {
     }
 
     if !res.status.success() {
-        if let Some(fault) = toolchain_unavailable(stdout, stderr) {
-            // Fail-closed: the tool never ran, so this is "could not check"
-            // (exit 2), never "undefined behavior detected" (exit 1).
-            return Err(crate::could_not_check::tag(
-                crate::could_not_check::Reason::ToolchainUnavailable,
-                anyhow::anyhow!(
-                    "miri could not run: {fault}. Install the component \
-                     (`rustup +nightly component add miri`) or disable the `miri` gate."
-                ),
-            ));
-        }
         if let Some(ov) = ctx
             .find_override(
                 GATE,
@@ -221,25 +227,35 @@ pub(crate) fn miri_argv(built_in: &str, args: &[String]) -> Result<Vec<String>> 
     Ok(argv)
 }
 
+/// Whether the output of `cargo miri test` shows that no test ran, by the preset's
+/// zero-tests guard, read over stdout and stderr together: libtest prints its counts on
+/// stdout and cargo its `Running` lines on stderr.
+fn zero_tests_shown(zero_pat: &str, stdout: &str, stderr: &str) -> Result<bool> {
+    crate::guards::command::zero_items_shown(
+        zero_pat,
+        "miri zero-tests guard",
+        &format!("{stdout}\n{stderr}"),
+    )
+}
+
+/// What the gate reports for a run, in the order it checks: a toolchain that never ran,
+/// a run that executed no test, a failed run.
 pub fn evaluate_miri_output(
     status_success: bool,
     stdout: &str,
     stderr: &str,
     zero_pat: Option<&str>,
-) -> Option<&'static str> {
+) -> Result<Option<&'static str>> {
+    // An environment fault is not a finding: see guards::toolchain_unavailable.
+    if !status_success && toolchain_unavailable(stdout, stderr).is_some() {
+        return Ok(Some("toolchain"));
+    }
     if let Some(zero_pat) = zero_pat {
-        if stdout.contains(zero_pat) || stderr.contains(zero_pat) {
-            return Some("zero-tests");
+        if zero_tests_shown(zero_pat, stdout, stderr)? {
+            return Ok(Some("zero-tests"));
         }
     }
-    if !status_success {
-        // An environment fault is not a finding: see guards::toolchain_unavailable.
-        if toolchain_unavailable(stdout, stderr).is_some() {
-            return Some("toolchain");
-        }
-        return Some("failure");
-    }
-    None
+    Ok((!status_success).then_some("failure"))
 }
 
 #[cfg(test)]
@@ -313,17 +329,63 @@ mod tests {
         // The tool never ran: rustup has no miri component for this toolchain.
         let env_fault = "error: the 'miri' component which provides the command 'cargo-miri' is not available for the 'stable-aarch64-apple-darwin' toolchain";
         assert_eq!(
-            evaluate_miri_output(false, "", env_fault, None),
+            evaluate_miri_output(false, "", env_fault, None).unwrap(),
             Some("toolchain"),
             "a missing toolchain must not be reported as detected undefined behavior"
+        );
+        // Nor as zero tests, whatever it printed.
+        let guard = Some(crate::guards::presets::LIBTEST_ZERO_TESTS);
+        assert_eq!(
+            evaluate_miri_output(false, "", env_fault, guard).unwrap(),
+            Some("toolchain")
         );
 
         // The tool RAN and found real UB: still a failure.
         let real_ub =
             "error: Undefined Behavior: attempting a read access using <untagged> at alloc1[0x0]";
         assert_eq!(
-            evaluate_miri_output(false, "", real_ub, None),
+            evaluate_miri_output(false, "", real_ub, None).unwrap(),
             Some("failure")
+        );
+        assert_eq!(
+            evaluate_miri_output(false, "running 3 tests\ntest t ... ", real_ub, guard).unwrap(),
+            Some("failure")
+        );
+        // A build that failed printed no test count: a failure, not zero tests.
+        let build = "error[E0425]: cannot find value `x` in this scope";
+        assert_eq!(
+            evaluate_miri_output(false, "", build, guard).unwrap(),
+            Some("failure")
+        );
+    }
+
+    /// `cargo miri test` runs the doc-tests too: an empty `Doc-tests` section after unit
+    /// tests ran is not a run of zero tests (#883). Every section empty still is; output
+    /// with no test count is not read as zero tests.
+    #[test]
+    fn miri_zero_tests_reads_the_count_of_every_section() {
+        use super::evaluate_miri_output;
+        let guard = Some(crate::guards::presets::LIBTEST_ZERO_TESTS);
+        let unit_ran = "running 2 tests\ntest t1 ... ok\ntest t2 ... ok\n\n\
+            test result: ok. 2 passed; 0 failed\n";
+        let doc_empty = "\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed\n";
+        let cargo = "     Running unittests src/lib.rs\n   Doc-tests p\n";
+        let ran = format!("{unit_ran}{doc_empty}");
+        assert_eq!(
+            evaluate_miri_output(true, &ran, cargo, guard).unwrap(),
+            None
+        );
+        // Control: every section empty.
+        let none_ran = format!("{}{doc_empty}", unit_ran.replace("running 2", "running 0"));
+        assert_eq!(
+            evaluate_miri_output(true, &none_ran, cargo, guard).unwrap(),
+            Some("zero-tests")
+        );
+        assert_eq!(evaluate_miri_output(true, "", cargo, guard).unwrap(), None);
+        // A count that ends in `0` is not zero.
+        assert_eq!(
+            evaluate_miri_output(true, "running 10 tests\n", "", guard).unwrap(),
+            None
         );
     }
 }

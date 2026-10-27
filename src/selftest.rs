@@ -5436,7 +5436,7 @@ command = "cargo test"
 
             // Check concurrency test invariants
             let loom_ok = loom.category == "concurrency"
-                && loom.zero_items_pattern == Some("running 0 tests")
+                && loom.zero_items_pattern == Some(presets::LIBTEST_ZERO_TESTS)
                 && loom.default_command == "cargo test --test loom -- --nocapture";
 
             // Check coverage report invariants
@@ -5468,15 +5468,41 @@ command = "cargo test"
                     && !re.is_match("100 mutants tested");
             }
             for id in ["loom", "miri"] {
-                let re = guard(id)?;
-                ok &= re.is_match("running 0 tests")
-                    && !re.is_match("running 10 tests")
-                    && !re.is_match("running 100 tests");
+                let pattern = resolve_preset(id)
+                    .and_then(|p| p.zero_items_pattern)
+                    .ok_or_else(|| anyhow::anyhow!("preset `{id}` has no zero-items guard"))?;
+                let shown = |out: &str| crate::guards::command::zero_items_shown(pattern, id, out);
+                ok &= shown("running 0 tests")?
+                    && !shown("running 10 tests")?
+                    && !shown("running 100 tests")?;
             }
             let lcov = guard("lcov")?;
             ok &= lcov.is_match("  lines......: 0% (0 of 12 lines)")
                 && !lcov.is_match("  lines......: 10% (1 of 10 lines)")
                 && !lcov.is_match("  lines......: 100% (12 of 12 lines)");
+            Ok(ok)
+        },
+    ),
+    (
+        "presets: the loom and miri zero-tests guard reads every libtest section, so an empty doc-test section after unit tests ran is not zero tests (#883)",
+        || {
+            use crate::guards::command::zero_items_shown;
+            use crate::guards::presets::{resolve_preset, LIBTEST_ZERO_TESTS};
+            let unit = "running 2 tests\ntest t1 ... ok\ntest t2 ... ok\n\ntest result: ok. 2 passed; 0 failed\n";
+            let doc = "\n   Doc-tests p\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed\n";
+            let ran = format!("{unit}{doc}");
+            let none_ran = format!("{}{doc}", unit.replace("running 2", "running 0"));
+            let mut ok = true;
+            for id in ["loom", "miri"] {
+                let preset = resolve_preset(id)
+                    .ok_or_else(|| anyhow::anyhow!("preset `{id}` is missing"))?;
+                ok &= preset.zero_items_pattern == Some(LIBTEST_ZERO_TESTS);
+                let shown = |out: &str| zero_items_shown(LIBTEST_ZERO_TESTS, id, out);
+                ok &= !shown(&ran)? && shown(&none_ran)? && !shown("")? && !shown("running 10 tests")?;
+            }
+            // A configured pattern keeps its meaning: matched anywhere.
+            ok &= zero_items_shown("running 0 tests", "configured", &ran)?;
+            ok &= crate::guards::command::output_pattern(LIBTEST_ZERO_TESTS, "configured").is_err();
             Ok(ok)
         },
     ),
@@ -9821,9 +9847,9 @@ smoke_cost::set_contains
         "miri: evaluate_miri_output distinguishes clean runs, zero-tests, and failures",
         || {
             use crate::guards::miri::evaluate_miri_output;
-            let clean = evaluate_miri_output(true, "test result: ok. 5 passed", "", Some("running 0 tests"));
-            let zero = evaluate_miri_output(true, "running 0 tests", "", Some("running 0 tests"));
-            let fail = evaluate_miri_output(false, "", "Undefined Behavior: pointer arithmetic out of bounds", Some("running 0 tests"));
+            let clean = evaluate_miri_output(true, "test result: ok. 5 passed", "", Some("running 0 tests"))?;
+            let zero = evaluate_miri_output(true, "running 0 tests", "", Some("running 0 tests"))?;
+            let fail = evaluate_miri_output(false, "", "Undefined Behavior: pointer arithmetic out of bounds", Some("running 0 tests"))?;
 
             Ok(clean.is_none() && zero == Some("zero-tests") && fail == Some("failure"))
         },

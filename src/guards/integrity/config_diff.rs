@@ -879,6 +879,41 @@ mod tests {
         );
     }
 
+    /// #883: the `loom` and `miri` presets' zero-tests guard reads libtest counts and is no
+    /// pattern, so a `zero_items_pattern` written beside them replaces it, the old default
+    /// `running 0 tests` among them, and one removed is replaced by it.
+    #[test]
+    fn a_zero_items_pattern_beside_a_libtest_preset_is_compared_with_its_counted_guard() {
+        let what = |base: &str, head: &str| -> Vec<String> {
+            diff_configs(&cfg(base), &cfg(head))
+                .unwrap()
+                .iter()
+                .map(|w| format!("{}: {}", w.gate, w.what()))
+                .collect()
+        };
+        let none: [&str; 0] = [];
+        let old = "zero_items_pattern = \"running 0 tests\"\n";
+        for preset in ["loom", "miri"] {
+            let table = |rest: &str| format!("[gates.command]\npreset = \"{preset}\"\n{rest}");
+            assert_eq!(
+                what(&table(""), &table(old)),
+                ["command: `zero_items_pattern` changed from \
+                     '{libtest: a \"running N tests\" line is printed and every one has N = 0}' \
+                     to \"running 0 tests\" \
+                     (the base value is its preset's default)"],
+                "{preset}"
+            );
+            assert_eq!(
+                what(&table(old), &table("")),
+                ["command: `zero_items_pattern` removed (was \"running 0 tests\")"],
+                "{preset}"
+            );
+            // Control: nothing written, or the same pattern on both sides.
+            assert_eq!(what(&table(""), &table("")), none, "{preset}");
+            assert_eq!(what(&table(old), &table(old)), none, "{preset}");
+        }
+    }
+
     #[test]
     fn ratification_policy_loosening_is_a_weakening_and_tightening_is_not() {
         use crate::config::{AcceptEdited, RatificationWindow};

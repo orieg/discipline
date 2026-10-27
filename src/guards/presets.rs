@@ -10,6 +10,8 @@ pub struct PresetDefinition {
     pub category: &'static str,
     pub default_command: &'static str,
     pub default_timeout_seconds: u64,
+    /// The zero-items guard: a regular expression whose match anywhere in the output means
+    /// nothing ran, or [`LIBTEST_ZERO_TESTS`], which reads libtest's counts instead.
     pub zero_items_pattern: Option<&'static str>,
     pub forbid_output: &'static [&'static str],
     pub canary_command: Option<&'static str>,
@@ -26,6 +28,29 @@ pub struct PresetDefinition {
 /// `0` with a digit before it ends a larger count (`10 mutants tested`), which is not an
 /// empty run (#847).
 pub const ZERO_MUTANTS_TESTED: &str = r"\b0 mutants tested";
+
+/// The zero-tests guard of the presets that run libtest (`loom`, `miri`). It is no regular
+/// expression: the run is empty when it printed a `running N tests` line and every such
+/// line has a count of zero ([`libtest_ran_no_test`]). `cargo test` prints one per test
+/// binary and one for the doc-tests, so a `running 0 tests` under `Doc-tests` after unit
+/// tests ran is not an empty run (#883). Output with no such line (`cargo nextest`, a JSON
+/// format, a failed build) is not read as empty, as the `running 0 tests` pattern never
+/// matched it either. The text is what `config-integrity` shows as the preset's default;
+/// it does not compile as a regular expression, so no configured `zero_items_pattern` can
+/// be equal to it, and a configured pattern keeps its meaning.
+pub const LIBTEST_ZERO_TESTS: &str =
+    r#"{libtest: a "running N tests" line is printed and every one has N = 0}"#;
+
+/// Whether libtest output shows that no test ran: it has a line `running N tests` (or
+/// `running 1 test`), and every such line has a count of zero. Output with no such line
+/// shows nothing either way, so it is not read as empty.
+pub fn libtest_ran_no_test(output: &str) -> bool {
+    static RUNNING: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?m)^running ([0-9]+) tests?\b").expect("valid regex")
+    });
+    let mut counts = RUNNING.captures_iter(output).peekable();
+    counts.peek().is_some() && counts.all(|c| c[1].bytes().all(|b| b == b'0'))
+}
 
 /// The `base-tests` preset's command. libtest prints JUnit only with `-Z unstable-options`,
 /// which a stable toolchain accepts when `RUSTC_BOOTSTRAP` is set; the command runs without
@@ -292,7 +317,7 @@ pub static PRESETS: &[PresetDefinition] = &[
         category: "concurrency",
         default_command: "cargo test --test loom -- --nocapture",
         default_timeout_seconds: 300,
-        zero_items_pattern: Some("running 0 tests"),
+        zero_items_pattern: Some(LIBTEST_ZERO_TESTS),
         forbid_output: &[],
         canary_command: None,
         canary_expected_diagnostic: None,
@@ -306,7 +331,7 @@ pub static PRESETS: &[PresetDefinition] = &[
         category: "concurrency",
         default_command: "cargo miri test",
         default_timeout_seconds: 600,
-        zero_items_pattern: Some("running 0 tests"),
+        zero_items_pattern: Some(LIBTEST_ZERO_TESTS),
         forbid_output: &[],
         canary_command: None,
         canary_expected_diagnostic: None,
@@ -485,7 +510,9 @@ mod tests {
 
         let loom = resolve_preset("loom").unwrap();
         assert_eq!(loom.category, "concurrency");
-        assert_eq!(loom.zero_items_pattern, Some("running 0 tests"));
+        assert_eq!(loom.zero_items_pattern, Some(LIBTEST_ZERO_TESTS));
+        let miri = resolve_preset("miri").unwrap();
+        assert_eq!(miri.zero_items_pattern, Some(LIBTEST_ZERO_TESTS));
 
         let cargo_deny = resolve_preset("cargo-deny").unwrap();
         assert_eq!(cargo_deny.category, "supply-chain");
@@ -506,6 +533,60 @@ mod tests {
         }
         assert!(!is_resolve_locked_preset("cargo-deny"));
     }
+    /// The output of the issue's reproduction: two unit tests ran, the doc-test section is
+    /// empty.
+    const DOC_TESTS_EMPTY: &str = "running 2 tests\ntest t1 ... ok\ntest t2 ... ok\n\n\
+        test result: ok. 2 passed; 0 failed\n\n   Doc-tests p\n\nrunning 0 tests\n\n\
+        test result: ok. 0 passed; 0 failed\n";
+
+    /// `cargo test` and `cargo miri test` print one `running N tests` line per test binary
+    /// and one for the doc-tests: the run is empty when every such line has a count of
+    /// zero, and output with none is not read as empty (#883).
+    #[test]
+    fn the_libtest_guard_reads_the_count_of_every_section() {
+        assert!(!libtest_ran_no_test(DOC_TESTS_EMPTY));
+        assert!(!libtest_ran_no_test(
+            "running 2 tests\r\ntest result: ok\r\n"
+        ));
+        // Control: every section ran none.
+        let all_empty = DOC_TESTS_EMPTY.replace("running 2 tests", "running 0 tests");
+        assert!(libtest_ran_no_test(&all_empty));
+        // No `running` line: not libtest's count, so not read as empty.
+        assert!(!libtest_ran_no_test(""));
+        assert!(!libtest_ran_no_test(
+            "test result: ok. 5 passed; 0 failed\n"
+        ));
+        assert!(!libtest_ran_no_test("error: could not compile `p`\n"));
+        assert!(!libtest_ran_no_test(
+            "     Starting 3 tests across 1 binary\n"
+        ));
+        // A count is read whole: one that ends in `0` is not zero, nor is one test.
+        assert!(libtest_ran_no_test("running 0 tests\n"));
+        assert!(!libtest_ran_no_test("running 10 tests\n"));
+        assert!(!libtest_ran_no_test("running 100 tests\n"));
+        assert!(!libtest_ran_no_test("running 1 test\n"));
+        assert!(!libtest_ran_no_test(
+            "running 0 tests\nrunning 99999999999999999999999 tests\n"
+        ));
+        // Only a line that starts with it: a test's own output saying so is no count.
+        assert!(libtest_ran_no_test(
+            "running 0 tests\nlog: rerunning 3 tests\nmsg running 4 tests\n"
+        ));
+    }
+
+    /// The preset's guard is no regular expression, so no configured value can stand for
+    /// it, and a configured `running 0 tests` keeps matching anywhere in the output (#883).
+    #[test]
+    fn a_configured_pattern_never_reads_libtest_counts() {
+        use crate::guards::command::{output_pattern, zero_items_shown};
+        assert!(output_pattern(LIBTEST_ZERO_TESTS, "k").is_err());
+        assert!(!zero_items_shown(LIBTEST_ZERO_TESTS, "k", DOC_TESTS_EMPTY).unwrap());
+        assert!(zero_items_shown("running 0 tests", "k", DOC_TESTS_EMPTY).unwrap());
+        let all_empty = DOC_TESTS_EMPTY.replace("running 2 tests", "running 0 tests");
+        assert!(zero_items_shown(LIBTEST_ZERO_TESTS, "k", &all_empty).unwrap());
+        assert!(zero_items_shown("running 0 tests", "k", &all_empty).unwrap());
+    }
+
     /// `forbid_output`, `zero_items_pattern` and `canary_expected_diagnostic` are regular
     /// expressions with no literal fallback (#600). Every built-in default must compile,
     /// and none may depend on being read as text: each matches its own text. The
@@ -538,8 +619,9 @@ mod tests {
     }
 
     /// A zero-items guard means "nothing ran", so it must match a count of exactly zero
-    /// and never a larger count that ends in `0` (#847). Each preset that has one is
-    /// listed with output it must match and output it must not.
+    /// and never a larger count that ends in `0` (#847), and, for libtest, only when every
+    /// section ran none (#883). Each preset that has one is listed with output it must
+    /// match and output it must not.
     #[test]
     fn every_zero_items_pattern_matches_only_a_whole_count_of_zero() {
         type Samples = (
@@ -561,9 +643,16 @@ mod tests {
         ];
         let tests_zero: &[&str] = &[
             "running 0 tests",
-            "running 3 tests\ntest result: ok\nrunning 0 tests\n",
+            "running 0 tests\ntest result: ok\n   Doc-tests p\nrunning 0 tests\n",
         ];
-        let tests_more: &[&str] = &["running 10 tests", "running 20 tests", "running 100 tests"];
+        let tests_more: &[&str] = &[
+            "running 10 tests",
+            "running 20 tests",
+            "running 100 tests",
+            "running 1 test",
+            "running 3 tests\ntest result: ok\n   Doc-tests p\nrunning 0 tests\n",
+            "error[E0425]: cannot find value `x` in this scope",
+        ];
         let samples: &[Samples] = &[
             ("cargo-mutants", mutants_zero, mutants_more),
             ("mutmut", mutants_zero, mutants_more),
@@ -589,12 +678,20 @@ mod tests {
                 .iter()
                 .find(|(id, _, _)| *id == preset.id)
                 .unwrap_or_else(|| panic!("preset `{}` has no samples here", preset.id));
-            let re = crate::guards::command::output_pattern(pattern, preset.id).unwrap();
+            // Every guard but the libtest one is a pattern that compiles.
+            assert_eq!(
+                crate::guards::command::output_pattern(pattern, preset.id).is_ok(),
+                pattern != LIBTEST_ZERO_TESTS,
+                "preset `{}`",
+                preset.id
+            );
+            let shown =
+                |out: &str| crate::guards::command::zero_items_shown(pattern, preset.id, out);
             for out in *zero {
-                assert!(re.is_match(out), "preset `{}`: {out:?}", preset.id);
+                assert!(shown(out).unwrap(), "preset `{}`: {out:?}", preset.id);
             }
             for out in *more {
-                assert!(!re.is_match(out), "preset `{}`: {out:?}", preset.id);
+                assert!(!shown(out).unwrap(), "preset `{}`: {out:?}", preset.id);
             }
         }
         assert_eq!(
