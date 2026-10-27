@@ -291,13 +291,13 @@ fn bare_label_content(rest: &str) -> &str {
 
 /// Strips inline code spans and quoted strings, and strips leading bullet markers so
 /// clause-anchored claim patterns match at the start of a list item.
-fn strip_non_claim_spans(line: &str) -> String {
+pub(crate) fn strip_non_claim_spans(line: &str) -> String {
     let without_code = CODE_SPAN_RE.replace_all(line, " ");
     let without_quotes = QUOTED_TEXT_RE.replace_all(&without_code, " ");
     without_quotes.into_owned()
 }
 
-fn is_question_or_todo(line: &str) -> bool {
+pub(crate) fn is_question_or_todo(line: &str) -> bool {
     let t = line.trim();
     if t.ends_with('?') {
         return true;
