@@ -300,6 +300,7 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `pr-checklist/checklist-claims-docs` | Checklist Claim Unsupported (docs) |
 | `pr-checklist/checklist-claims-benchmarks` | Checklist Claim Unsupported (benchmarks) |
 | `pr-checklist/checklist-claim-unsupported` | Checklist Claim Unsupported |
+| `pr-checklist/prose-claims-tests` | Prose Claims Tests The Change Does Not Contain |
 | `command/untrusted-command-modification` | Untrusted Command Modification |
 | `command/policy-file-deleted` | Policy File Deleted |
 | `command/canary-diagnostic-missing` | Canary Diagnostic Missing |
@@ -1340,10 +1341,24 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Ticked test checkboxes when no test file was modified and no test function was added or extended anywhere.
   - Ticked documentation checkboxes when zero docs or markdown files were modified.
   - Ticked benchmark checkboxes when zero benchmark files were modified.
+  - **Test claims written as prose (`prose-claims-tests`, `warning` at most):** a plain bullet or sentence of the PR body that says tests were added or changed, when the diff adds or extends no test (the same evidence as a ticked test checkbox). Generated descriptions usually state the claim this way rather than as a checkbox (#835). The forms, past, present and imperative, case ignored:
+    - a claim verb, `add`, `write`, `extend`, `update` or `expand` in any tense, then at most four of the listed modifiers, then a test noun: `Added regression tests for negative inputs`, `I added regression tests`, `Add tests for the parser`, `This change adds unit tests`, `Updated the existing tests`; also `improves` or `increases test coverage`, and the verb with a coordinated noun (`Added the flag and tests for it`);
+    - the passive: `Regression tests were added`, `Tests added`, `Unit test was written`;
+    - a bullet or sentence that opens with the noun and `for` or `covering`: `Tests for negative inputs`, `Test coverage for the reader`, unless the rest of the clause says the tests already exist (`pass`, `exist`, `live`, `run`, `cover`, `is`, `are` ...) and not that they were added;
+    - `with` or `plus` and the noun after the change it comes with, ending the clause or followed by `for`, `covering`, `that`, `included` or `added`: `Fixes the reader, with regression tests`.
+
+    Test nouns: `test`, `tests`, `test case(s)`, `test coverage`. Modifiers: `a`, `an`, `the`, `new`, `more`, `extra`, `additional`, `some`, `several`, `missing`, `regression`, `unit`, `integration`, `e2e`, `end-to-end`, `property`, `property-based`, `snapshot`, `golden`, `fuzz`, `focused`, `targeted`, `dedicated`, `corresponding`, `matching`, `basic`, `existing`, `its`, `their`, `our`, a number in digits or `one` to `ten`. Not a claim: a negated one (`no`, `not`, `never`, `without`, `cannot`, `TODO`, `n/a`, a word ending in `n't` anywhere before it in the clause: `No tests added`, `Refactor without tests`, `I didn't add tests`); a deferred or described one (the word just before it is `to`, `will`, `should`, `please`, `that`, `which`, `if`, `when`, `once`, `until` or a modal: `Will add tests`, `a change that adds tests`); one the clause goes on to undo (`not needed`, `to follow`, `follow-up`, `later`, `pending`, `TBD`, `out of scope`: `Tests not needed`, `Regression tests to follow`); a test noun used as an adjective or in a statement about tests that run (`test fixtures`, `test-only`, `the tests directory`, `test plan`, `tests pass`); and one credited to another change (`tests added by #505`, `#505 added tests`). Not read: code spans, fenced and indented code, quoted lines (`>`), double-quoted text, HTML comments (one line or several), directive lines, headings, checkbox items (a ticked one is the checkbox rule's, an unticked one is a to-do), questions and `TODO:` lines. One claim per paragraph or list item; a sentence wrapped over several lines is read whole. A claim that tests exist or pass without saying they were added (`Existing tests cover this`, `All 57 tests pass`) is not reported: it says nothing about what the change added.
+
+    It is a heuristic over prose, so it never reports above `warning`, whatever `severity` is set to. Sanity sample (RUN, self-judged, not an external review): over the bodies of the 400 most recent merged pull requests of this repository (#253 to #882), the reader found 74 claims in 58 pull requests. 70 of those claims were on a pull request that changes a test path; the other 4 (3 pull requests) were each on a pull request that adds a `#[test]` function in a source file, which backs the claim, so the finding is reported on none of the 400. Of 15 claims drawn at random and read by hand, 14 say tests were added or changed and 1 uses `added` as an adjective (`passed only added tests`) on a pull request that changes tests. Two rules were shaped on this sample: a `with` clause that opens the clause is not a claim, and a claim credited to another change is not one (before it, #554's `tests added by #505` would have been reported). No pull request in the sample makes a false test claim, so the sample measures neither precision nor recall; raising the severity needs a precision sample in the [`claim-labels`](benchmarks/claim-labels-precision.md) pattern first.
+- **What it does NOT catch:**
+  - A test claim in a commit message: the gate reads the PR body only.
+  - A claim outside the listed vocabulary (`Covered the new branch`, `Tested the parser with a new case`), and a claim the negation rules over-read: a negation anywhere before the claim in its clause cancels it (`I made sure not to skip it, and added tests` is not reported).
+  - A numeric claim compared with the test count: `all 57 tests pass` against the number of tests the head side holds (`test-floor` counts them). Follow-up.
+  - Whether the tests the diff does add are the ones the description names: any added or extended test backs every test claim.
 - **Passing PR body (accepted):**
   Checklists accurately reflect modified files, or unticked items remain `- [ ]`.
-- **Lifting directive:** `allow-pr-checklist: test|docs|bench <reason>` (the claim the finding names).
-- **Default:** off, severity `error`.
+- **Lifting directive:** `allow-pr-checklist: test|docs|bench <reason>` (the claim the finding names; `test` also lifts `prose-claims-tests`).
+- **Default:** off, severity `error` (`prose-claims-tests`: `warning` at most).
 - **Config keys:** `enabled`, `severity`, `exempt_paths`.
 
 #### `mechanism-sections`
