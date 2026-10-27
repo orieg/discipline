@@ -1,0 +1,14 @@
+[
+  {
+    "name": "src/ast/alpha.rs:10:9: replace f0 -> bool with true",
+    "file": "src/ast/alpha.rs"
+  },
+  {
+    "name": "src/ast/alpha.rs:11:9: replace f1 -> bool with true",
+    "file": "src/ast/alpha.rs"
+  },
+  {
+    "name": "src/guards/gamma.rs:12:9: replace f2 -> bool with true",
+    "file": "src/guards/gamma.rs"
+  }
+]

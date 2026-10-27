@@ -1,0 +1,62 @@
+[
+  {
+    "name": "src/ast/alpha.rs:10:9: replace f0 -> bool with true",
+    "file": "src/ast/alpha.rs"
+  },
+  {
+    "name": "src/ast/alpha.rs:11:9: replace f1 -> bool with true",
+    "file": "src/ast/alpha.rs"
+  },
+  {
+    "name": "src/ast/alpha.rs:12:9: replace f2 -> bool with true",
+    "file": "src/ast/alpha.rs"
+  },
+  {
+    "name": "src/ast/alpha.rs:13:9: replace f3 -> bool with true",
+    "file": "src/ast/alpha.rs"
+  },
+  {
+    "name": "src/ast/alpha.rs:14:9: replace f4 -> bool with true",
+    "file": "src/ast/alpha.rs"
+  },
+  {
+    "name": "src/ast/beta.rs:10:9: replace f0 -> bool with true",
+    "file": "src/ast/beta.rs"
+  },
+  {
+    "name": "src/ast/beta.rs:11:9: replace f1 -> bool with true",
+    "file": "src/ast/beta.rs"
+  },
+  {
+    "name": "src/ast/beta.rs:12:9: replace f2 -> bool with true",
+    "file": "src/ast/beta.rs"
+  },
+  {
+    "name": "src/ast/beta.rs:13:9: replace f3 -> bool with true",
+    "file": "src/ast/beta.rs"
+  },
+  {
+    "name": "src/guards/gamma.rs:10:9: replace f0 -> bool with true",
+    "file": "src/guards/gamma.rs"
+  },
+  {
+    "name": "src/guards/gamma.rs:11:9: replace f1 -> bool with true",
+    "file": "src/guards/gamma.rs"
+  },
+  {
+    "name": "src/guards/gamma.rs:12:9: replace f2 -> bool with true",
+    "file": "src/guards/gamma.rs"
+  },
+  {
+    "name": "src/guards/delta.rs:10:9: replace f0 -> bool with true",
+    "file": "src/guards/delta.rs"
+  },
+  {
+    "name": "src/guards/delta.rs:11:9: replace f1 -> bool with true",
+    "file": "src/guards/delta.rs"
+  },
+  {
+    "name": "src/guards/epsilon.rs:10:9: replace f0 -> bool with true",
+    "file": "src/guards/epsilon.rs"
+  }
+]
