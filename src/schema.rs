@@ -450,7 +450,7 @@ pub fn generate_schema() -> Value {
             })),
             "CommandGate": gate_table(json!({
                 "preset": { "type": "string", "description": "Predefined turnkey preset name (e.g. cargo-mutants, cargo-deny, loom)" },
-                "command": { "type": "string", "description": "Primary command to execute" },
+                "command": { "type": "string", "description": "Primary command to execute; `{diff_file}` in an argument is replaced by the path of a file holding the change's diff" },
                 "timeout_seconds": { "type": "integer", "description": "Execution timeout in seconds (default: 60s)" },
                 "count_pattern": { "type": "string", "description": "Regex pattern to extract an integer count from its first capture group; a pattern that does not compile or has no capture group is a configuration error" },
                 "min_count": { "type": "integer", "description": "Minimum count required" },
@@ -474,7 +474,7 @@ pub fn generate_schema() -> Value {
                 "properties": {
                     "name": { "type": "string", "description": "Name or identifier of the command" },
                     "preset": { "type": "string", "description": "Predefined turnkey preset name (e.g. cargo-mutants, cargo-deny, loom)" },
-                    "command": { "type": "string", "description": "Command string to execute" },
+                    "command": { "type": "string", "description": "Command string to execute; `{diff_file}` in an argument is replaced by the path of a file holding the change's diff" },
                     "timeout_seconds": { "type": "integer", "description": "Execution timeout in seconds" },
                     "count_pattern": { "type": "string", "description": "Regex pattern to extract an integer count from its first capture group; a pattern that does not compile or has no capture group is a configuration error" },
                     "min_count": { "type": "integer", "description": "Minimum count required" },

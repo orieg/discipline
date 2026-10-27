@@ -258,8 +258,9 @@ fn a_command_added_over_a_preset_default_is_reported() {
     let found = weakenings(&run);
     assert!(
         found.len() == 1
-            && found[0]
-                .starts_with("[command] `command` changed from \"cargo mutants --in-diff\" to "),
+            && found[0].starts_with(
+                "[command] `command` changed from \"cargo mutants --in-diff {diff_file}\" to "
+            ),
         "{found:?}\n{}",
         all(&run)
     );

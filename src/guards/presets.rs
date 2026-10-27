@@ -34,12 +34,17 @@ pub const ZERO_MUTANTS_TESTED: &str = r"\b0 mutants tested";
 pub const BASE_TESTS_COMMAND: &str =
     "env RUSTC_BOOTSTRAP=1 cargo test -- -Z unstable-options --format=junit";
 
+/// The `cargo-mutants` preset's command. `--in-diff` takes the path of a diff file; the
+/// command runs without a shell or stdin, so the `command` gate writes the change's diff to
+/// a file and passes its path in place of `{diff_file}` (#844).
+pub const CARGO_MUTANTS_COMMAND: &str = "cargo mutants --in-diff {diff_file}";
+
 pub static PRESETS: &[PresetDefinition] = &[
     // 1. Diff-Scoped Mutation Testing
     PresetDefinition {
         id: "cargo-mutants",
         category: "mutation",
-        default_command: "cargo mutants --in-diff",
+        default_command: CARGO_MUTANTS_COMMAND,
         default_timeout_seconds: 300,
         zero_items_pattern: Some(ZERO_MUTANTS_TESTED),
         forbid_output: &["survived", "MISSED"],
