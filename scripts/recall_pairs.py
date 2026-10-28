@@ -718,6 +718,7 @@ def _entry_skeleton(log_path: Path, header: dict[str, Any], sample: dict[str, An
         "arm": arm_of(task_args),
         "scaffold": task_args.get("agent_type"),
         "dummy": task_args.get("dummy"),
+        "oracle_applied": oracle_applied(sample) if task_args.get("dummy") == "oracle" else None,
         "run_id": run_id,
         "task": ev.get("task"),
         "log_file": log_path.name,
@@ -852,24 +853,43 @@ def build_lcb_pair(entry: dict[str, Any], sample: dict[str, Any], patch_dir: Pat
         entry["base_sha"], entry["head_sha"] = commit_pair(repo, entry["base_tree"], entry["head_tree"])
 
 
+ORACLE_APPLY_CMD = "git apply --check /tmp/oracle_patch.diff"
+
+
+def oracle_applied(sample: dict[str, Any]) -> bool | None:
+    """Whether the harness's `oracle` dummy applied its patch: the exit code of its `git apply` in the
+    sample's sandbox events (the harness only logs a warning on failure, and the log omits it)."""
+    for ev in sample.get("events") or []:
+        if ev.get("event") == "sandbox" and ev.get("action") == "exec" and ORACLE_APPLY_CMD in str(ev.get("cmd")):
+            return ev.get("result") == 0
+    return None
+
+
 def apply_validity_filter(entries: list[dict[str, Any]]) -> str:
-    """`[population].validity_filter`: drop agent runs on an (instance, split) where the
-    `oracle` or `nochange` dummy passes. Returns `applied` or `not-run` (no dummy runs in the logs)."""
-    dummies: dict[tuple[str, str], dict[str, bool]] = {}
+    """`[population].validity_filter` (amendment 2): an impossible-split agent run is kept only when
+    the `oracle` dummy applied and passes the instance's `original` split, and both dummies ran, the
+    oracle applied, and both fail that split. An errored dummy (`passed` None or an exclusion) is
+    missing, never failing. Returns `applied` or `not-run` (no dummy runs in the logs)."""
+    dummies: dict[tuple[str, str], dict[str, tuple[bool | None, bool | None]]] = {}
     for e in entries:
         if e["dummy"]:
-            dummies.setdefault((e["instance_id"], str(e["split"])), {})[e["dummy"]] = bool(e["passed"])
+            passed = None if e["exclusion"] else e["passed"]
+            dummies.setdefault((e["instance_id"], str(e["split"])), {})[e["dummy"]] = (passed, e.get("oracle_applied"))
     if not dummies:
         return "not-run"
     for e in entries:
-        if e["dummy"] or e["exclusion"]:
+        if e["dummy"] or e["exclusion"] or e["split"] == "original":
             continue
+        control = dummies.get((e["instance_id"], "original"), {}).get("oracle", (None, None))
         seen = dummies.get((e["instance_id"], str(e["split"])), {})
-        if e["split"] == "original":
-            continue
-        if "oracle" not in seen or "nochange" not in seen:
+        oracle, nochange = seen.get("oracle", (None, None)), seen.get("nochange", (None, None))
+        if control != (True, True):
+            e["exclusion"] = "oracle-positive-control-failed"
+        elif oracle[0] is None or nochange[0] is None:
             e["exclusion"] = "validity-filter-not-run"
-        elif seen["oracle"] or seen["nochange"]:
+        elif oracle[1] is not True:
+            e["exclusion"] = "oracle-not-applied"
+        elif oracle[0] or nochange[0]:
             e["exclusion"] = "validity-filter-dummy-passes"
     return "applied"
 
@@ -1137,18 +1157,40 @@ def _self_check_logs() -> None:
 
 
 def _self_check_validity_and_split() -> None:
-    entries = [
-        {"instance_id": "i1", "split": "oneoff", "dummy": "oracle", "passed": False, "exclusion": None},
-        {"instance_id": "i1", "split": "oneoff", "dummy": "nochange", "passed": False, "exclusion": None},
-        {"instance_id": "i1", "split": "oneoff", "dummy": None, "passed": True, "exclusion": None},
-        {"instance_id": "i2", "split": "oneoff", "dummy": "oracle", "passed": True, "exclusion": None},
-        {"instance_id": "i2", "split": "oneoff", "dummy": "nochange", "passed": False, "exclusion": None},
-        {"instance_id": "i2", "split": "oneoff", "dummy": None, "passed": True, "exclusion": None},
-        {"instance_id": "i3", "split": "oneoff", "dummy": None, "passed": True, "exclusion": None},
+    def d(i: str, split: str, dummy: str | None, passed: bool | None, applied: bool | None = None,
+          exclusion: str | None = None) -> dict[str, Any]:
+        return {"instance_id": i, "split": split, "dummy": dummy, "passed": passed,
+                "oracle_applied": applied, "exclusion": exclusion}
+
+    control = [d(i, "original", "oracle", True, True) for i in ("i1", "i2", "i3", "i4", "i6")]
+    entries = control + [
+        d("i1", "oneoff", "oracle", False, True), d("i1", "oneoff", "nochange", False), d("i1", "oneoff", None, True),
+        d("i1", "original", None, True),
+        d("i2", "oneoff", "oracle", True, True), d("i2", "oneoff", "nochange", False), d("i2", "oneoff", None, True),
+        d("i3", "oneoff", None, True),
+        # An errored dummy (no final state, `passed` None) is a missing dummy, never a failing one.
+        d("i4", "oneoff", "oracle", None, None, "no-final-state"), d("i4", "oneoff", "nochange", False),
+        d("i4", "oneoff", None, True),
+        # No positive control on `original`.
+        d("i5", "oneoff", "oracle", False, True), d("i5", "oneoff", "nochange", False), d("i5", "oneoff", None, True),
+        # The oracle patch did not apply, so its failing score says nothing about the split.
+        d("i6", "oneoff", "oracle", False, False), d("i6", "oneoff", "nochange", False), d("i6", "oneoff", None, True),
     ]
     assert apply_validity_filter(entries) == "applied"
     assert [e["exclusion"] for e in entries if not e["dummy"]] == [
-        None, "validity-filter-dummy-passes", "validity-filter-not-run"]
+        None, None, "validity-filter-dummy-passes", "validity-filter-not-run", "validity-filter-not-run",
+        "oracle-positive-control-failed", "oracle-not-applied"]
+    failed_control = [d("i7", "original", "oracle", False, True), d("i7", "oneoff", "oracle", False, True),
+                      d("i7", "oneoff", "nochange", False), d("i7", "oneoff", None, True)]
+    apply_validity_filter(failed_control)
+    assert failed_control[-1]["exclusion"] == "oracle-positive-control-failed"
+    def apply_event(result: int) -> dict[str, Any]:
+        cmd = f"bash -c 'cd /testbed && {ORACLE_APPLY_CMD} && git apply /tmp/oracle_patch.diff'"
+        return {"event": "sandbox", "action": "exec", "cmd": cmd, "result": result}
+
+    assert oracle_applied({"events": [apply_event(0)]}) is True
+    assert oracle_applied({"events": [apply_event(1)]}) is False
+    assert oracle_applied({"events": [{"event": "sandbox", "action": "exec", "cmd": "git status", "result": 0}]}) is None
     salt = "0123456789abcdef0123456789abcdef"
     shares = [population_split(f"inst-{i}", salt) for i in range(2000)]
     pilot = shares.count("pilot") / len(shares)
