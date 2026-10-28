@@ -1,0 +1,2846 @@
+{
+  "study_id": "agent-pr-precision-v4",
+  "blind_to_source_tool": true,
+  "hash_contributor_and_rater_identities": true,
+  "rater_1_id": "sha256:dfec328d0d464ca0",
+  "rater_1_kind": "llm-subagent",
+  "rater_2_id": "sha256:3dd2d2215a1740a6",
+  "rater_2_kind": "llm-subagent",
+  "tie_breaker_id": "sha256:9e55029a31ba4940",
+  "tie_breaker_kind": "llm-subagent",
+  "synthetic_rater_disclosure": "Synthetic-rater disclosure: Rater 1, Rater 2, and the tie-breaker in this study were executed by isolated, source-tool-blinded LLM research subagents, not human engineers. Model-to-model agreement (Cohen's kappa) establishes rubric consistency across independent prompts, not external human peer review.",
+  "committed_rater_packet": "docs/benchmarks/results-v4/rater-packet.json",
+  "total_items": 282,
+  "exact_agreement_count": 277,
+  "disagreement_count": 5,
+  "cohens_kappa": 1.0,
+  "min_acceptable_kappa": 0.75,
+  "kappa_passed": true,
+  "cohens_kappa_scope": "fresh-items",
+  "inherited_label_count": 281,
+  "fresh_label_count": 1,
+  "fresh_exact_agreement_count": 1,
+  "fresh_disagreement_count": 0,
+  "adjudications": [
+    {
+      "item_id": "ITEM-0001",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0001"
+    },
+    {
+      "item_id": "ITEM-0002",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0002"
+    },
+    {
+      "item_id": "ITEM-0003",
+      "label_source": "fresh",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "packet_item_id": "PKT-0008"
+    },
+    {
+      "item_id": "ITEM-0004",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0003"
+    },
+    {
+      "item_id": "ITEM-0005",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0004"
+    },
+    {
+      "item_id": "ITEM-0006",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0005"
+    },
+    {
+      "item_id": "ITEM-0007",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0006"
+    },
+    {
+      "item_id": "ITEM-0008",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0007"
+    },
+    {
+      "item_id": "ITEM-0009",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0008"
+    },
+    {
+      "item_id": "ITEM-0010",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0009"
+    },
+    {
+      "item_id": "ITEM-0011",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0010"
+    },
+    {
+      "item_id": "ITEM-0012",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0011"
+    },
+    {
+      "item_id": "ITEM-0013",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "cannot-tell",
+      "agreed": false,
+      "tie_breaker_label": "cannot-tell",
+      "final_label": "cannot-tell",
+      "v3_item_id": "ITEM-0012"
+    },
+    {
+      "item_id": "ITEM-0014",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0013"
+    },
+    {
+      "item_id": "ITEM-0015",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "cannot-tell",
+      "agreed": false,
+      "tie_breaker_label": "false-positive",
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0014"
+    },
+    {
+      "item_id": "ITEM-0016",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "cannot-tell",
+      "agreed": false,
+      "tie_breaker_label": "cannot-tell",
+      "final_label": "cannot-tell",
+      "v3_item_id": "ITEM-0015"
+    },
+    {
+      "item_id": "ITEM-0017",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0016"
+    },
+    {
+      "item_id": "ITEM-0018",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0017"
+    },
+    {
+      "item_id": "ITEM-0019",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0018"
+    },
+    {
+      "item_id": "ITEM-0020",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0019"
+    },
+    {
+      "item_id": "ITEM-0021",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0020"
+    },
+    {
+      "item_id": "ITEM-0022",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0021"
+    },
+    {
+      "item_id": "ITEM-0023",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0022"
+    },
+    {
+      "item_id": "ITEM-0024",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0023"
+    },
+    {
+      "item_id": "ITEM-0025",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0024"
+    },
+    {
+      "item_id": "ITEM-0026",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0025"
+    },
+    {
+      "item_id": "ITEM-0027",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0026"
+    },
+    {
+      "item_id": "ITEM-0028",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0027"
+    },
+    {
+      "item_id": "ITEM-0029",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0028"
+    },
+    {
+      "item_id": "ITEM-0030",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0029"
+    },
+    {
+      "item_id": "ITEM-0031",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0030"
+    },
+    {
+      "item_id": "ITEM-0032",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0031"
+    },
+    {
+      "item_id": "ITEM-0033",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0032"
+    },
+    {
+      "item_id": "ITEM-0034",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0033"
+    },
+    {
+      "item_id": "ITEM-0035",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0034"
+    },
+    {
+      "item_id": "ITEM-0036",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0035"
+    },
+    {
+      "item_id": "ITEM-0037",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0036"
+    },
+    {
+      "item_id": "ITEM-0038",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0037"
+    },
+    {
+      "item_id": "ITEM-0039",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0038"
+    },
+    {
+      "item_id": "ITEM-0040",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0039"
+    },
+    {
+      "item_id": "ITEM-0041",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0040"
+    },
+    {
+      "item_id": "ITEM-0042",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0041"
+    },
+    {
+      "item_id": "ITEM-0043",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0042"
+    },
+    {
+      "item_id": "ITEM-0044",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0043"
+    },
+    {
+      "item_id": "ITEM-0045",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0044"
+    },
+    {
+      "item_id": "ITEM-0046",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0045"
+    },
+    {
+      "item_id": "ITEM-0047",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0046"
+    },
+    {
+      "item_id": "ITEM-0048",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0047"
+    },
+    {
+      "item_id": "ITEM-0049",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0048"
+    },
+    {
+      "item_id": "ITEM-0050",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0049"
+    },
+    {
+      "item_id": "ITEM-0051",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0050"
+    },
+    {
+      "item_id": "ITEM-0052",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0051"
+    },
+    {
+      "item_id": "ITEM-0053",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0052"
+    },
+    {
+      "item_id": "ITEM-0054",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0053"
+    },
+    {
+      "item_id": "ITEM-0055",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0054"
+    },
+    {
+      "item_id": "ITEM-0056",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0055"
+    },
+    {
+      "item_id": "ITEM-0057",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0056"
+    },
+    {
+      "item_id": "ITEM-0058",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0057"
+    },
+    {
+      "item_id": "ITEM-0059",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0058"
+    },
+    {
+      "item_id": "ITEM-0060",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0059"
+    },
+    {
+      "item_id": "ITEM-0061",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0060"
+    },
+    {
+      "item_id": "ITEM-0062",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0061"
+    },
+    {
+      "item_id": "ITEM-0063",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0062"
+    },
+    {
+      "item_id": "ITEM-0064",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0063"
+    },
+    {
+      "item_id": "ITEM-0065",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0064"
+    },
+    {
+      "item_id": "ITEM-0066",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0065"
+    },
+    {
+      "item_id": "ITEM-0067",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0066"
+    },
+    {
+      "item_id": "ITEM-0068",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0067"
+    },
+    {
+      "item_id": "ITEM-0069",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0068"
+    },
+    {
+      "item_id": "ITEM-0070",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0069"
+    },
+    {
+      "item_id": "ITEM-0071",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0070"
+    },
+    {
+      "item_id": "ITEM-0072",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0071"
+    },
+    {
+      "item_id": "ITEM-0073",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0072"
+    },
+    {
+      "item_id": "ITEM-0074",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0073"
+    },
+    {
+      "item_id": "ITEM-0075",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0074"
+    },
+    {
+      "item_id": "ITEM-0076",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0075"
+    },
+    {
+      "item_id": "ITEM-0077",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0076"
+    },
+    {
+      "item_id": "ITEM-0078",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0077"
+    },
+    {
+      "item_id": "ITEM-0079",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0078"
+    },
+    {
+      "item_id": "ITEM-0080",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0079"
+    },
+    {
+      "item_id": "ITEM-0081",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0080"
+    },
+    {
+      "item_id": "ITEM-0082",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0081"
+    },
+    {
+      "item_id": "ITEM-0083",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0082"
+    },
+    {
+      "item_id": "ITEM-0084",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0083"
+    },
+    {
+      "item_id": "ITEM-0085",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0084"
+    },
+    {
+      "item_id": "ITEM-0086",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0085"
+    },
+    {
+      "item_id": "ITEM-0087",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0086"
+    },
+    {
+      "item_id": "ITEM-0088",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0087"
+    },
+    {
+      "item_id": "ITEM-0089",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0088"
+    },
+    {
+      "item_id": "ITEM-0090",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0089"
+    },
+    {
+      "item_id": "ITEM-0091",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0090"
+    },
+    {
+      "item_id": "ITEM-0092",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0091"
+    },
+    {
+      "item_id": "ITEM-0093",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0092"
+    },
+    {
+      "item_id": "ITEM-0094",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0093"
+    },
+    {
+      "item_id": "ITEM-0095",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0094"
+    },
+    {
+      "item_id": "ITEM-0096",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0095"
+    },
+    {
+      "item_id": "ITEM-0097",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0096"
+    },
+    {
+      "item_id": "ITEM-0098",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0097"
+    },
+    {
+      "item_id": "ITEM-0099",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0098"
+    },
+    {
+      "item_id": "ITEM-0100",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0099"
+    },
+    {
+      "item_id": "ITEM-0101",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0100"
+    },
+    {
+      "item_id": "ITEM-0102",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0101"
+    },
+    {
+      "item_id": "ITEM-0103",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0102"
+    },
+    {
+      "item_id": "ITEM-0104",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0103"
+    },
+    {
+      "item_id": "ITEM-0105",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0104"
+    },
+    {
+      "item_id": "ITEM-0106",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0105"
+    },
+    {
+      "item_id": "ITEM-0107",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0106"
+    },
+    {
+      "item_id": "ITEM-0108",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0107"
+    },
+    {
+      "item_id": "ITEM-0109",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0108"
+    },
+    {
+      "item_id": "ITEM-0110",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0109"
+    },
+    {
+      "item_id": "ITEM-0111",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0110"
+    },
+    {
+      "item_id": "ITEM-0112",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0111"
+    },
+    {
+      "item_id": "ITEM-0113",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0112"
+    },
+    {
+      "item_id": "ITEM-0114",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0113"
+    },
+    {
+      "item_id": "ITEM-0115",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0114"
+    },
+    {
+      "item_id": "ITEM-0116",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0115"
+    },
+    {
+      "item_id": "ITEM-0117",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0116"
+    },
+    {
+      "item_id": "ITEM-0118",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0117"
+    },
+    {
+      "item_id": "ITEM-0119",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0118"
+    },
+    {
+      "item_id": "ITEM-0120",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0119"
+    },
+    {
+      "item_id": "ITEM-0121",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0120"
+    },
+    {
+      "item_id": "ITEM-0122",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0121"
+    },
+    {
+      "item_id": "ITEM-0123",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0122"
+    },
+    {
+      "item_id": "ITEM-0124",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0123"
+    },
+    {
+      "item_id": "ITEM-0125",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0124"
+    },
+    {
+      "item_id": "ITEM-0126",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0125"
+    },
+    {
+      "item_id": "ITEM-0127",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0126"
+    },
+    {
+      "item_id": "ITEM-0128",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "cannot-tell",
+      "agreed": false,
+      "tie_breaker_label": "cannot-tell",
+      "final_label": "cannot-tell",
+      "v3_item_id": "ITEM-0127"
+    },
+    {
+      "item_id": "ITEM-0129",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0128"
+    },
+    {
+      "item_id": "ITEM-0130",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0129"
+    },
+    {
+      "item_id": "ITEM-0131",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0130"
+    },
+    {
+      "item_id": "ITEM-0132",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0131"
+    },
+    {
+      "item_id": "ITEM-0133",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0132"
+    },
+    {
+      "item_id": "ITEM-0134",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0133"
+    },
+    {
+      "item_id": "ITEM-0135",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0134"
+    },
+    {
+      "item_id": "ITEM-0136",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0135"
+    },
+    {
+      "item_id": "ITEM-0137",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0136"
+    },
+    {
+      "item_id": "ITEM-0138",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0137"
+    },
+    {
+      "item_id": "ITEM-0139",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0138"
+    },
+    {
+      "item_id": "ITEM-0140",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0139"
+    },
+    {
+      "item_id": "ITEM-0141",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0140"
+    },
+    {
+      "item_id": "ITEM-0142",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0141"
+    },
+    {
+      "item_id": "ITEM-0143",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0142"
+    },
+    {
+      "item_id": "ITEM-0144",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0143"
+    },
+    {
+      "item_id": "ITEM-0145",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0144"
+    },
+    {
+      "item_id": "ITEM-0146",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0145"
+    },
+    {
+      "item_id": "ITEM-0147",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0146"
+    },
+    {
+      "item_id": "ITEM-0148",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0147"
+    },
+    {
+      "item_id": "ITEM-0149",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0148"
+    },
+    {
+      "item_id": "ITEM-0150",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0149"
+    },
+    {
+      "item_id": "ITEM-0151",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0150"
+    },
+    {
+      "item_id": "ITEM-0152",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0151"
+    },
+    {
+      "item_id": "ITEM-0153",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0152"
+    },
+    {
+      "item_id": "ITEM-0154",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0153"
+    },
+    {
+      "item_id": "ITEM-0155",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0154"
+    },
+    {
+      "item_id": "ITEM-0156",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0155"
+    },
+    {
+      "item_id": "ITEM-0157",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0156"
+    },
+    {
+      "item_id": "ITEM-0158",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0157"
+    },
+    {
+      "item_id": "ITEM-0159",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0158"
+    },
+    {
+      "item_id": "ITEM-0160",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0159"
+    },
+    {
+      "item_id": "ITEM-0161",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0160"
+    },
+    {
+      "item_id": "ITEM-0162",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0161"
+    },
+    {
+      "item_id": "ITEM-0163",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0162"
+    },
+    {
+      "item_id": "ITEM-0164",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0163"
+    },
+    {
+      "item_id": "ITEM-0165",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0164"
+    },
+    {
+      "item_id": "ITEM-0166",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0165"
+    },
+    {
+      "item_id": "ITEM-0167",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0166"
+    },
+    {
+      "item_id": "ITEM-0168",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0167"
+    },
+    {
+      "item_id": "ITEM-0169",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0168"
+    },
+    {
+      "item_id": "ITEM-0170",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0169"
+    },
+    {
+      "item_id": "ITEM-0171",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0170"
+    },
+    {
+      "item_id": "ITEM-0172",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0171"
+    },
+    {
+      "item_id": "ITEM-0173",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0172"
+    },
+    {
+      "item_id": "ITEM-0174",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0173"
+    },
+    {
+      "item_id": "ITEM-0175",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0174"
+    },
+    {
+      "item_id": "ITEM-0176",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0175"
+    },
+    {
+      "item_id": "ITEM-0177",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0176"
+    },
+    {
+      "item_id": "ITEM-0178",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0177"
+    },
+    {
+      "item_id": "ITEM-0179",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0178"
+    },
+    {
+      "item_id": "ITEM-0180",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0179"
+    },
+    {
+      "item_id": "ITEM-0181",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0180"
+    },
+    {
+      "item_id": "ITEM-0182",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0181"
+    },
+    {
+      "item_id": "ITEM-0183",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0182"
+    },
+    {
+      "item_id": "ITEM-0184",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0183"
+    },
+    {
+      "item_id": "ITEM-0185",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0184"
+    },
+    {
+      "item_id": "ITEM-0186",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0185"
+    },
+    {
+      "item_id": "ITEM-0187",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0186"
+    },
+    {
+      "item_id": "ITEM-0188",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0187"
+    },
+    {
+      "item_id": "ITEM-0189",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0188"
+    },
+    {
+      "item_id": "ITEM-0190",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0189"
+    },
+    {
+      "item_id": "ITEM-0191",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0190"
+    },
+    {
+      "item_id": "ITEM-0192",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0191"
+    },
+    {
+      "item_id": "ITEM-0193",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0192"
+    },
+    {
+      "item_id": "ITEM-0194",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0193"
+    },
+    {
+      "item_id": "ITEM-0195",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0194"
+    },
+    {
+      "item_id": "ITEM-0196",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0195"
+    },
+    {
+      "item_id": "ITEM-0197",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0196"
+    },
+    {
+      "item_id": "ITEM-0198",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0197"
+    },
+    {
+      "item_id": "ITEM-0199",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0198"
+    },
+    {
+      "item_id": "ITEM-0200",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0199"
+    },
+    {
+      "item_id": "ITEM-0201",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0200"
+    },
+    {
+      "item_id": "ITEM-0202",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0201"
+    },
+    {
+      "item_id": "ITEM-0203",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0202"
+    },
+    {
+      "item_id": "ITEM-0204",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0203"
+    },
+    {
+      "item_id": "ITEM-0205",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0204"
+    },
+    {
+      "item_id": "ITEM-0206",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0205"
+    },
+    {
+      "item_id": "ITEM-0207",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0206"
+    },
+    {
+      "item_id": "ITEM-0208",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0207"
+    },
+    {
+      "item_id": "ITEM-0209",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0208"
+    },
+    {
+      "item_id": "ITEM-0210",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0209"
+    },
+    {
+      "item_id": "ITEM-0211",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0210"
+    },
+    {
+      "item_id": "ITEM-0212",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0211"
+    },
+    {
+      "item_id": "ITEM-0213",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0212"
+    },
+    {
+      "item_id": "ITEM-0214",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0213"
+    },
+    {
+      "item_id": "ITEM-0215",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0214"
+    },
+    {
+      "item_id": "ITEM-0216",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0215"
+    },
+    {
+      "item_id": "ITEM-0217",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0216"
+    },
+    {
+      "item_id": "ITEM-0218",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0217"
+    },
+    {
+      "item_id": "ITEM-0219",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0218"
+    },
+    {
+      "item_id": "ITEM-0220",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0219"
+    },
+    {
+      "item_id": "ITEM-0221",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0220"
+    },
+    {
+      "item_id": "ITEM-0222",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0221"
+    },
+    {
+      "item_id": "ITEM-0223",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0222"
+    },
+    {
+      "item_id": "ITEM-0224",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0223"
+    },
+    {
+      "item_id": "ITEM-0225",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0224"
+    },
+    {
+      "item_id": "ITEM-0226",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0225"
+    },
+    {
+      "item_id": "ITEM-0227",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0226"
+    },
+    {
+      "item_id": "ITEM-0228",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0227"
+    },
+    {
+      "item_id": "ITEM-0229",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0228"
+    },
+    {
+      "item_id": "ITEM-0230",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0229"
+    },
+    {
+      "item_id": "ITEM-0231",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0230"
+    },
+    {
+      "item_id": "ITEM-0232",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0231"
+    },
+    {
+      "item_id": "ITEM-0233",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0232"
+    },
+    {
+      "item_id": "ITEM-0234",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0233"
+    },
+    {
+      "item_id": "ITEM-0235",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0234"
+    },
+    {
+      "item_id": "ITEM-0236",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0235"
+    },
+    {
+      "item_id": "ITEM-0237",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0236"
+    },
+    {
+      "item_id": "ITEM-0238",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0237"
+    },
+    {
+      "item_id": "ITEM-0239",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0238"
+    },
+    {
+      "item_id": "ITEM-0240",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0239"
+    },
+    {
+      "item_id": "ITEM-0241",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0240"
+    },
+    {
+      "item_id": "ITEM-0242",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0241"
+    },
+    {
+      "item_id": "ITEM-0243",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "true-positive",
+      "agreed": false,
+      "tie_breaker_label": "cannot-tell",
+      "final_label": "cannot-tell",
+      "v3_item_id": "ITEM-0242"
+    },
+    {
+      "item_id": "ITEM-0244",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0243"
+    },
+    {
+      "item_id": "ITEM-0245",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0244"
+    },
+    {
+      "item_id": "ITEM-0246",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0245"
+    },
+    {
+      "item_id": "ITEM-0247",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0246"
+    },
+    {
+      "item_id": "ITEM-0248",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0247"
+    },
+    {
+      "item_id": "ITEM-0249",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0248"
+    },
+    {
+      "item_id": "ITEM-0250",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0249"
+    },
+    {
+      "item_id": "ITEM-0251",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0250"
+    },
+    {
+      "item_id": "ITEM-0252",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0251"
+    },
+    {
+      "item_id": "ITEM-0253",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0252"
+    },
+    {
+      "item_id": "ITEM-0254",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0253"
+    },
+    {
+      "item_id": "ITEM-0255",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0254"
+    },
+    {
+      "item_id": "ITEM-0256",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0255"
+    },
+    {
+      "item_id": "ITEM-0257",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0256"
+    },
+    {
+      "item_id": "ITEM-0258",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0257"
+    },
+    {
+      "item_id": "ITEM-0259",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0258"
+    },
+    {
+      "item_id": "ITEM-0260",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0259"
+    },
+    {
+      "item_id": "ITEM-0261",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0260"
+    },
+    {
+      "item_id": "ITEM-0262",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0261"
+    },
+    {
+      "item_id": "ITEM-0263",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0262"
+    },
+    {
+      "item_id": "ITEM-0264",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0263"
+    },
+    {
+      "item_id": "ITEM-0265",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0264"
+    },
+    {
+      "item_id": "ITEM-0266",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0265"
+    },
+    {
+      "item_id": "ITEM-0267",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0266"
+    },
+    {
+      "item_id": "ITEM-0268",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0267"
+    },
+    {
+      "item_id": "ITEM-0269",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0268"
+    },
+    {
+      "item_id": "ITEM-0270",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0269"
+    },
+    {
+      "item_id": "ITEM-0271",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0270"
+    },
+    {
+      "item_id": "ITEM-0272",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0271"
+    },
+    {
+      "item_id": "ITEM-0273",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0272"
+    },
+    {
+      "item_id": "ITEM-0274",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0273"
+    },
+    {
+      "item_id": "ITEM-0275",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0274"
+    },
+    {
+      "item_id": "ITEM-0276",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0275"
+    },
+    {
+      "item_id": "ITEM-0277",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0276"
+    },
+    {
+      "item_id": "ITEM-0278",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0277"
+    },
+    {
+      "item_id": "ITEM-0279",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0278"
+    },
+    {
+      "item_id": "ITEM-0280",
+      "label_source": "inherited-v3",
+      "rater_1_label": "true-positive",
+      "rater_2_label": "true-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "true-positive",
+      "v3_item_id": "ITEM-0279"
+    },
+    {
+      "item_id": "ITEM-0281",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0280"
+    },
+    {
+      "item_id": "ITEM-0282",
+      "label_source": "inherited-v3",
+      "rater_1_label": "false-positive",
+      "rater_2_label": "false-positive",
+      "agreed": true,
+      "tie_breaker_label": null,
+      "final_label": "false-positive",
+      "v3_item_id": "ITEM-0281"
+    }
+  ]
+}
