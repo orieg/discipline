@@ -528,8 +528,22 @@ fn noun_continues(suffix: &str) -> bool {
         .is_some_and(|w| NOUN_FOLLOWERS.contains(&w.as_str()))
 }
 
-/// The claim one clause makes, if any: the matched words.
-fn clause_claim(clause: &str) -> Option<String> {
+/// The value of a field that says no test was added (`Tests added: none`).
+const FIELD_NONE: &[&str] = &["none", "nothing", "no", "n/a", "na", "nil", "0"];
+
+/// Whether the clause is a field label (it ends at a colon) whose value, `after`, says
+/// nothing was added.
+fn field_value_none(separator: &str, after: &str) -> bool {
+    separator.contains(':')
+        && words(after)
+            .first()
+            .is_some_and(|w| FIELD_NONE.contains(&w.as_str()))
+}
+
+/// The claim one clause makes, if any: the matched words. `beside_paren`: the clause sits
+/// inside parentheses or a parenthesis follows it, where a `with` claim is an aside or a
+/// described item (`(gate or delete with tests)`, `each with the test (path, name)`).
+fn clause_claim(clause: &str, beside_paren: bool) -> Option<String> {
     let checks: [(&Regex, bool); 4] = [
         (&VERB_CLAIM_RE, true),
         (&COORDINATED_CLAIM_RE, true),
@@ -546,7 +560,7 @@ fn clause_claim(clause: &str) -> Option<String> {
             if check_noun && noun_continues(suffix) {
                 continue;
             }
-            if std::ptr::eq(re, &*WITH_CLAIM_RE) && prefix.trim().is_empty() {
+            if std::ptr::eq(re, &*WITH_CLAIM_RE) && (beside_paren || prefix.trim().is_empty()) {
                 continue;
             }
             return Some(m.as_str().split_whitespace().collect::<Vec<_>>().join(" "));
@@ -565,39 +579,65 @@ fn clause_claim(clause: &str) -> Option<String> {
         .then(|| m.as_str().split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
-/// `body` with HTML comments, directive lines and checkbox items blanked, line for line:
-/// none of them is a claim the description makes in prose. A ticked checkbox is the
-/// checkbox rule's, an unticked one is a to-do.
+/// HTML blocks whose content is not the description's own prose: a comment, and a
+/// blockquote, the HTML form of a `>` quote (a dependency bot quotes upstream release
+/// notes in one). Blockquotes nest; comments do not.
+const MASKED_BLOCKS: [(&str, &str, bool); 2] = [
+    ("<!--", "-->", false),
+    ("<blockquote", "</blockquote>", true),
+];
+
+/// `body` with HTML comments and blockquotes, directive lines and checkbox items blanked,
+/// line for line: none of them is a claim the description makes in prose. A ticked
+/// checkbox is the checkbox rule's, an unticked one is a to-do.
 fn mask_non_prose(body: &str) -> String {
     let directive_lines: Vec<usize> =
         crate::tokens::directive_lines(body, crate::tokens::OverrideSource::PrBody)
             .into_iter()
             .map(|(i, _)| i)
             .collect();
-    let mut in_comment = false;
+    // The open block and how deeply it is nested.
+    let mut open: Option<(usize, usize)> = None;
     let mut out = Vec::new();
     for (idx, line) in body.lines().enumerate() {
+        // ASCII lowercasing keeps byte offsets, so positions found in `lower` index `line`.
+        let lower = line.to_ascii_lowercase();
         let mut kept = String::new();
-        let mut rest = line;
+        let mut pos = 0;
         loop {
-            if in_comment {
-                match rest.find("-->") {
-                    Some(end) => {
-                        in_comment = false;
-                        rest = &rest[end + 3..];
+            let rest = &lower[pos..];
+            match open {
+                Some((block, depth)) => {
+                    let (start, end, nests) = MASKED_BLOCKS[block];
+                    let deeper = rest.find(start).filter(|_| nests);
+                    match (deeper, rest.find(end)) {
+                        (Some(s), e) if e.is_none_or(|e| s < e) => {
+                            open = Some((block, depth + 1));
+                            pos += s + start.len();
+                        }
+                        (_, Some(e)) => {
+                            open = (depth > 1).then_some((block, depth - 1));
+                            pos += e + end.len();
+                        }
+                        _ => break,
                     }
-                    None => break,
                 }
-            } else {
-                match rest.find("<!--") {
-                    Some(start) => {
-                        kept.push_str(&rest[..start]);
-                        in_comment = true;
-                        rest = &rest[start + 4..];
-                    }
-                    None => {
-                        kept.push_str(rest);
-                        break;
+                None => {
+                    let first = MASKED_BLOCKS
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, (start, _, _))| rest.find(start).map(|at| (at, i)))
+                        .min();
+                    match first {
+                        Some((at, block)) => {
+                            kept.push_str(&line[pos..pos + at]);
+                            open = Some((block, 1));
+                            pos += at + MASKED_BLOCKS[block].0.len();
+                        }
+                        None => {
+                            kept.push_str(&line[pos..]);
+                            break;
+                        }
                     }
                 }
             }
@@ -614,10 +654,11 @@ fn mask_non_prose(body: &str) -> String {
 /// (`docs/GATES.md`, `pr-checklist`): a claim verb before a test noun (`added regression
 /// tests`, `Add tests for`), the passive (`tests were added`), a bullet or sentence that
 /// opens with `Tests for` or `Test coverage for`, and `with tests`. Code spans, fenced
-/// and indented code, quoted lines (`>`), double-quoted text, HTML comments, directive
-/// lines, checkbox items, headings, questions and `TODO:` lines are not read. A claim
-/// negated (`no tests`, `without tests`, `tests not needed`) or deferred (`will add
-/// tests`, `tests to follow`) is not one. One claim per paragraph or list item.
+/// and indented code, quoted lines (`>`, `<blockquote>`), double-quoted text, HTML
+/// comments, directive lines, checkbox items, headings, questions and `TODO:` lines are
+/// not read. A claim negated (`no tests`, `without tests`, `tests not needed`, a `Tests
+/// added: none` field) or deferred (`will add tests`, `tests to follow`) is not one, nor
+/// is a `with tests` next to a parenthesis. One claim per paragraph or list item.
 pub fn find_prose_test_claims(pr_body: &str) -> ProseTestClaims {
     use crate::guards::claim_labels::{
         extract_prose_units, is_question_or_todo, strip_non_claim_spans,
@@ -649,15 +690,22 @@ pub fn find_prose_test_claims(pr_body: &str) -> ProseTestClaims {
             .map(|m| (m.start(), m.end()))
             .collect();
         boundaries.push((text.len(), text.len()));
+        let mut prev_separator = "";
         for (end, next) in boundaries {
             let raw = &text[offset..end];
+            let separator = &text[end..next];
             let lead = raw.len() - raw.trim_start().len();
             let clause = raw.trim();
             let clause_start = offset + lead;
+            let beside_paren = prev_separator.contains('(') || separator.contains('(');
+            prev_separator = separator;
             offset = next;
-            let Some(phrase) = clause_claim(clause) else {
+            let Some(phrase) = clause_claim(clause, beside_paren) else {
                 continue;
             };
+            if field_value_none(separator, &text[next..]) {
+                continue;
+            }
             let first = phrase.split(' ').next().unwrap_or_default();
             let at = clause_start + clause.find(first).unwrap_or(0);
             let line = starts
@@ -759,6 +807,18 @@ mod tests {
         );
         // Negative: a clause that opens with `with` describes something else.
         assert!(claims("Three documents (lib, doctest) with two test cases.\n").is_empty());
+        // Negative: a `with` aside in parentheses, or a described item a parenthesis
+        // goes on to detail.
+        assert!(claims("These belong to section B (gate or delete with tests).\n").is_empty());
+        assert!(claims(
+            "- §32.4: the gates, each with the test (`path:line`, name), and a status.\n"
+        )
+        .is_empty());
+        // Positive: the text after the parenthetical aside is still read.
+        assert_eq!(
+            claims("The reader (see #12) now rejects it, with regression tests.\n").len(),
+            1
+        );
         assert_eq!(claims("Improves test coverage of the writer.\n").len(), 1);
         assert_eq!(claims("- Added the flag and tests for it\n").len(), 1);
         // Positive: a sentence wrapped over two lines is read whole, on its first line.
@@ -788,6 +848,10 @@ mod tests {
             "Remember to add tests.\n",
             "Two drift tests added by #505 compare the installers.\n",
             "- #505 added tests for the installers\n",
+            // A template field whose value says no test was added.
+            "- Tests added/extended: none (doc comments). The doc tests pass.\n",
+            "Tests added: N/A\n",
+            "Tests added: nothing, the change is a rename.\n",
         ] {
             assert!(claims(body).is_empty(), "{body:?}: {:?}", claims(body));
         }
@@ -807,6 +871,9 @@ mod tests {
             "- [x] Added regression tests for negative inputs\n",
             "- [ ] Added regression tests for negative inputs\n",
             "allow-pr-checklist: test regression tests were added in a separate PR\n",
+            // An HTML blockquote, as a dependency bot quotes upstream release notes.
+            "<blockquote>\n<h2>v4.2.2</h2>\n<ul>\n<li>Expand unit test coverage for <code>isGhes</code></li>\n</ul>\n</blockquote>\n",
+            "<blockquote><p>Added regression tests for negative inputs</p></blockquote>\n",
         ] {
             assert!(claims(body).is_empty(), "{body:?}: {:?}", claims(body));
         }
@@ -863,6 +930,10 @@ mod tests {
             claims("- Added tests for the case where no input is given\n").len(),
             1
         );
+        // A `with` claim next to a parenthesis is not read.
+        assert!(claims("Fixes the reader, with regression tests (see #12).\n").is_empty());
+        // A field whose value names tests is still a claim.
+        assert_eq!(claims("Tests added: two, for the reader.\n").len(), 1);
     }
 
     #[test]
