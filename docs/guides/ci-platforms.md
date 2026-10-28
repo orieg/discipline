@@ -3,6 +3,7 @@ layout: default
 title: CI/CD Platform Integration Guide
 permalink: /guides/ci-platforms/
 ---
+<!-- {% raw %} -->
 
 # CI/CD Platform Integration Guide
 
@@ -534,4 +535,4 @@ Under **Settings → Repository → Protected branches**, allow no one to push o
 ### Gitea & Forgejo
 
 Under **Settings → Branches → Branch protection** for the default branch, enable **Status check** with the discipline job (or its rollup) as a required context, disable force push, require approvals as the team allows, and list `discipline.toml` and the workflow directory under **Protected file patterns**, separated by `;`: `discipline.toml;.gitea/workflows/**` (or `.forgejo/workflows/**`). The forge stops a single `*` at a `.`, so `.gitea/workflows/*` does not protect `ci.yml`: a pull request that edits it merges (RUN on Gitea 1.24.7 and Forgejo 12, #428). `discipline doctor` reports a workflow the patterns leave open.
-
+<!-- {% endraw %} -->
