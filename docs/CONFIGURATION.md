@@ -3,6 +3,7 @@ layout: default
 title: Configuration & Integration Reference
 permalink: /configuration/
 ---
+<!-- {% raw %} -->
 
 # Configuration & Integration Reference
 
@@ -2076,3 +2077,4 @@ In CI, run:
 ```bash
 discipline check --base origin/main --format agent-prompt
 ```
+<!-- {% endraw %} -->

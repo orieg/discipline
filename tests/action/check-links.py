@@ -316,13 +316,59 @@ def check_ci_recipes():
     return True
 
 
+LIQUID_RAW_OPEN = "<!-- {% raw %} -->"
+LIQUID_RAW_CLOSE = "<!-- {% endraw %} -->"
+
+
+def check_liquid_raw():
+    """Keep Liquid off Markdown that holds `{{` or `{%`.
+
+    The Pages build runs every Markdown file under docs/ through Liquid before
+    rendering it. An unterminated `{{` or `{%` aborts the build, and a terminated
+    one is evaluated and erased (`${{ toJson(needs) }}` was published as `$`).
+    Such a page opens its body with LIQUID_RAW_OPEN (after any front matter) and
+    ends with LIQUID_RAW_CLOSE; GitHub hides both comments, Jekyll honours the tags.
+    """
+    print("Checking that docs Markdown with Liquid delimiters is wrapped in raw tags...")
+    violations = []
+    for fpath in sorted((ROOT / "docs").rglob("*.md")):
+        rel_path = fpath.relative_to(ROOT)
+        text = fpath.read_text(encoding="utf-8", errors="ignore")
+        if "{{" not in text and "{%" not in text:
+            continue
+        lines = text.split("\n")
+        start = 0
+        if lines[0] == "---" and "---" in lines[1:]:
+            start = lines.index("---", 1) + 1
+        body = lines[start:]
+        while body and body[-1] == "":
+            body.pop()
+        if not body or body[0] != LIQUID_RAW_OPEN or body[-1] != LIQUID_RAW_CLOSE:
+            violations.append(
+                f"{rel_path}: holds `{{{{` or `{{%`; open its body with `{LIQUID_RAW_OPEN}` "
+                f"(after any front matter) and end it with `{LIQUID_RAW_CLOSE}`"
+            )
+            continue
+        inner = "\n".join(body[1:-1])
+        if "{% raw %}" in inner or "{% endraw %}" in inner:
+            violations.append(f"{rel_path}: a raw tag inside the wrapped body ends the wrapping early")
+    if violations:
+        print(f"FAILED: Found {len(violations)} page(s) the Pages build would break or erase:", file=sys.stderr)
+        for v in violations:
+            print(f"  {v}", file=sys.stderr)
+        return False
+    print("OK: Every docs Markdown page holding Liquid delimiters is wrapped in raw tags.")
+    return True
+
+
 def main():
     prd_ok = check_no_prd_references()
     links_ok = check_markdown_links()
     tags_ok = check_container_tags()
     recipes_ok = check_ci_recipes()
+    liquid_ok = check_liquid_raw()
 
-    if not (prd_ok and links_ok and tags_ok and recipes_ok):
+    if not (prd_ok and links_ok and tags_ok and recipes_ok and liquid_ok):
         sys.exit(1)
     print("All link, reference, and tag checks passed successfully.")
     sys.exit(0)
