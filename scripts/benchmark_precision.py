@@ -16,16 +16,19 @@ Implements the complete deterministic pipeline for `docs/benchmarks/precision-pr
 5. Artifact generator (`--generate-artifacts`) producing `manifest.json`, `findings.json`,
    `adjudication.json` (with explicit rater-kind and synthetic-LLM rater disclosure per
    Rule 3), `summary.json`, and `post-hoc-audit.json` under `docs/benchmarks/results/`.
-6. Replay of a committed manifest's exact pairs (`--from-manifest`), and the
-   `agent-pr-precision-v3` re-run (`docs/benchmarks/precision-preregistration-v3.toml`):
-   `--v3-stage diff|packet|artifacts` checks the reproduction of v2, applies the label-reuse
-   rule, builds the fresh-item packet and writes `docs/benchmarks/results-v3/`.
+6. Replay of a committed manifest's exact pairs (`--from-manifest`), and the re-runs on the
+   v2 corpus: `agent-pr-precision-v3` (`docs/benchmarks/precision-preregistration-v3.toml`)
+   and `agent-pr-precision-v4` (`docs/benchmarks/precision-preregistration-v4.toml`).
+   `--v3-stage` / `--v4-stage diff|packet|artifacts` checks the reproduction of the previous
+   study, applies the label-reuse rule, builds the fresh-item packet and writes
+   `docs/benchmarks/results-v3/` / `docs/benchmarks/results-v4/`.
 """
 
 from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 import hashlib
 import json
 import math
@@ -37,13 +40,14 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PREREG_PATH = REPO_ROOT / "docs" / "benchmarks" / "precision-preregistration.toml"
 RESULTS_DIR = REPO_ROOT / "docs" / "benchmarks" / "results"
 V3_RESULTS_DIR = REPO_ROOT / "docs" / "benchmarks" / "results-v3"
+V4_RESULTS_DIR = REPO_ROOT / "docs" / "benchmarks" / "results-v4"
 
 PILOT_REPOS: list[tuple[str, str]] = [
     ("astral-sh/uv", "uv"),
@@ -1444,7 +1448,7 @@ def generate_benchmark_artifacts(
     under `results_dir` from the evaluation cases, ground key, and rater labels.
 
     `label_provenance` (a re-run that inherits labels, v3 onward) maps every item id to
-    `{"label_source": "inherited-v2" | "fresh", ...}` plus any fields to record on the
+    `{"label_source": "inherited-<previous>" | "fresh", ...}` plus any fields to record on the
     finding (`finding_fields`) and adjudication (`adjudication_fields`). Kappa is then
     computed over the fresh items only, the scope the pre-registration names; agreement
     counts stay over every item.
@@ -1748,13 +1752,112 @@ def generate_benchmark_artifacts(
     return summary_doc
 
 
-# --- agent-pr-precision-v3: re-run on the v2 corpus (docs/benchmarks/precision-preregistration-v3.toml) ---
+# --- Re-runs on the v2 corpus: agent-pr-precision-v3 (docs/benchmarks/precision-preregistration-v3.toml)
+# --- and agent-pr-precision-v4 (docs/benchmarks/precision-preregistration-v4.toml) ---
 
 V3_STUDY_ID = "agent-pr-precision-v3"
 V3_PACKET_SHUFFLE_SEED = 48202
 V3_ANCHOR_SEED = 48203
 V3_ANCHORS_PER_SOURCE = 10
 V3_RATER_PACKET = "docs/benchmarks/results-v3/rater-packet.json"
+
+V4_STUDY_ID = "agent-pr-precision-v4"
+V4_PACKET_SHUFFLE_SEED = 48204
+V4_ANCHOR_SEED = 48205
+V4_RATER_PACKET = "docs/benchmarks/results-v4/rater-packet.json"
+
+
+def v4_message_key(message: str) -> str:
+    """The v4 label-reuse message key: v3's committed-message masking, then the replay commit id.
+
+    A finding that names the commit being checked names, in a replay, the scratch commit,
+    whose id depends on when the replay ran; `commit:<7-40 hex>` becomes
+    `commit:<replay-commit>`. Nothing else in the message is rewritten.
+    """
+    masked = _redact_packet_pii_literals(message) or ""
+    return re.sub(r"\bcommit:[0-9a-f]{7,40}\b", "commit:<replay-commit>", masked)
+
+
+def _identity_message_key(message: str) -> str:
+    return message
+
+
+@dataclass(frozen=True)
+class RerunStudy:
+    """What differs between two re-runs of the v2 corpus; everything else is shared.
+
+    `previous` is the short tag of the study whose labels are inherited ("v2" for v3, "v3"
+    for v4); it names the recorded fields (`v2_item_id`, `inherited-v2`, ...), so the v3
+    artifacts keep their field names. v3 recovered v2's messages from a replay with v2's
+    binary (`messages_from_reference`); v4 reads v3's committed messages and only checks
+    that a replay with v3's binary reproduces v3.
+    """
+
+    study_id: str
+    previous: str
+    previous_study_id: str
+    previous_results_dir: Path
+    results_dir: Path
+    rater_packet: str
+    preregistration: str
+    discipline_version: str
+    reference_binary: str
+    corpus_prior_inspection: str
+    packet_shuffle_seed: int
+    anchor_seed: int
+    message_key: Callable[[str], str]
+    messages_from_reference: bool
+    rater_label_diagnostic: bool
+
+
+V3_STUDY = RerunStudy(
+    study_id=V3_STUDY_ID,
+    previous="v2",
+    previous_study_id="agent-pr-precision-v2",
+    previous_results_dir=RESULTS_DIR,
+    results_dir=V3_RESULTS_DIR,
+    rater_packet=V3_RATER_PACKET,
+    preregistration="docs/benchmarks/precision-preregistration-v3.toml",
+    discipline_version="0.25.3",
+    reference_binary="cargo build --release at 82d02046e4d64012413885b354873cfa769be329",
+    corpus_prior_inspection=(
+        "The 232 pull requests and every 0.23.0 finding on them were inspected and labelled "
+        "under agent-pr-precision-v2; v3 characterises the 0.25.3 binary on the same changes, "
+        "not precision on unseen agent pull requests."
+    ),
+    packet_shuffle_seed=V3_PACKET_SHUFFLE_SEED,
+    anchor_seed=V3_ANCHOR_SEED,
+    message_key=_identity_message_key,
+    messages_from_reference=True,
+    rater_label_diagnostic=False,
+)
+
+V4_STUDY = RerunStudy(
+    study_id=V4_STUDY_ID,
+    previous="v3",
+    previous_study_id=V3_STUDY_ID,
+    previous_results_dir=V3_RESULTS_DIR,
+    results_dir=V4_RESULTS_DIR,
+    rater_packet=V4_RATER_PACKET,
+    preregistration="docs/benchmarks/precision-preregistration-v4.toml",
+    discipline_version="0.26.0",
+    reference_binary=(
+        "discipline-aarch64-apple-darwin.tar.gz from the v0.25.3 release, verified against its SHA256SUMS"
+    ),
+    corpus_prior_inspection=(
+        "The 232 pull requests were inspected and labelled under agent-pr-precision-v2 (0.23.0) "
+        "and agent-pr-precision-v3 (0.25.3), and some 0.26.0 gate changes were made with v3's "
+        "results in view; v4 characterises the 0.26.0 binary on the same changes, not precision "
+        "on unseen agent pull requests."
+    ),
+    packet_shuffle_seed=V4_PACKET_SHUFFLE_SEED,
+    anchor_seed=V4_ANCHOR_SEED,
+    message_key=v4_message_key,
+    messages_from_reference=False,
+    rater_label_diagnostic=True,
+)
+
+RERUN_STUDIES: dict[str, RerunStudy] = {"v3": V3_STUDY, "v4": V4_STUDY}
 
 
 def _location_key(gate: str, code: str, file: str | None, line: int | None) -> tuple[Any, ...]:
@@ -1803,34 +1906,82 @@ def attach_reference_messages(
     return messages, diffs
 
 
-def diff_findings_against_v2(
-    v2_findings: list[dict[str, Any]],
-    v2_messages: dict[str, str],
-    cases: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Classify each finding of a re-run against v2 per the pre-registered label-reuse rule.
+def check_reproduction_with_messages(
+    previous_findings: list[dict[str, Any]],
+    previous_manifest: dict[str, Any],
+    reference_cases: list[dict[str, Any]],
+    message_key: Callable[[str], str],
+) -> list[str]:
+    """Differences between a replay with the previous study's binary and its committed findings.
 
-    Per pull request: `unchanged` matches a v2 finding on (gate, code, file, line,
-    message) as a multiset; `changed` shares (gate, file, line) with a still-unmatched v2
-    finding but differs in code or message; `new` has no such v2 finding; v2 findings
-    left over are `gone`. A v2 finding without a recovered message can only be `gone`.
+    The replay reproduces the previous study when, per pull request, its multiset of
+    (gate, code, file, line, message key) equals the committed `discipline` items' and its
+    blocking count equals the manifest's. Used when the committed findings carry messages
+    (v3 onward), so nothing is recovered from the replay.
     """
-    v2_by_pr: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    for item in sorted(v2_findings, key=lambda i: i["item_id"]):
+    diffs: list[str] = []
+    want_by_pr: dict[tuple[str, str], list[tuple[Any, ...]]] = {}
+    for item in previous_findings:
         if item["source_tool"] == "discipline":
-            v2_by_pr.setdefault((item["repo"], item["head_sha"]), []).append(item)
+            want_by_pr.setdefault((item["repo"], item["head_sha"]), []).append(
+                (*_location_key(item["gate"], item["code"], item["file"], item["line"]), message_key(item["message"]))
+            )
+    ref_by_pr = {(c["repo"], c["sha"]): c for c in reference_cases}
+    for e in previous_manifest["pull_requests"]:
+        pr = (e["repo"], e["head_sha"])
+        case = ref_by_pr.get(pr)
+        if case is None:
+            diffs.append(f"{pr[0]}@{pr[1][:12]}: not replayed")
+            continue
+        if len(case["violations"]) != e["discipline_blocking_findings"]:
+            diffs.append(
+                f"{pr[0]}@{pr[1][:12]}: {len(case['violations'])} blocking findings, "
+                f"manifest says {e['discipline_blocking_findings']}"
+            )
+        got = sorted(
+            ((*_location_key(v["gate"], v["code"], v["file"], v["line"]), message_key(v["message"]))
+             for v in case["violations"]),
+            key=repr,
+        )
+        want = sorted(want_by_pr.get(pr, []), key=repr)
+        for key in sorted(set(got) | set(want), key=repr):
+            if got.count(key) != want.count(key):
+                diffs.append(
+                    f"{pr[0]}@{pr[1][:12]} {key[:4]}: committed has {want.count(key)}, replay has {got.count(key)}"
+                )
+    return diffs
+
+
+def diff_findings_against_previous(
+    previous_findings: list[dict[str, Any]],
+    previous_messages: dict[str, str],
+    cases: list[dict[str, Any]],
+    message_key: Callable[[str], str] = _identity_message_key,
+) -> dict[str, Any]:
+    """Classify each finding of a re-run against the previous study per the pre-registered label-reuse rule.
+
+    Per pull request: `unchanged` matches a previous finding on (gate, code, file, line,
+    message key) as a multiset; `changed` shares (gate, file, line) with a still-unmatched
+    previous finding but differs in code or message key; `new` has no such previous
+    finding; previous findings left over are `gone`. A previous finding without a message
+    can only be `gone`. The message key is the identity for v3 and `v4_message_key` for v4.
+    """
+    prev_by_pr: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for item in sorted(previous_findings, key=lambda i: i["item_id"]):
+        if item["source_tool"] == "discipline":
+            prev_by_pr.setdefault((item["repo"], item["head_sha"]), []).append(item)
     records: list[dict[str, Any]] = []
     gone: list[str] = []
     for ci, case in enumerate(cases):
-        pool = list(v2_by_pr.pop((case["repo"], case["sha"]), []))
+        pool = list(prev_by_pr.pop((case["repo"], case["sha"]), []))
         cats: list[tuple[str, str | None]] = [("new", None)] * len(case["violations"])
         for vi, v in enumerate(case["violations"]):
             for pi, item in enumerate(pool):
                 if (
-                    item["item_id"] in v2_messages
+                    item["item_id"] in previous_messages
                     and _location_key(item["gate"], item["code"], item["file"], item["line"])
                     == _location_key(v["gate"], v["code"], v["file"], v["line"])
-                    and v2_messages[item["item_id"]] == v["message"]
+                    and message_key(previous_messages[item["item_id"]]) == message_key(v["message"])
                 ):
                     cats[vi] = ("unchanged", item["item_id"])
                     pool.pop(pi)
@@ -1839,7 +1990,7 @@ def diff_findings_against_v2(
             if cats[vi][0] != "new":
                 continue
             for pi, item in enumerate(pool):
-                if item["item_id"] in v2_messages and (item["gate"], item["file"], item["line"]) == (
+                if item["item_id"] in previous_messages and (item["gate"], item["file"], item["line"]) == (
                     v["gate"], v["file"], v["line"]
                 ):
                     cats[vi] = ("changed", item["item_id"])
@@ -1855,33 +2006,33 @@ def diff_findings_against_v2(
                 "gate": v["gate"],
                 "code": v["code"],
                 "category": cats[vi][0],
-                "v2_item_id": cats[vi][1],
+                "previous_item_id": cats[vi][1],
             })
-    for items in v2_by_pr.values():
+    for items in prev_by_pr.values():
         gone.extend(item["item_id"] for item in items)
-    v2_gate = {i["item_id"]: i["gate"] for i in v2_findings}
+    prev_gate = {i["item_id"]: i["gate"] for i in previous_findings}
     by_gate: dict[str, dict[str, int]] = {}
     for r in records:
         cell = by_gate.setdefault(r["gate"], {"unchanged": 0, "changed": 0, "new": 0, "gone": 0})
         cell[r["category"]] += 1
     for item_id in gone:
-        cell = by_gate.setdefault(v2_gate[item_id], {"unchanged": 0, "changed": 0, "new": 0, "gone": 0})
+        cell = by_gate.setdefault(prev_gate[item_id], {"unchanged": 0, "changed": 0, "new": 0, "gone": 0})
         cell["gone"] += 1
     return {"records": records, "gone": sorted(gone), "by_gate": dict(sorted(by_gate.items()))}
 
 
 def twin_reuse(
-    cases: list[dict[str, Any]], v2_findings: list[dict[str, Any]]
+    cases: list[dict[str, Any]], previous_findings: list[dict[str, Any]]
 ) -> tuple[list[tuple[dict[str, Any], str, str]], dict[int, str]]:
-    """Redraw the twin sample and map each sampled flag (by position) to the v2 twin item it repeats."""
+    """Redraw the twin sample and map each sampled flag (by position) to the previous twin item it repeats."""
     sample = twin_sample(cases)
-    v2_twin: dict[tuple[str, str, str, str], list[str]] = {}
-    for item in sorted(v2_findings, key=lambda i: i["item_id"]):
+    prev_twin: dict[tuple[str, str, str, str], list[str]] = {}
+    for item in sorted(previous_findings, key=lambda i: i["item_id"]):
         if item["source_tool"] != "discipline":
-            v2_twin.setdefault((item["repo"], item["head_sha"], item["file"], item["code"]), []).append(item["item_id"])
+            prev_twin.setdefault((item["repo"], item["head_sha"], item["file"], item["code"]), []).append(item["item_id"])
     inherited: dict[int, str] = {}
     for pos, (case, path, code) in enumerate(sample):
-        ids = v2_twin.get((case["repo"], case["sha"], path, code))
+        ids = prev_twin.get((case["repo"], case["sha"], path, code))
         if ids:
             inherited[pos] = ids.pop(0)
     return sample, inherited
@@ -1920,13 +2071,14 @@ def _packet_raw_item(
     }
 
 
-def build_v3_packet(
+def build_rerun_packet(
+    study: RerunStudy,
     cases: list[dict[str, Any]],
     diff: dict[str, Any],
     twin_inherited: dict[int, str],
     twin_sampled: list[tuple[dict[str, Any], str, str]],
-    v2_findings: list[dict[str, Any]],
-    v2_manifest: dict[str, Any],
+    previous_findings: list[dict[str, Any]],
+    previous_manifest: dict[str, Any],
     clones_dir: Path,
     ground_key_out: Path,
     rater_packet_out: Path,
@@ -1954,22 +2106,22 @@ def build_v3_packet(
             _packet_raw_item(clones_dir, repo_map, file_cache, case["repo"], case["sha"], case["parent"],
                              case["subject"], path, None, code),
         ))
-    rng = random.Random(V3_ANCHOR_SEED)
-    parent_of = {(e["repo"], e["head_sha"]): e["base_sha"] for e in v2_manifest["pull_requests"]}
+    rng = random.Random(study.anchor_seed)
+    parent_of = {(e["repo"], e["head_sha"]): e["base_sha"] for e in previous_manifest["pull_requests"]}
     subject_of = {(c["repo"], c["sha"]): c["subject"] for c in cases}
     for source in ("discipline", "naive-sensitive-path-filter"):
         pool = sorted(
-            (i for i in v2_findings if (i["source_tool"] == "discipline") == (source == "discipline")),
+            (i for i in previous_findings if (i["source_tool"] == "discipline") == (source == "discipline")),
             key=lambda i: i["item_id"],
         )
         for item in rng.sample(pool, V3_ANCHORS_PER_SOURCE):
             pr = (item["repo"], item["head_sha"])
             raw.append((
-                {"role": "anchor", "source_tool": item["source_tool"], "v2_item_id": item["item_id"]},
+                {"role": "anchor", "source_tool": item["source_tool"], f"{study.previous}_item_id": item["item_id"]},
                 _packet_raw_item(clones_dir, repo_map, file_cache, item["repo"], item["head_sha"],
                                  parent_of[pr], subject_of[pr], item["file"], item["line"], item["code"]),
             ))
-    random.Random(V3_PACKET_SHUFFLE_SEED).shuffle(raw)
+    random.Random(study.packet_shuffle_seed).shuffle(raw)
     ground_key: dict[str, Any] = {}
     items = []
     for idx, (key, blinded) in enumerate(raw, 1):
@@ -1980,41 +2132,51 @@ def build_v3_packet(
     ground_key_out.write_text(json.dumps(ground_key, indent=2) + "\n")
     rater_packet_out.parent.mkdir(parents=True, exist_ok=True)
     rater_packet_out.write_text(json.dumps({
-        "study_id": V3_STUDY_ID,
+        "study_id": study.study_id,
         "blind_to_source_tool": True,
         "blind_to_gate_name": True,
         "blind_to_previous_labels": True,
-        "anchor_sample_seed": V3_ANCHOR_SEED,
-        "packet_shuffle_seed": V3_PACKET_SHUFFLE_SEED,
+        "anchor_sample_seed": study.anchor_seed,
+        "packet_shuffle_seed": study.packet_shuffle_seed,
         "total_items": len(items),
         "items": items,
     }, indent=2) + "\n")
     return items
 
 
-def generate_v3_artifacts(
+def _label_counts(labels: Sequence[str]) -> dict[str, int]:
+    return {label: sum(1 for x in labels if x == label) for label in ("true-positive", "false-positive", "cannot-tell")}
+
+
+def generate_rerun_artifacts(
+    study: RerunStudy,
     cases: list[dict[str, Any]],
     diff: dict[str, Any],
     twin_sampled: list[tuple[dict[str, Any], str, str]],
     twin_inherited: dict[int, str],
-    v2_results_dir: Path,
-    v2_messages: dict[str, str],
+    previous_messages: dict[str, str],
     reproduction_differences: list[str],
     packet_key: dict[str, Any],
     ratings: dict[str, Any],
     evaluated_commit: str,
     host: str,
-    results_dir: Path = V3_RESULTS_DIR,
+    results_dir: Path | None = None,
+    discipline_binary: str | None = None,
 ) -> dict[str, Any]:
-    """Write the v3 manifest, findings, adjudication and summary, inheriting v2 labels per the label-reuse rule."""
-    v2_findings = json.loads((v2_results_dir / "findings.json").read_text())["items"]
-    v2_adj = {a["item_id"]: a for a in json.loads((v2_results_dir / "adjudication.json").read_text())["adjudications"]}
+    """Write a re-run's manifest, findings, adjudication and summary, inheriting the previous study's labels."""
+    prev = study.previous
+    prev_id_field = f"{prev}_item_id"
+    previous_findings = json.loads((study.previous_results_dir / "findings.json").read_text())["items"]
+    prev_adj = {
+        a["item_id"]: a
+        for a in json.loads((study.previous_results_dir / "adjudication.json").read_text())["adjudications"]
+    }
     r1, r2, tb = ratings["rater_1"], ratings["rater_2"], ratings.get("tie_breaker", {})
     fresh_packet_id: dict[tuple[Any, ...], str] = {}
     anchors: list[tuple[str, str]] = []
     for packet_id, key in packet_key.items():
         if key["role"] == "anchor":
-            anchors.append((packet_id, key["v2_item_id"]))
+            anchors.append((packet_id, key[prev_id_field]))
         elif key["source_tool"] == "discipline":
             fresh_packet_id[("d", key["case_index"], key["violation_index"])] = packet_id
         else:
@@ -2027,18 +2189,18 @@ def generate_v3_artifacts(
     lt: dict[str, str] = {}
     provenance: dict[str, dict[str, Any]] = {}
 
-    def add(item: dict[str, Any], v2_id: str | None, packet_id: str | None, finding_fields: dict[str, Any]) -> None:
+    def add(item: dict[str, Any], prev_item: str | None, packet_id: str | None, finding_fields: dict[str, Any]) -> None:
         item_id = f"ITEM-{len(ground_key) + 1:04d}"
         ground_key[item_id] = item
-        if v2_id is not None:
-            a = v2_adj[v2_id]
+        if prev_item is not None:
+            a = prev_adj[prev_item]
             l1[item_id], l2[item_id] = a["rater_1_label"], a["rater_2_label"]
             if a["tie_breaker_label"] is not None:
                 lt[item_id] = a["tie_breaker_label"]
             provenance[item_id] = {
-                "label_source": "inherited-v2",
+                "label_source": f"inherited-{prev}",
                 "finding_fields": finding_fields,
-                "adjudication_fields": {"v2_item_id": v2_id},
+                "adjudication_fields": {prev_id_field: prev_item},
             }
         else:
             assert packet_id is not None
@@ -2058,76 +2220,77 @@ def generate_v3_artifacts(
             add(
                 {**case, "source_tool": "discipline", "gate": v["gate"], "code": v["code"],
                  "file": v["file"], "line": v["line"]},
-                rec["v2_item_id"] if inherited else None,
+                rec["previous_item_id"] if inherited else None,
                 None if inherited else fresh_packet_id[("d", ci, vi)],
                 {
                     # Same LAN-address and home-path masking as the packet; the key compares raw messages.
                     "message": _redact_packet_pii_literals(v["message"]),
                     "diff_category": rec["category"],
-                    "v2_item_id": rec["v2_item_id"],
+                    prev_id_field: rec["previous_item_id"],
                 },
             )
     for pos, (case, path, code) in enumerate(twin_sampled):
-        v2_id = twin_inherited.get(pos)
+        prev_item = twin_inherited.get(pos)
         add(
             {**case, "source_tool": "naive-sensitive-path-filter", "gate": "naive-sensitive-path-filter",
              "code": code, "file": path, "line": None},
-            v2_id,
-            None if v2_id is not None else fresh_packet_id[("t", pos)],
-            {"diff_category": "unchanged" if v2_id is not None else "new", "v2_item_id": v2_id},
+            prev_item,
+            None if prev_item is not None else fresh_packet_id[("t", pos)],
+            {"diff_category": "unchanged" if prev_item is not None else "new", prev_id_field: prev_item},
         )
 
     fresh_ids = [k for k, p in provenance.items() if p["label_source"] == "fresh"]
-    v2_final = {i: a["final_label"] for i, a in v2_adj.items()}
+    prev_final = {i: a["final_label"] for i, a in prev_adj.items()}
     anchor_r1 = [r1[p] for p, _ in anchors]
     anchor_r2 = [r2[p] for p, _ in anchors]
-    anchor_v2 = [v2_final[v] for _, v in anchors]
+    anchor_prev = [prev_final[v] for _, v in anchors]
     both_1 = [l1[k] for k in fresh_ids] + anchor_r1
     both_2 = [l2[k] for k in fresh_ids] + anchor_r2
     inherited_n = len(ground_key) - len(fresh_ids)
-    extra = {
-        "previous_study_id": "agent-pr-precision-v2",
-        "preregistration": "docs/benchmarks/precision-preregistration-v3.toml",
-        "corpus_prior_inspection": (
-            "The 232 pull requests and every 0.23.0 finding on them were inspected and labelled "
-            "under agent-pr-precision-v2; v3 characterises the 0.25.3 binary on the same changes, "
-            "not precision on unseen agent pull requests."
-        ),
-        "reproduction_check": {
-            "reference_binary": "cargo build --release at 82d02046e4d64012413885b354873cfa769be329",
-            "reproduced": not reproduction_differences,
-            "differences": reproduction_differences,
-            "v2_messages_recovered": len(v2_messages),
-        },
+    reproduction: dict[str, Any] = {
+        "reference_binary": study.reference_binary,
+        "reproduced": not reproduction_differences,
+        "differences": reproduction_differences,
+    }
+    if study.messages_from_reference:
+        reproduction[f"{prev}_messages_recovered"] = len(previous_messages)
+    else:
+        reproduction[f"{prev}_findings_compared"] = len(previous_messages)
+    extra: dict[str, Any] = {
+        "previous_study_id": study.previous_study_id,
+        "preregistration": study.preregistration,
+        **({"discipline_binary": discipline_binary} if discipline_binary else {}),
+        "corpus_prior_inspection": study.corpus_prior_inspection,
+        "reproduction_check": reproduction,
         "label_reuse": {
-            "inherited_from_v2": inherited_n,
+            f"inherited_from_{prev}": inherited_n,
             "fresh": len(fresh_ids),
             "fresh_discipline": sum(1 for k in fresh_ids if ground_key[k]["source_tool"] == "discipline"),
             "fresh_twin": sum(1 for k in fresh_ids if ground_key[k]["source_tool"] != "discipline"),
-            "twin_sample_identical_to_v2": len(twin_inherited) == len(twin_sampled),
+            f"twin_sample_identical_to_{prev}": len(twin_inherited) == len(twin_sampled),
         },
-        "findings_diff_vs_v2": {
+        f"findings_diff_vs_{prev}": {
             "unchanged": sum(r["category"] == "unchanged" for r in diff["records"]),
             "changed": sum(r["category"] == "changed" for r in diff["records"]),
             "new": sum(r["category"] == "new" for r in diff["records"]),
             "gone": len(diff["gone"]),
-            "gone_v2_item_ids": diff["gone"],
+            f"gone_{prev}_item_ids": diff["gone"],
             "by_gate": diff["by_gate"],
         },
         "anchor_check": {
             "anchors": len(anchors),
-            "rater_1_agrees_with_v2_final": sum(a == b for a, b in zip(anchor_r1, anchor_v2)),
-            "rater_2_agrees_with_v2_final": sum(a == b for a, b in zip(anchor_r2, anchor_v2)),
-            "resolved_agrees_with_v2_final": sum(
-                (r1[p] if r1[p] == r2[p] else tb.get(p, "cannot-tell")) == v2_final[v] for p, v in anchors
+            f"rater_1_agrees_with_{prev}_final": sum(a == b for a, b in zip(anchor_r1, anchor_prev)),
+            f"rater_2_agrees_with_{prev}_final": sum(a == b for a, b in zip(anchor_r2, anchor_prev)),
+            f"resolved_agrees_with_{prev}_final": sum(
+                (r1[p] if r1[p] == r2[p] else tb.get(p, "cannot-tell")) == prev_final[v] for p, v in anchors
             ),
             "cohens_kappa_fresh_plus_anchor": round(cohens_kappa(both_1, both_2), 6) if both_1 else None,
             "items": [
                 {
                     "packet_item_id": p,
-                    "v2_item_id": v,
+                    prev_id_field: v,
                     "source_tool": packet_key[p]["source_tool"],
-                    "v2_final_label": v2_final[v],
+                    f"{prev}_final_label": prev_final[v],
                     "rater_1_label": r1[p],
                     "rater_2_label": r2[p],
                     "tie_breaker_label": tb.get(p) if r1[p] != r2[p] else None,
@@ -2137,6 +2300,20 @@ def generate_v3_artifacts(
             "use": "drift check only; anchor labels are never final labels",
         },
     }
+    if study.rater_label_diagnostic:
+        packet_ids = sorted(packet_key)
+        counts = {
+            "rater_1": _label_counts([r1[p] for p in packet_ids]),
+            "rater_2": _label_counts([r2[p] for p in packet_ids]),
+        }
+        extra["rater_label_counts"] = {
+            "scope": "every packet item (fresh and anchor)",
+            **counts,
+            "single_label_raters": sorted(
+                name for name, c in counts.items() if sum(1 for n in c.values() if n) == 1 and len(packet_ids) > 1
+            ),
+            "use": "diagnostic only; not a verdict input",
+        }
     return generate_benchmark_artifacts(
         eval_cases=cases,
         ground_key=ground_key,
@@ -2147,10 +2324,10 @@ def generate_v3_artifacts(
         rater_2_raw_id=ratings["rater_2_id"],
         tie_breaker_raw_id=ratings["tie_breaker_id"],
         evaluated_commit=evaluated_commit,
-        discipline_version="0.25.3",
-        study_id=V3_STUDY_ID,
-        results_dir=results_dir,
-        committed_rater_packet=V3_RATER_PACKET,
+        discipline_version=study.discipline_version,
+        study_id=study.study_id,
+        results_dir=results_dir or study.results_dir,
+        committed_rater_packet=study.rater_packet,
         host=host,
         label_provenance=provenance,
         extra_summary=extra,
@@ -2193,8 +2370,8 @@ def _self_test_v3_label_reuse() -> None:
             v("pii", "pii/host-or-pii-leak", "README.md", 1, "home path"),
         ]},
     ]
-    d = diff_findings_against_v2(v2, msgs, cases)
-    got = [(r["head_sha"], r["violation_index"], r["category"], r["v2_item_id"]) for r in d["records"]]
+    d = diff_findings_against_previous(v2, msgs, cases)
+    got = [(r["head_sha"], r["violation_index"], r["category"], r["previous_item_id"]) for r in d["records"]]
     assert got == [
         ("a", 0, "unchanged", "ITEM-0003"),
         ("a", 1, "unchanged", "ITEM-0001"),
@@ -2230,6 +2407,75 @@ def _self_test_v3_label_reuse() -> None:
     assert len(diffs) == 2 and all("r/r@c" in x for x in diffs), diffs
     _, clean = attach_reference_messages(v2[:5] + v2[6:], {"pull_requests": manifest["pull_requests"][:2]}, ref[:2])
     assert clean == [], clean
+
+
+def _self_test_v4_label_reuse() -> None:
+    """The v4 message key, the reproduction check on committed messages and the keyed diff."""
+    # The key masks like v3's committed messages and rewrites only `commit:<7-40 hex>`.
+    assert v4_message_key("The commit:6f8c831 contains variation-selector character(s).") == (
+        "The commit:<replay-commit> contains variation-selector character(s)."
+    )
+    assert v4_message_key("commit:" + "a" * 40) == "commit:<replay-commit>"
+    assert v4_message_key("commit:abc12") == "commit:abc12"  # under 7 hex digits: not a commit id
+    assert v4_message_key("pin deadbeefcafe to a SHA") == "pin deadbeefcafe to a SHA"
+    # Built at runtime so the literals do not sit in this file.
+    lan, lan10, home = ".".join(["192", "168", "1", "20"]), ".".join(["10", "0", "0", "1"]), "/" + "Users/alex/x"
+    assert v4_message_key(f"host {lan} in {home}") == "host <lan-ip:192-168-1-20> in /<home>/alex/x"
+    assert v4_message_key(v4_message_key(f"commit:6f8c831 at {lan10}")) == v4_message_key(f"commit:6f8c831 at {lan10}")
+
+    def f(item_id: str, head: str, gate: str, code: str, file: str | None, line: int | None,
+          message: str) -> dict[str, Any]:
+        return {"item_id": item_id, "source_tool": "discipline", "repo": "r/r", "head_sha": head,
+                "gate": gate, "code": code, "file": file, "line": line, "message": message}
+
+    def v(gate: str, code: str, file: str | None, line: int | None, message: str) -> dict[str, Any]:
+        return {"gate": gate, "code": code, "file": file, "line": line, "message": message}
+
+    smuggle = "instruction-smuggling/invisible-characters-in-description"
+    v3 = [
+        f("ITEM-0001", "a", "instruction-smuggling", smuggle, None, None, "The commit:6f8c831 has VS chars."),
+        f("ITEM-0002", "a", "pii", "pii/host-or-pii-leak", "README.md", 1, "LAN address <lan-ip:10-0-0-1>"),
+        f("ITEM-0003", "b", "ci-integrity", "ci-integrity/unpinned-action", "w.yml", 3, "pin it"),
+    ]
+    cases = [
+        {"repo": "r/r", "sha": "a", "violations": [
+            v("instruction-smuggling", smuggle, None, None, "The commit:0d1e2f3 has VS chars."),
+            v("pii", "pii/host-or-pii-leak", "README.md", 1, f"LAN address {lan10}"),
+        ]},
+        {"repo": "r/r", "sha": "b", "violations": [
+            v("ci-integrity", "ci-integrity/unpinned-action", "w.yml", 3, "pin it to a full SHA"),
+            v("harness-tampering", "harness-tampering/pytest-hook-masks-results", "conftest.py", 4, "masks"),
+        ]},
+    ]
+    msgs = {i["item_id"]: i["message"] for i in v3}
+    d = diff_findings_against_previous(v3, msgs, cases, v4_message_key)
+    got = [(r["head_sha"], r["category"], r["previous_item_id"]) for r in d["records"]]
+    assert got == [
+        ("a", "unchanged", "ITEM-0001"),  # only the scratch commit id differs
+        ("a", "unchanged", "ITEM-0002"),  # raw message against v3's masked one
+        ("b", "changed", "ITEM-0003"),
+        ("b", "new", None),
+    ], got
+    # Without the key, both v3 artefacts become fresh.
+    raw = [r["category"] for r in diff_findings_against_previous(v3, msgs, cases)["records"]]
+    assert raw == ["changed", "changed", "changed", "new"], raw
+
+    manifest = {"pull_requests": [
+        {"repo": "r/r", "head_sha": "a", "discipline_blocking_findings": 2},
+        {"repo": "r/r", "head_sha": "b", "discipline_blocking_findings": 1},
+    ]}
+    ref = [
+        {"repo": "r/r", "sha": "a", "violations": cases[0]["violations"]},
+        {"repo": "r/r", "sha": "b", "violations": [v("ci-integrity", "ci-integrity/unpinned-action", "w.yml", 3,
+                                                      "pin it")]},
+    ]
+    assert check_reproduction_with_messages(v3, manifest, ref, v4_message_key) == []
+    bad = [ref[0], {"repo": "r/r", "sha": "b", "violations": [
+        v("ci-integrity", "ci-integrity/unpinned-action", "w.yml", 3, "pin it now")]}]
+    diffs = check_reproduction_with_messages(v3, manifest, bad, v4_message_key)
+    assert len(diffs) == 2 and all("r/r@b" in x for x in diffs), diffs
+    diffs = check_reproduction_with_messages(v3, manifest, ref[:1], v4_message_key)
+    assert diffs == ["r/r@b: not replayed"], diffs
 
 
 FAKE_DISCIPLINE = '''#!{python}
@@ -2446,15 +2692,21 @@ def run_self_tests() -> None:
     # 15. v3 label reuse: unchanged / changed / new / gone, and the reproduction check
     _self_test_v3_label_reuse()
 
-    # 16. The v3 pre-registration pins v2's manifest by hash (python3.10 has no tomllib)
-    prereg_v3 = REPO_ROOT / "docs" / "benchmarks" / "precision-preregistration-v3.toml"
-    if prereg_v3.exists():
-        pinned = re.search(r'^manifest_sha256 = "([0-9a-f]{64})"$', prereg_v3.read_text(), re.M)
-        actual = hashlib.sha256((RESULTS_DIR / "manifest.json").read_bytes()).hexdigest()
-        assert pinned and pinned.group(1) == actual, "v2 manifest.json changed after the v3 pre-registration"
+    # 15b. v4 label reuse: the message key, the reproduction check on committed messages
+    _self_test_v4_label_reuse()
 
-    # 17. Post-hoc audits on the committed data (v2 and v3)
-    for results_dir in (RESULTS_DIR, V3_RESULTS_DIR):
+    # 16. Each re-run's pre-registration pins the previous manifest by hash (python3.10 has no tomllib)
+    for study in RERUN_STUDIES.values():
+        prereg = REPO_ROOT / study.preregistration
+        if prereg.exists():
+            pinned = re.search(r'^manifest_sha256 = "([0-9a-f]{64})"$', prereg.read_text(), re.M)
+            actual = hashlib.sha256((study.previous_results_dir / "manifest.json").read_bytes()).hexdigest()
+            assert pinned and pinned.group(1) == actual, (
+                f"{study.previous} manifest.json changed after the {study.study_id} pre-registration"
+            )
+
+    # 17. Post-hoc audits on the committed data (v2, v3 and v4)
+    for results_dir in (RESULTS_DIR, V3_RESULTS_DIR, V4_RESULTS_DIR):
         if (results_dir / "findings.json").exists() and (results_dir / "post-hoc-audit.json").exists():
             committed = json.loads((results_dir / "post-hoc-audit.json").read_text())
             recomputed = json.loads(json.dumps(post_hoc_audit(results_dir)))
@@ -2466,44 +2718,52 @@ def run_self_tests() -> None:
     print("All benchmark_precision.py self-tests passed.")
 
 
-def run_v3_stage(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    """`--v3-stage diff|packet|artifacts` (docs/benchmarks/precision-preregistration-v3.toml)."""
+def run_rerun_stage(
+    study: RerunStudy, stage: str, args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> int:
+    """`--v3-stage` / `--v4-stage diff|packet|artifacts` (the study's pre-registration)."""
+    flag = f"--{study.study_id.rsplit('-', 1)[1]}-stage"
     if not args.raw_eval_json or not args.reference_raw_json or not args.clones_dir:
-        parser.error("--v3-stage requires --raw-eval-json, --reference-raw-json and --clones-dir")
+        parser.error(f"{flag} requires --raw-eval-json, --reference-raw-json and --clones-dir")
     cases = json.loads(args.raw_eval_json.read_text())
     reference = json.loads(args.reference_raw_json.read_text())
-    v2_findings = json.loads((RESULTS_DIR / "findings.json").read_text())["items"]
-    v2_manifest = json.loads((RESULTS_DIR / "manifest.json").read_text())
-    messages, differences = attach_reference_messages(v2_findings, v2_manifest, reference)
-    diff = diff_findings_against_v2(v2_findings, messages, cases)
-    sampled, inherited = twin_reuse(cases, v2_findings)
+    prev_findings = json.loads((study.previous_results_dir / "findings.json").read_text())["items"]
+    prev_manifest = json.loads((study.previous_results_dir / "manifest.json").read_text())
+    if study.messages_from_reference:
+        messages, differences = attach_reference_messages(prev_findings, prev_manifest, reference)
+    else:
+        messages = {i["item_id"]: i["message"] for i in prev_findings if i["source_tool"] == "discipline"}
+        differences = check_reproduction_with_messages(prev_findings, prev_manifest, reference, study.message_key)
+    diff = diff_findings_against_previous(prev_findings, messages, cases, study.message_key)
+    sampled, inherited = twin_reuse(cases, prev_findings)
     print(json.dumps({
         "reproduction_differences": differences,
-        "v2_messages_recovered": len(messages),
+        f"{study.previous}_messages": len(messages),
         "twin_flags_inherited": f"{len(inherited)} of {len(sampled)}",
         "findings": {c: sum(r["category"] == c for r in diff["records"]) for c in ("unchanged", "changed", "new")},
         "gone": len(diff["gone"]),
         "by_gate": diff["by_gate"],
     }, indent=2))
-    if args.v3_stage == "diff":
+    if stage == "diff":
         return 0
     if not args.ground_key_json:
-        parser.error("--v3-stage packet|artifacts requires --ground-key-json")
-    if args.v3_stage == "packet":
-        items = build_v3_packet(
-            cases, diff, inherited, sampled, v2_findings, v2_manifest, args.clones_dir,
-            args.ground_key_json, REPO_ROOT / V3_RATER_PACKET,
+        parser.error(f"{flag} packet|artifacts requires --ground-key-json")
+    if stage == "packet":
+        items = build_rerun_packet(
+            study, cases, diff, inherited, sampled, prev_findings, prev_manifest, args.clones_dir,
+            args.ground_key_json, REPO_ROOT / study.rater_packet,
         )
-        print(f"wrote {V3_RATER_PACKET} with {len(items)} items")
+        print(f"wrote {study.rater_packet} with {len(items)} items")
         return 0
     if not args.ratings_json or not args.evaluated_commit:
-        parser.error("--v3-stage artifacts requires --ratings-json and --evaluated-commit")
-    generate_v3_artifacts(
-        cases, diff, sampled, inherited, RESULTS_DIR, messages, differences,
+        parser.error(f"{flag} artifacts requires --ratings-json and --evaluated-commit")
+    generate_rerun_artifacts(
+        study, cases, diff, sampled, inherited, messages, differences,
         json.loads(args.ground_key_json.read_text()), json.loads(args.ratings_json.read_text()),
-        args.evaluated_commit, args.host,
+        args.evaluated_commit, args.host, args.results_dir_out, args.discipline_binary,
     )
-    print(f"wrote {V3_RESULTS_DIR.relative_to(REPO_ROOT)}/{{manifest,findings,adjudication,summary}}.json")
+    out = (args.results_dir_out or study.results_dir).resolve()
+    print(f"wrote {out}/{{manifest,findings,adjudication,summary}}.json")
     return 0
 
 
@@ -2571,14 +2831,30 @@ def main() -> int:
         "docs/benchmarks/results-v3/ (needs --raw-eval-json, --reference-raw-json, --clones-dir).",
     )
     parser.add_argument(
+        "--v4-stage",
+        choices=["diff", "packet", "artifacts"],
+        help="agent-pr-precision-v4: the same stages against v3, writing docs/benchmarks/results-v4/.",
+    )
+    parser.add_argument(
         "--reference-raw-json",
         type=Path,
-        help="Raw replay JSON from v2's binary (82d02046) over the v2 manifest, for the reproduction check.",
+        help="Raw replay JSON from the previous study's binary over its manifest, for the reproduction "
+        "check (v3: v2's 82d02046; v4: the 0.25.3 release).",
     )
     parser.add_argument(
         "--ratings-json",
         type=Path,
-        help="With --v3-stage artifacts: rater_1 / rater_2 / tie_breaker labels by packet item id, and rater ids.",
+        help="With --v3-stage / --v4-stage artifacts: rater_1 / rater_2 / tie_breaker labels by packet "
+        "item id, and rater ids.",
+    )
+    parser.add_argument(
+        "--results-dir-out",
+        type=Path,
+        help="With --v3-stage / --v4-stage artifacts: write here instead of the study's results directory.",
+    )
+    parser.add_argument(
+        "--discipline-binary",
+        help="With --v4-stage artifacts: how the replayed binary was obtained, recorded in summary.json.",
     )
     parser.add_argument("--evaluated-commit", help="Commit the replayed binary was built from.")
     parser.add_argument("--host", default="Apple M-series macOS 15 arm64", help="Host recorded in summary.json.")
@@ -2589,8 +2865,12 @@ def main() -> int:
         help="With --post-hoc-audit: the study results directory to audit.",
     )
     args = parser.parse_args()
+    if args.v3_stage and args.v4_stage:
+        parser.error("--v3-stage and --v4-stage are exclusive")
     if args.v3_stage:
-        return run_v3_stage(args, parser)
+        return run_rerun_stage(V3_STUDY, args.v3_stage, args, parser)
+    if args.v4_stage:
+        return run_rerun_stage(V4_STUDY, args.v4_stage, args, parser)
     if args.test:
         run_self_tests()
         return 0
