@@ -1801,6 +1801,11 @@ impl<'a> PythonExtractor<'a> {
                 }
             }
         }
+        // `with mock.patch('src.calc.f', return_value=9):` then `assert calc.f(1) == 9`:
+        // the only code the check runs is the double the test put there (#899).
+        if self.calls_only_patched(&[cond]) {
+            return true;
+        }
         // `assert (x == 1, "msg")` asserts a non-empty tuple, and
         // `assert m.called_once_with(1)` a child of a local mock: both are truthy.
         is_non_empty_tuple(cond) || is_unchecked_mock_call(cond, self.anc, self.src)
@@ -1843,8 +1848,109 @@ impl<'a> PythonExtractor<'a> {
             {
                 return true;
             }
+            // `self.assertEqual(calc.f(1), 9)` under a patch of `src.calc.f` (#899).
+            if self.calls_only_patched(&arg_nodes) {
+                return true;
+            }
         }
         false
+    }
+
+    /// Whether the expressions make at least one call and every call they make (nested
+    /// ones included) is to a target that a `mock.patch` / `patch.object` in force at
+    /// that point replaces (`patched_targets`): the check runs only the double the test
+    /// set up, so it holds whatever the real code does (#899). A callee is matched by
+    /// its dotted name, read from the tree (`dotted_name`): its segments must be the
+    /// last segments of the patched path (`calc.f` and `f` are `src.calc.f`). A callee
+    /// that is not a plain dotted name (`Calc().f`, `fs[0]`) is a call to something
+    /// unpatched.
+    fn calls_only_patched(&self, exprs: &[Node<'a>]) -> bool {
+        let Some(first) = exprs.first() else {
+            return false;
+        };
+        let mut callees = Vec::new();
+        let mut stack: Vec<Node<'a>> = exprs.to_vec();
+        while let Some(node) = stack.pop() {
+            if node.kind() == "call" {
+                match node
+                    .child_by_field_name("function")
+                    .and_then(|f| dotted_name(f, self.src))
+                {
+                    Some(name) => callees.push(name),
+                    None => return false,
+                }
+            }
+            let mut cursor = node.walk();
+            stack.extend(node.named_children(&mut cursor));
+        }
+        if callees.is_empty() {
+            return false;
+        }
+        let patched = self.patched_targets(*first);
+        callees.iter().all(|callee| {
+            patched
+                .iter()
+                .any(|target| target.len() >= callee.len() && target.ends_with(callee))
+        })
+    }
+
+    /// The dotted paths that patches in force at `node` replace: an item of a `with`
+    /// statement whose body holds `node`, and a decorator of the function that holds
+    /// it, each a patch call `patched_target` reads.
+    fn patched_targets(&self, node: Node<'a>) -> Vec<Vec<String>> {
+        let mut targets = Vec::new();
+        let mut child = node;
+        let mut parent = self.anc.parent(node);
+        while let Some(p) = parent {
+            match p.kind() {
+                "with_statement"
+                    if p.child_by_field_name("body")
+                        .is_some_and(|b| b.id() == child.id()) =>
+                {
+                    let mut cursor = p.walk();
+                    for clause in p.named_children(&mut cursor) {
+                        if clause.kind() != "with_clause" {
+                            continue;
+                        }
+                        let mut items = clause.walk();
+                        for item in clause.named_children(&mut items) {
+                            let value = item.child_by_field_name("value").map(|v| {
+                                if v.kind() == "as_pattern" {
+                                    v.named_child(0).unwrap_or(v)
+                                } else {
+                                    v
+                                }
+                            });
+                            targets.extend(value.and_then(|v| patched_target(v, self.src)));
+                        }
+                    }
+                }
+                "function_definition" => {
+                    if let Some(decorated) = self
+                        .anc
+                        .parent(p)
+                        .filter(|d| d.kind() == "decorated_definition")
+                    {
+                        let mut cursor = decorated.walk();
+                        for decorator in decorated.named_children(&mut cursor) {
+                            if decorator.kind() == "decorator" {
+                                targets.extend(
+                                    decorator
+                                        .named_child(0)
+                                        .and_then(|e| patched_target(e, self.src)),
+                                );
+                            }
+                        }
+                    }
+                    break;
+                }
+                "class_definition" | "lambda" => break,
+                _ => {}
+            }
+            child = p;
+            parent = self.anc.parent(p);
+        }
+        targets
     }
 
     /// One operand of an equality is a call and the other a plain name that the
@@ -1863,6 +1969,73 @@ impl<'a> PythonExtractor<'a> {
             }
             function.is_some_and(|f| bound_only_to(f, self.text(name), call, self.src))
         })
+    }
+}
+
+/// The segments of a plain dotted name: an identifier, or an attribute access whose
+/// object is one (`src.calc.f`). Anything else (a call, a subscript) is `None`.
+fn dotted_name(node: Node, src: &[u8]) -> Option<Vec<String>> {
+    match node.kind() {
+        "identifier" => Some(vec![node.utf8_text(src).ok()?.to_string()]),
+        "attribute" => {
+            let mut name = dotted_name(node.child_by_field_name("object")?, src)?;
+            let attr = node.child_by_field_name("attribute")?;
+            name.push(attr.utf8_text(src).ok()?.to_string());
+            Some(name)
+        }
+        _ => None,
+    }
+}
+
+/// The dotted path a `unittest.mock` patch call replaces (#899):
+/// `patch('<path>', ..)`, `mock.patch('<path>', ..)` or `unittest.mock.patch(..)` with
+/// a plain string literal first argument, and `patch.object(<obj>, '<attr>', ..)` (also
+/// through `mock.` / `unittest.mock.`) with a dotted-name object and a plain string
+/// literal attribute. A target that is not a literal (a variable, an f-string), a
+/// target passed by keyword, a call with a `*args` / `**kwargs` splat, and any other
+/// callee are not read.
+fn patched_target(call: Node, src: &[u8]) -> Option<Vec<String>> {
+    if call.kind() != "call" {
+        return None;
+    }
+    let callee = dotted_name(call.child_by_field_name("function")?, src)?;
+    let args = call.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let mut positional = Vec::new();
+    for arg in args.named_children(&mut cursor) {
+        match arg.kind() {
+            "comment" | "keyword_argument" => {}
+            "list_splat" | "dictionary_splat" => return None,
+            _ => positional.push(arg),
+        }
+    }
+    let path = |n: Node| -> Option<Vec<String>> {
+        let text = python_string_content(n, src)?;
+        let segments: Vec<String> = text.split('.').map(str::to_string).collect();
+        segments
+            .iter()
+            .all(|s| {
+                let mut chars = s.chars();
+                chars.next().is_some_and(|c| c.is_alphabetic() || c == '_')
+                    && chars.all(|c| c.is_alphanumeric() || c == '_')
+            })
+            .then_some(segments)
+    };
+    let callee: Vec<&str> = callee.iter().map(String::as_str).collect();
+    match callee.as_slice() {
+        ["patch"] | ["mock", "patch"] | ["unittest", "mock", "patch"] => path(*positional.first()?),
+        ["patch", "object"]
+        | ["mock", "patch", "object"]
+        | ["unittest", "mock", "patch", "object"] => {
+            let mut target = dotted_name(*positional.first()?, src)?;
+            let attr = path(*positional.get(1)?)?;
+            if attr.len() != 1 {
+                return None;
+            }
+            target.extend(attr);
+            Some(target)
+        }
+        _ => None,
     }
 }
 
@@ -3887,6 +4060,80 @@ class Case(unittest.TestCase):
             .extract("tests/test_calc.py", src, &AssertVocabulary::default())
             .unwrap();
         assert!(facts.tests[0].is_vacuous(), "{:?}", facts.tests[0]);
+    }
+
+    /// #899: an assertion whose every call is to a target the same test patches checks
+    /// only the double the test set up; one that also runs real code is a check.
+    #[test]
+    fn an_assertion_on_a_target_the_test_patches_is_a_tautology() {
+        // `(total_asserts, tautologies, is_vacuous)` of `test_h` in `src`.
+        let read = |src: &str| {
+            let facts = PythonPack
+                .extract("tests/test_calc.py", src, &AssertVocabulary::default())
+                .unwrap();
+            let t = facts
+                .tests
+                .iter()
+                .find(|t| t.name.ends_with("test_h"))
+                .unwrap_or_else(|| panic!("no test_h in {src}"));
+            (t.total_asserts, t.tautologies, t.is_vacuous())
+        };
+        let module = |body: &str| format!("from unittest import mock\n\n\ndef test_h():\n{body}");
+        for body in [
+            // The corpus case.
+            "    with mock.patch('src.calc.f', return_value=9):\n        from src import calc\n        assert calc.f(1) == 9\n",
+            // The callee spelled as the full path, as its last segment, `as m`, other
+            // patch spellings, a second item, a nested `with`, `patch.object`.
+            "    with mock.patch('src.calc.f', return_value=9):\n        assert src.calc.f(1) == 9\n",
+            "    with mock.patch('src.calc.f', return_value=9) as m:\n        assert f(1) == 9\n",
+            "    with patch('src.calc.f', return_value=9):\n        assert calc.f(1) == 9\n",
+            "    with unittest.mock.patch(\"src.calc.f\", return_value=9):\n        assert calc.f(1) == 9\n",
+            "    with open(p) as fh, mock.patch('src.calc.f', return_value=9):\n        assert calc.f(1) == 9\n",
+            "    with mock.patch('src.calc.g'):\n        with mock.patch('src.calc.f'):\n            assert calc.f(calc.g(1)) == 9\n",
+            "    with mock.patch.object(calc, 'f', return_value=9):\n        assert calc.f(1) == 9\n",
+            "    with patch.object(src.calc, 'f', return_value=9):\n        assert calc.f(1) is not None\n",
+        ] {
+            let (total, tautologies, vacuous) = read(&module(body));
+            assert_eq!((total, tautologies, vacuous), (1, 1, true), "{body}");
+        }
+        // The decorator form, and unittest's `assertEqual` under a `with` patch.
+        let decorated = "from unittest import mock\n\n\n@mock.patch('src.calc.f', return_value=9)\ndef test_h(m):\n    assert calc.f(1) == 9\n";
+        assert_eq!(read(decorated), (1, 1, true));
+        let unittest = "import unittest\nfrom unittest import mock\n\n\nclass Case(unittest.TestCase):\n    def test_h(self):\n        with mock.patch('src.calc.f', return_value=9):\n            self.assertEqual(calc.f(1), 9)\n";
+        assert_eq!(read(unittest), (1, 1, true));
+        // Controls. A patched dependency with the real target called (the key one);
+        // a real call beside the patched one; a callee that is not a dotted name; a
+        // path that only shares a segment; the assert after the `with`; a target that
+        // is not a literal (a variable, an f-string, by keyword); a check with no call;
+        // a call-record check beside a real call; another patching API; a patch that is
+        // not `unittest.mock`'s; a patch in another function.
+        for body in [
+            "    with mock.patch('src.calc.g', return_value=9):\n        assert calc.f(1) == 2\n",
+            "    with mock.patch('src.calc.f', return_value=9):\n        assert calc.f(1) == calc.g(8)\n",
+            "    with mock.patch('src.calc.f', return_value=9):\n        assert calc.f(len(xs)) == 9\n",
+            "    with mock.patch('src.calc.f', return_value=9):\n        assert Calc().f(1) == 9\n",
+            "    with mock.patch('src.calc.f', return_value=9):\n        assert other.f2(1) == 9\n",
+            "    with mock.patch('src.calc.f', return_value=9):\n        assert calc.f.g(1) == 9\n",
+            "    with mock.patch('src.calc.f', return_value=9):\n        pass\n    assert calc.f(1) == 9\n",
+            "    target = 'src.calc.f'\n    with mock.patch(target, return_value=9):\n        assert calc.f(1) == 9\n",
+            "    with mock.patch(f'src.calc.{name}', return_value=9):\n        assert calc.f(1) == 9\n",
+            "    with mock.patch(target='src.calc.f', return_value=9):\n        assert calc.f(1) == 9\n",
+            "    with mock.patch('src.calc.f', return_value=9) as m:\n        assert m.return_value == 9\n",
+            "    with mock.patch('src.calc.g') as m:\n        assert calc.f(1) == 2\n        m.assert_called_once_with(1)\n",
+            "    with mock.patch.object(calc, attr, return_value=9):\n        assert calc.f(1) == 9\n",
+            "    with monkeypatch.setattr('src.calc.f', lambda x: 9):\n        assert calc.f(1) == 9\n",
+            "    with other.patch('src.calc.f', return_value=9):\n        assert calc.f(1) == 9\n",
+            "    def inner():\n        with mock.patch('src.calc.f'):\n            pass\n    assert calc.f(1) == 9\n",
+        ] {
+            let (total, tautologies, _) = read(&module(body));
+            assert!(total >= 1 && tautologies == 0, "{body}: {total} {tautologies}");
+        }
+        // A decorator patching a dependency leaves the real target's check counted.
+        let decorated = "from unittest import mock\n\n\n@mock.patch('src.calc.g', return_value=9)\ndef test_h(m):\n    assert calc.f(1) == 2\n";
+        assert_eq!(read(decorated), (1, 0, false));
+        // One real check beside the patched one: the test is not vacuous.
+        let mixed = module("    with mock.patch('src.calc.f', return_value=9):\n        assert calc.f(1) == 9\n    assert calc.g(1) == 2\n");
+        assert_eq!(read(&mixed), (2, 1, false));
     }
 
     /// #836: an `assert` of a non-empty tuple is always true; `()` is always false.
