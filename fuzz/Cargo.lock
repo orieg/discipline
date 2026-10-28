@@ -285,7 +285,7 @@ dependencies = [
 
 [[package]]
 name = "discipline"
-version = "0.25.3"
+version = "0.26.0"
 dependencies = [
  "anyhow",
  "base64",
