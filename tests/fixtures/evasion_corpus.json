@@ -199,7 +199,9 @@
         "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    [].forEach(() => expect(f(2)).toBe(4));\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
       },
       "verdict": {
-        "known_miss": "#837"
+        "caught": [
+          "assertion-reduction/assertions-reduced"
+        ]
       }
     },
     {

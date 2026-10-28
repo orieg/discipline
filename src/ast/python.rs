@@ -2550,7 +2550,25 @@ pub const PY_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
         "continue",
         "break",
     ],
+    empty_iteration: Some(py_empty_iteration),
 };
+
+/// The body of a `for` loop over an empty list or tuple literal (`for _ in []:`), which
+/// runs zero times (#899). Its `else` clause runs, so it is not dead. A name bound to
+/// `[]` is not followed.
+fn py_empty_iteration(node: Node, _src: &str, out: &mut super::reach::DeadRanges) {
+    if node.kind() != "for_statement" {
+        return;
+    }
+    if let (Some(right), Some(body)) = (
+        node.child_by_field_name("right"),
+        node.child_by_field_name("body"),
+    ) {
+        if super::reach::holds_nothing(right, &["list", "tuple"]) {
+            super::reach::push_range(body, out);
+        }
+    }
+}
 
 /// A local a Python wrapper computes and forwards: `b = loc(d)`.
 pub const PY_LOCALS: super::LocalSpec = super::LocalSpec {

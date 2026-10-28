@@ -751,6 +751,7 @@ pub const SWIFT_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     block_kinds: &["statements"],
     ignored_kinds: &["comment", "multiline_comment"],
     terminators: &["return", "throw", "fatalError(", "preconditionFailure("],
+    empty_iteration: None,
 };
 
 /// Functions a test body runs through a dispatch table (`super::dispatch_calls`).

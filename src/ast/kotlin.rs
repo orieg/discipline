@@ -950,6 +950,7 @@ pub const KOTLIN_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     block_kinds: &["block"],
     ignored_kinds: &["line_comment", "block_comment"],
     terminators: &["return", "throw"],
+    empty_iteration: None,
 };
 
 /// Functions a test body runs through a dispatch table (`super::dispatch_calls`).

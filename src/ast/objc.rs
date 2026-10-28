@@ -532,6 +532,7 @@ pub const OBJC_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     block_kinds: &["compound_statement"],
     ignored_kinds: &["comment"],
     terminators: &["return", "@throw", "abort("],
+    empty_iteration: None,
 };
 
 /// A local a Objective-C wrapper computes and forwards: `int b = loc(d);`.

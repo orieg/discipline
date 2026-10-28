@@ -736,6 +736,7 @@ pub const RUBY_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     block_kinds: &["then", "body_statement", "block_body"],
     ignored_kinds: &["comment"],
     terminators: &["return", "raise", "next", "break"],
+    empty_iteration: None,
 };
 
 /// Functions a test body runs through a dispatch table (`super::dispatch_calls`).

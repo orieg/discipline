@@ -5,6 +5,10 @@
 //! unittest.SkipTest`) is not a terminator: the test is reported as ignored, and its
 //! body stays what it is.
 //!
+//! A pack may also name code that runs once per element of an empty literal: a callback
+//! passed to an iteration method called on `[]` (`[].forEach(() => ..)`), or the body of
+//! a loop over one (`for _ in []:`). It runs zero times (#899).
+//!
 //! An assertion there counts as an assertion to a line count and fails nothing. Each
 //! pack's assertion walk skips nodes that start inside a dead range.
 
@@ -20,6 +24,31 @@ pub struct ReachSpec {
     pub ignored_kinds: &'static [&'static str],
     /// Heads of a statement after which nothing at the same level runs.
     pub terminators: &'static [&'static str],
+    /// The pack's reading of code that runs once per element of an empty literal: called
+    /// with each node of the file, it adds the byte range of each such callback or loop
+    /// body to the ranges. `None` where the pack reads none.
+    pub empty_iteration: Option<EmptyIteration>,
+}
+
+/// See [`ReachSpec::empty_iteration`].
+pub type EmptyIteration = fn(Node, &str, &mut DeadRanges);
+
+/// Whether `node` is a literal of one of `kinds` that holds no element: `[]`, `()`. A
+/// comment inside it is not an element.
+pub fn holds_nothing(node: Node, kinds: &[&str]) -> bool {
+    if !kinds.contains(&node.kind()) {
+        return false;
+    }
+    let mut cursor = node.walk();
+    let empty = node.named_children(&mut cursor).all(|c| {
+        c.kind() == "comment" || c.kind() == "line_comment" || c.kind() == "block_comment"
+    });
+    empty
+}
+
+/// Adds the byte range of `node` to `out`.
+pub fn push_range(node: Node, out: &mut DeadRanges) {
+    out.push((node.start_byte(), node.end_byte()));
 }
 
 /// Byte ranges no execution reaches.
@@ -84,6 +113,9 @@ pub fn dead_ranges(root: Node, src: &str, spec: &ReachSpec) -> DeadRanges {
                     out.push((body.start_byte(), body.end_byte()));
                 }
             }
+        }
+        if let Some(empty_iteration) = spec.empty_iteration {
+            empty_iteration(node, src, &mut out);
         }
         if spec.block_kinds.contains(&node.kind()) {
             let mut cursor = node.walk();
@@ -284,5 +316,71 @@ mod pack_tests {
             "class ATest {\n    @Test\n    fun dead() {\n        if (false) {\n            assertEquals(1, 2)\n        }\n        return\n        assertEquals(3, 4)\n    }\n    @Test\n    fun live() {\n        if (flag) {\n            assertEquals(1, 2)\n        }\n    }\n}\n",
         );
         assert_eq!(kt, vec![(0, 0), (1, 1)]);
+    }
+
+    /// An assertion in a callback over an empty array literal, or in the body of a loop
+    /// over one, runs zero times and does not count (#899). The negative controls: a
+    /// literal with an element, a name as the receiver, a method that is not an iteration
+    /// method, a Python `for` loop's `else` clause, and a Go array literal (`[2]int{}`
+    /// holds two zero values).
+    #[test]
+    fn assertions_in_an_iteration_over_an_empty_literal_do_not_count() {
+        let js = counts(
+            "test/a.test.js",
+            "test('empty', () => { [].forEach(() => expect(f(2)).toBe(4)); });\n\
+             test('empty map', () => { [/* none */].map(function (x) { expect(x).toBe(1); }); });\n\
+             test('empty for of', () => { for (const x of []) { expect(x).toBe(1); } });\n\
+             test('one', () => { [1].forEach(() => expect(f(2)).toBe(4)); });\n\
+             test('name', () => { xs.forEach(() => expect(f(2)).toBe(4)); });\n\
+             test('not iteration', () => { [].push(expect(f(2)).toBe(4)); });\n\
+             test('for of one', () => { for (const x of [1]) { expect(x).toBe(1); } });\n",
+        );
+        assert_eq!(
+            js,
+            vec![(0, 0), (0, 0), (0, 0), (1, 1), (1, 1), (1, 1), (1, 1)]
+        );
+        let ts = counts(
+            "test/a.test.ts",
+            "test('empty', () => { [].some((x: number) => { expect(x).toBe(1); return true; }); });\n\
+             test('one', () => { [1].some((x: number) => { expect(x).toBe(1); return true; }); });\n",
+        );
+        assert_eq!(ts, vec![(0, 0), (1, 1)]);
+        // A same-file helper called in such a callback runs zero times too.
+        let helper = counts(
+            "test/b.test.js",
+            "function check(x) { expect(x).toBe(4); }\n\
+             test('empty', () => { [].forEach(() => check(f(2))); });\n\
+             test('dead', () => { if (false) { check(f(2)); } });\n\
+             test('one', () => { [1].forEach(() => check(f(2))); });\n",
+        );
+        assert_eq!(helper, vec![(0, 0), (0, 0), (1, 1)]);
+        let py = counts(
+            "tests/test_a.py",
+            "def test_empty():\n    for _ in []:\n        assert f(2) == 4\n\n\
+             def test_empty_tuple():\n    for _ in ():\n        assert f(2) == 4\n\n\
+             def test_else():\n    for _ in []:\n        assert f(2) == 4\n    else:\n        assert f(3) == 6\n\n\
+             def test_one():\n    for _ in [1]:\n        assert f(2) == 4\n\n\
+             def test_name():\n    for _ in xs:\n        assert f(2) == 4\n",
+        );
+        assert_eq!(py, vec![(0, 0), (0, 0), (1, 1), (1, 1), (1, 1)]);
+        let rs = counts(
+            "src/lib.rs",
+            "#[test]\nfn empty_for() { for _ in [] { assert_eq!(f(2), 4); } }\n\
+             #[test]\nfn empty_iter() { [].iter().for_each(|x: &u8| assert_eq!(*x, 4)); }\n\
+             #[test]\nfn empty_into_iter() { [].into_iter().map(|x: u8| assert_eq!(x, 4)).count(); }\n\
+             #[test]\nfn one_for() { for _ in [1] { assert_eq!(f(2), 4); } }\n\
+             #[test]\nfn one_iter() { [1].iter().for_each(|x| assert_eq!(*x, 1)); }\n\
+             #[test]\nfn name_iter() { xs.iter().for_each(|x| assert_eq!(*x, 1)); }\n",
+        );
+        assert_eq!(rs, vec![(0, 0), (0, 0), (0, 0), (1, 1), (1, 1), (1, 1)]);
+        let go = counts(
+            "pkg/a_test.go",
+            "package a\nfunc TestEmptySlice(t *testing.T) {\n\tfor range []int{} {\n\t\tt.Fatal(\"x\")\n\t}\n}\n\
+             func TestEmptyMap(t *testing.T) {\n\tfor k := range map[string]int{} {\n\t\tt.Fatal(k)\n\t}\n}\n\
+             func TestOne(t *testing.T) {\n\tfor range []int{1} {\n\t\tt.Fatal(\"x\")\n\t}\n}\n\
+             func TestArray(t *testing.T) {\n\tfor range [2]int{} {\n\t\tt.Fatal(\"x\")\n\t}\n}\n\
+             func TestName(t *testing.T) {\n\tfor range xs {\n\t\tt.Fatal(\"x\")\n\t}\n}\n",
+        );
+        assert_eq!(go, vec![(0, 0), (0, 0), (1, 1), (1, 1), (1, 1)]);
     }
 }
