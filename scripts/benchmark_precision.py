@@ -186,6 +186,7 @@ RULE_SUMMARIES: dict[str, str] = {
     "test-floor/test-count-below-floor": "Total test count in the module/file dropped from base to head.",
     "stub-bodies/stub-body-added": "Newly added non-test function has a trivial stub body (todo!(), unimplemented!(), pass, return constant/null).",
     "stub-bodies/body-replaced-by-stub": "Existing function body was replaced with a stub or constant return.",
+    "citation-anchors/link-target-missing": "Added line of a Markdown file has a relative link, image or reference definition whose target is not a tracked file or directory on the head side of the change.",
     "twin-sensitive-path/existing-test-file": "Existing test file modified: verify whether the change weakens, deletes, or degrades test assertions or coverage.",
     "twin-sensitive-path/ci-workflow": "CI workflow file modified: verify whether the change introduces unpinned actions, masks failures, or weakens CI gating.",
     "twin-sensitive-path/linter-or-runner-config": "Project manifest, linter, or test-runner config modified: verify whether the change adds/loosens dependencies or weakens checks.",
