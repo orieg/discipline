@@ -781,6 +781,60 @@ fn python_always_true_asserts_are_tautologies() {
     assert!(repo.check(&[]).violations("assertion-reduction").is_empty());
 }
 
+/// A Python expected value computed by the same call as the side it is compared with
+/// cannot differ from it (#899): `assert f(2) == 4` turned into `expected = f(2)` then
+/// `assert f(2) == expected` is an assertion reduction.
+#[test]
+fn an_expected_value_computed_by_the_code_under_test_does_not_count() {
+    const BASE: &str = "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n\n\ndef test_h():\n    assert f(1) == 2\n\n\ndef test_k():\n    assert f(3) == 6\n";
+    let repo = Repo::new();
+    repo.write(
+        "src/calc.py",
+        "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+    );
+    repo.commit_base("tests/test_calc.py", BASE, "test: calc");
+    let codes = |run: &common::Run| -> Vec<String> {
+        run.violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // Negative control, one assertion per test so that any of them read as a tautology
+    // is a reduction: an expected value from another callee, a name rebound after its
+    // assignment, one bound at module level, one from other arguments.
+    repo.write(
+        "tests/test_calc.py",
+        "from src.calc import f, g\n\nEXPECTED = f(1)\n\n\n\
+         def test_f():\n    expected = g(3)\n    assert f(2) == expected\n\n\n\
+         def test_g():\n    expected = g(1)\n    expected += 0\n    assert g(1) == expected\n\n\n\
+         def test_h():\n    assert f(1) == EXPECTED\n\n\n\
+         def test_k():\n    expected = f(2)\n    assert f(3) == expected\n",
+    );
+    repo.commit("test: independent");
+    let quiet = repo.check(&[]);
+    assert!(codes(&quiet).is_empty(), "{}", quiet.stdout);
+
+    // The corpus case: the expected value comes from the call under test.
+    repo.write(
+        "tests/test_calc.py",
+        &BASE.replace(
+            "assert f(2) == 4",
+            "expected = f(2)\n    assert f(2) == expected",
+        ),
+    );
+    repo.commit("test: self-computed");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert_eq!(codes(&run), ["assertion-reduction/assertions-reduced"]);
+    let lines: Vec<u64> = run
+        .violations("assertion-reduction")
+        .iter()
+        .map(|v| v["line"].as_u64().unwrap_or(0))
+        .collect();
+    assert_eq!(lines, [4], "{}", run.stdout);
+}
+
 /// A Python assertion wrapped in parentheses is the same check (#859): reformatting an
 /// existing test's equality with parentheses and a message weakens nothing, and a new
 /// test whose parenthesised equality sits beside a mock assertion checks a result.

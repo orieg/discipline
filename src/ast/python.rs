@@ -1780,6 +1780,14 @@ impl<'a> PythonExtractor<'a> {
             ) {
                 return true;
             }
+            // `expected = f(2)` then `assert f(2) == expected` (#899).
+            let mut cursor = cond.walk();
+            let is_eq = cond
+                .children(&mut cursor)
+                .any(|c| c.kind() == "==" && !c.is_named());
+            if is_eq && self.is_self_computed(left, right) {
+                return true;
+            }
         }
         if cond.kind() == "comparison_operator" {
             let mut cursor = cond.walk();
@@ -1829,9 +1837,96 @@ impl<'a> PythonExtractor<'a> {
             {
                 return true;
             }
+            if func_name == "self.assertEqual"
+                && arg_nodes.len() >= 2
+                && self.is_self_computed(arg_nodes[0], arg_nodes[1])
+            {
+                return true;
+            }
         }
         false
     }
+
+    /// One operand of an equality is a call and the other a plain name that the
+    /// enclosing function binds only to that same call (`bound_only_to`): the expected
+    /// value is computed by the code under test, so the two sides cannot differ (#899).
+    /// `expected = f(2)` then `assert f(2) == expected`.
+    fn is_self_computed(&self, a: Node<'a>, b: Node<'a>) -> bool {
+        let (a, b) = (unparenthesized(a), unparenthesized(b));
+        [(a, b), (b, a)].into_iter().any(|(name, call)| {
+            if name.kind() != "identifier" || call.kind() != "call" {
+                return false;
+            }
+            let mut function = self.anc.parent(name);
+            while let Some(f) = function.filter(|f| f.kind() != "function_definition") {
+                function = self.anc.parent(f);
+            }
+            function.is_some_and(|f| bound_only_to(f, self.text(name), call, self.src))
+        })
+    }
+}
+
+/// Whether `name` is bound in `function` (its parameters and body, nested functions,
+/// classes and lambdas included) at least once, and only by a plain assignment
+/// `name = <call>` whose value is the same tokens as `call`
+/// (`self_comparison::same`: the callee and the arguments, white space and comments
+/// left out). Any other binding of the name (a parameter, an augmented assignment, an
+/// assignment from anything else, a `for`, `with .. as`, `except .. as`, walrus,
+/// import, `global` / `nonlocal`, `del`, a pattern, a `def` or `class` of that name)
+/// means it is not judged.
+fn bound_only_to(function: Node, name: &str, call: Node, src: &[u8]) -> bool {
+    let text = |n: Node| n.utf8_text(src).unwrap_or("");
+    let is = |field: &str, parent: Node, n: Node| {
+        parent
+            .child_by_field_name(field)
+            .is_some_and(|c| c.id() == n.id())
+    };
+    let mut bound = false;
+    let mut stack: Vec<(Node, Node)> = Vec::new();
+    for field in ["parameters", "body"] {
+        if let Some(n) = function.child_by_field_name(field) {
+            stack.push((n, function));
+        }
+    }
+    while let Some((node, parent)) = stack.pop() {
+        match node.kind() {
+            "function_definition" | "class_definition"
+                if node.child_by_field_name("name").map(text) == Some(name) =>
+            {
+                return false;
+            }
+            "delete_statement" if names_in(node, src).any(|n| n == name) => return false,
+            "identifier" if text(node) == name => {
+                let binds = match parent.kind() {
+                    "assignment" if is("left", parent, node) => {
+                        let value = parent.child_by_field_name("right");
+                        if !value.is_some_and(|v| super::self_comparison::same(v, call, src)) {
+                            return false;
+                        }
+                        bound = true;
+                        false
+                    }
+                    "augmented_assignment" | "for_statement" | "for_in_clause" => {
+                        is("left", parent, node)
+                    }
+                    "named_expression"
+                    | "default_parameter"
+                    | "typed_default_parameter"
+                    | "type_alias_statement" => is("name", parent, node),
+                    "except_clause" => is("alias", parent, node),
+                    k => is_binding_position(k),
+                };
+                if binds {
+                    return false;
+                }
+                continue;
+            }
+            _ => {}
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.children(&mut cursor).map(|c| (c, node)));
+    }
+    bound
 }
 
 const PYTHON_CODE: super::NotCode = super::NotCode {
@@ -3709,6 +3804,89 @@ class Case(unittest.TestCase):
             .find(|t| t.name == "test_t")
             .unwrap_or_else(|| panic!("no test_t in {src}"));
         (t.total_asserts, t.tautologies)
+    }
+
+    /// #899: an equality whose expected side is a name the test binds only to the same
+    /// call as the other side compares the code under test with itself.
+    #[test]
+    fn an_expected_value_computed_by_the_same_call_is_a_tautology() {
+        for (prelude, body) in [
+            ("", "    expected = f(2)\n    assert f(2) == expected\n"),
+            ("", "    expected = f(2)\n    assert expected == f(2)\n"),
+            ("", "    expected = f( 2 )\n    assert (f(2)) == (expected), \"msg\"\n"),
+            ("", "    expected = calc.f(2, k=1)\n    assert calc.f(2, k=1) == expected\n"),
+            ("", "    expected = f(2)\n    run()\n    expected = f(2)\n    assert f(2) == expected\n"),
+            ("", "    other = expected = f(2)\n    assert f(2) == expected\n"),
+            ("", "    expected: int = f(2)\n    assert f(2) == expected\n"),
+            ("expected = 4", "    expected = f(2)\n    assert f(2) == expected\n"),
+            ("", "    expected = next(it)\n    assert next(it) == expected\n"),
+        ] {
+            assert_eq!(always_true(prelude, body), (1, 1), "{prelude}\n{body}");
+        }
+        // Controls: an independent expected value, another callee or other arguments,
+        // a name bound any other way too, a name the function does not bind, `is`, `!=`
+        // and a name inside a larger expression.
+        for (prelude, body) in [
+            ("", "    expected = 4\n    assert f(2) == expected\n"),
+            ("", "    expected = g(2)\n    assert f(2) == expected\n"),
+            ("", "    expected = f(1) * 2\n    assert f(2) == expected\n"),
+            ("", "    expected = f(3)\n    assert f(2) == expected\n"),
+            ("", "    expected = f(2)\n    expected += 1\n    assert f(2) == expected\n"),
+            ("", "    expected = f(2)\n    expected = 4\n    assert f(2) == expected\n"),
+            ("", "    expected = f(2)\n    for expected in [4]:\n        pass\n    assert f(2) == expected\n"),
+            ("", "    expected = f(2)\n    with open(p) as expected:\n        pass\n    assert f(2) == expected\n"),
+            ("", "    expected = f(2)\n    if (expected := 4):\n        pass\n    assert f(2) == expected\n"),
+            ("", "    expected = f(2)\n    del expected\n    assert f(2) == expected\n"),
+            ("", "    expected, other = f(2), 1\n    assert f(2) == expected\n"),
+            ("", "    expected = other = 4\n    expected = f(2)\n    assert f(2) == expected\n"),
+            ("expected = f(2)", "    assert f(2) == expected\n"),
+            ("", "    expected = f(2)\n    assert f(2) is expected\n"),
+            ("", "    expected = f(2)\n    assert f(2) == expected + 0\n"),
+            ("", "    expected = f(2)\n    assert f(2) != expected\n"),
+            ("", "    expected = f(2)\n    same = expected\n    assert f(2) == same\n"),
+            ("", "    expected = f(2)\n    assert calc.f(2) == expected\n"),
+            ("", "    expected = f(2)\n    xs = [expected for expected in ys]\n    assert f(2) == expected\n"),
+            ("", "    expected = f(2)\n    def inner(expected):\n        pass\n    assert f(2) == expected\n"),
+        ] {
+            assert_eq!(always_true(prelude, body), (1, 0), "{prelude}\n{body}");
+        }
+        // A parameter of the test (a fixture or a parametrized case) is not followed.
+        let src = "def test_t(expected):\n    expected = f(2)\n    assert f(2) == expected\n";
+        let facts = PythonPack
+            .extract("tests/test_t.py", src, &AssertVocabulary::default())
+            .unwrap();
+        assert_eq!(facts.tests[0].tautologies, 0);
+        // `assert f(2) == f(2)` was already a tautology: the same tokens on both sides.
+        assert_eq!(always_true("", "    assert f(2) == f(2)\n"), (1, 1));
+        // unittest's `assertEqual`, either order; `assertIs` and another value are not.
+        let unittest = |body: &str| {
+            let src = format!(
+                "import unittest\n\n\nclass Case(unittest.TestCase):\n    def test_u(self):\n{body}"
+            );
+            let facts = PythonPack
+                .extract("tests/test_u.py", &src, &AssertVocabulary::default())
+                .unwrap();
+            (facts.tests[0].total_asserts, facts.tests[0].tautologies)
+        };
+        for body in [
+            "        expected = f(2)\n        self.assertEqual(f(2), expected)\n",
+            "        expected = f(2)\n        self.assertEqual(expected, f(2))\n",
+        ] {
+            assert_eq!(unittest(body), (1, 1), "{body}");
+        }
+        for body in [
+            "        expected = 4\n        self.assertEqual(f(2), expected)\n",
+            "        expected = f(2)\n        self.assertIs(f(2), expected)\n",
+            "        expected = f(2)\n        expected -= 0\n        self.assertEqual(f(2), expected)\n",
+        ] {
+            assert_eq!(unittest(body), (1, 0), "{body}");
+        }
+        // The corpus case: the changed test is left with no effective assertion.
+        let src = "from src.calc import f\n\n\ndef test_f():\n    expected = f(2)\n    assert f(2) == expected\n";
+        let facts = PythonPack
+            .extract("tests/test_calc.py", src, &AssertVocabulary::default())
+            .unwrap();
+        assert!(facts.tests[0].is_vacuous(), "{:?}", facts.tests[0]);
     }
 
     /// #836: an `assert` of a non-empty tuple is always true; `()` is always false.
