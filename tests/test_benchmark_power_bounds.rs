@@ -1291,11 +1291,36 @@ fn test_benchmark_summary_results_match_rust_bounds() {
     }
 }
 
-// agent-pr-precision-v3: the v2 corpus re-run with discipline 0.25.3, labels inherited
-// from v2 where a finding is unchanged (docs/benchmarks/precision-preregistration-v3.toml).
+// agent-pr-precision-v3 and -v4: the v2 corpus re-run with discipline 0.25.3 and 0.26.0,
+// labels inherited from the previous study where a finding is unchanged
+// (docs/benchmarks/precision-preregistration-v3.toml, -v4.toml).
 
 const V3_PREREG: &str = "docs/benchmarks/precision-preregistration-v3.toml";
 const V3_RESULTS: &str = "docs/benchmarks/results-v3";
+const V4_PREREG: &str = "docs/benchmarks/precision-preregistration-v4.toml";
+const V4_RESULTS: &str = "docs/benchmarks/results-v4";
+
+/// One re-run and the study whose labels it inherits.
+struct Rerun {
+    prereg: &'static str,
+    results: &'static str,
+    previous: &'static str,
+    previous_results: &'static str,
+}
+
+const V3: Rerun = Rerun {
+    prereg: V3_PREREG,
+    results: V3_RESULTS,
+    previous: "v2",
+    previous_results: "docs/benchmarks/results",
+};
+
+const V4: Rerun = Rerun {
+    prereg: V4_PREREG,
+    results: V4_RESULTS,
+    previous: "v3",
+    previous_results: V3_RESULTS,
+};
 
 fn read_toml(path: &str) -> toml::Value {
     let raw = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path} must exist: {e}"));
@@ -1380,8 +1405,114 @@ fn v3_preregistration_keeps_v2_floors_population_and_labels() {
     );
 }
 
+#[test]
+fn v4_preregistration_keeps_v3_floors_and_pins_the_v3_manifest() {
+    let v2 = read_toml("docs/benchmarks/precision-preregistration.toml");
+    let v3 = read_toml(V3_PREREG);
+    let v4 = read_toml(V4_PREREG);
+    let s = &v4["study"];
+    assert_eq!(s["id"].as_str(), Some("agent-pr-precision-v4"));
+    assert_eq!(s["previous_study_id"].as_str(), v3["study"]["id"].as_str());
+    assert_eq!(s["status"].as_str(), Some("locked-pre-data"));
+    assert_eq!(s["discipline_version"].as_str(), Some("0.26.0"));
+    assert_eq!(s["recall_claimed"].as_bool(), Some(false));
+    assert!(s["corpus_prior_inspection"].as_str().is_some_and(|t| t
+        .contains("agent-pr-precision-v2")
+        && t.contains("agent-pr-precision-v3")));
+
+    // Floors, required n, pinned bounds, the label rubric and the twin are v3's (so v2's).
+    assert_eq!(v4["power_and_bounds"], v3["power_and_bounds"]);
+    for (key, value) in v2["power_and_bounds"].as_table().unwrap() {
+        assert_eq!(
+            v4["power_and_bounds"].get(key),
+            Some(value),
+            "power_and_bounds.{key}"
+        );
+    }
+    let floors = |doc: &toml::Value| -> Vec<toml::Value> {
+        doc["gate_floors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|g| {
+                let mut g = g.as_table().unwrap().clone();
+                // Prose only: the rationale and the registry note name the versions.
+                g.remove("rationale");
+                g.remove("unlisted_gate_rule");
+                toml::Value::Table(g)
+            })
+            .collect()
+    };
+    assert_eq!(floors(&v4), floors(&v3));
+    assert_eq!(v4["twin_baseline"], v3["twin_baseline"]);
+    assert_eq!(v4["adjudication"]["labels"], v3["adjudication"]["labels"]);
+    for key in [
+        "independent_raters",
+        "agreement_metric",
+        "min_acceptable_kappa",
+        "blind_to_source_tool",
+        "blind_to_gate_name",
+        "blind_to_previous_labels",
+        "anchor_items",
+        "kappa_scope",
+        "disagreement_resolution_rule",
+    ] {
+        assert_eq!(
+            v4["adjudication"][key], v3["adjudication"][key],
+            "adjudication.{key}"
+        );
+    }
+    assert_eq!(
+        v4["adjudication"]["committed_rater_packet"].as_str(),
+        Some("docs/benchmarks/results-v4/rater-packet.json")
+    );
+
+    // The population is v3's manifest, pinned by hash, not a re-harvest.
+    let p = &v4["population"];
+    assert_eq!(p["reharvest"].as_bool(), Some(false));
+    assert_eq!(
+        p["manifest_path"].as_str(),
+        Some("docs/benchmarks/results-v3/manifest.json")
+    );
+    assert_eq!(p["evaluation_repos"], v3["population"]["evaluation_repos"]);
+    let raw = std::fs::read("docs/benchmarks/results-v3/manifest.json").unwrap();
+    assert_eq!(
+        p["manifest_sha256"].as_str(),
+        Some(discipline::report::gitlab::sha256_hex(&raw).as_str()),
+        "results-v3/manifest.json changed after the v4 pre-registration"
+    );
+    let v3_manifest: ManifestDoc = read_json("docs/benchmarks/results-v3/manifest.json");
+    assert_eq!(
+        p["pull_request_count"].as_integer(),
+        Some(v3_manifest.pull_requests.len() as i64)
+    );
+
+    // The label-reuse key adds the message key, written before the data.
+    let reuse = &v4["label_reuse"];
+    assert_eq!(
+        reuse["identity_key"],
+        toml::Value::Array(
+            [
+                "repo",
+                "head_sha",
+                "gate",
+                "code",
+                "file",
+                "line",
+                "message_key"
+            ]
+            .map(|k| toml::Value::String(k.into()))
+            .to_vec()
+        )
+    );
+    assert!(reuse["message_key"]
+        .as_str()
+        .unwrap()
+        .contains("commit:<replay-commit>"));
+}
+
 #[derive(serde::Deserialize)]
-struct V3AdjudicationDoc {
+struct RerunAdjudicationDoc {
     study_id: String,
     cohens_kappa: f64,
     cohens_kappa_scope: String,
@@ -1392,12 +1523,12 @@ struct V3AdjudicationDoc {
     committed_rater_packet: String,
     synthetic_rater_disclosure: String,
     rater_1_kind: String,
-    adjudications: Vec<V3AdjudicationItem>,
+    adjudications: Vec<RerunAdjudicationItem>,
 }
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct V3AdjudicationItem {
+struct RerunAdjudicationItem {
     item_id: String,
     label_source: String,
     rater_1_label: String,
@@ -1408,23 +1539,38 @@ struct V3AdjudicationItem {
     #[serde(default)]
     v2_item_id: Option<String>,
     #[serde(default)]
+    v3_item_id: Option<String>,
+    #[serde(default)]
     packet_item_id: Option<String>,
 }
 
-/// Checks the v3 artifacts against their own labels, the v2 labels they inherit and the
-/// Rust bounds. Returns the first inconsistency.
-fn check_v3_results(
+impl RerunAdjudicationItem {
+    fn previous_item_id(&self, previous: &str) -> Option<&str> {
+        match previous {
+            "v2" => self.v2_item_id.as_deref(),
+            "v3" => self.v3_item_id.as_deref(),
+            _ => None,
+        }
+    }
+}
+
+/// Checks a re-run's artifacts against their own labels, the previous study's labels they
+/// inherit and the Rust bounds. Returns the first inconsistency.
+fn check_rerun_results(
+    study: &Rerun,
     summary: &SummaryDoc,
-    adj: &V3AdjudicationDoc,
+    adj: &RerunAdjudicationDoc,
     findings: &FindingsDoc,
 ) -> Result<(), String> {
-    let v2_adj: AdjudicationDoc = read_json("docs/benchmarks/results/adjudication.json");
-    let v2_by_id: std::collections::BTreeMap<&str, &AdjudicationItem> = v2_adj
+    let prev = study.previous;
+    let prev_adj: AdjudicationDoc =
+        read_json(&format!("{}/adjudication.json", study.previous_results));
+    let prev_by_id: std::collections::BTreeMap<&str, &AdjudicationItem> = prev_adj
         .adjudications
         .iter()
         .map(|a| (a.item_id.as_str(), a))
         .collect();
-    let packet: RaterPacketDoc = read_json(&format!("{V3_RESULTS}/rater-packet.json"));
+    let packet: RaterPacketDoc = read_json(&format!("{}/rater-packet.json", study.results));
     let packet_ids: std::collections::BTreeSet<&str> =
         packet.items.iter().map(|i| i.item_id.as_str()).collect();
 
@@ -1449,20 +1595,19 @@ fn check_v3_results(
             ));
         }
         match a.label_source.as_str() {
-            "inherited-v2" => {
+            s if s == format!("inherited-{prev}") => {
                 inherited += 1;
                 let id = a
-                    .v2_item_id
-                    .as_deref()
-                    .ok_or("inherited item without v2_item_id")?;
-                let v2 = v2_by_id
+                    .previous_item_id(prev)
+                    .ok_or_else(|| format!("inherited item without {prev}_item_id"))?;
+                let p = prev_by_id
                     .get(id)
-                    .ok_or_else(|| format!("unknown v2 item {id}"))?;
-                if (&v2.rater_1_label, &v2.rater_2_label, &v2.final_label)
+                    .ok_or_else(|| format!("unknown {prev} item {id}"))?;
+                if (&p.rater_1_label, &p.rater_2_label, &p.final_label)
                     != (&a.rater_1_label, &a.rater_2_label, &a.final_label)
-                    || v2.tie_breaker_label != a.tie_breaker_label
+                    || p.tie_breaker_label != a.tie_breaker_label
                 {
-                    return Err(format!("{}: labels differ from v2 {id}", a.item_id));
+                    return Err(format!("{}: labels differ from {prev} {id}", a.item_id));
                 }
             }
             "fresh" => {
@@ -1513,7 +1658,7 @@ fn check_v3_results(
     }
 
     // Tallies per gate, class and twin follow from the final labels.
-    let prereg = read_toml(V3_PREREG);
+    let prereg = read_toml(study.prereg);
     let gate_class: std::collections::BTreeMap<String, String> = prereg["gate_floors"]
         .as_array()
         .unwrap()
@@ -1628,10 +1773,63 @@ fn check_interval_and_verdict(
     Ok(())
 }
 
+/// The identity, rater and population checks of a re-run after v3, then the label cross-check.
+fn check_rerun_artifacts(study: &Rerun, study_id: &str, version: &str) {
+    let summary: SummaryDoc = read_json(&format!("{}/summary.json", study.results));
+    let adj: RerunAdjudicationDoc = read_json(&format!("{}/adjudication.json", study.results));
+    let findings: FindingsDoc = read_json(&format!("{}/findings.json", study.results));
+    let manifest: ManifestDoc = read_json(&format!("{}/manifest.json", study.results));
+    let prev_manifest: ManifestDoc =
+        read_json(&format!("{}/manifest.json", study.previous_results));
+
+    assert_eq!(summary.study_id, study_id);
+    assert_eq!(manifest.study_id, study_id);
+    assert_eq!(adj.study_id, study_id);
+    assert_eq!(summary.discipline_version, version);
+    assert_eq!(manifest.discipline_version, version);
+    assert_eq!(summary.evaluated_commit, manifest.evaluated_commit);
+    assert_eq!(summary.evaluated_commit.len(), 40);
+    assert_eq!(adj.cohens_kappa_scope, "fresh-items");
+    assert_eq!(adj.total_items, adj.adjudications.len());
+    assert_eq!(
+        adj.committed_rater_packet,
+        format!("{}/rater-packet.json", study.results)
+    );
+    assert_eq!(adj.rater_1_kind, "llm-subagent");
+    assert_eq!(summary.rater_kind, "llm-subagent");
+    assert!(adj.synthetic_rater_disclosure.contains("not human"));
+
+    // Exactly the previous study's pairs, in its order.
+    let pairs = |m: &ManifestDoc| -> Vec<(String, String, String, u64)> {
+        m.pull_requests
+            .iter()
+            .map(|p| {
+                (
+                    p.repo.clone(),
+                    p.base_sha.clone(),
+                    p.head_sha.clone(),
+                    p.pr_number,
+                )
+            })
+            .collect()
+    };
+    assert_eq!(pairs(&manifest), pairs(&prev_manifest));
+    assert_eq!(
+        manifest.total_pull_requests,
+        prev_manifest.total_pull_requests
+    );
+    assert_eq!(
+        manifest.discipline_blocked_pull_requests,
+        summary.pull_request_block_rates.discipline.blocked
+    );
+
+    check_rerun_results(study, &summary, &adj, &findings).unwrap();
+}
+
 #[test]
 fn v3_results_follow_from_labels_and_inherit_v2_labels() {
     let summary: SummaryDoc = read_json(&format!("{V3_RESULTS}/summary.json"));
-    let adj: V3AdjudicationDoc = read_json(&format!("{V3_RESULTS}/adjudication.json"));
+    let adj: RerunAdjudicationDoc = read_json(&format!("{V3_RESULTS}/adjudication.json"));
     let findings: FindingsDoc = read_json(&format!("{V3_RESULTS}/findings.json"));
     let manifest: ManifestDoc = read_json(&format!("{V3_RESULTS}/manifest.json"));
     let v2_manifest: ManifestDoc = read_json("docs/benchmarks/results/manifest.json");
@@ -1677,14 +1875,71 @@ fn v3_results_follow_from_labels_and_inherit_v2_labels() {
         summary.pull_request_block_rates.discipline.blocked
     );
 
-    check_v3_results(&summary, &adj, &findings).unwrap();
+    check_rerun_results(&V3, &summary, &adj, &findings).unwrap();
+}
+
+#[test]
+fn v4_results_follow_from_labels_and_inherit_v3_labels() {
+    check_rerun_artifacts(&V4, "agent-pr-precision-v4", "0.26.0");
+}
+
+/// Three single-label corruptions that the cross-check must each reject (v4 onward).
+fn flipping_one_label_breaks_the_cross_check(study: &Rerun) {
+    let summary: SummaryDoc = read_json(&format!("{}/summary.json", study.results));
+    let findings: FindingsDoc = read_json(&format!("{}/findings.json", study.results));
+    let fresh =
+        || -> RerunAdjudicationDoc { read_json(&format!("{}/adjudication.json", study.results)) };
+    let inherited = format!("inherited-{}", study.previous);
+
+    // An inherited final label that no longer matches the previous study.
+    let mut adj = fresh();
+    let item = adj
+        .adjudications
+        .iter_mut()
+        .find(|a| a.label_source == inherited && a.agreed)
+        .expect("an agreed inherited item");
+    let flipped = if item.final_label == "true-positive" {
+        "false-positive"
+    } else {
+        "true-positive"
+    };
+    item.rater_1_label = flipped.into();
+    item.rater_2_label = flipped.into();
+    item.final_label = flipped.into();
+    assert!(check_rerun_results(study, &summary, &adj, &findings)
+        .unwrap_err()
+        .contains(&format!("differ from {}", study.previous)));
+
+    // A final label that does not follow the agreement rule.
+    let mut adj = fresh();
+    adj.adjudications[0].final_label = "cannot-tell".into();
+    if adj.adjudications[0].rater_1_label == "cannot-tell" {
+        adj.adjudications[0].final_label = "true-positive".into();
+    }
+    assert!(check_rerun_results(study, &summary, &adj, &findings)
+        .unwrap_err()
+        .contains("does not follow"));
+
+    // An inherited item relabelled fresh moves the inherited / fresh counts.
+    let mut adj = fresh();
+    let item = adj
+        .adjudications
+        .iter_mut()
+        .find(|a| a.label_source == inherited)
+        .unwrap();
+    item.label_source = "fresh".into();
+    item.packet_item_id = Some("PKT-0001".into());
+    assert!(check_rerun_results(study, &summary, &adj, &findings)
+        .unwrap_err()
+        .contains("inherited"));
 }
 
 #[test]
 fn flipping_one_v3_label_breaks_the_v3_cross_check() {
     let summary: SummaryDoc = read_json(&format!("{V3_RESULTS}/summary.json"));
     let findings: FindingsDoc = read_json(&format!("{V3_RESULTS}/findings.json"));
-    let fresh = || -> V3AdjudicationDoc { read_json(&format!("{V3_RESULTS}/adjudication.json")) };
+    let fresh =
+        || -> RerunAdjudicationDoc { read_json(&format!("{V3_RESULTS}/adjudication.json")) };
 
     // An inherited final label that no longer matches v2.
     let mut adj = fresh();
@@ -1701,7 +1956,7 @@ fn flipping_one_v3_label_breaks_the_v3_cross_check() {
     item.rater_1_label = flipped.into();
     item.rater_2_label = flipped.into();
     item.final_label = flipped.into();
-    assert!(check_v3_results(&summary, &adj, &findings)
+    assert!(check_rerun_results(&V3, &summary, &adj, &findings)
         .unwrap_err()
         .contains("differ from v2"));
 
@@ -1711,7 +1966,7 @@ fn flipping_one_v3_label_breaks_the_v3_cross_check() {
     if adj.adjudications[0].rater_1_label == "cannot-tell" {
         adj.adjudications[0].final_label = "true-positive".into();
     }
-    assert!(check_v3_results(&summary, &adj, &findings)
+    assert!(check_rerun_results(&V3, &summary, &adj, &findings)
         .unwrap_err()
         .contains("does not follow"));
 
@@ -1724,7 +1979,12 @@ fn flipping_one_v3_label_breaks_the_v3_cross_check() {
         .unwrap();
     item.label_source = "fresh".into();
     item.packet_item_id = Some("PKT-0001".into());
-    assert!(check_v3_results(&summary, &adj, &findings)
+    assert!(check_rerun_results(&V3, &summary, &adj, &findings)
         .unwrap_err()
         .contains("inherited"));
+}
+
+#[test]
+fn flipping_one_v4_label_breaks_the_v4_cross_check() {
+    flipping_one_label_breaks_the_cross_check(&V4);
 }
