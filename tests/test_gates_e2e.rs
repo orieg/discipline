@@ -835,6 +835,58 @@ fn an_expected_value_computed_by_the_code_under_test_does_not_count() {
     assert_eq!(lines, [4], "{}", run.stdout);
 }
 
+/// A new Python test that asserts only on a call to a target it patches checks the
+/// return value it set up itself (#899): `vacuous-tests/vacuous-test-added`. A test
+/// that patches a dependency and calls the real target is a check.
+#[test]
+fn a_new_test_asserting_only_on_its_patched_target_is_vacuous() {
+    const BASE: &str = "from src.calc import f, g\n\nfrom unittest import mock\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n";
+    let repo = Repo::new();
+    repo.write(
+        "src/calc.py",
+        "def f(x):\n    return g(x) * 2\n\n\ndef g(x):\n    return x + 1\n",
+    );
+    repo.commit_base("tests/test_calc.py", BASE, "test: calc");
+    let codes = |run: &common::Run| -> Vec<String> {
+        run.violations("vacuous-tests")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // Negative control: new tests that patch a dependency and call the real target, that
+    // check the patched mock's call record beside a real call, that compare the patched
+    // target with a real call, and that patch through a target that is not a literal.
+    repo.write(
+        "tests/test_calc.py",
+        &format!(
+            "{BASE}\n\n\
+             def test_dep():\n    with mock.patch('src.calc.g', return_value=9):\n        from src import calc\n        assert calc.f(1) == 18\n\n\n\
+             def test_record():\n    with mock.patch('src.calc.g', return_value=9) as m:\n        from src import calc\n        assert calc.f(1) == 18\n        m.assert_called_once_with(1)\n\n\n\
+             def test_mixed():\n    with mock.patch('src.calc.f', return_value=9):\n        from src import calc\n        assert calc.f(1) == calc.g(8)\n\n\n\
+             def test_var():\n    target = 'src.calc.f'\n    with mock.patch(target, return_value=9):\n        from src import calc\n        assert calc.f(1) == 9\n"
+        ),
+    );
+    repo.commit("test: patched dependencies");
+    let quiet = repo.check(&[]);
+    assert!(codes(&quiet).is_empty(), "{}", quiet.stdout);
+
+    // The corpus case: the test patches `src.calc.f` and asserts on `calc.f(1)`.
+    repo.write(
+        "tests/test_calc.py",
+        &format!(
+            "{BASE}\n\n\
+             def test_h():\n    with mock.patch('src.calc.f', return_value=9):\n        from src import calc\n        assert calc.f(1) == 9\n"
+        ),
+    );
+    repo.commit("test: patched target");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert_eq!(codes(&run), ["vacuous-tests/vacuous-test-added"]);
+    let message = run.violations("vacuous-tests")[0]["message"].to_string();
+    assert!(message.contains("test_h"), "{message}");
+}
+
 /// A Python assertion wrapped in parentheses is the same check (#859): reformatting an
 /// existing test's equality with parentheses and a message weakens nothing, and a new
 /// test whose parenthesised equality sits beside a mock assertion checks a result.

@@ -965,7 +965,9 @@
         "tests/test_calc.py": "from src.calc import f, g\n\n\nfrom unittest import mock\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n\n\ndef test_h():\n    with mock.patch('src.calc.f', return_value=9):\n        from src import calc\n        assert calc.f(1) == 9\n"
       },
       "verdict": {
-        "known_miss": "#837"
+        "caught": [
+          "vacuous-tests/vacuous-test-added"
+        ]
       }
     },
     {

@@ -4314,6 +4314,42 @@ const CASES: &[Case] = &[
     ),
     #[cfg(feature = "lang-python")]
     (
+        "vacuous-tests: a new Python test asserting only on a call to a target it patches is vacuous; one that patches a dependency and calls the real target is a check (#899)",
+        || {
+            use crate::guards::agent_diff::{evaluate_vacuous_tests, Located};
+            let settings = crate::config::AssertionGate::default();
+            let codes = |body: &str| -> Result<Vec<String>> {
+                let path = "tests/test_calc.py";
+                let facts = extract(path, &format!("from unittest import mock\n\n\ndef test_h():\n{body}"))?;
+                let added: Vec<Located> = facts
+                    .tests
+                    .iter()
+                    .map(|test| Located { path, file_survives: true, test })
+                    .collect();
+                Ok(evaluate_vacuous_tests(&added, &settings, &[])?
+                    .violations
+                    .iter()
+                    .map(|v| v.code.clone())
+                    .collect())
+            };
+            let patched = |target: &str, check: &str| {
+                codes(&format!(
+                    "    with mock.patch('{target}', return_value=9):\n        from src import calc\n        {check}\n"
+                ))
+            };
+            let vacuous = ["vacuous-tests/vacuous-test-added".to_string()];
+            Ok(patched("src.calc.f", "assert calc.f(1) == 9")? == vacuous
+                && codes("    with mock.patch.object(calc, 'f', return_value=9):\n        assert calc.f(1) == 9\n")? == vacuous
+                // Controls: a patched dependency with the real target called, a real
+                // call beside the patched one, a target that is not a literal.
+                && patched("src.calc.g", "assert calc.f(1) == 18")?.is_empty()
+                && patched("src.calc.f", "assert calc.f(1) == calc.g(8)")?.is_empty()
+                && codes("    t = 'src.calc.f'\n    with mock.patch(t, return_value=9):\n        assert calc.f(1) == 9\n")?
+                    .is_empty())
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
         "assertion-reduction: a parenthesised Python assertion is read as the expression inside it (#859)",
         || {
             let read = |body: &str| -> Result<(usize, usize, usize)> {
