@@ -503,7 +503,7 @@ pub const SYNC_CALLBACKS: &[(&str, &[&str])] = &[
     ("C#", &["ForEach"]),
 ];
 
-fn sync_callbacks(language: &str) -> &'static [&'static str] {
+pub(crate) fn sync_callbacks(language: &str) -> &'static [&'static str] {
     SYNC_CALLBACKS
         .iter()
         .find(|(l, _)| *l == language)

@@ -920,6 +920,7 @@ pub const CS_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     block_kinds: &["block"],
     ignored_kinds: &["comment"],
     terminators: &["return", "throw"],
+    empty_iteration: None,
 };
 
 /// Functions a test body runs through a dispatch table (`super::dispatch_calls`).

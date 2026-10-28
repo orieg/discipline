@@ -7296,6 +7296,101 @@ fn unreachable_assertions_do_not_count() {
     );
 }
 
+/// An assertion moved into a callback over an empty array literal, or into the body of a
+/// loop over one, runs zero times and is an assertion reduction (#899).
+#[test]
+fn assertions_over_an_empty_literal_do_not_count() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "test/calc.test.js",
+        "describe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n});\n",
+    );
+    repo.write(
+        "tests/test_b.py",
+        "def test_loads():\n    assert load('x') == 'x'\n",
+    );
+    repo.commit("test: base");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative control: the same assertions in callbacks over a literal with an element
+    // and over a name run, so nothing is reported.
+    repo.write(
+        "test/calc.test.js",
+        "describe('f', () => {\n  it('doubles', () => {\n    [1].forEach(() => expect(f(2)).toBe(4));\n    xs.forEach(() => expect(f(2)).toBe(4));\n  });\n});\n",
+    );
+    repo.write(
+        "tests/test_b.py",
+        "def test_loads():\n    for _ in [1]:\n        assert load('x') == 'x'\n",
+    );
+    repo.commit("test: loop");
+    let quiet = repo.check(&[]);
+    assert!(
+        quiet.titles("assertion-reduction").is_empty(),
+        "{:?}",
+        quiet.violations("assertion-reduction")
+    );
+
+    // The assertions move into a callback over `[]` and a loop over `[]`; a new test's
+    // only assertion sits in such a callback.
+    repo.write(
+        "test/calc.test.js",
+        "describe('f', () => {\n  it('doubles', () => {\n    [].forEach(() => expect(f(2)).toBe(4));\n  });\n  it('triples', () => {\n    [].map((x) => expect(f(x)).toBe(6));\n  });\n});\n",
+    );
+    repo.write(
+        "tests/test_b.py",
+        "def test_loads():\n    for _ in []:\n        assert load('x') == 'x'\n",
+    );
+    repo.commit("test: empty");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1);
+    let mut reduced: Vec<(String, String)> = run
+        .violations("assertion-reduction")
+        .iter()
+        .map(|v| {
+            (
+                v["file"].as_str().unwrap().to_string(),
+                v["code"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    reduced.sort();
+    assert_eq!(
+        reduced,
+        vec![
+            (
+                "test/calc.test.js".to_string(),
+                "assertion-reduction/assertions-reduced".to_string()
+            ),
+            (
+                "tests/test_b.py".to_string(),
+                "assertion-reduction/assertions-reduced".to_string()
+            ),
+        ],
+        "{:?}",
+        run.violations("assertion-reduction")
+    );
+    let vacuous: Vec<(String, String)> = run
+        .violations("vacuous-tests")
+        .iter()
+        .map(|v| {
+            (
+                v["file"].as_str().unwrap().to_string(),
+                v["code"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        vacuous,
+        vec![(
+            "test/calc.test.js".to_string(),
+            "vacuous-tests/vacuous-test-added".to_string()
+        )],
+        "{:?}",
+        run.violations("vacuous-tests")
+    );
+}
+
 #[test]
 fn the_pr_body_file_can_be_named_by_discipline_pr_body_file() {
     let repo = Repo::new();

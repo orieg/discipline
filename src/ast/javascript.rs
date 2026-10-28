@@ -1064,6 +1064,10 @@ impl<'a> JsExtractor<'a> {
         above: Option<&'static str>,
         calls: &mut Vec<String>,
     ) {
+        // A call no execution reaches runs nothing (`super::reach`).
+        if super::reach::is_dead(&self.dead, node.start_byte()) {
+            return;
+        }
         if JS_FUNCTION_KINDS.contains(&node.kind())
             && (above == Some("variable_declarator")
                 || matches!(
@@ -1940,7 +1944,63 @@ pub const JS_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     block_kinds: &["statement_block"],
     ignored_kinds: &["comment"],
     terminators: &["return", "throw"],
+    empty_iteration: Some(js_empty_iteration),
 };
+
+/// Code that runs once per element of an empty array literal (#899): a function passed
+/// to an iteration method called on `[]` (`[].forEach(() => ..)`, the methods
+/// `caught_assertions::SYNC_CALLBACKS` lists), and the body of `for (x of [])` /
+/// `for (k in [])`. The receiver is read from the tree, as the literal `[]` itself: a
+/// name bound to `[]` is not followed.
+fn js_empty_iteration(node: Node, src: &str, out: &mut super::reach::DeadRanges) {
+    use super::reach::{holds_nothing, push_range};
+    match node.kind() {
+        "call_expression" => {
+            let Some(member) = node
+                .child_by_field_name("function")
+                .filter(|f| f.kind() == "member_expression")
+            else {
+                return;
+            };
+            let (Some(object), Some(property)) = (
+                member.child_by_field_name("object"),
+                member.child_by_field_name("property"),
+            ) else {
+                return;
+            };
+            let method = property.utf8_text(src.as_bytes()).unwrap_or("");
+            if !holds_nothing(object, &["array"])
+                || !super::caught_assertions::sync_callbacks("JavaScript / TypeScript")
+                    .contains(&method)
+            {
+                return;
+            }
+            let Some(args) = node.child_by_field_name("arguments") else {
+                return;
+            };
+            let mut cursor = args.walk();
+            for arg in args.named_children(&mut cursor) {
+                if matches!(
+                    arg.kind(),
+                    "arrow_function" | "function_expression" | "function"
+                ) {
+                    push_range(arg, out);
+                }
+            }
+        }
+        "for_in_statement" => {
+            if let (Some(right), Some(body)) = (
+                node.child_by_field_name("right"),
+                node.child_by_field_name("body"),
+            ) {
+                if holds_nothing(right, &["array"]) {
+                    push_range(body, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
 
 /// Functions a test body runs through a dispatch table (`super::dispatch_calls`).
 pub const JS_DISPATCH: super::DispatchSpec = super::DispatchSpec {

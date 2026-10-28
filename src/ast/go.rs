@@ -1574,7 +1574,37 @@ pub const GO_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     block_kinds: &["statement_list"],
     ignored_kinds: &["comment"],
     terminators: &["return", "panic(", "t.FailNow()", "os.Exit("],
+    empty_iteration: Some(go_empty_iteration),
 };
+
+/// The body of a `for ... range` over an empty slice or map literal (`range []int{}`,
+/// `range map[string]int{}`), which runs zero times (#899). An array literal is not
+/// read: `[3]int{}` holds three zero values. A name bound to an empty literal is not
+/// followed.
+fn go_empty_iteration(node: Node, _src: &str, out: &mut super::reach::DeadRanges) {
+    if node.kind() != "for_statement" {
+        return;
+    }
+    let mut cursor = node.walk();
+    let Some(range) = node
+        .named_children(&mut cursor)
+        .find(|c| c.kind() == "range_clause")
+    else {
+        return;
+    };
+    let empty = range
+        .child_by_field_name("right")
+        .filter(|r| r.kind() == "composite_literal")
+        .filter(|r| {
+            r.child_by_field_name("type")
+                .is_some_and(|t| matches!(t.kind(), "slice_type" | "map_type"))
+        })
+        .and_then(|r| r.child_by_field_name("body"))
+        .is_some_and(|b| super::reach::holds_nothing(b, &["literal_value"]));
+    if let (true, Some(body)) = (empty, node.child_by_field_name("body")) {
+        super::reach::push_range(body, out);
+    }
+}
 
 /// Functions a test body runs through a dispatch table (`super::dispatch_calls`).
 pub const GO_DISPATCH: super::DispatchSpec = super::DispatchSpec {

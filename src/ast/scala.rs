@@ -676,6 +676,7 @@ pub const SCALA_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     block_kinds: &["block"],
     ignored_kinds: &["comment", "block_comment"],
     terminators: &["return", "throw", "???"],
+    empty_iteration: None,
 };
 
 /// Functions a test body runs through a dispatch table: `List(check _, other _)`.

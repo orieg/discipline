@@ -1301,6 +1301,7 @@ pub const C_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     block_kinds: &["compound_statement"],
     ignored_kinds: &["comment"],
     terminators: &["return", "abort()", "exit(", "_exit(", "throw"],
+    empty_iteration: None,
 };
 
 /// A local a C / C++ wrapper computes and forwards: `int b = loc(d);`, `auto b = Loc(d);`.

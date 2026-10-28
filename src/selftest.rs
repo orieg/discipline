@@ -177,6 +177,24 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "assertion-reduction: a JS/TS assertion moved into a callback over an empty array literal never runs and is reported (#899)",
+        || {
+            let test = |body: &str| format!("test('f', () => {{\n  {body}\n}});\n");
+            let base = test("expect(f(2)).toBe(4);");
+            let codes = |head: &str| {
+                helper_change(&[("a.test.js", base.as_str(), test(head).as_str())], "")
+            };
+            let reduced = codes("[].forEach(() => expect(f(2)).toBe(4));")?
+                == ["assertion-reduction/assertions-reduced"]
+                && codes("for (const x of []) { expect(f(2)).toBe(4); }")?
+                    == ["assertion-reduction/assertions-reduced"];
+            // Controls: a literal with an element, and a name as the receiver, run it.
+            let kept = codes("[1].forEach(() => expect(f(2)).toBe(4));")?.is_empty()
+                && codes("xs.forEach(() => expect(f(2)).toBe(4));")?.is_empty();
+            Ok(reduced && kept)
+        },
+    ),
+    (
         "assertion-reduction: a JS/TS .resolves / .rejects matcher the test neither awaits nor returns is not an assertion (#829)",
         || {
             let test = |body: &str| format!("test('f', async () => {{\n  {body}\n}});\n");

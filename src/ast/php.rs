@@ -853,6 +853,7 @@ pub const PHP_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
     block_kinds: &["compound_statement"],
     ignored_kinds: &["comment"],
     terminators: &["return", "throw", "exit(", "die("],
+    empty_iteration: None,
 };
 
 /// A local a PHP wrapper computes and forwards: `$b = loc($d);`.

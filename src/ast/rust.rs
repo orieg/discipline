@@ -2612,7 +2612,78 @@ pub const RS_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
         "std::process::exit(",
         "process::exit(",
     ],
+    empty_iteration: Some(rs_empty_iteration),
 };
+
+/// Iterator methods whose closure runs once per element: the counterparts of the
+/// JavaScript methods `caught_assertions::SYNC_CALLBACKS` lists.
+const RS_EACH_METHODS: &[&str] = &["for_each", "map", "filter", "any", "all", "fold", "find"];
+
+/// Code that runs once per element of an empty array literal (#899): the body of `for _
+/// in [] { .. }`, and a closure passed to an iterator method (`RS_EACH_METHODS`) called
+/// on `[]` or on `[].iter()` / `[].into_iter()` / `[].iter_mut()`. `vec![]` and a name
+/// bound to `[]` are not read.
+fn rs_empty_iteration(node: Node, src: &str, out: &mut super::reach::DeadRanges) {
+    use super::reach::{holds_nothing, push_range};
+    let empty_array = |n: Node| holds_nothing(n, &["array_expression"]);
+    match node.kind() {
+        "for_expression" => {
+            if let (Some(value), Some(body)) = (
+                node.child_by_field_name("value"),
+                node.child_by_field_name("body"),
+            ) {
+                if empty_array(value) {
+                    push_range(body, out);
+                }
+            }
+        }
+        "call_expression" => {
+            let name = |n: Node| n.utf8_text(src.as_bytes()).unwrap_or("");
+            let Some(method) = node
+                .child_by_field_name("function")
+                .filter(|f| f.kind() == "field_expression")
+            else {
+                return;
+            };
+            let (Some(receiver), Some(field)) = (
+                method.child_by_field_name("value"),
+                method.child_by_field_name("field"),
+            ) else {
+                return;
+            };
+            if !RS_EACH_METHODS.contains(&name(field)) {
+                return;
+            }
+            // `[]`, or `[].iter()` with no arguments.
+            let empty = empty_array(receiver)
+                || (receiver.kind() == "call_expression"
+                    && receiver
+                        .child_by_field_name("arguments")
+                        .is_some_and(|a| a.named_child_count() == 0)
+                    && receiver
+                        .child_by_field_name("function")
+                        .filter(|f| f.kind() == "field_expression")
+                        .is_some_and(|f| {
+                            f.child_by_field_name("field").is_some_and(|m| {
+                                matches!(name(m), "iter" | "into_iter" | "iter_mut")
+                            }) && f.child_by_field_name("value").is_some_and(empty_array)
+                        }));
+            if !empty {
+                return;
+            }
+            let Some(args) = node.child_by_field_name("arguments") else {
+                return;
+            };
+            let mut cursor = args.walk();
+            for arg in args.named_children(&mut cursor) {
+                if arg.kind() == "closure_expression" {
+                    push_range(arg, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
 
 /// Functions a test body runs through a dispatch table (`super::dispatch_calls`).
 pub const RS_DISPATCH: super::DispatchSpec = super::DispatchSpec {
