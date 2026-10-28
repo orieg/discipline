@@ -610,7 +610,9 @@
         "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    expected = f(2)\n    assert f(2) == expected\n\n\ndef test_g():\n    assert g(1) == 2\n"
       },
       "verdict": {
-        "known_miss": "#837"
+        "caught": [
+          "assertion-reduction/assertions-reduced"
+        ]
       }
     },
     {

@@ -4290,6 +4290,30 @@ const CASES: &[Case] = &[
     ),
     #[cfg(feature = "lang-python")]
     (
+        "assertion-reduction: a Python expected value computed by the same call as the checked side cannot fail and is reported (#899)",
+        || {
+            let test = |body: &str| format!("def test_f():\n{body}");
+            let base = test("    assert f(2) == 4\n");
+            let codes = |head: &str| {
+                helper_change(
+                    &[("tests/test_f.py", base.as_str(), test(head).as_str())],
+                    "",
+                )
+            };
+            let reduced = codes("    expected = f(2)\n    assert f(2) == expected\n")?
+                == ["assertion-reduction/assertions-reduced"];
+            // Controls: an independent expected value, another callee, other arguments,
+            // a rebound name.
+            let kept = codes("    expected = 4\n    assert f(2) == expected\n")?.is_empty()
+                && codes("    expected = g(2)\n    assert f(2) == expected\n")?.is_empty()
+                && codes("    expected = f(1) * 2\n    assert f(2) == expected\n")?.is_empty()
+                && codes("    expected = f(2)\n    expected += 0\n    assert f(2) == expected\n")?
+                    .is_empty();
+            Ok(reduced && kept)
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
         "assertion-reduction: a parenthesised Python assertion is read as the expression inside it (#859)",
         || {
             let read = |body: &str| -> Result<(usize, usize, usize)> {
