@@ -279,7 +279,7 @@ dependencies = [
 
 [[package]]
 name = "discipline"
-version = "0.28.0"
+version = "0.28.1-rc.1"
 dependencies = [
  "anyhow",
  "base64",
