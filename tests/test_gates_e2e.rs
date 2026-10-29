@@ -6833,6 +6833,53 @@ fn go_repository_replay_false_positives_stay_quiet_and_their_controls_do_not() {
         .contains(&"Invisible Characters In Change Description".to_string()));
 }
 
+/// A getter added above others of its name does not shift their pairs: the unchanged
+/// `get() { return true; }` below it is not a body replaced by a stub (#910). A getter
+/// whose body is replaced in place beside the addition is still reported.
+#[test]
+fn an_added_getter_does_not_make_an_unchanged_one_a_stub() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    let t = "Object.defineProperty(p, \"t\", {\n  get() {\n    return true;\n  },\n});\n";
+    let s = "Object.defineProperty(p, \"s\", {\n  get() {\n    return load();\n  },\n});\n";
+    let n = "Object.defineProperty(p, \"n\", {\n  get() {\n    return port;\n  },\n});\n";
+    repo.write("src/p.js", &format!("{t}{s}"));
+    repo.commit("feat: base");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write("src/p.js", &format!("{n}{t}{s}"));
+    repo.commit("feat: add n");
+    let run = repo.check(&[]);
+    assert!(
+        run.titles("stub-bodies").is_empty(),
+        "{:?}",
+        run.violations("stub-bodies")
+    );
+
+    // Control: `s` is replaced in place beside the addition.
+    repo.write(
+        "src/p.js",
+        &format!("{n}{t}{}", s.replace("load()", "true")),
+    );
+    repo.commit("feat: stub s");
+    let run = repo.check(&[]);
+    let lines: Vec<(String, u64)> = run
+        .violations("stub-bodies")
+        .iter()
+        .map(|v| {
+            (
+                v["code"].as_str().unwrap().to_string(),
+                v["line"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        lines,
+        vec![("stub-bodies/body-replaced-by-stub".to_string(), 12)],
+        "{:?}",
+        run.violations("stub-bodies")
+    );
+}
+
 #[test]
 fn a_declared_test_entry_point_is_test_scope_for_every_gate() {
     // A script's `self_test()` holds fixture strings, an expect-to-raise handler and
