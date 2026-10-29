@@ -1,5 +1,5 @@
 # Written by `discipline hook install --agent copilot --cloud-agent`.
-# discipline-hook-file: sha256=ce31027168ff496acdf0409635eec0ad91a40e0dfece705991cbdee756c374b7
+# discipline-hook-file: sha256=9058a6bfb5b4172b3a425a7e2050a4e182dc93e282e03b37d21985a21ff7b4e7
 # Copilot cloud agent runs this job before it starts working: it reads the
 # repository's .github/hooks/ too, and a hook whose command is missing is skipped.
 name: "Copilot Setup Steps"
@@ -25,6 +25,6 @@ jobs:
       contents: read
     steps:
       - name: Install discipline for Copilot's hooks
-        uses: orieg/discipline@8e820553d7c6da0de6b39336b5f75c3a0e2927dc # v0.25.0
+        uses: orieg/discipline@794362b607c3e858ae9106b9762da5f3a796777a # v0.28.1
         with:
           install_only: 'true'
