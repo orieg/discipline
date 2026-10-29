@@ -268,13 +268,27 @@ pub fn run(ctx: &Context) -> Result<Vec<GateOutcome>> {
         }
     }
 
+    // Tests merged into a test named for their container are not removals (#911).
+    let merged = deletion_rationale::merged_into_container(&removed, &pairs, &added);
+    let kept: Vec<Located> = removed
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !merged.iter().any(|(m, _)| m == i))
+        .map(|(_, r)| Located { ..*r })
+        .collect();
     let mut deletion = evaluate_deletion_rationale(
         &changed,
-        &removed,
+        &kept,
         &gates.deletion_rationale,
         &ctx.directives,
         is_staged,
     )?;
+    for (i, container) in &merged {
+        deletion.notes.push(format!(
+            "test `{}` in `{}` is merged into `{container}`, which holds its assertions: not a removal",
+            removed[*i].test.name, removed[*i].path
+        ));
+    }
     report_shadowed_tests(
         &shadowed_tests(&analyzed_files),
         &gates.deletion_rationale,

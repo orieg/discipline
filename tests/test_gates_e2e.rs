@@ -6833,6 +6833,80 @@ fn go_repository_replay_false_positives_stay_quiet_and_their_controls_do_not() {
         .contains(&"Invisible Characters In Change Description".to_string()));
 }
 
+/// A `describe` turned into a `test` of its name that runs every nested test's
+/// assertions merges those tests; they are not removals (#911). The controls drop an
+/// assertion in the merge, then change an expected value it keeps, and the nested
+/// tests left over are removals again.
+#[test]
+fn tests_merged_into_their_container_are_not_removals() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "test/p.spec.js",
+        "describe('build', () => {\n  test('resolveId', () => {\n    expect(r(1)).toBe(1);\n  });\n  test('load', () => {\n    expect(l(1)).toBe(1);\n  });\n  test('transform', () => {\n    expect(t(1)).toBe(1);\n    expect(t(2)).toBe(2);\n  });\n});\n",
+    );
+    repo.commit("test: base");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write(
+        "test/p.spec.js",
+        "test('build', () => {\n  expect(r(1)).toBe(1);\n  expect(l(1)).toBe(1);\n  expect(t(1)).toBe(1);\n  expect(t(2)).toBe(2);\n});\n",
+    );
+    repo.commit("test: merge");
+    let run = repo.check(&[]);
+    assert!(
+        run.titles("deletion-rationale").is_empty(),
+        "{:?}",
+        run.violations("deletion-rationale")
+    );
+
+    // Control: the merge drops `expect(t(2))`.
+    repo.write(
+        "test/p.spec.js",
+        "test('build', () => {\n  expect(r(1)).toBe(1);\n  expect(l(1)).toBe(1);\n  expect(t(1)).toBe(1);\n});\n",
+    );
+    repo.commit("test: merge and drop");
+    let run = repo.check(&[]);
+    let mut removed: Vec<String> = run
+        .violations("deletion-rationale")
+        .iter()
+        .map(|v| v["message"].as_str().unwrap().to_string())
+        .collect();
+    removed.sort();
+    assert_eq!(
+        removed,
+        vec![
+            "Test `build > load` was removed from `test/p.spec.js`.".to_string(),
+            "Test `build > transform` was removed from `test/p.spec.js`.".to_string(),
+        ],
+        "{:?}",
+        run.violations("deletion-rationale")
+    );
+
+    // Control: the merge keeps every assertion but changes the expected value of
+    // `transform`'s second one.
+    repo.write(
+        "test/p.spec.js",
+        "test('build', () => {\n  expect(r(1)).toBe(1);\n  expect(l(1)).toBe(1);\n  expect(t(1)).toBe(1);\n  expect(t(2)).toBe(3);\n});\n",
+    );
+    repo.commit("test: merge and change");
+    let run = repo.check(&[]);
+    let mut removed: Vec<String> = run
+        .violations("deletion-rationale")
+        .iter()
+        .map(|v| v["message"].as_str().unwrap().to_string())
+        .collect();
+    removed.sort();
+    assert_eq!(
+        removed,
+        vec![
+            "Test `build > load` was removed from `test/p.spec.js`.".to_string(),
+            "Test `build > transform` was removed from `test/p.spec.js`.".to_string(),
+        ],
+        "{:?}",
+        run.violations("deletion-rationale")
+    );
+}
+
 #[test]
 fn a_declared_test_entry_point_is_test_scope_for_every_gate() {
     // A script's `self_test()` holds fixture strings, an expect-to-raise handler and

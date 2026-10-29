@@ -1,6 +1,7 @@
 //! `deletion-rationale`: tests and benchmarks removed without a stated reason.
 
-use super::{leaf_name, Located, Shadowed};
+use super::{leaf_name, Located, Shadowed, TestPair};
+use crate::ast::TestFn;
 use crate::config::GateSettings;
 use crate::gitctx::{ChangeKind, ChangedFile};
 use crate::guards::{exempt_filter, GateOutcome, PathFilter};
@@ -87,6 +88,93 @@ pub fn evaluate_deletion_rationale(
         }
     }
     Ok(out)
+}
+
+/// Removed tests merged into a test named for their container (#911): the change turns
+/// `describe('P', ..)` holding `P > a`, `P > b` and `P > c` into one `test('P', ..)`.
+/// `match_tests` pairs one of them with the new test and leaves the others removed,
+/// though their checks run in it. Such a removed test is not a removal when:
+///
+/// - the container is a head test of the same file that did not exist on the base side
+///   (the head of a pair whose base test is nested under its name, of a forced pair, or
+///   an added test), is not ignored, and its name is the removed test's name up to a
+///   separator (` > `, `::`, `#`);
+/// - the container holds at least as many assertions that are not tautologies, and as
+///   many strong ones, as every base test under its name that it took over (the removed
+///   ones and the one paired with it), and every expected value they checked, as written
+///   (`TestFn::expectations`, by skeleton and literal).
+///
+/// Returns each such removed test's place in `removed` with its container's name. A
+/// merge that drops an assertion, or any other consolidation, is still a removal;
+/// `assertion-reduction` judges the paired test's count as before.
+pub fn merged_into_container<'a>(
+    removed: &[Located<'a>],
+    pairs: &[TestPair<'a>],
+    added: &[Located<'a>],
+) -> Vec<(usize, &'a str)> {
+    const SEPARATORS: &[&str] = &[" > ", "::", "#"];
+    let under = |child: &str, parent: &str| {
+        child
+            .strip_prefix(parent)
+            .is_some_and(|rest| SEPARATORS.iter().any(|s| rest.starts_with(s)))
+    };
+    let containers = pairs
+        .iter()
+        .filter(|p| p.forced || under(&p.base.name, &p.head.name))
+        .map(|p| (p.path, p.head))
+        .chain(added.iter().map(|a| (a.path, a.test)));
+    let mut out = Vec::new();
+    for (path, container) in containers {
+        if container.ignored {
+            continue;
+        }
+        let members: Vec<usize> = removed
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| {
+                r.file_survives && r.path == path && under(&r.test.name, &container.name)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if members.is_empty() {
+            continue;
+        }
+        let taken_over: Vec<&TestFn> = members
+            .iter()
+            .map(|&i| removed[i].test)
+            .chain(
+                pairs
+                    .iter()
+                    .filter(|p| {
+                        p.path == path
+                            && std::ptr::eq(p.head, container)
+                            && under(&p.base.name, &container.name)
+                    })
+                    .map(|p| p.base),
+            )
+            .collect();
+        let effective = |f: &TestFn| f.total_asserts.saturating_sub(f.tautologies);
+        let (total, strong) = taken_over
+            .iter()
+            .fold((0, 0), |(t, s), b| (t + effective(b), s + b.strong_asserts));
+        // Every expected value they checked is checked, as written, in the container.
+        let mut expected: Vec<(&str, &str)> = container
+            .expectations
+            .iter()
+            .map(|e| (e.skeleton.as_str(), e.literal.as_str()))
+            .collect();
+        let kept = taken_over.iter().flat_map(|b| &b.expectations).all(|e| {
+            expected
+                .iter()
+                .position(|&x| x == (e.skeleton.as_str(), e.literal.as_str()))
+                .map(|i| expected.swap_remove(i))
+                .is_some()
+        });
+        if kept && effective(container) >= total && container.strong_asserts >= strong {
+            out.extend(members.into_iter().map(|i| (i, container.name.as_str())));
+        }
+    }
+    out
 }
 
 /// The `removes:` directive that lifts `lifts` for `subject` (or `alt_subject`), if any.
@@ -319,5 +407,101 @@ mod tests {
                 .unwrap();
         assert_eq!(out_test_excused.violations.len(), 0);
         assert_eq!(out_test_excused.overrides.len(), 1);
+    }
+
+    /// Tests merged into one named for their container are not removals (#911): the
+    /// shape of `vitejs/vite#23604`, a `describe` turned into a `test` that runs every
+    /// nested test's assertions. The controls are each still removals: the merge drops
+    /// an assertion (strong, or weak with the strong count kept), the container is
+    /// ignored, the container is in another file, and a name that only starts with the
+    /// container's.
+    #[test]
+    fn tests_merged_into_their_container_are_not_removals() {
+        let t = |name: &str, total: usize, strong: usize| TestFn {
+            name: name.to_string(),
+            total_asserts: total,
+            strong_asserts: strong,
+            ..Default::default()
+        };
+        let path = "test/p.spec.ts";
+        let resolve = t("build > resolveId", 2, 2);
+        let load = t("build > load", 2, 2);
+        let transform = t("build > transform", 4, 4);
+        let merged_ids = |container: &TestFn, container_path: &str, removed: &[&TestFn]| {
+            let pairs = [TestPair {
+                path,
+                base: &resolve,
+                head: container,
+                forced: false,
+            }];
+            let pairs: Vec<TestPair> = pairs
+                .into_iter()
+                .filter(|p| p.path == container_path)
+                .collect();
+            let added: Vec<Located> = if container_path == path {
+                Vec::new()
+            } else {
+                vec![Located {
+                    path: container_path,
+                    file_survives: true,
+                    test: container,
+                }]
+            };
+            let removed: Vec<Located> = removed
+                .iter()
+                .map(|r| Located {
+                    path,
+                    file_survives: true,
+                    test: r,
+                })
+                .collect();
+            merged_into_container(&removed, &pairs, &added)
+                .into_iter()
+                .map(|(i, c)| (removed[i].test.name.clone(), c.to_string()))
+                .collect::<Vec<_>>()
+        };
+        let build = t("build", 8, 8);
+        assert_eq!(
+            merged_ids(&build, path, &[&load, &transform]),
+            vec![
+                ("build > load".to_string(), "build".to_string()),
+                ("build > transform".to_string(), "build".to_string())
+            ]
+        );
+        // Controls.
+        assert!(merged_ids(&t("build", 7, 7), path, &[&load, &transform]).is_empty());
+        assert!(merged_ids(&t("build", 8, 7), path, &[&load, &transform]).is_empty());
+        // A weak assertion dropped in the merge: the strong count still holds, the total
+        // does not.
+        let weak_load = t("build > load", 2, 1);
+        assert!(merged_ids(&t("build", 7, 7), path, &[&weak_load, &transform]).is_empty());
+        // A merged check turned into a tautology does not count.
+        let mut tautology = t("build", 8, 8);
+        tautology.tautologies = 1;
+        assert!(merged_ids(&tautology, path, &[&load, &transform]).is_empty());
+        let mut ignored = t("build", 8, 8);
+        ignored.ignored = true;
+        assert!(merged_ids(&ignored, path, &[&load, &transform]).is_empty());
+        assert!(merged_ids(&build, "test/other.spec.ts", &[&load, &transform]).is_empty());
+        // A name that only starts with the container's is not under it: `build > loader`
+        // is not under an added `build > load`; `build > load > x` is.
+        let container = t("build > load", 8, 8);
+        let added = [Located {
+            path,
+            file_survives: true,
+            test: &container,
+        }];
+        let loader = t("build > loader", 2, 2);
+        let nested = t("build > load > x", 2, 2);
+        let removed = [&loader, &nested].map(|r| Located {
+            path,
+            file_survives: true,
+            test: r,
+        });
+        let found: Vec<&str> = merged_into_container(&removed, &[], &added)
+            .into_iter()
+            .map(|(i, _)| removed[i].test.name.as_str())
+            .collect();
+        assert_eq!(found, vec!["build > load > x"]);
     }
 }
