@@ -611,7 +611,8 @@ struct SummaryDoc {
     discipline_version: String,
     evaluated_commit: String,
     confidence_level: f64,
-    cohens_kappa: f64,
+    /// `null` when a re-run has no fresh items to compute it on (v5).
+    cohens_kappa: Option<f64>,
     rater_kind: String,
     synthetic_rater_disclosure: String,
     pull_request_block_rates: BlockRatesSection,
@@ -947,7 +948,10 @@ fn check_summary_against_labels(
         ));
     }
     for (name, reported) in [
-        ("summary.json", summary.cohens_kappa),
+        (
+            "summary.json",
+            summary.cohens_kappa.ok_or("summary.json has no kappa")?,
+        ),
         ("adjudication.json", adj.cohens_kappa),
     ] {
         if (reported - r.cohens_kappa).abs() >= 1e-6 {
@@ -1159,7 +1163,7 @@ fn test_benchmark_summary_results_match_rust_bounds() {
     );
     assert!(adj.cohens_kappa >= adj.min_acceptable_kappa);
     assert!(adj.kappa_passed);
-    assert!((summary.cohens_kappa - adj.cohens_kappa).abs() < 1e-6);
+    assert!((summary.cohens_kappa.unwrap() - adj.cohens_kappa).abs() < 1e-6);
 
     for item in &adj.adjudications {
         assert!(!item.item_id.is_empty());
@@ -1291,14 +1295,16 @@ fn test_benchmark_summary_results_match_rust_bounds() {
     }
 }
 
-// agent-pr-precision-v3 and -v4: the v2 corpus re-run with discipline 0.25.3 and 0.26.0,
-// labels inherited from the previous study where a finding is unchanged
-// (docs/benchmarks/precision-preregistration-v3.toml, -v4.toml).
+// agent-pr-precision-v3, -v4 and -v5: the v2 corpus re-run with discipline 0.25.3, 0.26.0
+// and 0.27.0, labels inherited from the previous study where a finding is unchanged
+// (docs/benchmarks/precision-preregistration-v3.toml, -v4.toml, -v5.toml).
 
 const V3_PREREG: &str = "docs/benchmarks/precision-preregistration-v3.toml";
 const V3_RESULTS: &str = "docs/benchmarks/results-v3";
 const V4_PREREG: &str = "docs/benchmarks/precision-preregistration-v4.toml";
 const V4_RESULTS: &str = "docs/benchmarks/results-v4";
+const V5_PREREG: &str = "docs/benchmarks/precision-preregistration-v5.toml";
+const V5_RESULTS: &str = "docs/benchmarks/results-v5";
 
 /// One re-run and the study whose labels it inherits.
 struct Rerun {
@@ -1320,6 +1326,13 @@ const V4: Rerun = Rerun {
     results: V4_RESULTS,
     previous: "v3",
     previous_results: V3_RESULTS,
+};
+
+const V5: Rerun = Rerun {
+    prereg: V5_PREREG,
+    results: V5_RESULTS,
+    previous: "v4",
+    previous_results: V4_RESULTS,
 };
 
 fn read_toml(path: &str) -> toml::Value {
@@ -1511,10 +1524,91 @@ fn v4_preregistration_keeps_v3_floors_and_pins_the_v3_manifest() {
         .contains("commit:<replay-commit>"));
 }
 
+#[test]
+fn v5_preregistration_keeps_v4_floors_and_pins_the_v4_manifest() {
+    let v4 = read_toml(V4_PREREG);
+    let v5 = read_toml(V5_PREREG);
+    let s = &v5["study"];
+    assert_eq!(s["id"].as_str(), Some("agent-pr-precision-v5"));
+    assert_eq!(s["previous_study_id"].as_str(), v4["study"]["id"].as_str());
+    assert_eq!(s["status"].as_str(), Some("locked-pre-data"));
+    assert_eq!(s["discipline_version"].as_str(), Some("0.27.0"));
+    assert_eq!(s["recall_claimed"].as_bool(), Some(false));
+    assert!(s["corpus_prior_inspection"].as_str().is_some_and(|t| t
+        .contains("agent-pr-precision-v3")
+        && t.contains("agent-pr-precision-v4")));
+
+    // Floors, required n, pinned bounds, the label rubric, the twin and the reuse key are v4's.
+    assert_eq!(v5["power_and_bounds"], v4["power_and_bounds"]);
+    let floors = |doc: &toml::Value| -> Vec<toml::Value> {
+        doc["gate_floors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|g| {
+                let mut g = g.as_table().unwrap().clone();
+                // Prose only: the rationale and the registry note name the versions.
+                g.remove("rationale");
+                g.remove("unlisted_gate_rule");
+                toml::Value::Table(g)
+            })
+            .collect()
+    };
+    assert_eq!(floors(&v5), floors(&v4));
+    assert_eq!(v5["twin_baseline"], v4["twin_baseline"]);
+    assert_eq!(v5["adjudication"]["labels"], v4["adjudication"]["labels"]);
+    for key in [
+        "independent_raters",
+        "agreement_metric",
+        "min_acceptable_kappa",
+        "blind_to_source_tool",
+        "blind_to_gate_name",
+        "blind_to_previous_labels",
+        "packet_scope",
+        "anchor_items",
+        "kappa_scope",
+        "disagreement_resolution_rule",
+    ] {
+        assert_eq!(
+            v5["adjudication"][key], v4["adjudication"][key],
+            "adjudication.{key}"
+        );
+    }
+    assert_eq!(
+        v5["label_reuse"]["identity_key"],
+        v4["label_reuse"]["identity_key"]
+    );
+    assert_eq!(
+        v5["adjudication"]["committed_rater_packet"].as_str(),
+        Some("docs/benchmarks/results-v5/rater-packet.json")
+    );
+    // The degeneracy rule replaces v4's report-only diagnostic.
+    assert!(v5["adjudication"].get("rater_label_diagnostic").is_none());
+    let rule = v5["adjudication"]["rater_degeneracy_rule"]
+        .as_str()
+        .unwrap();
+    assert!(rule.contains("failed-degenerate-raters") && rule.contains("replaced once"));
+
+    // The population is v4's manifest, pinned by hash, not a re-harvest.
+    let p = &v5["population"];
+    assert_eq!(p["reharvest"].as_bool(), Some(false));
+    assert_eq!(
+        p["manifest_path"].as_str(),
+        Some("docs/benchmarks/results-v4/manifest.json")
+    );
+    assert_eq!(p["evaluation_repos"], v4["population"]["evaluation_repos"]);
+    let raw = std::fs::read("docs/benchmarks/results-v4/manifest.json").unwrap();
+    assert_eq!(
+        p["manifest_sha256"].as_str(),
+        Some(discipline::report::gitlab::sha256_hex(&raw).as_str()),
+        "results-v4/manifest.json changed after the v5 pre-registration"
+    );
+}
+
 #[derive(serde::Deserialize)]
 struct RerunAdjudicationDoc {
     study_id: String,
-    cohens_kappa: f64,
+    cohens_kappa: Option<f64>,
     cohens_kappa_scope: String,
     inherited_label_count: usize,
     fresh_label_count: usize,
@@ -1541,7 +1635,12 @@ struct RerunAdjudicationItem {
     #[serde(default)]
     v3_item_id: Option<String>,
     #[serde(default)]
+    v4_item_id: Option<String>,
+    #[serde(default)]
     packet_item_id: Option<String>,
+    /// v5 onward: set when the rater-degeneracy rule made a fresh final label `cannot-tell`.
+    #[serde(default)]
+    final_label_rule: Option<String>,
 }
 
 impl RerunAdjudicationItem {
@@ -1549,6 +1648,7 @@ impl RerunAdjudicationItem {
         match previous {
             "v2" => self.v2_item_id.as_deref(),
             "v3" => self.v3_item_id.as_deref(),
+            "v4" => self.v4_item_id.as_deref(),
             _ => None,
         }
     }
@@ -1583,10 +1683,13 @@ fn check_rerun_results(
                 a.item_id
             ));
         }
-        let expected_final = if a.agreed {
-            Some(a.rater_1_label.as_str())
-        } else {
-            a.tie_breaker_label.as_deref()
+        let expected_final = match a.final_label_rule.as_deref() {
+            Some("rater-degeneracy-cannot-tell") if a.label_source == "fresh" => {
+                Some("cannot-tell")
+            }
+            Some(other) => return Err(format!("{}: final_label_rule {other}", a.item_id)),
+            None if a.agreed => Some(a.rater_1_label.as_str()),
+            None => a.tie_breaker_label.as_deref(),
         };
         if expected_final != Some(a.final_label.as_str()) {
             return Err(format!(
@@ -1638,21 +1741,28 @@ fn check_rerun_results(
     if fresh_agreed != adj.fresh_exact_agreement_count {
         return Err("fresh agreement count differs from the labels".into());
     }
-    let kappa = if fresh_pairs.iter().all(|(x, y)| x == y)
+    let kappa = if fresh_pairs.is_empty() {
+        // No fresh items: kappa is undefined and reported as null.
+        None
+    } else if fresh_pairs.iter().all(|(x, y)| x == y)
         && fresh_pairs.iter().all(|(x, _)| *x == fresh_pairs[0].0)
     {
         // One category for both raters: kappa is defined as 1 on full agreement.
-        1.0
+        Some(1.0)
     } else {
-        cohens_kappa(&fresh_pairs)
+        Some(cohens_kappa(&fresh_pairs))
     };
     for (name, reported) in [
         ("summary.json", summary.cohens_kappa),
         ("adjudication.json", adj.cohens_kappa),
     ] {
-        if (reported - kappa).abs() >= 1e-6 {
+        let same = match (reported, kappa) {
+            (Some(a), Some(b)) => (a - b).abs() < 1e-6,
+            (a, b) => a.is_none() && b.is_none(),
+        };
+        if !same {
             return Err(format!(
-                "{name} kappa {reported} vs {kappa} from the fresh labels"
+                "{name} kappa {reported:?} vs {kappa:?} from the fresh labels"
             ));
         }
     }
@@ -1883,6 +1993,11 @@ fn v4_results_follow_from_labels_and_inherit_v3_labels() {
     check_rerun_artifacts(&V4, "agent-pr-precision-v4", "0.26.0");
 }
 
+#[test]
+fn v5_results_follow_from_labels_and_inherit_v4_labels() {
+    check_rerun_artifacts(&V5, "agent-pr-precision-v5", "0.27.0");
+}
+
 /// Three single-label corruptions that the cross-check must each reject (v4 onward).
 fn flipping_one_label_breaks_the_cross_check(study: &Rerun) {
     let summary: SummaryDoc = read_json(&format!("{}/summary.json", study.results));
@@ -1987,4 +2102,9 @@ fn flipping_one_v3_label_breaks_the_v3_cross_check() {
 #[test]
 fn flipping_one_v4_label_breaks_the_v4_cross_check() {
     flipping_one_label_breaks_the_cross_check(&V4);
+}
+
+#[test]
+fn flipping_one_v5_label_breaks_the_v5_cross_check() {
+    flipping_one_label_breaks_the_cross_check(&V5);
 }

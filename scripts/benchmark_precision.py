@@ -18,10 +18,11 @@ Implements the complete deterministic pipeline for `docs/benchmarks/precision-pr
    Rule 3), `summary.json`, and `post-hoc-audit.json` under `docs/benchmarks/results/`.
 6. Replay of a committed manifest's exact pairs (`--from-manifest`), and the re-runs on the
    v2 corpus: `agent-pr-precision-v3` (`docs/benchmarks/precision-preregistration-v3.toml`)
-   and `agent-pr-precision-v4` (`docs/benchmarks/precision-preregistration-v4.toml`).
-   `--v3-stage` / `--v4-stage diff|packet|artifacts` checks the reproduction of the previous
-   study, applies the label-reuse rule, builds the fresh-item packet and writes
-   `docs/benchmarks/results-v3/` / `docs/benchmarks/results-v4/`.
+   `agent-pr-precision-v4` (`docs/benchmarks/precision-preregistration-v4.toml`) and
+   `agent-pr-precision-v5` (`docs/benchmarks/precision-preregistration-v5.toml`).
+   `--v3-stage` / `--v4-stage` / `--v5-stage diff|packet|artifacts` checks the reproduction
+   of the previous study, applies the label-reuse rule, builds the fresh-item packet and
+   writes `docs/benchmarks/results-v3/`, `results-v4/` or `results-v5/`.
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ PREREG_PATH = REPO_ROOT / "docs" / "benchmarks" / "precision-preregistration.tom
 RESULTS_DIR = REPO_ROOT / "docs" / "benchmarks" / "results"
 V3_RESULTS_DIR = REPO_ROOT / "docs" / "benchmarks" / "results-v3"
 V4_RESULTS_DIR = REPO_ROOT / "docs" / "benchmarks" / "results-v4"
+V5_RESULTS_DIR = REPO_ROOT / "docs" / "benchmarks" / "results-v5"
 
 PILOT_REPOS: list[tuple[str, str]] = [
     ("astral-sh/uv", "uv"),
@@ -1443,6 +1445,7 @@ def generate_benchmark_artifacts(
     host: str = "Apple M-series macOS 15 arm64",
     label_provenance: dict[str, dict[str, Any]] | None = None,
     extra_summary: dict[str, Any] | None = None,
+    final_label_override: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """
     Generate `manifest.json`, `findings.json`, `adjudication.json`, and `summary.json`
@@ -1452,7 +1455,8 @@ def generate_benchmark_artifacts(
     `{"label_source": "inherited-<previous>" | "fresh", ...}` plus any fields to record on the
     finding (`finding_fields`) and adjudication (`adjudication_fields`). Kappa is then
     computed over the fresh items only, the scope the pre-registration names; agreement
-    counts stay over every item.
+    counts stay over every item. `final_label_override` (v5's degeneracy rule) replaces the
+    final label of the items it names, recorded as `final_label_rule` on each.
     """
     results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1534,6 +1538,9 @@ def generate_benchmark_artifacts(
         else:
             tb_l = tie_breaker_labels.get(item_id, "cannot-tell")
             final_l = tb_l
+        overridden = final_label_override is not None and item_id in final_label_override
+        if overridden:
+            final_l = final_label_override[item_id]
 
         if gk["source_tool"] == "discipline":
             disc_findings_count += 1
@@ -1562,6 +1569,7 @@ def generate_benchmark_artifacts(
             "agreed": agreed,
             "tie_breaker_label": tb_l,
             "final_label": final_l,
+            **({"final_label_rule": "rater-degeneracy-cannot-tell"} if overridden else {}),
             **prov.get("adjudication_fields", {}),
         })
 
@@ -1754,7 +1762,8 @@ def generate_benchmark_artifacts(
 
 
 # --- Re-runs on the v2 corpus: agent-pr-precision-v3 (docs/benchmarks/precision-preregistration-v3.toml)
-# --- and agent-pr-precision-v4 (docs/benchmarks/precision-preregistration-v4.toml) ---
+# --- agent-pr-precision-v4 (docs/benchmarks/precision-preregistration-v4.toml)
+# --- and agent-pr-precision-v5 (docs/benchmarks/precision-preregistration-v5.toml) ---
 
 V3_STUDY_ID = "agent-pr-precision-v3"
 V3_PACKET_SHUFFLE_SEED = 48202
@@ -1766,6 +1775,11 @@ V4_STUDY_ID = "agent-pr-precision-v4"
 V4_PACKET_SHUFFLE_SEED = 48204
 V4_ANCHOR_SEED = 48205
 V4_RATER_PACKET = "docs/benchmarks/results-v4/rater-packet.json"
+
+V5_STUDY_ID = "agent-pr-precision-v5"
+V5_PACKET_SHUFFLE_SEED = 48206
+V5_ANCHOR_SEED = 48207
+V5_RATER_PACKET = "docs/benchmarks/results-v5/rater-packet.json"
 
 
 def v4_message_key(message: str) -> str:
@@ -1809,6 +1823,8 @@ class RerunStudy:
     message_key: Callable[[str], str]
     messages_from_reference: bool
     rater_label_diagnostic: bool
+    rater_degeneracy_rule: bool = False
+    reference_attribution: bool = False
 
 
 V3_STUDY = RerunStudy(
@@ -1858,7 +1874,141 @@ V4_STUDY = RerunStudy(
     rater_label_diagnostic=True,
 )
 
-RERUN_STUDIES: dict[str, RerunStudy] = {"v3": V3_STUDY, "v4": V4_STUDY}
+V5_STUDY = RerunStudy(
+    study_id=V5_STUDY_ID,
+    previous="v4",
+    previous_study_id=V4_STUDY_ID,
+    previous_results_dir=V4_RESULTS_DIR,
+    results_dir=V5_RESULTS_DIR,
+    rater_packet=V5_RATER_PACKET,
+    preregistration="docs/benchmarks/precision-preregistration-v5.toml",
+    discipline_version="0.27.0",
+    reference_binary=(
+        "discipline-aarch64-apple-darwin.tar.gz from the v0.26.0 release, verified against its SHA256SUMS"
+    ),
+    corpus_prior_inspection=(
+        "The 232 pull requests were inspected and labelled under agent-pr-precision-v2 (0.23.0), "
+        "agent-pr-precision-v3 (0.25.3) and agent-pr-precision-v4 (0.26.0); v5 characterises the "
+        "0.27.0 binary on the same changes, not precision on unseen agent pull requests."
+    ),
+    packet_shuffle_seed=V5_PACKET_SHUFFLE_SEED,
+    anchor_seed=V5_ANCHOR_SEED,
+    message_key=v4_message_key,
+    messages_from_reference=False,
+    rater_label_diagnostic=True,
+    rater_degeneracy_rule=True,
+    reference_attribution=True,
+)
+
+# The three v0.27.0 ledger rows whose findings v5 attributes (pre-registration [detector_attribution]).
+V5_ATTRIBUTION_ROWS = (
+    "v0.27.0 assertion-reduction, vacuous-tests: an iteration over an empty literal (#902)",
+    "v0.27.0 assertion-reduction, vacuous-tests: a Python expected value computed by the code under test (#903)",
+    "v0.27.0 vacuous-tests, assertion-reduction: a Python assertion on a target the test patches (#904)",
+)
+V5_KNOWN_REPLAY_ARTIFACT = ("astral-sh/ruff", "ITEM-0003")  # v4's citation-anchors/link-target-missing
+
+
+def reference_attribution(
+    study: RerunStudy,
+    cases: list[dict[str, Any]],
+    reference_cases: list[dict[str, Any]],
+    diff: dict[str, Any],
+) -> dict[str, Any]:
+    """The v5 `[detector_attribution]` and `[replay_artifact_check]` reports, computed from the replays.
+
+    Lists every (gate, code, file, line, message key) on which the re-run and the reference
+    replay (the previous study's binary) differ. A difference from `assertion-reduction` or
+    `vacuous-tests` must be attributed to a row by reading the flagged test, and a new or
+    changed finding must be checked against the full tree, so either one stops the stage
+    here rather than being reported as zero.
+    """
+    def keys(case: dict[str, Any]) -> list[tuple[Any, ...]]:
+        return sorted(
+            ((v["gate"], v["code"], v["file"], v["line"], study.message_key(v["message"])) for v in case["violations"]),
+            key=repr,
+        )
+
+    ref_by_pr = {(c["repo"], c["sha"]): keys(c) for c in reference_cases}
+    differences: list[dict[str, Any]] = []
+    for case in cases:
+        got, want = keys(case), ref_by_pr.get((case["repo"], case["sha"]), [])
+        for key in sorted(set(got) | set(want), key=repr):
+            for side, n in (("rerun-only", got.count(key) - want.count(key)), ("reference-only", want.count(key) - got.count(key))):
+                differences.extend(
+                    {"repo": case["repo"], "head_sha": case["sha"], "gate": key[0], "code": key[1],
+                     "file": key[2], "line": key[3], "side": side}
+                    for _ in range(max(n, 0))
+                )
+    if any(d["gate"] in ("assertion-reduction", "vacuous-tests") for d in differences):
+        raise ValueError("an assertion-reduction or vacuous-tests difference needs attribution from the flagged test")
+    fresh = [r for r in diff["records"] if r["category"] != "unchanged"]
+    if fresh:
+        raise ValueError(f"{len(fresh)} new or changed findings need the full-tree replay-artefact check")
+    repo, prev_item = V5_KNOWN_REPLAY_ARTIFACT
+    known = [r for r in diff["records"] if r["repo"] == repo and r["previous_item_id"] == prev_item]
+    return {
+        "detector_attribution": {
+            "rule": f"{study.preregistration} [detector_attribution]",
+            "reference_vs_rerun_differences": differences,
+            "findings_by_row": {row: 0 for row in V5_ATTRIBUTION_ROWS},
+            "use": "reported, not a verdict input",
+        },
+        "replay_artifact_check": {
+            "rule": f"{study.preregistration} [replay_artifact_check]",
+            "new_or_changed_findings_checked": 0,
+            "replay_artifacts_found": [],
+            "known_artifact": {
+                f"{study.previous}_item_id": prev_item,
+                "repo": repo,
+                "category": known[0]["category"] if known else "gone",
+            },
+            "use": "reported, not a verdict input; never changes a label",
+        },
+    }
+
+RERUN_STUDIES: dict[str, RerunStudy] = {"v3": V3_STUDY, "v4": V4_STUDY, "v5": V5_STUDY}
+
+
+def degenerate_rater(labels: Sequence[str], anchor_previous_labels: Sequence[str]) -> bool:
+    """The v5 degeneracy rule: one label for every packet item while the anchors carry at least two.
+
+    `labels` are one rater's labels over the whole packet (fresh and anchor);
+    `anchor_previous_labels` are the previous study's final labels of the anchors.
+    """
+    return len(set(labels)) == 1 and len(set(anchor_previous_labels)) >= 2
+
+
+def apply_degeneracy_rule(
+    packet_ids: Sequence[str],
+    in_use: dict[str, dict[str, str]],
+    excluded: dict[str, dict[str, Any]],
+    anchor_previous_labels: Sequence[str],
+) -> dict[str, Any]:
+    """Check the raters against the v5 degeneracy rule and return its status.
+
+    `in_use` maps "rater_1" / "rater_2" to the labels used; `excluded` maps a slot to the
+    `{"id", "labels"}` of the rater it replaced. An excluded rater must be degenerate, a
+    degenerate rater in use must be a replacement (raters are replaced once, before any
+    label is used), and the status is `failed-degenerate-raters` when one still is.
+    """
+    def is_degenerate(labels: dict[str, str]) -> bool:
+        return degenerate_rater([labels[p] for p in packet_ids], anchor_previous_labels)
+
+    for slot, ex in excluded.items():
+        if slot not in in_use:
+            raise ValueError(f"excluded rater slot {slot!r} is not rater_1 or rater_2")
+        if not is_degenerate(ex["labels"]):
+            raise ValueError(f"excluded {slot} is not degenerate; the rule excludes only degenerate raters")
+    still = sorted(slot for slot, labels in in_use.items() if is_degenerate(labels))
+    for slot in still:
+        if slot not in excluded:
+            raise ValueError(f"{slot} is degenerate and was not replaced; the rule replaces it once first")
+    return {
+        "status": "failed-degenerate-raters" if still else "measured",
+        "replaced": sorted(excluded),
+        "degenerate_after_replacement": still,
+    }
 
 
 def _location_key(gate: str, code: str, file: str | None, line: int | None) -> tuple[Any, ...]:
@@ -2163,6 +2313,7 @@ def generate_rerun_artifacts(
     host: str,
     results_dir: Path | None = None,
     discipline_binary: str | None = None,
+    reference_cases: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Write a re-run's manifest, findings, adjudication and summary, inheriting the previous study's labels."""
     prev = study.previous
@@ -2183,6 +2334,15 @@ def generate_rerun_artifacts(
         else:
             fresh_packet_id[("t", key["twin_position"])] = packet_id
     record_of = {(r["case_index"], r["violation_index"]): r for r in diff["records"]}
+    prev_final = {i: a["final_label"] for i, a in prev_adj.items()}
+    excluded = ratings.get("excluded", {})
+    degeneracy: dict[str, Any] | None = None
+    if study.rater_degeneracy_rule:
+        degeneracy = apply_degeneracy_rule(
+            sorted(packet_key), {"rater_1": r1, "rater_2": r2}, excluded, [prev_final[v] for _, v in anchors]
+        )
+    elif excluded:
+        raise ValueError(f"{study.study_id} has no rater-degeneracy rule; ratings must not exclude raters")
 
     ground_key: dict[str, Any] = {}
     l1: dict[str, str] = {}
@@ -2241,7 +2401,11 @@ def generate_rerun_artifacts(
         )
 
     fresh_ids = [k for k, p in provenance.items() if p["label_source"] == "fresh"]
-    prev_final = {i: a["final_label"] for i, a in prev_adj.items()}
+    override = (
+        {k: "cannot-tell" for k in fresh_ids}
+        if degeneracy is not None and degeneracy["status"] == "failed-degenerate-raters"
+        else None
+    )
     anchor_r1 = [r1[p] for p, _ in anchors]
     anchor_r2 = [r2[p] for p, _ in anchors]
     anchor_prev = [prev_final[v] for _, v in anchors]
@@ -2299,6 +2463,7 @@ def generate_rerun_artifacts(
                 for p, v in sorted(anchors)
             ],
             "use": "drift check only; anchor labels are never final labels",
+            **({"status": degeneracy["status"]} if degeneracy is not None else {}),
         },
     }
     if study.rater_label_diagnostic:
@@ -2313,7 +2478,32 @@ def generate_rerun_artifacts(
             "single_label_raters": sorted(
                 name for name, c in counts.items() if sum(1 for n in c.values() if n) == 1 and len(packet_ids) > 1
             ),
+            **(
+                {"excluded_raters": {
+                    slot: _label_counts([ex["labels"][p] for p in packet_ids]) for slot, ex in sorted(excluded.items())
+                }}
+                if excluded
+                else {}
+            ),
             "use": "diagnostic only; not a verdict input",
+        }
+    if study.reference_attribution:
+        if reference_cases is None:
+            raise ValueError(f"{study.study_id} attributes findings against the reference replay; pass it")
+        extra.update(reference_attribution(study, cases, reference_cases, diff))
+    if degeneracy is not None:
+        extra["rater_degeneracy"] = {
+            "rule": f"{study.preregistration} [adjudication].rater_degeneracy_rule",
+            **degeneracy,
+            "excluded_raters": [
+                {
+                    "slot": slot,
+                    "rater_id": "sha256:" + hashlib.sha256(ex["id"].encode("utf-8")).hexdigest()[:16],
+                    "labels": {p: ex["labels"][p] for p in sorted(packet_key)},
+                }
+                for slot, ex in sorted(excluded.items())
+            ],
+            "fresh_items_set_to_cannot_tell": len(override or {}),
         }
     return generate_benchmark_artifacts(
         eval_cases=cases,
@@ -2332,6 +2522,7 @@ def generate_rerun_artifacts(
         host=host,
         label_provenance=provenance,
         extra_summary=extra,
+        final_label_override=override,
     )
 
 
@@ -2505,6 +2696,94 @@ print(json.dumps({{"outcomes": [{{"gate": "assertion-reduction", "violations": [
       "file": "tests/test_a.py", "line": 3, "message": "warning only"}}]}}]}}))
 sys.exit(1)
 '''
+
+
+def _self_test_v5_degeneracy_rule() -> None:
+    """The v5 rater-degeneracy rule: detection, one replacement, and the cannot-tell fallback."""
+    tp, fp = "true-positive", "false-positive"
+    mixed_anchors = [tp, fp, fp]
+    assert degenerate_rater([fp, fp, fp, fp], mixed_anchors)
+    assert not degenerate_rater([fp, tp, fp, fp], mixed_anchors)
+    # Anchors with one previous label: a constant rater could be right, so it is not degenerate.
+    assert not degenerate_rater([fp, fp, fp], [fp, fp])
+
+    ids = ["PKT-0001", "PKT-0002", "PKT-0003"]
+    const = {i: fp for i in ids}
+    varied = {"PKT-0001": tp, "PKT-0002": fp, "PKT-0003": fp}
+    ok = apply_degeneracy_rule(ids, {"rater_1": varied, "rater_2": dict(varied)}, {}, mixed_anchors)
+    assert ok == {"status": "measured", "replaced": [], "degenerate_after_replacement": []}
+    replaced = apply_degeneracy_rule(
+        ids, {"rater_1": varied, "rater_2": dict(varied)}, {"rater_1": {"id": "x", "labels": const}}, mixed_anchors
+    )
+    assert replaced["status"] == "measured" and replaced["replaced"] == ["rater_1"]
+    failed = apply_degeneracy_rule(
+        ids, {"rater_1": const, "rater_2": varied}, {"rater_1": {"id": "x", "labels": dict(const)}}, mixed_anchors
+    )
+    assert failed == {"status": "failed-degenerate-raters", "replaced": ["rater_1"],
+                      "degenerate_after_replacement": ["rater_1"]}
+    for in_use, excluded in (
+        ({"rater_1": const, "rater_2": varied}, {}),  # degenerate but never replaced
+        ({"rater_1": varied, "rater_2": varied}, {"rater_2": {"id": "x", "labels": varied}}),  # excluded a good rater
+    ):
+        try:
+            apply_degeneracy_rule(ids, in_use, excluded, mixed_anchors)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("the degeneracy rule accepted a rater it must refuse")
+
+    # The fallback: an overridden item's final label is cannot-tell even when both raters agree.
+    # 40 findings and 40 twin flags keep the summary's minimum detectable difference defined.
+    case = {"repo": "o/r", "sha": "b" * 40, "parent": "a" * 40, "pr_number": 1, "author_hash": "h",
+            "agent_category": "trailer", "paths": ["src/a.rs"], "base_existing": ["src/a.rs"],
+            "violations": [{"gate": "stub-bodies", "code": "stub-bodies/stub-added", "file": "src/a.rs", "line": 1}]}
+    gk: dict[str, Any] = {}
+    for i in range(1, 81):
+        twin = i > 40
+        gk[f"ITEM-{i:04d}"] = {
+            **case,
+            "source_tool": "naive-sensitive-path-filter" if twin else "discipline",
+            "gate": "naive-sensitive-path-filter" if twin else "stub-bodies",
+            "code": "existing-test-file" if twin else "stub-bodies/stub-added",
+            "file": "src/a.rs",
+            "line": None if twin else i,
+        }
+    labels = {k: (fp if g["source_tool"] != "discipline" else tp) for k, g in gk.items()}
+    with tempfile.TemporaryDirectory() as tmp:
+        summary = generate_benchmark_artifacts(
+            [case], gk, labels, dict(labels), {}, "r1", "r2", "tb", "c" * 40,
+            results_dir=Path(tmp), final_label_override={"ITEM-0001": "cannot-tell"},
+        )
+        adjs = json.loads((Path(tmp) / "adjudication.json").read_text())["adjudications"]
+    assert adjs[0]["final_label"] == "cannot-tell" and adjs[0]["final_label_rule"] == "rater-degeneracy-cannot-tell"
+    assert adjs[1]["final_label"] == tp and "final_label_rule" not in adjs[1]
+    structural = summary["class_results"][0]
+    assert (structural["k"], structural["n"], structural["cannot_tell"]) == (39, 40, 1)
+
+
+def _self_test_v5_reference_attribution() -> None:
+    """The v5 attribution report: zero by row when the replays agree, a stop when they do not."""
+    v = {"gate": "vacuous-tests", "code": "vacuous-tests/vacuous-test-added", "file": "t.py", "line": 3,
+         "message": "Test has no assertion that can fail."}
+    ci = {"gate": "ci-integrity", "code": "ci-integrity/unpinned-action", "file": "ci.yml", "line": 9,
+          "message": "Action pinned to a tag at commit:abc1234."}
+    ref = [{"repo": "o/r", "sha": "b" * 40, "violations": [ci]}]
+    same = [{"repo": "o/r", "sha": "b" * 40, "violations": [{**ci, "message": ci["message"].replace("abc1234", "def5678")}]}]
+    no_diff = {"records": [{"repo": "o/r", "category": "unchanged", "previous_item_id": "ITEM-0001"}]}
+    out = reference_attribution(V5_STUDY, same, ref, no_diff)
+    assert out["detector_attribution"]["reference_vs_rerun_differences"] == []
+    assert set(out["detector_attribution"]["findings_by_row"].values()) == {0}
+    assert out["replay_artifact_check"]["known_artifact"]["category"] == "gone"
+    for cases, d in (
+        ([{"repo": "o/r", "sha": "b" * 40, "violations": [ci, v]}], no_diff),  # a vacuous-tests difference
+        (same, {"records": [{"repo": "o/r", "category": "new", "previous_item_id": None}]}),  # a new finding
+    ):
+        try:
+            reference_attribution(V5_STUDY, cases, ref, d)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("the attribution report counted a difference as zero")
 
 
 def _self_test_replay_from_manifest() -> None:
@@ -2696,6 +2975,10 @@ def run_self_tests() -> None:
     # 15b. v4 label reuse: the message key, the reproduction check on committed messages
     _self_test_v4_label_reuse()
 
+    # 15c. v5 rater-degeneracy rule: detection, one replacement, the cannot-tell fallback
+    _self_test_v5_degeneracy_rule()
+    _self_test_v5_reference_attribution()
+
     # 16. Each re-run's pre-registration pins the previous manifest by hash (python3.10 has no tomllib)
     for study in RERUN_STUDIES.values():
         prereg = REPO_ROOT / study.preregistration
@@ -2706,8 +2989,8 @@ def run_self_tests() -> None:
                 f"{study.previous} manifest.json changed after the {study.study_id} pre-registration"
             )
 
-    # 17. Post-hoc audits on the committed data (v2, v3 and v4)
-    for results_dir in (RESULTS_DIR, V3_RESULTS_DIR, V4_RESULTS_DIR):
+    # 17. Post-hoc audits on the committed data (v2 to v5)
+    for results_dir in (RESULTS_DIR, V3_RESULTS_DIR, V4_RESULTS_DIR, V5_RESULTS_DIR):
         if (results_dir / "findings.json").exists() and (results_dir / "post-hoc-audit.json").exists():
             committed = json.loads((results_dir / "post-hoc-audit.json").read_text())
             recomputed = json.loads(json.dumps(post_hoc_audit(results_dir)))
@@ -2722,7 +3005,7 @@ def run_self_tests() -> None:
 def run_rerun_stage(
     study: RerunStudy, stage: str, args: argparse.Namespace, parser: argparse.ArgumentParser
 ) -> int:
-    """`--v3-stage` / `--v4-stage diff|packet|artifacts` (the study's pre-registration)."""
+    """`--v3-stage` / `--v4-stage` / `--v5-stage diff|packet|artifacts` (the study's pre-registration)."""
     flag = f"--{study.study_id.rsplit('-', 1)[1]}-stage"
     if not args.raw_eval_json or not args.reference_raw_json or not args.clones_dir:
         parser.error(f"{flag} requires --raw-eval-json, --reference-raw-json and --clones-dir")
@@ -2761,7 +3044,7 @@ def run_rerun_stage(
     generate_rerun_artifacts(
         study, cases, diff, sampled, inherited, messages, differences,
         json.loads(args.ground_key_json.read_text()), json.loads(args.ratings_json.read_text()),
-        args.evaluated_commit, args.host, args.results_dir_out, args.discipline_binary,
+        args.evaluated_commit, args.host, args.results_dir_out, args.discipline_binary, reference,
     )
     out = (args.results_dir_out or study.results_dir).resolve()
     print(f"wrote {out}/{{manifest,findings,adjudication,summary}}.json")
@@ -2837,25 +3120,30 @@ def main() -> int:
         help="agent-pr-precision-v4: the same stages against v3, writing docs/benchmarks/results-v4/.",
     )
     parser.add_argument(
+        "--v5-stage",
+        choices=["diff", "packet", "artifacts"],
+        help="agent-pr-precision-v5: the same stages against v4, writing docs/benchmarks/results-v5/.",
+    )
+    parser.add_argument(
         "--reference-raw-json",
         type=Path,
         help="Raw replay JSON from the previous study's binary over its manifest, for the reproduction "
-        "check (v3: v2's 82d02046; v4: the 0.25.3 release).",
+        "check (v3: v2's 82d02046; v4: the 0.25.3 release; v5: the 0.26.0 release).",
     )
     parser.add_argument(
         "--ratings-json",
         type=Path,
-        help="With --v3-stage / --v4-stage artifacts: rater_1 / rater_2 / tie_breaker labels by packet "
-        "item id, and rater ids.",
+        help="With --vN-stage artifacts: rater_1 / rater_2 / tie_breaker labels by packet "
+        "item id, and rater ids; for v5, `excluded` maps a replaced rater's slot to its id and labels.",
     )
     parser.add_argument(
         "--results-dir-out",
         type=Path,
-        help="With --v3-stage / --v4-stage artifacts: write here instead of the study's results directory.",
+        help="With --vN-stage artifacts: write here instead of the study's results directory.",
     )
     parser.add_argument(
         "--discipline-binary",
-        help="With --v4-stage artifacts: how the replayed binary was obtained, recorded in summary.json.",
+        help="With --v4-stage / --v5-stage artifacts: how the replayed binary was obtained, recorded in summary.json.",
     )
     parser.add_argument("--evaluated-commit", help="Commit the replayed binary was built from.")
     parser.add_argument("--host", default="Apple M-series macOS 15 arm64", help="Host recorded in summary.json.")
@@ -2866,12 +3154,11 @@ def main() -> int:
         help="With --post-hoc-audit: the study results directory to audit.",
     )
     args = parser.parse_args()
-    if args.v3_stage and args.v4_stage:
-        parser.error("--v3-stage and --v4-stage are exclusive")
-    if args.v3_stage:
-        return run_rerun_stage(V3_STUDY, args.v3_stage, args, parser)
-    if args.v4_stage:
-        return run_rerun_stage(V4_STUDY, args.v4_stage, args, parser)
+    stages = [(s, getattr(args, f"{tag}_stage")) for tag, s in RERUN_STUDIES.items() if getattr(args, f"{tag}_stage")]
+    if len(stages) > 1:
+        parser.error("--v3-stage, --v4-stage and --v5-stage are exclusive")
+    if stages:
+        return run_rerun_stage(stages[0][0], stages[0][1], args, parser)
     if args.test:
         run_self_tests()
         return 0
