@@ -1439,6 +1439,40 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "deletion-rationale: a merge into the container test that compares another operand is a removal (#915)",
+        || {
+            use crate::ast::self_comparison::EqualityOperands;
+            use crate::ast::TestFn;
+            use crate::guards::agent_diff::{merged_into_container, Located, TestPair};
+            let t = |name: &str, operands: Vec<u64>| TestFn {
+                name: name.to_string(),
+                total_asserts: operands.len() / 2,
+                strong_asserts: operands.len() / 2,
+                equality_operands: EqualityOperands {
+                    same: Vec::new(),
+                    different: operands,
+                },
+                ..Default::default()
+            };
+            let (a, b) = (t("P > a", vec![1, 2]), t("P > b", vec![3, 2]));
+            let merged = |container: &TestFn| {
+                let pairs = [TestPair {
+                    path: "t.spec.js",
+                    base: &a,
+                    head: container,
+                    forced: false,
+                }];
+                let removed = [Located {
+                    path: "t.spec.js",
+                    file_survives: true,
+                    test: &b,
+                }];
+                merged_into_container(&removed, &pairs, &[]).len()
+            };
+            Ok(merged(&t("P", vec![1, 2, 3, 2])) == 1 && merged(&t("P", vec![1, 2, 3, 4])) == 0)
+        },
+    ),
+    (
         "deletion-rationale: nested tests merged into a test named for their container, assertions kept, are not removals; one that drops an assertion is (#911)",
         || {
             use crate::ast::TestFn;

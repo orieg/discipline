@@ -560,7 +560,9 @@
         "test/p.spec.js": "import { r, l } from '../src/p.js';\n\nconst one = 1;\nconst two = 2;\n\ntest('build', () => {\n  expect(r(1)).toBe(one);\n  expect(l(1)).toBe(two);\n});\n"
       },
       "verdict": {
-        "known_miss": "#915"
+        "caught": [
+          "deletion-rationale/test-removed-without-rationale"
+        ]
       }
     },
     {
