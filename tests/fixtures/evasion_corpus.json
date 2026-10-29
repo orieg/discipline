@@ -539,6 +539,18 @@
       }
     },
     {
+      "name": "js-getter-body-moved-to-new-getter",
+      "base": {
+        "src/p.js": "Object.defineProperty(p, \"s\", {\n  get() {\n    return load();\n  },\n});\n"
+      },
+      "head": {
+        "src/p.js": "Object.defineProperty(p, \"s\", {\n  get() {\n    return true;\n  },\n});\nObject.defineProperty(p, \"n\", {\n  get() {\n    return load();\n  },\n});\n"
+      },
+      "verdict": {
+        "known_miss": "#913"
+      }
+    },
+    {
       "name": "js-merged-test-operand-changed",
       "base": {
         "src/p.js": "export const r = (x) => x;\nexport const l = (x) => x;\n",

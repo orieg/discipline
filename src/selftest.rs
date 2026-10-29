@@ -1478,6 +1478,22 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "stub-bodies: a same-named function added before unchanged ones does not shift their pairs; one replaced in place is reported (#910)",
+        || {
+            use crate::guards::stub_bodies::judge;
+            let js = |src: &str| -> Result<Vec<crate::ast::functions::FunctionFacts>> {
+                Ok(facts("src/p.js", src)?.functions)
+            };
+            let t = "Object.defineProperty(p, 't', { get() { return true; } });\n";
+            let s = "Object.defineProperty(p, 's', { get() { return load(); } });\n";
+            let n = "Object.defineProperty(p, 'n', { get() { return port; } });\n";
+            let base = js(&format!("{t}{s}"))?;
+            let added = js(&format!("{n}{t}{s}"))?;
+            let replaced = js(&format!("{n}{t}{}", s.replace("load()", "true")))?;
+            Ok(judge(&base, &added).is_empty() && judge(&base, &replaced).len() == 1)
+        },
+    ),
+    (
         "stub-bodies: an equality method made constant `true` is reported at gate severity, even beside a derive in a comment; a generated one is not",
         || {
             use crate::guards::stub_bodies::judge;
