@@ -101,8 +101,9 @@ pub fn evaluate_deletion_rationale(
 ///   separator (` > `, `::`, `#`);
 /// - the container holds at least as many assertions that are not tautologies, and as
 ///   many strong ones, as every base test under its name that it took over (the removed
-///   ones and the one paired with it), and every expected value they checked, as written
-///   (`TestFn::expectations`, by skeleton and literal).
+///   ones and the one paired with it), every expected value they checked, as written
+///   (`TestFn::expectations`, by skeleton and literal), and every operand of their
+///   equality assertions (`TestFn::equality_operands`, #915).
 ///
 /// Returns each such removed test's place in `removed` with its container's name. A
 /// merge that drops an assertion, or any other consolidation, is still a removal;
@@ -170,7 +171,28 @@ pub fn merged_into_container<'a>(
                 .map(|i| expected.swap_remove(i))
                 .is_some()
         });
-        if kept && effective(container) >= total && container.strong_asserts >= strong {
+        // And every operand of their equality assertions, as written (#915): a merge
+        // that compares `l(1)` with `two` where a test compared it with `one` checks
+        // something else.
+        let mut operands: Vec<u64> = container.equality_operands.different.clone();
+        operands.extend(container.equality_operands.same.iter().map(|s| s.operand));
+        let compared = taken_over
+            .iter()
+            .flat_map(|b| {
+                b.equality_operands
+                    .different
+                    .iter()
+                    .copied()
+                    .chain(b.equality_operands.same.iter().map(|s| s.operand))
+            })
+            .all(|o| {
+                operands
+                    .iter()
+                    .position(|&x| x == o)
+                    .map(|i| operands.swap_remove(i))
+                    .is_some()
+            });
+        if kept && compared && effective(container) >= total && container.strong_asserts >= strong {
             out.extend(members.into_iter().map(|i| (i, container.name.as_str())));
         }
     }

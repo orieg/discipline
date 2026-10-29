@@ -6837,6 +6837,50 @@ fn go_repository_replay_false_positives_stay_quiet_and_their_controls_do_not() {
 /// assertions merges those tests; they are not removals (#911). The controls drop an
 /// assertion in the merge, then change an expected value it keeps, and the nested
 /// tests left over are removals again.
+/// A merge that keeps every count but compares with another operand, with no literal to
+/// tell them apart (`toBe(one)` to `toBe(two)`), leaves the merged test removed (#915).
+#[test]
+fn a_merge_that_compares_another_operand_is_a_removal() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    let head = "const one = r0();\nconst two = r0();\n\n";
+    repo.write(
+        "test/q.spec.js",
+        &format!("{head}describe('build', () => {{\n  test('a', () => {{\n    expect(r(one)).toBe(one);\n  }});\n  test('b', () => {{\n    expect(l(one)).toBe(one);\n  }});\n}});\n"),
+    );
+    repo.commit("test: base");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    // Negative control: the merge keeps both operands.
+    repo.write(
+        "test/q.spec.js",
+        &format!("{head}test('build', () => {{\n  expect(r(one)).toBe(one);\n  expect(l(one)).toBe(one);\n}});\n"),
+    );
+    repo.commit("test: merge");
+    let run = repo.check(&[]);
+    assert!(
+        run.titles("deletion-rationale").is_empty(),
+        "{:?}",
+        run.violations("deletion-rationale")
+    );
+    repo.write(
+        "test/q.spec.js",
+        &format!("{head}test('build', () => {{\n  expect(r(one)).toBe(one);\n  expect(l(one)).toBe(two);\n}});\n"),
+    );
+    repo.commit("test: merge and compare another");
+    let run = repo.check(&[]);
+    let removed: Vec<String> = run
+        .violations("deletion-rationale")
+        .iter()
+        .map(|v| v["message"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        removed,
+        vec!["Test `build > b` was removed from `test/q.spec.js`.".to_string()],
+        "{:?}",
+        run.violations("deletion-rationale")
+    );
+}
+
 #[test]
 fn tests_merged_into_their_container_are_not_removals() {
     let repo = Repo::new();
