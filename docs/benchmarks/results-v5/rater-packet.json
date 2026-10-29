@@ -1,0 +1,231 @@
+{
+  "study_id": "agent-pr-precision-v5",
+  "blind_to_source_tool": true,
+  "blind_to_gate_name": true,
+  "blind_to_previous_labels": true,
+  "anchor_sample_seed": 48207,
+  "packet_shuffle_seed": 48206,
+  "total_items": 20,
+  "items": [
+    {
+      "item_id": "PKT-0001",
+      "repo": "vitejs/vite",
+      "commit_sha": "9944fa603387",
+      "commit_subject": "fix(deps): update all non-major dependencies (#23601)",
+      "file": "packages/plugin-legacy/package.json",
+      "line": null,
+      "rule_summary": "Project manifest, linter, or test-runner config modified: verify whether the change adds/loosens dependencies or weakens checks.",
+      "diff_excerpt": "diff --git a/packages/plugin-legacy/package.json b/packages/plugin-legacy/package.json\nindex bd6b0c96d..762eb6e94 100644\n--- a/packages/plugin-legacy/package.json\n+++ b/packages/plugin-legacy/package.json\n@@ -38,14 +38,14 @@\n     \"@babel/plugin-transform-dynamic-import\": \"^7.29.7\",\n     \"@babel/plugin-transform-modules-systemjs\": \"^7.29.8\",\n     \"@babel/preset-env\": \"^7.29.7\",\n     \"babel-plugin-polyfill-corejs3\": \"^0.14.2\",\n     \"babel-plugin-polyfill-regenerator\": \"^0.6.8\",\n-    \"browserslist\": \"^4.29.0\",\n+    \"browserslist\": \"^4.29.1\",\n     \"browserslist-to-esbuild\": \"^2.1.1\",\n     \"core-js\": \"^3.50.0\",\n-    \"magic-string\": \"^1.4.1\",\n+    \"magic-string\": \"^1.4.2\",\n     \"regenerator-runtime\": \"^0.14.1\",\n     \"systemjs\": \"^6.15.1\"\n   },\n   \"peerDependencies\": {\n     \"terser\": \"^5.16.0\",",
+      "line_context": null
+    },
+    {
+      "item_id": "PKT-0002",
+      "repo": "astral-sh/ruff",
+      "commit_sha": "8a042667651d",
+      "commit_subject": "[ty] Allow discovering dependencies in system Python environments (#22994)",
+      "file": "crates/ty/tests/cli/python_environment.rs",
+      "line": 2214,
+      "rule_summary": "Existing test assertion expected literal value was modified or weakened in place.",
+      "diff_excerpt": "diff --git a/crates/ty/tests/cli/python_environment.rs b/crates/ty/tests/cli/python_environment.rs\nindex ce9a3ca72..209b3fc19 100644\n--- a/crates/ty/tests/cli/python_environment.rs\n+++ b/crates/ty/tests/cli/python_environment.rs\n@@ -2197,11 +2197,11 @@ fn ty_environment_is_system_not_virtual() -> anyhow::Result<()> {\n     };\n \n     let ty_package_path = format!(\"{ty_system_site_packages}/system_package/__init__.py\");\n \n     let case = CliTest::with_files([\n-        // Package in system Python installation (should NOT be discovered)\n+        // Package in system Python installation (should be discovered)\n         (ty_package_path.as_str(), \"class SystemClass: ...\"),\n         // Note: NO pyvenv.cfg - this is a system installation, not a venv\n         (\n             \"test.py\",\n             r\"\n@@ -2210,22 +2210,89 @@ fn ty_environment_is_system_not_virtual() -> anyhow::Result<()> {\n         ),\n     ])?\n     .with_ty_at(ty_executable_path)?;\n \n     assert_cmd_snapshot!(case.command(), @\"\n+    success: true\n+    exit_code: 0",
+      "line_context": "2209:             \",\n2210:         ),\n2211:     ])?\n2212:     .with_ty_at(ty_executable_path)?;\n2213: \n2214:     assert_cmd_snapshot!(case.command(), @\"\n2215:     success: true\n2216:     exit_code: 0\n2217:     ----- stdout -----\n2218:     All checks passed!\n2219: "
+    },
+    {
+      "item_id": "PKT-0003",
+      "repo": "vitejs/vite",
+      "commit_sha": "24339f4339d6",
+      "commit_subject": "chore(deps): update vitest monorepo to v5 (#23604)",
+      "file": "packages/vite/package.json",
+      "line": null,
+      "rule_summary": "Manifest loosens or widens an existing dependency version constraint.",
+      "diff_excerpt": "diff --git a/packages/vite/package.json b/packages/vite/package.json\nindex 78a2eabd1..ecb9702cb 100644\n--- a/packages/vite/package.json\n+++ b/packages/vite/package.json\n@@ -85,11 +85,11 @@\n     \"@rollup/pluginutils\": \"^5.4.0\",\n     \"@types/escape-html\": \"^1.0.4\",\n     \"@types/pnpapi\": \"^0.0.5\",\n     \"@vercel/detect-agent\": \"^1.2.5\",\n     \"@vitejs/devtools\": \"^0.7.6\",\n-    \"@vitest/utils\": \"4.1.11\",\n+    \"@vitest/utils\": \"^4.1.11\",\n     \"@voidzero-dev/vite-task-client\": \"^0.2.0\",\n     \"artichokie\": \"^0.4.5\",\n     \"baseline-browser-mapping\": \"^2.11.26\",\n     \"cac\": \"^7.0.0\",\n     \"chokidar\": \"^3.6.0\",",
+      "line_context": null
+    },
+    {
+      "item_id": "PKT-0004",
+      "repo": "vitejs/vite",
+      "commit_sha": "8a4c19cfc035",
+      "commit_subject": "fix(deps): update all non-major dependencies (#23648)",
+      "file": "playground/js-sourcemap/package.json",
+      "line": null,
+      "rule_summary": "Project manifest, linter, or test-runner config modified: verify whether the change adds/loosens dependencies or weakens checks.",
+      "diff_excerpt": "diff --git a/playground/js-sourcemap/package.json b/playground/js-sourcemap/package.json\nindex 405e5ce58..0802d7266 100644\n--- a/playground/js-sourcemap/package.json\n+++ b/playground/js-sourcemap/package.json\n@@ -13,9 +13,9 @@\n     \"@jridgewell/trace-mapping\": \"^0.3.31\",\n     \"@babel/core\": \"^7.29.7\",\n     \"@vitejs/test-dep-malicious-sourcemap\": \"file:dep-malicious-sourcemap\",\n     \"@vitejs/test-dep-optimized-malicious\": \"file:dep-optimized-malicious\",\n     \"@vitejs/test-importee-pkg\": \"file:importee-pkg\",\n-    \"magic-string\": \"^1.4.2\",\n+    \"magic-string\": \"^1.4.3\",\n     \"oxc-parser\": \"^0.153.0\"\n   }\n }",
+      "line_context": null
+    },
+    {
+      "item_id": "PKT-0005",
+      "repo": "tokio-rs/tokio",
+      "commit_sha": "8f37021c169c",
+      "commit_subject": "ci: bump actions/checkout from 6 to 7 (#8229)",
+      "file": ".github/workflows/loom.yml",
+      "line": 80,
+      "rule_summary": "CI workflow uses a third-party action pinned to a mutable tag or branch rather than a full 40-hex commit SHA.",
+      "diff_excerpt": "diff --git a/.github/workflows/loom.yml b/.github/workflows/loom.yml\nindex 728b7eb4..904958d8 100644\n--- a/.github/workflows/loom.yml\n+++ b/.github/workflows/loom.yml\n@@ -59,11 +59,11 @@ jobs:\n     name: loom time driver\n     # base_ref is null when it's not a pull request\n     if: github.repository_owner == 'tokio-rs' && (contains(github.event.pull_request.labels.*.name, 'R-loom-time-driver') || (github.base_ref == null))\n     runs-on: ubuntu-latest\n     steps:\n-      - uses: actions/checkout@v6\n+      - uses: actions/checkout@v7\n       - name: Install Rust ${{ env.rust_stable }}\n         uses: dtolnay/rust-toolchain@master\n         with:\n             toolchain: ${{ env.rust_stable }}\n       - uses: Swatinem/rust-cache@v2\n@@ -75,11 +75,11 @@ jobs:\n     name: loom current-thread scheduler\n     # base_ref is null when it's not a pull request\n     if: github.repository_owner == 'tokio-rs' && (contains(github.event.pull_request.labels.*.name, 'R-loom-current-thread') || (github.base_ref == null))\n     runs-on: ubuntu-latest\n     steps:\n-      - uses: actions/checkout@v6\n+      - uses: actions/checkout@v7",
+      "line_context": "75:     name: loom current-thread scheduler\n76:     # base_ref is null when it's not a pull request\n77:     if: github.repository_owner == 'tokio-rs' && (contains(github.event.pull_request.labels.*.name, 'R-loom-current-thread') || (github.base_ref == null))\n78:     runs-on: ubuntu-latest\n79:     steps:\n80:       - uses: actions/checkout@v7\n81:       - name: Install Rust ${{ env.rust_stable }}\n82:         uses: dtolnay/rust-toolchain@master\n83:         with:\n84:             toolchain: ${{ env.rust_stable }}\n85:       - uses: Swatinem/rust-cache@v2"
+    },
+    {
+      "item_id": "PKT-0006",
+      "repo": "tokio-rs/tokio",
+      "commit_sha": "8f37021c169c",
+      "commit_subject": "ci: bump actions/checkout from 6 to 7 (#8229)",
+      "file": ".github/workflows/ci.yml",
+      "line": 144,
+      "rule_summary": "CI workflow uses a third-party action pinned to a mutable tag or branch rather than a full 40-hex commit SHA.",
+      "diff_excerpt": "diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml\nindex ea05e74e..b5e0f0f6 100644\n--- a/.github/workflows/ci.yml\n+++ b/.github/workflows/ci.yml\n@@ -139,11 +139,11 @@ jobs:\n         os:\n           - windows-latest\n           - ubuntu-latest\n           - macos-latest\n     steps:\n-      - uses: actions/checkout@v6\n+      - uses: actions/checkout@v7\n       - name: Install Rust ${{ env.rust_nightly }}\n         uses: dtolnay/rust-toolchain@stable\n         with:\n             toolchain: ${{ env.rust_nightly }}\n       - name: Install cargo-nextest\n@@ -175,11 +175,11 @@ jobs:\n         os:\n           - windows-latest\n           - ubuntu-latest\n           - macos-latest\n     steps:\n-      - uses: actions/checkout@v6\n+      - uses: actions/checkout@v7",
+      "line_context": "139:         os:\n140:           - windows-latest\n141:           - ubuntu-latest\n142:           - macos-latest\n143:     steps:\n144:       - uses: actions/checkout@v7\n145:       - name: Install Rust ${{ env.rust_nightly }}\n146:         uses: dtolnay/rust-toolchain@stable\n147:         with:\n148:             toolchain: ${{ env.rust_nightly }}\n149:       - name: Install cargo-nextest"
+    },
+    {
+      "item_id": "PKT-0007",
+      "repo": "denoland/deno",
+      "commit_sha": "90760e7b983f",
+      "commit_subject": "perf(ext/node): remove per-chunk copying on TLSWrap data paths (#35705)",
+      "file": "ext/node/ops/tls_wrap.rs",
+      "line": 3029,
+      "rule_summary": "Existing function body was replaced with a stub or constant return.",
+      "diff_excerpt": "diff --git a/ext/node/ops/tls_wrap.rs b/ext/node/ops/tls_wrap.rs\nindex ac75a8dfd..a46547483 100644\n--- a/ext/node/ops/tls_wrap.rs\n+++ b/ext/node/ops/tls_wrap.rs\n@@ -3019,18 +3019,16 @@ impl TLSWrap {\n   fn enable_session_callbacks(&self) {\n     // No-op for rustls\n   }\n \n   /// Set the serialized TLS session for client resumption.\n-  /// With the shared session store, rustls handles resumption automatically.\n-  /// This is still needed to signal that a session was provided (so JS\n-  /// can check isSessionReused after handshake).\n+  /// With the shared session store, rustls handles resumption\n+  /// automatically, so this is a no-op; it only exists because the JS\n+  /// layer calls it. isSessionReused() reports resumption based on the\n+  /// negotiated handshake kind instead.\n   #[fast]\n-  fn set_session(&self, #[buffer] _session: &[u8]) {\n-    let inner = unsafe { &mut *self.inner.as_mut_ptr() };\n-    inner.session_was_set = true;\n-  }\n+  fn set_session(&self, #[buffer] _session: &[u8]) {}\n \n   /// Check if the TLS session was resumed (reused from a previous connection).",
+      "line_context": "3024:   /// With the shared session store, rustls handles resumption\n3025:   /// automatically, so this is a no-op; it only exists because the JS\n3026:   /// layer calls it. isSessionReused() reports resumption based on the\n3027:   /// negotiated handshake kind instead.\n3028:   #[fast]\n3029:   fn set_session(&self, #[buffer] _session: &[u8]) {}\n3030: \n3031:   /// Check if the TLS session was resumed (reused from a previous connection).\n3032:   #[fast]\n3033:   fn is_session_reused(&self) -> bool {\n3034:     let inner = unsafe { &*self.inner.as_mut_ptr() };"
+    },
+    {
+      "item_id": "PKT-0008",
+      "repo": "denoland/deno",
+      "commit_sha": "b4bf672c3118",
+      "commit_subject": "fix(ext/node): implement process.debugPort with ToInt32 coercion (#33403)",
+      "file": "ext/node/polyfills/process.ts",
+      "line": 990,
+      "rule_summary": "Existing function body was replaced with a stub or constant return.",
+      "diff_excerpt": "diff --git a/ext/node/polyfills/process.ts b/ext/node/polyfills/process.ts\nindex 07ec7b7be..86e116d91 100644\n--- a/ext/node/polyfills/process.ts\n+++ b/ext/node/polyfills/process.ts\n@@ -779,10 +779,37 @@ Object.defineProperty(process, \"argv0\", {\n     return argv0;\n   },\n   set(_val) {},\n });\n \n+/**\n+ * https://nodejs.org/api/process.html#processdebugport\n+ *\n+ * Node coerces the value via v8's ToInt32 (so numeric strings convert to\n+ * numbers, objects/arrays/NaN/Infinity become 0, booleans become 0 or 1,\n+ * and Symbols throw TypeError). Out-of-range values throw RangeError.\n+ */\n+// Node's default inspector port (kDefaultInspectorPort in src/node_options.h).\n+let _debugPort = 9229;\n+Object.defineProperty(process, \"debugPort\", {\n+  get() {",
+      "line_context": "985:   // TODO(@satyarohith): support disabling source maps if needed.\n986: };\n987: \n988: // Source maps are always enabled in Deno.\n989: Object.defineProperty(process, \"sourceMapsEnabled\", {\n990:   get() {\n991:     return true; // Source maps are always enabled in Deno.\n992:   },\n993:   enumerable: true,\n994:   configurable: true,\n995: });"
+    },
+    {
+      "item_id": "PKT-0009",
+      "repo": "vitejs/vite",
+      "commit_sha": "8a4c19cfc035",
+      "commit_subject": "fix(deps): update all non-major dependencies (#23648)",
+      "file": "packages/create-vite/template-svelte-ts/package.json",
+      "line": null,
+      "rule_summary": "Project manifest, linter, or test-runner config modified: verify whether the change adds/loosens dependencies or weakens checks.",
+      "diff_excerpt": "diff --git a/packages/create-vite/template-svelte-ts/package.json b/packages/create-vite/template-svelte-ts/package.json\nindex 4515dc994..0c8caeac8 100644\n--- a/packages/create-vite/template-svelte-ts/package.json\n+++ b/packages/create-vite/template-svelte-ts/package.json\n@@ -10,12 +10,12 @@\n     \"check\": \"svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json\"\n   },\n   \"devDependencies\": {\n     \"@sveltejs/vite-plugin-svelte\": \"^7.3.1\",\n     \"@tsconfig/svelte\": \"^5.0.8\",\n-    \"@types/node\": \"^24.19.0\",\n+    \"@types/node\": \"^24.19.1\",\n     \"svelte\": \"^5.57.1\",\n     \"svelte-check\": \"^4.7.6\",\n     \"typescript\": \"~6.0.2\",\n-    \"vite\": \"^8.3.1\"\n+    \"vite\": \"^8.3.3\"\n   }\n }",
+      "line_context": null
+    },
+    {
+      "item_id": "PKT-0010",
+      "repo": "vitejs/vite",
+      "commit_sha": "e8990c4d6101",
+      "commit_subject": "fix(deps): update all non-major dependencies (#23537)",
+      "file": "playground/css/package.json",
+      "line": null,
+      "rule_summary": "Project manifest, linter, or test-runner config modified: verify whether the change adds/loosens dependencies or weakens checks.",
+      "diff_excerpt": "diff --git a/playground/css/package.json b/playground/css/package.json\nindex b3ad8bdb5..c9efef354 100644\n--- a/playground/css/package.json\n+++ b/playground/css/package.json\n@@ -22,11 +22,11 @@\n     \"@vitejs/test-css-proxy-dep\": \"file:./css-proxy-dep\",\n     \"@vitejs/test-scss-proxy-dep\": \"file:./scss-proxy-dep\",\n     \"less\": \"^4.9.1\",\n     \"lightningcss\": \"^1.33.0\",\n     \"postcss-nested\": \"^7.0.2\",\n-    \"sass\": \"^1.104.1\",\n+    \"sass\": \"^1.105.0\",\n     \"stylus\": \"^0.64.0\",\n     \"sugarss\": \"^5.0.1\",\n     \"tinyglobby\": \"^0.2.17\"\n   },\n   \"imports\": {",
+      "line_context": null
+    },
+    {
+      "item_id": "PKT-0011",
+      "repo": "vitejs/vite",
+      "commit_sha": "dfc8aa5057dd",
+      "commit_subject": "fix: allow binding when strictPort is set but wildcard port is in use (#22150)",
+      "file": "packages/vite/src/node/__tests__/http.spec.ts",
+      "line": null,
+      "rule_summary": "Existing test file modified: verify whether the change weakens, deletes, or degrades test assertions or coverage.",
+      "diff_excerpt": "diff --git a/packages/vite/src/node/__tests__/http.spec.ts b/packages/vite/src/node/__tests__/http.spec.ts\nindex ec9d8d292..3c10fae32 100644\n--- a/packages/vite/src/node/__tests__/http.spec.ts\n+++ b/packages/vite/src/node/__tests__/http.spec.ts\n@@ -211,6 +211,44 @@ describe('port detection', () => {\n \n     await expect(viteServer.listen()).rejects.toThrow(\n       `Port ${BASE_PORT} is already in use`,\n     )\n   })\n+\n+  test('allows binding to specific host with strictPort when wildcard port is in use', async () => {\n+    await using _wildcardServer = await createSimpleServer(BASE_PORT, '0.0.0.0')\n+\n+    const warnMessages: string[] = []\n+    viteServer = await createServer({\n+      root: import.meta.dirname,\n+      customLogger: {\n+        info: () => {},\n+        warn: (msg) => warnMessages.push(msg),\n+        warnOnce: () => {},\n+        error: () => {},\n+        clearScreen: () => {},\n+        hasErrorLogged: () => false,\n+        hasWarned: false,",
+      "line_context": null
+    },
+    {
+      "item_id": "PKT-0012",
+      "repo": "tokio-rs/tokio",
+      "commit_sha": "8f37021c169c",
+      "commit_subject": "ci: bump actions/checkout from 6 to 7 (#8229)",
+      "file": ".github/workflows/ci.yml",
+      "line": 1084,
+      "rule_summary": "CI workflow uses a third-party action pinned to a mutable tag or branch rather than a full 40-hex commit SHA.",
+      "diff_excerpt": "diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml\nindex ea05e74e..b5e0f0f6 100644\n--- a/.github/workflows/ci.yml\n+++ b/.github/workflows/ci.yml\n@@ -1079,11 +1079,11 @@ jobs:\n       matrix:\n         target:\n           - wasm32-wasip1\n           - wasm32-wasip1-threads\n     steps:\n-      - uses: actions/checkout@v6\n+      - uses: actions/checkout@v7\n       - name: Install Rust ${{ env.rust_stable }}\n         uses: dtolnay/rust-toolchain@stable\n         with:\n           toolchain: ${{ env.rust_stable }}\n           targets: ${{ matrix.target }}\n@@ -1140,11 +1140,11 @@ jobs:\n   wasm32-wasip2:\n     name: test tokio for wasm32-wasip2\n     runs-on: ubuntu-latest\n     timeout-minutes: 10\n     steps:\n-      - uses: actions/checkout@v6\n+      - uses: actions/checkout@v7",
+      "line_context": "1079:       matrix:\n1080:         target:\n1081:           - wasm32-wasip1\n1082:           - wasm32-wasip1-threads\n1083:     steps:\n1084:       - uses: actions/checkout@v7\n1085:       - name: Install Rust ${{ env.rust_stable }}\n1086:         uses: dtolnay/rust-toolchain@stable\n1087:         with:\n1088:           toolchain: ${{ env.rust_stable }}\n1089:           targets: ${{ matrix.target }}"
+    },
+    {
+      "item_id": "PKT-0013",
+      "repo": "tokio-rs/tokio",
+      "commit_sha": "8f37021c169c",
+      "commit_subject": "ci: bump actions/checkout from 6 to 7 (#8229)",
+      "file": ".github/workflows/ci.yml",
+      "line": 1347,
+      "rule_summary": "CI workflow uses a third-party action pinned to a mutable tag or branch rather than a full 40-hex commit SHA.",
+      "diff_excerpt": "diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml\nindex ea05e74e..b5e0f0f6 100644\n--- a/.github/workflows/ci.yml\n+++ b/.github/workflows/ci.yml\n@@ -1342,11 +1342,11 @@ jobs:\n   freebsd-docs:\n     name: FreeBSD docs\n     needs: basics\n     runs-on: ubuntu-latest\n     steps:\n-      - uses: actions/checkout@v6\n+      - uses: actions/checkout@v7\n       - name: Build docs in FreeBSD\n         uses: vmactions/freebsd-vm@v1\n         env:\n           RUSTFLAGS: --cfg docsrs --cfg tokio_unstable\n           RUSTDOCFLAGS: --cfg docsrs --cfg tokio_unstable -Dwarnings\n@@ -1370,11 +1370,11 @@ jobs:\n   freebsd-i686:\n     name: FreeBSD i686\n     needs: basics\n     runs-on: ubuntu-latest\n     steps:\n-      - uses: actions/checkout@v6\n+      - uses: actions/checkout@v7",
+      "line_context": "1342:   freebsd-docs:\n1343:     name: FreeBSD docs\n1344:     needs: basics\n1345:     runs-on: ubuntu-latest\n1346:     steps:\n1347:       - uses: actions/checkout@v7\n1348:       - name: Build docs in FreeBSD\n1349:         uses: vmactions/freebsd-vm@v1\n1350:         env:\n1351:           RUSTFLAGS: --cfg docsrs --cfg tokio_unstable\n1352:           RUSTDOCFLAGS: --cfg docsrs --cfg tokio_unstable -Dwarnings"
+    },
+    {
+      "item_id": "PKT-0014",
+      "repo": "vitejs/vite",
+      "commit_sha": "cf80aa552cac",
+      "commit_subject": "fix(deps): update all non-major dependencies (#23731)",
+      "file": "packages/create-vite/package.json",
+      "line": null,
+      "rule_summary": "Project manifest, linter, or test-runner config modified: verify whether the change adds/loosens dependencies or weakens checks.",
+      "diff_excerpt": "diff --git a/packages/create-vite/package.json b/packages/create-vite/package.json\nindex c6f978b4f..56a63b6e3 100644\n--- a/packages/create-vite/package.json\n+++ b/packages/create-vite/package.json\n@@ -33,11 +33,11 @@\n   },\n   \"homepage\": \"https://github.com/vitejs/vite/tree/main/packages/create-vite#readme\",\n   \"funding\": \"https://github.com/vitejs/vite?sponsor=1\",\n   \"devDependencies\": {\n     \"@clack/prompts\": \"^1.8.1\",\n-    \"@vercel/detect-agent\": \"^1.2.5\",\n+    \"@vercel/detect-agent\": \"^1.2.6\",\n     \"mri\": \"^1.2.0\",\n     \"tinyexec\": \"^1.3.1\",\n     \"tsdown\": \"^0.23.1\",\n     \"unrun\": \"^0.3.1\"\n   }",
+      "line_context": null
+    },
+    {
+      "item_id": "PKT-0015",
+      "repo": "vitejs/vite",
+      "commit_sha": "456096953f2b",
+      "commit_subject": "test: replace lodash dependencies with local test packages (#22191)",
+      "file": "playground/optimize-deps/package.json",
+      "line": null,
+      "rule_summary": "Manifest adds a new direct dependency requiring license/supply-chain review or waiver.",
+      "diff_excerpt": "diff --git a/playground/optimize-deps/package.json b/playground/optimize-deps/package.json\nindex a6193bd3a..492dc5536 100644\n--- a/playground/optimize-deps/package.json\n+++ b/playground/optimize-deps/package.json\n@@ -45,18 +45,18 @@\n     \"@vitejs/test-dep-with-plus-subpath\": \"file:./dep-with-plus-subpath\",\n     \"@vitejs/test-dep-non-optimized\": \"file:./dep-non-optimized\",\n     \"@vitejs/test-added-in-entries\": \"file:./added-in-entries\",\n     \"@vitejs/test-dep-cjs-external-package-omit-js-suffix\": \"file:./dep-cjs-external-package-omit-js-suffix\",\n     \"@vitejs/test-dep-with-assets\": \"file:./dep-with-assets\",\n-    \"lodash-es\": \"^4.18.1\",\n+    \"@vitejs/test-dep-lodash\": \"file:./dep-lodash\",\n+    \"@vitejs/test-dep-lodash.clonedeep\": \"file:./dep-lodash-clonedeep\",\n+    \"@vitejs/test-dep-lodash-es\": \"file:./dep-lodash-es\",\n     \"@vitejs/test-nested-exclude\": \"file:./nested-exclude\",\n     \"phoenix\": \"^1.8.5\",\n     \"react\": \"^19.2.4\",\n     \"react-dom\": \"^19.2.4\",\n     \"@vitejs/test-resolve-linked\": \"workspace:0.0.0\",\n     \"url\": \"^0.11.4\",\n     \"vue\": \"^3.5.32\",\n-    \"vuex\": \"^4.1.0\",\n-    \"lodash\": \"^4.18.1\",\n-    \"lodash.clonedeep\": \"^4.5.0\"\n+    \"vuex\": \"^4.1.0\"",
+      "line_context": null
+    },
+    {
+      "item_id": "PKT-0016",
+      "repo": "vitejs/vite",
+      "commit_sha": "2540ed06d0b6",
+      "commit_subject": "feat: forward browser console logs and errors to dev server terminal (#20916)",
+      "file": "packages/vite/src/shared/tsconfig.json",
+      "line": null,
+      "rule_summary": "Project manifest, linter, or test-runner config modified: verify whether the change adds/loosens dependencies or weakens checks.",
+      "diff_excerpt": "diff --git a/packages/vite/src/shared/tsconfig.json b/packages/vite/src/shared/tsconfig.json\nindex 18d419812..448d4f977 100644\n--- a/packages/vite/src/shared/tsconfig.json\n+++ b/packages/vite/src/shared/tsconfig.json\n@@ -1,8 +1,9 @@\n {\n   \"extends\": \"../../tsconfig.base.json\",\n   \"include\": [\"./\", \"../types\"],\n+  \"exclude\": [\"__tests__\"],\n   \"compilerOptions\": {\n     \"lib\": [\"ESNext\", \"DOM\"],\n     \"stripInternal\": true\n   }\n }",
+      "line_context": null
+    },
+    {
+      "item_id": "PKT-0017",
+      "repo": "vitejs/vite",
+      "commit_sha": "9944fa603387",
+      "commit_subject": "fix(deps): update all non-major dependencies (#23601)",
+      "file": "packages/create-vite/template-preact/package.json",
+      "line": null,
+      "rule_summary": "Project manifest, linter, or test-runner config modified: verify whether the change adds/loosens dependencies or weakens checks.",
+      "diff_excerpt": "diff --git a/packages/create-vite/template-preact/package.json b/packages/create-vite/template-preact/package.json\nindex 2f2a096ff..3a8e79d99 100644\n--- a/packages/create-vite/template-preact/package.json\n+++ b/packages/create-vite/template-preact/package.json\n@@ -11,8 +11,8 @@\n   \"dependencies\": {\n     \"preact\": \"^10.29.8\"\n   },\n   \"devDependencies\": {\n     \"@preact/preset-vite\": \"^2.10.6\",\n-    \"vite\": \"^8.3.0\"\n+    \"vite\": \"^8.3.1\"\n   }\n }",
+      "line_context": null
+    },
+    {
+      "item_id": "PKT-0018",
+      "repo": "vitejs/vite",
+      "commit_sha": "d65a9831c984",
+      "commit_subject": "fix(server): improve malformed URL handling in middlewares (#20830)",
+      "file": "packages/vite/src/node/utils.ts",
+      "line": 1632,
+      "rule_summary": "Production code adds an empty catch/except/error handler that silently swallows errors.",
+      "diff_excerpt": "diff --git a/packages/vite/src/node/utils.ts b/packages/vite/src/node/utils.ts\nindex 937c4cc8c..931559d0e 100644\n--- a/packages/vite/src/node/utils.ts\n+++ b/packages/vite/src/node/utils.ts\n@@ -1624,10 +1624,19 @@ export function partialEncodeURIPath(uri: string): string {\n   const filePath = cleanUrl(uri)\n   const postfix = filePath !== uri ? uri.slice(filePath.length) : ''\n   return filePath.replaceAll('%', '%25') + postfix\n }\n \n+export function decodeURIIfPossible(input: string): string | undefined {\n+  try {\n+    return decodeURI(input)\n+  } catch {\n+    // url is malformed, probably a interpolate syntax of template engines\n+    return\n+  }\n+}\n+\n type SigtermCallback = (signal?: 'SIGTERM', exitCode?: number) => Promise<void>\n \n // Use a shared callback when attaching sigterm listeners to avoid `MaxListenersExceededWarning`\n const sigtermCallbacks = new Set<SigtermCallback>()\n const parentSigtermCallback: SigtermCallback = async (signal, exitCode) => {",
+      "line_context": "1627: }\n1628: \n1629: export function decodeURIIfPossible(input: string): string | undefined {\n1630:   try {\n1631:     return decodeURI(input)\n1632:   } catch {\n1633:     // url is malformed, probably a interpolate syntax of template engines\n1634:     return\n1635:   }\n1636: }\n1637: "
+    },
+    {
+      "item_id": "PKT-0019",
+      "repo": "denoland/deno",
+      "commit_sha": "e867d088e500",
+      "commit_subject": "feat: `bump-version -c` to handle deno.json + package.json in same dir (#34770)",
+      "file": "tests/specs/bump_version/single_fallback_to_pkg_json/deno.json",
+      "line": null,
+      "rule_summary": "Project manifest, linter, or test-runner config modified: verify whether the change adds/loosens dependencies or weakens checks.",
+      "diff_excerpt": "diff --git a/tests/specs/bump_version/single_fallback_to_pkg_json/deno.json b/tests/specs/bump_version/single_fallback_to_pkg_json/deno.json\nnew file mode 100644\nindex 000000000..2f35542b4\n--- /dev/null\n+++ b/tests/specs/bump_version/single_fallback_to_pkg_json/deno.json\n@@ -0,0 +1,7 @@\n+{\n+  \"lint\": {\n+    \"rules\": {\n+      \"tags\": [\"recommended\"]\n+    }\n+  }\n+}",
+      "line_context": null
+    },
+    {
+      "item_id": "PKT-0020",
+      "repo": "denoland/deno",
+      "commit_sha": "bac58b43ffaf",
+      "commit_subject": "chore(deps): bump tar from 0.4.43 to 0.4.45 (#32882)",
+      "file": "Cargo.toml",
+      "line": null,
+      "rule_summary": "Project manifest, linter, or test-runner config modified: verify whether the change adds/loosens dependencies or weakens checks.",
+      "diff_excerpt": "diff --git a/Cargo.toml b/Cargo.toml\nindex 35898b17c..69910f9b7 100644\n--- a/Cargo.toml\n+++ b/Cargo.toml\n@@ -301,11 +301,11 @@ socket2 = { version = \"0.5.3\", features = [\"all\"] }\n sourcemap = \"9.1.2\"\n static_assertions = \"1\"\n strum = { version = \"0.27.1\", features = [\"derive\"] }\n strum_macros = \"0.27.1\"\n sys_traits = \"=0.1.25\"\n-tar = \"=0.4.43\"\n+tar = \"=0.4.45\"\n tempfile = \"3.4.0\"\n termcolor = \"1.1.3\"\n testing_macros = \"1.0.0\"\n thiserror = \"2.0.12\"\n tokio = { version = \"1.47.1\", features = [\"full\"] }",
+      "line_context": null
+    }
+  ]
+}
