@@ -22,12 +22,27 @@ if [ "${GH_MOCK_FAIL:-0}" = "1" ]; then
   exit 1
 fi
 jq_expr=""
+workflow=""
+branch=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --jq) jq_expr="$2"; shift 2 ;;
+    --workflow) workflow="$2"; shift 2 ;;
+    --branch) branch="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
+# The Release run of a candidate tag: its commit is the tag's, unless overridden.
+if [ "${workflow}" = "release.yml" ]; then
+  head="${GH_MOCK_RELEASE_SHA:-$(git rev-parse -q --verify "refs/tags/${branch}^{commit}" || true)}"
+  case "${GH_MOCK_RELEASE_STATUS:-success}" in
+    failure) json="[{\"status\":\"completed\",\"conclusion\":\"failure\",\"headSha\":\"${head}\"}]" ;;
+    empty) json='[]' ;;
+    *) json="[{\"status\":\"completed\",\"conclusion\":\"success\",\"headSha\":\"${head}\"}]" ;;
+  esac
+  if [ -n "${jq_expr}" ]; then echo "${json}" | jq -r "${jq_expr}"; else echo "${json}"; fi
+  exit 0
+fi
 case "${GH_MOCK_STATUS:-success}" in
   failure) json='[{"status":"completed","conclusion":"failure"}]' ;;
   in_progress) json='[{"status":"in_progress","conclusion":""}]' ;;
@@ -61,8 +76,16 @@ set_version() {
   git commit -q -m "chore(release): bump version to $1"
 }
 
+# A candidate tag, pushed, as the release pipeline would have run it.
+candidate() {
+  git tag -a -m "v$1" "v$1" "${2:-HEAD}"
+  git push -q origin "refs/tags/v$1"
+}
+
 set_version 0.1.0
 old="$(git rev-parse HEAD)"
+set_version 0.2.0-rc.1
+rc="$(git rev-parse HEAD)"
 set_version 0.2.0
 bump="$(git rev-parse HEAD)"
 git push -q origin main
@@ -119,6 +142,40 @@ GH_MOCK_STATUS=in_progress expect_fail "in-progress CI status is refused" "CI st
 GH_MOCK_STATUS=empty expect_fail "missing CI runs refused" "no CI runs found for commit" 0.2.0 --commit "${bump}"
 GH_MOCK_FAIL=1 expect_fail "unreadable CI status is refused" "cannot read CI status" 0.2.0 --commit "${bump}"
 
+echo "== negative controls: a stable release needs a passing candidate on the same code"
+expect_fail "no candidate on the remote is refused" "no release candidate v0.2.0-rc.N on origin" 0.2.0 --commit "${bump}"
+candidate 0.2.0-rc.1 "${rc}"
+GH_MOCK_RELEASE_STATUS=failure expect_fail "a failed candidate run is refused" "Release run of v0.2.0-rc.1 is" 0.2.0 --commit "${bump}"
+GH_MOCK_RELEASE_STATUS=empty expect_fail "a candidate never run is refused" "no Release run found for v0.2.0-rc.1" 0.2.0 --commit "${bump}"
+GH_MOCK_RELEASE_SHA="${old}" expect_fail "a run of another commit is refused" "Release run of v0.2.0-rc.1 is" 0.2.0 --commit "${bump}"
+
+git checkout -q main
+set_version 0.4.0-rc.1
+candidate 0.4.0-rc.1
+echo 'fn main() {}' > main.rs
+git add main.rs
+git commit -q -m "fix: code after the candidate"
+set_version 0.4.0
+git push -q origin main
+expect_fail "code changed after the candidate is refused" "changed since: main.rs" 0.4.0 --commit HEAD
+set_version 0.4.0-rc.2
+candidate 0.4.0-rc.2
+printf '[[package]]\nname = "discipline"\nversion = "0.4.0-rc.2"\n\n[[package]]\nname = "zlib"\nversion = "1.1.31"\n' > Cargo.lock
+git add Cargo.lock
+git commit -q -m "fix(deps): raise zlib"
+printf '[package]\nname = "discipline"\nversion = "0.4.0"\n' > Cargo.toml
+sed -i.bak 's/^version = "0.4.0-rc.2"$/version = "0.4.0"/' Cargo.lock && rm Cargo.lock.bak
+git add Cargo.toml Cargo.lock
+git commit -q -m "chore(release): bump version to 0.4.0"
+git push -q origin main
+expect_fail "a dependency changed after the candidate is refused" "changed since: Cargo.lock" 0.4.0 --commit HEAD
+git checkout -q -b side HEAD~3
+set_version 0.4.0-rc.3
+candidate 0.4.0-rc.3
+git checkout -q main
+expect_fail "a candidate off the release's history is refused" "is not an ancestor of" 0.4.0 --commit HEAD
+git checkout -q stale
+
 echo "== positive control: an explicit commit on main is tagged with signature and pushed"
 "${script}" 0.2.0 --commit "${bump}" --push
 [ "$(git rev-parse 'v0.2.0^{commit}')" = "${bump}" ] || { echo "FAIL: local tag target"; exit 1; }
@@ -144,6 +201,14 @@ expect_existing "tag exists on the remote" "already exists on origin"
 
 echo "== positive control: default commit is version-bump commit, not tip of main; nothing pushed"
 git checkout -q main
+set_version 0.3.0-rc.1
+candidate 0.3.0-rc.1
+set_version 0.3.0-rc.2
+candidate 0.3.0-rc.2
+mkdir -p docs
+echo "install v0.3.0" > docs/install.md
+git add docs/install.md
+git commit -q -m "docs: point the install at 0.3.0"
 set_version 0.3.0
 bump_030="$(git rev-parse HEAD)"
 echo "unrelated post-bump commit" > post.txt
@@ -156,5 +221,13 @@ git checkout -q stale
 [ "$(git rev-parse 'v0.3.0^{commit}')" = "${bump_030}" ] || { echo "FAIL: default commit is not bump commit"; exit 1; }
 [ "$(git rev-parse 'v0.3.0^{commit}')" != "${tip}" ] || { echo "FAIL: default commit fell back to tip"; exit 1; }
 [ -z "$(git ls-remote --tags origin refs/tags/v0.3.0)" ] || { echo "FAIL: pushed without --push"; exit 1; }
+
+echo "== positive control: a candidate itself needs no candidate"
+git checkout -q main
+set_version 0.5.0-rc.1
+git push -q origin main
+git checkout -q stale
+"${script}" --unsigned 0.5.0-rc.1
+[ "$(git rev-parse 'v0.5.0-rc.1^{commit}')" = "$(git rev-parse origin/main)" ] || { echo "FAIL: candidate tag target"; exit 1; }
 
 echo "all tag-release checks passed"
