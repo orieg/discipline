@@ -54,27 +54,62 @@ fn shape_label(shape: &BodyShape) -> String {
     }
 }
 
-/// Judge one file's functions, head against base. Functions pair by enclosing type, name and order:
-/// the n-th `f` on the head side is the n-th `f` on the base side within the same type.
+/// Judge one file's functions, head against base. Functions pair by enclosing type and
+/// name. Within each, a head function pairs first with a base function of the same body,
+/// in source order (an unchanged function, wherever the change put others of its name);
+/// the rest pair by order within the gap between the same two such pairs, so a function
+/// added in one gap does not take the base function of another (#910). A file of many
+/// object-literal `get()` methods keeps its pairs when one is added.
 pub fn judge(base: &[FunctionFacts], head: &[FunctionFacts]) -> Vec<Finding> {
-    let mut by_key: HashMap<(Option<&str>, &str), Vec<&FunctionFacts>> = HashMap::new();
-    for f in base {
-        by_key
-            .entry((f.type_name.as_deref(), f.name.as_str()))
-            .or_default()
-            .push(f);
+    type Key<'a> = (Option<&'a str>, &'a str);
+    fn key(f: &FunctionFacts) -> Key<'_> {
+        (f.type_name.as_deref(), f.name.as_str())
     }
-    let mut taken: HashMap<(Option<&str>, &str), usize> = HashMap::new();
-    let mut found = Vec::new();
-    for h in head {
-        let is_eq = crate::ast::functions::is_equality_name(&h.name);
-        if h.is_test && !is_eq {
-            continue;
+    let mut base_by_key: HashMap<Key, Vec<&FunctionFacts>> = HashMap::new();
+    for b in base {
+        base_by_key.entry(key(b)).or_default().push(b);
+    }
+    let judged: Vec<&FunctionFacts> = head
+        .iter()
+        .filter(|h| !h.is_test || crate::ast::functions::is_equality_name(&h.name))
+        .collect();
+    let mut head_by_key: HashMap<Key, Vec<usize>> = HashMap::new();
+    for (i, h) in judged.iter().enumerate() {
+        head_by_key.entry(key(h)).or_default().push(i);
+    }
+    let mut paired: Vec<Option<&FunctionFacts>> = vec![None; judged.len()];
+    for (k, heads) in &head_by_key {
+        let bases = base_by_key.get(k).map(Vec::as_slice).unwrap_or_default();
+        // Anchors: same-body pairs, increasing on both sides.
+        let mut anchors: Vec<(usize, usize)> = Vec::new();
+        let mut next_base = 0;
+        for (hi, &h) in heads.iter().enumerate() {
+            if let Some(off) = bases[next_base..]
+                .iter()
+                .position(|b| b.body_digest == judged[h].body_digest)
+            {
+                anchors.push((hi, next_base + off));
+                next_base += off + 1;
+            }
         }
-        let key = (h.type_name.as_deref(), h.name.as_str());
-        let idx = taken.entry(key).or_default();
-        let b = by_key.get(&key).and_then(|v| v.get(*idx));
-        *idx += 1;
+        // Each gap between anchors (and before the first, after the last) pairs by order.
+        let mut from = (0, 0);
+        for &(hi, bi) in anchors
+            .iter()
+            .chain(std::iter::once(&(heads.len(), bases.len())))
+        {
+            for (h, b) in heads[from.0..hi].iter().zip(&bases[from.1..bi]) {
+                paired[*h] = Some(b);
+            }
+            if hi < heads.len() {
+                paired[heads[hi]] = Some(bases[bi]);
+            }
+            from = (hi + 1, bi + 1);
+        }
+    }
+    let mut found = Vec::new();
+    for (h, b) in judged.into_iter().zip(paired) {
+        let is_eq = crate::ast::functions::is_equality_name(&h.name);
         match b {
             None => {
                 if is_eq
@@ -340,7 +375,11 @@ pub fn stub_bodies(ctx: &Context) -> Result<GateOutcome> {
 mod tests {
     use super::*;
 
+    /// A function whose body is unlike any other's: each call gets its own digest, so
+    /// these functions pair by order, as two bodies that differ do.
     fn f(name: &str, line: usize, shape: BodyShape, is_test: bool) -> FunctionFacts {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
         FunctionFacts {
             name: name.into(),
             line,
@@ -349,6 +388,7 @@ mod tests {
             is_test,
             type_name: None,
             equality_carved_out: false,
+            body_digest: NEXT.fetch_add(1, Ordering::Relaxed),
         }
     }
 
@@ -487,6 +527,82 @@ mod tests {
             )],
         );
         assert!(from_trivial[0].capped_at_warning, "{from_trivial:?}");
+    }
+
+    /// A function added before others of its name does not shift their pairs: a head
+    /// function pairs first with a base function of the same body (#910). The shape of
+    /// `denoland/deno#33403`: a new `get()` added above a `get() { return true; }` and a
+    /// substantive `get()`, all unchanged. The controls are still reported: a body
+    /// replaced in place beside an unchanged one, and the same with an addition before
+    /// them.
+    #[test]
+    fn an_added_function_does_not_shift_the_pairs_of_unchanged_ones() {
+        let with = |mut g: FunctionFacts, digest: u64| {
+            g.body_digest = digest;
+            g
+        };
+        let trivial = || BodyShape::Trivial("return true".into());
+        let base = [
+            with(f("get", 10, trivial(), false), 1),
+            with(f("get", 20, BodyShape::Substantive, false), 2),
+        ];
+        let head = [
+            with(f("get", 5, BodyShape::Substantive, false), 3),
+            with(f("get", 15, trivial(), false), 1),
+            with(f("get", 25, BodyShape::Substantive, false), 2),
+        ];
+        assert_eq!(judge(&base, &head), vec![]);
+
+        // Controls: the substantive `get` is replaced in place, with and without a `get`
+        // added before it; the unchanged one keeps its pair either way.
+        let replaced = [
+            with(f("get", 15, trivial(), false), 1),
+            with(f("get", 25, trivial(), false), 4),
+        ];
+        let found = judge(&base, &replaced);
+        assert_eq!(
+            found
+                .iter()
+                .map(|x| (x.kind.code, x.line))
+                .collect::<Vec<_>>(),
+            vec![("body-replaced-by-stub", 25)]
+        );
+        let added_and_replaced = [
+            with(f("get", 5, BodyShape::Substantive, false), 3),
+            with(f("get", 15, trivial(), false), 1),
+            with(f("get", 25, trivial(), false), 4),
+        ];
+        let found = judge(&base, &added_and_replaced);
+        assert_eq!(
+            found
+                .iter()
+                .map(|x| (x.kind.code, x.line))
+                .collect::<Vec<_>>(),
+            vec![("body-replaced-by-stub", 25)]
+        );
+
+        // A trivial `get` added just before an unchanged substantive one is an added
+        // function: it does not take the base function of the pair after it.
+        let base = [
+            with(f("get", 10, BodyShape::Substantive, false), 9),
+            with(f("get", 20, BodyShape::Substantive, false), 2),
+        ];
+        let head = [
+            with(f("get", 5, BodyShape::Substantive, false), 3),
+            with(f("get", 8, trivial(), false), 4),
+            with(f("get", 20, BodyShape::Substantive, false), 2),
+        ];
+        assert_eq!(judge(&base, &head), vec![]);
+
+        // An unchanged function whose body is already a stub is not added: a `get` added
+        // above it does not make it `stub-body-added`.
+        let todo = || BodyShape::Stub("todo!()".into());
+        let base = [with(f("get", 10, todo(), false), 5)];
+        let head = [
+            with(f("get", 5, BodyShape::Substantive, false), 3),
+            with(f("get", 15, todo(), false), 5),
+        ];
+        assert_eq!(judge(&base, &head), vec![]);
     }
 
     #[test]

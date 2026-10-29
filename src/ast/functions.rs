@@ -35,6 +35,10 @@ pub struct FunctionFacts {
     /// AST-level carve-out for equality methods: test-double in test path, mock framework
     /// stub, or generated equals (dataclass, record, Lombok, derived PartialEq).
     pub equality_carved_out: bool,
+    /// A digest of the body as written, whitespace runs folded to one space: two functions
+    /// with the same digest have the same body. `stub-bodies` pairs a head function with
+    /// a base function of the same body before it pairs the rest by order (#910).
+    pub body_digest: u64,
 }
 
 /// Per-language description of function nodes.
@@ -136,6 +140,15 @@ fn describe<'t>(
         _ => body,
     };
     let shape = classify_body(body, src, spec);
+    let body_digest = {
+        use std::hash::{Hash, Hasher};
+        let text = body.utf8_text(src.as_bytes()).unwrap_or("");
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for word in text.split_whitespace() {
+            word.hash(&mut hasher);
+        }
+        hasher.finish()
+    };
     let is_test = (spec.is_test)(node, anc, src, path);
     let (type_name, equality_carved_out) = if is_equality_name(&name) {
         let type_info = enclosing_type(node, anc, src);
@@ -164,6 +177,7 @@ fn describe<'t>(
         is_test,
         type_name,
         equality_carved_out,
+        body_digest,
     })
 }
 
