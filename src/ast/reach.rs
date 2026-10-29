@@ -7,11 +7,14 @@
 //!
 //! A pack may also name code that runs once per element of an empty literal: a callback
 //! passed to an iteration method called on `[]` (`[].forEach(() => ..)`), or the body of
-//! a loop over one (`for _ in []:`). It runs zero times (#899).
+//! a loop over one (`for _ in []:`), or over a name bound to one that the function touches
+//! nowhere else (`const xs = []; xs.forEach(..)`, #906). It runs zero times (#899).
 //!
 //! An assertion there counts as an assertion to a line count and fails nothing. Each
 //! pack's assertion walk skips nodes that start inside a dead range.
 
+use super::ancestry::Ancestry;
+use std::collections::HashMap;
 use tree_sitter::Node;
 
 pub struct ReachSpec {
@@ -31,7 +34,7 @@ pub struct ReachSpec {
 }
 
 /// See [`ReachSpec::empty_iteration`].
-pub type EmptyIteration = fn(Node, &str, &mut DeadRanges);
+pub type EmptyIteration = for<'t> fn(Node<'t>, &str, &Ancestry<'t>, &mut DeadRanges);
 
 /// Whether `node` is a literal of one of `kinds` that holds no element: `[]`, `()`. A
 /// comment inside it is not an element.
@@ -44,6 +47,122 @@ pub fn holds_nothing(node: Node, kinds: &[&str]) -> bool {
         c.kind() == "comment" || c.kind() == "line_comment" || c.kind() == "block_comment"
     });
     empty
+}
+
+/// How a pack reads a local name bound to an empty literal (#906): `const xs = [];
+/// xs.forEach(..)` iterates zero times, as `[].forEach(..)` does.
+pub struct EmptyName {
+    /// Function node kinds: a binding outside every function (at module level) is not
+    /// read, since another module may fill it.
+    pub functions: &'static [&'static str],
+    /// Node kinds of a name as written: each occurrence of the name is one of these with
+    /// the same text.
+    pub names: &'static [&'static str],
+    /// Whether a name is visible in the whole function that binds it (Python), rather
+    /// than in the block that binds it (`const` / `let`, Rust `let`, Go `:=`).
+    pub function_scope: bool,
+    /// The binding statement when `name` is the whole target of a single binding whose
+    /// value is an empty literal (`const xs = []`, `xs = []`, `let xs = vec![]`, `xs :=
+    /// []int{}`); `None` otherwise.
+    pub binding: for<'t> fn(Node<'t>, &str, &Ancestry<'t>) -> Option<Node<'t>>,
+}
+
+/// The byte ranges of every occurrence of each name in a file, in source order: read once
+/// for a tree and kept on its ancestry, so each iteration costs a lookup and not a walk.
+struct NameIndex(HashMap<String, Vec<(usize, usize)>>);
+
+impl NameIndex {
+    fn of(root: Node, src: &str, kinds: &[&str]) -> Self {
+        let mut names: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
+        let mut cursor = root.walk();
+        'walk: loop {
+            super::ancestry::count(1);
+            let node = cursor.node();
+            if kinds.contains(&node.kind()) {
+                names
+                    .entry(text(node, src).to_string())
+                    .or_default()
+                    .push((node.start_byte(), node.end_byte()));
+            }
+            if cursor.goto_first_child() {
+                continue;
+            }
+            while !cursor.goto_next_sibling() {
+                if !cursor.goto_parent() {
+                    break 'walk;
+                }
+            }
+        }
+        Self(names)
+    }
+}
+
+/// Whether `receiver` is a name bound to an empty literal that nothing could have filled
+/// by the time it is iterated (#906). Every condition is read from the tree:
+///
+/// - `receiver` is a name; the occurrence of that name nearest before it is the whole
+///   target of a binding to an empty literal (`spec.binding`), inside a function;
+/// - the block holding the binding statement holds `receiver` too. A binding in a branch,
+///   or in a nested function, is in a block that does not;
+/// - the scope of the binding (that block, or with `function_scope` the whole function)
+///   holds no occurrence of the name but the binding and `receiver`, outside `skip` (the
+///   callback or loop body that runs once per element).
+///
+/// So a name pushed to, reassigned, passed to a call, captured by a closure, read, or
+/// bound again in its scope stays counted, as does a parameter, a name bound at module
+/// level, and a name bound by a call. A name shadowed in an inner scope is another
+/// occurrence too, and also stays counted.
+pub fn bound_to_empty<'t>(
+    receiver: Node<'t>,
+    skip: Node<'t>,
+    src: &str,
+    ancestry: &Ancestry<'t>,
+    spec: &EmptyName,
+) -> bool {
+    if !spec.names.contains(&receiver.kind()) {
+        return false;
+    }
+    let index = ancestry.kept(|| NameIndex::of(ancestry.root(), src, spec.names));
+    let Some(occurrences) = index.0.get(text(receiver, src)) else {
+        return false;
+    };
+    let before = occurrences.partition_point(|&(start, _)| start < receiver.start_byte());
+    let Some(&(start, end)) = before.checked_sub(1).and_then(|i| occurrences.get(i)) else {
+        return false;
+    };
+    let Some(statement) = ancestry
+        .root()
+        .descendant_for_byte_range(start, end)
+        .and_then(|binding| (spec.binding)(binding, src, ancestry))
+    else {
+        return false;
+    };
+    let Some(block) = ancestry.parent(statement).filter(|b| within(receiver, *b)) else {
+        return false;
+    };
+    let Some(function) = ancestry
+        .ancestors(block)
+        .find(|n| spec.functions.contains(&n.kind()))
+    else {
+        return false;
+    };
+    let scope = if spec.function_scope { function } else { block };
+    let first = occurrences.partition_point(|&(start, _)| start < scope.start_byte());
+    let others = occurrences[first..]
+        .iter()
+        .take_while(|&&(start, _)| start < scope.end_byte())
+        .filter(|&&(start, end)| {
+            super::ancestry::count(1);
+            start != receiver.start_byte()
+                && !(skip.start_byte() <= start && end <= skip.end_byte())
+        })
+        .count();
+    others == 1
+}
+
+/// Whether `inner` lies inside `outer`'s byte range.
+fn within(inner: Node, outer: Node) -> bool {
+    outer.start_byte() <= inner.start_byte() && inner.end_byte() <= outer.end_byte()
 }
 
 /// Adds the byte range of `node` to `out`.
@@ -98,6 +217,7 @@ fn terminates(t: &str, spec: &ReachSpec) -> bool {
 
 pub fn dead_ranges(root: Node, src: &str, spec: &ReachSpec) -> DeadRanges {
     let mut out: DeadRanges = Vec::new();
+    let ancestry = Ancestry::new(root);
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
         if spec.if_kinds.contains(&node.kind()) {
@@ -115,7 +235,7 @@ pub fn dead_ranges(root: Node, src: &str, spec: &ReachSpec) -> DeadRanges {
             }
         }
         if let Some(empty_iteration) = spec.empty_iteration {
-            empty_iteration(node, src, &mut out);
+            empty_iteration(node, src, &ancestry, &mut out);
         }
         if spec.block_kinds.contains(&node.kind()) {
             let mut cursor = node.walk();
@@ -275,6 +395,31 @@ mod pack_tests {
         assert!(many < 5 * few, "{few} steps for 40, {many} for 160");
     }
 
+    /// Iterations over names bound empty cost steps in proportion to their number: the
+    /// names of the file are read once, not once for each iteration (#906).
+    #[test]
+    fn iterations_over_names_bound_empty_cost_steps_in_proportion_to_their_number() {
+        let steps_of = |n: usize| -> u64 {
+            let body: String = (0..n)
+                .map(|i| {
+                    format!(
+                        "    xs{i} = []\n    for _ in xs{i}:\n        assert f({i}) == {i}\n    assert g({i}) == {i}\n"
+                    )
+                })
+                .collect();
+            let src = format!("def test_t():\n{body}");
+            let reg = default_registry();
+            let pack = reg.find_pack("tests/test_m.py").unwrap();
+            let (facts, counted) = crate::ast::ancestry::steps(|| {
+                pack.extract("tests/test_m.py", &src, &AssertVocabulary::default())
+            });
+            assert_eq!(facts.unwrap().tests[0].total_asserts, n);
+            counted
+        };
+        let (few, many) = (steps_of(40), steps_of(160));
+        assert!(many < 5 * few, "{few} steps for 40, {many} for 160");
+    }
+
     #[test]
     fn assertions_under_a_constant_false_branch_or_after_a_terminator_do_not_count() {
         // Rust: dead under `if false`, dead after `return`, live under a real condition and
@@ -382,5 +527,133 @@ mod pack_tests {
              func TestName(t *testing.T) {\n\tfor range xs {\n\t\tt.Fatal(\"x\")\n\t}\n}\n",
         );
         assert_eq!(go, vec![(0, 0), (0, 0), (1, 1), (1, 1), (1, 1)]);
+    }
+    /// An assertion in a callback or loop over a name the same function binds to an empty
+    /// literal, and touches nowhere else, runs zero times and does not count (#906). The
+    /// negative controls, each of which still counts: the name pushed to before the loop,
+    /// reassigned, bound from a call, a parameter, passed to a helper before the loop,
+    /// bound at module level, bound in a block that does not hold the loop, read after the
+    /// loop (a second occurrence the rule does not tell apart), and, in Python, filled by a
+    /// closure outside the block that binds it (a Python name is the function's).
+    #[test]
+    fn assertions_in_an_iteration_over_a_name_bound_empty_do_not_count() {
+        let js = counts(
+            "test/a.test.js",
+            "const outer = [];\n\
+             test('bound', () => { const cases = []; cases.forEach(() => expect(f(2)).toBe(4)); });\n\
+             test('let for of', () => { let cases = []; for (const c of cases) { expect(c).toBe(1); } });\n\
+             test('callback uses it', () => { const cases = []; cases.map((c) => expect(cases).toBe(c)); });\n\
+             test('pushed', () => { const cases = []; cases.push(1); cases.forEach(() => expect(f(2)).toBe(4)); });\n\
+             test('reassigned', () => { let cases = []; cases = [1]; cases.forEach(() => expect(f(2)).toBe(4)); });\n\
+             test('call', () => { const cases = load(); cases.forEach(() => expect(f(2)).toBe(4)); });\n\
+             test('parameter', (cases) => { cases.forEach(() => expect(f(2)).toBe(4)); });\n\
+             test('helper', () => { const cases = []; fill(cases); cases.forEach(() => expect(f(2)).toBe(4)); });\n\
+             test('module', () => { outer.forEach(() => expect(f(2)).toBe(4)); });\n\
+             test('var', () => { var cases = []; cases.forEach(() => expect(f(2)).toBe(4)); });\n\
+             test('inner block', () => { if (x) { const cases = []; } cases.forEach(() => expect(f(2)).toBe(4)); });\n\
+             test('shorthand', () => { const cases = []; fill({ cases }); cases.forEach(() => expect(f(2)).toBe(4)); });\n\
+             test('read after', () => { const cases = []; cases.forEach(() => expect(f(2)).toBe(4)); expect(cases).toEqual([]); });\n",
+        );
+        assert_eq!(
+            js,
+            vec![
+                (0, 0),
+                (0, 0),
+                (0, 0),
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (2, 2)
+            ]
+        );
+        let py = counts(
+            "tests/test_a.py",
+            "OUTER = []\n\n\
+             def test_bound():\n    cases = []\n    for _ in cases:\n        assert f(2) == 4\n\n\
+             def test_tuple():\n    cases = ()\n    for _ in cases:\n        assert f(2) == 4\n\n\
+             def test_pushed():\n    cases = []\n    cases.append(1)\n    for _ in cases:\n        assert f(2) == 4\n\n\
+             def test_augmented():\n    cases = []\n    cases += [1]\n    for _ in cases:\n        assert f(2) == 4\n\n\
+             def test_call():\n    cases = load()\n    for _ in cases:\n        assert f(2) == 4\n\n\
+             def test_parameter(cases):\n    for _ in cases:\n        assert f(2) == 4\n\n\
+             def test_helper():\n    cases = []\n    fill(cases)\n    for _ in cases:\n        assert f(2) == 4\n\n\
+             def test_module():\n    for _ in OUTER:\n        assert f(2) == 4\n\n\
+             def test_branch():\n    if x:\n        cases = []\n    for _ in cases:\n        assert f(2) == 4\n\n\
+             def test_closure():\n    fill = lambda: cases.append(1)\n    while True:\n        cases = []\n        fill()\n        for _ in cases:\n            assert f(2) == 4\n        break\n",
+        );
+        assert_eq!(
+            py,
+            vec![
+                (0, 0),
+                (0, 0),
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (1, 1)
+            ]
+        );
+        let rs = counts(
+            "src/lib.rs",
+            "const OUTER: [u8; 0] = [];\n\
+             #[test]\nfn bound_for() { let cases: [u8; 0] = []; for _ in cases { assert_eq!(f(2), 4); } }\n\
+             #[test]\nfn vec_iter() { let cases: Vec<u8> = vec![]; cases.iter().for_each(|x| assert_eq!(*x, 4)); }\n\
+             #[test]\nfn new_ref() { let mut cases: Vec<u8> = Vec::new(); for _ in &mut cases { assert_eq!(f(2), 4); } }\n\
+             #[test]\nfn pushed() { let mut cases = vec![]; cases.push(1); for _ in &cases { assert_eq!(f(2), 4); } }\n\
+             #[test]\nfn shadowed() { let cases: Vec<u8> = vec![]; let cases = vec![1]; for _ in cases { assert_eq!(f(2), 4); } }\n\
+             #[test]\nfn call() { let cases = load(); for _ in cases { assert_eq!(f(2), 4); } }\n\
+             #[test]\nfn parameter() { let check = |cases: Vec<u8>| for _ in cases { assert_eq!(f(2), 4); }; check(vec![1]); }\n\
+             #[test]\nfn helper() { let mut cases = vec![]; fill(&mut cases); for _ in cases { assert_eq!(f(2), 4); } }\n\
+             #[test]\nfn module() { for _ in OUTER { assert_eq!(f(2), 4); } }\n\
+             #[test]\nfn repeat() { let cases: Vec<u8> = vec![1; 0]; for _ in cases { assert_eq!(f(2), 4); } }\n",
+        );
+        assert_eq!(
+            rs,
+            vec![
+                (0, 0),
+                (0, 0),
+                (0, 0),
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (1, 1)
+            ]
+        );
+        let go = counts(
+            "pkg/a_test.go",
+            "package a\nvar outer = []int{}\n\
+             func TestBound(t *testing.T) {\n\tcases := []int{}\n\tfor range cases {\n\t\tt.Fatal(\"x\")\n\t}\n}\n\
+             func TestMap(t *testing.T) {\n\tcases := map[string]int{}\n\tfor k := range cases {\n\t\tt.Fatal(k)\n\t}\n}\n\
+             func TestAppended(t *testing.T) {\n\tcases := []int{}\n\tcases = append(cases, 1)\n\tfor range cases {\n\t\tt.Fatal(\"x\")\n\t}\n}\n\
+             func TestCall(t *testing.T) {\n\tcases := load()\n\tfor range cases {\n\t\tt.Fatal(\"x\")\n\t}\n}\n\
+             func TestParameter(t *testing.T) {\n\tcheck := func(cases []int) {\n\t\tfor range cases {\n\t\t\tt.Fatal(\"x\")\n\t\t}\n\t}\n\tcheck(nil)\n}\n\
+             func TestHelper(t *testing.T) {\n\tcases := []int{}\n\tfill(cases)\n\tfor range cases {\n\t\tt.Fatal(\"x\")\n\t}\n}\n\
+             func TestModule(t *testing.T) {\n\tfor range outer {\n\t\tt.Fatal(\"x\")\n\t}\n}\n\
+             func TestArray(t *testing.T) {\n\tcases := [2]int{}\n\tfor range cases {\n\t\tt.Fatal(\"x\")\n\t}\n}\n",
+        );
+        assert_eq!(
+            go,
+            vec![
+                (0, 0),
+                (0, 0),
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (1, 1)
+            ]
+        );
     }
 }

@@ -2822,9 +2822,14 @@ pub const PY_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
 };
 
 /// The body of a `for` loop over an empty list or tuple literal (`for _ in []:`), which
-/// runs zero times (#899). Its `else` clause runs, so it is not dead. A name bound to
-/// `[]` is not followed.
-fn py_empty_iteration(node: Node, _src: &str, out: &mut super::reach::DeadRanges) {
+/// runs zero times (#899), or over a name the same function binds to one and nothing else
+/// touches (`reach::bound_to_empty`, #906). Its `else` clause runs, so it is not dead.
+fn py_empty_iteration<'t>(
+    node: Node<'t>,
+    src: &str,
+    ancestry: &super::ancestry::Ancestry<'t>,
+    out: &mut super::reach::DeadRanges,
+) {
     if node.kind() != "for_statement" {
         return;
     }
@@ -2832,10 +2837,40 @@ fn py_empty_iteration(node: Node, _src: &str, out: &mut super::reach::DeadRanges
         node.child_by_field_name("right"),
         node.child_by_field_name("body"),
     ) {
-        if super::reach::holds_nothing(right, &["list", "tuple"]) {
+        if super::reach::holds_nothing(right, &["list", "tuple"])
+            || super::reach::bound_to_empty(right, body, src, ancestry, &PY_EMPTY_NAME)
+        {
             super::reach::push_range(body, out);
         }
     }
+}
+
+/// A name a Python test binds to `[]` or `()` (#906).
+const PY_EMPTY_NAME: super::reach::EmptyName = super::reach::EmptyName {
+    functions: &["function_definition", "lambda"],
+    names: &["identifier"],
+    function_scope: true,
+    binding: py_empty_binding,
+};
+
+/// The statement `name = []` / `name = ()`, `name` the whole target.
+fn py_empty_binding<'t>(
+    name: Node<'t>,
+    _src: &str,
+    ancestry: &super::ancestry::Ancestry<'t>,
+) -> Option<Node<'t>> {
+    let assignment = ancestry.parent(name).filter(|a| a.kind() == "assignment")?;
+    if assignment.child_by_field_name("left")?.id() != name.id()
+        || !super::reach::holds_nothing(
+            assignment.child_by_field_name("right")?,
+            &["list", "tuple"],
+        )
+    {
+        return None;
+    }
+    ancestry
+        .parent(assignment)
+        .filter(|s| s.kind() == "expression_statement")
 }
 
 /// A local a Python wrapper computes and forwards: `b = loc(d)`.

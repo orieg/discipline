@@ -195,6 +195,26 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "assertion-reduction: a JS/TS assertion moved into a callback over a name bound to an empty array literal never runs and is reported (#906)",
+        || {
+            let test = |body: &str| format!("test('f', () => {{\n  {body}\n}});\n");
+            let base = test("expect(f(2)).toBe(4);");
+            let codes = |head: &str| {
+                helper_change(&[("a.test.js", base.as_str(), test(head).as_str())], "")
+            };
+            let reduced = codes("const cases = [];\n  cases.forEach(() => expect(f(2)).toBe(4));")?
+                == ["assertion-reduction/assertions-reduced"];
+            // Controls: a name pushed to first, and one bound by a call, may hold elements.
+            let kept = codes(
+                "const cases = [];\n  cases.push(1);\n  cases.forEach(() => expect(f(2)).toBe(4));",
+            )?
+            .is_empty()
+                && codes("const cases = load();\n  cases.forEach(() => expect(f(2)).toBe(4));")?
+                    .is_empty();
+            Ok(reduced && kept)
+        },
+    ),
+    (
         "assertion-reduction: a JS/TS .resolves / .rejects matcher the test neither awaits nor returns is not an assertion (#829)",
         || {
             let test = |body: &str| format!("test('f', async () => {{\n  {body}\n}});\n");
