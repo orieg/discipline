@@ -220,10 +220,11 @@ const PLACE_SUFFIXES: &[&str] = &[
 /// How far up a function's place is looked for.
 const PLACE_DEPTH: usize = 8;
 
-/// The largest place read, in bytes. A larger one (a class holding the method, a long
-/// statement) gives no place: each function's place is hashed once, so the bound keeps
-/// a file's cost in proportion to its functions, not to functions times class size.
-const PLACE_BYTES: usize = 4096;
+/// The largest place read, in bytes, the function's own text left out. A larger one (a
+/// class holding the method, a long statement) gives no place: each function's place is
+/// hashed once, so the bound keeps a file's cost in proportion to its size, not to its
+/// functions times the size of what holds them (nested classes, #669).
+const PLACE_BYTES: usize = 256;
 
 /// The digest of a function's place ([`FunctionFacts::place`]): the nearest ancestor of
 /// a [`PLACE_SUFFIXES`] kind within [`PLACE_DEPTH`] levels, its text with the function's
@@ -251,7 +252,9 @@ fn place_digest<'t>(
         return None;
     }
     let bytes = src.as_bytes();
-    super::ancestry::count(around.end_byte() - around.start_byte());
+    super::ancestry::count(
+        (node.start_byte() - around.start_byte()) + (around.end_byte() - node.end_byte()),
+    );
     let before = std::str::from_utf8(&bytes[around.start_byte()..node.start_byte()]).ok()?;
     let after = std::str::from_utf8(&bytes[node.end_byte()..around.end_byte()]).ok()?;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
