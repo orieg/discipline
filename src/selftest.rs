@@ -1528,6 +1528,21 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "stub-bodies: a getter whose body moves to a new getter while it gets `return true` is reported: functions pair by place first (#913)",
+        || {
+            use crate::guards::stub_bodies::judge;
+            let js = |src: &str| -> Result<Vec<crate::ast::functions::FunctionFacts>> {
+                Ok(facts("src/p.js", src)?.functions)
+            };
+            let s = "Object.defineProperty(p, 's', { get() { return load(); } });\n";
+            let m = "Object.defineProperty(p, 'm', { get() { return load(); } });\n";
+            let base = js(s)?;
+            let moved = js(&format!("{}{m}", s.replace("load()", "true")))?;
+            let added = js(&format!("{m}{s}"))?;
+            Ok(judge(&base, &moved).len() == 1 && judge(&base, &added).is_empty())
+        },
+    ),
+    (
         "stub-bodies: an equality method made constant `true` is reported at gate severity, even beside a derive in a comment; a generated one is not",
         || {
             use crate::guards::stub_bodies::judge;

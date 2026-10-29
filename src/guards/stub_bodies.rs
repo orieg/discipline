@@ -55,11 +55,22 @@ fn shape_label(shape: &BodyShape) -> String {
 }
 
 /// Judge one file's functions, head against base. Functions pair by enclosing type and
-/// name. Within each, a head function pairs first with a base function of the same body,
-/// in source order (an unchanged function, wherever the change put others of its name);
-/// the rest pair by order within the gap between the same two such pairs, so a function
-/// added in one gap does not take the base function of another (#910). A file of many
-/// object-literal `get()` methods keeps its pairs when one is added.
+/// name, in three steps:
+///
+/// 1. a head function pairs with the base function in the same place
+///    ([`FunctionFacts::place`]) when no other function of its name, on either side, is
+///    in that place (#913): `Object.defineProperty(p, "s", { get() { .. } })` pairs
+///    with itself, whatever was added or moved around it;
+///    Then, among the rest, the same with the signature (the text before the body), so
+///    an overload pairs with itself in a class too long to give a place;
+/// 2. then a head function pairs with a base function of the same body, in source order
+///    (an unchanged function, wherever the change put others of its name, #910);
+/// 3. the rest pair by order within the gap between two pairs, so a function added in
+///    one gap does not take the base function of another.
+///
+/// A file of many object-literal `get()` methods keeps its pairs when one is added, and
+/// a getter whose body moved to a new getter while it got `return true` is paired with
+/// itself, so the replacement is reported.
 pub fn judge(base: &[FunctionFacts], head: &[FunctionFacts]) -> Vec<Finding> {
     type Key<'a> = (Option<&'a str>, &'a str);
     fn key(f: &FunctionFacts) -> Key<'_> {
@@ -80,31 +91,84 @@ pub fn judge(base: &[FunctionFacts], head: &[FunctionFacts]) -> Vec<Finding> {
     let mut paired: Vec<Option<&FunctionFacts>> = vec![None; judged.len()];
     for (k, heads) in &head_by_key {
         let bases = base_by_key.get(k).map(Vec::as_slice).unwrap_or_default();
-        // Anchors: same-body pairs, increasing on both sides.
-        let mut anchors: Vec<(usize, usize)> = Vec::new();
-        let mut next_base = 0;
+        let mut to_base: Vec<Option<usize>> = vec![None; heads.len()];
+        let mut taken = vec![false; bases.len()];
+        // 1. The same place, held by one function of this name on each side.
         for (hi, &h) in heads.iter().enumerate() {
-            if let Some(off) = bases[next_base..]
+            let Some(place) = judged[h].place else {
+                continue;
+            };
+            let on_head = heads
                 .iter()
-                .position(|b| b.body_digest == judged[h].body_digest)
-            {
-                anchors.push((hi, next_base + off));
-                next_base += off + 1;
+                .filter(|&&o| judged[o].place == Some(place))
+                .count();
+            let on_base: Vec<usize> = (0..bases.len())
+                .filter(|&b| bases[b].place == Some(place))
+                .collect();
+            if let ([b], 1) = (on_base.as_slice(), on_head) {
+                to_base[hi] = Some(*b);
+                taken[*b] = true;
             }
         }
-        // Each gap between anchors (and before the first, after the last) pairs by order.
-        let mut from = (0, 0);
-        for &(hi, bi) in anchors
-            .iter()
-            .chain(std::iter::once(&(heads.len(), bases.len())))
-        {
-            for (h, b) in heads[from.0..hi].iter().zip(&bases[from.1..bi]) {
-                paired[*h] = Some(b);
+        // 1b. The same signature, held by one function of this name on each side among
+        // the rest: an overload, where the place does not tell them apart.
+        for (hi, &h) in heads.iter().enumerate() {
+            if to_base[hi].is_some() {
+                continue;
             }
-            if hi < heads.len() {
-                paired[heads[hi]] = Some(bases[bi]);
+            let signature = judged[h].signature;
+            let on_head = heads
+                .iter()
+                .enumerate()
+                .filter(|&(i, &o)| to_base[i].is_none() && judged[o].signature == signature)
+                .count();
+            let on_base: Vec<usize> = (0..bases.len())
+                .filter(|&b| !taken[b] && bases[b].signature == signature)
+                .collect();
+            if let ([b], 1) = (on_base.as_slice(), on_head) {
+                to_base[hi] = Some(*b);
+                taken[*b] = true;
             }
-            from = (hi + 1, bi + 1);
+        }
+        // 2. The same body, increasing on both sides, among the rest.
+        let mut next_base = 0;
+        for (hi, &h) in heads.iter().enumerate() {
+            if to_base[hi].is_some() {
+                continue;
+            }
+            if let Some(b) = (next_base..bases.len())
+                .find(|&b| !taken[b] && bases[b].body_digest == judged[h].body_digest)
+            {
+                to_base[hi] = Some(b);
+                taken[b] = true;
+                next_base = b + 1;
+            }
+        }
+        // 3. Each gap between pairs that keep source order pairs by order; a pair that
+        // crosses another bounds no gap.
+        let mut from_base = 0;
+        let mut waiting: Vec<usize> = Vec::new();
+        for hi in 0..=heads.len() {
+            let bound = match heads.get(hi) {
+                None => bases.len(),
+                Some(_) => match to_base[hi] {
+                    None => {
+                        waiting.push(hi);
+                        continue;
+                    }
+                    Some(b) if b < from_base => continue,
+                    Some(b) => b,
+                },
+            };
+            let free = (from_base..bound).filter(|&b| !taken[b]);
+            for (h, b) in waiting.drain(..).zip(free.collect::<Vec<_>>()) {
+                to_base[h] = Some(b);
+                taken[b] = true;
+            }
+            from_base = bound + 1;
+        }
+        for (hi, &h) in heads.iter().enumerate() {
+            paired[h] = to_base[hi].map(|b| bases[b]);
         }
     }
     let mut found = Vec::new();
@@ -389,6 +453,8 @@ mod tests {
             type_name: None,
             equality_carved_out: false,
             body_digest: NEXT.fetch_add(1, Ordering::Relaxed),
+            place: None,
+            signature: NEXT.fetch_add(1, Ordering::Relaxed),
         }
     }
 
@@ -603,6 +669,69 @@ mod tests {
             with(f("get", 15, todo(), false), 5),
         ];
         assert_eq!(judge(&base, &head), vec![]);
+    }
+
+    /// A function pairs with the one in the same place first (#913): a getter whose body
+    /// moved to a new getter, while it got `return true`, is a body replaced by a stub. The
+    /// controls: a place two functions of the name share pairs nothing by place (the
+    /// moved body then pairs by body, as before), and the deno shape still reports nothing.
+    #[test]
+    fn a_function_pairs_with_the_one_in_its_place_first() {
+        let at = |mut g: FunctionFacts, digest: u64, place: u64| {
+            g.body_digest = digest;
+            g.place = Some(place);
+            g
+        };
+        let trivial = || BodyShape::Trivial("return true".into());
+        let base = [at(f("get", 2, BodyShape::Substantive, false), 1, 10)];
+        let moved = [
+            at(f("get", 2, trivial(), false), 2, 10),
+            at(f("get", 8, BodyShape::Substantive, false), 1, 20),
+        ];
+        assert_eq!(
+            judge(&base, &moved)
+                .iter()
+                .map(|x| (x.kind.code, x.line))
+                .collect::<Vec<_>>(),
+            vec![("body-replaced-by-stub", 2)]
+        );
+        // Control: both head getters in one place; the place pairs nothing.
+        let shared = [
+            at(f("get", 2, trivial(), false), 2, 10),
+            at(f("get", 8, BodyShape::Substantive, false), 1, 10),
+        ];
+        assert_eq!(judge(&base, &shared), vec![]);
+        // Control: the deno shape, a getter added in a new place above unchanged ones.
+        let base = [
+            at(f("get", 10, trivial(), false), 1, 30),
+            at(f("get", 20, BodyShape::Substantive, false), 2, 40),
+        ];
+        let added = [
+            at(f("get", 5, BodyShape::Substantive, false), 3, 50),
+            at(f("get", 15, trivial(), false), 1, 30),
+            at(f("get", 25, BodyShape::Substantive, false), 2, 40),
+        ];
+        assert_eq!(judge(&base, &added), vec![]);
+
+        // With no place (a method in a long class), an overload pairs by signature: `f(int)`
+        // stubbed while a new `f(String)` takes its body is reported.
+        let sig = |mut g: FunctionFacts, digest: u64, signature: u64| {
+            g.body_digest = digest;
+            g.signature = signature;
+            g
+        };
+        let base = [sig(f("f", 2, BodyShape::Substantive, false), 1, 100)];
+        let overloaded = [
+            sig(f("f", 2, trivial(), false), 2, 100),
+            sig(f("f", 8, BodyShape::Substantive, false), 1, 200),
+        ];
+        assert_eq!(
+            judge(&base, &overloaded)
+                .iter()
+                .map(|x| (x.kind.code, x.line))
+                .collect::<Vec<_>>(),
+            vec![("body-replaced-by-stub", 2)]
+        );
     }
 
     #[test]

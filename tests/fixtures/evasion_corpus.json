@@ -547,7 +547,9 @@
         "src/p.js": "Object.defineProperty(p, \"s\", {\n  get() {\n    return true;\n  },\n});\nObject.defineProperty(p, \"n\", {\n  get() {\n    return load();\n  },\n});\n"
       },
       "verdict": {
-        "known_miss": "#913"
+        "caught": [
+          "stub-bodies/body-replaced-by-stub"
+        ]
       }
     },
     {
