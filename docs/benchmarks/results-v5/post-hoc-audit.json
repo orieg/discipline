@@ -1,0 +1,89 @@
+{
+  "study_id": "agent-pr-precision-v5",
+  "pre_registered": false,
+  "generated_by": "python3 scripts/benchmark_precision.py --post-hoc-audit --write --results-dir docs/benchmarks/results-v5",
+  "structural_clustering": {
+    "pull_requests_with_findings": 38,
+    "largest_pull_request_findings": 52,
+    "largest_pull_request_true_positives": 52,
+    "k": 119,
+    "n": 125,
+    "design_effect": 3.113048,
+    "effective_n": 40.153568,
+    "cluster_robust_95_ci": [
+      0.885881,
+      1.018119
+    ],
+    "pr_cluster_bootstrap_95_ci": [
+      0.841463,
+      0.994152
+    ],
+    "bootstrap_seed": 20261015,
+    "bootstrap_resamples": 20000
+  },
+  "structural_false_positives_by_gate_and_repo": {
+    "assertion-reduction denoland/deno": 1,
+    "deletion-rationale vitejs/vite": 2,
+    "stub-bodies denoland/deno": 1
+  },
+  "twin_comparison": {
+    "difference": 0.918667,
+    "newcombe_independent_95_ci": [
+      0.851023,
+      0.95073
+    ],
+    "twin_true_positives": 5,
+    "twin_true_positives_on_a_file_with_a_discipline_true_positive": 4,
+    "twin_config_false_positives_by_file_name": {
+      "Cargo.toml": 4,
+      "deno.json": 2,
+      "package.json": 73,
+      "pyproject.toml": 1,
+      "tsconfig.json": 1
+    }
+  },
+  "design_power": {
+    "pass_probability_n141_true_0_95": 0.591103,
+    "smallest_n_clearing_0_90_at_0_95": 127,
+    "sizes_up_to_141_clearing_0_90_at_0_95": [
+      127,
+      128,
+      129,
+      130,
+      140,
+      141
+    ],
+    "wilson_lower_bound_k216_n245": 0.835174,
+    "wilson_lower_bound_k134_n141": 0.901074
+  },
+  "mdd_unpooled_vs_fleiss_pooled": [
+    {
+      "n1": 141,
+      "n2": 141,
+      "p1": 0.55,
+      "unpooled": 0.158945,
+      "fleiss_pooled": 0.160404
+    },
+    {
+      "n1": 245,
+      "n2": 245,
+      "p1": 0.55,
+      "unpooled": 0.122416,
+      "fleiss_pooled": 0.123077
+    },
+    {
+      "n1": 125,
+      "n2": 150,
+      "p1": 0.55,
+      "unpooled": 0.162077,
+      "fleiss_pooled": 0.162697
+    },
+    {
+      "n1": 10,
+      "n2": 10,
+      "p1": 0.3,
+      "unpooled": 0.526612,
+      "fleiss_pooled": 0.58049
+    }
+  ]
+}
