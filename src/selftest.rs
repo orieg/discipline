@@ -1744,6 +1744,14 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "instruction-smuggling: a selector completing an emoji variation sequence is not classified, one after a letter is (#909)",
+        || {
+            use crate::guards::instruction_smuggling::invisible_classes;
+            Ok(invisible_classes("#### \u{2B06}\u{FE0F} Dependencies", false).is_empty()
+                && invisible_classes("a\u{FE0F}b", false) == vec!["variation-selector"])
+        },
+    ),
+    (
         "instruction-smuggling: look-alike, encoded and mixed-script text is classified, a digest and Cyrillic prose are not",
         || {
             use crate::guards::instruction_smuggling::text_classes;

@@ -6880,6 +6880,43 @@ fn an_added_getter_does_not_make_an_unchanged_one_a_stub() {
     );
 }
 
+/// Renovate's release-notes headings write `⬆️` (U+2B06 U+FE0F): a standardized emoji
+/// variation sequence, in the description and the commit message alike, is not an
+/// invisible character (#909). A selector after a letter is still reported.
+#[test]
+fn an_emoji_variation_sequence_in_the_description_is_not_invisible_text() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("src/lib.rs", "pub fn f() -> u8 {\n    1\n}\n");
+    repo.commit("feat: base");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write("src/lib.rs", "pub fn f() -> u8 {\n    2\n}\n");
+    let notes = "Update deps\n\n#### \u{2B06}\u{FE0F} Dependencies\n\n- bump f\n";
+    repo.commit(notes);
+    let invisible = |run: &Run| {
+        run.titles("instruction-smuggling")
+            .iter()
+            .filter(|t| t.starts_with("Invisible"))
+            .count()
+    };
+    let run = repo.check_with_pr(&[], notes);
+    assert_eq!(
+        invisible(&run),
+        0,
+        "{:?}",
+        run.violations("instruction-smuggling")
+    );
+
+    // Control: the same selector after a letter carries nothing a reviewer sees.
+    let run = repo.check_with_pr(&[], "Update deps a\u{FE0F}b\n");
+    assert_eq!(
+        run.titles("instruction-smuggling"),
+        vec!["Invisible Characters In Change Description".to_string()],
+        "{:?}",
+        run.violations("instruction-smuggling")
+    );
+}
+
 #[test]
 fn a_declared_test_entry_point_is_test_scope_for_every_gate() {
     // A script's `self_test()` holds fixture strings, an expect-to-raise handler and
