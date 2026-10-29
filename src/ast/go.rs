@@ -1578,10 +1578,15 @@ pub const GO_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
 };
 
 /// The body of a `for ... range` over an empty slice or map literal (`range []int{}`,
-/// `range map[string]int{}`), which runs zero times (#899). An array literal is not
-/// read: `[3]int{}` holds three zero values. A name bound to an empty literal is not
-/// followed.
-fn go_empty_iteration(node: Node, _src: &str, out: &mut super::reach::DeadRanges) {
+/// `range map[string]int{}`), which runs zero times (#899), or over a name the same
+/// function binds to one with `:=` and nothing else touches (`reach::bound_to_empty`,
+/// #906). An array literal is not read: `[3]int{}` holds three zero values.
+fn go_empty_iteration<'t>(
+    node: Node<'t>,
+    src: &str,
+    ancestry: &super::ancestry::Ancestry<'t>,
+    out: &mut super::reach::DeadRanges,
+) {
     if node.kind() != "for_statement" {
         return;
     }
@@ -1592,18 +1597,59 @@ fn go_empty_iteration(node: Node, _src: &str, out: &mut super::reach::DeadRanges
     else {
         return;
     };
-    let empty = range
-        .child_by_field_name("right")
-        .filter(|r| r.kind() == "composite_literal")
-        .filter(|r| {
-            r.child_by_field_name("type")
-                .is_some_and(|t| matches!(t.kind(), "slice_type" | "map_type"))
-        })
-        .and_then(|r| r.child_by_field_name("body"))
-        .is_some_and(|b| super::reach::holds_nothing(b, &["literal_value"]));
-    if let (true, Some(body)) = (empty, node.child_by_field_name("body")) {
+    let (Some(right), Some(body)) = (
+        range.child_by_field_name("right"),
+        node.child_by_field_name("body"),
+    ) else {
+        return;
+    };
+    if go_empty_literal(right)
+        || super::reach::bound_to_empty(right, body, src, ancestry, &GO_EMPTY_NAME)
+    {
         super::reach::push_range(body, out);
     }
+}
+
+/// An empty slice or map literal: `[]int{}`, `map[string]int{}`.
+fn go_empty_literal(node: Node) -> bool {
+    node.kind() == "composite_literal"
+        && node
+            .child_by_field_name("type")
+            .is_some_and(|t| matches!(t.kind(), "slice_type" | "map_type"))
+        && node
+            .child_by_field_name("body")
+            .is_some_and(|b| super::reach::holds_nothing(b, &["literal_value"]))
+}
+
+/// A name a Go test binds to an empty slice or map literal (#906).
+const GO_EMPTY_NAME: super::reach::EmptyName = super::reach::EmptyName {
+    functions: &["function_declaration", "method_declaration", "func_literal"],
+    names: &["identifier"],
+    function_scope: false,
+    binding: go_empty_binding,
+};
+
+/// The statement `name := []T{}` / `name := map[K]V{}`, one name and one value.
+fn go_empty_binding<'t>(
+    name: Node<'t>,
+    _src: &str,
+    ancestry: &super::ancestry::Ancestry<'t>,
+) -> Option<Node<'t>> {
+    let left = ancestry
+        .parent(name)
+        .filter(|l| l.kind() == "expression_list")?;
+    let statement = ancestry
+        .parent(left)
+        .filter(|s| s.kind() == "short_var_declaration")?;
+    let right = statement.child_by_field_name("right")?;
+    if statement.child_by_field_name("left")?.id() != left.id()
+        || left.named_child_count() != 1
+        || right.named_child_count() != 1
+        || !go_empty_literal(right.named_child(0)?)
+    {
+        return None;
+    }
+    Some(statement)
 }
 
 /// Functions a test body runs through a dispatch table (`super::dispatch_calls`).

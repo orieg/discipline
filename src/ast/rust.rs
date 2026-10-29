@@ -2619,20 +2619,25 @@ pub const RS_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
 /// JavaScript methods `caught_assertions::SYNC_CALLBACKS` lists.
 const RS_EACH_METHODS: &[&str] = &["for_each", "map", "filter", "any", "all", "fold", "find"];
 
-/// Code that runs once per element of an empty array literal (#899): the body of `for _
-/// in [] { .. }`, and a closure passed to an iterator method (`RS_EACH_METHODS`) called
-/// on `[]` or on `[].iter()` / `[].into_iter()` / `[].iter_mut()`. `vec![]` and a name
-/// bound to `[]` are not read.
-fn rs_empty_iteration(node: Node, src: &str, out: &mut super::reach::DeadRanges) {
-    use super::reach::{holds_nothing, push_range};
-    let empty_array = |n: Node| holds_nothing(n, &["array_expression"]);
+/// Code that runs once per element of an empty collection (#899): the body of `for _ in
+/// [] { .. }`, and a closure passed to an iterator method (`RS_EACH_METHODS`) called on
+/// `[]` or on `[].iter()` / `[].into_iter()` / `[].iter_mut()`. The collection is `[]`,
+/// `vec![]` or `Vec::new()`, also behind `&`, or a name the same function binds to one
+/// with `let` and nothing else touches (`reach::bound_to_empty`, #906).
+fn rs_empty_iteration<'t>(
+    node: Node<'t>,
+    src: &str,
+    ancestry: &super::ancestry::Ancestry<'t>,
+    out: &mut super::reach::DeadRanges,
+) {
+    use super::reach::push_range;
     match node.kind() {
         "for_expression" => {
             if let (Some(value), Some(body)) = (
                 node.child_by_field_name("value"),
                 node.child_by_field_name("body"),
             ) {
-                if empty_array(value) {
+                if rs_empty(value, body, src, ancestry) {
                     push_range(body, out);
                 }
             }
@@ -2645,17 +2650,18 @@ fn rs_empty_iteration(node: Node, src: &str, out: &mut super::reach::DeadRanges)
             else {
                 return;
             };
-            let (Some(receiver), Some(field)) = (
+            let (Some(receiver), Some(field), Some(args)) = (
                 method.child_by_field_name("value"),
                 method.child_by_field_name("field"),
+                node.child_by_field_name("arguments"),
             ) else {
                 return;
             };
             if !RS_EACH_METHODS.contains(&name(field)) {
                 return;
             }
-            // `[]`, or `[].iter()` with no arguments.
-            let empty = empty_array(receiver)
+            // The collection, or `.iter()` on it with no arguments.
+            let empty = rs_empty(receiver, args, src, ancestry)
                 || (receiver.kind() == "call_expression"
                     && receiver
                         .child_by_field_name("arguments")
@@ -2666,14 +2672,13 @@ fn rs_empty_iteration(node: Node, src: &str, out: &mut super::reach::DeadRanges)
                         .is_some_and(|f| {
                             f.child_by_field_name("field").is_some_and(|m| {
                                 matches!(name(m), "iter" | "into_iter" | "iter_mut")
-                            }) && f.child_by_field_name("value").is_some_and(empty_array)
+                            }) && f
+                                .child_by_field_name("value")
+                                .is_some_and(|v| rs_empty(v, args, src, ancestry))
                         }));
             if !empty {
                 return;
             }
-            let Some(args) = node.child_by_field_name("arguments") else {
-                return;
-            };
             let mut cursor = args.walk();
             for arg in args.named_children(&mut cursor) {
                 if arg.kind() == "closure_expression" {
@@ -2683,6 +2688,83 @@ fn rs_empty_iteration(node: Node, src: &str, out: &mut super::reach::DeadRanges)
         }
         _ => {}
     }
+}
+
+/// Whether iterating `node` runs zero times: an empty literal, or a name bound to one that
+/// nothing in the function outside `skip` touches, either behind `&` / `&mut`.
+fn rs_empty<'t>(
+    node: Node<'t>,
+    skip: Node<'t>,
+    src: &str,
+    ancestry: &super::ancestry::Ancestry<'t>,
+) -> bool {
+    let node = if node.kind() == "reference_expression" {
+        match node.child_by_field_name("value") {
+            Some(v) => v,
+            None => return false,
+        }
+    } else {
+        node
+    };
+    rs_empty_literal(node, src)
+        || super::reach::bound_to_empty(node, skip, src, ancestry, &RS_EMPTY_NAME)
+}
+
+/// `[]`, `vec![]` or `Vec::new()`. `vec![x; 0]`, `Vec::with_capacity(..)` and
+/// `std::iter::empty()` are not read.
+fn rs_empty_literal(node: Node, src: &str) -> bool {
+    let name = |n: Node| n.utf8_text(src.as_bytes()).unwrap_or("");
+    match node.kind() {
+        "array_expression" => super::reach::holds_nothing(node, &["array_expression"]),
+        "macro_invocation" => {
+            node.child_by_field_name("macro")
+                .is_some_and(|m| m.kind() == "identifier" && name(m) == "vec")
+                && node
+                    .named_children(&mut node.walk())
+                    .find(|c| c.kind() == "token_tree")
+                    .is_some_and(|t| t.named_child_count() == 0)
+        }
+        "call_expression" => {
+            node.child_by_field_name("arguments")
+                .is_some_and(|a| a.named_child_count() == 0)
+                && node
+                    .child_by_field_name("function")
+                    .filter(|f| f.kind() == "scoped_identifier")
+                    .is_some_and(|f| {
+                        f.child_by_field_name("path")
+                            .is_some_and(|p| name(p) == "Vec")
+                            && f.child_by_field_name("name")
+                                .is_some_and(|n| name(n) == "new")
+                    })
+        }
+        _ => false,
+    }
+}
+
+/// A name a Rust test binds to an empty collection (#906).
+const RS_EMPTY_NAME: super::reach::EmptyName = super::reach::EmptyName {
+    functions: &["function_item", "closure_expression"],
+    names: &["identifier"],
+    function_scope: false,
+    binding: rs_empty_binding,
+};
+
+/// The statement `let name = [];` (`vec![]`, `Vec::new()`, also `let mut`), `name` the
+/// whole pattern.
+fn rs_empty_binding<'t>(
+    name: Node<'t>,
+    src: &str,
+    ancestry: &super::ancestry::Ancestry<'t>,
+) -> Option<Node<'t>> {
+    let statement = ancestry
+        .parent(name)
+        .filter(|l| l.kind() == "let_declaration")?;
+    if statement.child_by_field_name("pattern")?.id() != name.id()
+        || !rs_empty_literal(statement.child_by_field_name("value")?, src)
+    {
+        return None;
+    }
+    Some(statement)
 }
 
 /// Functions a test body runs through a dispatch table (`super::dispatch_calls`).
