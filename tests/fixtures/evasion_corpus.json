@@ -551,6 +551,19 @@
       }
     },
     {
+      "name": "js-merged-test-operand-changed",
+      "base": {
+        "src/p.js": "export const r = (x) => x;\nexport const l = (x) => x;\n",
+        "test/p.spec.js": "import { r, l } from '../src/p.js';\n\nconst one = 1;\nconst two = 2;\n\ndescribe('build', () => {\n  test('resolveId', () => {\n    expect(r(1)).toBe(one);\n  });\n  test('load', () => {\n    expect(l(1)).toBe(one);\n  });\n});\n"
+      },
+      "head": {
+        "test/p.spec.js": "import { r, l } from '../src/p.js';\n\nconst one = 1;\nconst two = 2;\n\ntest('build', () => {\n  expect(r(1)).toBe(one);\n  expect(l(1)).toBe(two);\n});\n"
+      },
+      "verdict": {
+        "known_miss": "#915"
+      }
+    },
+    {
       "name": "md-link-to-missing-file",
       "base": {
         "README.md": "# p\n\nSee [docs](docs/guide.md).\n",

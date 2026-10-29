@@ -1439,6 +1439,35 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "deletion-rationale: nested tests merged into a test named for their container, assertions kept, are not removals; one that drops an assertion is (#911)",
+        || {
+            use crate::ast::TestFn;
+            use crate::guards::agent_diff::{merged_into_container, Located, TestPair};
+            let t = |name: &str, n: usize| TestFn {
+                name: name.to_string(),
+                total_asserts: n,
+                strong_asserts: n,
+                ..Default::default()
+            };
+            let (a, b) = (t("P > a", 1), t("P > b", 2));
+            let merged = |container: &TestFn| {
+                let pairs = [TestPair {
+                    path: "t.spec.js",
+                    base: &a,
+                    head: container,
+                    forced: false,
+                }];
+                let removed = [Located {
+                    path: "t.spec.js",
+                    file_survives: true,
+                    test: &b,
+                }];
+                merged_into_container(&removed, &pairs, &[]).len()
+            };
+            Ok(merged(&t("P", 3)) == 1 && merged(&t("P", 2)) == 0)
+        },
+    ),
+    (
         "stub-bodies: a body replaced by todo!() is reported, a body given to a stub is not",
         || {
             use crate::guards::stub_bodies::judge;
