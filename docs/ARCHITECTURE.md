@@ -599,6 +599,7 @@ Major tags (`v0`, `v1`) provide consumer convenience for action workflows (`uses
 ### 8.3 CodeQL Security Pipeline (`.github/workflows/codeql.yml`)
 
 Static security analysis runs on pull requests, pushes to `main`, and on a scheduled run (`cron: '30 6 * * 1'`) using GitHub CodeQL Advanced setup (`github/codeql-action` pinned by SHA):
+- **Every change:** the triggers have no `paths-ignore`, so a pull request that changes only documentation is analysed too. OpenSSF Scorecard's SAST check (§8.5) counts a merged pull request with no CodeQL run as unchecked: one docs-only merge among its last 30 lowered the score to 9 (code-scanning alert 38).
 - **Matrix analysis:** Analyzes `rust`, `actions`, and `python`.
 - **Query suite:** Configured with `queries: security-extended` for deep vulnerability scanning.
 - **Toolchain:** `dtolnay/rust-toolchain`, pinned to a commit of its `master` branch with `toolchain: stable` set explicitly (its `stable` branch is rewritten, which orphans a pinned commit), for Rust AST and macro expansion.

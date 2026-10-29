@@ -1,22 +1,12 @@
 name: "CodeQL Advanced"
 
+# No paths-ignore: OpenSSF Scorecard's SAST check counts a merged pull request
+# without a CodeQL run as unchecked, and a docs-only one would otherwise skip it.
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - '**.md'
-      - 'LICENSE*'
-      - '.zenodo.json'
-      - 'CITATION.cff'
   pull_request:
     branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - '**.md'
-      - 'LICENSE*'
-      - '.zenodo.json'
-      - 'CITATION.cff'
   schedule:
     - cron: '30 6 * * 1'
 
