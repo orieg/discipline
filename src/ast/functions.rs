@@ -39,6 +39,16 @@ pub struct FunctionFacts {
     /// with the same digest have the same body. `stub-bodies` pairs a head function with
     /// a base function of the same body before it pairs the rest by order (#910).
     pub body_digest: u64,
+    /// Where the function sits: a digest of the smallest statement, declaration or
+    /// key-value pair around it, with the function's own text left out
+    /// (`Object.defineProperty(p, "s", { get() { .. } })` without the getter). `None`
+    /// when no such node is near (a function at the top of a module). `stub-bodies`
+    /// pairs a function with the one in the same place first (#913).
+    pub place: Option<u64>,
+    /// A digest of the function's text before its body (its signature: name, parameters,
+    /// return type, modifiers), whitespace runs folded. `stub-bodies` pairs overloads by
+    /// it when the place does not tell them apart (#913).
+    pub signature: u64,
 }
 
 /// Per-language description of function nodes.
@@ -149,6 +159,18 @@ fn describe<'t>(
         }
         hasher.finish()
     };
+    let place = place_digest(node, anc, src, spec);
+    let signature = {
+        use std::hash::{Hash, Hasher};
+        let head = src
+            .get(node.start_byte()..body.start_byte().max(node.start_byte()))
+            .unwrap_or("");
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for word in head.split_whitespace() {
+            word.hash(&mut hasher);
+        }
+        hasher.finish()
+    };
     let is_test = (spec.is_test)(node, anc, src, path);
     let (type_name, equality_carved_out) = if is_equality_name(&name) {
         let type_info = enclosing_type(node, anc, src);
@@ -178,7 +200,69 @@ fn describe<'t>(
         type_name,
         equality_carved_out,
         body_digest,
+        place,
+        signature,
     })
+}
+
+/// Node kinds, by suffix, that bound a function's place: the smallest statement,
+/// declaration, declarator, item, definition, key-value pair or assignment around it.
+const PLACE_SUFFIXES: &[&str] = &[
+    "statement",
+    "declaration",
+    "declarator",
+    "_item",
+    "definition",
+    "pair",
+    "assignment",
+];
+
+/// How far up a function's place is looked for.
+const PLACE_DEPTH: usize = 8;
+
+/// The largest place read, in bytes. A larger one (a class holding the method, a long
+/// statement) gives no place: each function's place is hashed once, so the bound keeps
+/// a file's cost in proportion to its functions, not to functions times class size.
+const PLACE_BYTES: usize = 4096;
+
+/// The digest of a function's place ([`FunctionFacts::place`]): the nearest ancestor of
+/// a [`PLACE_SUFFIXES`] kind within [`PLACE_DEPTH`] levels, its text with the function's
+/// own range left out, whitespace runs folded. Another function met first ends the
+/// search with `None`: a function nested in another sits in that one's body. A place
+/// longer than [`PLACE_BYTES`] around the function is `None` too.
+fn place_digest<'t>(
+    node: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    spec: &FunctionSpec,
+) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let around = anc.ancestors(node).take(PLACE_DEPTH).find_map(|a| {
+        if spec.function_kinds.contains(&a.kind()) {
+            Some(None)
+        } else if PLACE_SUFFIXES.iter().any(|s| a.kind().ends_with(s)) {
+            Some(Some(a))
+        } else {
+            None
+        }
+    })??;
+    if around.end_byte() - around.start_byte() - (node.end_byte() - node.start_byte()) > PLACE_BYTES
+    {
+        return None;
+    }
+    let bytes = src.as_bytes();
+    super::ancestry::count(around.end_byte() - around.start_byte());
+    let before = std::str::from_utf8(&bytes[around.start_byte()..node.start_byte()]).ok()?;
+    let after = std::str::from_utf8(&bytes[node.end_byte()..around.end_byte()]).ok()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for word in before.split_whitespace() {
+        word.hash(&mut hasher);
+    }
+    0u8.hash(&mut hasher);
+    for word in after.split_whitespace() {
+        word.hash(&mut hasher);
+    }
+    Some(hasher.finish())
 }
 
 fn enclosing_type<'t>(node: Node<'t>, anc: &Ancestry<'t>, src: &str) -> Option<(String, Node<'t>)> {
@@ -1581,6 +1665,58 @@ mod pack_tests {
                 ("test_z".into(), stub("pass"), true),
             ]
         );
+    }
+
+    /// A function's place is read once and is the statement or pair around it (#913): two
+    /// getters of one name in different `defineProperty` calls have different places, the
+    /// same getter keeps its place when another is added beside it, and a function at the
+    /// top of a module has none.
+    #[test]
+    fn a_function_place_is_the_statement_around_it() {
+        let places = |src: &str| -> Vec<(String, Option<u64>)> {
+            let reg = crate::ast::default_registry();
+            reg.find_pack("src/p.js")
+                .unwrap()
+                .extract("src/p.js", src, &AssertVocabulary::default())
+                .unwrap()
+                .functions
+                .iter()
+                .map(|f| (f.name.clone(), f.place))
+                .collect()
+        };
+        let s = "Object.defineProperty(p, 's', { get() { return load(); } });\n";
+        let n = "Object.defineProperty(p, 'n', { get() { return port; } });\n";
+        let alone = places(s);
+        let both = places(&format!("{n}{s}"));
+        assert_eq!(alone.len(), 1);
+        assert!(alone[0].1.is_some());
+        assert_eq!(both[1].1, alone[0].1, "{both:?}");
+        assert_ne!(both[0].1, both[1].1, "{both:?}");
+        // The body is not part of the place: a getter replaced in place keeps it.
+        assert_eq!(places(&s.replace("load()", "true"))[0].1, alone[0].1);
+        assert_eq!(places("function f() { return 1; }\n")[0].1, None);
+    }
+
+    /// Places cost steps in proportion to the functions: a class of many methods gives
+    /// each no place (it is larger than `PLACE_BYTES`) rather than hashing the class once
+    /// per method (#913).
+    #[test]
+    fn places_cost_steps_in_proportion_to_the_functions() {
+        let steps_of = |n: usize| -> u64 {
+            let methods: String = (0..n)
+                .map(|i| format!("  m{i}(x) {{ return x + {i} * compute(x, {i}); }}\n"))
+                .collect();
+            let src = format!("class K {{\n{methods}}}\n");
+            let reg = crate::ast::default_registry();
+            let pack = reg.find_pack("src/k.js").unwrap();
+            let (facts, counted) = crate::ast::ancestry::steps(|| {
+                pack.extract("src/k.js", &src, &AssertVocabulary::default())
+            });
+            assert_eq!(facts.unwrap().functions.len(), n);
+            counted
+        };
+        let (few, many) = (steps_of(100), steps_of(400));
+        assert!(many < 5 * few, "{few} steps for 100, {many} for 400");
     }
 
     #[test]

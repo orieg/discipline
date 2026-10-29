@@ -6909,7 +6909,8 @@ fn tests_merged_into_their_container_are_not_removals() {
 
 /// A getter added above others of its name does not shift their pairs: the unchanged
 /// `get() { return true; }` below it is not a body replaced by a stub (#910). A getter
-/// whose body is replaced in place beside the addition is still reported.
+/// whose body is replaced in place beside the addition is still reported, and so is one
+/// whose body moves to a new getter while it gets `return true` (#913).
 #[test]
 fn an_added_getter_does_not_make_an_unchanged_one_a_stub() {
     let repo = Repo::new();
@@ -6949,6 +6950,24 @@ fn an_added_getter_does_not_make_an_unchanged_one_a_stub() {
     assert_eq!(
         lines,
         vec![("stub-bodies/body-replaced-by-stub".to_string(), 12)],
+        "{:?}",
+        run.violations("stub-bodies")
+    );
+
+    // Control: `s` keeps its place and gets `return true` while its body moves to a new
+    // getter `m` (#913).
+    repo.write("src/p.js", &format!("{n}{t}{s}"));
+    repo.commit("feat: restore s");
+    let m = s.replace("\"s\"", "\"m\"");
+    repo.write(
+        "src/p.js",
+        &format!("{n}{t}{}{m}", s.replace("load()", "true")),
+    );
+    repo.commit("feat: move s to m");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.titles("stub-bodies"),
+        vec!["Function Body Replaced By Stub".to_string()],
         "{:?}",
         run.violations("stub-bodies")
     );
