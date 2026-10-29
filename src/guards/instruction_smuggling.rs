@@ -78,11 +78,16 @@ pub(crate) fn invisible_class(c: char) -> Option<&'static str> {
 }
 
 /// Classes of invisible characters on a line, deduplicated. A BOM at the very start of
-/// the file is ordinary and is not reported.
+/// the file is ordinary and is not reported, nor is a variation selector that completes a
+/// standardized emoji variation sequence (`⬆️`, [`completes_emoji_sequence`]).
 pub fn invisible_classes(line: &str, first_line: bool) -> Vec<&'static str> {
+    let chars: Vec<char> = line.chars().collect();
     let mut out: Vec<&'static str> = Vec::new();
-    for (i, c) in line.chars().enumerate() {
+    for (i, &c) in chars.iter().enumerate() {
         if first_line && i == 0 && c == '\u{FEFF}' {
+            continue;
+        }
+        if completes_emoji_sequence(&chars, i) {
             continue;
         }
         if let Some(class) = invisible_class(c) {
@@ -93,6 +98,224 @@ pub fn invisible_classes(line: &str, first_line: bool) -> Vec<&'static str> {
     }
     out
 }
+
+/// Whether `chars[i]` is the U+FE0E (text) or U+FE0F (emoji) selector of a standardized
+/// emoji variation sequence: it follows one of [`EMOJI_VARIATION_BASES`] directly, and,
+/// for an ASCII keycap base (`#`, `*`, `0`-`9`), U+20E3 follows it (`1️⃣`). It changes how
+/// the base renders and carries no text of its own (#909). Any other selector is
+/// reported: one after a letter, a second selector in a row, U+FE00-U+FE0D, and the
+/// supplement U+E0100-U+E01EF that variation-selector smuggling encodes bytes in.
+fn completes_emoji_sequence(chars: &[char], i: usize) -> bool {
+    if !matches!(chars[i], '\u{FE0E}' | '\u{FE0F}') {
+        return false;
+    }
+    let Some(&base) = i.checked_sub(1).and_then(|p| chars.get(p)) else {
+        return false;
+    };
+    if base.is_ascii() {
+        return matches!(base, '#' | '*' | '0'..='9') && chars.get(i + 1) == Some(&'\u{20E3}');
+    }
+    let b = base as u32;
+    EMOJI_VARIATION_BASES
+        .binary_search_by(|&(lo, hi)| {
+            if hi < b {
+                std::cmp::Ordering::Less
+            } else if lo > b {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .is_ok()
+}
+
+/// The non-ASCII bases of Unicode's emoji variation sequences, as sorted, inclusive
+/// ranges: every code point `emoji-variation-sequences.txt` (Emoji 16.0,
+/// <https://www.unicode.org/Public/16.0.0/ucd/emoji/emoji-variation-sequences.txt>)
+/// lists with U+FE0E and U+FE0F. The ASCII bases (`#`, `*`, `0`-`9`) are read in
+/// [`completes_emoji_sequence`].
+const EMOJI_VARIATION_BASES: &[(u32, u32)] = &[
+    (0x00A9, 0x00A9),
+    (0x00AE, 0x00AE),
+    (0x203C, 0x203C),
+    (0x2049, 0x2049),
+    (0x2122, 0x2122),
+    (0x2139, 0x2139),
+    (0x2194, 0x2199),
+    (0x21A9, 0x21AA),
+    (0x231A, 0x231B),
+    (0x2328, 0x2328),
+    (0x23CF, 0x23CF),
+    (0x23E9, 0x23F3),
+    (0x23F8, 0x23FA),
+    (0x24C2, 0x24C2),
+    (0x25AA, 0x25AB),
+    (0x25B6, 0x25B6),
+    (0x25C0, 0x25C0),
+    (0x25FB, 0x25FE),
+    (0x2600, 0x2604),
+    (0x260E, 0x260E),
+    (0x2611, 0x2611),
+    (0x2614, 0x2615),
+    (0x2618, 0x2618),
+    (0x261D, 0x261D),
+    (0x2620, 0x2620),
+    (0x2622, 0x2623),
+    (0x2626, 0x2626),
+    (0x262A, 0x262A),
+    (0x262E, 0x262F),
+    (0x2638, 0x263A),
+    (0x2640, 0x2640),
+    (0x2642, 0x2642),
+    (0x2648, 0x2653),
+    (0x265F, 0x2660),
+    (0x2663, 0x2663),
+    (0x2665, 0x2666),
+    (0x2668, 0x2668),
+    (0x267B, 0x267B),
+    (0x267E, 0x267F),
+    (0x2692, 0x2697),
+    (0x2699, 0x2699),
+    (0x269B, 0x269C),
+    (0x26A0, 0x26A1),
+    (0x26A7, 0x26A7),
+    (0x26AA, 0x26AB),
+    (0x26B0, 0x26B1),
+    (0x26BD, 0x26BE),
+    (0x26C4, 0x26C5),
+    (0x26C8, 0x26C8),
+    (0x26CE, 0x26CF),
+    (0x26D1, 0x26D1),
+    (0x26D3, 0x26D4),
+    (0x26E9, 0x26EA),
+    (0x26F0, 0x26F5),
+    (0x26F7, 0x26FA),
+    (0x26FD, 0x26FD),
+    (0x2702, 0x2702),
+    (0x2705, 0x2705),
+    (0x2708, 0x270D),
+    (0x270F, 0x270F),
+    (0x2712, 0x2712),
+    (0x2714, 0x2714),
+    (0x2716, 0x2716),
+    (0x271D, 0x271D),
+    (0x2721, 0x2721),
+    (0x2728, 0x2728),
+    (0x2733, 0x2734),
+    (0x2744, 0x2744),
+    (0x2747, 0x2747),
+    (0x274C, 0x274C),
+    (0x274E, 0x274E),
+    (0x2753, 0x2755),
+    (0x2757, 0x2757),
+    (0x2763, 0x2764),
+    (0x2795, 0x2797),
+    (0x27A1, 0x27A1),
+    (0x27B0, 0x27B0),
+    (0x27BF, 0x27BF),
+    (0x2934, 0x2935),
+    (0x2B05, 0x2B07),
+    (0x2B1B, 0x2B1C),
+    (0x2B50, 0x2B50),
+    (0x2B55, 0x2B55),
+    (0x3030, 0x3030),
+    (0x303D, 0x303D),
+    (0x3297, 0x3297),
+    (0x3299, 0x3299),
+    (0x1F004, 0x1F004),
+    (0x1F170, 0x1F171),
+    (0x1F17E, 0x1F17F),
+    (0x1F202, 0x1F202),
+    (0x1F21A, 0x1F21A),
+    (0x1F22F, 0x1F22F),
+    (0x1F237, 0x1F237),
+    (0x1F30D, 0x1F30F),
+    (0x1F315, 0x1F315),
+    (0x1F31C, 0x1F31C),
+    (0x1F321, 0x1F321),
+    (0x1F324, 0x1F32C),
+    (0x1F336, 0x1F336),
+    (0x1F378, 0x1F378),
+    (0x1F37D, 0x1F37D),
+    (0x1F393, 0x1F393),
+    (0x1F396, 0x1F397),
+    (0x1F399, 0x1F39B),
+    (0x1F39E, 0x1F39F),
+    (0x1F3A7, 0x1F3A7),
+    (0x1F3AC, 0x1F3AE),
+    (0x1F3C2, 0x1F3C2),
+    (0x1F3C4, 0x1F3C4),
+    (0x1F3C6, 0x1F3C6),
+    (0x1F3CA, 0x1F3CE),
+    (0x1F3D4, 0x1F3E0),
+    (0x1F3ED, 0x1F3ED),
+    (0x1F3F3, 0x1F3F3),
+    (0x1F3F5, 0x1F3F5),
+    (0x1F3F7, 0x1F3F7),
+    (0x1F408, 0x1F408),
+    (0x1F415, 0x1F415),
+    (0x1F41F, 0x1F41F),
+    (0x1F426, 0x1F426),
+    (0x1F43F, 0x1F43F),
+    (0x1F441, 0x1F442),
+    (0x1F446, 0x1F449),
+    (0x1F44D, 0x1F44E),
+    (0x1F453, 0x1F453),
+    (0x1F46A, 0x1F46A),
+    (0x1F47D, 0x1F47D),
+    (0x1F4A3, 0x1F4A3),
+    (0x1F4B0, 0x1F4B0),
+    (0x1F4B3, 0x1F4B3),
+    (0x1F4BB, 0x1F4BB),
+    (0x1F4BF, 0x1F4BF),
+    (0x1F4CB, 0x1F4CB),
+    (0x1F4DA, 0x1F4DA),
+    (0x1F4DF, 0x1F4DF),
+    (0x1F4E4, 0x1F4E6),
+    (0x1F4EA, 0x1F4ED),
+    (0x1F4F7, 0x1F4F7),
+    (0x1F4F9, 0x1F4FB),
+    (0x1F4FD, 0x1F4FD),
+    (0x1F508, 0x1F508),
+    (0x1F50D, 0x1F50D),
+    (0x1F512, 0x1F513),
+    (0x1F549, 0x1F54A),
+    (0x1F550, 0x1F567),
+    (0x1F56F, 0x1F570),
+    (0x1F573, 0x1F579),
+    (0x1F587, 0x1F587),
+    (0x1F58A, 0x1F58D),
+    (0x1F590, 0x1F590),
+    (0x1F5A5, 0x1F5A5),
+    (0x1F5A8, 0x1F5A8),
+    (0x1F5B1, 0x1F5B2),
+    (0x1F5BC, 0x1F5BC),
+    (0x1F5C2, 0x1F5C4),
+    (0x1F5D1, 0x1F5D3),
+    (0x1F5DC, 0x1F5DE),
+    (0x1F5E1, 0x1F5E1),
+    (0x1F5E3, 0x1F5E3),
+    (0x1F5E8, 0x1F5E8),
+    (0x1F5EF, 0x1F5EF),
+    (0x1F5F3, 0x1F5F3),
+    (0x1F5FA, 0x1F5FA),
+    (0x1F610, 0x1F610),
+    (0x1F687, 0x1F687),
+    (0x1F68D, 0x1F68D),
+    (0x1F691, 0x1F691),
+    (0x1F694, 0x1F694),
+    (0x1F698, 0x1F698),
+    (0x1F6AD, 0x1F6AD),
+    (0x1F6B2, 0x1F6B2),
+    (0x1F6B9, 0x1F6BA),
+    (0x1F6BC, 0x1F6BC),
+    (0x1F6CB, 0x1F6CB),
+    (0x1F6CD, 0x1F6CF),
+    (0x1F6E0, 0x1F6E5),
+    (0x1F6E9, 0x1F6E9),
+    (0x1F6F0, 0x1F6F0),
+    (0x1F6F3, 0x1F6F3),
+];
 
 /// Instruction phrases, lower-cased, matched on whitespace-normalised text.
 const PHRASES: &[(&str, &str)] = &[
@@ -1260,6 +1483,54 @@ mod tests {
         assert!(!is_instruction_file(".github/workflows/ci.yml"));
         assert!(!is_instruction_file("README.md"));
         assert!(!is_instruction_file("docs/AGENTS.md.bak"));
+    }
+
+    /// A selector that completes a standardized emoji variation sequence is not
+    /// reported (#909): `⬆️` in a Renovate heading, `☺︎` in text style, the keycap `1️⃣`.
+    /// The negative controls are each still reported: a selector after a letter, after a
+    /// keycap base with no U+20E3, after a base not in the list (`🐞` takes none), a
+    /// second selector in a row, U+FE00, and the supplement U+E0100.
+    #[test]
+    fn a_selector_completing_an_emoji_variation_sequence_is_not_reported() {
+        let none: Vec<&str> = Vec::new();
+        assert_eq!(
+            invisible_classes("#### \u{2B06}\u{FE0F} Dependencies", false),
+            none
+        );
+        assert_eq!(invisible_classes("\u{263A}\u{FE0E} ok", false), none);
+        assert_eq!(invisible_classes("press 1\u{FE0F}\u{20E3}", false), none);
+        assert_eq!(invisible_classes("\u{00A9}\u{FE0F} 2026", false), none);
+        assert_eq!(invisible_classes("\u{1F004}\u{FE0F}", false), none);
+        for reported in [
+            "a\u{FE0F}b",
+            "press 1\u{FE0F}",
+            "\u{1F41E}\u{FE0F} bug",
+            "\u{2B06}\u{FE0F}\u{FE0F}",
+            "\u{2B06}\u{FE00}",
+            "\u{2B06}\u{E0100}",
+            "\u{FE0F}\u{2B06}",
+        ] {
+            assert_eq!(
+                invisible_classes(reported, false),
+                vec!["variation-selector"],
+                "{reported:?}"
+            );
+        }
+    }
+
+    /// The table is sorted, its ranges do not touch, and it holds the 359 non-ASCII bases
+    /// of `emoji-variation-sequences.txt` (Emoji 16.0, 371 bases with the 12 ASCII ones).
+    #[test]
+    fn the_emoji_variation_bases_are_sorted_disjoint_and_complete() {
+        let mut total = 0;
+        for w in EMOJI_VARIATION_BASES.windows(2) {
+            assert!(w[0].1 + 1 < w[1].0, "{:X?} {:X?}", w[0], w[1]);
+        }
+        for &(lo, hi) in EMOJI_VARIATION_BASES {
+            assert!(lo <= hi && lo >= 0x80);
+            total += hi - lo + 1;
+        }
+        assert_eq!((EMOJI_VARIATION_BASES.len(), total), (180, 359));
     }
 
     #[test]
