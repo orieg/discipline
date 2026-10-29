@@ -1950,10 +1950,16 @@ pub const JS_REACH: super::reach::ReachSpec = super::reach::ReachSpec {
 /// Code that runs once per element of an empty array literal (#899): a function passed
 /// to an iteration method called on `[]` (`[].forEach(() => ..)`, the methods
 /// `caught_assertions::SYNC_CALLBACKS` lists), and the body of `for (x of [])` /
-/// `for (k in [])`. The receiver is read from the tree, as the literal `[]` itself: a
-/// name bound to `[]` is not followed.
-fn js_empty_iteration(node: Node, src: &str, out: &mut super::reach::DeadRanges) {
-    use super::reach::{holds_nothing, push_range};
+/// `for (k in [])`. The receiver is read from the tree: the literal `[]`, or a name a
+/// `const` / `let` in the same function binds to `[]` and nothing else touches
+/// (`reach::bound_to_empty`, #906).
+fn js_empty_iteration<'t>(
+    node: Node<'t>,
+    src: &str,
+    ancestry: &super::ancestry::Ancestry<'t>,
+    out: &mut super::reach::DeadRanges,
+) {
+    use super::reach::push_range;
     match node.kind() {
         "call_expression" => {
             let Some(member) = node
@@ -1969,15 +1975,17 @@ fn js_empty_iteration(node: Node, src: &str, out: &mut super::reach::DeadRanges)
                 return;
             };
             let method = property.utf8_text(src.as_bytes()).unwrap_or("");
-            if !holds_nothing(object, &["array"])
-                || !super::caught_assertions::sync_callbacks("JavaScript / TypeScript")
-                    .contains(&method)
+            if !super::caught_assertions::sync_callbacks("JavaScript / TypeScript")
+                .contains(&method)
             {
                 return;
             }
             let Some(args) = node.child_by_field_name("arguments") else {
                 return;
             };
+            if !js_empty(object, args, src, ancestry) {
+                return;
+            }
             let mut cursor = args.walk();
             for arg in args.named_children(&mut cursor) {
                 if matches!(
@@ -1993,13 +2001,66 @@ fn js_empty_iteration(node: Node, src: &str, out: &mut super::reach::DeadRanges)
                 node.child_by_field_name("right"),
                 node.child_by_field_name("body"),
             ) {
-                if holds_nothing(right, &["array"]) {
+                if js_empty(right, body, src, ancestry) {
                     push_range(body, out);
                 }
             }
         }
         _ => {}
     }
+}
+
+/// Whether an iteration over `receiver` runs zero times: `[]`, or a name bound to `[]`
+/// that nothing in the function outside `skip` touches.
+fn js_empty<'t>(
+    receiver: Node<'t>,
+    skip: Node<'t>,
+    src: &str,
+    ancestry: &super::ancestry::Ancestry<'t>,
+) -> bool {
+    super::reach::holds_nothing(receiver, &["array"])
+        || super::reach::bound_to_empty(receiver, skip, src, ancestry, &JS_EMPTY_NAME)
+}
+
+/// A name a JavaScript / TypeScript test binds to `[]` (#906).
+const JS_EMPTY_NAME: super::reach::EmptyName = super::reach::EmptyName {
+    functions: &[
+        "function_declaration",
+        "function_expression",
+        "function",
+        "arrow_function",
+        "method_definition",
+        "generator_function_declaration",
+        "generator_function",
+    ],
+    // `{ xs }` and `const { xs } = o` name it without an `identifier` node.
+    names: &[
+        "identifier",
+        "shorthand_property_identifier",
+        "shorthand_property_identifier_pattern",
+    ],
+    function_scope: false,
+    binding: js_empty_binding,
+};
+
+/// The `const` / `let` declaration when `name` is a declarator's whole name and its value
+/// is `[]`. A `var` is hoisted to the function and is not read.
+fn js_empty_binding<'t>(
+    name: Node<'t>,
+    _src: &str,
+    ancestry: &super::ancestry::Ancestry<'t>,
+) -> Option<Node<'t>> {
+    let declarator = ancestry
+        .parent(name)
+        .filter(|d| d.kind() == "variable_declarator")?;
+    if declarator.child_by_field_name("name")?.id() != name.id()
+        || !super::reach::holds_nothing(declarator.child_by_field_name("value")?, &["array"])
+    {
+        return None;
+    }
+    ancestry
+        .parent(declarator)
+        .filter(|d| d.kind() == "lexical_declaration")
 }
 
 /// Functions a test body runs through a dispatch table (`super::dispatch_calls`).

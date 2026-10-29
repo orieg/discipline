@@ -205,6 +205,67 @@
       }
     },
     {
+      "name": "js-callback-over-empty-name",
+      "base": {
+        "src/calc.js": "export function f(x) { return x * 2; }\n",
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    expect(f(2)).toBe(4);\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "head": {
+        "test/calc.test.js": "import { f } from '../src/calc.js';\n\ndescribe('f', () => {\n  it('doubles', () => {\n    const cases = [];\n    cases.forEach(() => expect(f(2)).toBe(4));\n  });\n  it('zero', () => {\n    expect(f(0)).toBe(0);\n  });\n});\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/assertions-reduced"
+        ]
+      }
+    },
+    {
+      "name": "py-loop-over-empty-name",
+      "base": {
+        "src/calc.py": "def f(x):\n    return x * 2\n\n\ndef g(x):\n    return x + 1\n",
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "head": {
+        "tests/test_calc.py": "from src.calc import f, g\n\n\ndef test_f():\n    cases = []\n    for _ in cases:\n        assert f(2) == 4\n\n\ndef test_g():\n    assert g(1) == 2\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/assertions-reduced"
+        ]
+      }
+    },
+    {
+      "name": "rs-loop-over-empty-name",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn zero() {\n        assert_eq!(f(0), 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        let cases: Vec<i32> = vec![];\n        cases.iter().for_each(|_| assert_eq!(f(2), 4));\n    }\n\n    #[test]\n    fn zero() {\n        assert_eq!(f(0), 0);\n    }\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/assertions-reduced"
+        ]
+      }
+    },
+    {
+      "name": "go-range-over-empty-name",
+      "base": {
+        "go.mod": "module p\n\ngo 1.22\n",
+        "p.go": "package p\n\nfunc F(x int) int {\n\treturn x * 2\n}\n",
+        "p_test.go": "package p\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {\n\tif got := F(2); got != 4 {\n\t\tt.Errorf(\"got %d\", got)\n\t}\n}\n\nfunc TestZero(t *testing.T) {\n\tif got := F(0); got != 0 {\n\t\tt.Errorf(\"got %d\", got)\n\t}\n}\n"
+      },
+      "head": {
+        "p_test.go": "package p\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {\n\tcases := []int{}\n\tfor range cases {\n\t\tif got := F(2); got != 4 {\n\t\t\tt.Errorf(\"got %d\", got)\n\t\t}\n\t}\n}\n\nfunc TestZero(t *testing.T) {\n\tif got := F(0); got != 0 {\n\t\tt.Errorf(\"got %d\", got)\n\t}\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/assertions-reduced"
+        ]
+      }
+    },
+    {
       "name": "js-each-expected-rewritten",
       "base": {
         "src/calc.js": "export function f(x) { return x * 2; }\n",
