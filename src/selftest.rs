@@ -1266,6 +1266,7 @@ const CASES: &[Case] = &[
                     refused_hidden_directives: Vec::new(),
                     deprecations: Vec::new(),
                     directive_notes: Vec::new(),
+                    stale_baseline_entries: 0,
                     unused_directives: Vec::new(),
                 };
                 let change = [ChangedFile {
@@ -3926,6 +3927,7 @@ const CASES: &[Case] = &[
                 refused_hidden_directives: Vec::new(),
                 deprecations: Vec::new(),
                 directive_notes: Vec::new(),
+                stale_baseline_entries: 0,
                 unused_directives: Vec::new(),
             };
             // No refusal: no rule, no suite, no entry.
@@ -6610,6 +6612,7 @@ command = "cargo test"
                 refused_hidden_directives: Vec::new(),
                 deprecations: Vec::new(),
                 directive_notes: Vec::new(),
+                stale_baseline_entries: 0,
                 unused_directives: Vec::new(),
             };
 
@@ -7460,6 +7463,26 @@ command = "cargo test"
             let out_unstrict = evaluate_deletion_rationale(&deleted, &[], &unstrict, &directives, false)?;
 
             Ok(out_strict.violations.len() == 1 && out_unstrict.violations.is_empty())
+        },
+    ),
+    (
+        "test-floor: a file's assertion count drops when a test body is gutted, and a version-2 baseline records none",
+        || {
+            use crate::guards::test_floor::file_assertions;
+            let registry = crate::ast::default_registry();
+            let v = crate::guards::agent_diff::assert_vocabulary(&crate::config::DisciplineConfig::default_for_repo("t"));
+            let strict = "#[test]\nfn parses() {\n    let n: i32 = \"42\".parse().unwrap();\n    assert_eq!(n, 42);\n    assert!(n > 0);\n    assert_ne!(n, 7);\n}\n";
+            let gutted = "#[test]\nfn parses() {\n    let n: i32 = \"42\".parse().unwrap();\n    assert!(n > 0);\n}\n";
+            let ignored = "#[test]\n#[ignore]\nfn parses() {\n    assert_eq!(1, 1 + 0);\n}\n";
+            let v2: crate::baseline::DisciplineBaseline = toml::from_str("version = 2\n")?;
+            let v3: crate::baseline::DisciplineBaseline =
+                toml::from_str("version = 3\n\n[assertions]\n\"tests/parse.rs\" = 3\n")?;
+            Ok(file_assertions("tests/parse.rs", strict, &registry, &v) == Some((1, 4))
+                && file_assertions("tests/parse.rs", gutted, &registry, &v) == Some((1, 2))
+                && file_assertions("tests/parse.rs", ignored, &registry, &v) == Some((0, 0))
+                && file_assertions("README.md", strict, &registry, &v).is_none()
+                && v2.assertions.is_empty()
+                && v3.assertions.get("tests/parse.rs") == Some(&3))
         },
     ),
     (
@@ -9059,6 +9082,7 @@ smoke_cost::set_contains
                 fill_fingerprints(&mut out.violations.iter_mut().collect::<Vec<_>>(), read);
                 let baseline = DisciplineBaseline {
                     version: 2,
+                    assertions: Default::default(),
                     findings: entries.into_iter().map(entry).collect(),
                 };
                 let mut outcomes = vec![out];
@@ -10172,6 +10196,7 @@ smoke_cost::set_contains
 
             let baseline = DisciplineBaseline {
                 version: crate::baseline::FINGERPRINT_VERSION,
+                assertions: Default::default(),
                 findings: vec![
                     BaselineEntry {
                         gate: "unsafe-safety-comment".to_string(),

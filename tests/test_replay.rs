@@ -428,6 +428,37 @@ fn a_file_the_configuration_names_before_it_existed_skips_its_group_in_replay_on
 }
 
 #[test]
+fn a_gate_that_reads_the_pull_request_does_not_stop_a_replay_run_in_ci() {
+    let (repo, _) = history();
+    let cfg = format!("{CONFIG_HEAD}[gates.review-threads]\nenabled = true\n");
+    let candidate = repo.file("candidate.toml");
+    std::fs::write(&candidate, &cfg).unwrap();
+    let ci = [("CI", "true"), ("GITHUB_ACTIONS", "true")];
+    // A replayed change is read from its merged body, never a live pull request, so it
+    // is judged in a CI job as it is on a laptop.
+    let s = replay(&repo, &["--config", candidate.to_str().unwrap()], &ci);
+    assert_eq!(s["could_not_check"], 0, "{s:#}");
+    assert_eq!(s["cases"], 2, "{s:#}");
+
+    // Setting replay's variable by hand in CI does not loosen it: the base is not a
+    // commit replay built, so the missing pull request is still a configuration error.
+    repo.write("discipline.toml", &cfg);
+    repo.commit("chore: configuration");
+    let forged = repo.run(
+        &["check", "--format", "json", "--base", "HEAD~1"],
+        &[ci[0], ci[1], ("DISCIPLINE_REPLAY_CASE", "1")],
+    );
+    assert_eq!(forged.code, 2, "{}\n{}", forged.stdout, forged.stderr);
+    assert!(
+        forged
+            .stderr
+            .contains("needs the pull request being checked"),
+        "{}",
+        forged.stderr
+    );
+}
+
+#[test]
 fn a_group_skipped_because_the_configuration_is_newer_is_in_the_summary() {
     let repo = Repo::new();
     repo.git(&["checkout", "-q", "main"]);
@@ -512,4 +543,68 @@ fn harness_git_commands_never_start_background_maintenance() {
         counts.contains("\npacks: 0\n"),
         "a maintenance task packed objects:\n{counts}"
     );
+}
+
+/// A replay of changes already replayed under the same binary and configuration reads
+/// their verdicts back instead of rebuilding them (#933); anything the verdict was reached
+/// from changes the marker, and `--no-cache` checks every change again.
+#[test]
+fn a_second_replay_of_the_same_changes_reads_cached_verdicts() {
+    let (repo, _) = history();
+    let cached = |s: &Value| -> Vec<bool> {
+        s["cases_detail"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["cached"] == true)
+            .collect()
+    };
+    let first = replay(&repo, &[], &[]);
+    assert_eq!(cached(&first), [false, false]);
+    assert_eq!(first["cached"], 0);
+    let records = || {
+        std::fs::read_dir(repo.file(".git/discipline/replay-cache"))
+            .map(|d| d.count())
+            .unwrap_or(0)
+    };
+    assert_eq!(records(), 2);
+
+    // The same changes, the same verdicts, read from the cache.
+    let second = replay(&repo, &["--jobs", "1"], &[]);
+    assert_eq!(cached(&second), [true, true]);
+    assert_eq!(second["cached"], 2);
+    assert_eq!(verdicts(&second), verdicts(&first));
+    assert_eq!(second["errors_by_gate"], first["errors_by_gate"]);
+    let text = repo.run(&["replay", "--last", "2", "--ref", "main"], &[]);
+    assert!(
+        text.stdout
+            .contains("2 of 2 verdicts read from the replay cache"),
+        "{}",
+        text.stdout
+    );
+    assert!(text.stderr.contains("(cached)"), "{}", text.stderr);
+
+    // `--no-cache` rebuilds both.
+    let fresh = replay(&repo, &["--no-cache"], &[]);
+    assert_eq!(cached(&fresh), [false, false]);
+    assert_eq!(verdicts(&fresh), verdicts(&first));
+
+    // Another configuration under test is another marker: checked again, and the
+    // verdict it reaches is its own.
+    let cfg = repo.file("candidate.toml");
+    std::fs::write(
+        &cfg,
+        format!("{CONFIG_HEAD}[gates.assertion-reduction]\nenabled = false\n"),
+    )
+    .unwrap();
+    let other = replay(&repo, &["--config", cfg.to_str().unwrap()], &[]);
+    assert_eq!(cached(&other), [false, false]);
+    assert_eq!(
+        verdicts(&other),
+        [(3, "passed".to_string()), (2, "passed".to_string())]
+    );
+
+    // So is an environment the check reads differently.
+    let offline = replay(&repo, &[], &[("DISCIPLINE_ALLOW_COMMAND_CHANGE", "1")]);
+    assert_eq!(cached(&offline), [false, false]);
 }

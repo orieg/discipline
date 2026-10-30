@@ -249,7 +249,7 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
             });
             if others.is_empty() && kept_places {
                 out.notes.push(format!(
-                    "`{baseline_shown}` migrated from fingerprint version {} to {} ({} of {} entries kept)",
+                    "`{baseline_shown}` migrated from baseline version {} to {} ({} of {} entries kept)",
                     b.version,
                     h.version,
                     h.findings.len(),
