@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="discipline" tests="8" failures="3" errors="0" time="0.0">
+<testsuites name="discipline" tests="10" failures="5" errors="0" time="0.0">
   <testsuite name="agent-guard" tests="1" failures="0" errors="0" skipped="0" time="0.0">
     <properties>
       <property name="examined" value="1"/>
@@ -10,7 +10,7 @@
       <system-out>examined: 1; overrides: 0</system-out>
     </testcase>
   </testsuite>
-  <testsuite name="policy" tests="7" failures="3" errors="0" skipped="0" time="0.0">
+  <testsuite name="policy" tests="9" failures="5" errors="0" skipped="0" time="0.0">
     <testcase name="max-inline-overrides-exceeded [directives.max_inline_overrides]" classname="discipline.policy" time="0.0">
       <failure message="Inline Override Budget Exceeded" type="error">[directives.max_inline_overrides] The change writes more inline overrides, on the lines it adds or modifies, than `directives.max_inline_overrides` allows, so the run is refused. The counts are in the JSON report (`policy_failures`).</failure>
     </testcase>
@@ -19,6 +19,12 @@
     </testcase>
     <testcase name="approval-required [directives.require_approval]" classname="discipline.policy" time="0.0">
       <failure message="Directive Overrides Await Approval" type="error">[directives.require_approval] The change applies directive overrides under `directives.require_approval`, and its checked head has no approving review from a reviewer `directives.allowed_override_actors` lists (the author&apos;s own approval does not count), so the run is refused. The detail is in the JSON report (`policy_failures`).</failure>
+    </testcase>
+    <testcase name="protective-gate-disarmed [gates]" classname="discipline.policy" time="0.0">
+      <failure message="Protective Gate Disarmed" type="error">[gates] The change switches off, demotes, or exempts a protected path from a gate that guards the pipeline (`config-integrity`, `ci-integrity`, `ratified-paths`, `sandbox-config`, `instruction-smuggling`), so the run is refused. No directive lifts this: change the base branch&apos;s configuration in a change of its own that the gate does not judge. The gates are named in the JSON report (`policy_failures`).</failure>
+    </testcase>
+    <testcase name="policy-file-deleted [discipline.toml]" classname="discipline.policy" time="0.0">
+      <failure message="Policy File Deleted" type="error">[discipline.toml] The change deletes the configuration file the base branch holds (`discipline.toml`, or the file `--config` names), so the run is refused, and the base side&apos;s override budgets and approval rule still apply to it. No directive lifts this.</failure>
     </testcase>
     <testcase name="hidden-directive-refused [PR body]" classname="discipline.policy" time="0.0">
       <system-err>[note] Hidden Directive Not Read: [PR body] A directive written where the rendered text does not show it was not read (`allow_hidden` is false). It lifts no finding; a finding it was written for is reported by its gate.</system-err>

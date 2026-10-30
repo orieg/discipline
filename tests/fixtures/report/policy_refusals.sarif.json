@@ -71,6 +71,44 @@
           "ruleId": "policy/approval-required"
         },
         {
+          "level": "error",
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "gates"
+                }
+              ]
+            }
+          ],
+          "message": {
+            "text": "The change switches off, demotes, or exempts a protected path from a gate that guards the pipeline (`config-integrity`, `ci-integrity`, `ratified-paths`, `sandbox-config`, `instruction-smuggling`), so the run is refused. No directive lifts this: change the base branch's configuration in a change of its own that the gate does not judge. The gates are named in the JSON report (`policy_failures`)."
+          },
+          "partialFingerprints": {
+            "disciplineFingerprint/v2": "90c4cc9c4f2398a6bb25fae2d0b62c9cba5d1ee88f73c31e97d6fb240d4eaa47"
+          },
+          "ruleId": "policy/protective-gate-disarmed"
+        },
+        {
+          "level": "error",
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "discipline.toml"
+                }
+              ]
+            }
+          ],
+          "message": {
+            "text": "The change deletes the configuration file the base branch holds (`discipline.toml`, or the file `--config` names), so the run is refused, and the base side's override budgets and approval rule still apply to it. No directive lifts this."
+          },
+          "partialFingerprints": {
+            "disciplineFingerprint/v2": "af68def6ee746423c9b0d8837cf0d4221ce8140be1eed70ef08ef3fa46755bae"
+          },
+          "ruleId": "policy/policy-file-deleted"
+        },
+        {
           "level": "note",
           "locations": [
             {
@@ -274,6 +312,42 @@
               },
               "shortDescription": {
                 "text": "Hidden Directive Not Read"
+              }
+            },
+            {
+              "fullDescription": {
+                "text": "The change switches off, demotes, or exempts a protected path from a gate that guards the pipeline (`config-integrity`, `ci-integrity`, `ratified-paths`, `sandbox-config`, `instruction-smuggling`), so the run is refused. No directive lifts this: change the base branch's configuration in a change of its own that the gate does not judge. The gates are named in the JSON report (`policy_failures`)."
+              },
+              "helpUri": "https://orieg.github.io/discipline/configuration/#policy-refusals",
+              "id": "policy/protective-gate-disarmed",
+              "name": "Policy/protectiveGateDisarmed",
+              "properties": {
+                "configurationKey": "gates",
+                "failsRun": true,
+                "tags": [
+                  "policy"
+                ]
+              },
+              "shortDescription": {
+                "text": "Protective Gate Disarmed"
+              }
+            },
+            {
+              "fullDescription": {
+                "text": "The change deletes the configuration file the base branch holds (`discipline.toml`, or the file `--config` names), so the run is refused, and the base side's override budgets and approval rule still apply to it. No directive lifts this."
+              },
+              "helpUri": "https://orieg.github.io/discipline/configuration/#policy-refusals",
+              "id": "policy/policy-file-deleted",
+              "name": "Policy/policyFileDeleted",
+              "properties": {
+                "configurationKey": "discipline.toml",
+                "failsRun": true,
+                "tags": [
+                  "policy"
+                ]
+              },
+              "shortDescription": {
+                "text": "Policy File Deleted"
               }
             }
           ]
