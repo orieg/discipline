@@ -1,0 +1,1889 @@
+{
+  "study_id": "agent-pr-precision-v6",
+  "discipline_version": "0.28.1",
+  "evaluated_commit": "794362b607c3e858ae9106b9762da5f3a796777a",
+  "host": "Apple M1 macOS 26.4.1 arm64",
+  "confidence_level": 0.95,
+  "cohens_kappa": 0.384269,
+  "rater_kind": "llm-subagent",
+  "synthetic_rater_disclosure": "Synthetic-rater disclosure: Rater 1, Rater 2, and the tie-breaker in this study were executed by isolated, source-tool-blinded LLM research subagents, not human engineers. Model-to-model agreement (Cohen's kappa) establishes rubric consistency across independent prompts, not external human peer review.",
+  "pull_request_block_rates": {
+    "total_pull_requests": 232,
+    "discipline": {
+      "blocked": 41,
+      "n": 232,
+      "point_estimate": 0.176724,
+      "wilson_95_ci": [
+        0.133025,
+        0.230955
+      ]
+    },
+    "naive_sensitive_path_filter": {
+      "blocked": 130,
+      "n": 232,
+      "point_estimate": 0.560345,
+      "wilson_95_ci": [
+        0.496008,
+        0.622716
+      ]
+    }
+  },
+  "class_results": [
+    {
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 12,
+      "false_positives": 107,
+      "cannot_tell": 3,
+      "k": 12,
+      "n": 122,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 0.098361,
+      "wilson_95_ci": [
+        0.057165,
+        0.164077
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "class": "heuristic-and-prose",
+      "true_positives": 0,
+      "false_positives": 5,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 5,
+      "required_n": 245,
+      "precision_floor": 0.8,
+      "point_estimate": 0.0,
+      "wilson_95_ci": [
+        0.0,
+        0.434482
+      ],
+      "verdict": "insufficient-n"
+    }
+  ],
+  "twin_baseline_result": {
+    "id": "naive-sensitive-path-filter",
+    "true_positives": 2,
+    "false_positives": 146,
+    "cannot_tell": 2,
+    "k": 2,
+    "n": 150,
+    "required_n": 141,
+    "precision_floor": 0.9,
+    "point_estimate": 0.013333,
+    "wilson_95_ci": [
+      0.003664,
+      0.047307
+    ],
+    "verdict": "REJECTED",
+    "observed_mdd_vs_structural": 0.163176,
+    "observed_precision_delta_structural_vs_twin": 0.085027
+  },
+  "per_gate_results": [
+    {
+      "gate": "agent-scratch",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "agents-md",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "archive-contents",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "assertion-reduction",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 5,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 5,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 0.0,
+      "wilson_95_ci": [
+        0.0,
+        0.434482
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "build-hooks",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "ci-integrity",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 2,
+      "false_positives": 64,
+      "cannot_tell": 0,
+      "k": 2,
+      "n": 66,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 0.030303,
+      "wilson_95_ci": [
+        0.00835,
+        0.103925
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "ci-skip-set",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "citation-anchors",
+      "class": "heuristic-and-prose",
+      "true_positives": 0,
+      "false_positives": 1,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 1,
+      "required_n": 245,
+      "precision_floor": 0.8,
+      "point_estimate": 0.0,
+      "wilson_95_ci": [
+        0.0,
+        0.793451
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "citation-metadata",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "config-integrity",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "deletion-rationale",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 3,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 3,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 0.0,
+      "wilson_95_ci": [
+        0.0,
+        0.561497
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "dependency-delta",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 9,
+      "false_positives": 11,
+      "cannot_tell": 0,
+      "k": 9,
+      "n": 20,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 0.45,
+      "wilson_95_ci": [
+        0.258198,
+        0.657915
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "error-swallowing",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 1,
+      "false_positives": 10,
+      "cannot_tell": 0,
+      "k": 1,
+      "n": 11,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 0.090909,
+      "wilson_95_ci": [
+        0.016232,
+        0.377358
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "gate-command-lint",
+      "class": "heuristic-and-prose",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 245,
+      "precision_floor": 0.8,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "golden-output",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 13,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 13,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 0.0,
+      "wilson_95_ci": [
+        0.0,
+        0.228095
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "harness-tampering",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "ignored-tests",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "instruction-smuggling",
+      "class": "heuristic-and-prose",
+      "true_positives": 0,
+      "false_positives": 3,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 3,
+      "required_n": 245,
+      "precision_floor": 0.8,
+      "point_estimate": 0.0,
+      "wilson_95_ci": [
+        0.0,
+        0.561497
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "issue-link",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "manifest-sync",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "mechanism-sections",
+      "class": "heuristic-and-prose",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 245,
+      "precision_floor": 0.8,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "pii",
+      "class": "heuristic-and-prose",
+      "true_positives": 0,
+      "false_positives": 1,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 1,
+      "required_n": 245,
+      "precision_floor": 0.8,
+      "point_estimate": 0.0,
+      "wilson_95_ci": [
+        0.0,
+        0.793451
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "pr-checklist",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "provenance-tags",
+      "class": "heuristic-and-prose",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 245,
+      "precision_floor": 0.8,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "sandbox-config",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "scope-confinement",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "shell-secrets",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "stub-bodies",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 1,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 1,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 0.0,
+      "wilson_95_ci": [
+        0.0,
+        0.793451
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "suppression-delta",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "test-budget",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "test-floor",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 2,
+      "k": 0,
+      "n": 2,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 0.0,
+      "wilson_95_ci": [
+        0.0,
+        0.65762
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "time-estimates",
+      "class": "heuristic-and-prose",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 245,
+      "precision_floor": 0.8,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "toolchain-config",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 1,
+      "k": 0,
+      "n": 1,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": 0.0,
+      "wilson_95_ci": [
+        0.0,
+        0.793451
+      ],
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "unsafe-safety-comment",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "vacuous-tests",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    },
+    {
+      "gate": "version-lockstep",
+      "class": "structural-ast-and-deterministic",
+      "true_positives": 0,
+      "false_positives": 0,
+      "cannot_tell": 0,
+      "k": 0,
+      "n": 0,
+      "required_n": 141,
+      "precision_floor": 0.9,
+      "point_estimate": null,
+      "wilson_95_ci": null,
+      "verdict": "insufficient-n"
+    }
+  ],
+  "previous_study_id": "agent-pr-precision-v5",
+  "preregistration": "docs/benchmarks/precision-preregistration-v6.toml",
+  "discipline_binary": "discipline-aarch64-apple-darwin.tar.gz from the v0.28.1 GitHub release, sha256 0e4e1dfd046ee429a7c6290346b77b68f8f5b7144bdf492a06fada0cc25485d4, verified against the release's SHA256SUMS; reports discipline 0.28.1",
+  "corpus_prior_inspection": "The 232 pull requests were inspected and labelled under agent-pr-precision-v2 (0.23.0) to agent-pr-precision-v5 (0.27.0), and three v0.28.0 rows were written to fix five v5 items; v6 characterises the 0.28.1 binary on the same changes, not precision on unseen agent pull requests.",
+  "reproduction_check": {
+    "reference_binary": "discipline-aarch64-apple-darwin.tar.gz from the v0.27.0 release, verified against its SHA256SUMS",
+    "reproduced": true,
+    "differences": [],
+    "v5_findings_compared": 132
+  },
+  "label_reuse": {
+    "inherited_from_v5": 0,
+    "fresh": 277,
+    "fresh_discipline": 127,
+    "fresh_twin": 150,
+    "twin_sample_identical_to_v5": true
+  },
+  "findings_diff_vs_v5": {
+    "unchanged": 127,
+    "changed": 0,
+    "new": 0,
+    "gone": 5,
+    "gone_v5_item_ids": [
+      "ITEM-0015",
+      "ITEM-0016",
+      "ITEM-0044",
+      "ITEM-0126",
+      "ITEM-0127"
+    ],
+    "by_gate": {
+      "assertion-reduction": {
+        "unchanged": 5,
+        "changed": 0,
+        "new": 0,
+        "gone": 0
+      },
+      "ci-integrity": {
+        "unchanged": 66,
+        "changed": 0,
+        "new": 0,
+        "gone": 0
+      },
+      "citation-anchors": {
+        "unchanged": 1,
+        "changed": 0,
+        "new": 0,
+        "gone": 0
+      },
+      "deletion-rationale": {
+        "unchanged": 3,
+        "changed": 0,
+        "new": 0,
+        "gone": 2
+      },
+      "dependency-delta": {
+        "unchanged": 20,
+        "changed": 0,
+        "new": 0,
+        "gone": 0
+      },
+      "error-swallowing": {
+        "unchanged": 11,
+        "changed": 0,
+        "new": 0,
+        "gone": 0
+      },
+      "golden-output": {
+        "unchanged": 13,
+        "changed": 0,
+        "new": 0,
+        "gone": 0
+      },
+      "instruction-smuggling": {
+        "unchanged": 3,
+        "changed": 0,
+        "new": 0,
+        "gone": 2
+      },
+      "pii": {
+        "unchanged": 1,
+        "changed": 0,
+        "new": 0,
+        "gone": 0
+      },
+      "stub-bodies": {
+        "unchanged": 1,
+        "changed": 0,
+        "new": 0,
+        "gone": 1
+      },
+      "test-floor": {
+        "unchanged": 2,
+        "changed": 0,
+        "new": 0,
+        "gone": 0
+      },
+      "toolchain-config": {
+        "unchanged": 1,
+        "changed": 0,
+        "new": 0,
+        "gone": 0
+      }
+    }
+  },
+  "anchor_check": {
+    "anchors": 20,
+    "rater_1_agrees_with_v5_final": 12,
+    "rater_2_agrees_with_v5_final": 11,
+    "resolved_agrees_with_v5_final": 11,
+    "cohens_kappa_fresh_plus_anchor": 0.39542,
+    "items": [
+      {
+        "packet_item_id": "PKT-0024",
+        "v5_item_id": "ITEM-0040",
+        "source_tool": "discipline",
+        "v5_final_label": "true-positive",
+        "rater_1_label": "false-positive",
+        "rater_2_label": "false-positive",
+        "tie_breaker_label": null
+      },
+      {
+        "packet_item_id": "PKT-0038",
+        "v5_item_id": "ITEM-0028",
+        "source_tool": "discipline",
+        "v5_final_label": "true-positive",
+        "rater_1_label": "false-positive",
+        "rater_2_label": "false-positive",
+        "tie_breaker_label": null
+      },
+      {
+        "packet_item_id": "PKT-0041",
+        "v5_item_id": "ITEM-0093",
+        "source_tool": "discipline",
+        "v5_final_label": "true-positive",
+        "rater_1_label": "true-positive",
+        "rater_2_label": "false-positive",
+        "tie_breaker_label": "false-positive"
+      },
+      {
+        "packet_item_id": "PKT-0069",
+        "v5_item_id": "ITEM-0248",
+        "source_tool": "naive-sensitive-path-filter",
+        "v5_final_label": "false-positive",
+        "rater_1_label": "false-positive",
+        "rater_2_label": "false-positive",
+        "tie_breaker_label": null
+      },
+      {
+        "packet_item_id": "PKT-0079",
+        "v5_item_id": "ITEM-0112",
+        "source_tool": "discipline",
+        "v5_final_label": "true-positive",
+        "rater_1_label": "false-positive",
+        "rater_2_label": "false-positive",
+        "tie_breaker_label": null
+      },
+      {
+        "packet_item_id": "PKT-0102",
+        "v5_item_id": "ITEM-0084",
+        "source_tool": "discipline",
+        "v5_final_label": "true-positive",
+        "rater_1_label": "false-positive",
+        "rater_2_label": "false-positive",
+        "tie_breaker_label": null
+      },
+      {
+        "packet_item_id": "PKT-0126",
+        "v5_item_id": "ITEM-0121",
+        "source_tool": "discipline",
+        "v5_final_label": "true-positive",
+        "rater_1_label": "false-positive",
+        "rater_2_label": "false-positive",
+        "tie_breaker_label": null
+      },
+      {
+        "packet_item_id": "PKT-0145",
+        "v5_item_id": "ITEM-0252",
+        "source_tool": "naive-sensitive-path-filter",
+        "v5_final_label": "false-positive",
+        "rater_1_label": "false-positive",
+        "rater_2_label": "false-positive",
+        "tie_breaker_label": null
+      },
+      {
+        "packet_item_id": "PKT-0168",
+        "v5_item_id": "ITEM-0039",
+        "source_tool": "discipline",
+        "v5_final_label": "true-positive",
+        "rater_1_label": "true-positive",
+        "rater_2_label": "true-positive",
+        "tie_breaker_label": null
+      },
+      {
+        "packet_item_id": "PKT-0179",
+        "v5_item_id": "ITEM-0116",
+        "source_tool": "discipline",
+        "v5_final_label": "true-positive",
+        "rater_1_label": "false-positive",
+        "rater_2_label": "false-positive",
+        "tie_breaker_label": null
+      },
+      {
+        "packet_item_id": "PKT-0185",
+        "v5_item_id": "ITEM-0042",
+        "source_tool": "discipline",
+        "v5_final_label": "true-positive",
+        "rater_1_label": "false-positive",
+        "rater_2_label": "false-positive",
+        "tie_breaker_label": null
+      },
+      {
+        "packet_item_id": "PKT-0196",
+        "v5_item_id": "ITEM-0200",
+        "source_tool": "naive-sensitive-path-filter",
+        "v5_final_label": "false-positive",
+        "rater_1_label": "false-positive",
+        "rater_2_label": "false-positive",
+        "tie_breaker_label": null
+      },
+      {
+        "packet_item_id": "PKT-0200",
+        "v5_item_id": "ITEM-0195",
+        "source_tool": "naive-sensitive-path-filter",
+        "v5_final_label": "false-positive",
+        "rater_1_label": "false-positive",
+        "rater_2_label": "false-positive",
+        "tie_breaker_label": null
+      },
+      {
+        "packet_item_id": "PKT-0213",
+        "v5_item_id": "ITEM-0266",
+        "source_tool": "naive-sensitive-path-filter",
+        "v5_final_label": "false-positive",
+        "rater_1_label": "false-positive",
+        "rater_2_label": "false-positive",
+        "tie_breaker_label": null
+      },
+      {
+        "packet_item_id": "PKT-0217",
+        "v5_item_id": "ITEM-0192",
+        "source_tool": "naive-sensitive-path-filter",
+        "v5_final_label": "false-positive",
+        "rater_1_label": "false-positive",
+        "rater_2_label": "false-positive",
+        "tie_breaker_label": null
+      },
+      {
+        "packet_item_id": "PKT-0225",
+        "v5_item_id": "ITEM-0149",
+        "source_tool": "naive-sensitive-path-filter",
+        "v5_final_label": "false-positive",
+        "rater_1_label": "false-positive",
+        "rater_2_label": "false-positive",
+        "tie_breaker_label": null
+      },
+      {
+        "packet_item_id": "PKT-0229",
+        "v5_item_id": "ITEM-0207",
+        "source_tool": "naive-sensitive-path-filter",
+        "v5_final_label": "false-positive",
+        "rater_1_label": "false-positive",
+        "rater_2_label": "false-positive",
+        "tie_breaker_label": null
+      },
+      {
+        "packet_item_id": "PKT-0230",
+        "v5_item_id": "ITEM-0203",
+        "source_tool": "naive-sensitive-path-filter",
+        "v5_final_label": "false-positive",
+        "rater_1_label": "false-positive",
+        "rater_2_label": "false-positive",
+        "tie_breaker_label": null
+      },
+      {
+        "packet_item_id": "PKT-0246",
+        "v5_item_id": "ITEM-0162",
+        "source_tool": "naive-sensitive-path-filter",
+        "v5_final_label": "false-positive",
+        "rater_1_label": "false-positive",
+        "rater_2_label": "false-positive",
+        "tie_breaker_label": null
+      },
+      {
+        "packet_item_id": "PKT-0267",
+        "v5_item_id": "ITEM-0008",
+        "source_tool": "discipline",
+        "v5_final_label": "true-positive",
+        "rater_1_label": "false-positive",
+        "rater_2_label": "false-positive",
+        "tie_breaker_label": null
+      }
+    ],
+    "use": "drift check only; an anchor judged through its fresh counterpart only reads that item's label, and an anchor-only item's labels are never final labels",
+    "judged_through_fresh_counterpart": 20,
+    "anchor_only_items": 0,
+    "status": "measured"
+  },
+  "rater_label_counts": {
+    "scope": "every packet item (fresh and anchor)",
+    "rater_1": {
+      "true-positive": 48,
+      "false-positive": 225,
+      "cannot-tell": 4
+    },
+    "rater_2": {
+      "true-positive": 14,
+      "false-positive": 260,
+      "cannot-tell": 3
+    },
+    "single_label_raters": [],
+    "use": "diagnostic only; not a verdict input"
+  },
+  "v5_match_diagnostic": {
+    "rule": "docs/benchmarks/precision-preregistration-v6.toml [v5_match]",
+    "matched_items": 277,
+    "agreeing_final_labels": 163,
+    "v5_final_to_v6_final": {
+      "discipline": {
+        "cannot-tell -> cannot-tell": 2,
+        "false-positive -> false-positive": 3,
+        "true-positive -> cannot-tell": 1,
+        "true-positive -> false-positive": 109,
+        "true-positive -> true-positive": 12
+      },
+      "naive-sensitive-path-filter": {
+        "cannot-tell -> cannot-tell": 1,
+        "false-positive -> cannot-tell": 1,
+        "false-positive -> false-positive": 143,
+        "true-positive -> false-positive": 3,
+        "true-positive -> true-positive": 2
+      }
+    },
+    "use": "diagnostic only; no v6 label is inherited"
+  },
+  "lost_v5_true_positives": {
+    "rule": "docs/benchmarks/precision-preregistration-v6.toml [in_sample_disclosure].lost_true_positive_rule",
+    "gone_with_true_positive_label": 0,
+    "items": [],
+    "repeated_v5_true_positives_with_another_v6_label": 110,
+    "relabelled_items": [
+      {
+        "v5_item_id": "ITEM-0001",
+        "item_id": "ITEM-0001",
+        "gate": "golden-output",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0002",
+        "item_id": "ITEM-0002",
+        "gate": "golden-output",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0004",
+        "item_id": "ITEM-0004",
+        "gate": "deletion-rationale",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0005",
+        "item_id": "ITEM-0005",
+        "gate": "golden-output",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0006",
+        "item_id": "ITEM-0006",
+        "gate": "golden-output",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0007",
+        "item_id": "ITEM-0007",
+        "gate": "golden-output",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0008",
+        "item_id": "ITEM-0008",
+        "gate": "golden-output",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0009",
+        "item_id": "ITEM-0009",
+        "gate": "golden-output",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0010",
+        "item_id": "ITEM-0010",
+        "gate": "instruction-smuggling",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0011",
+        "item_id": "ITEM-0011",
+        "gate": "assertion-reduction",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0012",
+        "item_id": "ITEM-0012",
+        "gate": "deletion-rationale",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0014",
+        "item_id": "ITEM-0014",
+        "gate": "dependency-delta",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0017",
+        "item_id": "ITEM-0015",
+        "gate": "golden-output",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0018",
+        "item_id": "ITEM-0016",
+        "gate": "golden-output",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0019",
+        "item_id": "ITEM-0017",
+        "gate": "golden-output",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0020",
+        "item_id": "ITEM-0018",
+        "gate": "golden-output",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0021",
+        "item_id": "ITEM-0019",
+        "gate": "golden-output",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0022",
+        "item_id": "ITEM-0020",
+        "gate": "stub-bodies",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0023",
+        "item_id": "ITEM-0021",
+        "gate": "dependency-delta",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0025",
+        "item_id": "ITEM-0023",
+        "gate": "error-swallowing",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0027",
+        "item_id": "ITEM-0025",
+        "gate": "error-swallowing",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0028",
+        "item_id": "ITEM-0026",
+        "gate": "error-swallowing",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0029",
+        "item_id": "ITEM-0027",
+        "gate": "error-swallowing",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0030",
+        "item_id": "ITEM-0028",
+        "gate": "error-swallowing",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0031",
+        "item_id": "ITEM-0029",
+        "gate": "error-swallowing",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0032",
+        "item_id": "ITEM-0030",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0033",
+        "item_id": "ITEM-0031",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0034",
+        "item_id": "ITEM-0032",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0035",
+        "item_id": "ITEM-0033",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0040",
+        "item_id": "ITEM-0038",
+        "gate": "error-swallowing",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0041",
+        "item_id": "ITEM-0039",
+        "gate": "error-swallowing",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0042",
+        "item_id": "ITEM-0040",
+        "gate": "error-swallowing",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0045",
+        "item_id": "ITEM-0042",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0046",
+        "item_id": "ITEM-0043",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0047",
+        "item_id": "ITEM-0044",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0048",
+        "item_id": "ITEM-0045",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0049",
+        "item_id": "ITEM-0046",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0051",
+        "item_id": "ITEM-0048",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0052",
+        "item_id": "ITEM-0049",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0053",
+        "item_id": "ITEM-0050",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0054",
+        "item_id": "ITEM-0051",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0055",
+        "item_id": "ITEM-0052",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0056",
+        "item_id": "ITEM-0053",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0057",
+        "item_id": "ITEM-0054",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0058",
+        "item_id": "ITEM-0055",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0059",
+        "item_id": "ITEM-0056",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0060",
+        "item_id": "ITEM-0057",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0061",
+        "item_id": "ITEM-0058",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0062",
+        "item_id": "ITEM-0059",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0063",
+        "item_id": "ITEM-0060",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0064",
+        "item_id": "ITEM-0061",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0065",
+        "item_id": "ITEM-0062",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0066",
+        "item_id": "ITEM-0063",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0067",
+        "item_id": "ITEM-0064",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0068",
+        "item_id": "ITEM-0065",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0069",
+        "item_id": "ITEM-0066",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0070",
+        "item_id": "ITEM-0067",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0071",
+        "item_id": "ITEM-0068",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0072",
+        "item_id": "ITEM-0069",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0073",
+        "item_id": "ITEM-0070",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0074",
+        "item_id": "ITEM-0071",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0075",
+        "item_id": "ITEM-0072",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0076",
+        "item_id": "ITEM-0073",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0077",
+        "item_id": "ITEM-0074",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0078",
+        "item_id": "ITEM-0075",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0079",
+        "item_id": "ITEM-0076",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0080",
+        "item_id": "ITEM-0077",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0081",
+        "item_id": "ITEM-0078",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0082",
+        "item_id": "ITEM-0079",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0083",
+        "item_id": "ITEM-0080",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0084",
+        "item_id": "ITEM-0081",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0085",
+        "item_id": "ITEM-0082",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0086",
+        "item_id": "ITEM-0083",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0087",
+        "item_id": "ITEM-0084",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0088",
+        "item_id": "ITEM-0085",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0089",
+        "item_id": "ITEM-0086",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0090",
+        "item_id": "ITEM-0087",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0091",
+        "item_id": "ITEM-0088",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0092",
+        "item_id": "ITEM-0089",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0093",
+        "item_id": "ITEM-0090",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0094",
+        "item_id": "ITEM-0091",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0095",
+        "item_id": "ITEM-0092",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0096",
+        "item_id": "ITEM-0093",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0097",
+        "item_id": "ITEM-0094",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0098",
+        "item_id": "ITEM-0095",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0099",
+        "item_id": "ITEM-0096",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0100",
+        "item_id": "ITEM-0097",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0101",
+        "item_id": "ITEM-0098",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0102",
+        "item_id": "ITEM-0099",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0103",
+        "item_id": "ITEM-0100",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0104",
+        "item_id": "ITEM-0101",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0105",
+        "item_id": "ITEM-0102",
+        "gate": "ci-integrity",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0107",
+        "item_id": "ITEM-0104",
+        "gate": "instruction-smuggling",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0108",
+        "item_id": "ITEM-0105",
+        "gate": "instruction-smuggling",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0109",
+        "item_id": "ITEM-0106",
+        "gate": "assertion-reduction",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0111",
+        "item_id": "ITEM-0108",
+        "gate": "dependency-delta",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0112",
+        "item_id": "ITEM-0109",
+        "gate": "dependency-delta",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0113",
+        "item_id": "ITEM-0110",
+        "gate": "dependency-delta",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0114",
+        "item_id": "ITEM-0111",
+        "gate": "dependency-delta",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0115",
+        "item_id": "ITEM-0112",
+        "gate": "dependency-delta",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0116",
+        "item_id": "ITEM-0113",
+        "gate": "dependency-delta",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0117",
+        "item_id": "ITEM-0114",
+        "gate": "toolchain-config",
+        "final_label": "cannot-tell"
+      },
+      {
+        "v5_item_id": "ITEM-0120",
+        "item_id": "ITEM-0117",
+        "gate": "dependency-delta",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0121",
+        "item_id": "ITEM-0118",
+        "gate": "dependency-delta",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0122",
+        "item_id": "ITEM-0119",
+        "gate": "dependency-delta",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0124",
+        "item_id": "ITEM-0121",
+        "gate": "error-swallowing",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0125",
+        "item_id": "ITEM-0122",
+        "gate": "golden-output",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0130",
+        "item_id": "ITEM-0125",
+        "gate": "assertion-reduction",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0131",
+        "item_id": "ITEM-0126",
+        "gate": "assertion-reduction",
+        "final_label": "false-positive"
+      },
+      {
+        "v5_item_id": "ITEM-0132",
+        "item_id": "ITEM-0127",
+        "gate": "deletion-rationale",
+        "final_label": "false-positive"
+      }
+    ]
+  },
+  "in_sample_disclosure": {
+    "rule": "docs/benchmarks/precision-preregistration-v6.toml [in_sample_disclosure]",
+    "fixed_items": {
+      "ITEM-0015": {
+        "v5_final_label": "false-positive",
+        "v6_item_id": null,
+        "v6_final_label": null
+      },
+      "ITEM-0016": {
+        "v5_final_label": "cannot-tell",
+        "v6_item_id": null,
+        "v6_final_label": null
+      },
+      "ITEM-0044": {
+        "v5_final_label": "false-positive",
+        "v6_item_id": null,
+        "v6_final_label": null
+      },
+      "ITEM-0126": {
+        "v5_final_label": "false-positive",
+        "v6_item_id": null,
+        "v6_final_label": null
+      },
+      "ITEM-0127": {
+        "v5_final_label": "false-positive",
+        "v6_item_id": null,
+        "v6_final_label": null
+      }
+    },
+    "in_sample_pull_requests": [
+      "astral-sh/ruff d0cf39c09e3a",
+      "denoland/deno b4bf672c3118",
+      "vitejs/vite 24339f4339d6"
+    ],
+    "all_pull_requests": {
+      "pull_requests": 232,
+      "class_results": [
+        {
+          "class": "structural-ast-and-deterministic",
+          "true_positives": 12,
+          "false_positives": 107,
+          "cannot_tell": 3,
+          "k": 12,
+          "n": 122,
+          "required_n": 141,
+          "precision_floor": 0.9,
+          "point_estimate": 0.098361,
+          "wilson_95_ci": [
+            0.057165,
+            0.164077
+          ],
+          "verdict": "insufficient-n"
+        },
+        {
+          "class": "heuristic-and-prose",
+          "true_positives": 0,
+          "false_positives": 5,
+          "cannot_tell": 0,
+          "k": 0,
+          "n": 5,
+          "required_n": 245,
+          "precision_floor": 0.8,
+          "point_estimate": 0.0,
+          "wilson_95_ci": [
+            0.0,
+            0.434482
+          ],
+          "verdict": "insufficient-n"
+        }
+      ],
+      "twin_baseline_result": {
+        "true_positives": 2,
+        "false_positives": 146,
+        "cannot_tell": 2,
+        "k": 2,
+        "n": 150,
+        "required_n": 141,
+        "precision_floor": 0.9,
+        "point_estimate": 0.013333,
+        "wilson_95_ci": [
+          0.003664,
+          0.047307
+        ],
+        "verdict": "REJECTED"
+      },
+      "pull_request_block_rates": {
+        "discipline": {
+          "blocked": 41,
+          "n": 232,
+          "point_estimate": 0.176724,
+          "wilson_95_ci": [
+            0.133025,
+            0.230955
+          ]
+        },
+        "naive_sensitive_path_filter": {
+          "blocked": 130,
+          "n": 232,
+          "point_estimate": 0.560345,
+          "wilson_95_ci": [
+            0.496008,
+            0.622716
+          ]
+        }
+      }
+    },
+    "excluding_in_sample_pull_requests": {
+      "pull_requests": 229,
+      "class_results": [
+        {
+          "class": "structural-ast-and-deterministic",
+          "true_positives": 11,
+          "false_positives": 107,
+          "cannot_tell": 2,
+          "k": 11,
+          "n": 120,
+          "required_n": 141,
+          "precision_floor": 0.9,
+          "point_estimate": 0.091667,
+          "wilson_95_ci": [
+            0.051957,
+            0.156708
+          ],
+          "verdict": "insufficient-n"
+        },
+        {
+          "class": "heuristic-and-prose",
+          "true_positives": 0,
+          "false_positives": 5,
+          "cannot_tell": 0,
+          "k": 0,
+          "n": 5,
+          "required_n": 245,
+          "precision_floor": 0.8,
+          "point_estimate": 0.0,
+          "wilson_95_ci": [
+            0.0,
+            0.434482
+          ],
+          "verdict": "insufficient-n"
+        }
+      ],
+      "twin_baseline_result": {
+        "true_positives": 2,
+        "false_positives": 144,
+        "cannot_tell": 2,
+        "k": 2,
+        "n": 148,
+        "required_n": 141,
+        "precision_floor": 0.9,
+        "point_estimate": 0.013514,
+        "wilson_95_ci": [
+          0.003714,
+          0.047929
+        ],
+        "verdict": "REJECTED"
+      },
+      "pull_request_block_rates": {
+        "discipline": {
+          "blocked": 40,
+          "n": 229,
+          "point_estimate": 0.174672,
+          "wilson_95_ci": [
+            0.130976,
+            0.229103
+          ]
+        },
+        "naive_sensitive_path_filter": {
+          "blocked": 127,
+          "n": 229,
+          "point_estimate": 0.554585,
+          "wilson_95_ci": [
+            0.489839,
+            0.61753
+          ]
+        }
+      }
+    }
+  },
+  "detector_attribution": {
+    "rule": "docs/benchmarks/precision-preregistration-v6.toml [detector_attribution]",
+    "findings_by_row": {
+      "v0.28.0 deletion-rationale (test-removed-without-rationale: tests merged into their container) (#911, #915)": 2,
+      "v0.28.0 stub-bodies (how base and head functions pair) (#910, #913)": 1,
+      "v0.28.0 instruction-smuggling (invisible-characters-added, invisible-characters-in-description: a variation selector) (#909)": 2,
+      "v0.28.0 assertion-reduction, vacuous-tests (an iteration over a name bound to an empty literal) (#906)": 0
+    },
+    "attributed": {
+      "v0.28.0 deletion-rationale (test-removed-without-rationale: tests merged into their container) (#911, #915)": [
+        {
+          "repo": "vitejs/vite",
+          "head_sha": "24339f4339d64fd8b5bc37654ac14ccff5aee584",
+          "gate": "deletion-rationale",
+          "code": "deletion-rationale/test-removed-without-rationale",
+          "file": "packages/vite/src/node/__tests__/plugins/index.spec.ts",
+          "line": null,
+          "side": "reference-only"
+        },
+        {
+          "repo": "vitejs/vite",
+          "head_sha": "24339f4339d64fd8b5bc37654ac14ccff5aee584",
+          "gate": "deletion-rationale",
+          "code": "deletion-rationale/test-removed-without-rationale",
+          "file": "packages/vite/src/node/__tests__/plugins/index.spec.ts",
+          "line": null,
+          "side": "reference-only"
+        }
+      ],
+      "v0.28.0 stub-bodies (how base and head functions pair) (#910, #913)": [
+        {
+          "repo": "denoland/deno",
+          "head_sha": "b4bf672c31189757cbd6e8b366decf4f6a89334c",
+          "gate": "stub-bodies",
+          "code": "stub-bodies/body-replaced-by-stub",
+          "file": "ext/node/polyfills/process.ts",
+          "line": 990,
+          "side": "reference-only"
+        }
+      ],
+      "v0.28.0 instruction-smuggling (invisible-characters-added, invisible-characters-in-description: a variation selector) (#909)": [
+        {
+          "repo": "astral-sh/ruff",
+          "head_sha": "d0cf39c09e3a79d53601a236b81a6a3d558aa115",
+          "gate": "instruction-smuggling",
+          "code": "instruction-smuggling/invisible-characters-in-description",
+          "file": null,
+          "line": null,
+          "side": "reference-only"
+        },
+        {
+          "repo": "astral-sh/ruff",
+          "head_sha": "d0cf39c09e3a79d53601a236b81a6a3d558aa115",
+          "gate": "instruction-smuggling",
+          "code": "instruction-smuggling/invisible-characters-in-description",
+          "file": null,
+          "line": null,
+          "side": "reference-only"
+        }
+      ]
+    },
+    "unexplained": [],
+    "use": "reported, not a verdict input"
+  },
+  "replay_artifact_check": {
+    "rule": "docs/benchmarks/precision-preregistration-v6.toml [replay_artifact_check]",
+    "new_or_changed_findings_checked": 0,
+    "replay_artifacts_found": [],
+    "known_artifact": {
+      "v5_item_id": "ITEM-0003",
+      "repo": "astral-sh/ruff",
+      "category": "unchanged"
+    },
+    "use": "reported, not a verdict input; never changes a label"
+  },
+  "rater_degeneracy": {
+    "rule": "docs/benchmarks/precision-preregistration-v6.toml [adjudication].rater_degeneracy_rule",
+    "status": "measured",
+    "replaced": [],
+    "degenerate_after_replacement": [],
+    "excluded_raters": [],
+    "fresh_items_set_to_cannot_tell": 0
+  }
+}
