@@ -88,6 +88,7 @@ findings! {
     // assertion-reduction
     ASSERTION_FAILURE_CAUGHT = ["assertion-reduction"], "assertion-failure-caught", "Assertion Failure Caught Inside Test", Same;
     ASSERTION_BOUND_LOOSENED = ["assertion-reduction"], "assertion-bound-loosened", "Assertion Bound Loosened", Same;
+    WEAKENED_BOUND = ["assertion-reduction"], "weakened-bound", "Assertion Comparison Weakened", Same;
     EXPECTED_VALUE_CHANGED = ["assertion-reduction"], "expected-value-changed", "Expected Value Changed In Existing Test", Same;
     EXPECTED_EXCEPTION_WIDENED = ["assertion-reduction"], "expected-exception-widened", "Expected Exception Or Panic Widened", Same;
     MOCKING_INCREASED = ["assertion-reduction"], "mocking-increased-without-stronger-assertions", "Mocking Increased Without Stronger Assertions", Was("Mocking Grew Without Stronger Assertions");
