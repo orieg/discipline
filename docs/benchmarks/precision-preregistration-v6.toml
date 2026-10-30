@@ -1,0 +1,522 @@
+# Pre-registration for `agent-pr-precision-v6`: the public agent-PR precision benchmark
+# re-run with discipline 0.28.1 on the `agent-pr-precision-v5` corpus, with every label
+# fresh.
+#
+# Locked before any 0.28.1 replay output exists. Any modification to floors, population,
+# labelling, adjudication or degeneracy rules after 0.28.1 data is inspected relabels the
+# affected verdicts `INTERMEDIATE_amended_threshold_redesign` and is recorded in the results.
+#
+# Floors, required sample sizes, label definitions, twin rule and pinned bound values are
+# copied unchanged from `docs/benchmarks/precision-preregistration-v5.toml`, which copied
+# them unchanged from v4, v3 and v2 (`docs/benchmarks/precision-preregistration.toml`).
+# The v4 message key and v5's rater-degeneracy rule are kept. What differs from v5:
+# - the binary (0.28.1), the previous study (v5) and the reproduction binary (0.27.0);
+# - no label is inherited: every 0.28.1 finding and every sampled twin flag is labelled
+#   fresh, and the match against v5 is recorded per item as a diagnostic only;
+# - the anchors are v5 items drawn by v5's rule, judged through the fresh item that repeats
+#   them, because nothing is inherited for them to be compared against otherwise;
+# - the rater prompt is committed here, the packet is split into batches, and the two
+#   rater slots use different models;
+# - an in-sample disclosure: 0.28.0 changed rules to fix five v5 items, so the result is
+#   reported with and without the pull requests that hold them, and lost v5 true positives
+#   are counted;
+# - attribution of findings to the four v0.28.0 ledger rows.
+
+[study]
+id = "agent-pr-precision-v6"
+previous_study_id = "agent-pr-precision-v5"
+status = "locked-pre-data"
+locked_date = "2026-10-30"
+novelty_tier_claimed = "Characterisation"
+tier_justification = """
+Measures empirical precision and 95% Wilson score confidence intervals of the blocking
+findings of discipline 0.28.1 on the fixed population of 232 merged agent-authored pull
+requests already replayed by `agent-pr-precision-v2` to `-v5`, compared against the same
+naive file-path substitution twin, with every label given fresh by new raters. Claims a
+measured property of shipped detectors on a bounded population, not a causal mechanism or
+a closed-form law.
+"""
+discipline_version = "0.28.1"
+discipline_binary = """
+`discipline-aarch64-apple-darwin.tar.gz` from the v0.28.1 GitHub release of
+`orieg/discipline` (published 2026-10-29, before this lock), verified against that
+release's `SHA256SUMS` before the replay starts; it must report `discipline 0.28.1`. The
+tag `v0.28.1` is `794362b607c3e858ae9106b9762da5f3a796777a`. If the asset cannot be
+downloaded or does not verify, the binary is `cargo build --release --locked` at that tag
+on the replay host instead. The results name which one was used.
+"""
+configuration_mode = "default-with-test-entrypoints"
+primary_unit_of_analysis = "blocking-finding-error-severity"
+secondary_unit_of_analysis = "per-pull-request-block-rate"
+recall_claimed = false
+corpus_prior_inspection = """
+The corpus is not fresh. Every pull request in it was inspected and labelled under
+`agent-pr-precision-v2` (discipline 0.23.0), `-v3` (0.25.3), `-v4` (0.26.0) and `-v5`
+(0.27.0). v6 does not estimate precision on unseen agent pull requests: it characterises a
+different binary (0.28.1) on the same 232 changes. A precision change between v5 and v6
+mixes two causes, the binary and the new raters; the per-item v5 match diagnostic below
+separates them where an item repeats.
+"""
+
+[in_sample_disclosure]
+# Pre-registered because the fixes were made with v5's results in view.
+fixed_items = """
+Three v0.28.0 ledger rows in `docs/ROADMAP.md` name v5 items they were written to fix:
+`instruction-smuggling` (#909) `ITEM-0015` and `ITEM-0016` on `astral-sh/ruff#29355`;
+`stub-bodies` (#910, #913) `ITEM-0044` on `denoland/deno#33403`; `deletion-rationale`
+(#911, #915) `ITEM-0126` and `ITEM-0127` on `vitejs/vite#23604`. All three rows are
+`looser`. v5 labelled the five items `false-positive` (4) and `cannot-tell` (1). On these
+232 pull requests, v6 is therefore in-sample for those fixes and is not independent
+evidence that they work.
+"""
+in_sample_pull_requests = [
+  "astral-sh/ruff#29355 d0cf39c09e3a",
+  "denoland/deno#33403 b4bf672c3118",
+  "vitejs/vite#23604 24339f4339d6",
+]
+reporting_rule = """
+Every class result, the twin result, the block rate and the PR-clustered bootstrap are
+reported twice: on all 232 pull requests (primary), and on the 229 left after removing the
+three pull requests above with every finding and twin flag they hold. The verdict rule is
+applied to both. A PASS on the 232-pull-request set is reported as `PASS` with the
+qualifier `in-sample-for-v0.28.0-fixes`; the 229-pull-request set is still the corpus
+inspected under v2 to v5, so its PASS is reported as `PASS` with the qualifier
+`same-corpus-as-v2-to-v5`. Neither qualifier changes a verdict string.
+"""
+lost_true_positive_rule = """
+All three fixing rows are looser, so they can remove true positives as well as the five
+items. The results report the number of v5 discipline items with final label
+`true-positive` that have no v6 counterpart (`gone` under `[v5_match]`), listed by v5 item
+id and gate, including zero. Separately, they report how many v5 `true-positive` items
+that do repeat in v6 receive a different fresh final label; that is a rater difference,
+not a lost finding.
+"""
+
+[population]
+visibility = "public-only"
+exclude_private_repositories = true
+exclude_named_consumer_repositories = true
+pull_request_state = "merged-only"
+source = "previous-study-manifest"
+reharvest = false
+manifest_path = "docs/benchmarks/results-v5/manifest.json"
+manifest_sha256 = "f77e33add0adac8c736464cfc0c5d24e6c278bc4959cbd37ccd19e29fbf1bacc"
+manifest_commit = "5647796fe5ff00242a24b04f11ecec4423ea907e"
+pull_request_count = 232
+pr_number_rule = """
+The population is exactly the 232 `(repo, base_sha, head_sha)` entries of
+`docs/benchmarks/results-v5/manifest.json` (sha256 above), in manifest order, with the
+`pr_number`, `author_hash` and `agent_category` recorded there; they are the v2 to v4
+manifests' pairs in the same order. No harvest is run: the upstream repositories' newer
+merges cannot enter the sample. An entry whose commits cannot be fetched is reported and
+excluded, never replaced.
+"""
+head_base_definition = """
+Each change unit is replayed as in v2 to v5: the files `git diff-tree -r base_sha
+head_sha` lists, materialised at `base_sha` and `head_sha` in a scratch repository
+(submodule entries dropped), with the head commit's full message (`git show -s
+--format=%B`) as both the replay commit message and `--pr-body-file`, checked by
+`discipline check --config <default-with-test-entrypoints> --format json --base <base>`
+with `DISCIPLINE_REPLAY_CASE=1` and `DISCIPLINE_NO_NETWORK=1`. Only `error`-severity
+violations are findings. Exit codes other than 0 and 1 abort the run. The
+`default-with-test-entrypoints` configuration text is v5's, unchanged.
+"""
+replay_mode = "python3 scripts/benchmark_precision.py --from-manifest docs/benchmarks/results-v5/manifest.json"
+evaluation_repos = [
+  "astral-sh/ruff",
+  "denoland/deno",
+  "BurntSushi/ripgrep",
+  "tokio-rs/tokio",
+  "fastapi/fastapi",
+  "vitejs/vite",
+  "golang/go",
+  "junit-team/junit5",
+]
+clone_mode = "git clone --filter=blob:none (blob-less partial clone), outside the repository"
+
+[reproduction_check]
+# v5's committed findings carry their messages. The check shows the replay mode is still
+# faithful on this host before any v5/v6 difference is attributed to the binary.
+reference_binary = """
+`discipline-aarch64-apple-darwin.tar.gz` from the v0.27.0 GitHub release (built from the
+`v0.27.0` tag, `0ced0afba4600c501f08de03df20996c18a09f3b`, the binary v5 replayed),
+verified against that release's `SHA256SUMS`; it must report `discipline 0.27.0`.
+"""
+must_reproduce = """
+The reference replay must reproduce, per `(repo, head_sha)`, the multiset of
+`(gate, code, file, line, message key)` of the `discipline` items in
+`docs/benchmarks/results-v5/findings.json`, and every `discipline_blocking_findings` count
+in the v5 manifest. The message key is defined under `[v5_match]`.
+"""
+on_failure = """
+If the reproduction differs, the replay mode is not shown faithful: the differences are
+listed in the results, labelling proceeds as written, and every v6 verdict is relabelled
+`INTERMEDIATE_replay_not_reproduced`.
+"""
+
+[v5_match]
+# Replaces v5's [label_reuse]. Nothing here assigns a label.
+identity_key = ["repo", "head_sha", "gate", "code", "file", "line", "message_key"]
+message_key = """
+v4's and v5's message key, unchanged: a finding's message after two deterministic
+rewrites, applied in this order to the v5 committed message and to the 0.28.1 message
+alike:
+1. the LAN-address and home-path masking applied to every committed message
+   (`_redact_packet_pii_literals`), so a raw 0.28.1 message compares with v5's masked one;
+2. every `commit:<hex>` token with 7 to 40 lowercase hex digits becomes
+   `commit:<replay-commit>`.
+No other part of a message is rewritten.
+"""
+rule = """
+No v6 label is inherited. Every 0.28.1 finding and every sampled twin flag is labelled
+fresh under the adjudication protocol below. Each one is matched against v5 for the
+record only, with v5's categories and multiset assignment:
+- unchanged: identity key matched within the same pull request (repo, head_sha);
+- changed: no identity match, but a v5 finding in the same pull request shares
+  (gate, file, line) and differs in code or message key;
+- new: no v5 finding shares (gate, file, line) in that pull request;
+- gone: a v5 finding left unmatched after the above.
+When a key occurs m times in v5 and m' times in 0.28.1, min(m, m') findings match,
+assigned in v5 item-id order and 0.28.1 report order. A twin flag matches the v5 twin
+item with the same (repo, head_sha, file, code). findings.json records per item the
+matched v5 item id, its category and v5's final label (`v5_item_id`, `diff_category`,
+`v5_final_label`); none of them reaches a rater or a final label.
+"""
+match_diagnostic = """
+Reported, not a verdict input: for the unchanged and changed discipline findings and the
+matched twin flags, the table of v5 final label against v6 final label, and the count of
+items where they agree.
+"""
+twin_sample = """
+The twin depends only on the changed paths. The 150-flag twin sample is redrawn from the
+replayed candidate list with `sample_seed = 482`, as in v2 to v5. The results state
+whether it equals the v5 sample item for item; every flag is labelled fresh either way.
+"""
+
+[detector_attribution]
+# Reported, not a verdict input.
+rows = [
+  "v0.28.0 deletion-rationale (test-removed-without-rationale: tests merged into their container) (#911, #915)",
+  "v0.28.0 stub-bodies (how base and head functions pair) (#910, #913)",
+  "v0.28.0 instruction-smuggling (invisible-characters-added, invisible-characters-in-description: a variation selector) (#909)",
+  "v0.28.0 assertion-reduction, vacuous-tests (an iteration over a name bound to an empty literal) (#906)",
+]
+rule = """
+The 0.27.0 reference replay and the 0.28.1 replay are compared per pull request on
+(gate, code, file, line, message key). Every difference is listed. One is attributed to a
+row when its gate is the row's gate and its direction is the row's: for the three looser
+rows, a finding only the 0.27.0 replay reports; for the stricter #906 row, a finding only
+the 0.28.1 replay reports from `assertion-reduction` or `vacuous-tests`, whose flagged
+test at `head_sha` iterates over a name bound to an empty literal (read from the file).
+The study reports, for each row, how many findings it accounts for, including zero, and
+lists every other difference as unexplained. v0.28.1 has no behaviour-change rows.
+"""
+
+[replay_artifact_check]
+# Reported, not a verdict input; it never changes a label.
+known_artifact = """
+v4's and v5's `citation-anchors/link-target-missing` finding on `astral-sh/ruff#27184`
+(`crates/ty/CONTRIBUTING.md:147`, v5 `ITEM-0003`) is a replay artefact: the link target
+exists in the full repository at that commit, but the diff-scoped scratch tree holds only
+the changed files. If 0.28.1 reports it, it is labelled fresh like every other finding;
+the results say whether it is still reported and how it was labelled.
+"""
+rule = """
+Every `new` or `changed` 0.28.1 finding whose message names a repository path that is
+absent from the scratch tree is checked against the full tree at `head_sha`
+(`git cat-file -e <head_sha>:<path>` in the clone). One whose named path exists there is
+reported as the same kind of replay artefact. Its label counts like any other.
+"""
+
+[adjudication]
+independent_raters = 2
+agreement_metric = "cohens_kappa"
+min_acceptable_kappa = 0.75
+blind_to_source_tool = true
+blind_to_gate_name = true
+blind_to_previous_labels = true
+hash_contributor_and_rater_identities = true
+committed_rater_packet = "docs/benchmarks/results-v6/rater-packet.json"
+packet_scope = """
+The packet holds every 0.28.1 discipline finding, every one of the 150 sampled twin flags,
+and an anchor-only item for each anchor that has no v6 counterpart, shuffled together with
+`packet_shuffle_seed`. Packet items have the v2 fields only (repo, 12-character commit,
+subject, file, line, rule summary, diff excerpt, line context): no source tool, gate
+id, finding code, message or label. A finding code without a prose rule summary in the
+harness gets one written from `docs/GATES.md` before the packet is built; the generic
+`Gate <code> violation` fallback, which would name the gate, is refused.
+"""
+anchor_items = 20
+anchor_composition = "10 v5 discipline findings and 10 v5 twin flags, sampled with anchor_sample_seed from v5's labelled items by v5's rule"
+anchor_sample_seed = 48209
+packet_shuffle_seed = 48208
+anchor_use = """
+Anchors measure drift against v5's final labels. In v2 to v5 an anchor was an extra
+packet item, because the item it repeated was inherited and never shown. In v6 every item
+is fresh, so an anchor whose v5 item has a v6 counterpart under `[v5_match]` (unchanged or
+changed for a discipline finding, the same twin flag for a twin item) is judged through
+that counterpart's packet item and adds no packet item: the item is not shown twice. The
+counterpart's label is its final label as a fresh item; the anchor comparison only reads
+it. An anchor without a v6 counterpart becomes an anchor-only packet item, whose labels
+are never final labels and never enter a precision count. The seeds are new values, so the
+anchors are a fresh draw by v5's rule.
+"""
+kappa_scope = """
+Primary: Cohen's kappa between Rater 1 and Rater 2 on the fresh items (every packet item
+that is not anchor-only), against `min_acceptable_kappa`. Secondary: kappa on every packet
+item. With fewer than 10 fresh items the primary kappa is reported but described as
+uninformative.
+"""
+rater_procedure = """
+Two independent rater slots (Rater 1, Rater 2). The packet is split, in packet-id order,
+into consecutive batches of at most `batch_size` items. Each batch of each slot goes to a
+new isolated LLM subagent given the prompt in `rater_prompt` with that batch's file path;
+it reads that one file with its file-read tool, uses no other tool, and returns one JSON
+object of labels. A slot's labels over the packet are the union of its batch subagents'
+labels, and the slot is the unit the degeneracy rule and kappa apply to. Rater 1's
+subagents run on the `opus` model and Rater 2's on the `sonnet` model, so the two slots do
+not share a model. No subagent sees another's labels, the source tool, gate names, finding
+codes, v2 to v5 labels or this study's hypotheses. Items the slots disagree on go, in
+batches of at most `batch_size`, to new isolated LLM subagents on the `opus` model (the
+tie-breaker), given `tie_breaker_prompt`, who see the item but neither rater's label. A
+batch whose answer is not one valid label per item id is re-asked once with the same
+prompt to a new subagent; a second invalid answer stops the study.
+"""
+batch_size = 40
+rater_models = { rater_1 = "opus", rater_2 = "sonnet", tie_breaker = "opus" }
+rater_prompt = """
+You are an independent code-review rater in a blinded labelling study. Judge each item from the text of one file alone: read the file {BATCH_FILE} with your file-read tool, once. Do not read any other file, run commands, search, browse, or use any other tool. Do not try to find out which tool produced an item or how anyone else labelled it.
+
+Each item is a location in a merged public pull request (repository, 12-character commit, commit subject, file, line), a one-sentence rule describing a defect, a diff excerpt and, where available, the lines around the location in the changed file. Decide whether the flagged location exhibits the defect the rule describes.
+
+Use exactly one of these three labels per item:
+
+true-positive
+  Definition: The flagged location in the pull request diff exhibits the code, test, workflow, or configuration defect described by the gate's rule, and a maintainer reviewing the change would want the defect repaired or explicitly waived before merge.
+  Worked example: An agent pull request modifies an existing test `test_parse_header` and deletes two `assert_eq!` statements while keeping the function body compiling; the rule "Existing test function has fewer assertions or weaker assertion strength than on base" flags `tests/header.rs:42`.
+
+false-positive
+  Definition: The flagged location does not exhibit the defect described by the gate's rule (for example, an equivalent assertion refactor that preserves verification strength, a benign identifier matching a heuristic pattern, or a parser misattribution).
+  Worked example: An agent pull request moves an unchanged test module lower in the same file without altering any test body or assertion; if the rule flags the moved tests as reduced, the finding is a false-positive.
+
+cannot-tell
+  Definition: The diff and surrounding file context at the head and base commits are insufficient to determine whether the change is a genuine defect without executing external tools or consulting private context unavailable in the public repository. Counted in the denominator as a non-success so ambiguity never inflates reported precision.
+  Worked example: A pull request removes a test function and replaces it in another crate not included in the local diff context where equivalence cannot be verified from the repository tree.
+
+Answer with one JSON object and nothing else: {"PKT-0001": "true-positive", ...}, one key per item id in the file, each value one of the three labels.
+"""
+tie_breaker_prompt = """
+The rater prompt above, unchanged, with this sentence added after its first paragraph: "Each item in the file was labelled differently by two other raters; you do not see their labels. If you cannot establish from the diff and context whether the flagged location exhibits the defect, answer cannot-tell."
+"""
+rater_degeneracy_rule = """
+v5's rule, unchanged in substance, applied to rater slots.
+
+Definition: a rater is degenerate when it gives the same label to every item of the
+packet (fresh and anchor-only) while the anchors' v5 final labels include at least two
+distinct labels. The rule has no other parameter.
+
+Procedure, applied to Rater 1 and Rater 2 after their first pass, before any fresh label
+is used and before the tie-breaker runs:
+1. A degenerate rater is excluded. Its labels are recorded in the results
+   (`excluded_raters`) and used for nothing else: not as final labels, not in kappa, not
+   in the drift check.
+2. Each excluded rater is replaced once by a new set of isolated LLM subagents on the same
+   model, given the identical prompt and batches, which see neither the excluded rater's
+   nor the other rater's labels.
+3. If neither rater in use is then degenerate, the protocol continues with those two
+   raters (tie-breaker on their disagreements), and the drift check is reported with
+   status `measured`.
+4. If a replacement is also degenerate, no further replacement is drawn. The drift check
+   is reported with status `failed-degenerate-raters`: its agreement counts are listed as
+   a diagnostic and never described as a measurement of drift. Every fresh item's final
+   label is then `cannot-tell` (a non-success in the denominator), so a constant labeller
+   cannot raise a precision estimate, and the results state how many fresh items this
+   affects.
+The tie-breaker sees only disagreements and is not tested for degeneracy. Per-rater label
+counts over the packet are reported for every rater, including excluded ones.
+"""
+rater_kind_disclosure = """
+adjudication.json records `rater_1_kind`, `rater_2_kind`, and `tie_breaker_kind`
+(`"llm-subagent"`) with the same synthetic-rater disclosure as v2 to v5, and states that
+no final label was inherited and all are fresh, so model-to-model agreement is never
+presented as independent human review.
+"""
+disagreement_resolution_rule = """
+All disagreements between Rater 1 and Rater 2 are adjudicated in a third pass by a
+designated tie-breaker reading the diff and finding location without seeing either
+rater's individual label; if the tie-breaker cannot establish whether the finding
+is a true defect from the diff and repository context alone, the final label is
+`cannot-tell`, which counts in the denominator (not as a true positive) under
+conservative precision scoring.
+"""
+
+[[adjudication.labels]]
+id = "true-positive"
+counts_as_success = true
+counts_in_denominator = true
+definition = """
+The flagged location in the pull request diff exhibits the code, test, workflow,
+or configuration defect described by the gate's rule, and a maintainer reviewing
+the change would want the defect repaired or explicitly waived before merge.
+"""
+worked_example = """
+An agent pull request modifies an existing test `test_parse_header` and deletes
+two `assert_eq!` statements while keeping the function body compiling; `assertion-reduction`
+flags `tests/header.rs:42` (`assertion-reduction/assertions-reduced`).
+"""
+
+[[adjudication.labels]]
+id = "false-positive"
+counts_as_success = false
+counts_in_denominator = true
+definition = """
+The flagged location does not exhibit the defect described by the gate's rule
+(for example, an equivalent assertion refactor that preserves verification strength,
+a benign identifier matching a heuristic pattern, or a parser misattribution).
+"""
+worked_example = """
+An agent pull request moves an unchanged test module lower in the same file without
+altering any test body or assertion; if a gate flags the moved tests as reduced,
+the finding is a `false-positive`.
+"""
+
+[[adjudication.labels]]
+id = "cannot-tell"
+counts_as_success = false
+counts_in_denominator = true
+definition = """
+The diff and surrounding file context at the head and base commits are insufficient
+to determine whether the change is a genuine defect without executing external tools
+or consulting private context unavailable in the public repository. Counted in the
+denominator as a non-success so ambiguity never inflates reported precision.
+"""
+worked_example = """
+A pull request removes a test function and replaces it in another crate not included
+in the local diff context where equivalence cannot be verified from the repository tree.
+"""
+
+[twin_baseline]
+id = "naive-sensitive-path-filter"
+sampled_flags = 150
+sample_seed = 482
+packet_shuffle_seed = 48201
+rule = """
+Flag any modified file in an agent-authored pull request that matches (1) an existing
+test file present on `base_sha` (`tests/`, `test/`, `__tests__/`, `*_test.*`, `*.test.*`,
+`*.spec.*`), (2) a CI workflow file (`.github/workflows/**`, `.gitlab-ci.yml`,
+`.gitea/workflows/**`, `.forgejo/workflows/**`), or (3) a project manifest, linter, or
+test-runner configuration file (`Cargo.toml`, `pyproject.toml`, `package.json`,
+`deno.json(c)`, `pom.xml`, `build.gradle(.kts)`, `tsconfig*.json`, `.eslintrc*`,
+`eslint.config.*`, `biome.json(c)`, `(.)ruff.toml`, `mypy.ini`, `.flake8`, `pytest.ini`,
+`vitest.config.*`, `jest.config.*`, `.golangci.ya?ml`, `(.)clippy.toml`, `(.)rustfmt.toml`,
+`codecov.ya?ml`).
+"""
+winning_regime = """
+Recall and operational simplicity: zero AST parsing required, guaranteed 100% recall
+on any test-file, workflow-file, or manifest/linter/runner config erosion within those
+paths, and wins whenever a team prefers reviewing every agent touch to tests, CI, or
+project configuration over maintaining language-specific structural parsers.
+"""
+
+[power_and_bounds]
+confidence_level = 0.95
+statistical_power = 0.80
+target_half_width = 0.05
+insufficient_n_verdict = "insufficient-n"
+amendment_verdict = "INTERMEDIATE_amended_threshold_redesign"
+verdict_rule = """
+Per class and per gate: PASS iff n >= required_n and the Wilson 95% lower bound >= the
+floor; n < required_n is `insufficient-n` whatever the interval; otherwise
+`INTERMEDIATE_floor_within_ci` when the point estimate clears the floor and `REJECTED`
+when it does not. The PR-clustered bootstrap (seed 20261015, 20000 resamples) is
+reported beside the Wilson interval as a post-hoc audit, not as a verdict input.
+"""
+
+# Pinned values computed via `src/guards/perf/bounds.rs` (unchanged from v2 to v5):
+# - `sample_size_for_interval(0.95, 0.05, 0.95)` -> 83 findings (at assumed precision)
+# - `sample_size_for_interval(0.90, 0.05, 0.95)` -> 141 findings (at 0.90 floor; required_n so Wilson lower bound >= 0.90 at p=0.95)
+# - `sample_size_for_interval(0.88, 0.05, 0.95)` -> 164 findings (at assumed precision)
+# - `sample_size_for_interval(0.80, 0.05, 0.95)` -> 245 findings (at 0.80 floor; required_n so Wilson lower bound >= 0.80 at p=0.88)
+# - `minimum_detectable_difference(141, 141, 0.55, 0.95, 0.80)` -> 0.15894491346884432
+# - `minimum_detectable_difference(245, 245, 0.55, 0.95, 0.80)` -> 0.12241601541985098
+structural_assumed_precision = 0.95
+structural_assumed_precision_n = 83
+structural_required_n = 141
+heuristic_assumed_precision = 0.88
+heuristic_assumed_precision_n = 164
+heuristic_required_n = 245
+twin_assumed_baseline_precision = 0.55
+mdd_structural_vs_twin = 0.15894491346884432
+mdd_heuristic_vs_twin = 0.12241601541985098
+
+[[gate_floors]]
+class = "structural-ast-and-deterministic"
+precision_floor = 0.90
+assumed_precision = 0.95
+required_n = 141
+rationale = """
+Unchanged from v2 to v5. Deterministic AST, manifest, lockfile, and workflow diff gates inspect
+syntax trees and structured configuration keys; blocking precision must clear a 0.90
+Wilson 95% lower bound. Requiring n=141 (sample_size_for_interval at the 0.90 floor)
+ensures that at assumed precision 0.95 (k=134), the Wilson 95% lower bound (0.9009)
+strictly clears 0.90.
+"""
+gates = [
+  "agents-md",
+  "assertion-reduction",
+  "vacuous-tests",
+  "ignored-tests",
+  "unsafe-safety-comment",
+  "deletion-rationale",
+  "agent-scratch",
+  "shell-secrets",
+  "issue-link",
+  "citation-metadata",
+  "config-integrity",
+  "stub-bodies",
+  "harness-tampering",
+  "error-swallowing",
+  "build-hooks",
+  "toolchain-config",
+  "sandbox-config",
+  "scope-confinement",
+  "suppression-delta",
+  "ci-integrity",
+  "ci-skip-set",
+  "test-floor",
+  "golden-output",
+  "dependency-delta",
+  "test-budget",
+  "pr-checklist",
+  "archive-contents",
+  "manifest-sync",
+  "version-lockstep",
+]
+
+[[gate_floors]]
+class = "heuristic-and-prose"
+precision_floor = 0.80
+assumed_precision = 0.88
+required_n = 245
+rationale = """
+Unchanged from v2 to v5. Prose, regex-corpus, and secret/PII pattern gates operate over
+natural-language markdown, comments, and free-form strings; blocking precision must
+clear a 0.80 Wilson 95% lower bound. Requiring n=245 (sample_size_for_interval at the
+0.80 floor) ensures that at assumed precision 0.88 (k=216), the Wilson 95% lower bound
+(0.8333) strictly clears 0.80.
+"""
+gates = [
+  "time-estimates",
+  "pii",
+  "instruction-smuggling",
+  "provenance-tags",
+  "gate-command-lint",
+  "mechanism-sections",
+  "citation-anchors",
+]
+unlisted_gate_rule = """
+A finding from a gate in neither list (the registry is the same 46 gates at 82d02046,
+0.25.3, 0.26.0, 0.27.0 and 0.28.1; `claim-labels`, `commit-provenance`, `review-threads`, `ratified-paths` and the
+opt-in tool gates are unlisted) is counted in `heuristic-and-prose`, as v2's generator
+does, and named in the results.
+"""
