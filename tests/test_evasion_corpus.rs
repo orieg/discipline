@@ -9,6 +9,8 @@
 //!   policy refusal by its `policy/<code>` rule id;
 //! - `lifted`: nothing is reported, and a directive lifted exactly these finding codes;
 //! - `known_miss`: nothing is reported, and the issue named tracks the gap;
+//! - `clean`: a legitimate change, with nothing reported and nothing lifted, that the
+//!   case's `gate` examined (a false-positive control);
 //! - `exit`: the run could not check, with this exit code.
 //!
 //! A caught case that stops being caught fails here. So does a known miss that starts
@@ -16,10 +18,12 @@
 //! `docs/GATES.md` together, so the documented misses stay true. A known miss whose issue
 //! that list does not name fails too.
 //!
-//! The corpus's `coverage` names every registered gate: on `required` when a case must
-//! exercise it, or on `exempt` with the reason it has none. A required gate is exercised
-//! by a case whose `caught` or `lifted` codes are the gate's, or whose `gate` names it
-//! (for a `known_miss` or `exit` case, which has no code to read the gate from).
+//! The corpus's `coverage` names every registered gate: on `required` when cases must
+//! exercise it, or on `exempt` with the reason it has none. A required gate needs a catch
+//! case (`caught` codes of the gate, or a `known_miss` / `exit` case whose `gate` names
+//! it) and a false-positive control (a `clean` case whose `gate` names it, or a legitimate
+//! change whose `lifted` codes are the gate's, for a gate that by design passes a
+//! legitimate change only with its directive).
 
 mod common;
 
@@ -38,7 +42,7 @@ struct Case {
     body: String,
     #[serde(default)]
     enable: Vec<String>,
-    /// The gate a `known_miss` or `exit` case is about.
+    /// The gate a `known_miss`, `clean` or `exit` case is about.
     #[serde(default)]
     gate: Option<String>,
     verdict: Verdict,
@@ -50,6 +54,7 @@ enum Verdict {
     Caught(Vec<String>),
     Lifted(Vec<String>),
     KnownMiss(String),
+    Clean,
     Exit(i32),
 }
 
@@ -62,7 +67,7 @@ struct Corpus {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Coverage {
-    /// Gates that must have at least one case.
+    /// Gates that must have a catch case and a false-positive control.
     required: Vec<String>,
     /// Gates left out on purpose, each with the reason.
     exempt: BTreeMap<String, String>,
@@ -76,6 +81,8 @@ struct Outcome {
     reported: BTreeSet<String>,
     /// The code of every finding a directive lifted.
     lifted: BTreeSet<String>,
+    /// Items examined, by enabled gate.
+    examined: BTreeMap<String, u64>,
 }
 
 fn corpus() -> Corpus {
@@ -119,29 +126,41 @@ fn documented_misses() -> BTreeMap<String, String> {
     misses
 }
 
-/// The gates a case exercises: those of its `caught` or `lifted` codes, and its `gate`.
-fn gates_of(case: &Case) -> BTreeSet<String> {
-    let codes = match &case.verdict {
-        Verdict::Caught(codes) | Verdict::Lifted(codes) => codes.as_slice(),
-        Verdict::KnownMiss(_) | Verdict::Exit(_) => &[],
+/// The gates a case is a catch case for, and the gates it is a false-positive control for.
+fn gates_of(case: &Case) -> (BTreeSet<String>, BTreeSet<String>) {
+    let of_codes = |codes: &[String]| -> BTreeSet<String> {
+        codes
+            .iter()
+            .filter_map(|c| c.split_once('/').map(|(gate, _)| gate.to_string()))
+            .collect()
     };
-    codes
-        .iter()
-        .filter_map(|c| c.split_once('/').map(|(gate, _)| gate.to_string()))
-        .chain(case.gate.clone())
-        .collect()
+    let named: BTreeSet<String> = case.gate.iter().cloned().collect();
+    match &case.verdict {
+        Verdict::Caught(codes) => (&of_codes(codes) | &named, BTreeSet::new()),
+        Verdict::KnownMiss(_) | Verdict::Exit(_) => (named, BTreeSet::new()),
+        Verdict::Lifted(codes) => (BTreeSet::new(), of_codes(codes)),
+        Verdict::Clean => (BTreeSet::new(), named),
+    }
 }
 
-/// The gates on the coverage list that no case exercises.
+/// What each gate on the coverage list lacks: a catch case, a false-positive control.
 fn uncovered(corpus: &Corpus) -> Vec<String> {
-    let covered: BTreeSet<String> = corpus.cases.iter().flat_map(gates_of).collect();
-    corpus
-        .coverage
-        .required
-        .iter()
-        .filter(|g| !covered.contains(*g))
-        .cloned()
-        .collect()
+    let (mut caught, mut controlled) = (BTreeSet::new(), BTreeSet::new());
+    for case in &corpus.cases {
+        let (catch, control) = gates_of(case);
+        caught.extend(catch);
+        controlled.extend(control);
+    }
+    let mut missing = Vec::new();
+    for gate in &corpus.coverage.required {
+        if !caught.contains(gate) {
+            missing.push(format!("{gate}: no catch case"));
+        }
+        if !controlled.contains(gate) {
+            missing.push(format!("{gate}: no false-positive control"));
+        }
+    }
+    missing
 }
 
 /// What the binary reports for one case.
@@ -187,6 +206,7 @@ fn run_case(case: &Case) -> Outcome {
             code: 2,
             reported: BTreeSet::new(),
             lifted: BTreeSet::new(),
+            examined: BTreeMap::new(),
         };
     }
     let report = run.json();
@@ -210,6 +230,14 @@ fn run_case(case: &Case) -> Outcome {
         code: run.code,
         reported: codes("violations").into_iter().chain(refusals).collect(),
         lifted: codes("overrides").into_iter().collect(),
+        examined: outcomes
+            .iter()
+            .filter(|o| o["enabled"] == true)
+            .map(|o| {
+                let gate = o["gate"].as_str().unwrap().to_string();
+                (gate, o["examined"].as_u64().unwrap_or(0))
+            })
+            .collect(),
     }
 }
 
@@ -219,6 +247,7 @@ fn judge(case: &Case, outcome: &Outcome) -> Option<String> {
         code,
         reported: codes,
         lifted,
+        examined,
     } = outcome;
     match &case.verdict {
         Verdict::Exit(want) if code != want => Some(format!(
@@ -241,6 +270,16 @@ fn judge(case: &Case, outcome: &Outcome) -> Option<String> {
             (!codes.is_empty() || *lifted != want).then(|| {
                 format!(
                     "{}: expected nothing reported and exactly {want:?} lifted, got {codes:?} reported and {lifted:?} lifted",
+                    case.name
+                )
+            })
+        }
+        Verdict::Clean => {
+            let gate = case.gate.as_deref().unwrap_or_default();
+            let seen = examined.get(gate).copied().unwrap_or(0);
+            (*code != 0 || !codes.is_empty() || !lifted.is_empty() || seen == 0).then(|| {
+                format!(
+                    "{}: expected a clean run that `{gate}` examined, got exit {code}, {codes:?} reported, {lifted:?} lifted, {seen} item(s) examined by `{gate}`",
                     case.name
                 )
             })
@@ -361,13 +400,18 @@ fn the_corpus_is_well_formed() {
                         .map_or("any gate's".to_string(), |g| format!("`{g}`'s"))
                 );
             }
+            Verdict::Clean => assert!(
+                case.gate.is_some(),
+                "{}: a `clean` case names the gate it controls in `gate`",
+                case.name
+            ),
             Verdict::Exit(code) => assert_eq!(*code, 2, "{}: only exit 2 is a verdict", case.name),
         }
     }
 }
 
 /// Every registered gate is on the coverage list or exempt with a reason, and every gate
-/// on the list has a case.
+/// on the list has a catch case and a false-positive control.
 #[test]
 fn every_listed_gate_has_a_case() {
     let corpus = corpus();
@@ -402,19 +446,30 @@ fn every_listed_gate_has_a_case() {
     let missing = uncovered(&corpus);
     assert!(
         missing.is_empty(),
-        "gates on the corpus coverage list with no case: {missing:?}; add a `caught` or `known_miss` case, or move the gate to `exempt` with a reason"
+        "gates on the corpus coverage list without their controls: {missing:?}; add the case (`caught` / `known_miss` for a catch, `clean` / `lifted` for a false-positive control), or move the gate to `exempt` with a reason"
     );
 }
 
-/// The coverage check discriminates: removing the only cases of a listed gate reports it.
+/// The coverage check discriminates: removing a listed gate's catch cases, or its
+/// false-positive controls, reports that gate.
 #[test]
 fn coverage_reports_a_listed_gate_whose_cases_are_removed() {
-    let mut corpus = corpus();
-    assert!(uncovered(&corpus).is_empty());
     let gate = "shell-secrets".to_string();
-    assert!(corpus.coverage.required.contains(&gate));
-    corpus.cases.retain(|c| !gates_of(c).contains(&gate));
-    assert_eq!(uncovered(&corpus), vec![gate]);
+    let without = |control: bool| {
+        let mut corpus = corpus();
+        assert!(uncovered(&corpus).is_empty());
+        assert!(corpus.coverage.required.contains(&gate));
+        corpus.cases.retain(|c| {
+            let (catch, controls) = gates_of(c);
+            !if control { controls } else { catch }.contains(&gate)
+        });
+        uncovered(&corpus)
+    };
+    assert_eq!(without(false), vec!["shell-secrets: no catch case"]);
+    assert_eq!(
+        without(true),
+        vec!["shell-secrets: no false-positive control"]
+    );
 }
 
 /// The judge itself discriminates: each verdict kind fails on the outcome it rules out.
@@ -434,6 +489,7 @@ fn the_judge_rejects_each_kind_of_disagreement() {
         code,
         reported: set(reported),
         lifted: set(lifted),
+        examined: BTreeMap::from([("a".to_string(), 1)]),
     };
     let caught = case(Verdict::Caught(vec!["a/b".into()]));
     assert!(judge(&caught, &ran(1, &["a/b"], &[])).is_none());
@@ -472,6 +528,31 @@ fn the_judge_rejects_each_kind_of_disagreement() {
     assert!(
         judge(&miss, &ran(0, &["w/x"], &[])).is_some(),
         "even at warning severity"
+    );
+    let clean = Case {
+        gate: Some("a".into()),
+        ..case(Verdict::Clean)
+    };
+    assert!(judge(&clean, &ran(0, &[], &[])).is_none());
+    assert!(
+        judge(&clean, &ran(1, &["a/b"], &[])).is_some(),
+        "a false positive"
+    );
+    assert!(
+        judge(&clean, &ran(0, &["a/w"], &[])).is_some(),
+        "even at warning severity"
+    );
+    assert!(
+        judge(&clean, &ran(0, &[], &["a/b"])).is_some(),
+        "clean only because a directive lifted it"
+    );
+    let unexamined = Outcome {
+        examined: BTreeMap::from([("a".to_string(), 0)]),
+        ..ran(0, &[], &[])
+    };
+    assert!(
+        judge(&clean, &unexamined).is_some(),
+        "clean only because the gate looked at nothing"
     );
     let exit = case(Verdict::Exit(2));
     assert!(judge(&exit, &ran(2, &[], &[])).is_none());
