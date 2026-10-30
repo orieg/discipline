@@ -23,6 +23,10 @@ Implements the complete deterministic pipeline for `docs/benchmarks/precision-pr
    `--v3-stage` / `--v4-stage` / `--v5-stage diff|packet|artifacts` checks the reproduction
    of the previous study, applies the label-reuse rule, builds the fresh-item packet and
    writes `docs/benchmarks/results-v3/`, `results-v4/` or `results-v5/`.
+7. `agent-pr-precision-v6` (`docs/benchmarks/precision-preregistration-v6.toml`):
+   `--v6-stage diff|packet|artifacts` re-runs the same corpus with every label fresh, records
+   the v5 match per item, splits the packet into rater batches, and reports the in-sample
+   split, lost v5 true positives and the v0.28.0 row attribution in `results-v6/`.
 """
 
 from __future__ import annotations
@@ -50,6 +54,7 @@ RESULTS_DIR = REPO_ROOT / "docs" / "benchmarks" / "results"
 V3_RESULTS_DIR = REPO_ROOT / "docs" / "benchmarks" / "results-v3"
 V4_RESULTS_DIR = REPO_ROOT / "docs" / "benchmarks" / "results-v4"
 V5_RESULTS_DIR = REPO_ROOT / "docs" / "benchmarks" / "results-v5"
+V6_RESULTS_DIR = REPO_ROOT / "docs" / "benchmarks" / "results-v6"
 
 PILOT_REPOS: list[tuple[str, str]] = [
     ("astral-sh/uv", "uv"),
@@ -666,6 +671,21 @@ def post_hoc_audit(results_dir: Path = RESULTS_DIR) -> dict[str, Any]:
         return round(x, 6)
 
     lo_d, hi_d = newcombe_difference_ci(s_k, len(s_items), twin_k, len(twin))
+    in_sample: dict[str, Any] = {}
+    if "in_sample_disclosure" in summary_doc:
+        # v6: the same bootstrap without the pull requests holding the items v0.28.0 fixed.
+        kept = [i for i in items if not in_sample_pr(i["repo"], i["head_sha"])]
+        kept_clusters = pull_request_clusters(kept, structural)
+        kept_boot = pr_cluster_bootstrap_ci(kept_clusters)
+        in_sample = {"structural_clustering_excluding_in_sample_pull_requests": {
+            "excluded_pull_requests": [f"{repo} {prefix}" for repo, prefix in V6_IN_SAMPLE_PRS],
+            "pull_requests_with_findings": len(kept_clusters),
+            "k": sum(k for k, _ in kept_clusters),
+            "n": sum(n for _, n in kept_clusters),
+            "pr_cluster_bootstrap_95_ci": [round(kept_boot[0], 6), round(kept_boot[1], 6)],
+            "bootstrap_seed": POST_HOC_BOOTSTRAP_SEED,
+            "bootstrap_resamples": POST_HOC_BOOTSTRAP_RESAMPLES,
+        }}
     generated_by = "python3 scripts/benchmark_precision.py --post-hoc-audit --write"
     if Path(results_dir).resolve() != RESULTS_DIR.resolve():
         generated_by += f" --results-dir {Path(results_dir).resolve().relative_to(REPO_ROOT)}"
@@ -686,6 +706,7 @@ def post_hoc_audit(results_dir: Path = RESULTS_DIR) -> dict[str, Any]:
             "bootstrap_seed": POST_HOC_BOOTSTRAP_SEED,
             "bootstrap_resamples": POST_HOC_BOOTSTRAP_RESAMPLES,
         },
+        **in_sample,
         "structural_false_positives_by_gate_and_repo": dict(sorted(fp_by_gate_repo.items())),
         "twin_comparison": {
             "difference": r6(s_k / len(s_items) - twin_k / len(twin)),
@@ -1825,6 +1846,8 @@ class RerunStudy:
     rater_label_diagnostic: bool
     rater_degeneracy_rule: bool = False
     reference_attribution: bool = False
+    # v6 onward: no label is inherited; the match against the previous study is recorded only.
+    inherit_labels: bool = True
 
 
 V3_STUDY = RerunStudy(
@@ -1967,7 +1990,345 @@ def reference_attribution(
         },
     }
 
-RERUN_STUDIES: dict[str, RerunStudy] = {"v3": V3_STUDY, "v4": V4_STUDY, "v5": V5_STUDY}
+V6_STUDY_ID = "agent-pr-precision-v6"
+V6_PACKET_SHUFFLE_SEED = 48208
+V6_ANCHOR_SEED = 48209
+V6_RATER_PACKET = "docs/benchmarks/results-v6/rater-packet.json"
+V6_BATCH_SIZE = 40
+
+V6_STUDY = RerunStudy(
+    study_id=V6_STUDY_ID,
+    previous="v5",
+    previous_study_id=V5_STUDY_ID,
+    previous_results_dir=V5_RESULTS_DIR,
+    results_dir=V6_RESULTS_DIR,
+    rater_packet=V6_RATER_PACKET,
+    preregistration="docs/benchmarks/precision-preregistration-v6.toml",
+    discipline_version="0.28.1",
+    reference_binary=(
+        "discipline-aarch64-apple-darwin.tar.gz from the v0.27.0 release, verified against its SHA256SUMS"
+    ),
+    corpus_prior_inspection=(
+        "The 232 pull requests were inspected and labelled under agent-pr-precision-v2 (0.23.0) to "
+        "agent-pr-precision-v5 (0.27.0), and three v0.28.0 rows were written to fix five v5 items; v6 "
+        "characterises the 0.28.1 binary on the same changes, not precision on unseen agent pull requests."
+    ),
+    packet_shuffle_seed=V6_PACKET_SHUFFLE_SEED,
+    anchor_seed=V6_ANCHOR_SEED,
+    message_key=v4_message_key,
+    messages_from_reference=False,
+    rater_label_diagnostic=True,
+    rater_degeneracy_rule=True,
+    inherit_labels=False,
+)
+
+# Pre-registration [in_sample_disclosure]: the v5 items three v0.28.0 rows were written to fix,
+# and the pull requests (repo, head_sha prefix) that hold them.
+V6_FIXED_V5_ITEMS = ("ITEM-0015", "ITEM-0016", "ITEM-0044", "ITEM-0126", "ITEM-0127")
+V6_IN_SAMPLE_PRS = (
+    ("astral-sh/ruff", "d0cf39c09e3a"),
+    ("denoland/deno", "b4bf672c3118"),
+    ("vitejs/vite", "24339f4339d6"),
+)
+V6_IN_SAMPLE_QUALIFIERS = {"all": "in-sample-for-v0.28.0-fixes", "excluding": "same-corpus-as-v2-to-v5"}
+
+# Pre-registration [detector_attribution]: the four v0.28.0 rows, their gates and the side of
+# the 0.27.0-vs-0.28.1 comparison a finding they explain is on.
+V6_ATTRIBUTION_ROWS: tuple[tuple[str, frozenset[str], str], ...] = (
+    ("v0.28.0 deletion-rationale (test-removed-without-rationale: tests merged into their container) (#911, #915)",
+     frozenset({"deletion-rationale"}), "reference-only"),
+    ("v0.28.0 stub-bodies (how base and head functions pair) (#910, #913)",
+     frozenset({"stub-bodies"}), "reference-only"),
+    ("v0.28.0 instruction-smuggling (invisible-characters-added, invisible-characters-in-description: "
+     "a variation selector) (#909)", frozenset({"instruction-smuggling"}), "reference-only"),
+    ("v0.28.0 assertion-reduction, vacuous-tests (an iteration over a name bound to an empty literal) (#906)",
+     frozenset({"assertion-reduction", "vacuous-tests"}), "rerun-only"),
+)
+
+
+def in_sample_pr(repo: str, head_sha: str) -> bool:
+    """A pull request holding one of the v5 items the v0.28.0 rows were written to fix."""
+    return any(repo == r and head_sha.startswith(prefix) for r, prefix in V6_IN_SAMPLE_PRS)
+
+
+def replay_differences(
+    message_key: Callable[[str], str],
+    cases: list[dict[str, Any]],
+    reference_cases: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Every (gate, code, file, line, message key) on which the re-run and the reference replay differ."""
+    def keys(case: dict[str, Any]) -> list[tuple[Any, ...]]:
+        return sorted(
+            ((v["gate"], v["code"], v["file"], v["line"], message_key(v["message"])) for v in case["violations"]),
+            key=repr,
+        )
+
+    ref_by_pr = {(c["repo"], c["sha"]): keys(c) for c in reference_cases}
+    differences: list[dict[str, Any]] = []
+    for case in cases:
+        got, want = keys(case), ref_by_pr.get((case["repo"], case["sha"]), [])
+        for key in sorted(set(got) | set(want), key=repr):
+            for side, n in (("rerun-only", got.count(key) - want.count(key)), ("reference-only", want.count(key) - got.count(key))):
+                differences.extend(
+                    {"repo": case["repo"], "head_sha": case["sha"], "gate": key[0], "code": key[1],
+                     "file": key[2], "line": key[3], "side": side}
+                    for _ in range(max(n, 0))
+                )
+    return differences
+
+
+def v6_detector_attribution(
+    study: RerunStudy,
+    cases: list[dict[str, Any]],
+    reference_cases: list[dict[str, Any]],
+    empty_binding_reads: dict[tuple[str, str, str, int | None], bool] | None = None,
+) -> dict[str, Any]:
+    """The v6 `[detector_attribution]` report: each 0.27.0-vs-0.28.1 difference to a v0.28.0 row, or unexplained.
+
+    A difference is attributed by the row's gate and side. The stricter #906 row also needs
+    the flagged test read: `empty_binding_reads` maps (repo, head_sha, file, line) to whether
+    the test at head iterates over a name bound to an empty literal, and a rerun-only
+    assertion-reduction or vacuous-tests difference without an entry stops the stage.
+    """
+    reads = empty_binding_reads or {}
+    by_row: dict[str, list[dict[str, Any]]] = {row: [] for row, _, _ in V6_ATTRIBUTION_ROWS}
+    unexplained: list[dict[str, Any]] = []
+    for d in replay_differences(study.message_key, cases, reference_cases):
+        row = next((r for r, gates, side in V6_ATTRIBUTION_ROWS if d["gate"] in gates and d["side"] == side), None)
+        if row is not None and side_needs_read(d):
+            key = (d["repo"], d["head_sha"], d["file"], d["line"])
+            if key not in reads:
+                raise ValueError(f"{d['gate']} {d['file']}:{d['line']} needs the flagged test read for the #906 row")
+            row = row if reads[key] else None
+        (by_row[row] if row is not None else unexplained).append(d)
+    return {
+        "rule": f"{study.preregistration} [detector_attribution]",
+        "findings_by_row": {row: len(ds) for row, ds in by_row.items()},
+        "attributed": {row: ds for row, ds in by_row.items() if ds},
+        "unexplained": unexplained,
+        "use": "reported, not a verdict input",
+    }
+
+
+def side_needs_read(d: dict[str, Any]) -> bool:
+    return d["side"] == "rerun-only" and d["gate"] in ("assertion-reduction", "vacuous-tests")
+
+
+_MESSAGE_PATH = re.compile(r"`([^`\s]+/[^`\s]*|[^`\s]+\.[A-Za-z0-9]+)`")
+
+
+def v6_replay_artifact_check(
+    study: RerunStudy,
+    cases: list[dict[str, Any]],
+    diff: dict[str, Any],
+    clones_dir: Path,
+) -> dict[str, Any]:
+    """The `[replay_artifact_check]`: a new or changed finding naming a path absent from the scratch tree but present at head."""
+    repo_map = dict(EVALUATION_REPOS)
+    checked = 0
+    found: list[dict[str, Any]] = []
+    for r in diff["records"]:
+        if r["category"] == "unchanged":
+            continue
+        case = cases[r["case_index"]]
+        v = case["violations"][r["violation_index"]]
+        named = [p.split("#", 1)[0] for p in _MESSAGE_PATH.findall(v["message"])]
+        absent = sorted({p for p in named if p and p not in case["paths"]})
+        if not absent:
+            continue
+        checked += 1
+        for path in absent:
+            ok = subprocess.run(
+                ["git", "-C", str(clones_dir / repo_map[case["repo"]]), "cat-file", "-e", f"{case['sha']}:{path}"],
+                capture_output=True,
+            ).returncode == 0
+            if ok:
+                found.append({"repo": case["repo"], "head_sha": case["sha"], "gate": v["gate"], "code": v["code"],
+                              "file": v["file"], "line": v["line"], "named_path": path})
+    repo, prev_item = V5_KNOWN_REPLAY_ARTIFACT
+    known = [r for r in diff["records"] if r["repo"] == repo and r["previous_item_id"] == prev_item]
+    return {
+        "rule": f"{study.preregistration} [replay_artifact_check]",
+        "new_or_changed_findings_checked": checked,
+        "replay_artifacts_found": found,
+        "known_artifact": {
+            f"{study.previous}_item_id": prev_item,
+            "repo": repo,
+            "category": known[0]["category"] if known else "gone",
+        },
+        "use": "reported, not a verdict input; never changes a label",
+    }
+
+
+def gate_class_of(gate: str) -> str:
+    """The pre-registered class of a gate; an unlisted gate counts as heuristic-and-prose."""
+    return "structural-ast-and-deterministic" if gate in STRUCTURAL_GATES else "heuristic-and-prose"
+
+
+def subset_results(
+    items: list[dict[str, Any]], cases: list[dict[str, Any]], twin_flags_by_pr: dict[tuple[str, str], int]
+) -> dict[str, Any]:
+    """Class, twin and block-rate results of a set of labelled items over a set of pull requests.
+
+    `items` carry `source_tool`, `gate` and `final_label`; the verdict rule and the class floors
+    are the pre-registered ones (`evaluate_gate_verdict`).
+    """
+    def tally(xs: list[dict[str, Any]], floor: float, required_n: int) -> dict[str, Any]:
+        k = sum(x["final_label"] == "true-positive" for x in xs)
+        return {
+            "true_positives": k,
+            "false_positives": sum(x["final_label"] == "false-positive" for x in xs),
+            "cannot_tell": sum(x["final_label"] == "cannot-tell" for x in xs),
+            **evaluate_gate_verdict(k, len(xs), floor, required_n),
+        }
+
+    disc = [i for i in items if i["source_tool"] == "discipline"]
+    floors = {"structural-ast-and-deterministic": (0.90, 141), "heuristic-and-prose": (0.80, 245)}
+    blocked = sum(1 for c in cases if c["violations"])
+    twin_blocked = sum(1 for c in cases if twin_flags_by_pr.get((c["repo"], c["sha"]), 0))
+    n = len(cases)
+
+    def rate(b: int) -> dict[str, Any]:
+        lo, hi = wilson_score_interval(b, n, 0.95)
+        return {"blocked": b, "n": n, "point_estimate": round(b / n, 6), "wilson_95_ci": [round(lo, 6), round(hi, 6)]}
+
+    return {
+        "pull_requests": n,
+        "class_results": [
+            {"class": cls, **tally([i for i in disc if gate_class_of(i["gate"]) == cls], *floors[cls])}
+            for cls in ("structural-ast-and-deterministic", "heuristic-and-prose")
+        ],
+        "twin_baseline_result": tally([i for i in items if i["source_tool"] != "discipline"], 0.90, 141),
+        "pull_request_block_rates": {"discipline": rate(blocked), "naive_sensitive_path_filter": rate(twin_blocked)},
+    }
+
+
+def v6_reports(
+    study: RerunStudy,
+    cases: list[dict[str, Any]],
+    diff: dict[str, Any],
+    ground_key: dict[str, Any],
+    provenance: dict[str, dict[str, Any]],
+    final: dict[str, str],
+    prev_final: dict[str, str],
+    previous_findings: list[dict[str, Any]],
+    reference_cases: list[dict[str, Any]],
+    clones_dir: Path,
+    empty_binding_reads: dict[tuple[str, str, str, int | None], bool] | None = None,
+) -> dict[str, Any]:
+    """The v6 reports beside the verdicts: the v5 match, lost true positives, the in-sample split,
+    detector attribution and the replay-artefact check (pre-registration `[v5_match]`,
+    `[in_sample_disclosure]`, `[detector_attribution]`, `[replay_artifact_check]`)."""
+    prev = study.previous
+    pid = f"{prev}_item_id"
+    items = [
+        {
+            "item_id": k,
+            "source_tool": g["source_tool"],
+            "gate": g["gate"],
+            "repo": g["repo"],
+            "head_sha": g["sha"],
+            "final_label": final[k],
+            pid: provenance[k]["finding_fields"][pid],
+        }
+        for k, g in ground_key.items()
+    ]
+    matched = [i for i in items if i[pid] is not None]
+    table: dict[str, dict[str, int]] = {}
+    for i in matched:
+        source = "discipline" if i["source_tool"] == "discipline" else "naive-sensitive-path-filter"
+        cell = table.setdefault(source, {})
+        key = f"{prev_final[i[pid]]} -> {i['final_label']}"
+        cell[key] = cell.get(key, 0) + 1
+    prev_by_id = {i["item_id"]: i for i in previous_findings}
+    v6_of_prev = {i[pid]: i for i in matched}
+    lost = [
+        {pid: item_id, "gate": prev_by_id[item_id]["gate"], "code": prev_by_id[item_id]["code"],
+         "repo": prev_by_id[item_id]["repo"], "file": prev_by_id[item_id]["file"], "line": prev_by_id[item_id]["line"]}
+        for item_id in diff["gone"]
+        if prev_final[item_id] == "true-positive"
+    ]
+    relabelled = [
+        {pid: i[pid], "item_id": i["item_id"], "gate": i["gate"], "final_label": i["final_label"]}
+        for i in matched
+        if i["source_tool"] == "discipline" and prev_final[i[pid]] == "true-positive" and i["final_label"] != "true-positive"
+    ]
+
+    twin_flags_by_pr = {
+        (c["repo"], c["sha"]): sum(
+            classify_twin_sensitive_path(p, p in set(c["base_existing"])) is not None for p in c["paths"]
+        )
+        for c in cases
+    }
+
+    def qualified(results: dict[str, Any], qualifier: str) -> dict[str, Any]:
+        for r in [*results["class_results"], results["twin_baseline_result"]]:
+            if r["verdict"] == "PASS":
+                r["qualifier"] = qualifier
+        return results
+
+    kept_cases = [c for c in cases if not in_sample_pr(c["repo"], c["sha"])]
+    kept_items = [i for i in items if not in_sample_pr(i["repo"], i["head_sha"])]
+    return {
+        f"{prev}_match_diagnostic": {
+            "rule": f"{study.preregistration} [v5_match]",
+            "matched_items": len(matched),
+            "agreeing_final_labels": sum(prev_final[i[pid]] == i["final_label"] for i in matched),
+            f"{prev}_final_to_v6_final": {src: dict(sorted(t.items())) for src, t in sorted(table.items())},
+            "use": "diagnostic only; no v6 label is inherited",
+        },
+        f"lost_{prev}_true_positives": {
+            "rule": f"{study.preregistration} [in_sample_disclosure].lost_true_positive_rule",
+            "gone_with_true_positive_label": len(lost),
+            "items": lost,
+            f"repeated_{prev}_true_positives_with_another_v6_label": len(relabelled),
+            "relabelled_items": relabelled,
+        },
+        "in_sample_disclosure": {
+            "rule": f"{study.preregistration} [in_sample_disclosure]",
+            "fixed_items": {
+                item_id: {
+                    f"{prev}_final_label": prev_final[item_id],
+                    "v6_item_id": v6_of_prev[item_id]["item_id"] if item_id in v6_of_prev else None,
+                    "v6_final_label": v6_of_prev[item_id]["final_label"] if item_id in v6_of_prev else None,
+                }
+                for item_id in V6_FIXED_V5_ITEMS
+            },
+            "in_sample_pull_requests": [f"{repo} {prefix}" for repo, prefix in V6_IN_SAMPLE_PRS],
+            "all_pull_requests": qualified(subset_results(items, cases, twin_flags_by_pr), V6_IN_SAMPLE_QUALIFIERS["all"]),
+            "excluding_in_sample_pull_requests": qualified(
+                subset_results(kept_items, kept_cases, twin_flags_by_pr), V6_IN_SAMPLE_QUALIFIERS["excluding"]
+            ),
+        },
+        "detector_attribution": v6_detector_attribution(study, cases, reference_cases, empty_binding_reads),
+        "replay_artifact_check": v6_replay_artifact_check(study, cases, diff, clones_dir),
+    }
+
+
+def write_packet_batches(items: list[dict[str, Any]], batch_dir: Path) -> None:
+    """One `batch-NN.json` per rater batch, holding only the blinded packet items."""
+    by_id = {i["item_id"]: i for i in items}
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    for n, ids in enumerate(packet_batches(list(by_id)), 1):
+        (batch_dir / f"batch-{n:02d}.json").write_text(json.dumps([by_id[i] for i in ids], indent=1) + "\n")
+
+
+def load_empty_binding_reads(path: Path | None) -> dict[tuple[str, str, str, int | None], bool] | None:
+    if path is None:
+        return None
+    return {
+        (r["repo"], r["head_sha"], r["file"], r["line"]): bool(r["iterates_empty_binding"])
+        for r in json.loads(path.read_text())
+    }
+
+
+def packet_batches(packet_ids: Sequence[str], size: int = V6_BATCH_SIZE) -> list[list[str]]:
+    """The pre-registered rater batches: consecutive runs of at most `size` packet ids in id order."""
+    ids = sorted(packet_ids)
+    return [ids[i : i + size] for i in range(0, len(ids), size)]
+
+
+RERUN_STUDIES: dict[str, RerunStudy] = {"v3": V3_STUDY, "v4": V4_STUDY, "v5": V5_STUDY, "v6": V6_STUDY}
 
 
 def degenerate_rater(labels: Sequence[str], anchor_previous_labels: Sequence[str]) -> bool:
@@ -2234,26 +2595,44 @@ def build_rerun_packet(
     ground_key_out: Path,
     rater_packet_out: Path,
 ) -> list[dict[str, Any]]:
-    """Blinded packet of the fresh items (new and changed findings, non-inherited twin flags) plus anchors."""
+    """Blinded packet of the fresh items plus anchors.
+
+    With label inheritance (v3 to v5) the fresh items are the new and changed findings and the
+    non-inherited twin flags, and every anchor is an extra packet item. Without it (v6) every
+    finding and twin flag is fresh and records the previous item it matches; an anchor whose
+    previous item has a fresh counterpart is judged through that item (`anchor_for`), and only
+    an anchor without one adds an anchor-only packet item.
+    """
     repo_map = dict(EVALUATION_REPOS)
     file_cache: dict[tuple[str, str, str], list[str]] = {}
     raw: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    counterpart: dict[str, int] = {}
     for r in diff["records"]:
-        if r["category"] == "unchanged":
+        if r["category"] == "unchanged" and study.inherit_labels:
             continue
         case = cases[r["case_index"]]
         v = case["violations"][r["violation_index"]]
+        key = {"role": "fresh", "source_tool": "discipline", "case_index": r["case_index"],
+               "violation_index": r["violation_index"], "category": r["category"]}
+        if not study.inherit_labels:
+            key[f"{study.previous}_item_id"] = r["previous_item_id"]
+            if r["previous_item_id"] is not None:
+                counterpart[r["previous_item_id"]] = len(raw)
         raw.append((
-            {"role": "fresh", "source_tool": "discipline", "case_index": r["case_index"],
-             "violation_index": r["violation_index"], "category": r["category"]},
+            key,
             _packet_raw_item(clones_dir, repo_map, file_cache, case["repo"], case["sha"], case["parent"],
                              case["subject"], v["file"], v["line"], v["code"]),
         ))
     for pos, (case, path, code) in enumerate(twin_sampled):
-        if pos in twin_inherited:
+        if pos in twin_inherited and study.inherit_labels:
             continue
+        key = {"role": "fresh", "source_tool": "naive-sensitive-path-filter", "twin_position": pos}
+        if not study.inherit_labels:
+            key[f"{study.previous}_item_id"] = twin_inherited.get(pos)
+            if pos in twin_inherited:
+                counterpart[twin_inherited[pos]] = len(raw)
         raw.append((
-            {"role": "fresh", "source_tool": "naive-sensitive-path-filter", "twin_position": pos},
+            key,
             _packet_raw_item(clones_dir, repo_map, file_cache, case["repo"], case["sha"], case["parent"],
                              case["subject"], path, None, code),
         ))
@@ -2266,6 +2645,9 @@ def build_rerun_packet(
             key=lambda i: i["item_id"],
         )
         for item in rng.sample(pool, V3_ANCHORS_PER_SOURCE):
+            if not study.inherit_labels and item["item_id"] in counterpart:
+                raw[counterpart[item["item_id"]]][0]["anchor_for"] = item["item_id"]
+                continue
             pr = (item["repo"], item["head_sha"])
             raw.append((
                 {"role": "anchor", "source_tool": item["source_tool"], f"{study.previous}_item_id": item["item_id"]},
@@ -2289,6 +2671,7 @@ def build_rerun_packet(
         "blind_to_previous_labels": True,
         "anchor_sample_seed": study.anchor_seed,
         "packet_shuffle_seed": study.packet_shuffle_seed,
+        **({} if study.inherit_labels else {"batch_size": V6_BATCH_SIZE}),
         "total_items": len(items),
         "items": items,
     }, indent=2) + "\n")
@@ -2314,8 +2697,14 @@ def generate_rerun_artifacts(
     results_dir: Path | None = None,
     discipline_binary: str | None = None,
     reference_cases: list[dict[str, Any]] | None = None,
+    clones_dir: Path | None = None,
+    empty_binding_reads: dict[tuple[str, str, str, int | None], bool] | None = None,
 ) -> dict[str, Any]:
-    """Write a re-run's manifest, findings, adjudication and summary, inheriting the previous study's labels."""
+    """Write a re-run's manifest, findings, adjudication and summary.
+
+    Up to v5 a finding the previous study already labelled inherits its label; v6 labels every
+    item fresh and adds `v6_reports`.
+    """
     prev = study.previous
     prev_id_field = f"{prev}_item_id"
     previous_findings = json.loads((study.previous_results_dir / "findings.json").read_text())["items"]
@@ -2329,7 +2718,10 @@ def generate_rerun_artifacts(
     for packet_id, key in packet_key.items():
         if key["role"] == "anchor":
             anchors.append((packet_id, key[prev_id_field]))
-        elif key["source_tool"] == "discipline":
+            continue
+        if "anchor_for" in key:
+            anchors.append((packet_id, key["anchor_for"]))
+        if key["source_tool"] == "discipline":
             fresh_packet_id[("d", key["case_index"], key["violation_index"])] = packet_id
         else:
             fresh_packet_id[("t", key["twin_position"])] = packet_id
@@ -2349,6 +2741,12 @@ def generate_rerun_artifacts(
     l2: dict[str, str] = {}
     lt: dict[str, str] = {}
     provenance: dict[str, dict[str, Any]] = {}
+
+    def match_label(prev_item: str | None) -> dict[str, Any]:
+        """v6: the matched previous item's final label, recorded as a diagnostic only."""
+        if study.inherit_labels:
+            return {}
+        return {f"{prev}_final_label": prev_final[prev_item] if prev_item is not None else None}
 
     def add(item: dict[str, Any], prev_item: str | None, packet_id: str | None, finding_fields: dict[str, Any]) -> None:
         item_id = f"ITEM-{len(ground_key) + 1:04d}"
@@ -2377,7 +2775,7 @@ def generate_rerun_artifacts(
     for ci, case in enumerate(cases):
         for vi, v in enumerate(case["violations"]):
             rec = record_of[(ci, vi)]
-            inherited = rec["category"] == "unchanged"
+            inherited = rec["category"] == "unchanged" and study.inherit_labels
             add(
                 {**case, "source_tool": "discipline", "gate": v["gate"], "code": v["code"],
                  "file": v["file"], "line": v["line"]},
@@ -2388,6 +2786,7 @@ def generate_rerun_artifacts(
                     "message": _redact_packet_pii_literals(v["message"]),
                     "diff_category": rec["category"],
                     prev_id_field: rec["previous_item_id"],
+                    **match_label(rec["previous_item_id"]),
                 },
             )
     for pos, (case, path, code) in enumerate(twin_sampled):
@@ -2395,9 +2794,10 @@ def generate_rerun_artifacts(
         add(
             {**case, "source_tool": "naive-sensitive-path-filter", "gate": "naive-sensitive-path-filter",
              "code": code, "file": path, "line": None},
-            prev_item,
-            None if prev_item is not None else fresh_packet_id[("t", pos)],
-            {"diff_category": "unchanged" if prev_item is not None else "new", prev_id_field: prev_item},
+            prev_item if study.inherit_labels else None,
+            None if prev_item is not None and study.inherit_labels else fresh_packet_id[("t", pos)],
+            {"diff_category": "unchanged" if prev_item is not None else "new", prev_id_field: prev_item,
+             **match_label(prev_item)},
         )
 
     fresh_ids = [k for k, p in provenance.items() if p["label_source"] == "fresh"]
@@ -2462,7 +2862,16 @@ def generate_rerun_artifacts(
                 }
                 for p, v in sorted(anchors)
             ],
-            "use": "drift check only; anchor labels are never final labels",
+            "use": (
+                "drift check only; anchor labels are never final labels"
+                if study.inherit_labels
+                else "drift check only; an anchor judged through its fresh counterpart only reads that item's "
+                "label, and an anchor-only item's labels are never final labels"
+            ),
+            **({} if study.inherit_labels else {
+                "judged_through_fresh_counterpart": sum(1 for p, _ in anchors if packet_key[p]["role"] == "fresh"),
+                "anchor_only_items": sum(1 for p, _ in anchors if packet_key[p]["role"] == "anchor"),
+            }),
             **({"status": degeneracy["status"]} if degeneracy is not None else {}),
         },
     }
@@ -2491,6 +2900,17 @@ def generate_rerun_artifacts(
         if reference_cases is None:
             raise ValueError(f"{study.study_id} attributes findings against the reference replay; pass it")
         extra.update(reference_attribution(study, cases, reference_cases, diff))
+    if not study.inherit_labels:
+        if reference_cases is None or clones_dir is None:
+            raise ValueError(f"{study.study_id} needs the reference replay and the clones for its reports")
+        final = {
+            k: (override or {}).get(k) or (l1[k] if l1[k] == l2[k] else lt.get(k, "cannot-tell"))
+            for k in ground_key
+        }
+        extra.update(v6_reports(
+            study, cases, diff, ground_key, provenance, final, prev_final, previous_findings,
+            reference_cases, clones_dir, empty_binding_reads,
+        ))
     if degeneracy is not None:
         extra["rater_degeneracy"] = {
             "rule": f"{study.preregistration} [adjudication].rater_degeneracy_rule",
@@ -2786,6 +3206,57 @@ def _self_test_v5_reference_attribution() -> None:
             raise AssertionError("the attribution report counted a difference as zero")
 
 
+def _self_test_v6_fresh_labelling_reports() -> None:
+    """The v6 reports: in-sample pull requests, row attribution by gate and side, subset results, batches."""
+    assert in_sample_pr("vitejs/vite", "24339f4339d6" + "0" * 28)
+    assert not in_sample_pr("vitejs/vite", "0" * 40) and not in_sample_pr("astral-sh/uv", "d0cf39c09e3a")
+
+    def finding(gate: str, line: int) -> dict[str, Any]:
+        return {"gate": gate, "code": f"{gate}/x", "file": "t.ts", "line": line, "message": f"{gate} at {line}"}
+
+    sha = "b" * 40
+    ref = [{"repo": "o/r", "sha": sha, "violations": [finding("stub-bodies", 1), finding("ci-integrity", 2)]}]
+    rerun = [{"repo": "o/r", "sha": sha, "violations": [finding("ci-integrity", 2), finding("stub-bodies", 5)]}]
+    out = v6_detector_attribution(V6_STUDY, rerun, ref)
+    rows = list(out["findings_by_row"])
+    # The reference-only stub-bodies finding is the looser row's; a rerun-only one is not.
+    assert out["findings_by_row"][rows[1]] == 1 and sum(out["findings_by_row"].values()) == 1
+    assert [(d["gate"], d["side"]) for d in out["unexplained"]] == [("stub-bodies", "rerun-only")]
+    stricter = [{"repo": "o/r", "sha": sha, "violations": [*ref[0]["violations"], finding("vacuous-tests", 9)]}]
+    try:
+        v6_detector_attribution(V6_STUDY, stricter, ref)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a rerun-only vacuous-tests finding was attributed without reading its test")
+    key = ("o/r", sha, "t.ts", 9)
+    assert v6_detector_attribution(V6_STUDY, stricter, ref, {key: True})["findings_by_row"][rows[3]] == 1
+    assert len(v6_detector_attribution(V6_STUDY, stricter, ref, {key: False})["unexplained"]) == 1
+
+    tp, fp = "true-positive", "false-positive"
+    kept = {"repo": "o/r", "sha": sha, "violations": [finding("stub-bodies", 1)]}
+    fixed = {"repo": "vitejs/vite", "sha": "24339f4339d6" + "0" * 28, "violations": [finding("stub-bodies", 1)]}
+    items = [
+        {"source_tool": "discipline", "gate": "stub-bodies", "repo": "o/r", "head_sha": sha, "final_label": tp},
+        {"source_tool": "discipline", "gate": "stub-bodies", "repo": fixed["repo"], "head_sha": fixed["sha"],
+         "final_label": fp},
+        {"source_tool": "discipline", "gate": "pii", "repo": "o/r", "head_sha": sha, "final_label": "cannot-tell"},
+        {"source_tool": "naive-sensitive-path-filter", "gate": "naive-sensitive-path-filter", "repo": "o/r",
+         "head_sha": sha, "final_label": fp},
+    ]
+    res = subset_results(items, [kept, fixed], {("o/r", sha): 1})
+    structural, heuristic = res["class_results"]
+    assert (structural["k"], structural["n"], structural["false_positives"]) == (1, 2, 1)
+    assert (heuristic["n"], heuristic["cannot_tell"]) == (1, 1)
+    assert res["pull_request_block_rates"]["discipline"]["blocked"] == 2
+    assert res["pull_request_block_rates"]["naive_sensitive_path_filter"]["blocked"] == 1
+    kept_items = [i for i in items if not in_sample_pr(i["repo"], i["head_sha"])]
+    assert subset_results(kept_items, [kept], {})["class_results"][0]["n"] == 1
+
+    batches = packet_batches([f"PKT-{i:04d}" for i in range(85, 0, -1)])
+    assert [len(b) for b in batches] == [40, 40, 5] and batches[0][0] == "PKT-0001"
+
+
 def _self_test_replay_from_manifest() -> None:
     """`replay_from_manifest` replays only the manifest's pairs, diff-scoped, with the manifest's metadata."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -2979,6 +3450,9 @@ def run_self_tests() -> None:
     _self_test_v5_degeneracy_rule()
     _self_test_v5_reference_attribution()
 
+    # 15d. v6: every label fresh; the in-sample split, attribution and batches
+    _self_test_v6_fresh_labelling_reports()
+
     # 16. Each re-run's pre-registration pins the previous manifest by hash (python3.10 has no tomllib)
     for study in RERUN_STUDIES.values():
         prereg = REPO_ROOT / study.preregistration
@@ -2990,7 +3464,7 @@ def run_self_tests() -> None:
             )
 
     # 17. Post-hoc audits on the committed data (v2 to v5)
-    for results_dir in (RESULTS_DIR, V3_RESULTS_DIR, V4_RESULTS_DIR, V5_RESULTS_DIR):
+    for results_dir in (RESULTS_DIR, V3_RESULTS_DIR, V4_RESULTS_DIR, V5_RESULTS_DIR, V6_RESULTS_DIR):
         if (results_dir / "findings.json").exists() and (results_dir / "post-hoc-audit.json").exists():
             committed = json.loads((results_dir / "post-hoc-audit.json").read_text())
             recomputed = json.loads(json.dumps(post_hoc_audit(results_dir)))
@@ -3038,6 +3512,9 @@ def run_rerun_stage(
             args.ground_key_json, REPO_ROOT / study.rater_packet,
         )
         print(f"wrote {study.rater_packet} with {len(items)} items")
+        if not study.inherit_labels and args.batch_dir:
+            write_packet_batches(items, args.batch_dir)
+            print(f"wrote {len(packet_batches([i['item_id'] for i in items]))} rater batches to {args.batch_dir}")
         return 0
     if not args.ratings_json or not args.evaluated_commit:
         parser.error(f"{flag} artifacts requires --ratings-json and --evaluated-commit")
@@ -3045,6 +3522,7 @@ def run_rerun_stage(
         study, cases, diff, sampled, inherited, messages, differences,
         json.loads(args.ground_key_json.read_text()), json.loads(args.ratings_json.read_text()),
         args.evaluated_commit, args.host, args.results_dir_out, args.discipline_binary, reference,
+        args.clones_dir, load_empty_binding_reads(args.empty_binding_reads_json),
     )
     out = (args.results_dir_out or study.results_dir).resolve()
     print(f"wrote {out}/{{manifest,findings,adjudication,summary}}.json")
@@ -3125,6 +3603,23 @@ def main() -> int:
         help="agent-pr-precision-v5: the same stages against v4, writing docs/benchmarks/results-v5/.",
     )
     parser.add_argument(
+        "--v6-stage",
+        choices=["diff", "packet", "artifacts"],
+        help="agent-pr-precision-v6: the same stages against v5 with every label fresh, writing "
+        "docs/benchmarks/results-v6/.",
+    )
+    parser.add_argument(
+        "--batch-dir",
+        type=Path,
+        help="With --v6-stage packet: also write the pre-registered rater batches (batch-NN.json) here.",
+    )
+    parser.add_argument(
+        "--empty-binding-reads-json",
+        type=Path,
+        help="With --v6-stage artifacts: [{repo, head_sha, file, line, iterates_empty_binding}] read from "
+        "each rerun-only assertion-reduction / vacuous-tests finding's test (the #906 row).",
+    )
+    parser.add_argument(
         "--reference-raw-json",
         type=Path,
         help="Raw replay JSON from the previous study's binary over its manifest, for the reproduction "
@@ -3156,7 +3651,7 @@ def main() -> int:
     args = parser.parse_args()
     stages = [(s, getattr(args, f"{tag}_stage")) for tag, s in RERUN_STUDIES.items() if getattr(args, f"{tag}_stage")]
     if len(stages) > 1:
-        parser.error("--v3-stage, --v4-stage and --v5-stage are exclusive")
+        parser.error("--v3-stage, --v4-stage, --v5-stage and --v6-stage are exclusive")
     if stages:
         return run_rerun_stage(stages[0][0], stages[0][1], args, parser)
     if args.test:
