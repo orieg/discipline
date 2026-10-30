@@ -36,6 +36,30 @@
     }
   },
   {
+    "description": "Policy: The change switches off, demotes, or exempts a protected path from a gate that guards the pipeline (`config-integrity`, `ci-integrity`, `ratified-paths`, `sandbox-config`, `instruction-smuggling`), so the run is refused. No directive lifts this: change the base branch's configuration in a change of its own that the gate does not judge. The gates are named in the JSON report (`policy_failures`). [gates]",
+    "check_name": "policy/protective-gate-disarmed",
+    "fingerprint": "90c4cc9c4f2398a6bb25fae2d0b62c9cba5d1ee88f73c31e97d6fb240d4eaa47",
+    "severity": "major",
+    "location": {
+      "path": "discipline.toml",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
+    "description": "Policy: The change deletes the configuration file the base branch holds (`discipline.toml`, or the file `--config` names), so the run is refused, and the base side's override budgets and approval rule still apply to it. No directive lifts this. [discipline.toml]",
+    "check_name": "policy/policy-file-deleted",
+    "fingerprint": "af68def6ee746423c9b0d8837cf0d4221ce8140be1eed70ef08ef3fa46755bae",
+    "severity": "major",
+    "location": {
+      "path": "discipline.toml",
+      "lines": {
+        "begin": 1
+      }
+    }
+  },
+  {
     "description": "Policy: A directive written where the rendered text does not show it was not read (`allow_hidden` is false). It lifts no finding; a finding it was written for is reported by its gate. [PR body]",
     "check_name": "policy/hidden-directive-refused",
     "fingerprint": "608ccaf03b1e28bec0d81bba1c0834382fc22ec75b870126ce99ebc7e9255b40",
