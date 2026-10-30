@@ -439,7 +439,7 @@ May also be specified with the \fBDISCIPLINE_DISABLE\fR environment variable.
 Record current findings to the baseline file
 .TP
 \fB\-\-migrate\fR
-Rewrite a fingerprint\-version\-1 baseline to version 2: every entry a current finding still matches is kept under its finding code, and stale entries are dropped. Commit the result in a change of its own, which `config\-integrity` accepts without a directive. With no baseline file there is nothing to migrate: it says so and exits 0; a file that cannot be read exits 2
+Rewrite an older baseline to version 3: a version\-1 file\*(Aqs entries that a current finding still matches are kept under their finding codes and stale ones dropped, a version\-2 file\*(Aqs entries are kept, and the per\-file assertion counts are seeded. Commit the result in a change of its own, which `config\-integrity` accepts without a directive. With no baseline file there is nothing to migrate: it says so and exits 0; a file that cannot be read exits 2
 .TP
 \fB\-\-baseline\-file\fR \fI<BASELINE_FILE>\fR [default: discipline\-baseline.toml]
 Path to grandfathering baseline file (defaults to discipline\-baseline.toml)
@@ -849,7 +849,7 @@ Replay the last N merged changes through a configuration: what it would have blo
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
-\fBdiscipline replay\fR <\fB\-\-last\fR> [\fB\-\-ref\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBdiscipline replay\fR <\fB\-\-last\fR> [\fB\-\-ref\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-json\fR] [\fB\-\-no\-cache\fR] [\fB\-\-jobs\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
@@ -866,6 +866,12 @@ Configuration under test (default: discipline.toml in the working tree)
 .TP
 \fB\-\-json\fR
 Print the summary as JSON
+.TP
+\fB\-\-no\-cache\fR
+Check every change again: read no verdict from the replay cache and record none
+.TP
+\fB\-\-jobs\fR \fI<N>\fR
+Changes checked at once (default: one per core, at most 4)
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

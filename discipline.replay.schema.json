@@ -17,6 +17,10 @@
           },
           "type": "array"
         },
+        "cached": {
+          "const": true,
+          "description": "The verdict was read from the replay cache: the change was checked before under the same binary, configuration under test and pull request. Omitted otherwise"
+        },
         "detail": {
           "description": "Why the change could not be checked. Omitted otherwise",
           "type": "string"
@@ -219,6 +223,11 @@
   "description": "The summary `discipline replay --json` prints: each replayed change's verdict under the configuration, and per-gate counts. Changes are labelled `#N` (pull request) or by a 10-character commit id.",
   "properties": {
     "blocked": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "cached": {
+      "description": "Changes whose verdict was read from the replay cache (`<git dir>/discipline/replay-cache/`) instead of checked again. Absent from a report written before the cache",
       "minimum": 0,
       "type": "integer"
     },

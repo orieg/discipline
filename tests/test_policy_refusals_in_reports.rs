@@ -547,6 +547,7 @@ fn summary_with_every_refusal() -> CheckSummary {
         ],
         deprecations: Vec::new(),
         directive_notes: Vec::new(),
+        stale_baseline_entries: 0,
         unused_directives: Vec::new(),
     }
 }

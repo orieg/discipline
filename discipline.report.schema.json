@@ -423,6 +423,11 @@
       "const": 1,
       "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it"
     },
+    "stale_baseline_entries": {
+      "description": "Baseline entries no finding of this run matched (resolved findings), a disabled gate's included; `discipline baseline --write` drops them. Omitted when there are none",
+      "minimum": 1,
+      "type": "integer"
+    },
     "unused_directives": {
       "description": "Directives this run read that lifted no finding; never fails the run. Computed when every suite ran. Omitted when empty",
       "items": {

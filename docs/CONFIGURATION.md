@@ -603,7 +603,7 @@ Every option of every subcommand, generated from the binary's own definitions (`
 | `--enable` | `DISCIPLINE_ENABLE` |  | Gate ids to force on (comma separated) |
 | `--disable` | `DISCIPLINE_DISABLE` |  | Gate ids to force off (comma separated) |
 | `--write` |  |  | Record current findings to the baseline file |
-| `--migrate` |  |  | Rewrite a fingerprint-version-1 baseline to version 2: every entry a current finding still matches is kept under its finding code, and stale entries are dropped. Commit the result in a change of its own, which `config-integrity` accepts without a directive. With no baseline file there is nothing to migrate: it says so and exits 0; a file that cannot be read exits 2 |
+| `--migrate` |  |  | Rewrite an older baseline to version 3: a version-1 file's entries that a current finding still matches are kept under their finding codes and stale ones dropped, a version-2 file's entries are kept, and the per-file assertion counts are seeded. Commit the result in a change of its own, which `config-integrity` accepts without a directive. With no baseline file there is nothing to migrate: it says so and exits 0; a file that cannot be read exits 2 |
 | `--baseline-file` |  | `discipline-baseline.toml` | Path to grandfathering baseline file (defaults to discipline-baseline.toml) |
 | `-b`, `--base` | `DISCIPLINE_BASE_REF` |  | Base branch or commit ref to compare against |
 | `-s`, `--suite` |  | `all` | Specific suite to run: all, agent-guard, hygiene, integrity ... |
@@ -689,6 +689,8 @@ Every option of every subcommand, generated from the binary's own definitions (`
 | `--ref` |  |  | Branch whose history is replayed (default: origin's default branch, else main / master) |
 | `-c`, `--config` |  |  | Configuration under test (default: discipline.toml in the working tree) |
 | `--json` |  |  | Print the summary as JSON |
+| `--no-cache` |  |  | Check every change again: read no verdict from the replay cache and record none |
+| `--jobs` |  |  | Changes checked at once (default: one per core, at most 4) |
 
 **`discipline audit`**
 
@@ -1335,6 +1337,8 @@ The configuration under test is usually newer than the history it replays. A fil
 
 `--json` prints the per-change verdicts and the per-gate counts (`errors_by_gate` names the changes each gate blocked with an error finding; `refused_overrides_by_gate` the changes whose override of a gate was refused; `overrides_by_gate` the changes whose check applied an override of a gate, and each case lists those overrides in `overrides` by gate, directive, subject and source, never with the reason text; `could_not_check_by_reason` groups the changes that could not be checked by the reason their check gave, the report's `could_not_check.reason`, with `forge` for a change whose merged pull request could not be read; each case carries its `reason` and the error in `detail`). The command exits 0 when the replay ran, whatever it found; 2 when it could not run. The shape is defined by `discipline.replay.schema.json`, and the `check --format json` report's by `discipline.report.schema.json`, both at the repository root.
 
+**Cached verdicts and parallel checks.** Each verdict a replay reaches is recorded under `<git dir>/discipline/replay-cache/`, one file per change, keyed by its `replayed` marker: the hash of the binary's bytes, the configuration under test, the commit id, the body and author its merged pull request returned, and `DISCIPLINE_NO_NETWORK`. A later replay of a change with the same marker reads the verdict back instead of rebuilding the change and running `check` on it: the row says `(cached)`, the summary `N of M verdicts read from the replay cache`, and `--json` carries `cached` (a count on the summary, `true` on each such case). Anything that could change the verdict changes the marker: a rebuilt binary, an edited `discipline.toml` or a pull-request body edited since. A change that could not be checked is never recorded, so it is tried again. `--no-cache` checks every change again, reading and writing nothing there. The changes left are checked `--jobs N` at a time (default one per core, at most 4), each in a throwaway repository of its own; the summary lists them in history order whichever finishes first.
+
 ### Auditing Escape Hatches: `discipline audit`
 
 ```bash
@@ -1774,11 +1778,21 @@ Fingerprints (version 2) are `sha256("v2:" + gate/code + ":" + path + ":" + sha2
 
 **Version 1 files.** Releases before the finding codes wrote `version = 1`, fingerprinted on the finding's title. Such a file still grandfathers its findings, and each run reports a `deprecated:` line. `discipline baseline --migrate` rewrites it to version 2: every entry a current finding still matches is kept, under its code, and stale entries are dropped, so the file never grows. Commit the migration in a change of its own: `config-integrity` accepts a change that touches nothing but the baseline, does not grow it and keeps every entry's gate and path, without a directive. Mixed with other changes it is reported as `config-integrity/baseline-migration-not-alone`. A `--write --suite <suite>` over a version-1 file is refused until it is migrated, since the entries of the gates it does not run could not be rewritten.
 
+**Version 3: assertion counts.** `baseline --write` writes `version = 3`, which adds an `[assertions]` table: for each tracked test file whose tests run (not under `[gates.test-floor]` `exempt_paths`), the number of assertions its running tests hold, counted as `min_assertions_per_test` counts them.
+
+```toml
+[assertions]
+"tests/parse.rs" = 3
+```
+
+`test-floor` reports a file holding fewer as `test-density-regression`, a warning, comparing against the larger of the count on the base side and the count in the change's own copy, so the entry only moves down through a change that carries `allow-test-shrink: <path> <reason>` ([`test-floor`](GATES.md#test-floor)). `baseline --write` records the current counts (raising an entry is a tightening; lowering one is what the directive is for); `--write --suite <suite>` keeps the recorded counts. A version-2 file still grandfathers its findings and compares no counts (a `test-floor` note says so): `discipline baseline --migrate` rewrites it to version 3, keeping every entry and seeding the counts. As for version 1, commit the migration in a change of its own.
+
 ### 2. Subsequent CI Execution
 
 Subsequent runs automatically detect `discipline-baseline.toml` if present:
 - **Pre-existing findings:** Grandfathered and reported per gate as a non-blocking note (`N finding(s) grandfathered by baseline in this gate (not blocking)`) and as `baselined: N` in the summary line. They do not cause non-zero exit codes.
 - **New violations:** Fail CI immediately with exit code 1.
+- **Stale entries:** an entry no finding of the run matched (a finding since fixed) is named in its gate's notes, and every such entry, a disabled gate's included, is counted in the run's report (`stale_baseline_entries` in `--format json`, a `baseline: N stale entries` line in the text report). `discipline baseline --write` drops them (`--migrate` for a version-1 file).
 - **Transparency:** The baselined count is reported in the terminal, the GitHub step summary and JSON (not in JUnit, SARIF or GitLab reports) and exposed to GitHub Actions workflows via the `steps.<id>.outputs.baselined` step output.
 - **Bypassing Baseline:** Pass `--no-baseline` (or set `no_baseline: true` in the action) to evaluate the diff without grandfathering.
 - **Custom Baseline Path:** Pass `--baseline-file <path>` (or set `baseline_file` in the action).

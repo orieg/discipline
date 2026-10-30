@@ -7,6 +7,9 @@ on:
     branches: [main]
     # `edited`: a changed PR description (a directive added or removed) re-runs the gates.
     types: [opened, synchronize, reopened, edited]
+  # Weekly: the `audit` job reads the merged history, which changes without a pull request.
+  schedule:
+    - cron: "17 5 * * 1"
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}
@@ -589,6 +592,64 @@ jobs:
           path: ${{ steps.discipline.outputs.report }}
           if-no-files-found: ignore
 
+  # The cumulative view no single pull request's check has: what the merged history
+  # carries (#933). The canary seeds that history in a scratch repository and asserts the
+  # diagnostics, not an exit code.
+  audit:
+    needs: build-static
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: discipline-x86_64-unknown-linux-musl
+          path: .ci-bin
+      - run: chmod +x .ci-bin/discipline
+      - name: discipline audit of the last 50 merged changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          .ci-bin/discipline audit --last 50 --ref HEAD --format json --output "${RUNNER_TEMP}/audit.json"
+          {
+            echo '## discipline audit --last 50'
+            echo '```text'
+            .ci-bin/discipline audit --last 50 --ref HEAD
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+      - name: "Inverted canary: a seeded loosening and a gutted test are named, and cleared once restored"
+        run: tests/action/test-audit-canary.sh .ci-bin/discipline "${RUNNER_TEMP}/audit-canary"
+      # What `replay --last N` costs with the release binary, cold and then from the
+      # replay cache: the second run must read back every verdict the first one reached.
+      - name: Replay cost, cold and cached
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          n=5
+          t0="$(date +%s)"
+          .ci-bin/discipline replay --last "${n}" --ref HEAD --json > "${RUNNER_TEMP}/replay-cold.json"
+          t1="$(date +%s)"
+          .ci-bin/discipline replay --last "${n}" --ref HEAD --json > "${RUNNER_TEMP}/replay-warm.json"
+          t2="$(date +%s)"
+          checked="$(jq '[.cases_detail[] | select(.verdict != "could_not_check")] | length' "${RUNNER_TEMP}/replay-cold.json")"
+          [ "${checked}" -gt 0 ] || { echo "::error::no replayed change could be checked"; jq '.could_not_check_by_reason' "${RUNNER_TEMP}/replay-cold.json"; exit 1; }
+          jq -e '.cached == 0' "${RUNNER_TEMP}/replay-cold.json" > /dev/null \
+            || { echo "::error::the cold replay read a cached verdict"; exit 1; }
+          jq -e --argjson n "${checked}" '.cached == $n' "${RUNNER_TEMP}/replay-warm.json" > /dev/null \
+            || { echo "::error::the second replay did not read back the ${checked} verdict(s) the first one reached"; jq '.cached' "${RUNNER_TEMP}/replay-warm.json"; exit 1; }
+          echo "replay --last ${n} on $(nproc) cores: cold $((t1 - t0)) s (${checked} checked), cached $((t2 - t1)) s" | tee -a "${GITHUB_STEP_SUMMARY}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: discipline-audit
+          path: ${{ runner.temp }}/audit.json
+          if-no-files-found: ignore
+
   # Smoke test the built container image with non-root USER 10001 against a root-owned checkout (reproducing R1).
   docker-smoke:
     needs: [detect-changes, build-static]
@@ -657,7 +718,7 @@ jobs:
 
   ci-gate:
     if: always()
-    needs: [detect-changes, lint, test, msrv, supply-chain, build-static, action-github, action-gitea, pre-commit, dogfood, docker-smoke]
+    needs: [detect-changes, lint, test, msrv, supply-chain, build-static, action-github, action-gitea, pre-commit, dogfood, audit, docker-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -672,7 +733,7 @@ jobs:
           # `failure`, `cancelled`, or a result string added later — fails.
           bad="$(echo "${NEEDS}" | jq -r '[to_entries[] | select(.value.result != "success" and .value.result != "skipped") | .key] | join(", ")')"
           count="$(echo "${NEEDS}" | jq 'length')"
-          [ "${count}" -eq 11 ] || { echo "::error::expected 11 needed jobs, saw ${count}"; exit 1; }
+          [ "${count}" -eq 12 ] || { echo "::error::expected 12 needed jobs, saw ${count}"; exit 1; }
           [ -z "${bad}" ] || { echo "::error::not successful: ${bad}"; exit 1; }
       # Dogfood ci-skip-set on this rollup's own runtime context.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

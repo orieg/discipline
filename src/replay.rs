@@ -3,7 +3,7 @@
 //! Each of the last N first-parent commits of a branch is one merged change. For each
 //! commit C with parent P the change is rebuilt in a throwaway repository whose object
 //! store borrows the source repository's (`objects/info/alternates`), so nothing is
-//! written to the source repository:
+//! written to the source repository's object store or working tree:
 //!
 //! * B' = P's tree with the configuration under test as `discipline.toml`;
 //! * H' = C's tree with the same configuration, C's message and author (a change to
@@ -13,6 +13,14 @@
 //!   lookup as the `merged-pr-body` directive source), else the commit message only.
 //!
 //! The throwaway repository is removed when the replay ends, whatever the outcome.
+//!
+//! Each verdict reached is recorded under `<git dir>/discipline/replay-cache/`, keyed by
+//! the change's `replayed` marker ([`cache_key`]: the binary, the configuration under
+//! test, the commit id and what the forge returned for it). A later replay of the same
+//! change under the same marker reads the verdict back instead of rebuilding it
+//! (`--no-cache` checks every change again). The changes left are checked by several
+//! workers at once (`--jobs`), each in a throwaway repository of its own; the summary
+//! lists them in history order whichever finishes first.
 
 use crate::could_not_check::Reason;
 use anyhow::{anyhow, bail, Context, Result};
@@ -66,6 +74,10 @@ pub struct Case {
     /// The child's stderr when it could not check.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub detail: String,
+    /// The verdict was read from the replay cache: the change was checked before under
+    /// the same binary, configuration and pull request ([`cache_key`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cached: bool,
 }
 
 /// One error or warning of a replayed change. Its message is never carried: a finding
@@ -144,6 +156,9 @@ pub struct Summary {
     /// than the change.
     #[serde(default)]
     pub skipped_by_gate: BTreeMap<String, Vec<String>>,
+    /// Changes whose verdict was read from the replay cache instead of checked again.
+    #[serde(default)]
+    pub cached: usize,
     pub cases_detail: Vec<Case>,
 }
 
@@ -164,6 +179,7 @@ impl Summary {
             ..Default::default()
         };
         for c in &cases {
+            s.cached += usize::from(c.cached);
             match c.verdict.as_ref() {
                 "passed" => s.passed += 1,
                 "blocked" => s.blocked += 1,
@@ -237,6 +253,9 @@ impl Summary {
                 let overridden: Vec<&str> = overridden.into_iter().collect();
                 gates.push_str(&format!("  overridden: {}", overridden.join(", ")));
             }
+            if c.cached {
+                gates.push_str("  (cached)");
+            }
             out.push_str(&format!(
                 "{:<9} {:<16} {}{gates}\n",
                 c.label(),
@@ -248,6 +267,12 @@ impl Summary {
             "\n{} changes: {} passed, {} blocked, {} could not be checked\n",
             self.cases, self.passed, self.blocked, self.could_not_check
         ));
+        if self.cached > 0 {
+            out.push_str(&format!(
+                "{} of {} verdicts read from the replay cache (checked before under the same binary, configuration and pull request; `--no-cache` checks them again)\n",
+                self.cached, self.cases
+            ));
+        }
         let from_body = self
             .cases_detail
             .iter()
@@ -625,6 +650,20 @@ pub struct Options {
     pub reference: Option<String>,
     /// The configuration under test (default: `discipline.toml` in the working tree).
     pub config: Option<PathBuf>,
+    /// Check every change again, reading and writing no cached verdict.
+    pub no_cache: bool,
+    /// Changes checked at once; `None` for [`default_jobs`].
+    pub jobs: Option<usize>,
+}
+
+/// Changes checked at once by default: one per core, at most four. Each runs its own
+/// `discipline check`, and the verdicts are listed in history order whatever the order
+/// they finish in.
+pub fn default_jobs() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(4)
 }
 
 /// The first-parent commits to replay, newest first.
@@ -645,6 +684,275 @@ pub fn commits_to_replay<'r>(
     Ok(out)
 }
 
+/// What the forge said about the pull request a change arrived through.
+struct Lookup {
+    pr: Option<u64>,
+    body: Option<String>,
+    author: Option<String>,
+    directives_from: String,
+    /// The lookup failed: what it said, and the token hint.
+    error: Option<(String, Option<String>)>,
+}
+
+/// Where `replay` keeps the verdicts it reached: under the source repository's git
+/// directory, beside the hook log, never in its object store or working tree.
+fn cache_dir(src: &Repository) -> PathBuf {
+    src.commondir().join("discipline").join("replay-cache")
+}
+
+/// The version of the cache's key and record layout.
+const CACHE_LAYOUT: &str = "replay-cache-v1";
+
+/// The `replayed` marker of a change: the hash of everything its verdict was reached
+/// from. The binary (its bytes, so a rebuild of the same version is a new binary), the
+/// configuration under test, the change's commit id (its tree, parent, message and
+/// author), what the forge returned for it (the body read for directives and the author
+/// checked as), and the environment the check reads ([`check_environment`]). A change
+/// with the same marker would be checked the same way, so its recorded verdict is reused.
+fn cache_key(binary: &str, config: Option<&[u8]>, change: &str, lookup: &Lookup) -> String {
+    use crate::report::gitlab::sha256_hex;
+    let parts = [
+        CACHE_LAYOUT.to_string(),
+        binary.to_string(),
+        config.map_or_else(|| "none".to_string(), sha256_hex),
+        change.to_string(),
+        lookup
+            .body
+            .as_deref()
+            .map_or_else(|| "none".to_string(), |b| sha256_hex(b.as_bytes())),
+        lookup.author.clone().unwrap_or_default(),
+        lookup.directives_from.clone(),
+        check_environment(),
+    ];
+    sha256_hex(parts.join("\0").as_bytes())
+}
+
+/// The environment a replayed `check` reads that can change its verdict: every
+/// `DISCIPLINE_*` variable it is run with (`DISCIPLINE_NO_NETWORK`, a runner
+/// authorisation, a forge URL), and which `*_TOKEN` variables are set, by name only (a
+/// gate that reads the forge answers differently with one).
+fn check_environment() -> String {
+    let mut seen: Vec<String> = std::env::vars()
+        .filter_map(|(k, v)| {
+            if k.starts_with("DISCIPLINE_") && !STRIPPED.contains(&k.as_str()) {
+                Some(format!("{k}={v}"))
+            } else if k.ends_with("_TOKEN") && !v.is_empty() {
+                Some(k)
+            } else {
+                None
+            }
+        })
+        .collect();
+    seen.sort();
+    seen.join("\n")
+}
+
+/// Variables `replay` removes from each `check` it runs ([`check_change`]): the ones a
+/// runner sets for the run it is in, which would make every change judged as that run.
+const STRIPPED: &[&str] = &[
+    "PR_BODY",
+    "DISCIPLINE_PR_BODY_FILE",
+    "PR_TITLE",
+    "DISCIPLINE_BASE_REF",
+    "DISCIPLINE_COMMENT",
+    "GITLAB_CI",
+    "CI_PIPELINE_SOURCE",
+    "CI_COMMIT_BEFORE_SHA",
+    "DISCIPLINE_ACTOR",
+    "GITHUB_ACTOR",
+    "GITEA_ACTOR",
+    "FORGEJO_ACTOR",
+    "GITLAB_USER_LOGIN",
+];
+
+/// The verdict recorded under `key`, marked as read from the cache. A record that does
+/// not read is no record: the change is checked again.
+fn cached_case(dir: &std::path::Path, key: &str) -> Option<Case> {
+    let text = std::fs::read_to_string(dir.join(format!("{key}.json"))).ok()?;
+    let mut case: Case = serde_json::from_str(&text).ok()?;
+    case.cached = true;
+    Some(case)
+}
+
+/// Record a verdict under `key`. Only a change that was checked is recorded: one that
+/// could not be checked (a forge that did not answer, a configuration that does not
+/// load) is tried again next time. A record that cannot be written costs the next run
+/// a check, so it is reported and the replay goes on.
+fn store_case(dir: &std::path::Path, key: &str, case: &Case) {
+    if case.verdict == "could_not_check" {
+        return;
+    }
+    let written = std::fs::create_dir_all(dir).and_then(|()| {
+        let tmp = dir.join(format!("{key}.json.tmp"));
+        std::fs::write(&tmp, serde_json::to_vec(case).unwrap_or_default())?;
+        std::fs::rename(&tmp, dir.join(format!("{key}.json")))
+    });
+    if let Err(e) = written {
+        eprintln!("replay: could not record the verdict of {}: {e}", case.sha);
+    }
+}
+
+/// A throwaway repository one worker rebuilds changes in, its object store borrowing the
+/// source repository's.
+struct Scratch {
+    tmp: TempDir,
+    repo: Repository,
+    config_blob: Option<Oid>,
+}
+
+impl Scratch {
+    fn new(objects: &std::path::Path, origin: Option<&str>, config: Option<&[u8]>) -> Result<Self> {
+        let tmp = TempDir::new()?;
+        let scratch = Repository::init(tmp.0.join("tree"))?;
+        let alternates = scratch.path().join("objects/info/alternates");
+        std::fs::write(&alternates, format!("{}\n", objects.display()))?;
+        let repo = Repository::open(tmp.0.join("tree"))?;
+        if let Some(url) = origin {
+            repo.remote("origin", url)?;
+        }
+        let config_blob = config.map(|b| repo.blob(b)).transpose()?;
+        Ok(Self {
+            tmp,
+            repo,
+            config_blob,
+        })
+    }
+}
+
+/// Rebuild change `oid` in `scratch` and run this binary's `check` on it.
+fn check_change(
+    scratch: &Scratch,
+    exe: &std::path::Path,
+    oid: Oid,
+    lookup: Lookup,
+    directives: &crate::config::DirectivesConfig,
+) -> Result<Case> {
+    let (repo, tmp, config_blob) = (&scratch.repo, &scratch.tmp, scratch.config_blob);
+    let c = repo.find_commit(oid)?;
+    let parent = c.parent(0)?;
+    let subject = crate::gitctx::commit_subject(&c);
+    let sig = git2::Signature::now("discipline replay", crate::gitctx::REPLAY_BASE_EMAIL)?;
+    let base_tree = repo.find_tree(with_config(repo, &parent.tree()?, config_blob)?)?;
+    let base = repo.commit(
+        None,
+        &sig,
+        &sig,
+        crate::gitctx::REPLAY_BASE_MESSAGE,
+        &base_tree,
+        &[],
+    )?;
+    let head_tree = repo.find_tree(with_config(repo, &c.tree()?, config_blob)?)?;
+    let base_commit = repo.find_commit(base)?;
+    let head = repo.commit(
+        None,
+        &c.author(),
+        &c.committer(),
+        // Read as `check` reads it: a byte that is not UTF-8 is U+FFFD, and the
+        // directives of the message are kept.
+        &crate::gitctx::commit_message(&c),
+        &head_tree,
+        &[&base_commit],
+    )?;
+    repo.set_head_detached(head)?;
+    repo.checkout_head(Some(
+        git2::build::CheckoutBuilder::new()
+            .force()
+            .remove_untracked(true),
+    ))?;
+
+    let Lookup {
+        pr,
+        body,
+        author,
+        directives_from,
+        error: lookup_error,
+    } = lookup;
+    let body_file = tmp.0.join("body.txt");
+    std::fs::write(&body_file, body.as_deref().unwrap_or(""))?;
+
+    let mut cmd = std::process::Command::new(exe);
+    cmd.env(crate::guards::REPLAY_CASE_ENV, "1")
+        .current_dir(tmp.0.join("tree"))
+        .args(["check", "--format", "json", "--base"])
+        .arg(base.to_string())
+        .arg("--pr-body-file")
+        .arg(&body_file);
+    // The pull request's author stands in for the CI actor that ran its check, so
+    // `allowed_override_actors` is judged per change, never as whoever runs the replay.
+    if let Some(a) = &author {
+        cmd.arg("--actor").arg(a);
+    }
+    for (k, _) in std::env::vars() {
+        let event = k.ends_with("_EVENT_NAME")
+            || k.ends_with("_EVENT_BEFORE")
+            || k.ends_with("_EVENT_PATH");
+        if event || STRIPPED.contains(&k.as_str()) {
+            cmd.env_remove(&k);
+        }
+    }
+    let out = cmd.output().context("cannot run discipline check")?;
+    let code = out.status.code().unwrap_or(2);
+    let report = parse_report(&String::from_utf8_lossy(&out.stdout));
+    let (mut verdict, blocking, warning) = read_verdict(code, &report);
+    let findings = read_findings(code, &report);
+    let mut overrides = read_overrides(code, &report);
+    // The check ran on the scratch commit; the directive was read in the commit
+    // being replayed, which is the one a reader can find. The id is cut as the
+    // check cut the scratch one.
+    let (scratch_id, replayed_id) = (head.to_string(), c.id().to_string());
+    for o in &mut overrides {
+        let short = o.source.strip_prefix("commit ").map(str::len);
+        if let Some(len) = short
+            .filter(|len| *len > 0 && o.source.strip_prefix("commit ") == scratch_id.get(..*len))
+        {
+            o.source =
+                crate::tokens::OverrideSource::Commit(replayed_id[..len].to_string()).to_string();
+        }
+    }
+    let skipped_checks = if matches!(code, 0 | 1) {
+        read_skipped_checks(&report)
+    } else {
+        Vec::new()
+    };
+    let (mut detail, mut reason) = if verdict == "could_not_check" {
+        (
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            Some(read_reason(&report)),
+        )
+    } else {
+        (String::new(), None)
+    };
+    let refused = if verdict == "blocked" {
+        refused_overrides(&report, directives, author.as_deref())
+    } else {
+        Vec::new()
+    };
+    // A forge that was found but could not answer may hold a merged pull request whose
+    // body lifts these findings: the change's verdict is unknown, not blocked.
+    if let (Some((e, hint)), "blocked") = (&lookup_error, verdict) {
+        verdict = "could_not_check";
+        reason = Some(Reason::Forge);
+        detail = lookup_failed_detail(e, hint.as_deref());
+    }
+    Ok(Case {
+        sha: c.id().to_string(),
+        pr: pr.or_else(|| pr_from_subject(&subject)),
+        subject,
+        verdict: verdict.into(),
+        blocking_gates: blocking,
+        refused_overrides: refused,
+        overrides,
+        actor: author,
+        warning_gates: warning,
+        findings,
+        directives_from,
+        skipped_checks,
+        reason,
+        detail,
+        cached: false,
+    })
+}
+
 pub fn run(opts: &Options) -> Result<Summary> {
     if opts.last == 0 {
         bail!("--last must be at least 1");
@@ -659,26 +967,11 @@ pub fn run(opts: &Options) -> Result<Summary> {
         Some(p) => Some(std::fs::read(p).with_context(|| format!("cannot read {}", p.display()))?),
         None => std::fs::read(workdir.join(CONFIG_NAME)).ok(),
     };
-
-    let tmp = TempDir::new()?;
-    let scratch = Repository::init(tmp.0.join("tree"))?;
-    let alternates = scratch.path().join("objects/info/alternates");
-    std::fs::write(
-        &alternates,
-        format!("{}\n", src.commondir().join("objects").display()),
-    )?;
-    let scratch = Repository::open(tmp.0.join("tree"))?;
-    if let Some(url) = src
+    let origin = src
         .find_remote("origin")
         .ok()
-        .and_then(|r| r.url().ok().map(str::to_string))
-    {
-        scratch.remote("origin", &url)?;
-    }
-    let config_blob = config_bytes
-        .as_deref()
-        .map(|b| scratch.blob(b))
-        .transpose()?;
+        .and_then(|r| r.url().ok().map(str::to_string));
+    let objects = src.commondir().join("objects");
     // The override policy of the configuration under test, to name the overrides each
     // case's `check` refused. A configuration that does not parse makes every case exit
     // 2, so its defaults are never used for a verdict.
@@ -692,8 +985,15 @@ pub fn run(opts: &Options) -> Result<Summary> {
     let forge = crate::forge::detect_for_repo(&src);
     let api = crate::forge::HttpApi::from_env();
     let exe = std::env::current_exe().context("cannot locate the discipline binary")?;
+    let cache = (!opts.no_cache).then(|| cache_dir(&src));
+    let binary = match &cache {
+        Some(_) => crate::report::gitlab::sha256_hex(
+            &std::fs::read(&exe)
+                .context("cannot read the discipline binary to key the replay cache")?,
+        ),
+        None => String::new(),
+    };
 
-    let mut cases = Vec::new();
     let commits = commits_to_replay(&src, tip, opts.last)?;
     if commits.len() < opts.last {
         eprintln!(
@@ -702,177 +1002,246 @@ pub fn run(opts: &Options) -> Result<Summary> {
             opts.last
         );
     }
-    for c in commits {
-        let parent = c.parent(0)?;
-        let subject = crate::gitctx::commit_subject(&c);
-        let sig = git2::Signature::now("discipline replay", crate::gitctx::REPLAY_BASE_EMAIL)?;
-        let base_tree = scratch.find_tree(with_config(&scratch, &parent.tree()?, config_blob)?)?;
-        let base = scratch.commit(
-            None,
-            &sig,
-            &sig,
-            crate::gitctx::REPLAY_BASE_MESSAGE,
-            &base_tree,
-            &[],
-        )?;
-        let head_tree = scratch.find_tree(with_config(&scratch, &c.tree()?, config_blob)?)?;
-        let base_commit = scratch.find_commit(base)?;
-        let head = scratch.commit(
-            None,
-            &c.author(),
-            &c.committer(),
-            // Read as `check` reads it: a byte that is not UTF-8 is U+FFFD, and the
-            // directives of the message are kept.
-            &crate::gitctx::commit_message(&c),
-            &head_tree,
-            &[&base_commit],
-        )?;
-        scratch.set_head_detached(head)?;
-        scratch.checkout_head(Some(
-            git2::build::CheckoutBuilder::new()
-                .force()
-                .remove_untracked(true),
-        ))?;
-
-        let mut lookup_error = None;
-        let (pr, body, author, directives_from) = match &forge {
+    let total = commits.len();
+    // Each change's pull request is looked up first, in history order: the body it
+    // returns is part of the change's marker. The cached verdicts are taken here; the
+    // rest are checked below.
+    let mut cases: Vec<Option<Case>> = Vec::with_capacity(total);
+    let mut pending: Vec<(usize, Oid, Lookup, String)> = Vec::new();
+    for c in &commits {
+        let lookup = match &forge {
             Ok(f) => match crate::forge::merged_pull_lookup(&api, f, &c.id().to_string()) {
-                Ok(Some(m)) => (
-                    Some(m.number),
-                    Some(m.body),
-                    Some(m.author).filter(|a| !a.trim().is_empty()),
-                    "pull request body".to_string(),
-                ),
-                Ok(None) => (
-                    None,
-                    None,
-                    None,
-                    "commit message only: no merged pull request".to_string(),
-                ),
+                Ok(Some(m)) => Lookup {
+                    pr: Some(m.number),
+                    body: Some(m.body),
+                    author: Some(m.author).filter(|a| !a.trim().is_empty()),
+                    directives_from: "pull request body".to_string(),
+                    error: None,
+                },
+                Ok(None) => Lookup {
+                    pr: None,
+                    body: None,
+                    author: None,
+                    directives_from: "commit message only: no merged pull request".to_string(),
+                    error: None,
+                },
                 Err(e) => {
                     let hint = crate::forge::token_hint(f.kind, e.kind, api.has_token(f.kind));
                     let e = e.detail();
-                    let from = format!("commit message only: {e}");
-                    lookup_error = Some((e, hint));
-                    (None, None, None, from)
+                    Lookup {
+                        pr: None,
+                        body: None,
+                        author: None,
+                        directives_from: format!("commit message only: {e}"),
+                        error: Some((e, hint)),
+                    }
                 }
             },
-            Err(e) => (None, None, None, format!("commit message only: {e}")),
+            Err(e) => Lookup {
+                pr: None,
+                body: None,
+                author: None,
+                directives_from: format!("commit message only: {e}"),
+                error: None,
+            },
         };
-        let body_file = tmp.0.join("body.txt");
-        std::fs::write(&body_file, body.as_deref().unwrap_or(""))?;
-
-        let mut cmd = std::process::Command::new(&exe);
-        cmd.env(crate::guards::REPLAY_CASE_ENV, "1")
-            .current_dir(tmp.0.join("tree"))
-            .args(["check", "--format", "json", "--base"])
-            .arg(base.to_string())
-            .arg("--pr-body-file")
-            .arg(&body_file);
-        // The pull request's author stands in for the CI actor that ran its check, so
-        // `allowed_override_actors` is judged per change, never as whoever runs the replay.
-        if let Some(a) = &author {
-            cmd.arg("--actor").arg(a);
-        }
-        for (k, _) in std::env::vars() {
-            let event = k.ends_with("_EVENT_NAME")
-                || k.ends_with("_EVENT_BEFORE")
-                || k.ends_with("_EVENT_PATH");
-            if event
-                || matches!(
-                    k.as_str(),
-                    "PR_BODY"
-                        | "DISCIPLINE_PR_BODY_FILE"
-                        | "PR_TITLE"
-                        | "DISCIPLINE_BASE_REF"
-                        | "DISCIPLINE_COMMENT"
-                        | "GITLAB_CI"
-                        | "CI_PIPELINE_SOURCE"
-                        | "CI_COMMIT_BEFORE_SHA"
-                        | "DISCIPLINE_ACTOR"
-                        | "GITHUB_ACTOR"
-                        | "GITEA_ACTOR"
-                        | "FORGEJO_ACTOR"
-                        | "GITLAB_USER_LOGIN"
-                )
-            {
-                cmd.env_remove(&k);
-            }
-        }
-        let out = cmd.output().context("cannot run discipline check")?;
-        let code = out.status.code().unwrap_or(2);
-        let report = parse_report(&String::from_utf8_lossy(&out.stdout));
-        let (mut verdict, blocking, warning) = read_verdict(code, &report);
-        let findings = read_findings(code, &report);
-        let mut overrides = read_overrides(code, &report);
-        // The check ran on the scratch commit; the directive was read in the commit
-        // being replayed, which is the one a reader can find. The id is cut as the
-        // check cut the scratch one.
-        let (scratch_id, replayed_id) = (head.to_string(), c.id().to_string());
-        for o in &mut overrides {
-            let short = o.source.strip_prefix("commit ").map(str::len);
-            if let Some(len) = short.filter(|len| {
-                *len > 0 && o.source.strip_prefix("commit ") == scratch_id.get(..*len)
-            }) {
-                o.source = crate::tokens::OverrideSource::Commit(replayed_id[..len].to_string())
-                    .to_string();
-            }
-        }
-        let skipped_checks = if matches!(code, 0 | 1) {
-            read_skipped_checks(&report)
+        let sha = c.id().to_string();
+        // A failed lookup can turn a verdict into `could_not_check`, which is never
+        // recorded; it is never read from the cache either.
+        let key = cache_key(&binary, config_bytes.as_deref(), &sha, &lookup);
+        let hit = match (&cache, &lookup.error) {
+            (Some(dir), None) => cached_case(dir, &key),
+            _ => None,
+        };
+        if let Some(case) = hit {
+            eprintln!(
+                "replay {}/{total}: {} {} (cached)",
+                cases.len() + 1,
+                &sha[..10],
+                case.verdict
+            );
+            cases.push(Some(case));
         } else {
-            Vec::new()
-        };
-        let (mut detail, mut reason) = if verdict == "could_not_check" {
-            (
-                String::from_utf8_lossy(&out.stderr).trim().to_string(),
-                Some(read_reason(&report)),
-            )
-        } else {
-            (String::new(), None)
-        };
-        let refused = if verdict == "blocked" {
-            refused_overrides(&report, &directives, author.as_deref())
-        } else {
-            Vec::new()
-        };
-        // A forge that was found but could not answer may hold a merged pull request whose
-        // body lifts these findings: the change's verdict is unknown, not blocked.
-        if let (Some((e, hint)), "blocked") = (&lookup_error, verdict) {
-            verdict = "could_not_check";
-            reason = Some(Reason::Forge);
-            detail = lookup_failed_detail(e, hint.as_deref());
+            pending.push((cases.len(), c.id(), lookup, key));
+            cases.push(None);
         }
-        eprintln!(
-            "replay {}/{}: {} {}",
-            cases.len() + 1,
-            opts.last,
-            &c.id().to_string()[..10],
-            verdict
-        );
-        cases.push(Case {
-            sha: c.id().to_string(),
-            pr: pr.or_else(|| pr_from_subject(&subject)),
-            subject,
-            verdict: verdict.into(),
-            blocking_gates: blocking,
-            refused_overrides: refused,
-            overrides,
-            actor: author,
-            warning_gates: warning,
-            findings,
-            directives_from,
-            skipped_checks,
-            reason,
-            detail,
-        });
     }
+
+    // The changes left are checked by up to `jobs` workers, each in a scratch repository
+    // of its own. A change's verdict depends on nothing another change does, and each
+    // lands in its own place in history order, so the summary does not depend on which
+    // worker finished first.
+    let jobs = opts
+        .jobs
+        .unwrap_or_else(default_jobs)
+        .max(1)
+        .min(pending.len().max(1));
+    let queue = std::sync::Mutex::new(pending.into_iter());
+    let done =
+        std::sync::atomic::AtomicUsize::new(total - cases.iter().filter(|c| c.is_none()).count());
+    let checked: std::sync::Mutex<Vec<(usize, String, Case)>> = Default::default();
+    let failed: std::sync::Mutex<Option<anyhow::Error>> = Default::default();
+    std::thread::scope(|s| {
+        for _ in 0..jobs {
+            s.spawn(|| {
+                let work = || -> Result<()> {
+                    let scratch =
+                        Scratch::new(&objects, origin.as_deref(), config_bytes.as_deref())?;
+                    loop {
+                        if failed.lock().map_or(true, |f| f.is_some()) {
+                            return Ok(());
+                        }
+                        let next = queue.lock().ok().and_then(|mut q| q.next());
+                        let Some((i, oid, lookup, key)) = next else {
+                            return Ok(());
+                        };
+                        let case = check_change(&scratch, &exe, oid, lookup, &directives)?;
+                        let n = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                        eprintln!("replay {n}/{total}: {} {}", &case.sha[..10], case.verdict);
+                        if let Ok(mut c) = checked.lock() {
+                            c.push((i, key, case));
+                        }
+                    }
+                };
+                if let Err(e) = work() {
+                    if let Ok(mut f) = failed.lock() {
+                        f.get_or_insert(e);
+                    }
+                }
+            });
+        }
+    });
+    if let Some(e) = failed.into_inner().ok().flatten() {
+        return Err(e);
+    }
+    for (i, key, case) in checked
+        .into_inner()
+        .map_err(|_| anyhow!("a replay worker panicked"))?
+    {
+        if let Some(dir) = &cache {
+            store_case(dir, &key, &case);
+        }
+        cases[i] = Some(case);
+    }
+    let cases: Vec<Case> = cases
+        .into_iter()
+        .collect::<Option<_>>()
+        .ok_or_else(|| anyhow!("a replayed change has no verdict"))?;
     Ok(Summary::from_cases(cases))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lookup(body: Option<&str>, author: Option<&str>) -> Lookup {
+        Lookup {
+            pr: Some(7),
+            body: body.map(str::to_string),
+            author: author.map(str::to_string),
+            directives_from: "pull request body".to_string(),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn the_replayed_marker_changes_with_each_thing_a_verdict_is_reached_from() {
+        let base = cache_key(
+            "bin",
+            Some(b"cfg"),
+            "c0ffee",
+            &lookup(Some("body"), Some("a")),
+        );
+        assert_eq!(
+            base,
+            cache_key(
+                "bin",
+                Some(b"cfg"),
+                "c0ffee",
+                &lookup(Some("body"), Some("a"))
+            )
+        );
+        for other in [
+            cache_key(
+                "bin2",
+                Some(b"cfg"),
+                "c0ffee",
+                &lookup(Some("body"), Some("a")),
+            ),
+            cache_key(
+                "bin",
+                Some(b"cfg2"),
+                "c0ffee",
+                &lookup(Some("body"), Some("a")),
+            ),
+            cache_key("bin", None, "c0ffee", &lookup(Some("body"), Some("a"))),
+            cache_key(
+                "bin",
+                Some(b"cfg"),
+                "decade",
+                &lookup(Some("body"), Some("a")),
+            ),
+            cache_key(
+                "bin",
+                Some(b"cfg"),
+                "c0ffee",
+                &lookup(Some("edited"), Some("a")),
+            ),
+            cache_key("bin", Some(b"cfg"), "c0ffee", &lookup(None, Some("a"))),
+            cache_key(
+                "bin",
+                Some(b"cfg"),
+                "c0ffee",
+                &lookup(Some("body"), Some("b")),
+            ),
+        ] {
+            assert_ne!(base, other);
+        }
+    }
+
+    #[test]
+    fn a_checked_verdict_is_read_back_as_cached_and_one_that_could_not_check_is_not_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let case = |verdict: &'static str| Case {
+            sha: "abcdef0123456789".into(),
+            pr: Some(3),
+            subject: "fix: x".into(),
+            verdict: verdict.into(),
+            blocking_gates: vec!["pii".into()],
+            refused_overrides: Vec::new(),
+            overrides: Vec::new(),
+            actor: None,
+            warning_gates: Vec::new(),
+            findings: Vec::new(),
+            directives_from: String::new(),
+            skipped_checks: Vec::new(),
+            reason: None,
+            detail: String::new(),
+            cached: false,
+        };
+        assert!(cached_case(dir.path(), "k1").is_none());
+        store_case(dir.path(), "k1", &case("blocked"));
+        let back = cached_case(dir.path(), "k1").unwrap();
+        assert!(back.cached);
+        assert_eq!(
+            (back.verdict.as_ref(), back.blocking_gates.as_slice()),
+            ("blocked", ["pii".to_string()].as_slice())
+        );
+        store_case(dir.path(), "k2", &case("could_not_check"));
+        assert!(cached_case(dir.path(), "k2").is_none());
+        // A record that does not read is no record.
+        std::fs::write(dir.path().join("k3.json"), "{").unwrap();
+        assert!(cached_case(dir.path(), "k3").is_none());
+        // The summary counts what came from the cache.
+        let s = Summary::from_cases(vec![back, case("passed")]);
+        assert_eq!(s.cached, 1);
+        assert!(
+            s.render()
+                .contains("1 of 2 verdicts read from the replay cache"),
+            "{}",
+            s.render()
+        );
+    }
 
     #[test]
     fn a_failed_lookup_carries_a_hint_only_when_there_is_one() {
@@ -907,6 +1276,7 @@ mod tests {
             skipped_checks: Vec::new(),
             reason: Some(Reason::Forge),
             detail: DETAIL_WITH_A_LINE.into(),
+            cached: false,
         };
         let text = Summary::from_cases(vec![case]).render();
         assert!(text.contains("fix: x\u{fffd}[2J\u{fffd}\n"), "{text:?}");
@@ -1059,6 +1429,7 @@ mod tests {
             skipped_checks: Vec::new(),
             reason: None,
             detail: String::new(),
+            cached: false,
         };
         let s = Summary::from_cases(vec![
             case(Some(1), "blocked", &["pii"], &[]),
@@ -1204,6 +1575,7 @@ mod tests {
             }],
             reason: Some(Reason::Configuration),
             detail: "some detail".into(),
+            cached: false,
         };
         let summary = Summary::from_cases(vec![case.clone()]);
         let json = serde_json::to_string(&summary).unwrap();

@@ -43,7 +43,7 @@ fn nothing_to_migrate_names_the_file_only() {
     assert!(!out.contains(&private), "{out}");
 
     // Through the environment variable, and for a file that already has the version.
-    std::fs::write(&file, "version = 2\n").unwrap();
+    std::fs::write(&file, "version = 3\n").unwrap();
     let (code, out) = output(
         &repo,
         &["baseline", "--migrate"],
@@ -51,7 +51,7 @@ fn nothing_to_migrate_names_the_file_only() {
     );
     assert_eq!(code, 0, "{out}");
     assert!(
-        out.contains("`known.toml` already uses fingerprint version 2; nothing to migrate."),
+        out.contains("`known.toml` already uses baseline version 3; nothing to migrate."),
         "{out}"
     );
     assert!(!out.contains(&private), "{out}");

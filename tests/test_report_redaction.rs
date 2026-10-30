@@ -173,6 +173,7 @@ fn test_cross_format_redaction_pins_sentinel_exclusion() {
         refused_hidden_directives: Vec::new(),
         deprecations: Vec::new(),
         directive_notes: Vec::new(),
+        stale_baseline_entries: 0,
         unused_directives: Vec::new(),
     };
 
@@ -366,6 +367,7 @@ fn a_policy_refusal_reaches_sarif_junit_and_gitlab_without_the_text_it_quotes() 
         refused_hidden_directives: vec![OverrideSource::PrBody],
         deprecations: Vec::new(),
         directive_notes: Vec::new(),
+        stale_baseline_entries: 0,
         unused_directives: Vec::new(),
     };
     for format in OutputFormat::value_variants() {
@@ -496,6 +498,7 @@ fn step24_cross_format_encoding_and_forge_token_leakage_regression() {
         refused_hidden_directives: Vec::new(),
         deprecations: Vec::new(),
         directive_notes: Vec::new(),
+        stale_baseline_entries: 0,
         unused_directives: Vec::new(),
     };
     for format in [
