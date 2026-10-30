@@ -1541,7 +1541,9 @@
         "tests/test_stats.py": "from src.stats import summarize\n\n\ndef test_summarize():\n    rows = [{\"a\": 1}] * 7\n    row = rows[0]\n    assert summarize([]) != 1\n"
       },
       "verdict": {
-        "known_miss": "#934"
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
       }
     },
     {
@@ -1554,7 +1556,9 @@
         "tests/test_stats.py": "from src.stats import summarize\n\n\ndef test_summarize():\n    rows = [{\"a\": 1}] * 7\n    row = rows[0]\n    assert summarize(rows) >= 6\n"
       },
       "verdict": {
-        "known_miss": "#934"
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
       }
     },
     {
@@ -1567,7 +1571,9 @@
         "tests/test_stats.py": "from src.stats import summarize\n\n\ndef test_summarize():\n    rows = [{\"a\": 1}] * 7\n    row = rows[0]\n    assert summarize([]) <= 1\n"
       },
       "verdict": {
-        "known_miss": "#934"
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
       }
     },
     {
@@ -1580,7 +1586,9 @@
         "tests/test_stats.py": "from src.stats import summarize\n\n\ndef test_summarize():\n    rows = [{\"a\": 1}] * 7\n    row = rows[0]\n    assert \"a\" not in row\n"
       },
       "verdict": {
-        "known_miss": "#934"
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
       }
     },
     {
@@ -1594,7 +1602,9 @@
         "p_test.go": "package p\n\nimport \"testing\"\n\nfunc TestSum(t *testing.T) {\n\tif Sum(1, 2) < 3 {\n\t\tt.Fatalf(\"want 3\")\n\t}\n}\n"
       },
       "verdict": {
-        "known_miss": "#934"
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
       }
     }
   ]
