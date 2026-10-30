@@ -1543,7 +1543,9 @@
       },
       "body": "allow-gate-weakening: ci-integrity the workflow check is noisy here\n",
       "verdict": {
-        "known_miss": "#932"
+        "caught": [
+          "policy/protective-gate-disarmed"
+        ]
       }
     },
     {
@@ -1558,7 +1560,9 @@
       },
       "body": "allow-gate-weakening: instruction-smuggling too many findings to triage now\n",
       "verdict": {
-        "known_miss": "#932"
+        "caught": [
+          "policy/protective-gate-disarmed"
+        ]
       }
     },
     {
@@ -1573,7 +1577,9 @@
       },
       "body": "allow-gate-weakening: config-integrity the generated files trip it\n",
       "verdict": {
-        "known_miss": "#932"
+        "caught": [
+          "policy/protective-gate-disarmed"
+        ]
       }
     },
     {
@@ -1589,7 +1595,10 @@
       },
       "body": "allow-assertion-drop: doubles relaxed for the new rounding\nallow-assertion-drop: wraps relaxed for the new rounding\nallow-gate-weakening: directives the cap moves to the workflow\nremoves: discipline.toml configuration now lives in the workflow\n",
       "verdict": {
-        "known_miss": "#932"
+        "caught": [
+          "policy/max-overrides-exceeded",
+          "policy/policy-file-deleted"
+        ]
       }
     }
   ]

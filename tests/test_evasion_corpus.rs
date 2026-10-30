@@ -49,19 +49,20 @@ fn corpus() -> Corpus {
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
-/// The finding codes the stability contract records (`finding_codes` of the v1 surface).
+/// The finding codes and policy refusals the stability contract records (`finding_codes`
+/// and `policy_refusals` of the v1 surface).
 fn registered_codes() -> BTreeSet<String> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v1_surface.json");
     let surface: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    surface["surface"]["finding_codes"]
-        .as_array()
-        .unwrap()
+    ["finding_codes", "policy_refusals"]
         .iter()
+        .flat_map(|key| surface["surface"][key].as_array().unwrap().clone())
         .map(|c| c.as_str().unwrap().to_string())
         .collect()
 }
 
-/// What the binary reports for one case: its exit code and the codes of every violation.
+/// What the binary reports for one case: its exit code, the codes of every violation, and
+/// the rule id (`policy/<code>`) of every refusal that fails the run.
 fn run_case(case: &Case) -> (i32, BTreeSet<String>) {
     let repo = Repo {
         dir: tempfile::tempdir().unwrap(),
@@ -82,7 +83,18 @@ fn run_case(case: &Case) -> (i32, BTreeSet<String>) {
     repo.commit("change");
 
     let enable = case.enable.join(",");
-    let mut args = vec!["check", "--format", "json", "--base", "main"];
+    // The JSON report keeps a refusal as its sentence; the SARIF report names its rule.
+    let sarif = repo.dir.path().join(".git/discipline-corpus.sarif");
+    let sarif_arg = sarif.to_str().unwrap().to_string();
+    let mut args = vec![
+        "check",
+        "--format",
+        "json",
+        "--base",
+        "main",
+        "--report-sarif",
+        &sarif_arg,
+    ];
     if !enable.is_empty() {
         args.extend(["--enable", &enable]);
     }
@@ -90,13 +102,24 @@ fn run_case(case: &Case) -> (i32, BTreeSet<String>) {
     if run.code == 2 {
         return (2, BTreeSet::new());
     }
-    let codes = run.json()["outcomes"]
+    let mut codes: BTreeSet<String> = run.json()["outcomes"]
         .as_array()
         .unwrap()
         .iter()
         .flat_map(|o| o["violations"].as_array().cloned().unwrap_or_default())
         .map(|v| v["code"].as_str().unwrap().to_string())
         .collect();
+    let report: Value = serde_json::from_str(&std::fs::read_to_string(&sarif).unwrap()).unwrap();
+    codes.extend(
+        report["runs"][0]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["level"] == "error")
+            .filter_map(|r| r["ruleId"].as_str())
+            .filter(|id| id.starts_with("policy/"))
+            .map(str::to_string),
+    );
     (run.code, codes)
 }
 

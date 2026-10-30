@@ -2,7 +2,8 @@
 //!
 //! A refusal is a decision of the run's policy that no gate owns: an override budget
 //! that is exceeded, directive overrides without the approval the policy requires, a
-//! hidden directive that was not read. It is not a finding: it has no gate, no severity
+//! hidden directive that was not read, a gate that guards the pipeline disarmed by the
+//! change it judges, a policy file the change deletes. It is not a finding: it has no gate, no severity
 //! a `[gates.<id>]` table sets, and no baseline entry. So it is not registered in
 //! [`crate::findings`], whose every kind names the gate that reports it; it has this
 //! table, held to the same rule: a code is frozen once released
@@ -36,6 +37,11 @@ pub enum RefusalKind {
     /// A directive written where the rendered text does not show it, not read because
     /// `allow_hidden` is false.
     HiddenDirective,
+    /// A gate that guards the pipeline ([`crate::policy_floor::PROTECTIVE_GATES`]) switched
+    /// off, demoted, or exempted from a protected path by the change it judges.
+    ProtectiveGateDisarmed,
+    /// The change deletes the configuration file the base side holds.
+    PolicyFileDeleted,
 }
 
 /// What the reports say about one kind of refusal.
@@ -88,6 +94,22 @@ pub const REFUSALS: &[RefusalInfo] = &[
         blocks: false,
         title: "Hidden Directive Not Read",
         message: "A directive written where the rendered text does not show it was not read (`allow_hidden` is false). It lifts no finding; a finding it was written for is reported by its gate.",
+    },
+    RefusalInfo {
+        kind: RefusalKind::ProtectiveGateDisarmed,
+        code: "protective-gate-disarmed",
+        key: "gates",
+        blocks: true,
+        title: "Protective Gate Disarmed",
+        message: "The change switches off, demotes, or exempts a protected path from a gate that guards the pipeline (`config-integrity`, `ci-integrity`, `ratified-paths`, `sandbox-config`, `instruction-smuggling`), so the run is refused. No directive lifts this: change the base branch's configuration in a change of its own that the gate does not judge. The gates are named in the JSON report (`policy_failures`).",
+    },
+    RefusalInfo {
+        kind: RefusalKind::PolicyFileDeleted,
+        code: "policy-file-deleted",
+        key: "discipline.toml",
+        blocks: true,
+        title: "Policy File Deleted",
+        message: "The change deletes the configuration file the base branch holds (`discipline.toml`, or the file `--config` names), so the run is refused, and the base side's override budgets and approval rule still apply to it. No directive lifts this.",
     },
 ];
 
@@ -250,6 +272,8 @@ mod tests {
             RefusalKind::MaxInlineOverrides,
             RefusalKind::ApprovalRequired,
             RefusalKind::HiddenDirective,
+            RefusalKind::ProtectiveGateDisarmed,
+            RefusalKind::PolicyFileDeleted,
         ];
         for kind in kinds {
             // Exhaustive: a new variant does not compile until it is listed above.
@@ -257,7 +281,9 @@ mod tests {
                 RefusalKind::MaxOverrides
                 | RefusalKind::MaxInlineOverrides
                 | RefusalKind::ApprovalRequired
-                | RefusalKind::HiddenDirective => {}
+                | RefusalKind::HiddenDirective
+                | RefusalKind::ProtectiveGateDisarmed
+                | RefusalKind::PolicyFileDeleted => {}
             }
             assert_eq!(REFUSALS.iter().filter(|r| r.kind == kind).count(), 1);
             assert_eq!(kind.info().kind, kind);

@@ -1509,7 +1509,9 @@
       "policy/approval-required",
       "policy/hidden-directive-refused",
       "policy/max-inline-overrides-exceeded",
-      "policy/max-overrides-exceeded"
+      "policy/max-overrides-exceeded",
+      "policy/policy-file-deleted",
+      "policy/protective-gate-disarmed"
     ],
     "presets": [
       "api-snapshot",
