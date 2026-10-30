@@ -8926,6 +8926,128 @@ fn override_budget_caps_what_one_change_may_excuse() {
         .contains("`max_overrides` increased from 0 to 5"));
 }
 
+/// The rule ids of the refusals a run's `policy_failures` sentences name, read back from
+/// the wording `src/refusals.rs` gives each kind.
+fn refused(run: &Run) -> Vec<String> {
+    let json = run.json();
+    let Some(failures) = json["policy_failures"].as_array() else {
+        return Vec::new();
+    };
+    failures
+        .iter()
+        .map(|f| {
+            let f = f.as_str().unwrap();
+            if f.contains("directives.max_overrides") {
+                "max-overrides-exceeded"
+            } else if f.contains("disarms a gate") {
+                "protective-gate-disarmed"
+            } else if f.contains("is deleted by this change") {
+                "policy-file-deleted"
+            } else {
+                "other"
+            }
+            .to_string()
+        })
+        .collect()
+}
+
+#[test]
+fn the_base_budget_holds_when_the_change_raises_or_deletes_it() {
+    // Raising the budget in the change that spends it: the base's 1 still caps the run,
+    // under either policy side (#932, chain 2).
+    let repo = repo_with_base_config(&format!("{CONFIG_HEAD}[directives]\nmax_overrides = 1\n"));
+    repo.write(
+        "discipline.toml",
+        &format!(
+            "{CONFIG_HEAD}[directives]\nmax_overrides = 5\n\
+             [gates.vacuous-tests]\nenabled = false\n[gates.pii]\nenabled = false\n"
+        ),
+    );
+    repo.commit(
+        "chore: tune\n\nallow-gate-weakening: vacuous-tests snapshot macros assert for us\n\
+         allow-gate-weakening: pii fixtures carry documentation addresses\n\
+         allow-gate-weakening: directives the budget moves to five",
+    );
+    for side in ["head", "base"] {
+        let run = repo.check(&["--policy-from", side]);
+        assert_eq!(run.code, 1, "{side}: {}", run.stdout);
+        assert_eq!(refused(&run), vec!["max-overrides-exceeded"], "{side}");
+    }
+
+    // Deleting the file that sets the budget: refused, and the budget still holds.
+    let repo = repo_with_base_config(&format!("{CONFIG_HEAD}[directives]\nmax_overrides = 0\n"));
+    repo.git(&["rm", "-q", "discipline.toml"]);
+    repo.commit(
+        "chore: drop the configuration\n\nremoves: discipline.toml settings move to the workflow\n\
+         allow-gate-weakening: directives the budget goes with the file",
+    );
+    for side in ["head", "base"] {
+        let run = repo.check(&["--policy-from", side]);
+        assert_eq!(run.code, 1, "{side}: {}", run.stdout);
+        let ids = refused(&run);
+        assert!(
+            ids.contains(&"policy-file-deleted".to_string()),
+            "{side}: {ids:?}"
+        );
+        assert!(
+            ids.contains(&"max-overrides-exceeded".to_string()),
+            "{side}: {ids:?}"
+        );
+    }
+}
+
+#[test]
+fn a_directive_does_not_lift_the_disarming_of_a_protective_gate() {
+    let base = format!("{CONFIG_HEAD}[gates.ci-integrity]\nenabled = true\n");
+    for (head, body) in [
+        (
+            "enabled = false\n",
+            "allow-gate-weakening: ci-integrity the check is noisy",
+        ),
+        (
+            "severity = \"warning\"\n",
+            "allow-gate-weakening: ci-integrity the check is noisy",
+        ),
+        (
+            "exempt_paths = [\".github/**\"]\n",
+            "allow-gate-weakening: ci-integrity the check is noisy",
+        ),
+    ] {
+        let repo = repo_with_base_config(&base);
+        repo.write(
+            "discipline.toml",
+            &format!("{CONFIG_HEAD}[gates.ci-integrity]\n{head}"),
+        );
+        repo.commit(&format!("chore: tune\n\n{body}"));
+        for side in ["head", "base"] {
+            let run = repo.check(&["--policy-from", side]);
+            assert_eq!(run.code, 1, "{head} {side}: {}", run.stdout);
+            assert_eq!(
+                refused(&run),
+                vec!["protective-gate-disarmed"],
+                "{head} {side}"
+            );
+        }
+    }
+
+    // A narrow exemption, and an ordinary gate switched off, stay liftable weakenings.
+    let repo = repo_with_base_config(&base);
+    repo.write(
+        "discipline.toml",
+        &format!(
+            "{CONFIG_HEAD}[gates.ci-integrity]\nenabled = true\nexempt_paths = [\"tests/fixtures/**\"]\n\
+             [gates.vacuous-tests]\nenabled = false\n"
+        ),
+    );
+    repo.commit(
+        "chore: tune\n\nallow-gate-weakening: ci-integrity fixtures hold sample workflows\n\
+         allow-gate-weakening: vacuous-tests snapshot macros assert for us",
+    );
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(refused(&run).is_empty());
+}
+
 /// Six `time-estimates` markers already in the tree, under a cap of five.
 fn repo_with_six_markers_in_the_tree(directives: &str) -> Repo {
     let repo = Repo::new();

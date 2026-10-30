@@ -2172,6 +2172,76 @@
           "assertion-reduction/weakened-bound"
         ]
       }
+    },
+    {
+      "name": "protective-gate-disabled-by-directive",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n",
+        "discipline.toml": "[gates.ci-integrity]\nenabled = true\n"
+      },
+      "head": {
+        "discipline.toml": "[gates.ci-integrity]\nenabled = false\n"
+      },
+      "body": "allow-gate-weakening: ci-integrity the workflow check is noisy here\n",
+      "verdict": {
+        "caught": [
+          "policy/protective-gate-disarmed"
+        ]
+      }
+    },
+    {
+      "name": "protective-gate-demoted-by-directive",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n",
+        "discipline.toml": "[gates.instruction-smuggling]\nseverity = \"error\"\n"
+      },
+      "head": {
+        "discipline.toml": "[gates.instruction-smuggling]\nseverity = \"warning\"\n"
+      },
+      "body": "allow-gate-weakening: instruction-smuggling too many findings to triage now\n",
+      "verdict": {
+        "caught": [
+          "policy/protective-gate-disarmed"
+        ]
+      }
+    },
+    {
+      "name": "protective-gate-exempts-everything-by-directive",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n",
+        "discipline.toml": "[gates.config-integrity]\nenabled = true\n"
+      },
+      "head": {
+        "discipline.toml": "[gates.config-integrity]\nenabled = true\nexempt_paths = [\"**\"]\n"
+      },
+      "body": "allow-gate-weakening: config-integrity the generated files trip it\n",
+      "verdict": {
+        "caught": [
+          "policy/protective-gate-disarmed"
+        ]
+      }
+    },
+    {
+      "name": "policy-file-deleted-lifts-override-cap",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert_eq!(f(2), 4);\n    }\n\n    #[test]\n    fn wraps() {\n        assert_eq!(M(1).0, 1);\n    }\n}\n",
+        "discipline.toml": "[directives]\nmax_overrides = 1\n"
+      },
+      "head": {
+        "discipline.toml": null,
+        "src/lib.rs": "pub struct M(pub i32);\n\npub fn f(x: i32) -> i32 {\n    x * 2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn doubles() {\n        assert!(f(2) > 0);\n    }\n\n    #[test]\n    fn wraps() {\n        assert!(M(1).0 > 0);\n    }\n}\n"
+      },
+      "body": "allow-assertion-drop: doubles relaxed for the new rounding\nallow-assertion-drop: wraps relaxed for the new rounding\nallow-gate-weakening: directives the cap moves to the workflow\nremoves: discipline.toml configuration now lives in the workflow\n",
+      "verdict": {
+        "caught": [
+          "policy/max-overrides-exceeded",
+          "policy/policy-file-deleted"
+        ]
+      }
     }
   ]
 }
