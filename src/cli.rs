@@ -144,6 +144,14 @@ pub struct ReplayArgs {
     /// Print the summary as JSON
     #[arg(long)]
     pub json: bool,
+
+    /// Check every change again: read no verdict from the replay cache and record none
+    #[arg(long)]
+    pub no_cache: bool,
+
+    /// Changes checked at once (default: one per core, at most 4)
+    #[arg(long, value_name = "N")]
+    pub jobs: Option<usize>,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]

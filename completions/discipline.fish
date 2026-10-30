@@ -209,7 +209,9 @@ complete -c discipline -n "__fish_discipline_using_subcommand explain" -s h -l h
 complete -c discipline -n "__fish_discipline_using_subcommand replay" -l last -d 'Number of first-parent commits (merged changes) to replay, newest first' -r
 complete -c discipline -n "__fish_discipline_using_subcommand replay" -l ref -d 'Branch whose history is replayed (default: origin\'s default branch, else main / master)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand replay" -s c -l config -d 'Configuration under test (default: discipline.toml in the working tree)' -r -F
+complete -c discipline -n "__fish_discipline_using_subcommand replay" -l jobs -d 'Changes checked at once (default: one per core, at most 4)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand replay" -l json -d 'Print the summary as JSON'
+complete -c discipline -n "__fish_discipline_using_subcommand replay" -l no-cache -d 'Check every change again: read no verdict from the replay cache and record none'
 complete -c discipline -n "__fish_discipline_using_subcommand replay" -s h -l help -d 'Print help'
 complete -c discipline -n "__fish_discipline_using_subcommand audit" -l last -d 'Number of first-parent commits (merged changes) to audit, newest first' -r
 complete -c discipline -n "__fish_discipline_using_subcommand audit" -l ref -d 'Branch whose history is audited (default: origin\'s default branch, else main / master)' -r

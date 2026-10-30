@@ -513,3 +513,67 @@ fn harness_git_commands_never_start_background_maintenance() {
         "a maintenance task packed objects:\n{counts}"
     );
 }
+
+/// A replay of changes already replayed under the same binary and configuration reads
+/// their verdicts back instead of rebuilding them (#933); anything the verdict was reached
+/// from changes the marker, and `--no-cache` checks every change again.
+#[test]
+fn a_second_replay_of_the_same_changes_reads_cached_verdicts() {
+    let (repo, _) = history();
+    let cached = |s: &Value| -> Vec<bool> {
+        s["cases_detail"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["cached"] == true)
+            .collect()
+    };
+    let first = replay(&repo, &[], &[]);
+    assert_eq!(cached(&first), [false, false]);
+    assert_eq!(first["cached"], 0);
+    let records = || {
+        std::fs::read_dir(repo.file(".git/discipline/replay-cache"))
+            .map(|d| d.count())
+            .unwrap_or(0)
+    };
+    assert_eq!(records(), 2);
+
+    // The same changes, the same verdicts, read from the cache.
+    let second = replay(&repo, &["--jobs", "1"], &[]);
+    assert_eq!(cached(&second), [true, true]);
+    assert_eq!(second["cached"], 2);
+    assert_eq!(verdicts(&second), verdicts(&first));
+    assert_eq!(second["errors_by_gate"], first["errors_by_gate"]);
+    let text = repo.run(&["replay", "--last", "2", "--ref", "main"], &[]);
+    assert!(
+        text.stdout
+            .contains("2 of 2 verdicts read from the replay cache"),
+        "{}",
+        text.stdout
+    );
+    assert!(text.stderr.contains("(cached)"), "{}", text.stderr);
+
+    // `--no-cache` rebuilds both.
+    let fresh = replay(&repo, &["--no-cache"], &[]);
+    assert_eq!(cached(&fresh), [false, false]);
+    assert_eq!(verdicts(&fresh), verdicts(&first));
+
+    // Another configuration under test is another marker: checked again, and the
+    // verdict it reaches is its own.
+    let cfg = repo.file("candidate.toml");
+    std::fs::write(
+        &cfg,
+        format!("{CONFIG_HEAD}[gates.assertion-reduction]\nenabled = false\n"),
+    )
+    .unwrap();
+    let other = replay(&repo, &["--config", cfg.to_str().unwrap()], &[]);
+    assert_eq!(cached(&other), [false, false]);
+    assert_eq!(
+        verdicts(&other),
+        [(3, "passed".to_string()), (2, "passed".to_string())]
+    );
+
+    // So is an environment the check reads differently.
+    let offline = replay(&repo, &[], &[("DISCIPLINE_ALLOW_COMMAND_CHANGE", "1")]);
+    assert_eq!(cached(&offline), [false, false]);
+}

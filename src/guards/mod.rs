@@ -649,6 +649,10 @@ impl GateOutcome {
     }
 }
 
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
 #[derive(Debug, Serialize)]
 pub struct CheckSummary {
     /// The report schema's version ([`crate::output_schema::REPORT_SCHEMA_VERSION`]). A field
@@ -660,6 +664,11 @@ pub struct CheckSummary {
     pub notes: usize,
     pub overrides: usize,
     pub baselined: usize,
+    /// Baseline entries no finding of this run matched: findings since resolved, which
+    /// `discipline baseline --write` (or `--migrate`, for a version-1 file) drops. Each
+    /// enabled gate's notes name its own; this counts every entry, a disabled gate's too.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub stale_baseline_entries: usize,
     pub outcomes: Vec<GateOutcome>,
     /// Gates the roadmap plans but this binary does not ship. Listed in every
     /// report so their absence is never mistaken for coverage.
@@ -1323,8 +1332,10 @@ pub fn run_checks(
 
     // Grandfathered findings baseline matching
     let mut deprecations = ctx.config.deprecations.clone();
+    let mut stale_baseline_entries = 0;
     if let Some(baseline) = ctx.baseline {
-        crate::baseline::apply_baseline_with_git(ctx.git, baseline, &mut outcomes)?;
+        stale_baseline_entries =
+            crate::baseline::apply_baseline_with_git(ctx.git, baseline, &mut outcomes)?.stale_count;
         if baseline.version < crate::baseline::FINGERPRINT_VERSION {
             deprecations.push(format!(
                 "`{}` uses fingerprint version {}, which keys on finding titles: run `discipline baseline --migrate` in a change of its own to rewrite it to version {}",
@@ -1353,6 +1364,7 @@ pub fn run_checks(
         notes: count(Severity::Note),
         overrides: total_overrides,
         baselined: total_baselined,
+        stale_baseline_entries,
         planned_gates: GATES
             .iter()
             .filter(|g| !g.available)

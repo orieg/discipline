@@ -23736,3 +23736,108 @@ allow-toolchain-weakening: .github/workflows/sonar.yml staged rollout
         "{bad_violations:?}"
     );
 }
+
+/// The assertion-density ratchet (#936): a test file holding fewer assertions than the
+/// baseline records is a warning, whatever the change's own diff was excused for. The
+/// count is read from the base side's baseline too, so lowering it in the same change
+/// does not lower the floor.
+#[test]
+fn test_floor_ratchets_each_files_assertions_from_the_baseline() {
+    const STRICT: &str = "#[test]\nfn parses() {\n    let n: i32 = \"42\".parse().unwrap();\n    \
+        assert_eq!(n, 42);\n    assert!(n > 0);\n    assert_ne!(n, 7);\n}\n";
+    const GUTTED: &str =
+        "#[test]\nfn parses() {\n    let n: i32 = \"42\".parse().unwrap();\n    assert!(n > 0);\n}\n";
+    let density = |run: &Run| -> Vec<(String, String, String)> {
+        run.violations("test-floor")
+            .iter()
+            .filter(|v| v["code"] == "test-floor/test-density-regression")
+            .map(|v| {
+                (
+                    v["severity"].as_str().unwrap().to_string(),
+                    v["file"].as_str().unwrap().to_string(),
+                    v["message"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    };
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("tests/parse.rs", STRICT);
+    repo.commit("test: strict");
+    let written = repo.run(&["baseline", "--write"], &[]);
+    assert_eq!(written.code, 0, "{}{}", written.stdout, written.stderr);
+    let recorded = std::fs::read_to_string(repo.file("discipline-baseline.toml")).unwrap();
+    assert!(recorded.contains("version = 3"), "{recorded}");
+    assert!(recorded.contains("\"tests/parse.rs\" = 4"), "{recorded}");
+    repo.commit("chore: record the baseline");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative control: the counts held, nothing to report.
+    repo.write(
+        "docs/plan.md",
+        "# Plan\n\nPhase 1 then Phase 2, then Phase 3.\n",
+    );
+    repo.commit("docs: plan");
+    assert!(density(&repo.check(&[])).is_empty());
+
+    // Two assertions gone, the drop excused for assertion-reduction by the change itself.
+    repo.write("tests/parse.rs", GUTTED);
+    repo.commit(
+        "test: simplify\n\nallow-assertion-drop: tests/parse.rs the bounds are checked in parse_bounds",
+    );
+    let run = repo.check(&[]);
+    assert!(
+        run.violations("assertion-reduction").is_empty(),
+        "{:?}",
+        run.violations("assertion-reduction")
+    );
+    let found = density(&run);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(
+        (found[0].0.as_str(), found[0].1.as_str()),
+        ("warning", "tests/parse.rs")
+    );
+    assert!(
+        found[0].2.contains("holds 2 assertion(s)"),
+        "{}",
+        found[0].2
+    );
+    assert!(found[0].2.contains("records 4"), "{}", found[0].2);
+    // A warning: the run still passes unless warnings fail it.
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_eq!(repo.check(&["--fail-on-warnings"]).code, 1);
+
+    // Rewriting the baseline in the same change does not lower the floor: the base
+    // side's entry stands.
+    assert_eq!(repo.run(&["baseline", "--write"], &[]).code, 0);
+    repo.commit("chore: re-record the baseline\n\nallow-gate-weakening: baseline re-recorded");
+    assert_eq!(density(&repo.check(&[])).len(), 1);
+
+    // An intended drop is excused by name.
+    repo.commit("chore: excuse\n\nallow-test-shrink: tests/parse.rs bounds moved to parse_bounds");
+    let run = repo.check(&[]);
+    assert!(density(&run).is_empty());
+    assert!(
+        run.outcome("test-floor")["overrides"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["code"] == "test-floor/test-density-regression"),
+        "{}",
+        run.outcome("test-floor")
+    );
+
+    // A baseline that records no counts compares nothing, and says so.
+    let repo = Repo::new();
+    repo.write("discipline-baseline.toml", "version = 2\n");
+    repo.commit("chore: empty baseline");
+    let run = repo.check(&[]);
+    assert!(density(&run).is_empty());
+    assert!(
+        run.outcome("test-floor")["notes"]
+            .to_string()
+            .contains("records no per-file assertion counts"),
+        "{}",
+        run.outcome("test-floor")["notes"]
+    );
+}

@@ -1530,6 +1530,23 @@
           "harness-tampering/harness-exits-zero"
         ]
       }
+    },
+    {
+      "name": "rs-test-body-gutted-assertion-drop-lifted-baseline-density",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "discipline-baseline.toml": "version = 3\nfindings = []\n\n[assertions]\n\"tests/parse.rs\" = 4\n",
+        "tests/parse.rs": "#[test]\nfn parses() {\n    let n: i32 = \"42\".parse().unwrap();\n    assert_eq!(n, 42);\n    assert!(n > 0);\n    assert_ne!(n, 7);\n}\n"
+      },
+      "head": {
+        "tests/parse.rs": "#[test]\nfn parses() {\n    let n: i32 = \"42\".parse().unwrap();\n    assert!(n > 0);\n}\n"
+      },
+      "body": "allow-assertion-drop: tests/parse.rs the bounds are checked in parse_bounds\n",
+      "verdict": {
+        "caught": [
+          "test-floor/test-density-regression"
+        ]
+      }
     }
   ]
 }

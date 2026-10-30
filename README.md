@@ -58,6 +58,7 @@ discipline check
 discipline hook install --agent claude-code
 
 # What would discipline have blocked in your last 50 merged changes?
+# (each change is rebuilt and checked once; a second run reads the verdicts back from the replay cache)
 discipline replay --last 50
 
 # Which waivers, loosenings and grandfathered findings did they carry?

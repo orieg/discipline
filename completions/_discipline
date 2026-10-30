@@ -293,7 +293,9 @@ _arguments "${_arguments_options[@]}" : \
 '--ref=[Branch whose history is replayed (default\: origin'\''s default branch, else main / master)]:REFERENCE:_default' \
 '-c+[Configuration under test (default\: discipline.toml in the working tree)]:CONFIG:_files' \
 '--config=[Configuration under test (default\: discipline.toml in the working tree)]:CONFIG:_files' \
+'--jobs=[Changes checked at once (default\: one per core, at most 4)]:N:_default' \
 '--json[Print the summary as JSON]' \
+'--no-cache[Check every change again\: read no verdict from the replay cache and record none]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0

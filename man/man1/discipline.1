@@ -828,7 +828,7 @@ Replay the last N merged changes through a configuration: what it would have blo
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
-\fBdiscipline replay\fR <\fB\-\-last\fR> [\fB\-\-ref\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBdiscipline replay\fR <\fB\-\-last\fR> [\fB\-\-ref\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-json\fR] [\fB\-\-no\-cache\fR] [\fB\-\-jobs\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
@@ -845,6 +845,12 @@ Configuration under test (default: discipline.toml in the working tree)
 .TP
 \fB\-\-json\fR
 Print the summary as JSON
+.TP
+\fB\-\-no\-cache\fR
+Check every change again: read no verdict from the replay cache and record none
+.TP
+\fB\-\-jobs\fR \fI<N>\fR
+Changes checked at once (default: one per core, at most 4)
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

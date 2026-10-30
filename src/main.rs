@@ -166,6 +166,8 @@ fn run_command(command: Commands) -> Result<bool> {
                 last: args.last,
                 reference: args.reference,
                 config: args.config,
+                no_cache: args.no_cache,
+                jobs: args.jobs,
             })?;
             if args.json {
                 println!("{}", serde_json::to_string_pretty(&summary)?);
@@ -539,6 +541,7 @@ fn emit_fatal_reports(args: &CheckArgs, is_gitlab: bool, base: &str, err: &anyho
         refused_hidden_directives: Vec::new(),
         deprecations: Vec::new(),
         directive_notes: Vec::new(),
+        stale_baseline_entries: 0,
         unused_directives: Vec::new(),
     };
     let json_summary = empty(

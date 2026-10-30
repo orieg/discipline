@@ -269,6 +269,14 @@ fn render_terminal_to_writer<W: Write>(
     for note in &summary.deprecations {
         writeln!(w, "deprecated: {}", text::terminal_line(note))?;
     }
+    if summary.stale_baseline_entries > 0 {
+        let n = summary.stale_baseline_entries;
+        writeln!(
+            w,
+            "baseline: {n} stale entr{} match no finding of this run (resolved findings); `discipline baseline --write` drops them, `--migrate` for a version-1 file",
+            if n == 1 { "y" } else { "ies" }
+        )?;
+    }
     for d in &summary.unused_directives {
         writeln!(
             w,
@@ -813,6 +821,7 @@ mod tests {
             refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
         }
     }
@@ -1033,6 +1042,7 @@ mod tests {
             refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
         };
         let prompt = format_agent_prompt(&summary);
@@ -1178,6 +1188,7 @@ mod tests {
             refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
         };
 
@@ -1245,6 +1256,7 @@ mod tests {
             refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
         };
 
@@ -1347,6 +1359,7 @@ mod tests {
             refused_hidden_directives: Vec::new(),
             deprecations: vec!["`gates.x.old` is deprecated".into()],
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
         };
         let mut buf = Vec::new();
@@ -1363,6 +1376,7 @@ mod tests {
         let quiet = CheckSummary {
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
             ..summary
         };
@@ -1405,6 +1419,7 @@ mod tests {
             refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
         };
 
@@ -1442,6 +1457,7 @@ mod tests {
             refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
         };
 
@@ -1485,6 +1501,7 @@ mod tests {
             refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
         };
 
