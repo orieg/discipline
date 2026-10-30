@@ -100,6 +100,7 @@ impl LanguagePack for PythonPack {
             &mut extractor.facts,
         );
         super::bounds::python(root, src, &mut extractor.facts.tests);
+        super::comparisons::python(root, src, &mut extractor.facts.tests);
         super::expectations::python(root, src, &mut extractor.facts.tests);
         super::caught_assertions::python(root, &anc, src, &mut extractor.facts.tests, vocab);
         super::caught_assertions::through_helpers(
