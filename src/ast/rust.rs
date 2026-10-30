@@ -605,6 +605,7 @@ impl<'a> Extractor<'a> {
             trivial_asserts: 0,
             helper_checks: 0,
             bounds: Vec::new(),
+            comparisons: Vec::new(),
             expectations: Vec::new(),
             caught_assertions: Vec::new(),
             expected_exceptions: should_panic.into_iter().collect(),

@@ -368,6 +368,8 @@ struct PairFindings<'a> {
     loss: AssertionLoss,
     mock_growth: bool,
     loosened: Vec<crate::ast::bounds::Loosened>,
+    /// Comparisons whose operator now accepts more (`ast::comparisons`).
+    weakened_bounds: Vec<crate::ast::comparisons::Weakened>,
     changed: Vec<usize>,
     /// Lines of case-table cells whose value was rewritten in place
     /// (`ast::test_cases::rewritten_cells`).
@@ -395,6 +397,8 @@ impl PairFindings<'_> {
             &crate::findings::MOCKING_INCREASED
         } else if !self.loosened.is_empty() {
             &crate::findings::ASSERTION_BOUND_LOOSENED
+        } else if !self.weakened_bounds.is_empty() {
+            &crate::findings::WEAKENED_BOUND
         } else if !self.widened.is_empty() {
             &crate::findings::EXPECTED_EXCEPTION_WIDENED
         } else if !self.changed.is_empty() || !self.rewritten_rows.is_empty() {
@@ -490,6 +494,7 @@ fn judge_pair<'a>(
     report_newly_caught(p, &f, cx, out);
     report_self_comparisons(p, &f, out);
     report_loosened_bounds(p, &f, cx, out);
+    report_weakened_bounds(p, &f, cx, out);
     report_changed_expectations(p, &f, cx, out);
     report_widened_exceptions(p, &f, cx, out);
     if !f.dropped {
@@ -525,6 +530,14 @@ fn pair_findings<'a>(
         && h_eff.saturating_sub(h.mock_asserts) <= b_eff.saturating_sub(b.mock_asserts);
     // The same assertion with its numeric bound moved the loose way: the count holds.
     let loosened = crate::ast::bounds::loosened(&b.bounds, &h.bounds);
+    // The same assertion with its operator moved the loose way: the count, the class and
+    // the literal hold. A rewrite that also lowers the count or the class is the
+    // reduction below, which already names it.
+    let weakened_bounds = if total_drop || strong_drop {
+        Vec::new()
+    } else {
+        crate::ast::comparisons::weakened(&b.comparisons, &h.comparisons)
+    };
     // The same assertion expecting a different value: the count and strength hold.
     let changed = crate::ast::expectations::changed(&b.expectations, &h.expectations);
     // The same case row with one value rewritten: the count of rows and assertions holds.
@@ -541,6 +554,7 @@ fn pair_findings<'a>(
     let dropped = total_drop || strong_drop || fatal_drop || mock_growth || cases_drop;
     if !dropped
         && loosened.is_empty()
+        && weakened_bounds.is_empty()
         && changed.is_empty()
         && rewritten_rows.is_empty()
         && newly_caught.is_empty()
@@ -557,6 +571,7 @@ fn pair_findings<'a>(
         loss,
         mock_growth,
         loosened,
+        weakened_bounds,
         changed,
         rewritten_rows,
         widened,
@@ -976,6 +991,51 @@ fn report_loosened_bounds(
     }
 }
 
+/// Reports each comparison whose operator now accepts more results.
+fn report_weakened_bounds(
+    p: &TestPair,
+    f: &PairFindings,
+    cx: &ReductionInputs,
+    out: &mut GateOutcome,
+) {
+    let h = p.head;
+    let (settings, is_staged) = (cx.settings, cx.is_staged);
+    let test_label = pair_label(p);
+    let directive_name = pair_directive_name(p);
+    for w in &f.weakened_bounds {
+        // The line and the two operators only: operators are a closed set, the rest of
+        // the assertion is the change's own text and is not echoed into a report agents
+        // read.
+        let message = if w.fails_when_true {
+            format!(
+                "{test_label}: the failure condition on line {} changed its comparison from `{}` to `{}`, so the test fails on fewer results.",
+                w.line, w.from, w.to
+            )
+        } else {
+            format!(
+                "{test_label}: the assertion on line {} changed its comparison from `{}` to `{}`, which accepts more results.",
+                w.line, w.from, w.to
+            )
+        };
+        out.push(
+            if is_staged {
+                crate::config::Severity::Warning
+            } else {
+                settings.severity()
+            },
+            &crate::findings::WEAKENED_BOUND,
+            Some(p.path),
+            Some(w.line),
+            message,
+            &format!(
+                "Restore the comparison, or justify the change on its own line in the PR body or a commit message: `allow-assertion-drop: {} <reason>`.",
+                directive_name
+            ),
+        );
+        out.anchor_last(h.name.clone());
+    }
+}
+
 /// Reports each assertion that now expects a different value, and each case-table row
 /// with one value rewritten in place.
 fn report_changed_expectations(
@@ -1302,6 +1362,88 @@ mod tests {
     use crate::gitctx::{ChangeKind, ChangedFile};
     use crate::guards::agent_diff::test_support::*;
     use crate::guards::agent_diff::{match_tests, FileFacts};
+
+    #[test]
+    fn an_operator_moved_the_loose_way_is_a_weakened_bound() {
+        const WEAKENED: &str = "assertion-reduction/weakened-bound";
+        let py = |check: &str| {
+            format!(
+                "def test_summarize():\n    rows = [1] * 7\n    row = {{\"a\": 1}}\n    {check}\n"
+            )
+        };
+        let go = |cond: &str| {
+            format!("package p\n\nimport \"testing\"\n\nfunc TestSum(t *testing.T) {{\n\tif {cond} {{\n\t\tt.Fatalf(\"want 3\")\n\t}}\n}}\n")
+        };
+        let change = |path: &str, base: String, head: String, body: &str| {
+            reduction(&[(path, &base, &head)], body)
+                .into_iter()
+                .map(|(code, _)| code)
+                .collect::<Vec<_>>()
+        };
+        let py_path = "tests/test_stats.py";
+        for (base, head) in [
+            ("assert summarize([]) == 0", "assert summarize([]) != 1"),
+            ("assert summarize(rows) > 6", "assert summarize(rows) >= 6"),
+            ("assert summarize([]) < 1", "assert summarize([]) <= 1"),
+            ("assert \"a\" in row", "assert \"a\" not in row"),
+        ] {
+            assert_eq!(
+                change(py_path, py(base), py(head), ""),
+                [WEAKENED],
+                "{base} -> {head}"
+            );
+            // Lifted by `allow-assertion-drop:` naming the test, as every finding of
+            // the gate on the test is.
+            assert!(change(
+                py_path,
+                py(base),
+                py(head),
+                "allow-assertion-drop: test_summarize the count is now a range"
+            )
+            .is_empty());
+        }
+        assert_eq!(
+            change("p_test.go", go("Sum(1, 2) != 3"), go("Sum(1, 2) < 3"), ""),
+            [WEAKENED]
+        );
+        // Negative controls: a new expected value under the same operator is the
+        // expected-value finding, not this one; a tightened operator and an unchanged
+        // test are silent.
+        assert_eq!(
+            change(
+                py_path,
+                py("assert summarize(rows) == 7"),
+                py("assert summarize(rows) == 8"),
+                ""
+            ),
+            ["assertion-reduction/expected-value-changed"]
+        );
+        assert!(change(
+            py_path,
+            py("assert summarize(rows) >= 6"),
+            py("assert summarize(rows) > 6"),
+            ""
+        )
+        .is_empty());
+        assert!(change(
+            py_path,
+            py("assert summarize(rows) > 6"),
+            py("assert summarize(rows) > 6"),
+            ""
+        )
+        .is_empty());
+        assert!(change("p_test.go", go("Sum(1, 2) < 3"), go("Sum(1, 2) != 3"), "").is_empty());
+        // A rewrite that also loses the equality class is the reduction, reported once.
+        assert_eq!(
+            change(
+                py_path,
+                py("assert summarize(rows) == 7"),
+                py("assert summarize(rows) >= 7"),
+                ""
+            ),
+            ["assertion-reduction/assertions-reduced"]
+        );
+    }
 
     #[test]
     fn test_assertion_reduction_pure() {
