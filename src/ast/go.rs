@@ -79,6 +79,7 @@ impl LanguagePack for GoPack {
             &mut extractor.facts,
         );
         super::bounds::go(root, src, &mut extractor.facts.tests);
+        super::comparisons::go(root, src, &mut extractor.facts.tests);
         super::expectations::go(root, src, &mut extractor.facts.tests);
         super::expected_exceptions::go(
             root,

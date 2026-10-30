@@ -4472,6 +4472,34 @@ const CASES: &[Case] = &[
                     .is_empty())
         },
     ),
+    #[cfg(all(feature = "lang-python", feature = "lang-go"))]
+    (
+        "assertion-reduction: a comparison operator moved the loose way is a weakened bound in Python and Go (#934)",
+        || {
+            let py = |check: &str| format!("def test_t():\n    row = {{\"a\": 1}}\n    {check}\n");
+            let go = |cond: &str| {
+                format!("package p\n\nfunc TestT(t *testing.T) {{\n\tif {cond} {{\n\t\tt.Fatalf(\"bad\")\n\t}}\n}}\n")
+            };
+            let mut ok = true;
+            for (path, form, base, head) in [
+                ("tests/test_t.py", &py as &dyn Fn(&str) -> String, "assert f([]) == 0", "assert f([]) != 1"),
+                ("tests/test_t.py", &py, "assert f(6) > 6", "assert f(6) >= 6"),
+                ("tests/test_t.py", &py, "assert f([]) < 1", "assert f([]) <= 1"),
+                ("tests/test_t.py", &py, "assert \"a\" in row", "assert \"a\" not in row"),
+                ("p_test.go", &go, "Sum(1, 2) != 3", "Sum(1, 2) < 3"),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[(path, &form(base), &form(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: test_t the range is intended")?.is_empty()
+                    || change(head, "allow-assertion-drop: TestT the range is intended")?.is_empty();
+                // Control: the comparison kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            Ok(ok)
+        },
+    ),
     #[cfg(feature = "lang-python")]
     (
         "assertion-reduction: a parenthesised Python assertion is read as the expression inside it (#859)",

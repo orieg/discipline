@@ -1831,6 +1831,82 @@
           "test-floor/test-density-regression"
         ]
       }
+    },
+    {
+      "name": "py-equality-swapped-to-inequality",
+      "base": {
+        "src/stats.py": "def summarize(rows):\n    return len(rows)\n",
+        "tests/test_stats.py": "from src.stats import summarize\n\n\ndef test_summarize():\n    rows = [{\"a\": 1}] * 7\n    row = rows[0]\n    assert summarize([]) == 0\n"
+      },
+      "head": {
+        "tests/test_stats.py": "from src.stats import summarize\n\n\ndef test_summarize():\n    rows = [{\"a\": 1}] * 7\n    row = rows[0]\n    assert summarize([]) != 1\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "py-strict-lower-bound-made-inclusive",
+      "base": {
+        "src/stats.py": "def summarize(rows):\n    return len(rows)\n",
+        "tests/test_stats.py": "from src.stats import summarize\n\n\ndef test_summarize():\n    rows = [{\"a\": 1}] * 7\n    row = rows[0]\n    assert summarize(rows) > 6\n"
+      },
+      "head": {
+        "tests/test_stats.py": "from src.stats import summarize\n\n\ndef test_summarize():\n    rows = [{\"a\": 1}] * 7\n    row = rows[0]\n    assert summarize(rows) >= 6\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "py-strict-upper-bound-made-inclusive",
+      "base": {
+        "src/stats.py": "def summarize(rows):\n    return len(rows)\n",
+        "tests/test_stats.py": "from src.stats import summarize\n\n\ndef test_summarize():\n    rows = [{\"a\": 1}] * 7\n    row = rows[0]\n    assert summarize([]) < 1\n"
+      },
+      "head": {
+        "tests/test_stats.py": "from src.stats import summarize\n\n\ndef test_summarize():\n    rows = [{\"a\": 1}] * 7\n    row = rows[0]\n    assert summarize([]) <= 1\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "py-membership-polarity-flipped",
+      "base": {
+        "src/stats.py": "def summarize(rows):\n    return len(rows)\n",
+        "tests/test_stats.py": "from src.stats import summarize\n\n\ndef test_summarize():\n    rows = [{\"a\": 1}] * 7\n    row = rows[0]\n    assert \"a\" in row\n"
+      },
+      "head": {
+        "tests/test_stats.py": "from src.stats import summarize\n\n\ndef test_summarize():\n    rows = [{\"a\": 1}] * 7\n    row = rows[0]\n    assert \"a\" not in row\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "go-guard-inequality-relaxed",
+      "base": {
+        "go.mod": "module p\n\ngo 1.22\n",
+        "p.go": "package p\n\nfunc Sum(a, b int) int {\n\treturn a + b\n}\n",
+        "p_test.go": "package p\n\nimport \"testing\"\n\nfunc TestSum(t *testing.T) {\n\tif Sum(1, 2) != 3 {\n\t\tt.Fatalf(\"want 3\")\n\t}\n}\n"
+      },
+      "head": {
+        "p_test.go": "package p\n\nimport \"testing\"\n\nfunc TestSum(t *testing.T) {\n\tif Sum(1, 2) < 3 {\n\t\tt.Fatalf(\"want 3\")\n\t}\n}\n"
+      },
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
     }
   ]
 }
