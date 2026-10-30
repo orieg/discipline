@@ -448,6 +448,12 @@ const SPAWN_ALLOW_LIST: &[(&str, &str, usize, &str)] = &[
         "source text of a fixture repository's own test helper, written to disk for the gates to read and never compiled here",
     ),
     (
+        "tests/test_doctor.rs",
+        "the binary's path from the harness",
+        1,
+        "the directory of the binary goes on PATH of an isolated `discipline_cmd()`, so `doctor`'s `hook-binary` finds it",
+    ),
+    (
         "tests/test_lease.rs",
         "the binary's path from the harness",
         1,

@@ -1615,7 +1615,7 @@ fn doctor_reports_mutation_preset_finding() {
 
 /// `PATH` with the directory of the binary under test first, then the system's.
 fn path_with_discipline() -> String {
-    let bin = std::path::Path::new(env!("CARGO_BIN_EXE_discipline"));
+    let bin = common::discipline_bin();
     format!("{}:/usr/bin:/bin", bin.parent().unwrap().display())
 }
 
