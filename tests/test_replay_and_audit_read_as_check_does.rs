@@ -116,8 +116,11 @@ fn an_override_of_a_replayed_commit_names_that_commit_and_two_runs_are_identical
         id.len() >= 7 && sha.starts_with(id),
         "{source} is not {sha}"
     );
-    // A second run writes the same bytes.
-    let second = run(&repo, &["replay", "--last", "2", "--ref", "main", "--json"]);
+    // A second run that checks each change again writes the same bytes.
+    let second = run(
+        &repo,
+        &["replay", "--last", "2", "--ref", "main", "--json", "--no-cache"],
+    );
     assert_eq!(first.stdout, second.stdout);
 }
 
