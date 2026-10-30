@@ -15,6 +15,7 @@ pub mod c_macros;
 pub mod calls;
 pub mod caught_assertions;
 pub mod ci_condition;
+pub mod comparisons;
 #[cfg(feature = "lang-csharp")]
 pub mod csharp;
 pub mod exception_tables;
@@ -299,6 +300,10 @@ pub struct TestFn {
     /// Numeric bounds of its assertions (`super::bounds`), paired by skeleton across a
     /// change so a bound moved the loose way is seen although the count is unchanged.
     pub bounds: Vec<bounds::Bound>,
+    /// Comparison operators of its assertions (`super::comparisons`), paired by skeleton
+    /// across a change so an operator moved the loose way is seen although the count,
+    /// the class and the literal are unchanged.
+    pub comparisons: Vec<comparisons::Comparison>,
     /// Expected values of its equality assertions (`super::expectations`), paired by
     /// skeleton across a change so an edited expected value is seen although the count is
     /// unchanged.
@@ -2382,6 +2387,7 @@ impl Default for ParsedFileFacts {
                 trivial_asserts: 0,
                 helper_checks: 0,
                 bounds: Vec::new(),
+                comparisons: Vec::new(),
                 expectations: Vec::new(),
                 caught_assertions: Vec::new(),
                 expected_exceptions: Vec::new(),
@@ -2427,6 +2433,7 @@ impl ParsedFileFacts {
             trivial_asserts: 0,
             helper_checks: 0,
             bounds: Vec::new(),
+            comparisons: Vec::new(),
             expectations: Vec::new(),
             caught_assertions: Vec::new(),
             expected_exceptions: Vec::new(),
