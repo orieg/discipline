@@ -1161,6 +1161,26 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "overrides: a change cannot disarm a protective gate or raise the base budget",
+        || {
+            use crate::config::{DirectivesConfig, DisciplineConfig};
+            use crate::policy_floor::{disarms, stricter_directives};
+            let base = DisciplineConfig::from_toml_str("[gates.ci-integrity]\nenabled = true\n")?;
+            let off = DisciplineConfig::from_toml_str("[gates.ci-integrity]\nenabled = false\n")?;
+            let narrow = DisciplineConfig::from_toml_str(
+                "[gates.ci-integrity]\nexempt_paths = [\"tests/fixtures/**\"]\n",
+            )?;
+            let base_budget = DirectivesConfig {
+                max_overrides: Some(3),
+                ..Default::default()
+            };
+            let raised = stricter_directives(&DirectivesConfig::default(), Some(&base_budget));
+            Ok(disarms(&base, &off).len() == 1
+                && disarms(&base, &narrow).is_empty()
+                && raised.max_overrides == Some(3))
+        },
+    ),
+    (
         "overrides: the inline override budget refuses the marker past it, not the one at it",
         || {
             use crate::config::DirectivesConfig;
@@ -3918,6 +3938,8 @@ const CASES: &[Case] = &[
                 PolicyFailure::new(RefusalKind::MaxOverrides, quoted),
                 PolicyFailure::new(RefusalKind::MaxInlineOverrides, quoted),
                 PolicyFailure::new(RefusalKind::ApprovalRequired, quoted),
+                PolicyFailure::new(RefusalKind::ProtectiveGateDisarmed, quoted),
+                PolicyFailure::new(RefusalKind::PolicyFileDeleted, quoted),
             ];
             summary.refused_hidden_directives = vec![
                 crate::tokens::OverrideSource::PrBody,
@@ -3927,7 +3949,7 @@ const CASES: &[Case] = &[
             let results = doc["runs"][0]["results"].as_array().cloned().unwrap_or_default();
             let issues = gitlab::generate_gitlab_issues(&summary);
             let xml = junit::format_junit(&summary, false);
-            let mut ok = quiet && results.len() == 5 && issues.len() == 5;
+            let mut ok = quiet && results.len() == 7 && issues.len() == 7;
             for info in REFUSALS {
                 let id = info.rule_id();
                 let n = if info.blocks { 1 } else { 2 };
@@ -3937,11 +3959,11 @@ const CASES: &[Case] = &[
                     && xml.matches(&format!("<testcase name=\"{} [", info.code)).count() == n;
             }
             let prints: std::collections::HashSet<&str> = issues.iter().map(|i| i.fingerprint.as_str()).collect();
-            ok &= prints.len() == 5
-                && xml.contains("<testsuite name=\"policy\" tests=\"5\" failures=\"3\"")
+            ok &= prints.len() == 7
+                && xml.contains("<testsuite name=\"policy\" tests=\"7\" failures=\"5\"")
                 && xml == junit::format_junit(&summary, true)
                 && [doc.to_string(), xml, gitlab::format_gitlab(&summary)].iter().all(|t| !t.contains(quoted))
-                && serde_json::to_value(&summary)?["policy_failures"] == serde_json::json!([quoted, quoted, quoted]);
+                && serde_json::to_value(&summary)?["policy_failures"] == serde_json::json!([quoted, quoted, quoted, quoted, quoted]);
             Ok(ok)
         },
     ),

@@ -931,14 +931,23 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
     );
     let inline_overrides =
         discipline::override_policy::inline_overrides_added(summary.overrides(), &changed);
-    summary.policy_failures = discipline::override_policy::judge(
+    // The base side's floor: its budgets and approval rule hold whichever side judges the
+    // change, and a protective gate or the file itself cannot be disarmed by it.
+    let floor = discipline::policy_floor::evaluate(&git, &config_path)
+        .map_err(|e| tag(Reason::Configuration, e))?;
+    let directives = discipline::policy_floor::stricter_directives(
         &config.directives,
+        floor.base_directives.as_ref(),
+    );
+    summary.policy_failures = discipline::override_policy::judge(
+        &directives,
         summary.directive_overrides(),
         inline_overrides,
         pull.as_ref(),
         &|| discipline::forge::detect_for(&git),
         &discipline::forge::HttpApi::from_env(),
     )?;
+    summary.policy_failures.extend(floor.failures);
 
     let raw_fail_on_overrides = config.directives.fail_on_overrides;
     let actor = args
