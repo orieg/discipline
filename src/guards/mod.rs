@@ -830,8 +830,9 @@ pub struct ForgeAccess<'a> {
 
 impl Context<'_> {
     /// The pull request a gate that reads pull-request facts judges. `Ok(None)` for a
-    /// run that has none to read (a local run, a push); in CI on any other event, a
-    /// missing pull request is a configuration error (exit 2), never a pass.
+    /// run that has none to read (a local run, a push, a change `discipline replay`
+    /// checks: it reads the merged body, never a live pull request); in CI on any other
+    /// event, a missing pull request is a configuration error (exit 2), never a pass.
     pub fn pull_request_for(&self, gate: &str) -> Result<Option<&ForgeAccess<'_>>> {
         let Some(access) = self.forge.as_ref().filter(|f| f.pull.is_some()) else {
             let in_ci = [
@@ -843,7 +844,10 @@ impl Context<'_> {
             ]
             .iter()
             .any(|k| std::env::var(k).is_ok_and(|v| !v.trim().is_empty() && v != "false"));
-            if in_ci && !crate::gitctx::is_push_event_environment() {
+            // A replayed change is judged the same in a CI job as on a laptop.
+            let replayed =
+                std::env::var_os(REPLAY_CASE_ENV).is_some() && self.git.base_is_replay_base();
+            if in_ci && !replayed && !crate::gitctx::is_push_event_environment() {
                 return Err(crate::could_not_check::tag(
                     crate::could_not_check::Reason::Configuration,
                     anyhow::anyhow!(

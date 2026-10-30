@@ -428,6 +428,37 @@ fn a_file_the_configuration_names_before_it_existed_skips_its_group_in_replay_on
 }
 
 #[test]
+fn a_gate_that_reads_the_pull_request_does_not_stop_a_replay_run_in_ci() {
+    let (repo, _) = history();
+    let cfg = format!("{CONFIG_HEAD}[gates.review-threads]\nenabled = true\n");
+    let candidate = repo.file("candidate.toml");
+    std::fs::write(&candidate, &cfg).unwrap();
+    let ci = [("CI", "true"), ("GITHUB_ACTIONS", "true")];
+    // A replayed change is read from its merged body, never a live pull request, so it
+    // is judged in a CI job as it is on a laptop.
+    let s = replay(&repo, &["--config", candidate.to_str().unwrap()], &ci);
+    assert_eq!(s["could_not_check"], 0, "{s:#}");
+    assert_eq!(s["cases"], 2, "{s:#}");
+
+    // Setting replay's variable by hand in CI does not loosen it: the base is not a
+    // commit replay built, so the missing pull request is still a configuration error.
+    repo.write("discipline.toml", &cfg);
+    repo.commit("chore: configuration");
+    let forged = repo.run(
+        &["check", "--format", "json", "--base", "HEAD~1"],
+        &[ci[0], ci[1], ("DISCIPLINE_REPLAY_CASE", "1")],
+    );
+    assert_eq!(forged.code, 2, "{}\n{}", forged.stdout, forged.stderr);
+    assert!(
+        forged
+            .stderr
+            .contains("needs the pull request being checked"),
+        "{}",
+        forged.stderr
+    );
+}
+
+#[test]
 fn a_group_skipped_because_the_configuration_is_newer_is_in_the_summary() {
     let repo = Repo::new();
     repo.git(&["checkout", "-q", "main"]);
