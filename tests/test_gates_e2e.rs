@@ -1038,6 +1038,118 @@ fn parenthesised_expected_values_and_bounds_are_read_in_rust_go_and_js() {
     }
 }
 
+/// A comparison operator moved the loose way inside an otherwise unchanged assertion
+/// (#934): the count, the class and the literal hold, so only the operator shows it.
+/// Each shape fails the run as `weakened-bound`; `allow-assertion-drop:` lifts it, and a
+/// new expected value under the same operator stays `expected-value-changed`.
+#[test]
+fn a_comparison_operator_moved_the_loose_way_fails_as_a_weakened_bound() {
+    let py = |check: &str| {
+        format!("from src.stats import summarize\n\n\ndef test_summarize():\n    rows = [{{\"a\": 1}}] * 7\n    row = rows[0]\n    {check}\n")
+    };
+    let go = |cond: &str| {
+        format!("package p\n\nimport \"testing\"\n\nfunc TestSum(t *testing.T) {{\n\tif {cond} {{\n\t\tt.Fatalf(\"want 3\")\n\t}}\n}}\n")
+    };
+    let run = |path: &str,
+               base: String,
+               head: String,
+               body: &str|
+     -> (i32, Vec<String>, serde_json::Value) {
+        let repo = Repo::new();
+        repo.write(
+            "src/stats.py",
+            "def summarize(rows):\n    return len(rows)\n",
+        );
+        repo.write("go.mod", "module p\n\ngo 1.22\n");
+        repo.write(
+            "p.go",
+            "package p\n\nfunc Sum(a, b int) int {\n\treturn a + b\n}\n",
+        );
+        repo.commit_base(path, &base, "test: summarize");
+        repo.write(path, &head);
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    let py_path = "tests/test_stats.py";
+    let shapes = [
+        (
+            py_path,
+            py("assert summarize([]) == 0"),
+            py("assert summarize([]) != 1"),
+            "test_summarize",
+            "`==` to `!=`",
+        ),
+        (
+            py_path,
+            py("assert summarize(rows) > 6"),
+            py("assert summarize(rows) >= 6"),
+            "test_summarize",
+            "`>` to `>=`",
+        ),
+        (
+            py_path,
+            py("assert summarize([]) < 1"),
+            py("assert summarize([]) <= 1"),
+            "test_summarize",
+            "`<` to `<=`",
+        ),
+        (
+            py_path,
+            py("assert \"a\" in row"),
+            py("assert \"a\" not in row"),
+            "test_summarize",
+            "`in` to `not in`",
+        ),
+        (
+            "p_test.go",
+            go("Sum(1, 2) != 3"),
+            go("Sum(1, 2) < 3"),
+            "TestSum",
+            "`!=` to `<`",
+        ),
+    ];
+    for (path, base, head, test, ops) in shapes {
+        let (code, codes, outcome) = run(path, base.clone(), head.clone(), "");
+        assert_eq!(code, 1, "{path}: {head}");
+        assert_eq!(
+            codes,
+            ["assertion-reduction/weakened-bound"],
+            "{path}: {head}"
+        );
+        let message = outcome["violations"][0]["message"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(message.contains(ops), "{message}");
+        // The assertion's own text is not echoed.
+        assert!(
+            !message.contains("summarize(") && !message.contains("Sum("),
+            "{message}"
+        );
+        let lifted = run(
+            path,
+            base,
+            head,
+            &format!("allow-assertion-drop: {test} the bound is a range now\n"),
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{path}: lifted");
+    }
+    // Negative control: a new expected value under the same operator.
+    let (_, codes, _) = run(
+        py_path,
+        py("assert summarize(rows) == 7"),
+        py("assert summarize(rows) == 8"),
+        "",
+    );
+    assert_eq!(codes, ["assertion-reduction/expected-value-changed"]);
+}
+
 /// A Python mock assertion call is a check (#828): deleting it from an existing test, or
 /// leaving its name read but not called, is a reduction; a new test whose only check
 /// is one is still a test that asserts only on mocks.
