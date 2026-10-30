@@ -95,6 +95,13 @@ pub trait LanguagePack: Send + Sync {
     /// Human-readable display name (e.g. "Rust", "Golden/Snapshot", "Python").
     fn name(&self) -> &'static str;
 
+    /// The pack's name in a gate's published language coverage (`GateInfo::languages`):
+    /// the display name unless a shorter one reads better in a list. Packs that share a
+    /// label (C and C++) are listed once.
+    fn label(&self) -> &'static str {
+        self.name()
+    }
+
     /// Whether this pack handles the given relative path.
     fn matches(&self, path: &str) -> bool;
 
@@ -148,6 +155,24 @@ impl LanguageRegistry {
     pub fn is_supported(&self, path: &str) -> bool {
         self.find_pack(path).is_some()
     }
+
+    /// The packs, in the order they were registered.
+    pub fn packs(&self) -> impl Iterator<Item = &dyn LanguagePack> {
+        self.packs.iter().map(|p| p.as_ref())
+    }
+}
+
+/// The labels of the built-in packs that supply `fact`, in registry order, each once: a
+/// gate that reads `fact` analyses exactly these languages. `GateInfo::languages` is built
+/// from it, so the coverage the docs publish is what the binary registers.
+pub fn coverage_labels(fact: Fact) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for pack in default_registry().packs().filter(|p| p.supplies(fact)) {
+        if !out.contains(&pack.label()) {
+            out.push(pack.label());
+        }
+    }
+    out
 }
 
 /// Constructs the default registry containing all built-in packs enabled by Cargo features.

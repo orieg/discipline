@@ -204,7 +204,7 @@ pub fn render_gates_markdown(gates: &[GateInfo], target_prefix: &str) -> String 
             g.id,
             g.id,
             g.suite.label(),
-            g.languages,
+            g.languages(),
             g.summary
         ));
     }
@@ -244,7 +244,7 @@ pub fn render_gates_catalog_markdown(
             gate_link,
             g.suite.label(),
             status,
-            g.languages,
+            g.languages(),
             g.summary
         ));
     }
@@ -280,7 +280,8 @@ pub fn render_gates_html(gates: &[GateInfo]) -> String {
             Suite::Verification => "Verification",
             Suite::Bench => "Performance",
         };
-        let lang_badge = match g.languages {
+        let languages = g.languages();
+        let lang_badge = match languages.as_str() {
             "any" => "Any",
             other => other,
         };
@@ -1009,7 +1010,7 @@ pub fn render_gates_roff(gates: &[GateInfo]) -> String {
             roff_escape(g.summary),
             g.suite.label(),
             default,
-            roff_escape(g.languages)
+            roff_escape(&g.languages())
         ));
     }
     out

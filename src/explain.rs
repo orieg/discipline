@@ -52,7 +52,7 @@ pub fn suggestions(query: &str) -> Vec<&'static str> {
 pub fn render(g: &GateInfo, state: Option<(bool, Severity)>) -> String {
     let mut out = format!("{} ({})\n", g.id, g.suite.label());
     out.push_str(&format!("  Checks:      {}\n", g.summary));
-    out.push_str(&format!("  Languages:   {}\n", g.languages));
+    out.push_str(&format!("  Languages:   {}\n", g.languages()));
     let here = match (g.available, state) {
         (false, _) => "planned, not in this binary".to_string(),
         (true, Some((true, sev))) => format!("on, {sev}"),

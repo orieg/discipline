@@ -33,6 +33,10 @@ impl LanguagePack for JavaScriptPack {
         "JavaScript/TypeScript"
     }
 
+    fn label(&self) -> &'static str {
+        "JS/TS"
+    }
+
     fn matches(&self, path: &str) -> bool {
         matches!(
             super::extension(path),
