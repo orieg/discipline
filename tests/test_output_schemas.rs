@@ -27,6 +27,12 @@ const REPORT_FIELDS: &[&str] = &[
     "directive_notes?: array",
     "directive_notes[]: string",
     "errors: integer",
+    "hook?: object",
+    "hook.agent: string",
+    "hook.binary_version: string",
+    "hook.decision: enum(allowed|blocked|observed)",
+    "hook.event: enum(edit|stop)",
+    "hook.mode: enum(observe|enforce)",
     "notes: integer",
     "outcomes: array",
     "outcomes[]: object",
@@ -680,6 +686,56 @@ fn check_output_conforms_to_the_report_schema() {
         "stdout carries the report --json-out writes"
     );
     assert_valid(&report_schema(), &report);
+}
+
+/// A check a hook runs carries the `hook` object, valid against the schema, with the
+/// decision its mode gives; a check run any other way (the variable unset, or the `1` an
+/// earlier release's hook sets) carries none.
+#[test]
+fn a_check_a_hook_runs_names_the_hook_in_its_report() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "tests/a.rs",
+        "#[test]\nfn kept() { assert_eq!(1 + 1, 2); }\n",
+    );
+    repo.commit("test: base");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    let args = ["check", "--format", "json", "--base", "main"];
+    let report = |env: &[(&str, &str)]| -> Value {
+        serde_json::from_str(&repo.run(&args, env).stdout).unwrap()
+    };
+    let enforce = [(
+        "DISCIPLINE_HOOK_RUN",
+        "agent=claude-code event=edit mode=enforce",
+    )];
+    let passing = report(&enforce);
+    assert_eq!(passing["hook"]["decision"], "allowed", "{passing:#}");
+    assert_valid(&report_schema(), &passing);
+
+    repo.write("tests/a.rs", "#[test]\nfn kept() {}\n");
+    repo.commit("test: drop the assertion");
+    let blocked = report(&enforce);
+    assert_eq!(
+        blocked["hook"],
+        serde_json::json!({
+            "agent": "claude-code",
+            "event": "edit",
+            "mode": "enforce",
+            "binary_version": env!("CARGO_PKG_VERSION"),
+            "decision": "blocked",
+        }),
+        "{blocked:#}"
+    );
+    assert_valid(&report_schema(), &blocked);
+    let observed = report(&[("DISCIPLINE_HOOK_RUN", "agent=codex event=stop mode=observe")]);
+    assert_eq!(observed["hook"]["decision"], "observed", "{observed:#}");
+    assert_valid(&report_schema(), &observed);
+
+    for env in [&[][..], &[("DISCIPLINE_HOOK_RUN", "1")][..]] {
+        let plain = report(env);
+        assert_eq!(plain.get("hook"), None, "{env:?}: {plain:#}");
+    }
 }
 
 #[test]

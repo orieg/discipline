@@ -273,6 +273,19 @@ pub enum HookCommand {
     Run(HookRunArgs),
     /// Write the agent's hook configuration at the repository root (or, with --user, the user-level one); an existing file is never rewritten
     Install(HookInstallArgs),
+    /// Print this repository's hook records (<git dir>/discipline/hook-observe.log): time, agent, event, mode, binary version, decision, exit code and finding counts, oldest first
+    Log(HookLogArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct HookLogArgs {
+    /// Print each record as one JSON object per line
+    #[arg(long)]
+    pub json: bool,
+
+    /// Print only the last N records
+    #[arg(long, value_name = "N")]
+    pub last: Option<usize>,
 }
 
 #[derive(Args, Debug)]

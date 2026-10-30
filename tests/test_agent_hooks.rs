@@ -1042,7 +1042,8 @@ fn claude_code_install_writes_the_cloud_bootstrap() {
 }
 
 /// Observe mode: the check runs, the agent is never blocked, and what would have blocked
-/// is said on stderr and logged under the git directory; a clean change leaves no trace.
+/// is said on stderr and logged under the git directory; a clean change is logged as
+/// allowed and says nothing (#937: a run with no line is a run that did not happen).
 #[test]
 fn observe_mode_reports_and_logs_without_blocking() {
     let repo = Repo::new();
@@ -1056,7 +1057,13 @@ fn observe_mode_reports_and_logs_without_blocking() {
         (clean.code, clean.stdout.as_str(), clean.stderr.as_str()),
         (0, "", "")
     );
-    assert!(!log.exists(), "a clean change is not logged");
+    let first = std::fs::read_to_string(&log).expect("a clean change is logged");
+    let first: serde_json::Value = serde_json::from_str(first.trim()).unwrap();
+    assert_eq!(
+        (&first["mode"], &first["decision"], &first["verdict"]),
+        (&"observe".into(), &"allowed".into(), &"pass".into()),
+        "{first}"
+    );
 
     weakened(&repo);
     let edit = hook(
@@ -1090,15 +1097,18 @@ fn observe_mode_reports_and_logs_without_blocking() {
         "{}",
         stop.stdout
     );
+    // The clean run's `allowed` line aside, what would have blocked.
     let lines: Vec<serde_json::Value> = std::fs::read_to_string(&log)
         .unwrap()
         .lines()
-        .map(|l| serde_json::from_str(l).unwrap())
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .filter(|l| l["decision"] != "allowed")
         .collect();
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert_eq!(lines[0]["agent"], "claude-code");
     assert_eq!(lines[0]["event"], "edit");
     assert_eq!(lines[0]["verdict"], "findings");
+    assert_eq!(lines[0]["decision"], "observed");
     assert!(lines[0]["codes"]
         .as_array()
         .unwrap()
@@ -1108,6 +1118,77 @@ fn observe_mode_reports_and_logs_without_blocking() {
         (lines[1]["agent"].as_str(), lines[1]["event"].as_str()),
         (Some("copilot"), Some("stop"))
     );
+}
+
+/// An enforcing hook records every change check it runs, and `hook log` prints the records
+/// in order with the mode, binary version, decision, exit code and counts (#937). Before
+/// any hook ran there is no log, and `hook log` says so instead of printing an empty one.
+#[test]
+fn hook_log_prints_each_run_of_an_enforcing_hook() {
+    let repo = Repo::new();
+    let none = repo.run(&["hook", "log"], &[]);
+    assert_eq!(
+        (none.code, none.stdout.as_str()),
+        (0, ""),
+        "{}",
+        none.stderr
+    );
+    assert!(
+        none.stderr.contains("no hook has recorded a run"),
+        "{}",
+        none.stderr
+    );
+
+    let clean = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
+    assert_eq!(clean.code, 0, "{}", clean.stderr);
+    weakened(&repo);
+    let blocked = hook(&repo, &["hook", "run", "--agent", "claude-code"], POST_EDIT);
+    assert_eq!(blocked.code, 2, "{}", blocked.stderr);
+
+    let json = repo.run(&["hook", "log", "--json"], &[]);
+    assert_eq!(json.code, 0, "{}", json.stderr);
+    let records: Vec<serde_json::Value> = json
+        .stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(records.len(), 2, "{}", json.stdout);
+    let version = env!("CARGO_PKG_VERSION");
+    for (r, decision, exit, errors) in [
+        (&records[0], "allowed", 0, 0),
+        (&records[1], "blocked", 2, 1),
+    ] {
+        assert_eq!(r["agent"], "claude-code", "{r}");
+        assert_eq!(r["event"], "edit", "{r}");
+        assert_eq!(r["mode"], "enforce", "{r}");
+        assert_eq!(r["version"], version, "{r}");
+        assert_eq!(r["decision"], decision, "{r}");
+        assert_eq!(r["exit_code"], exit, "{r}");
+        assert_eq!(r["errors"], errors, "{r}");
+        assert!(r["time"].as_i64().unwrap() > 0, "{r}");
+    }
+    assert_eq!(
+        records[1]["codes"],
+        serde_json::json!(["assertion-reduction/assertions-reduced"])
+    );
+
+    let text = repo.run(&["hook", "log", "--last", "1"], &[]);
+    assert_eq!(text.code, 0, "{}", text.stderr);
+    let lines: Vec<&str> = text.stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "header and one record: {}", text.stdout);
+    assert!(lines[0].starts_with("time"), "{}", text.stdout);
+    for part in [
+        "claude-code",
+        " edit ",
+        " enforce ",
+        version,
+        " blocked ",
+        "exit=2",
+        "errors=1",
+        "codes=assertion-reduction/assertions-reduced",
+    ] {
+        assert!(lines[1].contains(part), "{part:?} in {}", lines[1]);
+    }
 }
 
 /// A check that cannot run names why in the text the agent reads, whether the hook

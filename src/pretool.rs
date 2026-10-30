@@ -753,45 +753,47 @@ pub fn run_with(agent: Agent, stdin: &str, observe: bool, if_configured: bool) -
 }
 
 fn finish(agent: Agent, verdict: &Verdict, observe: bool, root: Option<&Path>) -> HookOutput {
-    match (verdict, observe) {
-        (Verdict::Deny(reason), true) => {
-            if let Some(dir) = root.and_then(|r| crate::gitctx::discover_repository(r).ok()) {
-                let log = dir.path().join("discipline").join("hook-observe.log");
-                let entry = serde_json::json!({
-                    "time": crate::lease::now(),
-                    "agent": agent.id(),
-                    "event": "pre-tool",
-                    "verdict": "deny",
-                    "reason": reason,
-                });
-                let written = std::fs::create_dir_all(log.parent().unwrap_or(Path::new(".")))
-                    .and_then(|_| {
-                        use std::io::Write;
-                        std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(&log)
-                            .and_then(|mut f| writeln!(f, "{entry}"))
-                    });
-                if let Err(e) = written {
-                    return HookOutput {
-                        stdout: String::new(),
-                        stderr: format!(
-                            "discipline (observe mode): would refuse: {reason}\n(could not write {}: {})\n",
-                            q(log.display()),
-                            q(&e)
-                        ),
-                        code: 0,
-                    };
-                }
-            }
-            HookOutput {
-                stdout: String::new(),
-                stderr: format!("discipline (observe mode): would refuse: {reason}\n"),
-                code: 0,
-            }
+    let Verdict::Deny(reason) = verdict else {
+        return answer(agent, verdict);
+    };
+    // A refusal is logged in either mode; a call let through is not (every tool call of a
+    // session passes here).
+    let (mode, decision) = if observe {
+        (
+            crate::hook_log::Mode::Observe,
+            crate::hook_log::Decision::Observed,
+        )
+    } else {
+        (
+            crate::hook_log::Mode::Enforce,
+            crate::hook_log::Decision::Blocked,
+        )
+    };
+    let out = if observe {
+        HookOutput {
+            stdout: String::new(),
+            stderr: format!("discipline (observe mode): would refuse: {reason}\n"),
+            code: 0,
         }
-        _ => answer(agent, verdict),
+    } else {
+        answer(agent, verdict)
+    };
+    let written = root.map(|r| {
+        let mut m =
+            crate::hook_log::record(agent.id(), "pre-tool", mode, decision, i32::from(out.code));
+        m.insert("verdict".into(), "deny".into());
+        m.insert("reason".into(), reason.as_str().into());
+        crate::hook_log::append(r, &serde_json::Value::Object(m))
+    });
+    match written {
+        Some(Err(e)) if observe => HookOutput {
+            stderr: format!(
+                "discipline (observe mode): would refuse: {reason}\n(could not write the hook log: {})\n",
+                q(format!("{e:#}"))
+            ),
+            ..out
+        },
+        _ => out,
     }
 }
 

@@ -53,9 +53,22 @@ pub fn report_schema() -> Value {
             "deprecations": { "type": "array", "items": { "type": "string" }, "description": "Deprecated configuration keys this run read, one note each; never fails the run. Omitted when empty" },
             "directive_notes": { "type": "array", "items": { "type": "string" }, "description": "Notes about the directive sources as a whole (the merged pull request a pushed commit came through, a forge lookup that could not be made), once per run; a note about one directive is in its gate's notes. Omitted when empty" },
             "unused_directives": { "type": "array", "items": { "$ref": "#/$defs/UnusedDirective" }, "description": "Directives this run read that lifted no finding; never fails the run. Computed when every suite ran. Omitted when empty" },
-            "could_not_check": { "$ref": "#/$defs/CouldNotCheck", "description": "Why the check could not run (exit 2). Omitted otherwise" }
+            "could_not_check": { "$ref": "#/$defs/CouldNotCheck", "description": "Why the check could not run (exit 2). Omitted otherwise" },
+            "hook": { "$ref": "#/$defs/HookContext", "description": "The agent hook that ran this check, and what it answers on this report. Omitted when no hook ran the check" }
         },
         "$defs": {
+            "HookContext": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["agent", "event", "mode", "binary_version", "decision"],
+                "properties": {
+                    "agent": { "type": "string", "description": "The agent whose hook ran the check (`claude-code`, `copilot`, ...)" },
+                    "event": { "enum": ["edit", "stop"], "description": "`edit` after an edit, `stop` at the end of a turn" },
+                    "mode": { "enum": ["observe", "enforce"], "description": "`observe` never blocks and logs what it would have blocked; `enforce` blocks" },
+                    "binary_version": { "type": "string", "description": "The version of the discipline binary that ran the check" },
+                    "decision": { "enum": ["allowed", "blocked", "observed"], "description": "`allowed` when the report passes, otherwise `blocked` (enforce) or `observed` (observe). The hook log (`discipline hook log`) records each run's decision, an end-of-turn refusal included" }
+                }
+            },
             "CouldNotCheck": {
                 "type": "object",
                 "additionalProperties": false,

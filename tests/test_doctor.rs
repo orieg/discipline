@@ -1613,6 +1613,60 @@ fn doctor_reports_mutation_preset_finding() {
     );
 }
 
+/// `PATH` with the directory of the binary under test first, then the system's.
+fn path_with_discipline() -> String {
+    let bin = std::path::Path::new(env!("CARGO_BIN_EXE_discipline"));
+    format!("{}:/usr/bin:/bin", bin.parent().unwrap().display())
+}
+
+/// A repository that ships agent hook files and has no `discipline` on `PATH`: every hook
+/// prints a line and exits 0, so nothing is checked. `doctor` reports it as `hook-binary`
+/// and `--strict` fails; with the binary on `PATH` it passes (#937).
+#[test]
+fn doctor_strict_reports_hook_files_whose_binary_is_not_on_path() {
+    let repo = protected_repo();
+    let install = repo.run(&["hook", "install", "--agent", "claude-code"], &[]);
+    assert_eq!(install.code, 0, "{}", install.stderr);
+    let missing = [("PATH", "/usr/bin:/bin")];
+    assert!(
+        !std::path::Path::new("/usr/bin/discipline").exists()
+            && !std::path::Path::new("/bin/discipline").exists(),
+        "the fixture PATH must hold no discipline"
+    );
+
+    let json = repo.run(&["doctor", "--local-only", "--format", "json"], &missing);
+    let st = statuses(&json.stdout);
+    assert!(
+        st.contains(&("hook-binary".into(), "warn".into())),
+        "{st:?}\n{}",
+        json.stdout
+    );
+    assert!(
+        json.stdout.contains(".claude/settings.json"),
+        "{}",
+        json.stdout
+    );
+    let strict = repo.run(&["doctor", "--local-only", "--strict"], &missing);
+    assert_eq!(strict.code, 1, "{}", strict.stdout);
+    assert!(strict.stdout.contains("hook-binary"), "{}", strict.stdout);
+
+    let path = path_with_discipline();
+    let found = [("PATH", path.as_str())];
+    let json = repo.run(&["doctor", "--local-only", "--format", "json"], &found);
+    assert!(
+        statuses(&json.stdout).contains(&("hook-binary".into(), "pass".into())),
+        "{}",
+        json.stdout
+    );
+    let strict = repo.run(&["doctor", "--local-only", "--strict"], &found);
+    assert_eq!(strict.code, 0, "{}", strict.stdout);
+
+    // No hook file: nothing to report, whatever PATH holds.
+    let plain = protected_repo();
+    let json = plain.run(&["doctor", "--local-only", "--format", "json"], &missing);
+    assert!(!json.stdout.contains("hook-binary"), "{}", json.stdout);
+}
+
 #[test]
 fn doctor_reports_hook_mode_truthfully() {
     let repo = Repo::new();
@@ -1676,7 +1730,11 @@ fn doctor_reports_hook_mode_truthfully() {
             pretool["summary"]
         );
 
-        let strict = repo.run(&["doctor", "--local-only", "--strict"], &[]);
+        // `discipline` on PATH, as the hooks need it: `hook-binary` passes.
+        let strict = repo.run(
+            &["doctor", "--local-only", "--strict"],
+            &[("PATH", path_with_discipline().as_str())],
+        );
         assert_eq!(
             strict.code, 0,
             "doctor --strict must not fail on observe mode hook: {}",
