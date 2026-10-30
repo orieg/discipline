@@ -530,6 +530,14 @@ fn summary_with_every_refusal() -> CheckSummary {
                 RefusalKind::ApprovalRequired,
                 format!("2 directive override(s) await an approving review by one of: {SENTINEL}"),
             ),
+            PolicyFailure::new(
+                RefusalKind::ProtectiveGateDisarmed,
+                format!("this change disarms a gate that guards the pipeline: {SENTINEL}"),
+            ),
+            PolicyFailure::new(
+                RefusalKind::PolicyFileDeleted,
+                format!("`{SENTINEL}` is deleted by this change"),
+            ),
         ],
         refused_hidden_directives: vec![
             OverrideSource::PrBody,
@@ -590,11 +598,11 @@ fn each_format_maps_a_refusal_to_its_level_whatever_fail_on_warnings_says() {
         let junit = render(OutputFormat::Junit);
         let suite = junit_policy_suite(&junit);
         assert!(
-            junit.contains("<testsuites name=\"discipline\" tests=\"8\" failures=\"3\""),
+            junit.contains("<testsuites name=\"discipline\" tests=\"10\" failures=\"5\""),
             "{junit}"
         );
         assert!(
-            suite[0].contains("tests=\"7\" failures=\"3\" errors=\"0\" skipped=\"0\""),
+            suite[0].contains("tests=\"9\" failures=\"5\" errors=\"0\" skipped=\"0\""),
             "{}",
             suite[0]
         );
@@ -643,6 +651,6 @@ fn each_format_maps_a_refusal_to_its_level_whatever_fail_on_warnings_says() {
             .iter()
             .map(|i| i["fingerprint"].as_str().unwrap())
             .collect();
-        assert_eq!(prints.len(), 7);
+        assert_eq!(prints.len(), 9);
     }
 }
