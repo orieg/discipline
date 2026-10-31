@@ -198,6 +198,18 @@ pub fn generate_schema() -> Value {
                     }
                 }
             },
+            "audit": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "What `discipline audit` refuses in the history it reads, from the audited branch's tip; `check` does not read this table",
+                "properties": {
+                    "waiver_density_rise": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Waiver-density tripwire: when the waivers per changed file (directives and inline markers) of the newest changes rose this many times in a row, `audit` exits 1 with a policy failure. 0 switches it off (default: 0)"
+                    }
+                }
+            },
             "hooks": {
                 "type": "object",
                 "additionalProperties": false,

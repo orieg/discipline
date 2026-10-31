@@ -382,6 +382,33 @@ pub fn audit_schema() -> Value {
                     }
                 }
             },
+            "waiver_density": {
+                "type": "object",
+                "description": "Waivers per changed file of each audited change, oldest first, and the tripwire over them (#944). A trend for reviewers, not a verdict on one change. Omitted by a binary older than this field",
+                "additionalProperties": false,
+                "required": ["changes", "rising", "tripwire"],
+                "properties": {
+                    "changes": {
+                        "type": "array",
+                        "description": "Oldest first",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["sha", "pr", "waivers", "changed_files", "per_mille"],
+                            "properties": {
+                                "sha": text("The change's commit"),
+                                "pr": { "type": ["integer", "null"], "minimum": 1, "description": "Its pull request, from the subject or `--forge`" },
+                                "waivers": { "type": "integer", "minimum": 0, "description": "Its directive and inline-marker records" },
+                                "changed_files": { "type": "integer", "minimum": 0, "description": "Files it added, modified, deleted or renamed" },
+                                "per_mille": { "type": "integer", "minimum": 0, "description": "Waivers per 1000 changed files (a change with no file counts as one)" }
+                            }
+                        }
+                    },
+                    "rising": { "type": "integer", "minimum": 0, "description": "How many times in a row the density rose, ending at the newest change" },
+                    "tripwire": { "type": "integer", "minimum": 0, "description": "`[audit] waiver_density_rise` at the tip; 0 when the tripwire is off" }
+                }
+            },
+            "policy_failures": { "type": "array", "items": { "type": "string" }, "description": "What the tip's `[audit]` table refuses in this history (the waiver-density tripwire); any entry exits 1. Omitted when empty" },
             "replay": {
                 "type": ["object", "null"],
                 "description": "The `discipline replay --json` report `--replay` read; null without it",

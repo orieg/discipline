@@ -582,6 +582,8 @@ pub struct DisciplineConfig {
     pub gates: Gates,
     #[serde(default)]
     pub hooks: HooksConfig,
+    #[serde(default)]
+    pub audit: AuditConfig,
     /// Deprecated key names this configuration used, one note each (see [`KEY_ALIASES`]).
     #[serde(skip)]
     pub deprecations: Vec<String>,
@@ -716,6 +718,17 @@ pub fn apply_key_aliases(value: &mut Value, aliases: &[KeyAlias]) -> Result<Vec<
         }
     }
     Ok(notes)
+}
+
+/// What `discipline audit` refuses in the history it reads (#944). `check` never reads
+/// this table; `audit` reads it from the audited branch's tip.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AuditConfig {
+    /// The waiver-density tripwire: when the waivers per changed file (directives and
+    /// inline markers) of the newest changes rose this many times in a row, `audit` exits 1
+    /// with a policy failure. 0 (the default) switches it off.
+    pub waiver_density_rise: u32,
 }
 
 /// Checks `discipline hook run` makes inside an agent's session and nowhere else. `check`
@@ -2781,6 +2794,7 @@ impl DisciplineConfig {
             languages: LanguagesConfig::default(),
             gates: Gates::default(),
             hooks: HooksConfig::default(),
+            audit: AuditConfig::default(),
             deprecations: Vec::new(),
         }
     }

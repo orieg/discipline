@@ -367,6 +367,18 @@ pub fn diff_configs_under(
         }
     }
 
+    // [audit]: the waiver-density tripwire switched off, or made to need a longer rise.
+    let (b, h) = (base.audit.waiver_density_rise, head.audit.waiver_density_rise);
+    if b > 0 && h == 0 {
+        found.push(
+            Weakening::new("audit", "waiver_density_rise", Change::Changed).values(b, h),
+        );
+    } else if b > 0 && h > b {
+        found.push(
+            Weakening::new("audit", "waiver_density_rise", Change::Increased).values(b, h),
+        );
+    }
+
     // [hooks.premature-stop]: the end-of-turn check switched off or made quieter.
     let (b, h) = (&base.hooks.premature_stop, &head.hooks.premature_stop);
     let stop = |key: &str, change: Change| Weakening::new("hooks.premature-stop", key, change);
