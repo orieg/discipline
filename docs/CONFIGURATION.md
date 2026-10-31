@@ -281,7 +281,9 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.pii.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.pii.term_denylist` | list | `[]` | Words or phrases that must not appear in committed files, paths, commit messages, PR title or branch name; matched as whole tokens, case-insensitively by default, or case-sensitively with prefix `case:` or `case-sensitive:` |
 | `gates.pr-checklist.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.pr-checklist.exempt_authors` | list | `[]` | Pull-request authors (exact logins, case-insensitive) whose undeclared boundary changes are a note, never a finding, e.g. dependabot[bot]; matched against the event payload's author, never the run's actor |
 | `gates.pr-checklist.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.pr-checklist.require_declared_surfaces` | boolean | `false` | A pull-request body without a `Touched surfaces` section declares no surface, so every boundary file the change touches (a workflow, a build hook, a lockfile, the configuration) is reported as undeclared (default: false: the declared-surface contract applies to a body that has the section) |
 | `gates.pr-checklist.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.provenance-tags.check_intervals` | boolean | `true` | Check published wall-clock ratios for confidence intervals or explicit qualifiers |
 | `gates.provenance-tags.check_mechanisms` | boolean | `true` | Check for mechanism claims without hardware counter evidence or explicit hypothesis qualifiers |

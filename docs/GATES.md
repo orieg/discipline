@@ -50,7 +50,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`golden-output`](#golden-output) | integrity | **shipped** | any | prevents stealth edits to committed golden/test output files without explicit override |
 | [`dependency-delta`](#dependency-delta) | integrity | **shipped** | any | manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification |
 | [`test-budget`](#test-budget) | integrity | **shipped** | Rust, Python, JS/TS, Go, any | property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus) |
-| [`pr-checklist`](#pr-checklist) | hygiene | **shipped** | any | ticked PR checkboxes are reconciled against the diff |
+| [`pr-checklist`](#pr-checklist) | hygiene | **shipped** | any | ticked PR checkboxes and declared touched surfaces are reconciled against the diff |
 | [`command`](#command) | verification | **shipped** | any | fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet |
 | [`sanitizers`](#sanitizers) | verification | **shipped** | Rust, C/C++ | ASan / TSan preset with audited suppressions and a race canary |
 | [`msrv`](#msrv) | quality | **shipped** | Rust | cargo check under the pinned MSRV |
@@ -304,6 +304,7 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `pr-checklist/checklist-claims-benchmarks` | Checklist Claim Unsupported (benchmarks) |
 | `pr-checklist/checklist-claim-unsupported` | Checklist Claim Unsupported |
 | `pr-checklist/prose-claims-tests` | Prose Claims Tests The Change Does Not Contain |
+| `pr-checklist/undeclared-boundary-delta` | Boundary Change Not Declared |
 | `command/untrusted-command-modification` | Untrusted Command Modification |
 | `command/policy-file-deleted` | Policy File Deleted |
 | `command/canary-diagnostic-missing` | Canary Diagnostic Missing |
@@ -1353,6 +1354,11 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Ticked test checkboxes when no test file was modified and no test function was added or extended anywhere.
   - Ticked documentation checkboxes when zero docs or markdown files were modified.
   - Ticked benchmark checkboxes when zero benchmark files were modified.
+  - **Declared surfaces (#942, #943):** the PR body's `Touched surfaces` section (the pull request template's), read as a closed vocabulary: the first heading of any level whose text is `Touched surfaces`, up to the next heading of its level or above, and in it the checkbox items whose text is one of the fixed entries `workflows`, `build hooks`, `manifests/lockfiles`, `discipline.toml`, `directives`, `docs`, `tests`, `benches` (case and backticks aside; text after the entry, such as `docs (README.md)`, is not read). A ticked entry declares that the change modifies that surface; an unticked one, that it does not. Reconciled both ways:
+    - **a declared entry the diff does not resolve** (the false-claim direction): `workflows` by a changed file matching `ci-integrity`'s `workflows` globs, `build hooks` by a build script or package-manager configuration as `build-hooks` reads them, `manifests/lockfiles` by a file matching `dependency-delta`'s `manifests` or a lockfile name it reads, `discipline.toml` by the run's configuration file, `directives` by a directive the run read, and `docs`, `tests`, `benches` by the evidence the checkbox rule uses. Reported as `checklist-claims-tests`, `checklist-claims-docs`, `checklist-claims-benchmarks`, or `checklist-claim-unsupported` for the other entries; the section's items are the contract's, so the checkbox rule does not report them a second time;
+    - **a boundary file changed with its entry unticked** (`undeclared-boundary-delta`, the gap direction): a workflow, a build hook, a lockfile (a manifest alone is not one) or the configuration file, on either side of a rename. One finding per undeclared class, naming its files (a rename once, `old -> new`) and the gate that judges the file itself (`ci-integrity`, `build-hooks`, `dependency-delta`, `config-integrity`), or that it is not enabled: this finding names the missing declaration, that gate's finding the file. Only these four classes: reverse completeness over every other change is not checked, by design (a declaration over prose volume is gameable).
+
+    The section is read from the body the directive sources allow (`directives.sources`): the pull request's body (`pr-body`); on a push, the body of the one merged pull request the pushed commits arrived through (`merged-pr-body`), else the head commit's message (`commits`). A body whose source the policy leaves out declares nothing. Without the section the contract is not applied, unless `require_declared_surfaces = true`, under which a body without it declares nothing. Not read: a heading or an item in fenced code, an HTML comment or a `>` quote (an example of the template is not a declaration, #896), and items outside the fixed list (named in a note). False-positive controls: a pull request whose author, as the event payload names it, is in `exempt_authors` (a dependency-update bot) gets a note for each undeclared boundary class, never a finding; a lockfile the base side's root `.gitattributes` marks `linguist-generated` needs no declaration (a workflow, a build hook or the configuration does, whatever its attributes); `exempt_paths` takes a path out of both directions.
   - **Test claims written as prose (`prose-claims-tests`, `warning` at most):** a plain bullet or sentence of the PR body that says tests were added or changed, when the diff adds or extends no test (the same evidence as a ticked test checkbox). Generated descriptions usually state the claim this way rather than as a checkbox (#835). The forms, past, present and imperative, case ignored:
     - a claim verb, `add`, `write`, `extend`, `update` or `expand` in any tense, then at most four of the listed modifiers, then a test noun: `Added regression tests for negative inputs`, `I added regression tests`, `Add tests for the parser`, `This change adds unit tests`, `Updated the existing tests`; also `improves` or `increases test coverage`, and the verb with a coordinated noun (`Added the flag and tests for it`);
     - the passive: `Regression tests were added`, `Tests added`, `Unit test was written`;
@@ -1368,12 +1374,17 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - A `with` claim next to a parenthesis: `Fixes the reader, with regression tests (see #12)` is not reported.
   - A numeric claim compared with the test count: `all 57 tests pass` against the number of tests the head side holds (`test-floor` counts them). Follow-up.
   - Whether the tests the diff does add are the ones the description names: any added or extended test backs every test claim.
-  - The `Touched surfaces` declaration section (#943) is not read: a boundary file (a workflow, a build hook, a lockfile, `discipline.toml`) changed without its class declared, and a declared workflows, build hooks, manifests/lockfiles, `discipline.toml` or directives entry the diff does not touch, are not reported.
+  - Claims in the description's narrative prose about which files or surfaces changed: only the `Touched surfaces` section's fixed entries are reconciled (narrative path extraction is refused, #943; #896 is the measured precedent).
+  - A body without the `Touched surfaces` section, unless `require_declared_surfaces` is on: the contract is not applied, so deleting the section from the description takes the change out of it.
+  - A manifest changed with its `manifests/lockfiles` entry unticked: the gap direction holds lockfiles, not manifests, to a declaration. A lockfile the base marks `linguist-generated` is not held either, and a `.gitattributes` below the repository root is not read.
+  - A boundary file outside what the owning gates read: a hook under `.husky/`, a `Makefile`, a workflow outside `ci-integrity`'s `workflows` globs.
+  - Whether a declared surface changed the way the description says: a ticked entry is resolved by any change to a file of its class.
+  - On GitLab the pipeline names no merge-request author, so `exempt_authors` does not apply there (no forge request is made for it).
 - **Passing PR body (accepted):**
   Checklists accurately reflect modified files, or unticked items remain `- [ ]`.
-- **Lifting directive:** `allow-pr-checklist: test|docs|bench <reason>` (the claim the finding names; `test` also lifts `prose-claims-tests`).
+- **Lifting directive:** `allow-pr-checklist: test|docs|bench <reason>` (the claim the finding names; `test` also lifts `prose-claims-tests`); for a declared surface, the entry's subject: `workflows`, `build-hooks`, `manifests`, `discipline.toml`, `directives`, `docs`, `test`, `bench` (`allow-pr-checklist: workflows <reason>` lifts either direction's finding for that entry).
 - **Default:** off, severity `error` (`prose-claims-tests`: `warning` at most).
-- **Config keys:** `enabled`, `severity`, `exempt_paths`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `require_declared_surfaces` (default `false`), `exempt_authors` (default empty, e.g. `["dependabot[bot]", "renovate[bot]"]`). Switching `require_declared_surfaces` off or adding an `exempt_authors` login is a `config-integrity` weakening.
 
 #### `mechanism-sections`
 - **Rule:** Requires evidence tags (`(inferred)` or `(verified: <test or artifact>)`) for claims in designated root cause or mechanism sections (`section_headings`). Evidence targets must resolve in the repository.

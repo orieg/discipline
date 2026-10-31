@@ -19,6 +19,19 @@ use toml::Value as TomlValue;
 
 pub const GATE: &str = "dependency-delta";
 
+/// The lockfile names this gate reads by file name, wherever they sit.
+pub const LOCKFILE_NAMES: [&str; 9] = [
+    "Cargo.lock",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "poetry.lock",
+    "uv.lock",
+    "composer.lock",
+    "Gemfile.lock",
+    "go.sum",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DependencyRecord {
     pub name: String,
@@ -1004,17 +1017,7 @@ pub fn evaluate_dependency_delta(ctx: &Context) -> Result<GateOutcome> {
 
     let changed = ctx.git.changed_files()?;
     let mut manifest_files = Vec::new();
-    let lockfile_names = [
-        "Cargo.lock",
-        "package-lock.json",
-        "pnpm-lock.yaml",
-        "yarn.lock",
-        "poetry.lock",
-        "uv.lock",
-        "composer.lock",
-        "Gemfile.lock",
-        "go.sum",
-    ];
+    let lockfile_names = LOCKFILE_NAMES;
     let mut lock_files = Vec::new();
 
     for f in &changed {
@@ -1693,6 +1696,7 @@ allow-git = ["https://github.com/orieg/"]
             staged: true,
             pr_title: None,
             pr_body: None,
+            declaration_body: Default::default(),
             directives: Vec::new(),
             directive_notes: Vec::new(),
             bench_provenance: None,

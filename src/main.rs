@@ -782,6 +782,14 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
     } else {
         None
     };
+    // `pr-checklist`'s declared surfaces come through the directive sources the policy
+    // allows: the pull request's body, a merged pull request's, or the head commit's.
+    let declaration_body = discipline::guards::pr_checklist::select_declaration_body(
+        pr_body.as_deref().filter(|_| had_pr_body),
+        &merged.bodies,
+        pr_body.as_deref().filter(|_| !had_pr_body),
+        &config.directives.sources,
+    );
 
     let explicit_baseline = args.baseline_file.clone().or_else(|| {
         std::env::var("DISCIPLINE_BASELINE")
@@ -842,6 +850,7 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
         staged: args.staged,
         pr_title,
         pr_body,
+        declaration_body,
         directives,
         directive_notes,
         bench_provenance: args.bench_provenance.clone(),

@@ -10112,6 +10112,44 @@ smoke_cost::set_contains
         },
     ),
     (
+        "pr-checklist: the Touched surfaces section is reconciled both ways; a fenced example is not read",
+        || {
+            use crate::guards::pr_checklist::{
+                read_declaration, reconcile, DiffEvidence, Surface, SurfaceClassifier,
+            };
+            let classifier = SurfaceClassifier::new(
+                &crate::config::DisciplineConfig::default(),
+                "discipline.toml",
+            )?;
+            let pair = |p: &str| (p.to_string(), p.to_string());
+            let body = "## Touched surfaces\n- [x] build hooks\n- [ ] workflows\n";
+            let Some(decl) = read_declaration(body) else {
+                return Ok(false);
+            };
+            let (claims, gaps) = reconcile(
+                &decl,
+                &[pair(".github/workflows/ci.yml")],
+                &classifier,
+                DiffEvidence::default(),
+                &|_| false,
+            );
+            let (no_claims, no_gaps) = reconcile(
+                &decl,
+                &[pair("build.rs")],
+                &classifier,
+                DiffEvidence::default(),
+                &|_| false,
+            );
+            let fenced = read_declaration("```\n## Touched surfaces\n- [x] workflows\n```\n");
+            Ok(claims.iter().map(|(s, _)| *s).collect::<Vec<_>>() == vec![Surface::BuildHooks]
+                && gaps.len() == 1
+                && gaps[0].surface == Surface::Workflows
+                && no_claims.is_empty()
+                && no_gaps.is_empty()
+                && fenced.is_none())
+        },
+    ),
+    (
         "pr-checklist: a test function added or extended in any file backs a test claim",
         || {
             use crate::guards::pr_checklist::added_or_extended_tests;

@@ -213,7 +213,7 @@ Fourteen tree-sitter language packs (Rust, Python, JavaScript / TypeScript, Java
 | [`golden-output`](docs/GATES.md#golden-output) | integrity | any | prevents stealth edits to committed golden/test output files without explicit override |
 | [`dependency-delta`](docs/GATES.md#dependency-delta) | integrity | any | manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification |
 | [`test-budget`](docs/GATES.md#test-budget) | integrity | Rust, Python, JS/TS, Go, any | property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus) |
-| [`pr-checklist`](docs/GATES.md#pr-checklist) | hygiene | any | ticked PR checkboxes are reconciled against the diff |
+| [`pr-checklist`](docs/GATES.md#pr-checklist) | hygiene | any | ticked PR checkboxes and declared touched surfaces are reconciled against the diff |
 | [`command`](docs/GATES.md#command) | verification | any | fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet |
 | [`sanitizers`](docs/GATES.md#sanitizers) | verification | Rust, C/C++ | ASan / TSan preset with audited suppressions and a race canary |
 | [`msrv`](docs/GATES.md#msrv) | quality | Rust | cargo check under the pinned MSRV |

@@ -642,7 +642,10 @@ pub fn generate_schema() -> Value {
                 "allowed_suppressions": { "$ref": "#/$defs/StringListOrReset", "description": "Specific suppression patterns explicitly permitted by policy" },
                 "quote_line": { "type": "boolean", "description": "When true, quote the source line containing the suppression in the finding's remediation (default: false)" }
             })),
-            "PrChecklistGate": gate_table(json!({})),
+            "PrChecklistGate": gate_table(json!({
+                "require_declared_surfaces": { "type": "boolean", "description": "A pull-request body without a `Touched surfaces` section declares no surface, so every boundary file the change touches (a workflow, a build hook, a lockfile, the configuration) is reported as undeclared (default: false: the declared-surface contract applies to a body that has the section)" },
+                "exempt_authors": { "$ref": "#/$defs/StringListOrReset", "description": "Pull-request authors (exact logins, case-insensitive) whose undeclared boundary changes are a note, never a finding, e.g. dependabot[bot]; matched against the event payload's author, never the run's actor" }
+            })),
             "UnsafeBudgetGate": gate_table(json!({
                 "max_unsafe": { "type": ["integer", "null"], "description": "Maximum total number of unsafe sites allowed in head ref" },
                 "allow_increase": { "type": "boolean", "description": "Whether total unsafe count may increase over base ref without override" }

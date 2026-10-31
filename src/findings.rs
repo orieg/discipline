@@ -380,6 +380,7 @@ findings! {
     CHECKLIST_CLAIMS_BENCHMARKS = ["pr-checklist"], "checklist-claims-benchmarks", "Checklist Claim Unsupported (benchmarks)", Message;
     CHECKLIST_CLAIM_UNSUPPORTED = ["pr-checklist"], "checklist-claim-unsupported", "Checklist Claim Unsupported", Message;
     PROSE_CLAIMS_TESTS = ["pr-checklist"], "prose-claims-tests", "Prose Claims Tests The Change Does Not Contain", Same;
+    UNDECLARED_BOUNDARY_DELTA = ["pr-checklist"], "undeclared-boundary-delta", "Boundary Change Not Declared", Same;
 
     // command
     UNTRUSTED_COMMAND_MODIFICATION = ["command"], "untrusted-command-modification", "Untrusted Command Modification", Same;
