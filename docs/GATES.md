@@ -1368,6 +1368,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - A `with` claim next to a parenthesis: `Fixes the reader, with regression tests (see #12)` is not reported.
   - A numeric claim compared with the test count: `all 57 tests pass` against the number of tests the head side holds (`test-floor` counts them). Follow-up.
   - Whether the tests the diff does add are the ones the description names: any added or extended test backs every test claim.
+  - The `Touched surfaces` declaration section (#943) is not read: a boundary file (a workflow, a build hook, a lockfile, `discipline.toml`) changed without its class declared, and a declared workflows, build hooks, manifests/lockfiles, `discipline.toml` or directives entry the diff does not touch, are not reported.
 - **Passing PR body (accepted):**
   Checklists accurately reflect modified files, or unticked items remain `- [ ]`.
 - **Lifting directive:** `allow-pr-checklist: test|docs|bench <reason>` (the claim the finding names; `test` also lifts `prose-claims-tests`).

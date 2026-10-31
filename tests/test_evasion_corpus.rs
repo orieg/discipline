@@ -4,7 +4,8 @@
 //! optional PR body and the gates it enables beyond the built-in defaults. The head tree
 //! is laid over the base: a path mapped to a string is written, a path mapped to `null`
 //! is removed (a file, or a directory with everything under it), so a case can delete a
-//! test file, a fixture directory or a workflow. The verdict is one of:
+//! test file, a fixture directory or a workflow. An `author` is handed to the run as the
+//! pull request's author in an Actions event payload. The verdict is one of:
 //! - `caught`: exactly these finding codes are reported, at any severity, counting a
 //!   policy refusal by its `policy/<code>` rule id;
 //! - `lifted`: nothing is reported, and a directive lifted exactly these finding codes;
@@ -42,6 +43,10 @@ struct Case {
     body: String,
     #[serde(default)]
     enable: Vec<String>,
+    /// The login that opened the pull request, as an Actions event payload names it
+    /// (`pull_request.user.login`); no payload when absent.
+    #[serde(default)]
+    author: Option<String>,
     /// The gate a `known_miss`, `clean` or `exit` case is about.
     #[serde(default)]
     gate: Option<String>,
@@ -200,7 +205,17 @@ fn run_case(case: &Case) -> Outcome {
     if !enable.is_empty() {
         args.extend(["--enable", &enable]);
     }
-    let run = repo.run(&args, &[("PR_BODY", &case.body)]);
+    // The pull request's author reaches the run the way CI hands it over: an event payload.
+    let event = repo.path().join(".git/corpus-event.json");
+    let event_arg = event.to_str().unwrap();
+    let mut env = vec![("PR_BODY", case.body.as_str())];
+    if let Some(author) = &case.author {
+        let payload = serde_json::json!({"pull_request": {
+            "number": 1, "user": {"login": author}, "head": {"sha": "0000000"}}});
+        std::fs::write(&event, payload.to_string()).unwrap();
+        env.push(("GITHUB_EVENT_PATH", event_arg));
+    }
+    let run = repo.run(&args, &env);
     if run.code == 2 {
         return Outcome {
             code: 2,
@@ -481,6 +496,7 @@ fn the_judge_rejects_each_kind_of_disagreement() {
         head: BTreeMap::new(),
         body: String::new(),
         enable: vec![],
+        author: None,
         gate: None,
         verdict,
     };
