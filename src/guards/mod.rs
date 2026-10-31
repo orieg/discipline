@@ -809,6 +809,9 @@ pub struct Context<'a> {
     pub staged: bool,
     pub pr_title: Option<String>,
     pub pr_body: Option<String>,
+    /// The body `pr-checklist`'s declared-surface contract reads, chosen through
+    /// `directives.sources` ([`pr_checklist::select_declaration_body`]).
+    pub declaration_body: pr_checklist::DeclarationBody,
     pub directives: Vec<crate::tokens::ParsedDirective>,
     pub directive_notes: Vec<String>,
     pub bench_provenance: Option<String>,
@@ -2097,6 +2100,7 @@ pub(crate) mod test_support {
             staged: false,
             pr_title: None,
             pr_body: None,
+            declaration_body: Default::default(),
             directives: Vec::new(),
             directive_notes: Vec::new(),
             bench_provenance: None,

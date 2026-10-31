@@ -1429,7 +1429,7 @@ Test `adds`: effective assertions dropped from 2 to 0.
             <td>Hygiene</td>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
-            <td>no home paths, LAN IPs, denylisted hostnames, or fixed-format credentials (private keys, AWS, GitHub, Slack, OpenAI and Anthropic tokens, literal bearer headers) in tracked text</td>
+            <td>no home paths, LAN IPs, denylisted hostnames, or fixed-format token literals (private-key headers; AWS, GitHub, Slack, OpenAI and Anthropic token formats; literal bearer headers) in tracked text: literal format matching, not credential scanning</td>
           </tr>
           <tr>
             <td class="gate-id">agent-scratch</td>
@@ -1443,7 +1443,7 @@ Test `adds`: effective assertions dropped from 2 to 0.
             <td>Hygiene</td>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">shell, docker, workflows</span></td>
-            <td>no command-line secrets or unverified piped scripts in shell, docker, or CI</td>
+            <td>no secrets on command lines, fixed-format token literals, or unverified piped scripts in shell, docker, or CI files: literal pattern matching, not secret scanning</td>
           </tr>
           <tr>
             <td class="gate-id">issue-link</td>
@@ -1604,7 +1604,7 @@ Test `adds`: effective assertions dropped from 2 to 0.
             <td>Hygiene</td>
             <td><span class="gate-badge badge-lang">Off</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
-            <td>ticked PR checkboxes are reconciled against the diff</td>
+            <td>ticked PR checkboxes and declared touched surfaces are reconciled against the diff</td>
           </tr>
           <tr>
             <td class="gate-id">command</td>

@@ -164,7 +164,7 @@ pub const GATES: &[GateInfo] = &[
     GateInfo {
         id: "pii",
         suite: Suite::Hygiene,
-        summary: "no home paths, LAN IPs, denylisted hostnames, or fixed-format credentials (private keys, AWS, GitHub, Slack, OpenAI and Anthropic tokens, literal bearer headers) in tracked text",
+        summary: "no home paths, LAN IPs, denylisted hostnames, or fixed-format token literals (private-key headers; AWS, GitHub, Slack, OpenAI and Anthropic token formats; literal bearer headers) in tracked text: literal format matching, not credential scanning",
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
@@ -180,7 +180,7 @@ pub const GATES: &[GateInfo] = &[
     GateInfo {
         id: "shell-secrets",
         suite: Suite::Hygiene,
-        summary: "no command-line secrets or unverified piped scripts in shell, docker, or CI",
+        summary: "no secrets on command lines, fixed-format token literals, or unverified piped scripts in shell, docker, or CI files: literal pattern matching, not secret scanning",
         coverage: Coverage::Stated("shell, docker, workflows"),
         available: true,
         delta_only: false,
@@ -373,7 +373,7 @@ pub const GATES: &[GateInfo] = &[
     GateInfo {
         id: "pr-checklist",
         suite: Suite::Hygiene,
-        summary: "ticked PR checkboxes are reconciled against the diff",
+        summary: "ticked PR checkboxes and declared touched surfaces are reconciled against the diff",
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
@@ -2477,6 +2477,13 @@ pub struct PrChecklistGate {
     pub enabled: bool,
     pub severity: Severity,
     pub exempt_paths: Vec<String>,
+    /// A pull-request body without a `Touched surfaces` section declares no surface, so
+    /// every boundary file the change touches is undeclared. Off: the declared-surface
+    /// contract applies to a body that has the section.
+    pub require_declared_surfaces: bool,
+    /// Pull-request authors (exact logins, case-insensitive) whose undeclared boundary
+    /// changes are a note, never a finding: dependency-update bots fill no template.
+    pub exempt_authors: Vec<String>,
 }
 
 impl Default for PrChecklistGate {
@@ -2485,6 +2492,8 @@ impl Default for PrChecklistGate {
             enabled: false,
             severity: Severity::Error,
             exempt_paths: Vec::new(),
+            require_declared_surfaces: false,
+            exempt_authors: Vec::new(),
         }
     }
 }

@@ -2,11 +2,12 @@
 //! report.
 
 use super::{
-    agent_permission_findings, agent_sandbox_findings, analyse_gitlab_ci, analyse_workflows,
-    codeowners_finding, copilot_trust_finding, default_branch, gitea_protection, github_protection,
-    gitlab_protection, merge_methods, multi_agent_findings, mutation_preset_finding,
-    protection_findings, push_covers, read, security_policy_finding, test_report_finding,
-    DisciplineJob, Finding, Report, Status, CODEOWNERS_PATHS, SECURITY_POLICY_PATHS, WORKFLOW_DIRS,
+    agent_permission_findings, agent_policy_claim, agent_policy_finding, agent_sandbox_findings,
+    analyse_gitlab_ci, analyse_workflows, codeowners_covers, codeowners_finding,
+    copilot_trust_finding, default_branch, gitea_protection, github_protection, gitlab_protection,
+    merge_methods, multi_agent_findings, mutation_preset_finding, protection_findings, push_covers,
+    read, security_policy_finding, test_report_finding, DisciplineJob, Finding, ProtectionRead,
+    Report, Status, CODEOWNERS_PATHS, SECURITY_POLICY_PATHS, WORKFLOW_DIRS,
 };
 use crate::forge::{Forge, ForgeApi, ForgeKind};
 use std::path::Path;
@@ -139,6 +140,15 @@ pub fn run(input: &DoctorInput) -> Report {
         codeowners.as_ref().map(|(p, c)| (p.as_str(), c.as_str())),
         &targets,
     ));
+    // `agent-policy`: what the configuration claims about agents, and whether CODEOWNERS
+    // owns every referee surface (the configuration and the workflows that run discipline).
+    let agent_claim = repo_config.as_ref().and_then(agent_policy_claim);
+    let owners_cover = codeowners
+        .as_ref()
+        .is_some_and(|(_, c)| targets.iter().all(|t| codeowners_covers(c, t)));
+    let agent_policy = |read: ProtectionRead| {
+        agent_policy_finding(agent_claim.as_deref(), read, &targets, owners_cover)
+    };
     findings.push(if root.join("discipline.toml").exists() {
         Finding::new("config", Status::Pass, "discipline.toml is present")
     } else {
@@ -175,6 +185,7 @@ pub fn run(input: &DoctorInput) -> Report {
     let mut repository = None;
     let mut branch = input.branch.clone();
     if input.local_only {
+        findings.extend(agent_policy(ProtectionRead::NotAsked));
         let push_jobs: Vec<&DisciplineJob> = local
             .jobs
             .iter()
@@ -212,6 +223,9 @@ pub fn run(input: &DoctorInput) -> Report {
                     Finding::new("platform", Status::Unknown, format!("cannot identify the forge: {e}"))
                         .fix("Set DISCIPLINE_FORGE (github, gitlab, gitea, forgejo) and DISCIPLINE_FORGE_URL, or use --local-only."),
                 );
+                findings.extend(agent_policy(ProtectionRead::Unreadable(
+                    "the forge could not be identified",
+                )));
             }
             Ok(forge) => {
                 platform_name = forge.kind.label().to_string();
@@ -236,6 +250,11 @@ pub fn run(input: &DoctorInput) -> Report {
                             .fix(access_hint(forge.kind, &e)),
                         ),
                     }
+                }
+                if branch.is_none() {
+                    findings.extend(agent_policy(ProtectionRead::Unreadable(
+                        "the default branch could not be read",
+                    )));
                 }
                 if let Some(b) = &branch {
                     let on_push: Vec<&DisciplineJob> = local
@@ -311,6 +330,10 @@ pub fn run(input: &DoctorInput) -> Report {
                         ForgeKind::GitLab => gitlab_protection(input.api, forge, b),
                     };
                     let reviews = protection.as_ref().ok().and_then(|p| p.required_approvals);
+                    findings.extend(agent_policy(match &protection {
+                        Ok(p) => ProtectionRead::Read(p),
+                        Err(e) => ProtectionRead::Unreadable(e),
+                    }));
                     match protection {
                         Ok(p) => findings.extend(protection_findings(forge.kind, &p, &local.jobs)),
                         Err(e) => findings.push(

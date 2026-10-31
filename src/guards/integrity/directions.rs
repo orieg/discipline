@@ -161,6 +161,7 @@ pub const KEY_DIRECTIONS: &[(&str, Direction)] = &[
     ("scan_workflows", Direction::LooserWhenFalse),
     ("scan_scripts", Direction::LooserWhenFalse),
     ("require_in_commit_if_no_pr", Direction::LooserWhenFalse),
+    ("require_declared_surfaces", Direction::LooserWhenFalse),
     ("check_plans", Direction::LooserWhenFalse),
     ("require_declared_outputs", Direction::LooserWhenFalse),
     ("verify_tracker_titles", Direction::LooserWhenFalse),

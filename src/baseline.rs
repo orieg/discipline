@@ -797,6 +797,7 @@ pub fn run_cli(mut args: crate::cli::BaselineArgs) -> Result<bool> {
         staged: false,
         pr_title: None,
         pr_body: None,
+        declaration_body: Default::default(),
         directives,
         directive_notes,
         bench_provenance: None,

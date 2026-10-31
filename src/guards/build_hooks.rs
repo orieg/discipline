@@ -230,6 +230,13 @@ pub fn judge(file: &ChangedFile, base: Option<&str>, head: Option<&str>) -> Vec<
     out
 }
 
+/// Whether `path` is a build hook this gate reads by name alone: a build script (code
+/// that runs at build time) or package-manager configuration. A `package.json` is a
+/// manifest; its lifecycle scripts are judged from its content.
+pub fn is_build_hook_path(path: &str) -> bool {
+    BUILD_SCRIPTS.contains(&basename(path)) || is_manager_config(path)
+}
+
 pub fn build_hooks(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.build_hooks;
     let mut out = GateOutcome::new(GATE);

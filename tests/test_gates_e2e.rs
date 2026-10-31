@@ -17390,6 +17390,183 @@ enabled = true
     assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
 }
 
+/// The `Touched surfaces` section (#943), reconciled both ways through the real binary:
+/// a declared entry the diff does not touch, a boundary file changed without its entry,
+/// the directive that lifts each, the bot bucket (a note, never a finding), the source
+/// policy, and `require_declared_surfaces`.
+#[test]
+fn pr_checklist_reconciles_declared_surfaces_both_ways() {
+    const ENTRIES: [&str; 8] = [
+        "workflows",
+        "build hooks",
+        "manifests/lockfiles",
+        "`discipline.toml`",
+        "directives",
+        "docs",
+        "tests",
+        "benches",
+    ];
+    let body = |ticked: &[&str], extra: &str| {
+        let mut b = String::from("Tidies the build.\n\n## Touched surfaces\n\n");
+        for e in ENTRIES {
+            let mark = if ticked.contains(&e) { "x" } else { " " };
+            b.push_str(&format!("- [{mark}] {e}\n"));
+        }
+        b.push_str(extra);
+        b
+    };
+    let config = |extra: &str| {
+        format!("{CONFIG_HEAD}\n[gates.pr-checklist]\nenabled = true\nexempt_authors = [\"renovate[bot]\"]\n{extra}")
+    };
+    let wf = "name: CI\non: pull_request\npermissions:\n  contents: read\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo t\n";
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", &config("")),
+            (".github/workflows/ci.yml", wf),
+        ],
+        "base",
+    );
+    repo.write(
+        ".github/workflows/ci.yml",
+        &format!("# Runs the tests.\n{wf}"),
+    );
+    repo.commit("ci: describe the workflow");
+    let codes = |run: &Run| -> Vec<String> {
+        run.outcome("pr-checklist")["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let notes = |run: &Run| run.outcome("pr-checklist")["notes"].to_string();
+    let bodies = tempfile::tempdir().unwrap();
+    let check = |b: &str, env: &[(&str, &str)]| {
+        let file = bodies.path().join("body.md");
+        std::fs::write(&file, b).unwrap();
+        repo.run(
+            &[
+                "check",
+                "--format",
+                "json",
+                "--base",
+                "main",
+                "--pr-body-file",
+                file.to_str().unwrap(),
+            ],
+            env,
+        )
+    };
+
+    // Gap direction, positive: the workflow changed and `workflows` is not ticked.
+    let gap = check(&body(&[], ""), &[]);
+    assert_eq!(gap.code, 1, "{}{}", gap.stdout, gap.stderr);
+    assert_eq!(codes(&gap), vec!["pr-checklist/undeclared-boundary-delta"]);
+    let message = gap.outcome("pr-checklist")["violations"][0]["message"].to_string();
+    assert!(message.contains(".github/workflows/ci.yml"), "{message}");
+    assert!(message.contains("`ci-integrity` judges"), "{message}");
+    // Negative: declared.
+    let declared = check(&body(&["workflows"], ""), &[]);
+    assert_eq!(declared.code, 0, "{}{}", declared.stdout, declared.stderr);
+    assert!(codes(&declared).is_empty());
+
+    // False-claim direction, positive: `build hooks` ticked, no build hook changed.
+    let claim = check(&body(&["workflows", "build hooks"], ""), &[]);
+    assert_eq!(claim.code, 1, "{}", claim.stdout);
+    assert_eq!(
+        codes(&claim),
+        vec!["pr-checklist/checklist-claim-unsupported"]
+    );
+    // The section's lines are the contract's: a ticked `docs` is reported once, by it.
+    let docs = check(&body(&["workflows", "docs"], ""), &[]);
+    assert_eq!(codes(&docs), vec!["pr-checklist/checklist-claims-docs"]);
+
+    // Each direction's finding lifts with the entry's subject.
+    let lifted = check(
+        &body(
+            &["build hooks"],
+            "\nallow-pr-checklist: workflows comment-only edit\nallow-pr-checklist: build-hooks ticked by mistake\n",
+        ),
+        &[],
+    );
+    assert_eq!(lifted.code, 0, "{}{}", lifted.stdout, lifted.stderr);
+    assert_eq!(
+        lifted.outcome("pr-checklist")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    // The bot bucket: the payload names an `exempt_authors` login, so the gap is a note.
+    let dir = tempfile::tempdir().unwrap();
+    let event = |author: &str| {
+        let p = dir
+            .path()
+            .join(format!("{}.json", author.replace(['[', ']'], "_")));
+        let payload = serde_json::json!({"pull_request": {
+            "number": 3, "user": {"login": author}, "head": {"sha": "abc123"}}});
+        std::fs::write(&p, payload.to_string()).unwrap();
+        p.to_str().unwrap().to_string()
+    };
+    let bot_event = event("renovate[bot]");
+    let bot = check(&body(&[], ""), &[("GITHUB_EVENT_PATH", bot_event.as_str())]);
+    assert_eq!(bot.code, 0, "{}{}", bot.stdout, bot.stderr);
+    assert!(codes(&bot).is_empty());
+    assert!(notes(&bot).contains("exempt_authors"), "{}", notes(&bot));
+    // Anyone else, even when the run's actor is the bot, is held to the declaration.
+    let human_event = event("someone");
+    let human = check(
+        &body(&[], ""),
+        &[
+            ("GITHUB_EVENT_PATH", human_event.as_str()),
+            ("GITHUB_ACTOR", "renovate[bot]"),
+        ],
+    );
+    assert_eq!(
+        codes(&human),
+        vec!["pr-checklist/undeclared-boundary-delta"]
+    );
+
+    // No section: the contract is not applied, unless the policy requires one.
+    let absent = check("Tidies the build.\n", &[]);
+    assert_eq!(absent.code, 0, "{}", absent.stdout);
+    assert!(notes(&absent).contains("not applied"), "{}", notes(&absent));
+    repo.write(
+        "discipline.toml",
+        &config("require_declared_surfaces = true\n"),
+    );
+    repo.commit("chore: require the declaration");
+    let required = check("Tidies the build.\n", &[]);
+    assert_eq!(
+        codes(&required),
+        vec![
+            "pr-checklist/undeclared-boundary-delta",
+            "pr-checklist/undeclared-boundary-delta"
+        ],
+        "the workflow and discipline.toml: {}",
+        required.stdout
+    );
+
+    // A body the directive sources leave out declares nothing.
+    repo.write(
+        "discipline.toml",
+        &format!(
+            "{}\n[directives]\nsources = [\"commits\"]\n",
+            config("require_declared_surfaces = true\n")
+        ),
+    );
+    repo.commit("chore: read directives from commits only");
+    let excluded = check(&body(&["workflows", "`discipline.toml`"], ""), &[]);
+    assert_eq!(codes(&excluded).len(), 2, "{}", excluded.stdout);
+    assert!(
+        notes(&excluded).contains("`pr-body`"),
+        "{}",
+        notes(&excluded)
+    );
+}
+
 // ---- unsafe-budget ---------------------------------------------------------
 
 #[test]

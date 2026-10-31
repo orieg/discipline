@@ -11,7 +11,7 @@
 [![Marketplace](https://img.shields.io/badge/Marketplace-Discipline%20CI%20Gate-blue?logo=github-actions)](https://github.com/marketplace/actions/discipline-ci-gate)
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](.pre-commit-hooks.yaml)
 
-**Universal CI/CD diff sentinel and AI coding agent gatekeeper built in Rust.** One static binary, identical in GitHub Actions, GitLab CI/CD, Forgejo Actions, Gitea Actions, Argo Workflows, pre-commit hooks, and an agent's local inner loop. Interactive guides and documentation: [orieg.github.io/discipline](https://orieg.github.io/discipline/).
+**Agent-diff integrity gate built in Rust: it holds a change to its tests, its safety justifications, its policy and its verification harness.** It reads the structure of a change and the policy around it, not what the code does at run time; [Non-Goals](#non-goals) lists what that leaves out. One static binary, identical in GitHub Actions, GitLab CI/CD, Forgejo Actions, Gitea Actions, Argo Workflows, pre-commit hooks, and an agent's local inner loop. Interactive guides and documentation: [orieg.github.io/discipline](https://orieg.github.io/discipline/).
 
 ## Why Discipline?
 
@@ -33,7 +33,7 @@ Autonomous coding agents operating in iterate-until-green loops optimize for pas
 - Running a command on every install from where CI checks do not look: a `package.json` `postinstall`, a `build.rs`, or a repointed registry in `.npmrc` / `pip.conf`.
 - Introducing unverified calendar estimates or leaking developer workstation paths and LAN IPs.
 
-Discipline inspects the **diff** against the merge base using `tree-sitter` AST parsing and fail-closed verification rigors. It rejects erosion patterns before they reach review, and it guards its own trust boundary: a change cannot switch its run to advisory, disable the gate that judges its configuration, narrow the CI step that runs the gate without a recorded reason, or (with `directives.require_approval`) excuse itself without a review by someone else. On a push to the default branch, the waivers reviewed on the merged pull request still count: `merged-pr-body` reads that pull request's body through the forge, because a squash or rebase merge drops it from the commit message.
+Discipline reads the **diff** against the merge base: `tree-sitter` syntax trees for code, structured parsers for configuration, and fixed literal patterns for text, failing closed when it cannot read one. It judges structure and policy, not runtime semantics or data flow. It rejects erosion patterns before they reach review, and it guards its own trust boundary: a change cannot switch its run to advisory, disable the gate that judges its configuration, narrow the CI step that runs the gate without a recorded reason, or (with `directives.require_approval`) excuse itself without a review by someone else. On a push to the default branch, the waivers reviewed on the merged pull request still count: `merged-pr-body` reads that pull request's body through the forge, because a squash or rebase merge drops it from the commit message.
 
 ## Quickstart
 
@@ -188,9 +188,9 @@ Fourteen tree-sitter language packs (Rust, Python, JavaScript / TypeScript, Java
 | [`unsafe-safety-comment`](docs/GATES.md#unsafe-safety-comment) | agent-guard | Rust | unsafe blocks / impls carry a // SAFETY: comment |
 | [`deletion-rationale`](docs/GATES.md#deletion-rationale) | agent-guard | any | deleted files and removed tests need a scoped removes: rationale |
 | [`time-estimates`](docs/GATES.md#time-estimates) | hygiene | any | no calendar / duration estimates in markdown or the PR body |
-| [`pii`](docs/GATES.md#pii) | hygiene | any | no home paths, LAN IPs, denylisted hostnames, or fixed-format credentials (private keys, AWS, GitHub, Slack, OpenAI and Anthropic tokens, literal bearer headers) in tracked text |
+| [`pii`](docs/GATES.md#pii) | hygiene | any | no home paths, LAN IPs, denylisted hostnames, or fixed-format token literals (private-key headers; AWS, GitHub, Slack, OpenAI and Anthropic token formats; literal bearer headers) in tracked text: literal format matching, not credential scanning |
 | [`agent-scratch`](docs/GATES.md#agent-scratch) | hygiene | any | agent scratch state is never tracked |
-| [`shell-secrets`](docs/GATES.md#shell-secrets) | hygiene | shell, docker, workflows | no command-line secrets or unverified piped scripts in shell, docker, or CI |
+| [`shell-secrets`](docs/GATES.md#shell-secrets) | hygiene | shell, docker, workflows | no secrets on command lines, fixed-format token literals, or unverified piped scripts in shell, docker, or CI files: literal pattern matching, not secret scanning |
 | [`issue-link`](docs/GATES.md#issue-link) | hygiene | any | PR title or description links a tracking issue (#123, Fixes #123) |
 | [`review-threads`](docs/GATES.md#review-threads) | hygiene | any | the pull request has no unresolved review thread |
 | [`ratified-paths`](docs/GATES.md#ratified-paths) | agent-guard | any | edits to protected paths carry an owner's ratification on an issue the pull request closes |
@@ -213,7 +213,7 @@ Fourteen tree-sitter language packs (Rust, Python, JavaScript / TypeScript, Java
 | [`golden-output`](docs/GATES.md#golden-output) | integrity | any | prevents stealth edits to committed golden/test output files without explicit override |
 | [`dependency-delta`](docs/GATES.md#dependency-delta) | integrity | any | manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification |
 | [`test-budget`](docs/GATES.md#test-budget) | integrity | Rust, Python, JS/TS, Go, any | property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus) |
-| [`pr-checklist`](docs/GATES.md#pr-checklist) | hygiene | any | ticked PR checkboxes are reconciled against the diff |
+| [`pr-checklist`](docs/GATES.md#pr-checklist) | hygiene | any | ticked PR checkboxes and declared touched surfaces are reconciled against the diff |
 | [`command`](docs/GATES.md#command) | verification | any | fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet |
 | [`sanitizers`](docs/GATES.md#sanitizers) | verification | Rust, C/C++ | ASan / TSan preset with audited suppressions and a race canary |
 | [`msrv`](docs/GATES.md#msrv) | quality | Rust | cargo check under the pinned MSRV |
@@ -228,6 +228,25 @@ Fourteen tree-sitter language packs (Rust, Python, JavaScript / TypeScript, Java
 | [`citation-anchors`](docs/GATES.md#citation-anchors) | hygiene | markdown, any | verify path:line@sha citations against quoted text and git history, and relative Markdown links against the tree |
 | [`claim-labels`](docs/GATES.md#claim-labels) | hygiene | markdown, any | require RUN or READ labels on verification claims in PR bodies, commits, and Markdown |
 <!-- /generated -->
+
+## Non-Goals
+
+Discipline's lane is the integrity of an agent's diff: tests, safety justifications, policy and the verification harness. It reads syntax, configuration and fixed text patterns; it does not run the code, trace data flow, or decide whether a secret works. The classes below lie outside every gate. Each is a `known_miss` case in the evasion corpus, so `tests/test_evasion_corpus.rs` fails the day a gate starts catching one, and the case moves to `caught`. The concrete shapes live in the corpus, not here.
+
+<!-- generated:non-goals -->
+| Class | Corpus case | Stated under | Tracking |
+|---|---|---|---|
+| value/dataflow gating | [`out-of-lane-value-dataflow-gating`](tests/fixtures/evasion_corpus.json) | [`assertion-reduction`](docs/GATES.md#assertion-reduction) | [#941](https://github.com/orieg/discipline/issues/941) |
+| dataflow to external sinks | [`out-of-lane-dataflow-to-external-sinks`](tests/fixtures/evasion_corpus.json) | [`error-swallowing`](docs/GATES.md#error-swallowing) | [#941](https://github.com/orieg/discipline/issues/941) |
+| runtime payload semantics | [`out-of-lane-runtime-payload-semantics`](tests/fixtures/evasion_corpus.json) | [`instruction-smuggling`](docs/GATES.md#instruction-smuggling) | [#941](https://github.com/orieg/discipline/issues/941) |
+| credential validity | [`out-of-lane-credential-validity`](tests/fixtures/evasion_corpus.json) | [`pii`](docs/GATES.md#pii) | [#941](https://github.com/orieg/discipline/issues/941) |
+
+Entries in each gate's "What it does NOT catch" list:
+
+[`agents-md`](docs/GATES.md#agents-md) 1 · [`assertion-reduction`](docs/GATES.md#assertion-reduction) 19 · [`vacuous-tests`](docs/GATES.md#vacuous-tests) 8 · [`ignored-tests`](docs/GATES.md#ignored-tests) 11 · [`unsafe-safety-comment`](docs/GATES.md#unsafe-safety-comment) 3 · [`deletion-rationale`](docs/GATES.md#deletion-rationale) 5 · [`time-estimates`](docs/GATES.md#time-estimates) 7 · [`pii`](docs/GATES.md#pii) 8 · [`agent-scratch`](docs/GATES.md#agent-scratch) 1 · [`shell-secrets`](docs/GATES.md#shell-secrets) 5 · [`issue-link`](docs/GATES.md#issue-link) 3 · [`review-threads`](docs/GATES.md#review-threads) 4 · [`ratified-paths`](docs/GATES.md#ratified-paths) 4 · [`citation-metadata`](docs/GATES.md#citation-metadata) 4 · [`commit-provenance`](docs/GATES.md#commit-provenance) 8 · [`config-integrity`](docs/GATES.md#config-integrity) 5 · [`stub-bodies`](docs/GATES.md#stub-bodies) 6 · [`harness-tampering`](docs/GATES.md#harness-tampering) 9 · [`error-swallowing`](docs/GATES.md#error-swallowing) 10 · [`instruction-smuggling`](docs/GATES.md#instruction-smuggling) 10 · [`build-hooks`](docs/GATES.md#build-hooks) 3 · [`toolchain-config`](docs/GATES.md#toolchain-config) 9 · [`sandbox-config`](docs/GATES.md#sandbox-config) 7 · [`scope-confinement`](docs/GATES.md#scope-confinement) 4 · [`suppression-delta`](docs/GATES.md#suppression-delta) 5 · [`provenance-tags`](docs/GATES.md#provenance-tags) 4 · [`ci-integrity`](docs/GATES.md#ci-integrity) 7 · [`ci-skip-set`](docs/GATES.md#ci-skip-set) 3 · [`test-floor`](docs/GATES.md#test-floor) 8 · [`golden-output`](docs/GATES.md#golden-output) 1 · [`dependency-delta`](docs/GATES.md#dependency-delta) 5 · [`test-budget`](docs/GATES.md#test-budget) 5 · [`pr-checklist`](docs/GATES.md#pr-checklist) 11 · [`command`](docs/GATES.md#command) 3 · [`sanitizers`](docs/GATES.md#sanitizers) 3 · [`msrv`](docs/GATES.md#msrv) 3 · [`miri`](docs/GATES.md#miri) 3 · [`unsafe-budget`](docs/GATES.md#unsafe-budget) 3 · [`bench-regression`](docs/GATES.md#bench-regression) 2 · [`archive-contents`](docs/GATES.md#archive-contents) 2 · [`manifest-sync`](docs/GATES.md#manifest-sync) 2 · [`version-lockstep`](docs/GATES.md#version-lockstep) 2 · [`gate-command-lint`](docs/GATES.md#gate-command-lint) 6 · [`mechanism-sections`](docs/GATES.md#mechanism-sections) 4 · [`citation-anchors`](docs/GATES.md#citation-anchors) 6 · [`claim-labels`](docs/GATES.md#claim-labels) 3
+<!-- /generated -->
+
+Generated by `discipline docs --write` from each gate's "What it does NOT catch" list in [`docs/GATES.md`](docs/GATES.md); `discipline docs --check` fails when this section and those lists disagree.
 
 ## Auditing What Got Through
 

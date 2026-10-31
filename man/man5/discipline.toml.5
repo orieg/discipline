@@ -199,13 +199,13 @@ deleted files and removed tests need a scoped removes: rationale (agent-guard; d
 no calendar / duration estimates in markdown or the PR body (hygiene; default: on, warning; languages: any)
 .TP
 .B [gates.pii]
-no home paths, LAN IPs, denylisted hostnames, or fixed\-format credentials (private keys, AWS, GitHub, Slack, OpenAI and Anthropic tokens, literal bearer headers) in tracked text (hygiene; default: on, error; languages: any)
+no home paths, LAN IPs, denylisted hostnames, or fixed\-format token literals (private\-key headers; AWS, GitHub, Slack, OpenAI and Anthropic token formats; literal bearer headers) in tracked text: literal format matching, not credential scanning (hygiene; default: on, error; languages: any)
 .TP
 .B [gates.agent-scratch]
 agent scratch state is never tracked (hygiene; default: on, error; languages: any)
 .TP
 .B [gates.shell-secrets]
-no command\-line secrets or unverified piped scripts in shell, docker, or CI (hygiene; default: on, error; languages: shell, docker, workflows)
+no secrets on command lines, fixed\-format token literals, or unverified piped scripts in shell, docker, or CI files: literal pattern matching, not secret scanning (hygiene; default: on, error; languages: shell, docker, workflows)
 .TP
 .B [gates.issue-link]
 PR title or description links a tracking issue (#123, Fixes #123) (hygiene; default: off; languages: any)
@@ -274,7 +274,7 @@ manifest diff inspection: zero wildcards, source/license allowlists, and deny.to
 property\-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus) (integrity; default: on, error; languages: Rust, Python, JS/TS, Go, any)
 .TP
 .B [gates.pr-checklist]
-ticked PR checkboxes are reconciled against the diff (hygiene; default: off; languages: any)
+ticked PR checkboxes and declared touched surfaces are reconciled against the diff (hygiene; default: off; languages: any)
 .TP
 .B [gates.command]
 fail\-closed wrapper for any tool: zero\-tests guard, canary, count ratchet (verification; default: on, error; languages: any)
