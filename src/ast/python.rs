@@ -30,6 +30,7 @@ impl LanguagePack for PythonPack {
                 | Fact::Handlers
                 | Fact::Prose
                 | Fact::Budgets
+                | Fact::CapabilitySinks
         )
     }
 
@@ -43,6 +44,22 @@ impl LanguagePack for PythonPack {
 
     fn is_test_path(&self, path: &str) -> bool {
         super::functions::is_test_file(path, Some(is_python_test_path))
+    }
+
+    fn capability_sinks(
+        &self,
+        path: &str,
+        src: &str,
+    ) -> Result<Vec<super::capability_sinks::SinkSite>> {
+        crate::ast::scanner_limits::python_indent_nesting(src)
+            .map_err(|why| anyhow!("could not parse `{path}`: {why}"))?;
+        super::capability_sinks::sites_of(
+            &tree_sitter_python::LANGUAGE.into(),
+            "the Python",
+            path,
+            src,
+            &super::capability_sinks::PYTHON,
+        )
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {

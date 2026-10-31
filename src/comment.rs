@@ -49,6 +49,18 @@ pub fn render(summary: &CheckSummary, success: bool) -> String {
         summary.warnings,
         summary.total_overrides()
     ));
+    // The counts a reviewer routes on, after the verdict; numbers and fixed words only.
+    if let Some(counts) = summary
+        .review_routing
+        .as_ref()
+        .and_then(|r| r.counts_line())
+    {
+        out.push_str(&format!(
+            "{} _({})_\n\n",
+            comment_markdown_cell(&counts),
+            comment_markdown_cell(crate::routing::STABILITY)
+        ));
+    }
     for f in &summary.policy_failures {
         out.push_str(&format!(
             "- **Refused:** {}\n",
@@ -394,6 +406,7 @@ mod tests {
             directive_notes: Vec::new(),
             stale_baseline_entries: 0,
             unused_directives: Vec::new(),
+            review_routing: None,
         };
         let body = render(&summary, false);
         assert!(body.starts_with(MARKER));

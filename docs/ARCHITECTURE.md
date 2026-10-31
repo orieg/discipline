@@ -506,6 +506,15 @@ To support brownfield adoption without weakening gates or ignoring violations, D
 - **Safety:** same path checks, https rule and `DISCIPLINE_NO_NETWORK` as the reads; a write is never replayed against a redirect. Text from the change is escaped as §7 describes (no `@` mention, no HTML, no link, no table break, no control character, no forged marker), and the comment carries no directive syntax, since agents read pull-request comments too.
 - **Failure:** a token that cannot write (HTTP 401 / 403 / 404, the fork case) is a named note and the gates' verdict stands; a forge that cannot be identified or reached stops the run (exit 2), because a comment was asked for. The comment never decides the verdict: the check's status does.
 
+### 7.4 Review Routing (an inventory, not a gate)
+
+Every `check` that has a change computes one report section, `review_routing` (`src/routing.rs`, #944): what the change touches that a reviewer routes on. It is not a gate: no outcome, no finding code, no severity, nothing to waive, and it never changes the exit code. Its JSON is **unstable until 1.0** and none of its names is in `tests/fixtures/v1_surface.json`; every rendering says so.
+
+- **Deterministic half (exact):** the directives the run read from the change (count and names), the `discipline:allow(<gate>)` markers the change adds and removes, and the authority files it changes, by surface (`policy`, `ci`, `lockfile`, `build-hook`, `code-owners`, `agent-instructions`, `toolchain`, `sandbox`: the files existing gates already read). Automated routing may condition on this half only, and only with a repository's own opt-in: a zero is not a clearance.
+- **Heuristic half (non-exhaustive):** calls to a capability sink (`process-spawn`, `dynamic-eval`, `network`) on lines the change adds, read from the syntax tree of the languages whose pack supplies `Fact::CapabilitySinks` (`src/ast/capability_sinks.rs`: a closed vocabulary per language, matched on the callee as code, never in a string or a comment), and the tests the change adds or removes, by name. It informs reviewers and nothing else.
+- **Coverage footer:** how many changed files were in a language with a capability inventory, from the packs (`crate::ast::coverage_labels`), and that runtime semantics are not inspected.
+- **Placement:** after the verdict on every surface. The counts line, zero rows left out, is the first line under the job summary's heading, the `review_routing` step output (the text for a commit-status description; discipline posts no status of its own, and the action does not re-export it, to keep the name out of the 1.0 surface), and a line of the pull-request comment. The terminal report and the job summary list at most five `file:line` pointers per row with an `and N more in <surface>` tail. The `agent-prompt` report a hook relays carries the counts and the pointers as quoted spans, with no directive name, scrubbed like the rest; the hook log line carries the counts as `routing`.
+
 ## 8. CI and Release Pipelines
 
 ### 8.1 CI Pipeline (`.github/workflows/ci.yml`)
