@@ -1920,7 +1920,7 @@
               "$ref": "#/$defs/PiiGate"
             }
           ],
-          "description": "no home paths, LAN IPs, denylisted hostnames, or fixed-format credentials (private keys, AWS, GitHub, Slack, OpenAI and Anthropic tokens, literal bearer headers) in tracked text"
+          "description": "no home paths, LAN IPs, denylisted hostnames, or fixed-format token literals (private-key headers; AWS, GitHub, Slack, OpenAI and Anthropic token formats; literal bearer headers) in tracked text: literal format matching, not credential scanning"
         },
         "pr-checklist": {
           "allOf": [
@@ -1984,7 +1984,7 @@
               "$ref": "#/$defs/ShellSecretsGate"
             }
           ],
-          "description": "no command-line secrets or unverified piped scripts in shell, docker, or CI"
+          "description": "no secrets on command lines, fixed-format token literals, or unverified piped scripts in shell, docker, or CI files: literal pattern matching, not secret scanning"
         },
         "stub-bodies": {
           "allOf": [
