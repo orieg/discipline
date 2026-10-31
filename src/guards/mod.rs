@@ -699,6 +699,11 @@ pub struct CheckSummary {
     /// Why the run could not check (exit 2): only then present, and `outcomes` is empty.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub could_not_check: Option<crate::could_not_check::CouldNotCheck>,
+    /// What the change touches that a reviewer routes on ([`crate::routing`]): an
+    /// inventory, never a verdict, and unstable until 1.0. Absent when the run has no
+    /// change to describe (a whole-tree run, a run that could not check).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_routing: Option<crate::routing::ReviewRouting>,
 }
 
 impl CheckSummary {
@@ -1387,6 +1392,7 @@ pub fn run_checks(
         refused_hidden_directives: Vec::new(),
         deprecations,
         directive_notes: run_directive_notes,
+        review_routing: None,
     })
 }
 

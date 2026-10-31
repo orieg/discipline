@@ -543,6 +543,7 @@ fn emit_fatal_reports(args: &CheckArgs, is_gitlab: bool, base: &str, err: &anyho
         directive_notes: Vec::new(),
         stale_baseline_entries: 0,
         unused_directives: Vec::new(),
+        review_routing: None,
     };
     let json_summary = empty(
         Vec::new(),
@@ -948,6 +949,10 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
         &discipline::forge::HttpApi::from_env(),
     )?;
     summary.policy_failures.extend(floor.failures);
+    // What the change touches that a reviewer routes on: an inventory beside the verdict,
+    // never part of it (#944).
+    summary.review_routing =
+        discipline::routing::compute(&ctx).map_err(|e| tag(Reason::Repository, e))?;
 
     let raw_fail_on_overrides = config.directives.fail_on_overrides;
     let actor = args

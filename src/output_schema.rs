@@ -55,9 +55,78 @@ pub fn report_schema() -> Value {
             "directive_notes": { "type": "array", "items": { "type": "string" }, "description": "Notes about the directive sources as a whole (the merged pull request a pushed commit came through, a forge lookup that could not be made), once per run; a note about one directive is in its gate's notes. Omitted when empty" },
             "unused_directives": { "type": "array", "items": { "$ref": "#/$defs/UnusedDirective" }, "description": "Directives this run read that lifted no finding; never fails the run. Computed when every suite ran. Omitted when empty" },
             "could_not_check": { "$ref": "#/$defs/CouldNotCheck", "description": "Why the check could not run (exit 2). Omitted otherwise" },
-            "hook": { "$ref": "#/$defs/HookContext", "description": "The agent hook that ran this check, and what it answers on this report. Omitted when no hook ran the check" }
+            "hook": { "$ref": "#/$defs/HookContext", "description": "The agent hook that ran this check, and what it answers on this report. Omitted when no hook ran the check" },
+            "review_routing": { "$ref": "#/$defs/ReviewRouting", "description": "UNSTABLE until 1.0: names and shape may change in any release, and none is in the frozen interface. What the change touches that a reviewer routes on: an inventory, never a verdict. Omitted when the run has no change to describe" }
         },
         "$defs": {
+            "ReviewRouting": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["stability", "deterministic", "heuristic", "coverage"],
+                "description": "Unstable until 1.0. Two halves: `deterministic` is exact, and automated routing may condition on it only with a repository's opt-in (a zero is not a clearance); `heuristic` is non-exhaustive and informs reviewers only",
+                "properties": {
+                    "stability": { "type": "string", "description": "The section's stability statement" },
+                    "deterministic": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["directives", "directive_kinds", "inline_markers_added", "inline_markers_removed", "authority_files"],
+                        "properties": {
+                            "directives": { "type": "integer", "minimum": 0, "description": "Directives the run read from the change, whether or not they lifted anything" },
+                            "directive_kinds": { "type": "array", "items": { "type": "string" }, "description": "Their names, lower case, each once, sorted" },
+                            "inline_markers_added": { "type": "integer", "minimum": 0, "description": "`discipline:allow(<gate>)` markers on lines the change adds" },
+                            "inline_markers_removed": { "type": "integer", "minimum": 0, "description": "Marker lines the base side had that the head side does not" },
+                            "authority_files": {
+                                "type": "array",
+                                "description": "Changed files that govern how the change is built, checked or run, in path order",
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": ["path", "surface", "change"],
+                                    "properties": {
+                                        "path": { "type": "string" },
+                                        "surface": { "enum": ["policy", "ci", "lockfile", "build-hook", "code-owners", "agent-instructions", "toolchain", "sandbox"] },
+                                        "change": { "enum": ["added", "modified", "deleted", "renamed"] }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "heuristic": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["capability_sites", "tests_added", "tests_removed"],
+                        "properties": {
+                            "capability_sites": {
+                                "type": "array",
+                                "description": "Calls to a capability sink on lines the change adds, from a closed vocabulary per language: non-exhaustive",
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": ["file", "line", "surface"],
+                                    "properties": {
+                                        "file": { "type": "string" },
+                                        "line": { "type": "integer", "minimum": 1 },
+                                        "surface": { "enum": ["process-spawn", "dynamic-eval", "network"] }
+                                    }
+                                }
+                            },
+                            "tests_added": { "type": "integer", "minimum": 0, "description": "Tests the head side has that the base side does not, by name" },
+                            "tests_removed": { "type": "integer", "minimum": 0, "description": "Tests the base side has that the head side does not, by name" }
+                        }
+                    },
+                    "coverage": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["changed_files", "inventoried_files", "unparsed_files", "languages"],
+                        "properties": {
+                            "changed_files": { "type": "integer", "minimum": 0, "description": "Files the change adds, modifies or renames" },
+                            "inventoried_files": { "type": "integer", "minimum": 0, "description": "Of those, files in a language with a capability inventory that parsed" },
+                            "unparsed_files": { "type": "integer", "minimum": 0, "description": "Files in such a language that did not parse" },
+                            "languages": { "type": "array", "items": { "type": "string" }, "description": "The languages with a capability inventory in this binary" }
+                        }
+                    }
+                }
+            },
             "HookContext": {
                 "type": "object",
                 "additionalProperties": false,

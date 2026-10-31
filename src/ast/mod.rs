@@ -13,6 +13,7 @@ pub mod budgets;
 pub mod c_cpp;
 pub mod c_macros;
 pub mod calls;
+pub mod capability_sinks;
 pub mod caught_assertions;
 pub mod ci_condition;
 pub mod comparisons;
@@ -116,6 +117,13 @@ pub trait LanguagePack: Send + Sync {
 
     /// Extract language-neutral facts from source text.
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts>;
+
+    /// The calls of `src` that reach a capability sink (`Fact::CapabilitySinks`): a
+    /// non-exhaustive inventory for reviewers, never a finding. Empty for a pack that
+    /// does not supply the fact.
+    fn capability_sinks(&self, _path: &str, _src: &str) -> Result<Vec<capability_sinks::SinkSite>> {
+        Ok(Vec::new())
+    }
 }
 
 /// A kind of fact a pack may or may not extract.
@@ -129,6 +137,9 @@ pub enum Fact {
     Prose,
     /// Testing-effort budgets (proptest `cases`, Hypothesis `max_examples`, ...).
     Budgets,
+    /// Calls that spawn a process, evaluate code or open a network connection
+    /// ([`capability_sinks`]): the review-routing inventory, never a gate's input.
+    CapabilitySinks,
 }
 
 /// Registry of active language packs.

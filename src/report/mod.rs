@@ -323,6 +323,10 @@ fn render_terminal_to_writer<W: Write>(
             )?;
         }
     }
+    // After the verdict, never part of it.
+    if let Some(routing) = &summary.review_routing {
+        write!(w, "{}", routing.terminal())?;
+    }
     Ok(())
 }
 
@@ -395,11 +399,16 @@ pub fn render_step_summary_to_writer(
     } else {
         "### Discipline gate: FAILED"
     };
-    writeln!(
-        file,
-        "{heading}\n\nBase: {}\n",
-        text::code_span(&summary.base)
-    )?;
+    writeln!(file, "{heading}\n")?;
+    // The first line under the verdict: the counts a reviewer routes on (#944).
+    if let Some(counts) = summary
+        .review_routing
+        .as_ref()
+        .and_then(|r| r.counts_line())
+    {
+        writeln!(file, "**{}**\n", text::markdown(&counts))?;
+    }
+    writeln!(file, "Base: {}\n", text::code_span(&summary.base))?;
     for failure in &summary.policy_failures {
         writeln!(file, "**Refused:** {}\n", text::markdown(&failure.text))?;
     }
@@ -514,6 +523,9 @@ pub fn render_step_summary_to_writer(
             )?;
         }
     }
+    if let Some(routing) = &summary.review_routing {
+        write!(file, "{}", routing.markdown())?;
+    }
     Ok(())
 }
 
@@ -554,6 +566,15 @@ fn render_step_outputs(
     writeln!(file, "overridden_gates={}", overridden.join(","))?;
     writeln!(file, "passed_gates={passed}")?;
     writeln!(file, "examined_items={examined}")?;
+    // One line, the text a workflow that posts a commit status uses as its description.
+    // Unstable until 1.0, and not an output of the action (#944).
+    if let Some(counts) = summary
+        .review_routing
+        .as_ref()
+        .and_then(|r| r.counts_line())
+    {
+        writeln!(file, "review_routing={}", text::terminal_line(&counts))?;
+    }
     Ok(())
 }
 
@@ -569,6 +590,12 @@ pub fn format_agent_prompt(summary: &CheckSummary) -> String {
 /// touched, and an agent told to "fix each issue" edits it.
 pub fn format_agent_prompt_with(summary: &CheckSummary, fail_on_warnings: bool) -> String {
     let violations: Vec<&Violation> = summary.violations().collect();
+    // The review-routing section, after the verdict: counts and quoted pointers only.
+    let routing = summary
+        .review_routing
+        .as_ref()
+        .map(|r| r.agent_text())
+        .unwrap_or_default();
 
     if violations.is_empty() {
         let (passed, _, _, examined) = summary.gate_counts(false, false);
@@ -578,9 +605,9 @@ pub fn format_agent_prompt_with(summary: &CheckSummary, fail_on_warnings: bool) 
         } else {
             String::new()
         };
-        return format!(
-            "No discipline violations found ({passed} gates passed, {examined} {items_label} examined{baselined_part}).\n"
-        );
+        return scrub_override_directives(&format!(
+            "No discipline violations found ({passed} gates passed, {examined} {items_label} examined{baselined_part}).\n{routing}"
+        ));
     }
 
     let blocks = |v: &&Violation| fail_on_warnings || v.severity == Severity::Error;
@@ -625,6 +652,7 @@ pub fn format_agent_prompt_with(summary: &CheckSummary, fail_on_warnings: bool) 
     for v in &advisory {
         issue(&mut out, v);
     }
+    out.push_str(&routing);
 
     scrub_override_directives(&out)
 }
@@ -850,6 +878,7 @@ mod tests {
             directive_notes: Vec::new(),
             stale_baseline_entries: 0,
             unused_directives: Vec::new(),
+            review_routing: None,
         }
     }
 
@@ -1071,6 +1100,7 @@ mod tests {
             directive_notes: Vec::new(),
             stale_baseline_entries: 0,
             unused_directives: Vec::new(),
+            review_routing: None,
         };
         let prompt = format_agent_prompt(&summary);
         assert!(
@@ -1217,6 +1247,7 @@ mod tests {
             directive_notes: Vec::new(),
             stale_baseline_entries: 0,
             unused_directives: Vec::new(),
+            review_routing: None,
         };
 
         let prompt = format_agent_prompt(&summary);
@@ -1285,6 +1316,7 @@ mod tests {
             directive_notes: Vec::new(),
             stale_baseline_entries: 0,
             unused_directives: Vec::new(),
+            review_routing: None,
         };
 
         let mut buf = Vec::new();
@@ -1388,6 +1420,7 @@ mod tests {
             directive_notes: Vec::new(),
             stale_baseline_entries: 0,
             unused_directives: Vec::new(),
+            review_routing: None,
         };
         let mut buf = Vec::new();
         render_terminal_to_writer(&mut buf, &summary, false, false).unwrap();
@@ -1448,6 +1481,7 @@ mod tests {
             directive_notes: Vec::new(),
             stale_baseline_entries: 0,
             unused_directives: Vec::new(),
+            review_routing: None,
         };
 
         let mut buf = Vec::new();
@@ -1486,6 +1520,7 @@ mod tests {
             directive_notes: Vec::new(),
             stale_baseline_entries: 0,
             unused_directives: Vec::new(),
+            review_routing: None,
         };
 
         let prompt = format_agent_prompt(&summary);
@@ -1530,6 +1565,7 @@ mod tests {
             directive_notes: Vec::new(),
             stale_baseline_entries: 0,
             unused_directives: Vec::new(),
+            review_routing: None,
         };
 
         let mut buf = Vec::new();

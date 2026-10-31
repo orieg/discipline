@@ -240,6 +240,7 @@ mod tests {
             directive_notes: Vec::new(),
             stale_baseline_entries: 0,
             unused_directives: Vec::new(),
+            review_routing: None,
         };
 
         let xml = format_junit(&summary, false);
@@ -293,6 +294,7 @@ mod tests {
             directive_notes: Vec::new(),
             stale_baseline_entries: 0,
             unused_directives: Vec::new(),
+            review_routing: None,
         };
 
         let xml = format_junit(&summary, false);
@@ -373,6 +375,7 @@ mod tests {
             directive_notes: Vec::new(),
             stale_baseline_entries: 0,
             unused_directives: Vec::new(),
+            review_routing: None,
         };
 
         // Without fail_on_warnings, failures="0" and no <failure> tag emitted

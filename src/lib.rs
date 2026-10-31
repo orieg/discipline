@@ -52,6 +52,7 @@ pub mod refusals;
 pub mod replay;
 pub mod report;
 pub mod review_threads;
+pub mod routing;
 pub mod schema;
 pub mod selftest;
 pub mod session;

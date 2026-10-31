@@ -623,7 +623,17 @@ fn check_record(
         could_not_check_reason(run).map_or(serde_json::Value::Null, Into::into),
     );
     m.insert("codes".into(), blocking_codes(run).into());
+    // The review-routing counts (#944), deterministic and heuristic apart; absent when the
+    // report carries no section.
+    if let Some(routing) = routing_of(run) {
+        m.insert("routing".into(), routing.log_counts());
+    }
     serde_json::Value::Object(m)
+}
+
+/// The review-routing section of `run`'s JSON report, when it has one.
+fn routing_of(run: &CheckRun) -> Option<crate::routing::ReviewRouting> {
+    serde_json::from_value(run.json.as_ref()?.get("review_routing")?.clone()).ok()
 }
 
 /// The codes of what blocks in `run`: the errors, or the warnings when no error does
@@ -957,6 +967,13 @@ pub fn render_session_report(
         "{} unchanged non-blocking warning(s) from earlier in this session elided ({codes_summary}). {pointer}\n",
         unchanged.len()
     ));
+    // The same review-routing section the full report ends with (#944).
+    if let Some(routing) = json
+        .get("review_routing")
+        .and_then(|v| serde_json::from_value::<crate::routing::ReviewRouting>(v.clone()).ok())
+    {
+        out.push_str(&routing.agent_text());
+    }
 
     (
         crate::report::scrub_override_directives(&out),

@@ -1268,6 +1268,7 @@ const CASES: &[Case] = &[
                     directive_notes: Vec::new(),
                     stale_baseline_entries: 0,
                     unused_directives: Vec::new(),
+                    review_routing: None,
                 };
                 let change = [ChangedFile {
                     path: "a.md".into(),
@@ -3929,6 +3930,7 @@ const CASES: &[Case] = &[
                 directive_notes: Vec::new(),
                 stale_baseline_entries: 0,
                 unused_directives: Vec::new(),
+                review_routing: None,
             };
             // No refusal: no rule, no suite, no entry.
             let quiet = sarif::format_sarif(&summary)["runs"][0]["results"] == serde_json::json!([])
@@ -6614,6 +6616,7 @@ command = "cargo test"
                 directive_notes: Vec::new(),
                 stale_baseline_entries: 0,
                 unused_directives: Vec::new(),
+                review_routing: None,
             };
 
             let prompt = format_agent_prompt(&summary);
