@@ -193,6 +193,7 @@ pub const DOCTOR_FINDINGS: &[&str] = &[
     "actions-approve-prs",
     "actions-sha-pinning",
     "agent-permission",
+    "agent-policy",
     "agent-sandbox",
     "allow-failure",
     "allowed-actions",

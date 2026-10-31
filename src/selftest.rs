@@ -9335,6 +9335,32 @@ smoke_cost::set_contains
         },
     ),
     (
+        "doctor: an agent-aware policy passes with a required review, warns without one, and is undecided when the forge cannot be read",
+        || {
+            use crate::doctor::{agent_policy_finding, Protection, ProtectionRead, Status};
+            let referee = vec!["discipline.toml".to_string()];
+            let claim = Some("`directives.require_approval` is on");
+            let status = |read: ProtectionRead| {
+                agent_policy_finding(claim, read, &referee, false).map(|f| f.status)
+            };
+            let reviewed = Protection {
+                protected: true,
+                pull_request_required: true,
+                required_approvals: Some(1),
+                ..Protection::default()
+            };
+            let unreviewed = Protection {
+                required_approvals: Some(0),
+                ..reviewed.clone()
+            };
+            Ok(status(ProtectionRead::Read(&reviewed)) == Some(Status::Pass)
+                && status(ProtectionRead::Read(&unreviewed)) == Some(Status::Warn)
+                && status(ProtectionRead::Unreadable("HTTP 403")) == Some(Status::Unknown)
+                && agent_policy_finding(None, ProtectionRead::Read(&unreviewed), &referee, false)
+                    .is_none())
+        },
+    ),
+    (
         "doctor: hook-mode distinguishes observe, enforcing and unknown; pretool text does not say refuses for observe",
         || {
             use crate::doctor::{multi_agent_findings, Status};

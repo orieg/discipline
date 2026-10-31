@@ -1845,3 +1845,87 @@ fn doctor_warns_when_public_repo_has_committed_term_denylist() {
         .unwrap()
         .contains("public repository with committed `term_denylist`"));
 }
+
+/// `agent-policy` (#942): a configuration that claims an agent-aware policy
+/// (`directives.require_approval`, `ratified-paths` `agent_logins`) presumes a reviewer
+/// distinct from the agent. With a required approving review it passes; with no review
+/// or signature rule over the referee surfaces it is a warning that `--strict` fails on;
+/// with the forge unreachable it is undecided (exit 2); without the claim it is absent.
+#[test]
+fn doctor_asserts_an_agent_aware_policy_is_enforced_by_the_forge() {
+    let repo = Repo::new();
+    let claimed = format!("{CONFIG_HEAD}[directives]\nrequire_approval = true\n");
+    repo.commit_base_files(
+        &[
+            (".github/workflows/ci.yml", WORKFLOW),
+            (".github/CODEOWNERS", CODEOWNERS),
+            ("discipline.toml", &claimed),
+        ],
+        "base",
+    );
+    let agent_policy = |run: &Run| -> Vec<String> {
+        statuses(&run.stdout)
+            .into_iter()
+            .filter(|(id, _)| id == "agent-policy")
+            .map(|(_, s)| s)
+            .collect()
+    };
+
+    // Enforced: a pull request needs one approving review.
+    let api = github_api(GOOD_RULES);
+    let enforced = doctor_json(&repo, &api);
+    assert_eq!(agent_policy(&enforced), vec!["pass"], "{}", enforced.stdout);
+    assert_eq!(enforced.code, 0, "{}", enforced.stdout);
+
+    // Not enforced: no approving review, no code-owner review, no signature rule.
+    let loose = GOOD_RULES
+        .replace(
+            "\"required_approving_review_count\":1",
+            "\"required_approving_review_count\":0",
+        )
+        .replace(
+            "\"require_code_owner_review\":true",
+            "\"require_code_owner_review\":false",
+        );
+    let api = github_api(&loose);
+    let url = api.url();
+    let env = [
+        ("DISCIPLINE_FORGE_API_URL", url.as_str()),
+        ("GH_TOKEN", "gh-tok-1"),
+    ];
+    let lax = repo.run(&["doctor", "--repo", "o/r", "--format", "json"], &env);
+    assert_eq!(agent_policy(&lax), vec!["warn"], "{}", lax.stdout);
+    let strict = repo.run(
+        &["doctor", "--repo", "o/r", "--format", "json", "--strict"],
+        &env,
+    );
+    assert_eq!(strict.code, 1, "{}", strict.stdout);
+    assert_eq!(agent_policy(&strict), vec!["warn"]);
+
+    // The same rules with a signed-commit rule hold the claim.
+    let signed = loose.replacen('[', r#"[{"type":"required_signatures","ruleset_id":1},"#, 1);
+    let api = github_api(&signed);
+    let held = doctor_json(&repo, &api);
+    assert_eq!(agent_policy(&held), vec!["pass"], "{}", held.stdout);
+
+    // Unreachable forge (the harness sets DISCIPLINE_NO_NETWORK=1): undecided, exit 2.
+    let offline = repo.run(&["doctor", "--repo", "o/r", "--format", "json"], &[]);
+    assert_eq!(offline.code, 2, "{}", offline.stdout);
+    assert_eq!(
+        agent_policy(&offline),
+        vec!["unknown"],
+        "{}",
+        offline.stdout
+    );
+
+    // `--local-only` asks no forge: information.
+    let local = repo.run(&["doctor", "--local-only", "--format", "json"], &[]);
+    assert_eq!(agent_policy(&local), vec!["info"], "{}", local.stdout);
+
+    // No claim: no finding.
+    repo.write("discipline.toml", CONFIG_HEAD);
+    repo.commit("drop the claim");
+    let api = github_api(&loose);
+    let unclaimed = doctor_json(&repo, &api);
+    assert!(agent_policy(&unclaimed).is_empty(), "{}", unclaimed.stdout);
+}

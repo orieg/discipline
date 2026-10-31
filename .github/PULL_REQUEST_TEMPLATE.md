@@ -7,6 +7,23 @@ No time estimates (AGENTS.md §2.1), no hostnames, LAN IPs, or local workstation
 
 <!-- Summarise what changed and where. Reference the issue this resolves (e.g., Fixes #123). -->
 
+## Touched surfaces
+
+<!--
+A ticked entry declares that this change modifies that surface; an unticked one declares
+that it does not. The list is fixed. `pr-checklist` reconciles the ticks against the diff
+in both directions (docs/GATES.md, `pr-checklist`, declared surfaces, #943).
+-->
+
+- [ ] workflows
+- [ ] build hooks
+- [ ] manifests/lockfiles
+- [ ] `discipline.toml`
+- [ ] directives
+- [ ] docs
+- [ ] tests
+- [ ] benches
+
 ## Verification Evidence (RUN)
 
 <!-- Paste command outputs and artifact paths demonstrating verification. -->
