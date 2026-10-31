@@ -779,6 +779,27 @@ A release\*(Aqs SHA256SUMS, verified (`gh attestation verify`): the Claude Code 
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
+.SS "discipline hook log"
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+Print this repository\*(Aqs hook records (<git dir>/discipline/hook\-observe.log): time, agent, event, mode, binary version, decision, exit code and finding counts, oldest first
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBdiscipline hook log\fR [\fB\-\-json\fR] [\fB\-\-last\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.PP
+\fBOPTIONS\fR
+.TP
+\fB\-\-json\fR
+Print each record as one JSON object per line
+.TP
+\fB\-\-last\fR \fI<N>\fR
+Print only the last N records
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
 .SS "discipline explain"
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '

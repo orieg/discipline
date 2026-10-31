@@ -133,7 +133,16 @@ type HookFile = (crate::hook::Agent, &'static str, Option<fn(&str) -> bool>);
 /// - `hook-mode`: the mode of each agent hook file (pass when enforcing, warning when observe,
 ///   naming the file and how to switch; unknown when unreadable; warning when no check or
 ///   stop entry is present).
+/// - `hook-binary`: once for the hook files the repository ships, whether `discipline` is
+///   on `PATH`, which each of their commands runs by name. Without it every hook prints a
+///   line on stderr and exits 0, so it never blocks and checks nothing: a warning, which
+///   `--strict` fails on (#937).
 pub fn multi_agent_findings(root: &Path) -> Vec<Finding> {
+    multi_agent_findings_on(root, std::env::var_os("PATH").as_deref())
+}
+
+/// [`multi_agent_findings`] with the `PATH` the hooks would search.
+pub fn multi_agent_findings_on(root: &Path, path: Option<&std::ffi::OsStr>) -> Vec<Finding> {
     let mut out = Vec::new();
     let Ok(repo) = crate::gitctx::discover_repository(root) else {
         return out;
@@ -239,6 +248,7 @@ pub fn multi_agent_findings(root: &Path) -> Vec<Finding> {
         ),
         (crate::hook::Agent::Cursor, ".cursor/hooks.json", None),
     ];
+    let mut shipped: Vec<&str> = Vec::new();
     for (agent, rel, has) in files {
         let Some(text) = read(root, rel) else {
             continue;
@@ -246,6 +256,7 @@ pub fn multi_agent_findings(root: &Path) -> Vec<Finding> {
         if !text.contains("discipline hook run") {
             continue;
         }
+        shipped.push(rel);
         let agent_id = agent.id();
         let is_observe = crate::hook::generated_mode(agent, false, &text) == Some(true)
             || text.contains("--event pre-tool --observe")
@@ -303,7 +314,57 @@ pub fn multi_agent_findings(root: &Path) -> Vec<Finding> {
             });
         }
     }
+    out.extend(hook_binary_finding(&shipped, path));
     out
+}
+
+/// `hook-binary` for the hook files `shipped`, against the directories of `path`.
+fn hook_binary_finding(shipped: &[&str], path: Option<&std::ffi::OsStr>) -> Option<Finding> {
+    if shipped.is_empty() {
+        return None;
+    }
+    let files = shipped
+        .iter()
+        .map(|f| format!("`{f}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(match executable_on(path, "discipline") {
+        Some(found) => Finding::new(
+            "hook-binary",
+            Status::Pass,
+            format!("the hooks in {files} find `discipline` on PATH ({})", found.display()),
+        ),
+        None => Finding::new(
+            "hook-binary",
+            Status::Warn,
+            format!("the hooks in {files} run `discipline` from PATH and there is none on PATH: each hook says so on stderr and exits 0, so no change is checked and nothing is blocked"),
+        )
+        .fix("Install discipline (https://orieg.github.io/discipline/) where the agents run, or put the directory that holds it on PATH; `discipline hook log` lists each run the hooks recorded."),
+    })
+}
+
+/// The first executable file named `name` in the directories of `path`.
+fn executable_on(path: Option<&std::ffi::OsStr>, name: &str) -> Option<std::path::PathBuf> {
+    let file = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+    std::env::split_paths(path?)
+        .filter(|d| !d.as_os_str().is_empty())
+        .map(|d| d.join(&file))
+        .find(|p| is_executable(p))
+}
+
+#[cfg(unix)]
+fn is_executable(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(p: &Path) -> bool {
+    p.is_file()
 }
 
 fn has_check_or_stop(agent: crate::hook::Agent, text: &str) -> bool {
@@ -415,6 +476,31 @@ mod tests {
     use super::*;
     use crate::doctor::test_support::*;
     use crate::forge::CannedApi;
+
+    #[cfg(unix)]
+    #[test]
+    fn hook_binary_is_reported_only_for_shipped_hooks_and_found_only_when_executable() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let empty = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        let exe = bin.path().join("discipline");
+        std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+        let path = |dirs: &[&Path]| std::env::join_paths(dirs).unwrap();
+        let shipped = [".claude/settings.json"];
+
+        assert!(hook_binary_finding(&[], Some(&path(&[empty.path()]))).is_none());
+        let status = |p: &std::ffi::OsStr| hook_binary_finding(&shipped, Some(p)).unwrap().status;
+        // Not executable: the hooks' `command -v` would not find it either.
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(status(&path(&[empty.path(), bin.path()])), Status::Warn);
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(status(&path(&[empty.path(), bin.path()])), Status::Pass);
+        assert_eq!(status(&path(&[empty.path()])), Status::Warn);
+        assert_eq!(
+            hook_binary_finding(&shipped, None).unwrap().status,
+            Status::Warn
+        );
+    }
 
     #[test]
     fn agent_sandbox_warns_on_the_repository_and_informs_on_the_user() {

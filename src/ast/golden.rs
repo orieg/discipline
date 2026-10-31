@@ -19,6 +19,10 @@ impl LanguagePack for GoldenPack {
         "Golden / PHPT"
     }
 
+    fn label(&self) -> &'static str {
+        "PHPT"
+    }
+
     fn matches(&self, path: &str) -> bool {
         super::extension(path) == Some("phpt")
     }

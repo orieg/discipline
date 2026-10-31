@@ -405,10 +405,24 @@ fn observe_mode_logs_copilot_and_agy_premature_stops() {
         );
     }
     let log = observe_log(&repo);
-    let agents: Vec<String> = log
+    let entries: Vec<Value> = log
         .lines()
-        .map(|line| {
-            let entry: Value = serde_json::from_str(line).unwrap();
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    // Each stop also leaves the change check's record (#937), which passed.
+    let (checks, judged): (Vec<Value>, Vec<Value>) =
+        entries.into_iter().partition(|e| e.get("record").is_some());
+    assert_eq!(checks.len(), 2, "{log}");
+    for c in &checks {
+        assert_eq!(
+            (&c["event"], &c["verdict"], &c["decision"]),
+            (&"stop".into(), &"pass".into(), &"allowed".into()),
+            "{c}"
+        );
+    }
+    let agents: Vec<String> = judged
+        .iter()
+        .map(|entry| {
             assert_eq!(entry["event"], "stop");
             assert_eq!(entry["verdict"], "premature-stop");
             assert_eq!(entry["codes"], serde_json::json!([CODE]));

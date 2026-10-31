@@ -10,6 +10,23 @@ use crate::style;
 use anyhow::{Context, Result};
 use std::io::Write;
 
+/// The JSON report (`--format json`, `--json-out`): the summary's fields, then the `hook`
+/// object when an agent hook ran the check ([`crate::hook_log::HookContext`]). `passed` is
+/// the run's verdict, which the hook's decision follows.
+pub fn json_report(summary: &CheckSummary, passed: bool) -> serde_json::Result<String> {
+    #[derive(serde::Serialize)]
+    struct Report<'a> {
+        #[serde(flatten)]
+        summary: &'a CheckSummary,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        hook: Option<crate::hook_log::HookContext>,
+    }
+    serde_json::to_string_pretty(&Report {
+        summary,
+        hook: crate::hook_log::HookContext::from_env(passed),
+    })
+}
+
 pub fn format_report_content(
     summary: &CheckSummary,
     format: OutputFormat,
@@ -22,7 +39,10 @@ pub fn format_report_content(
             render_terminal_to_writer(&mut buf, summary, fail_on_warnings, fail_on_overrides)?;
             Ok(String::from_utf8_lossy(&buf).to_string())
         }
-        OutputFormat::Json => Ok(serde_json::to_string_pretty(summary)?),
+        OutputFormat::Json => Ok(json_report(
+            summary,
+            summary.is_success(fail_on_warnings, fail_on_overrides),
+        )?),
         OutputFormat::Junit => Ok(junit::format_junit(summary, fail_on_warnings)),
         OutputFormat::Sarif => Ok(serde_json::to_string_pretty(&sarif::format_sarif(summary))?),
         OutputFormat::Gitlab => Ok(gitlab::format_gitlab(summary)),
@@ -79,7 +99,13 @@ pub fn render_report(
             render_step_summary(summary, fail_on_warnings, fail_on_overrides)?;
             render_step_outputs(summary, fail_on_warnings, fail_on_overrides)?;
         }
-        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(summary)?),
+        OutputFormat::Json => println!(
+            "{}",
+            json_report(
+                summary,
+                summary.is_success(fail_on_warnings, fail_on_overrides)
+            )?
+        ),
         OutputFormat::Junit => println!("{}", junit::format_junit(summary, fail_on_warnings)),
         OutputFormat::Sarif => {
             println!(
