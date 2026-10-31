@@ -539,15 +539,144 @@ fn run_payload(
     if event == Event::Edit {
         witness_post_tool(agent, &dir, &base, stdin);
     }
-    let run = run_check(&dir, &base)?;
-    let reason = could_not_check_reason(&run);
+    let mode = if observe {
+        crate::hook_log::Mode::Observe
+    } else {
+        crate::hook_log::Mode::Enforce
+    };
+    let event_name = match event {
+        Event::Edit => "edit",
+        Event::Stop => "stop",
+    };
+    let run = run_check_under(
+        &dir,
+        &base,
+        Some(crate::hook_log::HookContext::env_value(
+            agent.id(),
+            event_name,
+            mode,
+        )),
+    )?;
+    let mut out = answer_run(agent, &dir, &base, &payload, &run, observe, verbose)?;
+    // One line per change check, whatever it decided: a configured repository with no
+    // line for a session is one whose hook did not run (#937).
+    let pass = translate_event(agent, event, 0, "", "");
+    let decision = if event == Event::Stop && payload.stop_hook_active && !observe && run.code != 0
+    {
+        crate::hook_log::Decision::LetThrough
+    } else if observe || run.code != 0 {
+        crate::hook_log::Decision::of_check(mode, run.code == 0)
+    } else if out.stdout == pass.stdout && out.code == pass.code {
+        crate::hook_log::Decision::Allowed
+    } else {
+        crate::hook_log::Decision::Blocked
+    };
+    let logged = crate::hook_log::append(
+        &dir,
+        &check_record(agent, event_name, mode, decision, &run, &out),
+    )
+    .ok();
+    if observe && run.code != 0 {
+        if let Some(p) = logged {
+            if out.stderr.ends_with('\n') {
+                out.stderr.pop();
+                out.stderr
+                    .push_str(&format!(" Logged to {}.\n", p.display()));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The log line of one change check: the record's fields, the report's counts, the
+/// blocking codes and the reason a check could not run.
+fn check_record(
+    agent: Agent,
+    event: &str,
+    mode: crate::hook_log::Mode,
+    decision: crate::hook_log::Decision,
+    run: &CheckRun,
+    out: &HookOutput,
+) -> serde_json::Value {
+    let mut m = crate::hook_log::record(agent.id(), event, mode, decision, i32::from(out.code));
+    let count = |k: &str| {
+        run.json
+            .as_ref()
+            .and_then(|j| j.get(k))
+            .and_then(|n| n.as_u64())
+            .map_or(serde_json::Value::Null, Into::into)
+    };
+    m.insert("check_exit".into(), run.code.into());
+    m.insert("errors".into(), count("errors"));
+    m.insert("warnings".into(), count("warnings"));
+    m.insert(
+        "verdict".into(),
+        match run.code {
+            0 => "pass",
+            1 => "findings",
+            _ => "could_not_check",
+        }
+        .into(),
+    );
+    m.insert(
+        "reason".into(),
+        could_not_check_reason(run).map_or(serde_json::Value::Null, Into::into),
+    );
+    m.insert("codes".into(), blocking_codes(run).into());
+    serde_json::Value::Object(m)
+}
+
+/// The codes of what blocks in `run`: the errors, or the warnings when no error does
+/// (warnings made fatal) and the run did not pass.
+fn blocking_codes(run: &CheckRun) -> Vec<String> {
+    if run.code == 0 {
+        return Vec::new();
+    }
+    let findings: Vec<&serde_json::Value> = run
+        .json
+        .as_ref()
+        .and_then(|j| j.get("outcomes"))
+        .and_then(|o| o.as_array())
+        .into_iter()
+        .flatten()
+        .flat_map(|o| o["violations"].as_array().into_iter().flatten())
+        .collect();
+    let errors: Vec<&serde_json::Value> = findings
+        .iter()
+        .copied()
+        .filter(|v| v["severity"] == "error")
+        .collect();
+    let blocking = if errors.is_empty() { findings } else { errors };
+    blocking
+        .iter()
+        .filter_map(|v| v["code"].as_str().map(str::to_string))
+        .collect()
+}
+
+/// What the hook answers on a check it ran: the end-of-turn checks on a passing stop,
+/// observe mode's pass, or the report in the agent's contract.
+fn answer_run(
+    agent: Agent,
+    dir: &Path,
+    base: &CheckSide,
+    payload: &Payload,
+    run: &CheckRun,
+    observe: bool,
+    verbose: bool,
+) -> Result<HookOutput> {
+    let event = if payload.stop {
+        Event::Stop
+    } else {
+        Event::Edit
+    };
+    let reason = could_not_check_reason(run);
     let session_id = payload
         .session
         .as_deref()
         .or(payload.conversation.as_deref());
     if run.code == 0 {
         if let Some(sid) = session_id {
-            if let Ok(store) = crate::session::SessionStore::open(&dir) {
+            if let Ok(store) = crate::session::SessionStore::open(dir) {
                 let now = crate::lease::now();
                 if let Some(prev) = store
                     .load(sid, agent.id(), now)
@@ -574,15 +703,15 @@ fn run_payload(
     // A change that passed, at the end of a turn: the turn itself is judged, when the
     // base ref's configuration asks for it. A change with findings is already an answer.
     if run.code == 0 && event == Event::Stop {
-        if let Some(out) = verified_stop(agent, &dir, &base, &payload, observe) {
+        if let Some(out) = verified_stop(agent, dir, base, payload, observe) {
             return Ok(out);
         }
-        if let Some(out) = premature_stop(agent, &dir, &base, &payload, observe) {
+        if let Some(out) = premature_stop(agent, dir, base, payload, observe) {
             return Ok(out);
         }
     }
     if observe {
-        return Ok(observed(agent, event, &dir, &run, reason.as_deref()));
+        return Ok(observed(agent, event, run, reason.as_deref()));
     }
     let code = run.code;
     // A continuation this hook already caused is let through, so it cannot loop; what
@@ -591,18 +720,18 @@ fn run_payload(
         return Ok(let_through(agent, event, code));
     }
     let report = if code == 1 {
-        compact_or_full_report(&dir, agent, session_id, &run, verbose)
+        compact_or_full_report(dir, agent, session_id, run, verbose)
     } else {
-        run.report
+        run.report.clone()
     };
-    let detail = run.stderr;
+    let detail = &run.stderr;
     if agent == Agent::Agy {
         return Ok(agy_guarded(
-            &dir,
+            dir,
             payload.conversation.as_deref(),
             code,
             &report,
-            &detail,
+            detail,
             reason.as_deref(),
         ));
     }
@@ -611,7 +740,7 @@ fn run_payload(
         event,
         code,
         &report,
-        &detail,
+        detail,
         reason.as_deref(),
     ))
 }
@@ -1575,20 +1704,7 @@ fn verified_stop(
 
 /// Appends one line to `<git dir>/discipline/hook-observe.log` and returns its path.
 fn append_observation(dir: &Path, entry: &serde_json::Value) -> Option<PathBuf> {
-    use std::io::Write as _;
-    let path = crate::gitctx::discover_repository(dir)
-        .ok()?
-        .path()
-        .join("discipline")
-        .join("hook-observe.log");
-    std::fs::create_dir_all(path.parent()?).ok()?;
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .ok()?;
-    writeln!(f, "{entry}").ok()?;
-    Some(path)
+    crate::hook_log::append(dir, entry).ok()
 }
 
 /// The end-of-turn check (`crate::turn`): `Some` when this stop is answered here, `None`
@@ -1762,66 +1878,21 @@ fn could_not_check_reason(run: &CheckRun) -> Option<String> {
     })
 }
 
-/// The observe-mode answer: the agent's pass, what would have blocked on stderr and in
-/// the observation log.
-fn observed(
-    agent: Agent,
-    event: Event,
-    dir: &Path,
-    run: &CheckRun,
-    reason: Option<&str>,
-) -> HookOutput {
+/// The observe-mode answer: the agent's pass, and what would have blocked on stderr. The
+/// caller logs the run and names the log on stderr.
+fn observed(agent: Agent, event: Event, run: &CheckRun, reason: Option<&str>) -> HookOutput {
     let mut out = translate_event(agent, event, 0, "", "");
     if run.code == 0 {
         return out;
     }
-    let findings: Vec<&serde_json::Value> = run
-        .json
-        .as_ref()
-        .and_then(|j| j.get("outcomes"))
-        .and_then(|o| o.as_array())
-        .into_iter()
-        .flatten()
-        .flat_map(|o| o["violations"].as_array().into_iter().flatten())
-        .collect();
-    // What would have blocked: the errors. A warning blocks only when no error does
-    // (warnings made fatal), so it is named then and not otherwise.
-    let errors: Vec<&serde_json::Value> = findings
-        .iter()
-        .copied()
-        .filter(|v| v["severity"] == "error")
-        .collect();
-    let blocking = if errors.is_empty() { findings } else { errors };
-    let codes: Vec<String> = blocking
-        .iter()
-        .filter_map(|v| v["code"].as_str().map(str::to_string))
-        .collect();
-    let verdict = if run.code == 1 {
-        "findings"
-    } else {
-        "could_not_check"
-    };
-    let entry = serde_json::json!({
-        "time": std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
-        "agent": agent.id(),
-        "event": match event { Event::Edit => "edit", Event::Stop => "stop" },
-        "verdict": verdict,
-        "reason": reason,
-        "codes": codes,
-    });
-    let logged = append_observation(dir, &entry);
+    let codes = blocking_codes(run);
     out.stderr = format!(
-        "discipline (observe mode, not enforced): this change would be blocked: {}.{}\n",
-        match verdict {
-            "findings" => format!("{} finding(s): {}", codes.len(), codes.join(", ")),
-            _ => format!("the check could not run ({})", reason.unwrap_or("internal")),
+        "discipline (observe mode, not enforced): this change would be blocked: {}.\n",
+        if run.code == 1 {
+            format!("{} finding(s): {}", codes.len(), codes.join(", "))
+        } else {
+            format!("the check could not run ({})", reason.unwrap_or("internal"))
         },
-        logged
-            .map(|p| format!(" Logged to {}.", p.display()))
-            .unwrap_or_default()
     );
     out
 }
@@ -1980,6 +2051,12 @@ pub fn verify_hook_binary_with_digest(
 /// only source left is a PR body, and none is passed), so a waiver in a commit message
 /// does not lift a finding here. CI, which reads the reviewed PR body, still can.
 pub fn run_check(dir: &Path, side: &CheckSide) -> Result<CheckRun> {
+    run_check_under(dir, side, None)
+}
+
+/// [`run_check`] for a hook: `hook` is the [`HOOK_RUN_ENV`] value naming the agent, the
+/// event and the mode, which the check writes into its report's `hook` object.
+pub fn run_check_under(dir: &Path, side: &CheckSide, hook: Option<String>) -> Result<CheckRun> {
     let exe = match std::env::current_exe()
         .context("cannot locate the discipline binary")
         .and_then(|exe| verify_hook_binary(&exe, dir))
@@ -2008,7 +2085,7 @@ pub fn run_check(dir: &Path, side: &CheckSide) -> Result<CheckRun> {
         .env_remove("PR_TITLE")
         .env_remove("DISCIPLINE_COMMENT")
         .env_remove(crate::guards::REPLAY_CASE_ENV)
-        .env(HOOK_RUN_ENV, "1");
+        .env(HOOK_RUN_ENV, hook.as_deref().unwrap_or("1"));
     match side {
         CheckSide::Default => {
             if let Some(b) = default_side_base(dir) {
@@ -2871,6 +2948,9 @@ fn replace_unproven(
 
 /// Set by [`run_check`] for the check a hook runs: the only run in which a hook file
 /// identical to what this release generates is not reported (see [`is_generated_hook_file`]).
+/// A hook's change check sets it to the agent, event and mode
+/// ([`crate::hook_log::HookContext::env_value`]), which the report carries as its `hook`
+/// object; any other run sets it to `1`.
 pub const HOOK_RUN_ENV: &str = "DISCIPLINE_HOOK_RUN";
 
 /// Whether `content` at `path` is exactly what `hook install` of this release writes there,
@@ -4179,6 +4259,39 @@ pub fn run_cli(args: crate::cli::HookArgs) -> Result<bool> {
                 .context("cannot write the hook response")?;
             std::process::exit(i32::from(out.code));
         }
+        HookCommand::Log(a) => {
+            let dir = Path::new(".");
+            let path = crate::hook_log::path(dir)?;
+            let Some((entries, unread)) = crate::hook_log::read(dir)? else {
+                eprintln!(
+                    "discipline hook log: no hook has recorded a run in this repository ({} does not exist)",
+                    path.display()
+                );
+                return Ok(true);
+            };
+            let skip = a.last.map_or(0, |n| entries.len().saturating_sub(n));
+            let mut out = std::io::stdout().lock();
+            if !a.json {
+                writeln!(out, "{}", crate::hook_log::HEADER)
+                    .context("cannot write the hook log")?;
+            }
+            for e in &entries[skip..] {
+                let line = if a.json {
+                    serde_json::to_string(e)?
+                } else {
+                    e.render()
+                };
+                writeln!(out, "{line}").context("cannot write the hook log")?;
+            }
+            out.flush().context("cannot write the hook log")?;
+            if unread > 0 {
+                eprintln!(
+                    "discipline hook log: {unread} line(s) of {} are not records and were skipped",
+                    path.display()
+                );
+            }
+            Ok(true)
+        }
         HookCommand::Install(a) => {
             let pin = match &a.pin_sums {
                 Some(_) if a.agent != crate::hook::Agent::ClaudeCode => bail!(
@@ -4969,7 +5082,6 @@ mod tests {
     /// them; a warning only when warnings are what blocked.
     #[test]
     fn observe_mode_names_only_the_blocking_codes() {
-        let dir = std::env::temp_dir();
         let run = |findings: serde_json::Value| CheckRun {
             code: 1,
             json: Some(serde_json::json!({"outcomes": [{"violations": findings}]})),
@@ -4978,7 +5090,6 @@ mod tests {
         let mixed = observed(
             Agent::ClaudeCode,
             Event::Edit,
-            &dir,
             &run(serde_json::json!([
                 {"code": "assertion-reduction/assertions-reduced", "severity": "error"},
                 {"code": "time-estimates/time-estimate", "severity": "warning"}
@@ -4996,7 +5107,6 @@ mod tests {
         let fatal = observed(
             Agent::ClaudeCode,
             Event::Edit,
-            &dir,
             &run(serde_json::json!([
                 {"code": "time-estimates/time-estimate", "severity": "warning"}
             ])),

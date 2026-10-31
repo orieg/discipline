@@ -42,6 +42,10 @@ impl LanguagePack for CPack {
         "C"
     }
 
+    fn label(&self) -> &'static str {
+        "C/C++"
+    }
+
     fn matches(&self, path: &str) -> bool {
         matches!(super::extension(path), Some("c" | "h"))
     }
@@ -136,6 +140,10 @@ impl LanguagePack for CppPack {
 
     fn name(&self) -> &'static str {
         "C++"
+    }
+
+    fn label(&self) -> &'static str {
+        "C/C++"
     }
 
     fn matches(&self, path: &str) -> bool {

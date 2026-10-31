@@ -509,3 +509,155 @@ fn docs_check_passes_over_the_working_tree() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// The rows of the generated gate tables of a committed Markdown file: gate id and the
+/// `Languages` cell, read by the column's position in each table's header.
+fn published_coverage(rel: &str) -> Vec<(String, String)> {
+    let text = std::fs::read_to_string(rel).unwrap_or_else(|e| panic!("{rel}: {e}"));
+    let mut rows = Vec::new();
+    let mut column = None;
+    for line in text.lines() {
+        if !line.starts_with('|') {
+            column = None;
+            continue;
+        }
+        let cells: Vec<&str> = line.trim_matches('|').split(" | ").map(str::trim).collect();
+        if let Some(i) = cells.iter().position(|c| *c == "Languages") {
+            column = Some(i);
+            continue;
+        }
+        let (Some(i), Some(first)) = (column, cells.first()) else {
+            continue;
+        };
+        let Some(id) = first.split('`').nth(1) else {
+            continue;
+        };
+        rows.push((id.to_string(), cells[i].to_string()));
+    }
+    rows
+}
+
+/// Published language coverage is data (#938): the `Languages` cell of every generated
+/// gate table is the gate's derived coverage, and a gate that reads a language pack's
+/// facts publishes exactly the packs this binary registers for that fact. A hand edit of
+/// a cell, or a pack that gains or loses a fact without `discipline docs --write`, fails.
+#[test]
+fn published_language_coverage_is_the_registered_packs() {
+    use discipline::config::{Coverage, GATES};
+    for rel in ["README.md", "docs/GATES.md", "docs/ROADMAP.md"] {
+        let rows = published_coverage(rel);
+        assert!(!rows.is_empty(), "{rel}: no generated gate table found");
+        for (id, cell) in rows {
+            let gate = GATES
+                .iter()
+                .find(|g| g.id == id)
+                .unwrap_or_else(|| panic!("{rel}: `{id}` is not a registered gate"));
+            assert_eq!(
+                cell,
+                gate.languages(),
+                "{rel}: the published coverage of `{id}` is not the derived one; run `discipline docs --write`"
+            );
+        }
+    }
+    let registry = discipline::ast::default_registry();
+    let mut derived = 0;
+    for g in GATES {
+        let Coverage::Packs {
+            fact,
+            before,
+            after,
+        } = &g.coverage
+        else {
+            continue;
+        };
+        derived += 1;
+        let mut labels: Vec<&str> = Vec::new();
+        for pack in registry.packs().filter(|p| p.supplies(*fact)) {
+            if !labels.contains(&pack.label()) {
+                labels.push(pack.label());
+            }
+        }
+        assert!(!labels.is_empty(), "{}: no pack supplies {fact:?}", g.id);
+        assert_eq!(
+            g.languages(),
+            format!("{before}{}{after}", labels.join(", ")),
+            "{}",
+            g.id
+        );
+    }
+    assert!(derived >= 8, "only {derived} gates derive their coverage");
+}
+
+/// The text of each item of the numbered list that follows `heading` in `text`.
+fn numbered_items(text: &str, heading: &str) -> Vec<String> {
+    let start = text
+        .find(heading)
+        .unwrap_or_else(|| panic!("`{heading}` not found"));
+    let mut items: Vec<String> = Vec::new();
+    for line in text[start..].lines().skip(1) {
+        if line.starts_with('#') {
+            break;
+        }
+        let Some((n, rest)) = line.split_once(". ") else {
+            continue;
+        };
+        if n.parse::<usize>() == Ok(items.len() + 1) {
+            items.push(rest.to_string());
+        }
+    }
+    items
+}
+
+/// What an item of the contract names: its code spans and bold phrases, or, for an item
+/// that has neither, its whole sentence.
+fn contract_anchors(item: &str) -> Vec<String> {
+    let mut out: Vec<String> = item
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .map(|s| format!("`{s}`"))
+        .collect();
+    out.extend(
+        item.split("**")
+            .skip(1)
+            .step_by(2)
+            .map(|s| s.trim_end_matches(':').to_string()),
+    );
+    if out.is_empty() {
+        out.push(item.to_string());
+    }
+    out.into_iter().map(|a| a.to_lowercase()).collect()
+}
+
+/// CONTRIBUTING.md restates AGENTS.md §3.4 item by item (#938): the same number of items,
+/// and item n of CONTRIBUTING names every path, identifier and bold phrase item n of
+/// AGENTS.md names. An item added to, dropped from or reordered in either list fails.
+#[test]
+fn contributing_restates_the_gate_contract_item_by_item() {
+    let agents = numbered_items(
+        &std::fs::read_to_string("AGENTS.md").unwrap(),
+        "### 3.4 Adding or Changing a Gate",
+    );
+    let contributing = numbered_items(
+        &std::fs::read_to_string("CONTRIBUTING.md").unwrap(),
+        "## Gate Contract Discipline",
+    );
+    assert_eq!(agents.len(), 9, "AGENTS.md §3.4: {agents:#?}");
+    assert_eq!(
+        contributing.len(),
+        agents.len(),
+        "CONTRIBUTING.md lists {} contract items, AGENTS.md §3.4 lists {}",
+        contributing.len(),
+        agents.len()
+    );
+    for (n, (a, c)) in agents.iter().zip(&contributing).enumerate() {
+        let c = c.to_lowercase();
+        for anchor in contract_anchors(a) {
+            assert!(
+                c.contains(&anchor),
+                "contract item {}: CONTRIBUTING.md does not name {anchor:?} that AGENTS.md §3.4 names\nAGENTS.md: {a}\nCONTRIBUTING.md: {c}",
+                n + 1
+            );
+        }
+    }
+}

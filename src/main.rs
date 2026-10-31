@@ -549,7 +549,7 @@ fn emit_fatal_reports(args: &CheckArgs, is_gitlab: bool, base: &str, err: &anyho
         0,
         Some(discipline::could_not_check::CouldNotCheck::from_error(err)),
     );
-    let json = serde_json::to_string_pretty(&json_summary).unwrap_or_default();
+    let json = discipline::report::json_report(&json_summary, false).unwrap_or_default();
     if args.format == discipline::cli::OutputFormat::Json {
         println!("{json}");
     }
@@ -1006,7 +1006,7 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
             .with_context(|| format!("failed to write output file {}", path.display()))?;
     }
     if let Some(path) = &args.json_out {
-        std::fs::write(path, serde_json::to_string_pretty(&summary)?)
+        std::fs::write(path, discipline::report::json_report(&summary, success)?)
             .with_context(|| format!("failed to write JSON report {}", path.display()))?;
     }
 

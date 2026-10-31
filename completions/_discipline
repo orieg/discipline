@@ -243,6 +243,14 @@ opencode\:"OpenCode (\`.opencode/plugins/discipline.js\`, a plugin on session st
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(log)
+_arguments "${_arguments_options[@]}" : \
+'--last=[Print only the last N records]:N:_default' \
+'--json[Print each record as one JSON object per line]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_discipline__subcmd__hook__subcmd__help_commands" \
@@ -260,6 +268,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (install)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(log)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -563,6 +575,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(log)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -853,6 +869,7 @@ _discipline__subcmd__help__subcmd__hook_commands() {
     local commands; commands=(
 'run:Check the change so far and answer in the agent'\''s hook contract (reads the hook payload on stdin)' \
 'install:Write the agent'\''s hook configuration at the repository root (or, with --user, the user-level one); an existing file is never rewritten' \
+'log:Print this repository'\''s hook records (<git dir>/discipline/hook-observe.log)\: time, agent, event, mode, binary version, decision, exit code and finding counts, oldest first' \
     )
     _describe -t commands 'discipline help hook commands' commands "$@"
 }
@@ -860,6 +877,11 @@ _discipline__subcmd__help__subcmd__hook_commands() {
 _discipline__subcmd__help__subcmd__hook__subcmd__install_commands() {
     local commands; commands=()
     _describe -t commands 'discipline help hook install commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__hook__subcmd__log_commands] )) ||
+_discipline__subcmd__help__subcmd__hook__subcmd__log_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help hook log commands' commands "$@"
 }
 (( $+functions[_discipline__subcmd__help__subcmd__hook__subcmd__run_commands] )) ||
 _discipline__subcmd__help__subcmd__hook__subcmd__run_commands() {
@@ -943,6 +965,7 @@ _discipline__subcmd__hook_commands() {
     local commands; commands=(
 'run:Check the change so far and answer in the agent'\''s hook contract (reads the hook payload on stdin)' \
 'install:Write the agent'\''s hook configuration at the repository root (or, with --user, the user-level one); an existing file is never rewritten' \
+'log:Print this repository'\''s hook records (<git dir>/discipline/hook-observe.log)\: time, agent, event, mode, binary version, decision, exit code and finding counts, oldest first' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'discipline hook commands' commands "$@"
@@ -952,6 +975,7 @@ _discipline__subcmd__hook__subcmd__help_commands() {
     local commands; commands=(
 'run:Check the change so far and answer in the agent'\''s hook contract (reads the hook payload on stdin)' \
 'install:Write the agent'\''s hook configuration at the repository root (or, with --user, the user-level one); an existing file is never rewritten' \
+'log:Print this repository'\''s hook records (<git dir>/discipline/hook-observe.log)\: time, agent, event, mode, binary version, decision, exit code and finding counts, oldest first' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'discipline hook help commands' commands "$@"
@@ -966,6 +990,11 @@ _discipline__subcmd__hook__subcmd__help__subcmd__install_commands() {
     local commands; commands=()
     _describe -t commands 'discipline hook help install commands' commands "$@"
 }
+(( $+functions[_discipline__subcmd__hook__subcmd__help__subcmd__log_commands] )) ||
+_discipline__subcmd__hook__subcmd__help__subcmd__log_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline hook help log commands' commands "$@"
+}
 (( $+functions[_discipline__subcmd__hook__subcmd__help__subcmd__run_commands] )) ||
 _discipline__subcmd__hook__subcmd__help__subcmd__run_commands() {
     local commands; commands=()
@@ -975,6 +1004,11 @@ _discipline__subcmd__hook__subcmd__help__subcmd__run_commands() {
 _discipline__subcmd__hook__subcmd__install_commands() {
     local commands; commands=()
     _describe -t commands 'discipline hook install commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__hook__subcmd__log_commands] )) ||
+_discipline__subcmd__hook__subcmd__log_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline hook log commands' commands "$@"
 }
 (( $+functions[_discipline__subcmd__hook__subcmd__run_commands] )) ||
 _discipline__subcmd__hook__subcmd__run_commands() {

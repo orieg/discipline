@@ -96,7 +96,7 @@ fn explain(query: &str) -> (String, bool) {
                 suite = g.suite.label(),
                 planned = if g.available { "" } else { ", planned, not in this binary" },
                 summary = g.summary,
-                langs = g.languages,
+                langs = g.languages(),
             ),
             false,
         ),
