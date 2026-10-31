@@ -200,7 +200,11 @@ fn run_command(command: Commands) -> Result<bool> {
                     .with_context(|| format!("cannot write {}", path.display()))?,
                 None => print!("{out}"),
             }
-            Ok(true)
+            // A tripwire of the tip's `[audit]` table fails the run (#944).
+            for f in &summary.policy_failures {
+                eprintln!("audit: {}", discipline::report::text::terminal_line(f));
+            }
+            Ok(summary.policy_failures.is_empty())
         }
         Commands::Mcp => {
             let stdin = std::io::stdin();

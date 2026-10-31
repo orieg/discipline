@@ -505,6 +505,114 @@ pub struct Summary {
     /// The per-file assertion counts the tip's baseline records, against the tip's test
     /// files; `None` when it records none.
     pub density: Option<Density>,
+    /// Waivers per changed file of each audited change, and the tripwire over them.
+    pub waiver_density: WaiverDensity,
+    /// What the tip's `[audit]` table refuses in this history; any entry exits 1.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub policy_failures: Vec<String>,
+}
+
+/// The waiver density of the audited changes, oldest first (#944): the waivers a change
+/// carried (directives and inline markers) per changed file, and whether it rose change
+/// after change. A rise is a trend for a reviewer, never a verdict on one change; the
+/// tripwire (`[audit] waiver_density_rise`) turns a sustained one into a policy failure.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct WaiverDensity {
+    /// Oldest first.
+    pub changes: Vec<ChangeDensity>,
+    /// How many times in a row the density rose, ending at the newest change.
+    pub rising: usize,
+    /// `[audit] waiver_density_rise` at the tip; 0 when the tripwire is off.
+    pub tripwire: u32,
+}
+
+/// One change's waivers and changed files.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ChangeDensity {
+    pub sha: String,
+    pub pr: Option<u64>,
+    /// Directive and inline-marker records of the change.
+    pub waivers: usize,
+    /// Files the change added, modified, deleted or renamed.
+    pub changed_files: usize,
+    /// Waivers per 1000 changed files (a change with no file counts as one).
+    pub per_mille: u64,
+}
+
+impl WaiverDensity {
+    /// The trend over `changes` (`(sha, pr, changed files)`, newest first as the audit
+    /// reads them) from `records`, with the tripwire `tripwire`.
+    pub fn of(changes: &[(String, Option<u64>, usize)], records: &[Record], tripwire: u32) -> Self {
+        let out: Vec<ChangeDensity> = changes
+            .iter()
+            .rev()
+            .map(|(sha, pr, files)| {
+                let waivers = records
+                    .iter()
+                    .filter(|r| &r.sha == sha && matches!(r.kind, "directive" | "inline-marker"))
+                    .count();
+                ChangeDensity {
+                    sha: sha.clone(),
+                    pr: *pr,
+                    waivers,
+                    changed_files: *files,
+                    per_mille: (waivers as u64 * 1000) / (*files).max(1) as u64,
+                }
+            })
+            .collect();
+        let rising = out
+            .windows(2)
+            .rev()
+            .take_while(|w| w[1].per_mille > w[0].per_mille)
+            .count();
+        WaiverDensity {
+            changes: out,
+            rising,
+            tripwire,
+        }
+    }
+
+    /// The policy failure the tripwire raises, if it does.
+    pub fn failure(&self) -> Option<String> {
+        if self.tripwire == 0 || self.rising < self.tripwire as usize {
+            return None;
+        }
+        let n = self.changes.len();
+        let from = &self.changes[n - 1 - self.rising];
+        let to = &self.changes[n - 1];
+        Some(format!(
+            "waiver density rose in each of the last {} changes (from {} to {} waivers per 1000 changed files), at or above `audit.waiver_density_rise = {}`",
+            self.rising, from.per_mille, to.per_mille, self.tripwire
+        ))
+    }
+}
+
+/// The `waiver-density-rise` check.
+pub fn waiver_density_check(checks: &mut Vec<Check>, d: &WaiverDensity) {
+    let (state, detail) = if d.tripwire == 0 {
+        (
+            "not-checked",
+            format!(
+                "the tripwire is off (`[audit] waiver_density_rise`); the density rose in the last {} change(s) in a row",
+                d.rising
+            ),
+        )
+    } else if let Some(f) = d.failure() {
+        ("found", f)
+    } else {
+        (
+            "clean",
+            format!(
+                "the density rose in the last {} change(s) in a row, below the tripwire of {}",
+                d.rising, d.tripwire
+            ),
+        )
+    };
+    checks.push(Check {
+        id: "waiver-density-rise",
+        state,
+        detail,
+    });
 }
 
 /// The assertion counts the tip's baseline records (`[assertions]`), against the tip:
@@ -794,6 +902,31 @@ impl Summary {
                     b.recorded
                 ));
             }
+        }
+        let w = &self.waiver_density;
+        if !w.changes.is_empty() {
+            let recent: Vec<String> = w
+                .changes
+                .iter()
+                .rev()
+                .take(10)
+                .rev()
+                .map(|c| c.per_mille.to_string())
+                .collect();
+            out.push_str(&format!(
+                "\nWaiver density (waivers per 1000 changed files, oldest to newest, last {}): {}; rose {} time(s) in a row{}\n",
+                recent.len(),
+                recent.join(" "),
+                w.rising,
+                if w.tripwire == 0 {
+                    " (tripwire off)".to_string()
+                } else {
+                    format!(" (tripwire at {})", w.tripwire)
+                }
+            ));
+        }
+        for f in &self.policy_failures {
+            out.push_str(&format!("failure: {}\n", line(f)));
         }
         out.push_str("\nChecks:\n");
         for c in &self.checks {
@@ -1422,7 +1555,18 @@ pub fn run(opts: &Options) -> Result<Summary> {
         .and_then(|t| history_config(&t))
         .unwrap_or_else(|| DisciplineConfig::default_for_repo("audit"));
     let mut marked = std::collections::BTreeSet::new();
+    let mut sizes: Vec<(String, Option<u64>, usize)> = Vec::new();
     for (ord, c) in commits.iter().enumerate() {
+        let files = repo
+            .diff_tree_to_tree(Some(&c.parent(0)?.tree()?), Some(&c.tree()?), None)
+            .with_context(|| format!("cannot diff change {}", c.id()))?
+            .deltas()
+            .len();
+        sizes.push((
+            c.id().to_string(),
+            crate::replay::pr_from_subject(&crate::gitctx::commit_subject(c)),
+            files,
+        ));
         let detail = crate::gitctx::CommitDetail::of(c);
         if crate::guards::commit_provenance::is_agent_commit(
             &detail,
@@ -1523,6 +1667,15 @@ pub fn run(opts: &Options) -> Result<Summary> {
     identity_check(&mut s.checks, &s.identities, s.forge.is_some());
     s.density = tip_density(&repo, &repo.find_commit(tip)?.tree()?, &tip_config)?;
     density_check(&mut s.checks, s.density.as_ref());
+    // A pull request the forge named for a change whose subject does not.
+    for (sha, pr, _) in &mut sizes {
+        if pr.is_none() {
+            *pr = pulls.iter().find(|p| &p.sha == sha).map(|p| p.pr);
+        }
+    }
+    s.waiver_density = WaiverDensity::of(&sizes, &s.records, tip_config.audit.waiver_density_rise);
+    waiver_density_check(&mut s.checks, &s.waiver_density);
+    s.policy_failures.extend(s.waiver_density.failure());
     s.pulls = pulls;
     s.issues = issues;
     Ok(s)
@@ -2475,6 +2628,47 @@ mod tests {
             ord: 0,
             subject: "s".into(),
         }
+    }
+
+    #[test]
+    fn waiver_density_rises_and_trips_only_at_its_configured_length() {
+        let change = |sha: &str, files: usize| (sha.to_string(), None, files);
+        let rec = |sha: &str, kind: &'static str| {
+            let mut info = info();
+            info.sha = sha.into();
+            Record::new(&info.to_owned(), kind, "detector")
+        };
+        // Newest first, as the audit reads them: c (2 waivers / 1 file), b (1 / 1), a (1 / 2).
+        let changes = [change("c", 1), change("b", 1), change("a", 2)];
+        let records = [
+            rec("c", "directive"),
+            rec("c", "inline-marker"),
+            rec("b", "directive"),
+            rec("a", "directive"),
+            rec("a", "config"),
+        ];
+        let d = WaiverDensity::of(&changes, &records, 0);
+        let per: Vec<u64> = d.changes.iter().map(|c| c.per_mille).collect();
+        assert_eq!(per, [500, 1000, 2000]);
+        assert_eq!(d.rising, 2);
+        assert!(d.failure().is_none(), "off");
+        assert!(WaiverDensity::of(&changes, &records, 3).failure().is_none());
+        let tripped = WaiverDensity::of(&changes, &records, 2).failure().unwrap();
+        assert!(tripped.contains("from 500 to 2000"), "{tripped}");
+        // A fall ends the run: only the newest rise counts.
+        let records = [
+            rec("c", "directive"),
+            rec("b", "directive"),
+            rec("b", "directive"),
+        ];
+        let d = WaiverDensity::of(&changes, &records, 1);
+        assert_eq!(d.rising, 0);
+        assert!(d.failure().is_none());
+        // A change of no file counts as one file.
+        assert_eq!(
+            WaiverDensity::of(&[change("c", 0)], &[rec("c", "directive")], 0).changes[0].per_mille,
+            1000
+        );
     }
 
     #[test]
