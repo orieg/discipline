@@ -115,6 +115,13 @@ fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
+/// Whether `path` is a file this gate reads for install-time code other than a manifest's
+/// lifecycle scripts: a build script (`build.rs`, `setup.py`, ...) or a package manager's
+/// configuration. The review-routing inventory lists these as authority files.
+pub(crate) fn is_build_hook_file(path: &str) -> bool {
+    BUILD_SCRIPTS.contains(&basename(path)) || is_manager_config(path)
+}
+
 fn is_manager_config(path: &str) -> bool {
     let name = basename(path);
     MANAGER_CONFIG.iter().any(|m| {
@@ -221,6 +228,13 @@ pub fn judge(file: &ChangedFile, base: Option<&str>, head: Option<&str>) -> Vec<
         });
     }
     out
+}
+
+/// Whether `path` is a build hook this gate reads by name alone: a build script (code
+/// that runs at build time) or package-manager configuration. A `package.json` is a
+/// manifest; its lifecycle scripts are judged from its content.
+pub fn is_build_hook_path(path: &str) -> bool {
+    BUILD_SCRIPTS.contains(&basename(path)) || is_manager_config(path)
 }
 
 pub fn build_hooks(ctx: &Context) -> Result<GateOutcome> {

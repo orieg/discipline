@@ -44,11 +44,37 @@ impl Suite {
     }
 }
 
+/// What a gate reads, as the docs, `explain` and MCP publish it ([`GateInfo::languages`]).
+pub enum Coverage {
+    /// Written by hand: the gate reads files, formats or tools, not a language pack's facts.
+    Stated(&'static str),
+    /// The built-in language packs that supply `fact` (`crate::ast::coverage_labels`),
+    /// between `before` and `after`. A pack that gains or loses the fact changes the
+    /// published coverage with it.
+    Packs {
+        fact: crate::ast::Fact,
+        before: &'static str,
+        after: &'static str,
+    },
+}
+
+impl Coverage {
+    /// The packs that supply `fact`, with nothing around them.
+    pub const fn packs(fact: crate::ast::Fact) -> Self {
+        Coverage::Packs {
+            fact,
+            before: "",
+            after: "",
+        }
+    }
+}
+
 pub struct GateInfo {
     pub id: &'static str,
     pub suite: Suite,
     pub summary: &'static str,
-    pub languages: &'static str,
+    /// The languages or files the gate reads; [`GateInfo::languages`] renders it.
+    pub coverage: Coverage,
     /// `false` = planned in the roadmap but not shipped in this binary. A planned
     /// gate cannot be enabled or configured: asking for it is an error, never
     /// a silent pass.
@@ -59,13 +85,31 @@ pub struct GateInfo {
     pub delta_only: bool,
 }
 
+impl GateInfo {
+    /// The published coverage: the hand-written text, or the packs that supply the fact
+    /// the gate reads, joined with `, `.
+    pub fn languages(&self) -> String {
+        match &self.coverage {
+            Coverage::Stated(text) => (*text).to_string(),
+            Coverage::Packs {
+                fact,
+                before,
+                after,
+            } => format!(
+                "{before}{}{after}",
+                crate::ast::coverage_labels(*fact).join(", ")
+            ),
+        }
+    }
+}
+
 /// Single source of truth for gate identifiers.
 pub const GATES: &[GateInfo] = &[
     GateInfo {
         id: "agents-md",
         suite: Suite::AgentGuard,
         summary: "AGENTS.md exists; CLAUDE.md / GEMINI.md do not fork it",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
     },
@@ -73,7 +117,7 @@ pub const GATES: &[GateInfo] = &[
         id: "assertion-reduction",
         suite: Suite::AgentGuard,
         summary: "assertion count / strength must not drop in an existing test",
-        languages: "Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala, Objective-C",
+        coverage: Coverage::packs(crate::ast::Fact::Tests),
         available: true,
         delta_only: true,
     },
@@ -81,7 +125,7 @@ pub const GATES: &[GateInfo] = &[
         id: "vacuous-tests",
         suite: Suite::AgentGuard,
         summary: "new tests must carry a non-tautological assertion",
-        languages: "Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala, Objective-C",
+        coverage: Coverage::packs(crate::ast::Fact::Tests),
         available: true,
         delta_only: false,
     },
@@ -89,7 +133,7 @@ pub const GATES: &[GateInfo] = &[
         id: "ignored-tests",
         suite: Suite::AgentGuard,
         summary: "tests must not be newly #[ignore]d or skipped without directive",
-        languages: "Rust, Python, JS/TS, PHPT, Java, Go, PHP, C/C++, C#, Ruby, Kotlin, Swift, Scala, Objective-C",
+        coverage: Coverage::packs(crate::ast::Fact::Tests),
         available: true,
         delta_only: true,
     },
@@ -97,7 +141,7 @@ pub const GATES: &[GateInfo] = &[
         id: "unsafe-safety-comment",
         suite: Suite::AgentGuard,
         summary: "unsafe blocks / impls carry a // SAFETY: comment",
-        languages: "Rust",
+        coverage: Coverage::packs(crate::ast::Fact::UnsafeSites),
         available: true,
         delta_only: false,
     },
@@ -105,7 +149,7 @@ pub const GATES: &[GateInfo] = &[
         id: "deletion-rationale",
         suite: Suite::AgentGuard,
         summary: "deleted files and removed tests need a scoped removes: rationale",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
     },
@@ -113,15 +157,15 @@ pub const GATES: &[GateInfo] = &[
         id: "time-estimates",
         suite: Suite::Hygiene,
         summary: "no calendar / duration estimates in markdown or the PR body",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
     },
     GateInfo {
         id: "pii",
         suite: Suite::Hygiene,
-        summary: "no home paths, LAN IPs, denylisted hostnames, or fixed-format credentials (private keys, AWS, GitHub, Slack, OpenAI and Anthropic tokens, literal bearer headers) in tracked text",
-        languages: "any",
+        summary: "no home paths, LAN IPs, denylisted hostnames, or fixed-format token literals (private-key headers; AWS, GitHub, Slack, OpenAI and Anthropic token formats; literal bearer headers) in tracked text: literal format matching, not credential scanning",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
     },
@@ -129,15 +173,15 @@ pub const GATES: &[GateInfo] = &[
         id: "agent-scratch",
         suite: Suite::Hygiene,
         summary: "agent scratch state is never tracked",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
     },
     GateInfo {
         id: "shell-secrets",
         suite: Suite::Hygiene,
-        summary: "no command-line secrets or unverified piped scripts in shell, docker, or CI",
-        languages: "shell, docker, workflows",
+        summary: "no secrets on command lines, fixed-format token literals, or unverified piped scripts in shell, docker, or CI files: literal pattern matching, not secret scanning",
+        coverage: Coverage::Stated("shell, docker, workflows"),
         available: true,
         delta_only: false,
     },
@@ -145,7 +189,7 @@ pub const GATES: &[GateInfo] = &[
         id: "issue-link",
         suite: Suite::Hygiene,
         summary: "PR title or description links a tracking issue (#123, Fixes #123)",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
     },
@@ -153,7 +197,7 @@ pub const GATES: &[GateInfo] = &[
         id: "review-threads",
         suite: Suite::Hygiene,
         summary: "the pull request has no unresolved review thread",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
     },
@@ -161,7 +205,7 @@ pub const GATES: &[GateInfo] = &[
         id: "ratified-paths",
         suite: Suite::AgentGuard,
         summary: "edits to protected paths carry an owner's ratification on an issue the pull request closes",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
     },
@@ -169,7 +213,7 @@ pub const GATES: &[GateInfo] = &[
         id: "citation-metadata",
         suite: Suite::Hygiene,
         summary: "CITATION.cff and .zenodo.json are valid, agree with each other, and cite the concept DOI",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
     },
@@ -177,7 +221,7 @@ pub const GATES: &[GateInfo] = &[
         id: "commit-provenance",
         suite: Suite::Hygiene,
         summary: "commits carry the required trailers; an agent-produced commit carries a review by someone else",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
     },
@@ -185,7 +229,7 @@ pub const GATES: &[GateInfo] = &[
         id: "config-integrity",
         suite: Suite::Integrity,
         summary: "a change cannot weaken its own discipline.toml without a token",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
     },
@@ -193,7 +237,7 @@ pub const GATES: &[GateInfo] = &[
         id: "stub-bodies",
         suite: Suite::AgentGuard,
         summary: "added functions are not stubs; existing bodies are not replaced by todo!() / NotImplementedError / return null",
-        languages: "Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala, Objective-C",
+        coverage: Coverage::packs(crate::ast::Fact::Functions),
         available: true,
         delta_only: true,
     },
@@ -201,7 +245,7 @@ pub const GATES: &[GateInfo] = &[
         id: "harness-tampering",
         suite: Suite::AgentGuard,
         summary: "a file the test runner loads does not make a failing run pass",
-        languages: "Go, Python, JS/TS, Rust",
+        coverage: Coverage::Stated("Go, Python, JS/TS, Rust"),
         available: true,
         delta_only: true,
     },
@@ -209,7 +253,7 @@ pub const GATES: &[GateInfo] = &[
         id: "error-swallowing",
         suite: Suite::AgentGuard,
         summary: "no new empty error handler or discarded Result outside tests",
-        languages: "Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala, Objective-C",
+        coverage: Coverage::packs(crate::ast::Fact::Handlers),
         available: true,
         delta_only: true,
     },
@@ -217,7 +261,11 @@ pub const GATES: &[GateInfo] = &[
         id: "instruction-smuggling",
         suite: Suite::AgentGuard,
         summary: "no invisible Unicode, unreviewed agent-instruction edits, or instruction-like text in comments and prose",
-        languages: "any (invisible characters, instruction files); Rust, Python, JS/TS, Go, Java, C#, PHP, Ruby, C/C++, Kotlin, Swift, Scala, Objective-C and prose files (phrases)",
+        coverage: Coverage::Packs {
+            fact: crate::ast::Fact::Prose,
+            before: "any (invisible characters, instruction files); ",
+            after: " and prose files (phrases)",
+        },
         available: true,
         delta_only: false,
     },
@@ -225,7 +273,7 @@ pub const GATES: &[GateInfo] = &[
         id: "build-hooks",
         suite: Suite::Integrity,
         summary: "install and build hooks that gain network or shell access, and package-manager configuration edits, need a token",
-        languages: "package.json, build.rs, setup.py, .npmrc, .pypirc, pip.conf, .cargo/config.toml, .env*",
+        coverage: Coverage::Stated("package.json, build.rs, setup.py, .npmrc, .pypirc, pip.conf, .cargo/config.toml, .env*"),
         available: true,
         delta_only: true,
     },
@@ -233,7 +281,7 @@ pub const GATES: &[GateInfo] = &[
         id: "toolchain-config",
         suite: Suite::Integrity,
         summary: "compiler, linter, type-checker, test-runner and coverage configuration cannot be loosened without a token",
-        languages: "tsconfig, ruff, mypy, pytest (addopts flags and -k / -m selection), coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest and vitest (JSON or a literal object), package.json test scripts, codecov, phpstan, phpunit, and compiler warning flags in Makefile, CMake, setup.py and build.rs",
+        coverage: Coverage::Stated("tsconfig, ruff, mypy, pytest (addopts flags and -k / -m selection), coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest and vitest (JSON or a literal object), package.json test scripts, codecov, phpstan, phpunit, and compiler warning flags in Makefile, CMake, setup.py and build.rs"),
         available: true,
         delta_only: true,
     },
@@ -241,7 +289,7 @@ pub const GATES: &[GateInfo] = &[
         id: "sandbox-config",
         suite: Suite::Integrity,
         summary: "a change cannot widen an agent's permissions or sandbox, or a container's isolation, without a token",
-        languages: "Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor and Copilot CLI settings, MCP server lists, devcontainer.json, Docker Compose, CI job and service containers",
+        coverage: Coverage::Stated("Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor and Copilot CLI settings, MCP server lists, devcontainer.json, Docker Compose, CI job and service containers"),
         available: true,
         delta_only: false,
     },
@@ -249,7 +297,7 @@ pub const GATES: &[GateInfo] = &[
         id: "scope-confinement",
         suite: Suite::AgentGuard,
         summary: "changes stay inside authorized paths",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
     },
@@ -257,7 +305,7 @@ pub const GATES: &[GateInfo] = &[
         id: "suppression-delta",
         suite: Suite::AgentGuard,
         summary: "newly added linter / compiler suppression annotations",
-        languages: "per pack",
+        coverage: Coverage::Stated("per pack"),
         available: true,
         delta_only: true,
     },
@@ -265,7 +313,7 @@ pub const GATES: &[GateInfo] = &[
         id: "provenance-tags",
         suite: Suite::Hygiene,
         summary: "published numerics carry (measured|target|projected)",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
     },
@@ -273,7 +321,7 @@ pub const GATES: &[GateInfo] = &[
         id: "ci-integrity",
         suite: Suite::Integrity,
         summary: "workflow weakening: continue-on-error, || true, unpinned actions",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
     },
@@ -281,7 +329,7 @@ pub const GATES: &[GateInfo] = &[
         id: "ci-skip-set",
         suite: Suite::Integrity,
         summary: "rollup skip set matches each job's `if:` under the observed filter outputs",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
     },
@@ -289,7 +337,7 @@ pub const GATES: &[GateInfo] = &[
         id: "test-floor",
         suite: Suite::Integrity,
         summary: "test-count ratchet read from the base ref",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
     },
@@ -298,7 +346,7 @@ pub const GATES: &[GateInfo] = &[
         suite: Suite::Integrity,
         summary:
             "prevents stealth edits to committed golden/test output files without explicit override",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
     },
@@ -306,7 +354,7 @@ pub const GATES: &[GateInfo] = &[
         id: "dependency-delta",
         suite: Suite::Integrity,
         summary: "manifest diff inspection: zero wildcards, source/license allowlists, and deny.toml verification",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
     },
@@ -314,15 +362,19 @@ pub const GATES: &[GateInfo] = &[
         id: "test-budget",
         suite: Suite::Integrity,
         summary: "property-test and fuzz effort ratchet (cases, shrink iters, fuzztime, seed corpus)",
-        languages: "Rust, Python, JS/TS, Go, any",
+        coverage: Coverage::Packs {
+            fact: crate::ast::Fact::Budgets,
+            before: "",
+            after: ", Go, any",
+        },
         available: true,
         delta_only: true,
     },
     GateInfo {
         id: "pr-checklist",
         suite: Suite::Hygiene,
-        summary: "ticked PR checkboxes are reconciled against the diff",
-        languages: "any",
+        summary: "ticked PR checkboxes and declared touched surfaces are reconciled against the diff",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
     },
@@ -330,7 +382,7 @@ pub const GATES: &[GateInfo] = &[
         id: "command",
         suite: Suite::Verification,
         summary: "fail-closed wrapper for any tool: zero-tests guard, canary, count ratchet",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
     },
@@ -338,7 +390,7 @@ pub const GATES: &[GateInfo] = &[
         id: "sanitizers",
         suite: Suite::Verification,
         summary: "ASan / TSan preset with audited suppressions and a race canary",
-        languages: "Rust, C/C++",
+        coverage: Coverage::Stated("Rust, C/C++"),
         available: true,
         delta_only: false,
     },
@@ -346,7 +398,7 @@ pub const GATES: &[GateInfo] = &[
         id: "msrv",
         suite: Suite::Quality,
         summary: "cargo check under the pinned MSRV",
-        languages: "Rust",
+        coverage: Coverage::Stated("Rust"),
         available: true,
         delta_only: false,
     },
@@ -354,7 +406,7 @@ pub const GATES: &[GateInfo] = &[
         id: "miri",
         suite: Suite::Verification,
         summary: "Miri tiers with zero-tests guard",
-        languages: "Rust",
+        coverage: Coverage::Stated("Rust"),
         available: true,
         delta_only: false,
     },
@@ -362,7 +414,7 @@ pub const GATES: &[GateInfo] = &[
         id: "unsafe-budget",
         suite: Suite::Verification,
         summary: "unsafe count ratchet",
-        languages: "Rust",
+        coverage: Coverage::Stated("Rust"),
         available: true,
         delta_only: false,
     },
@@ -370,7 +422,7 @@ pub const GATES: &[GateInfo] = &[
         id: "bench-regression",
         suite: Suite::Bench,
         summary: "benchmark drift via harness adapters (deterministic counts or BCa intervals)",
-        languages: "Rust, Go, Python, C/C++",
+        coverage: Coverage::Stated("Rust, Go, Python, C/C++"),
         available: true,
         delta_only: true,
     },
@@ -378,7 +430,7 @@ pub const GATES: &[GateInfo] = &[
         id: "archive-contents",
         suite: Suite::Integrity,
         summary: "distribution archive must contain required paths and zero forbidden developer artifacts",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
     },
@@ -386,7 +438,7 @@ pub const GATES: &[GateInfo] = &[
         id: "manifest-sync",
         suite: Suite::Integrity,
         summary: "reconcile git-tracked files against packaging manifest declarations",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
     },
@@ -394,7 +446,7 @@ pub const GATES: &[GateInfo] = &[
         id: "version-lockstep",
         suite: Suite::Integrity,
         summary: "version declarations across headers, manifests, and files must remain in lockstep",
-        languages: "any",
+        coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
     },
@@ -402,7 +454,7 @@ pub const GATES: &[GateInfo] = &[
         id: "gate-command-lint",
         suite: Suite::AgentGuard,
         summary: "reject vacuous, masked, or inverted verification commands in plan files",
-        languages: "markdown, shell",
+        coverage: Coverage::Stated("markdown, shell"),
         available: true,
         delta_only: false,
     },
@@ -410,7 +462,7 @@ pub const GATES: &[GateInfo] = &[
         id: "mechanism-sections",
         suite: Suite::Hygiene,
         summary: "require (inferred) or (verified: <target>) evidence tags in root cause sections",
-        languages: "markdown",
+        coverage: Coverage::Stated("markdown"),
         available: true,
         delta_only: false,
     },
@@ -418,7 +470,7 @@ pub const GATES: &[GateInfo] = &[
         id: "citation-anchors",
         suite: Suite::Hygiene,
         summary: "verify path:line@sha citations against quoted text and git history, and relative Markdown links against the tree",
-        languages: "markdown, any",
+        coverage: Coverage::Stated("markdown, any"),
         available: true,
         delta_only: false,
     },
@@ -426,7 +478,7 @@ pub const GATES: &[GateInfo] = &[
         id: "claim-labels",
         suite: Suite::Hygiene,
         summary: "require RUN or READ labels on verification claims in PR bodies, commits, and Markdown",
-        languages: "markdown, any",
+        coverage: Coverage::Stated("markdown, any"),
         available: true,
         delta_only: false,
     },
@@ -530,6 +582,8 @@ pub struct DisciplineConfig {
     pub gates: Gates,
     #[serde(default)]
     pub hooks: HooksConfig,
+    #[serde(default)]
+    pub audit: AuditConfig,
     /// Deprecated key names this configuration used, one note each (see [`KEY_ALIASES`]).
     #[serde(skip)]
     pub deprecations: Vec<String>,
@@ -664,6 +718,17 @@ pub fn apply_key_aliases(value: &mut Value, aliases: &[KeyAlias]) -> Result<Vec<
         }
     }
     Ok(notes)
+}
+
+/// What `discipline audit` refuses in the history it reads (#944). `check` never reads
+/// this table; `audit` reads it from the audited branch's tip.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AuditConfig {
+    /// The waiver-density tripwire: when the waivers per changed file (directives and
+    /// inline markers) of the newest changes rose this many times in a row, `audit` exits 1
+    /// with a policy failure. 0 (the default) switches it off.
+    pub waiver_density_rise: u32,
 }
 
 /// Checks `discipline hook run` makes inside an agent's session and nowhere else. `check`
@@ -2425,6 +2490,13 @@ pub struct PrChecklistGate {
     pub enabled: bool,
     pub severity: Severity,
     pub exempt_paths: Vec<String>,
+    /// A pull-request body without a `Touched surfaces` section declares no surface, so
+    /// every boundary file the change touches is undeclared. Off: the declared-surface
+    /// contract applies to a body that has the section.
+    pub require_declared_surfaces: bool,
+    /// Pull-request authors (exact logins, case-insensitive) whose undeclared boundary
+    /// changes are a note, never a finding: dependency-update bots fill no template.
+    pub exempt_authors: Vec<String>,
 }
 
 impl Default for PrChecklistGate {
@@ -2433,6 +2505,8 @@ impl Default for PrChecklistGate {
             enabled: false,
             severity: Severity::Error,
             exempt_paths: Vec::new(),
+            require_declared_surfaces: false,
+            exempt_authors: Vec::new(),
         }
     }
 }
@@ -2720,6 +2794,7 @@ impl DisciplineConfig {
             languages: LanguagesConfig::default(),
             gates: Gates::default(),
             hooks: HooksConfig::default(),
+            audit: AuditConfig::default(),
             deprecations: Vec::new(),
         }
     }

@@ -166,6 +166,8 @@ fn run_command(command: Commands) -> Result<bool> {
                 last: args.last,
                 reference: args.reference,
                 config: args.config,
+                no_cache: args.no_cache,
+                jobs: args.jobs,
             })?;
             if args.json {
                 println!("{}", serde_json::to_string_pretty(&summary)?);
@@ -198,7 +200,11 @@ fn run_command(command: Commands) -> Result<bool> {
                     .with_context(|| format!("cannot write {}", path.display()))?,
                 None => print!("{out}"),
             }
-            Ok(true)
+            // A tripwire of the tip's `[audit]` table fails the run (#944).
+            for f in &summary.policy_failures {
+                eprintln!("audit: {}", discipline::report::text::terminal_line(f));
+            }
+            Ok(summary.policy_failures.is_empty())
         }
         Commands::Mcp => {
             let stdin = std::io::stdin();
@@ -539,14 +545,16 @@ fn emit_fatal_reports(args: &CheckArgs, is_gitlab: bool, base: &str, err: &anyho
         refused_hidden_directives: Vec::new(),
         deprecations: Vec::new(),
         directive_notes: Vec::new(),
+        stale_baseline_entries: 0,
         unused_directives: Vec::new(),
+        review_routing: None,
     };
     let json_summary = empty(
         Vec::new(),
         0,
         Some(discipline::could_not_check::CouldNotCheck::from_error(err)),
     );
-    let json = serde_json::to_string_pretty(&json_summary).unwrap_or_default();
+    let json = discipline::report::json_report(&json_summary, false).unwrap_or_default();
     if args.format == discipline::cli::OutputFormat::Json {
         println!("{json}");
     }
@@ -779,6 +787,14 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
     } else {
         None
     };
+    // `pr-checklist`'s declared surfaces come through the directive sources the policy
+    // allows: the pull request's body, a merged pull request's, or the head commit's.
+    let declaration_body = discipline::guards::pr_checklist::select_declaration_body(
+        pr_body.as_deref().filter(|_| had_pr_body),
+        &merged.bodies,
+        pr_body.as_deref().filter(|_| !had_pr_body),
+        &config.directives.sources,
+    );
 
     let explicit_baseline = args.baseline_file.clone().or_else(|| {
         std::env::var("DISCIPLINE_BASELINE")
@@ -839,6 +855,7 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
         staged: args.staged,
         pr_title,
         pr_body,
+        declaration_body,
         directives,
         directive_notes,
         bench_provenance: args.bench_provenance.clone(),
@@ -928,14 +945,27 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
     );
     let inline_overrides =
         discipline::override_policy::inline_overrides_added(summary.overrides(), &changed);
-    summary.policy_failures = discipline::override_policy::judge(
+    // The base side's floor: its budgets and approval rule hold whichever side judges the
+    // change, and a protective gate or the file itself cannot be disarmed by it.
+    let floor = discipline::policy_floor::evaluate(&git, &config_path)
+        .map_err(|e| tag(Reason::Configuration, e))?;
+    let directives = discipline::policy_floor::stricter_directives(
         &config.directives,
+        floor.base_directives.as_ref(),
+    );
+    summary.policy_failures = discipline::override_policy::judge(
+        &directives,
         summary.directive_overrides(),
         inline_overrides,
         pull.as_ref(),
         &|| discipline::forge::detect_for(&git),
         &discipline::forge::HttpApi::from_env(),
     )?;
+    summary.policy_failures.extend(floor.failures);
+    // What the change touches that a reviewer routes on: an inventory beside the verdict,
+    // never part of it (#944).
+    summary.review_routing =
+        discipline::routing::compute(&ctx).map_err(|e| tag(Reason::Repository, e))?;
 
     let raw_fail_on_overrides = config.directives.fail_on_overrides;
     let actor = args
@@ -994,7 +1024,7 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
             .with_context(|| format!("failed to write output file {}", path.display()))?;
     }
     if let Some(path) = &args.json_out {
-        std::fs::write(path, serde_json::to_string_pretty(&summary)?)
+        std::fs::write(path, discipline::report::json_report(&summary, success)?)
             .with_context(|| format!("failed to write JSON report {}", path.display()))?;
     }
 

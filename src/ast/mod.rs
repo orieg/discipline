@@ -13,8 +13,10 @@ pub mod budgets;
 pub mod c_cpp;
 pub mod c_macros;
 pub mod calls;
+pub mod capability_sinks;
 pub mod caught_assertions;
 pub mod ci_condition;
+pub mod comparisons;
 #[cfg(feature = "lang-csharp")]
 pub mod csharp;
 pub mod exception_tables;
@@ -95,6 +97,13 @@ pub trait LanguagePack: Send + Sync {
     /// Human-readable display name (e.g. "Rust", "Golden/Snapshot", "Python").
     fn name(&self) -> &'static str;
 
+    /// The pack's name in a gate's published language coverage (`GateInfo::languages`):
+    /// the display name unless a shorter one reads better in a list. Packs that share a
+    /// label (C and C++) are listed once.
+    fn label(&self) -> &'static str {
+        self.name()
+    }
+
     /// Whether this pack handles the given relative path.
     fn matches(&self, path: &str) -> bool;
 
@@ -108,6 +117,13 @@ pub trait LanguagePack: Send + Sync {
 
     /// Extract language-neutral facts from source text.
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts>;
+
+    /// The calls of `src` that reach a capability sink (`Fact::CapabilitySinks`): a
+    /// non-exhaustive inventory for reviewers, never a finding. Empty for a pack that
+    /// does not supply the fact.
+    fn capability_sinks(&self, _path: &str, _src: &str) -> Result<Vec<capability_sinks::SinkSite>> {
+        Ok(Vec::new())
+    }
 }
 
 /// A kind of fact a pack may or may not extract.
@@ -121,6 +137,9 @@ pub enum Fact {
     Prose,
     /// Testing-effort budgets (proptest `cases`, Hypothesis `max_examples`, ...).
     Budgets,
+    /// Calls that spawn a process, evaluate code or open a network connection
+    /// ([`capability_sinks`]): the review-routing inventory, never a gate's input.
+    CapabilitySinks,
 }
 
 /// Registry of active language packs.
@@ -148,6 +167,24 @@ impl LanguageRegistry {
     pub fn is_supported(&self, path: &str) -> bool {
         self.find_pack(path).is_some()
     }
+
+    /// The packs, in the order they were registered.
+    pub fn packs(&self) -> impl Iterator<Item = &dyn LanguagePack> {
+        self.packs.iter().map(|p| p.as_ref())
+    }
+}
+
+/// The labels of the built-in packs that supply `fact`, in registry order, each once: a
+/// gate that reads `fact` analyses exactly these languages. `GateInfo::languages` is built
+/// from it, so the coverage the docs publish is what the binary registers.
+pub fn coverage_labels(fact: Fact) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for pack in default_registry().packs().filter(|p| p.supplies(fact)) {
+        if !out.contains(&pack.label()) {
+            out.push(pack.label());
+        }
+    }
+    out
 }
 
 /// Constructs the default registry containing all built-in packs enabled by Cargo features.
@@ -299,6 +336,10 @@ pub struct TestFn {
     /// Numeric bounds of its assertions (`super::bounds`), paired by skeleton across a
     /// change so a bound moved the loose way is seen although the count is unchanged.
     pub bounds: Vec<bounds::Bound>,
+    /// Comparison operators of its assertions (`super::comparisons`), paired by skeleton
+    /// across a change so an operator moved the loose way is seen although the count,
+    /// the class and the literal are unchanged.
+    pub comparisons: Vec<comparisons::Comparison>,
     /// Expected values of its equality assertions (`super::expectations`), paired by
     /// skeleton across a change so an edited expected value is seen although the count is
     /// unchanged.
@@ -2382,6 +2423,7 @@ impl Default for ParsedFileFacts {
                 trivial_asserts: 0,
                 helper_checks: 0,
                 bounds: Vec::new(),
+                comparisons: Vec::new(),
                 expectations: Vec::new(),
                 caught_assertions: Vec::new(),
                 expected_exceptions: Vec::new(),
@@ -2427,6 +2469,7 @@ impl ParsedFileFacts {
             trivial_asserts: 0,
             helper_checks: 0,
             bounds: Vec::new(),
+            comparisons: Vec::new(),
             expectations: Vec::new(),
             caught_assertions: Vec::new(),
             expected_exceptions: Vec::new(),

@@ -148,6 +148,9 @@ _discipline() {
             discipline__subcmd__help__subcmd__hook,install)
                 cmd="discipline__subcmd__help__subcmd__hook__subcmd__install"
                 ;;
+            discipline__subcmd__help__subcmd__hook,log)
+                cmd="discipline__subcmd__help__subcmd__hook__subcmd__log"
+                ;;
             discipline__subcmd__help__subcmd__hook,run)
                 cmd="discipline__subcmd__help__subcmd__hook__subcmd__run"
                 ;;
@@ -175,6 +178,9 @@ _discipline() {
             discipline__subcmd__hook,install)
                 cmd="discipline__subcmd__hook__subcmd__install"
                 ;;
+            discipline__subcmd__hook,log)
+                cmd="discipline__subcmd__hook__subcmd__log"
+                ;;
             discipline__subcmd__hook,run)
                 cmd="discipline__subcmd__hook__subcmd__run"
                 ;;
@@ -183,6 +189,9 @@ _discipline() {
                 ;;
             discipline__subcmd__hook__subcmd__help,install)
                 cmd="discipline__subcmd__hook__subcmd__help__subcmd__install"
+                ;;
+            discipline__subcmd__hook__subcmd__help,log)
+                cmd="discipline__subcmd__hook__subcmd__help__subcmd__log"
                 ;;
             discipline__subcmd__hook__subcmd__help,run)
                 cmd="discipline__subcmd__hook__subcmd__help__subcmd__run"
@@ -960,7 +969,7 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__help__subcmd__hook)
-            opts="run install"
+            opts="run install log"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -974,6 +983,20 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__help__subcmd__hook__subcmd__install)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        discipline__subcmd__help__subcmd__hook__subcmd__log)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1184,7 +1207,7 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__hook)
-            opts="-h --help run install help"
+            opts="-h --help run install log help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1198,7 +1221,7 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__hook__subcmd__help)
-            opts="run install help"
+            opts="run install log help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1226,6 +1249,20 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__hook__subcmd__help__subcmd__install)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        discipline__subcmd__hook__subcmd__help__subcmd__log)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1269,6 +1306,24 @@ _discipline() {
                     return 0
                     ;;
                 --pin-sums)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        discipline__subcmd__hook__subcmd__log)
+            opts="-h --json --last --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --last)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -1590,7 +1645,7 @@ _discipline() {
             return 0
             ;;
         discipline__subcmd__replay)
-            opts="-c -h --last --ref --config --json --help"
+            opts="-c -h --last --ref --config --json --no-cache --jobs --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1609,6 +1664,10 @@ _discipline() {
                     return 0
                     ;;
                 -c)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --jobs)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;

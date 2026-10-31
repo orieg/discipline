@@ -649,6 +649,10 @@ impl GateOutcome {
     }
 }
 
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
 #[derive(Debug, Serialize)]
 pub struct CheckSummary {
     /// The report schema's version ([`crate::output_schema::REPORT_SCHEMA_VERSION`]). A field
@@ -660,6 +664,11 @@ pub struct CheckSummary {
     pub notes: usize,
     pub overrides: usize,
     pub baselined: usize,
+    /// Baseline entries no finding of this run matched: findings since resolved, which
+    /// `discipline baseline --write` (or `--migrate`, for a version-1 file) drops. Each
+    /// enabled gate's notes name its own; this counts every entry, a disabled gate's too.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub stale_baseline_entries: usize,
     pub outcomes: Vec<GateOutcome>,
     /// Gates the roadmap plans but this binary does not ship. Listed in every
     /// report so their absence is never mistaken for coverage.
@@ -690,6 +699,11 @@ pub struct CheckSummary {
     /// Why the run could not check (exit 2): only then present, and `outcomes` is empty.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub could_not_check: Option<crate::could_not_check::CouldNotCheck>,
+    /// What the change touches that a reviewer routes on ([`crate::routing`]): an
+    /// inventory, never a verdict, and unstable until 1.0. Absent when the run has no
+    /// change to describe (a whole-tree run, a run that could not check).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_routing: Option<crate::routing::ReviewRouting>,
 }
 
 impl CheckSummary {
@@ -795,6 +809,9 @@ pub struct Context<'a> {
     pub staged: bool,
     pub pr_title: Option<String>,
     pub pr_body: Option<String>,
+    /// The body `pr-checklist`'s declared-surface contract reads, chosen through
+    /// `directives.sources` ([`pr_checklist::select_declaration_body`]).
+    pub declaration_body: pr_checklist::DeclarationBody,
     pub directives: Vec<crate::tokens::ParsedDirective>,
     pub directive_notes: Vec<String>,
     pub bench_provenance: Option<String>,
@@ -821,8 +838,9 @@ pub struct ForgeAccess<'a> {
 
 impl Context<'_> {
     /// The pull request a gate that reads pull-request facts judges. `Ok(None)` for a
-    /// run that has none to read (a local run, a push); in CI on any other event, a
-    /// missing pull request is a configuration error (exit 2), never a pass.
+    /// run that has none to read (a local run, a push, a change `discipline replay`
+    /// checks: it reads the merged body, never a live pull request); in CI on any other
+    /// event, a missing pull request is a configuration error (exit 2), never a pass.
     pub fn pull_request_for(&self, gate: &str) -> Result<Option<&ForgeAccess<'_>>> {
         let Some(access) = self.forge.as_ref().filter(|f| f.pull.is_some()) else {
             let in_ci = [
@@ -834,7 +852,10 @@ impl Context<'_> {
             ]
             .iter()
             .any(|k| std::env::var(k).is_ok_and(|v| !v.trim().is_empty() && v != "false"));
-            if in_ci && !crate::gitctx::is_push_event_environment() {
+            // A replayed change is judged the same in a CI job as on a laptop.
+            let replayed =
+                std::env::var_os(REPLAY_CASE_ENV).is_some() && self.git.base_is_replay_base();
+            if in_ci && !replayed && !crate::gitctx::is_push_event_environment() {
                 return Err(crate::could_not_check::tag(
                     crate::could_not_check::Reason::Configuration,
                     anyhow::anyhow!(
@@ -1323,8 +1344,10 @@ pub fn run_checks(
 
     // Grandfathered findings baseline matching
     let mut deprecations = ctx.config.deprecations.clone();
+    let mut stale_baseline_entries = 0;
     if let Some(baseline) = ctx.baseline {
-        crate::baseline::apply_baseline_with_git(ctx.git, baseline, &mut outcomes)?;
+        stale_baseline_entries =
+            crate::baseline::apply_baseline_with_git(ctx.git, baseline, &mut outcomes)?.stale_count;
         if baseline.version < crate::baseline::FINGERPRINT_VERSION {
             deprecations.push(format!(
                 "`{}` uses fingerprint version {}, which keys on finding titles: run `discipline baseline --migrate` in a change of its own to rewrite it to version {}",
@@ -1353,6 +1376,7 @@ pub fn run_checks(
         notes: count(Severity::Note),
         overrides: total_overrides,
         baselined: total_baselined,
+        stale_baseline_entries,
         planned_gates: GATES
             .iter()
             .filter(|g| !g.available)
@@ -1371,6 +1395,7 @@ pub fn run_checks(
         refused_hidden_directives: Vec::new(),
         deprecations,
         directive_notes: run_directive_notes,
+        review_routing: None,
     })
 }
 
@@ -2075,6 +2100,7 @@ pub(crate) mod test_support {
             staged: false,
             pr_title: None,
             pr_body: None,
+            declaration_body: Default::default(),
             directives: Vec::new(),
             directive_notes: Vec::new(),
             bench_provenance: None,

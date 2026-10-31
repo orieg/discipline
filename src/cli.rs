@@ -144,6 +144,14 @@ pub struct ReplayArgs {
     /// Print the summary as JSON
     #[arg(long)]
     pub json: bool,
+
+    /// Check every change again: read no verdict from the replay cache and record none
+    #[arg(long)]
+    pub no_cache: bool,
+
+    /// Changes checked at once (default: one per core, at most 4)
+    #[arg(long, value_name = "N")]
+    pub jobs: Option<usize>,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -273,6 +281,19 @@ pub enum HookCommand {
     Run(HookRunArgs),
     /// Write the agent's hook configuration at the repository root (or, with --user, the user-level one); an existing file is never rewritten
     Install(HookInstallArgs),
+    /// Print this repository's hook records (<git dir>/discipline/hook-observe.log): time, agent, event, mode, binary version, decision, exit code and finding counts, oldest first
+    Log(HookLogArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct HookLogArgs {
+    /// Print each record as one JSON object per line
+    #[arg(long)]
+    pub json: bool,
+
+    /// Print only the last N records
+    #[arg(long, value_name = "N")]
+    pub last: Option<usize>,
 }
 
 #[derive(Args, Debug)]
@@ -623,10 +644,11 @@ pub struct BaselineArgs {
     #[arg(long)]
     pub write: bool,
 
-    /// Rewrite a fingerprint-version-1 baseline to version 2: every entry a current
-    /// finding still matches is kept under its finding code, and stale entries are
-    /// dropped. Commit the result in a change of its own, which `config-integrity`
-    /// accepts without a directive. With no baseline file there is nothing to migrate:
+    /// Rewrite an older baseline to version 3: a version-1 file's entries that a current
+    /// finding still matches are kept under their finding codes and stale ones dropped, a
+    /// version-2 file's entries are kept, and the per-file assertion counts are seeded.
+    /// Commit the result in a change of its own, which `config-integrity` accepts
+    /// without a directive. With no baseline file there is nothing to migrate:
     /// it says so and exits 0; a file that cannot be read exits 2.
     #[arg(long, conflicts_with_all = ["write", "base", "whole_tree"])]
     pub migrate: bool,

@@ -52,16 +52,17 @@ cargo run -- check --base origin/main
 
 ## Gate Contract Discipline
 
-When adding or modifying a gate, the contribution must satisfy the complete 4-point contract ([`AGENTS.md`](AGENTS.md) §3.4 and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §3):
+When adding or modifying a gate, the contribution must satisfy the complete nine-item contract of [`AGENTS.md`](AGENTS.md) §3.4 (full statement: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §3 and §9). The list below restates it item by item, in the same order; `tests/test_docs.rs` (`contributing_restates_the_gate_contract_item_by_item`) fails when the two lists diverge.
 
-1. **Gate Registration:** Register the gate in `src/config.rs::GATES` with its kebab-case identifier, documentation summary, and configuration schema table in `[gates.<id>]`.
-2. **Deterministic Outcome:** Return a truthful `GateOutcome` recording the exact number of items examined, violations detected, and notes for unanalysed files.
-3. **4-Point Test Coverage:**
-   - **Unit Tests:** Detector-level tests with both positive and negative controls.
-   - **End-to-End Tests:** Integration test in `tests/test_gates_e2e.rs` exercising the compiled binary on throwaway git repositories.
-   - **Mutation Evidence:** Deliberately break the detector, observe test failure, restore it, and document which test killed the mutant.
-   - **Self-Test Case:** Embedded check in `src/selftest.rs` allowing deployed binaries to verify their own discriminators.
-4. **Escape Hatch:** Any override directive must pass through `src/tokens.rs` with line-anchored, placeholder-rejecting validation.
+1. **Gate Registration:** a stable kebab-case id in `src/config.rs::GATES` and its own `[gates.<id>]` table with `enabled`, `severity` and `exempt_paths`. A gate that is designed but not implemented is registered with `available: false`; it is never accepted as configuration.
+2. **Truthful Outcome:** return a `GateOutcome` with a truthful `examined` count and a `notes` entry for anything the gate could not verify. Every finding kind it reports is registered in `src/findings.rs` with a kebab-case code that names what it protects; the code is frozen once released, the title is not.
+3. **Tests:** a **unit test** with a positive and a negative control; an **end-to-end test** in `tests/test_gates_e2e.rs` driving the real binary; a **`self-test` case** in `src/selftest.rs`, so a deployed binary can verify its own discriminators.
+4. **Mutation evidence:** break the detector, watch a test fail, restore it. State in the pull request which test killed the mutant.
+5. **Escape Hatch:** any escape hatch goes through `src/tokens.rs` (line-anchored, placeholder-rejecting, scoped). No in-source override comments.
+6. **Secrets:** if a finding could echo a secret or a user name, report the location only.
+7. **Documentation:** `docs/GATES.md` and `README.md` list the gate with its true status.
+8. **Stable Names:** the gate's new interface names (gate id, finding codes, configuration keys, directives) are recorded in `tests/fixtures/v1_surface.json` (`DISCIPLINE_BLESS_SURFACE=1 cargo test --test test_stability_contract`). A name recorded there is never removed or renamed before a major version (`docs/ARCHITECTURE.md` §3.2).
+9. **Evasion corpus:** a new evasion shape, a way a change weakens a test or the run without tripping a gate, goes into `tests/fixtures/evasion_corpus.json` first, as a `known_miss` naming its issue. The change that closes it sets the case to `caught` with the exact finding codes; `tests/test_evasion_corpus.rs` fails until the verdict and the gate's "What it does NOT catch" list in `docs/GATES.md` agree with the binary.
 
 ---
 

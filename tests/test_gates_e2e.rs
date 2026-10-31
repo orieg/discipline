@@ -1038,6 +1038,118 @@ fn parenthesised_expected_values_and_bounds_are_read_in_rust_go_and_js() {
     }
 }
 
+/// A comparison operator moved the loose way inside an otherwise unchanged assertion
+/// (#934): the count, the class and the literal hold, so only the operator shows it.
+/// Each shape fails the run as `weakened-bound`; `allow-assertion-drop:` lifts it, and a
+/// new expected value under the same operator stays `expected-value-changed`.
+#[test]
+fn a_comparison_operator_moved_the_loose_way_fails_as_a_weakened_bound() {
+    let py = |check: &str| {
+        format!("from src.stats import summarize\n\n\ndef test_summarize():\n    rows = [{{\"a\": 1}}] * 7\n    row = rows[0]\n    {check}\n")
+    };
+    let go = |cond: &str| {
+        format!("package p\n\nimport \"testing\"\n\nfunc TestSum(t *testing.T) {{\n\tif {cond} {{\n\t\tt.Fatalf(\"want 3\")\n\t}}\n}}\n")
+    };
+    let run = |path: &str,
+               base: String,
+               head: String,
+               body: &str|
+     -> (i32, Vec<String>, serde_json::Value) {
+        let repo = Repo::new();
+        repo.write(
+            "src/stats.py",
+            "def summarize(rows):\n    return len(rows)\n",
+        );
+        repo.write("go.mod", "module p\n\ngo 1.22\n");
+        repo.write(
+            "p.go",
+            "package p\n\nfunc Sum(a, b int) int {\n\treturn a + b\n}\n",
+        );
+        repo.commit_base(path, &base, "test: summarize");
+        repo.write(path, &head);
+        repo.commit("test: change");
+        let run = repo.check_with_pr(&[], body);
+        let codes = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes, run.outcome("assertion-reduction"))
+    };
+    let py_path = "tests/test_stats.py";
+    let shapes = [
+        (
+            py_path,
+            py("assert summarize([]) == 0"),
+            py("assert summarize([]) != 1"),
+            "test_summarize",
+            "`==` to `!=`",
+        ),
+        (
+            py_path,
+            py("assert summarize(rows) > 6"),
+            py("assert summarize(rows) >= 6"),
+            "test_summarize",
+            "`>` to `>=`",
+        ),
+        (
+            py_path,
+            py("assert summarize([]) < 1"),
+            py("assert summarize([]) <= 1"),
+            "test_summarize",
+            "`<` to `<=`",
+        ),
+        (
+            py_path,
+            py("assert \"a\" in row"),
+            py("assert \"a\" not in row"),
+            "test_summarize",
+            "`in` to `not in`",
+        ),
+        (
+            "p_test.go",
+            go("Sum(1, 2) != 3"),
+            go("Sum(1, 2) < 3"),
+            "TestSum",
+            "`!=` to `<`",
+        ),
+    ];
+    for (path, base, head, test, ops) in shapes {
+        let (code, codes, outcome) = run(path, base.clone(), head.clone(), "");
+        assert_eq!(code, 1, "{path}: {head}");
+        assert_eq!(
+            codes,
+            ["assertion-reduction/weakened-bound"],
+            "{path}: {head}"
+        );
+        let message = outcome["violations"][0]["message"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(message.contains(ops), "{message}");
+        // The assertion's own text is not echoed.
+        assert!(
+            !message.contains("summarize(") && !message.contains("Sum("),
+            "{message}"
+        );
+        let lifted = run(
+            path,
+            base,
+            head,
+            &format!("allow-assertion-drop: {test} the bound is a range now\n"),
+        );
+        assert_eq!((lifted.0, lifted.1), (0, vec![]), "{path}: lifted");
+    }
+    // Negative control: a new expected value under the same operator.
+    let (_, codes, _) = run(
+        py_path,
+        py("assert summarize(rows) == 7"),
+        py("assert summarize(rows) == 8"),
+        "",
+    );
+    assert_eq!(codes, ["assertion-reduction/expected-value-changed"]);
+}
+
 /// A Python mock assertion call is a check (#828): deleting it from an existing test, or
 /// leaving its name read but not called, is a reduction; a new test whose only check
 /// is one is still a test that asserts only on mocks.
@@ -8812,6 +8924,128 @@ fn override_budget_caps_what_one_change_may_excuse() {
         .as_str()
         .unwrap()
         .contains("`max_overrides` increased from 0 to 5"));
+}
+
+/// The rule ids of the refusals a run's `policy_failures` sentences name, read back from
+/// the wording `src/refusals.rs` gives each kind.
+fn refused(run: &Run) -> Vec<String> {
+    let json = run.json();
+    let Some(failures) = json["policy_failures"].as_array() else {
+        return Vec::new();
+    };
+    failures
+        .iter()
+        .map(|f| {
+            let f = f.as_str().unwrap();
+            if f.contains("directives.max_overrides") {
+                "max-overrides-exceeded"
+            } else if f.contains("disarms a gate") {
+                "protective-gate-disarmed"
+            } else if f.contains("is deleted by this change") {
+                "policy-file-deleted"
+            } else {
+                "other"
+            }
+            .to_string()
+        })
+        .collect()
+}
+
+#[test]
+fn the_base_budget_holds_when_the_change_raises_or_deletes_it() {
+    // Raising the budget in the change that spends it: the base's 1 still caps the run,
+    // under either policy side (#932, chain 2).
+    let repo = repo_with_base_config(&format!("{CONFIG_HEAD}[directives]\nmax_overrides = 1\n"));
+    repo.write(
+        "discipline.toml",
+        &format!(
+            "{CONFIG_HEAD}[directives]\nmax_overrides = 5\n\
+             [gates.vacuous-tests]\nenabled = false\n[gates.pii]\nenabled = false\n"
+        ),
+    );
+    repo.commit(
+        "chore: tune\n\nallow-gate-weakening: vacuous-tests snapshot macros assert for us\n\
+         allow-gate-weakening: pii fixtures carry documentation addresses\n\
+         allow-gate-weakening: directives the budget moves to five",
+    );
+    for side in ["head", "base"] {
+        let run = repo.check(&["--policy-from", side]);
+        assert_eq!(run.code, 1, "{side}: {}", run.stdout);
+        assert_eq!(refused(&run), vec!["max-overrides-exceeded"], "{side}");
+    }
+
+    // Deleting the file that sets the budget: refused, and the budget still holds.
+    let repo = repo_with_base_config(&format!("{CONFIG_HEAD}[directives]\nmax_overrides = 0\n"));
+    repo.git(&["rm", "-q", "discipline.toml"]);
+    repo.commit(
+        "chore: drop the configuration\n\nremoves: discipline.toml settings move to the workflow\n\
+         allow-gate-weakening: directives the budget goes with the file",
+    );
+    for side in ["head", "base"] {
+        let run = repo.check(&["--policy-from", side]);
+        assert_eq!(run.code, 1, "{side}: {}", run.stdout);
+        let ids = refused(&run);
+        assert!(
+            ids.contains(&"policy-file-deleted".to_string()),
+            "{side}: {ids:?}"
+        );
+        assert!(
+            ids.contains(&"max-overrides-exceeded".to_string()),
+            "{side}: {ids:?}"
+        );
+    }
+}
+
+#[test]
+fn a_directive_does_not_lift_the_disarming_of_a_protective_gate() {
+    let base = format!("{CONFIG_HEAD}[gates.ci-integrity]\nenabled = true\n");
+    for (head, body) in [
+        (
+            "enabled = false\n",
+            "allow-gate-weakening: ci-integrity the check is noisy",
+        ),
+        (
+            "severity = \"warning\"\n",
+            "allow-gate-weakening: ci-integrity the check is noisy",
+        ),
+        (
+            "exempt_paths = [\".github/**\"]\n",
+            "allow-gate-weakening: ci-integrity the check is noisy",
+        ),
+    ] {
+        let repo = repo_with_base_config(&base);
+        repo.write(
+            "discipline.toml",
+            &format!("{CONFIG_HEAD}[gates.ci-integrity]\n{head}"),
+        );
+        repo.commit(&format!("chore: tune\n\n{body}"));
+        for side in ["head", "base"] {
+            let run = repo.check(&["--policy-from", side]);
+            assert_eq!(run.code, 1, "{head} {side}: {}", run.stdout);
+            assert_eq!(
+                refused(&run),
+                vec!["protective-gate-disarmed"],
+                "{head} {side}"
+            );
+        }
+    }
+
+    // A narrow exemption, and an ordinary gate switched off, stay liftable weakenings.
+    let repo = repo_with_base_config(&base);
+    repo.write(
+        "discipline.toml",
+        &format!(
+            "{CONFIG_HEAD}[gates.ci-integrity]\nenabled = true\nexempt_paths = [\"tests/fixtures/**\"]\n\
+             [gates.vacuous-tests]\nenabled = false\n"
+        ),
+    );
+    repo.commit(
+        "chore: tune\n\nallow-gate-weakening: ci-integrity fixtures hold sample workflows\n\
+         allow-gate-weakening: vacuous-tests snapshot macros assert for us",
+    );
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(refused(&run).is_empty());
 }
 
 /// Six `time-estimates` markers already in the tree, under a cap of five.
@@ -17156,6 +17390,183 @@ enabled = true
     assert_eq!(run_ov.code, 0, "{}{}", run_ov.stdout, run_ov.stderr);
 }
 
+/// The `Touched surfaces` section (#943), reconciled both ways through the real binary:
+/// a declared entry the diff does not touch, a boundary file changed without its entry,
+/// the directive that lifts each, the bot bucket (a note, never a finding), the source
+/// policy, and `require_declared_surfaces`.
+#[test]
+fn pr_checklist_reconciles_declared_surfaces_both_ways() {
+    const ENTRIES: [&str; 8] = [
+        "workflows",
+        "build hooks",
+        "manifests/lockfiles",
+        "`discipline.toml`",
+        "directives",
+        "docs",
+        "tests",
+        "benches",
+    ];
+    let body = |ticked: &[&str], extra: &str| {
+        let mut b = String::from("Tidies the build.\n\n## Touched surfaces\n\n");
+        for e in ENTRIES {
+            let mark = if ticked.contains(&e) { "x" } else { " " };
+            b.push_str(&format!("- [{mark}] {e}\n"));
+        }
+        b.push_str(extra);
+        b
+    };
+    let config = |extra: &str| {
+        format!("{CONFIG_HEAD}\n[gates.pr-checklist]\nenabled = true\nexempt_authors = [\"renovate[bot]\"]\n{extra}")
+    };
+    let wf = "name: CI\non: pull_request\npermissions:\n  contents: read\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo t\n";
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", &config("")),
+            (".github/workflows/ci.yml", wf),
+        ],
+        "base",
+    );
+    repo.write(
+        ".github/workflows/ci.yml",
+        &format!("# Runs the tests.\n{wf}"),
+    );
+    repo.commit("ci: describe the workflow");
+    let codes = |run: &Run| -> Vec<String> {
+        run.outcome("pr-checklist")["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let notes = |run: &Run| run.outcome("pr-checklist")["notes"].to_string();
+    let bodies = tempfile::tempdir().unwrap();
+    let check = |b: &str, env: &[(&str, &str)]| {
+        let file = bodies.path().join("body.md");
+        std::fs::write(&file, b).unwrap();
+        repo.run(
+            &[
+                "check",
+                "--format",
+                "json",
+                "--base",
+                "main",
+                "--pr-body-file",
+                file.to_str().unwrap(),
+            ],
+            env,
+        )
+    };
+
+    // Gap direction, positive: the workflow changed and `workflows` is not ticked.
+    let gap = check(&body(&[], ""), &[]);
+    assert_eq!(gap.code, 1, "{}{}", gap.stdout, gap.stderr);
+    assert_eq!(codes(&gap), vec!["pr-checklist/undeclared-boundary-delta"]);
+    let message = gap.outcome("pr-checklist")["violations"][0]["message"].to_string();
+    assert!(message.contains(".github/workflows/ci.yml"), "{message}");
+    assert!(message.contains("`ci-integrity` judges"), "{message}");
+    // Negative: declared.
+    let declared = check(&body(&["workflows"], ""), &[]);
+    assert_eq!(declared.code, 0, "{}{}", declared.stdout, declared.stderr);
+    assert!(codes(&declared).is_empty());
+
+    // False-claim direction, positive: `build hooks` ticked, no build hook changed.
+    let claim = check(&body(&["workflows", "build hooks"], ""), &[]);
+    assert_eq!(claim.code, 1, "{}", claim.stdout);
+    assert_eq!(
+        codes(&claim),
+        vec!["pr-checklist/checklist-claim-unsupported"]
+    );
+    // The section's lines are the contract's: a ticked `docs` is reported once, by it.
+    let docs = check(&body(&["workflows", "docs"], ""), &[]);
+    assert_eq!(codes(&docs), vec!["pr-checklist/checklist-claims-docs"]);
+
+    // Each direction's finding lifts with the entry's subject.
+    let lifted = check(
+        &body(
+            &["build hooks"],
+            "\nallow-pr-checklist: workflows comment-only edit\nallow-pr-checklist: build-hooks ticked by mistake\n",
+        ),
+        &[],
+    );
+    assert_eq!(lifted.code, 0, "{}{}", lifted.stdout, lifted.stderr);
+    assert_eq!(
+        lifted.outcome("pr-checklist")["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    // The bot bucket: the payload names an `exempt_authors` login, so the gap is a note.
+    let dir = tempfile::tempdir().unwrap();
+    let event = |author: &str| {
+        let p = dir
+            .path()
+            .join(format!("{}.json", author.replace(['[', ']'], "_")));
+        let payload = serde_json::json!({"pull_request": {
+            "number": 3, "user": {"login": author}, "head": {"sha": "abc123"}}});
+        std::fs::write(&p, payload.to_string()).unwrap();
+        p.to_str().unwrap().to_string()
+    };
+    let bot_event = event("renovate[bot]");
+    let bot = check(&body(&[], ""), &[("GITHUB_EVENT_PATH", bot_event.as_str())]);
+    assert_eq!(bot.code, 0, "{}{}", bot.stdout, bot.stderr);
+    assert!(codes(&bot).is_empty());
+    assert!(notes(&bot).contains("exempt_authors"), "{}", notes(&bot));
+    // Anyone else, even when the run's actor is the bot, is held to the declaration.
+    let human_event = event("someone");
+    let human = check(
+        &body(&[], ""),
+        &[
+            ("GITHUB_EVENT_PATH", human_event.as_str()),
+            ("GITHUB_ACTOR", "renovate[bot]"),
+        ],
+    );
+    assert_eq!(
+        codes(&human),
+        vec!["pr-checklist/undeclared-boundary-delta"]
+    );
+
+    // No section: the contract is not applied, unless the policy requires one.
+    let absent = check("Tidies the build.\n", &[]);
+    assert_eq!(absent.code, 0, "{}", absent.stdout);
+    assert!(notes(&absent).contains("not applied"), "{}", notes(&absent));
+    repo.write(
+        "discipline.toml",
+        &config("require_declared_surfaces = true\n"),
+    );
+    repo.commit("chore: require the declaration");
+    let required = check("Tidies the build.\n", &[]);
+    assert_eq!(
+        codes(&required),
+        vec![
+            "pr-checklist/undeclared-boundary-delta",
+            "pr-checklist/undeclared-boundary-delta"
+        ],
+        "the workflow and discipline.toml: {}",
+        required.stdout
+    );
+
+    // A body the directive sources leave out declares nothing.
+    repo.write(
+        "discipline.toml",
+        &format!(
+            "{}\n[directives]\nsources = [\"commits\"]\n",
+            config("require_declared_surfaces = true\n")
+        ),
+    );
+    repo.commit("chore: read directives from commits only");
+    let excluded = check(&body(&["workflows", "`discipline.toml`"], ""), &[]);
+    assert_eq!(codes(&excluded).len(), 2, "{}", excluded.stdout);
+    assert!(
+        notes(&excluded).contains("`pr-body`"),
+        "{}",
+        notes(&excluded)
+    );
+}
+
 // ---- unsafe-budget ---------------------------------------------------------
 
 #[test]
@@ -23734,5 +24145,110 @@ allow-toolchain-weakening: .github/workflows/sonar.yml staged rollout
             .iter()
             .any(|v| v["code"] == "toolchain-config/toolchain-config-unreadable"),
         "{bad_violations:?}"
+    );
+}
+
+/// The assertion-density ratchet (#936): a test file holding fewer assertions than the
+/// baseline records is a warning, whatever the change's own diff was excused for. The
+/// count is read from the base side's baseline too, so lowering it in the same change
+/// does not lower the floor.
+#[test]
+fn test_floor_ratchets_each_files_assertions_from_the_baseline() {
+    const STRICT: &str = "#[test]\nfn parses() {\n    let n: i32 = \"42\".parse().unwrap();\n    \
+        assert_eq!(n, 42);\n    assert!(n > 0);\n    assert_ne!(n, 7);\n}\n";
+    const GUTTED: &str =
+        "#[test]\nfn parses() {\n    let n: i32 = \"42\".parse().unwrap();\n    assert!(n > 0);\n}\n";
+    let density = |run: &Run| -> Vec<(String, String, String)> {
+        run.violations("test-floor")
+            .iter()
+            .filter(|v| v["code"] == "test-floor/test-density-regression")
+            .map(|v| {
+                (
+                    v["severity"].as_str().unwrap().to_string(),
+                    v["file"].as_str().unwrap().to_string(),
+                    v["message"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    };
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("tests/parse.rs", STRICT);
+    repo.commit("test: strict");
+    let written = repo.run(&["baseline", "--write"], &[]);
+    assert_eq!(written.code, 0, "{}{}", written.stdout, written.stderr);
+    let recorded = std::fs::read_to_string(repo.file("discipline-baseline.toml")).unwrap();
+    assert!(recorded.contains("version = 3"), "{recorded}");
+    assert!(recorded.contains("\"tests/parse.rs\" = 4"), "{recorded}");
+    repo.commit("chore: record the baseline");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+
+    // Negative control: the counts held, nothing to report.
+    repo.write(
+        "docs/plan.md",
+        "# Plan\n\nPhase 1 then Phase 2, then Phase 3.\n",
+    );
+    repo.commit("docs: plan");
+    assert!(density(&repo.check(&[])).is_empty());
+
+    // Two assertions gone, the drop excused for assertion-reduction by the change itself.
+    repo.write("tests/parse.rs", GUTTED);
+    repo.commit(
+        "test: simplify\n\nallow-assertion-drop: tests/parse.rs the bounds are checked in parse_bounds",
+    );
+    let run = repo.check(&[]);
+    assert!(
+        run.violations("assertion-reduction").is_empty(),
+        "{:?}",
+        run.violations("assertion-reduction")
+    );
+    let found = density(&run);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(
+        (found[0].0.as_str(), found[0].1.as_str()),
+        ("warning", "tests/parse.rs")
+    );
+    assert!(
+        found[0].2.contains("holds 2 assertion(s)"),
+        "{}",
+        found[0].2
+    );
+    assert!(found[0].2.contains("records 4"), "{}", found[0].2);
+    // A warning: the run still passes unless warnings fail it.
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_eq!(repo.check(&["--fail-on-warnings"]).code, 1);
+
+    // Rewriting the baseline in the same change does not lower the floor: the base
+    // side's entry stands.
+    assert_eq!(repo.run(&["baseline", "--write"], &[]).code, 0);
+    repo.commit("chore: re-record the baseline\n\nallow-gate-weakening: baseline re-recorded");
+    assert_eq!(density(&repo.check(&[])).len(), 1);
+
+    // An intended drop is excused by name.
+    repo.commit("chore: excuse\n\nallow-test-shrink: tests/parse.rs bounds moved to parse_bounds");
+    let run = repo.check(&[]);
+    assert!(density(&run).is_empty());
+    assert!(
+        run.outcome("test-floor")["overrides"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["code"] == "test-floor/test-density-regression"),
+        "{}",
+        run.outcome("test-floor")
+    );
+
+    // A baseline that records no counts compares nothing, and says so.
+    let repo = Repo::new();
+    repo.write("discipline-baseline.toml", "version = 2\n");
+    repo.commit("chore: empty baseline");
+    let run = repo.check(&[]);
+    assert!(density(&run).is_empty());
+    assert!(
+        run.outcome("test-floor")["notes"]
+            .to_string()
+            .contains("records no per-file assertion counts"),
+        "{}",
+        run.outcome("test-floor")["notes"]
     );
 }

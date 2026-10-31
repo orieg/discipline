@@ -805,6 +805,9 @@ fn test_harness_isolates_names_read_without_a_family_prefix() {
     .unwrap();
     // Inside source text the Rust pack's own unit tests parse: no run reads it.
     let fixture_text = ["SKIP_SLOW"];
+    // Inherited on purpose: every spawned `git` needs it. `doctor`'s `hook-binary` looks
+    // for `discipline` on it, and the tests of that finding set it themselves.
+    let inherited = ["PATH"];
     let mut missing = std::collections::BTreeSet::new();
     for (path, text) in binary_sources() {
         for c in read.captures_iter(&text) {
@@ -812,6 +815,7 @@ fn test_harness_isolates_names_read_without_a_family_prefix() {
             if !common::ISOLATED_ENV_VARS.contains(&name)
                 && !SET_BY_HARNESS.contains(&name)
                 && !fixture_text.contains(&name)
+                && !inherited.contains(&name)
             {
                 missing.insert(format!("{name} ({path})"));
             }
@@ -847,6 +851,7 @@ const REVIEWED_DYNAMIC_READS: &[(&str, &str, &str)] = &[
         "crate::hook::HOOK_RUN_ENV",
         NAMED_CONSTANT,
     ),
+    ("src/hook_log.rs", "crate::hook::HOOK_RUN_ENV", NAMED_CONSTANT),
     ("src/guards/mod.rs", "REPLAY_CASE_ENV", NAMED_CONSTANT),
     ("src/cli.rs", "HOSTNAME_DENYLIST_ENV", NAMED_CONSTANT),
     ("src/cli.rs", "TERM_DENYLIST_ENV", NAMED_CONSTANT),

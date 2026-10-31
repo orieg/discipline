@@ -19,7 +19,12 @@ impl LanguagePack for GoPack {
     fn supplies(&self, fact: Fact) -> bool {
         matches!(
             fact,
-            Fact::Tests | Fact::EscapeHatches | Fact::Functions | Fact::Handlers | Fact::Prose
+            Fact::Tests
+                | Fact::EscapeHatches
+                | Fact::Functions
+                | Fact::Handlers
+                | Fact::Prose
+                | Fact::CapabilitySinks
         )
     }
 
@@ -33,6 +38,20 @@ impl LanguagePack for GoPack {
 
     fn is_test_path(&self, path: &str) -> bool {
         super::functions::is_test_file(path, Some(is_go_test_path))
+    }
+
+    fn capability_sinks(
+        &self,
+        path: &str,
+        src: &str,
+    ) -> Result<Vec<super::capability_sinks::SinkSite>> {
+        super::capability_sinks::sites_of(
+            &tree_sitter_go::LANGUAGE.into(),
+            "the Go",
+            path,
+            src,
+            &super::capability_sinks::GO,
+        )
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
@@ -79,6 +98,7 @@ impl LanguagePack for GoPack {
             &mut extractor.facts,
         );
         super::bounds::go(root, src, &mut extractor.facts.tests);
+        super::comparisons::go(root, src, &mut extractor.facts.tests);
         super::expectations::go(root, src, &mut extractor.facts.tests);
         super::expected_exceptions::go(
             root,

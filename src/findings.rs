@@ -88,6 +88,7 @@ findings! {
     // assertion-reduction
     ASSERTION_FAILURE_CAUGHT = ["assertion-reduction"], "assertion-failure-caught", "Assertion Failure Caught Inside Test", Same;
     ASSERTION_BOUND_LOOSENED = ["assertion-reduction"], "assertion-bound-loosened", "Assertion Bound Loosened", Same;
+    WEAKENED_BOUND = ["assertion-reduction"], "weakened-bound", "Assertion Comparison Weakened", Same;
     EXPECTED_VALUE_CHANGED = ["assertion-reduction"], "expected-value-changed", "Expected Value Changed In Existing Test", Same;
     EXPECTED_EXCEPTION_WIDENED = ["assertion-reduction"], "expected-exception-widened", "Expected Exception Or Panic Widened", Same;
     MOCKING_INCREASED = ["assertion-reduction"], "mocking-increased-without-stronger-assertions", "Mocking Increased Without Stronger Assertions", Was("Mocking Grew Without Stronger Assertions");
@@ -350,6 +351,7 @@ findings! {
     TEST_IDENTITY_DROPPED = ["test-floor"], "test-dropped-from-suite", "Test Dropped From Suite", Same;
     UNTRUSTED_TEST_COMMAND = ["test-floor"], "untrusted-test-command", "Untrusted Test Command", Same;
     TESTS_MOVED_OUT_OF_DEFAULT_RUN = ["test-floor"], "tests-moved-out-of-default-run", "Tests Moved Out Of Default Run", Same;
+    TEST_DENSITY_REGRESSION = ["test-floor"], "test-density-regression", "Test Density Regression", Same;
 
     // dependency-delta
     LOCKFILE_DELETED = ["dependency-delta"], "lockfile-deleted", "Lockfile Deleted", Same;
@@ -378,6 +380,7 @@ findings! {
     CHECKLIST_CLAIMS_BENCHMARKS = ["pr-checklist"], "checklist-claims-benchmarks", "Checklist Claim Unsupported (benchmarks)", Message;
     CHECKLIST_CLAIM_UNSUPPORTED = ["pr-checklist"], "checklist-claim-unsupported", "Checklist Claim Unsupported", Message;
     PROSE_CLAIMS_TESTS = ["pr-checklist"], "prose-claims-tests", "Prose Claims Tests The Change Does Not Contain", Same;
+    UNDECLARED_BOUNDARY_DELTA = ["pr-checklist"], "undeclared-boundary-delta", "Boundary Change Not Declared", Same;
 
     // command
     UNTRUSTED_COMMAND_MODIFICATION = ["command"], "untrusted-command-modification", "Untrusted Command Modification", Same;

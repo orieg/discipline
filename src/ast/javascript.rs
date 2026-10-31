@@ -26,6 +26,7 @@ impl LanguagePack for JavaScriptPack {
                 | Fact::Handlers
                 | Fact::Prose
                 | Fact::Budgets
+                | Fact::CapabilitySinks
         )
     }
 
@@ -33,10 +34,33 @@ impl LanguagePack for JavaScriptPack {
         "JavaScript/TypeScript"
     }
 
+    fn label(&self) -> &'static str {
+        "JS/TS"
+    }
+
     fn matches(&self, path: &str) -> bool {
         matches!(
             super::extension(path),
             Some("js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "mts" | "cts")
+        )
+    }
+
+    fn capability_sinks(
+        &self,
+        path: &str,
+        src: &str,
+    ) -> Result<Vec<super::capability_sinks::SinkSite>> {
+        let lang = match super::extension(path).unwrap_or("js") {
+            "ts" | "mts" | "cts" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            "tsx" | "jsx" => tree_sitter_typescript::LANGUAGE_TSX.into(),
+            _ => tree_sitter_javascript::LANGUAGE.into(),
+        };
+        super::capability_sinks::sites_of(
+            &lang,
+            "JS/TS",
+            path,
+            src,
+            &super::capability_sinks::JAVASCRIPT,
         )
     }
 

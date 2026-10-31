@@ -6,7 +6,7 @@
 
 use anyhow::{bail, Context, Result};
 use clap::CommandFactory;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use crate::config::{GateInfo, Suite, GATES};
@@ -204,7 +204,7 @@ pub fn render_gates_markdown(gates: &[GateInfo], target_prefix: &str) -> String 
             g.id,
             g.id,
             g.suite.label(),
-            g.languages,
+            g.languages(),
             g.summary
         ));
     }
@@ -244,7 +244,7 @@ pub fn render_gates_catalog_markdown(
             gate_link,
             g.suite.label(),
             status,
-            g.languages,
+            g.languages(),
             g.summary
         ));
     }
@@ -280,7 +280,8 @@ pub fn render_gates_html(gates: &[GateInfo]) -> String {
             Suite::Verification => "Verification",
             Suite::Bench => "Performance",
         };
-        let lang_badge = match g.languages {
+        let languages = g.languages();
+        let lang_badge = match languages.as_str() {
             "any" => "Any",
             other => other,
         };
@@ -585,12 +586,190 @@ pub fn render_finding_codes_markdown() -> String {
     out
 }
 
+/// The line that opens a gate's list of what it does not catch in `docs/GATES.md`.
+const LIMITS_HEADER: &str = "- **What it does NOT catch:**";
+
+/// The label that opens an entry naming a class of change no gate reads.
+const OUT_OF_LANE: &str = "**Out of lane: ";
+
+/// Each gate's "What it does NOT catch" list in `docs/GATES.md`, by gate id in document
+/// order: its top-level entries, with their nested lines. A gate's section opens with a
+/// `` #### `<id>` `` heading; the list runs from the [`LIMITS_HEADER`] line to the next
+/// `- **` line or heading. Text on the header line after the colon is the list's first
+/// entry. `tests/test_evasion_corpus.rs` reads the same lists.
+pub fn gate_limits(gates_md: &str) -> Vec<(String, Vec<String>)> {
+    fn entries_of(limits: &mut Vec<(String, Vec<String>)>, id: &str) -> usize {
+        match limits.iter().position(|(g, _)| g == id) {
+            Some(i) => i,
+            None => {
+                limits.push((id.to_string(), Vec::new()));
+                limits.len() - 1
+            }
+        }
+    }
+    let mut limits = Vec::<(String, Vec<String>)>::new();
+    let (mut gate, mut inside) = (None::<String>, false);
+    for line in gates_md.lines() {
+        if line.starts_with('#') && !line.starts_with("#####") {
+            gate = line
+                .trim_start_matches('#')
+                .strip_prefix(" `")
+                .and_then(|s| s.strip_suffix('`'))
+                .filter(|id| {
+                    !id.is_empty()
+                        && id
+                            .chars()
+                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+                })
+                .map(str::to_string);
+            inside = false;
+            continue;
+        }
+        let Some(id) = &gate else { continue };
+        if let Some(rest) = line.strip_prefix(LIMITS_HEADER) {
+            inside = true;
+            let i = entries_of(&mut limits, id);
+            if !rest.trim().is_empty() {
+                limits[i].1.push(rest.trim().to_string());
+            }
+        } else if line.starts_with("- **") || line.starts_with('#') {
+            inside = false;
+        } else if inside {
+            let i = entries_of(&mut limits, id);
+            let entries = &mut limits[i].1;
+            if let Some(entry) = line.strip_prefix("  - ") {
+                entries.push(entry.to_string());
+            } else if let Some(last) = entries.last_mut().filter(|_| !line.trim().is_empty()) {
+                last.push('\n');
+                last.push_str(line.trim());
+            }
+        }
+    }
+    limits
+}
+
+/// A class of change that no gate reads, as one gate's list states it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaneClass {
+    /// The class, as the entry names it (`runtime payload semantics`).
+    pub class: String,
+    /// The gate whose list states it.
+    pub gate: String,
+    /// The tracking issue (`#941`).
+    pub issue: String,
+}
+
+impl LaneClass {
+    /// The name of the evasion-corpus case that shows the class going unreported:
+    /// `out-of-lane-` and the class with every run of other characters as one `-`.
+    pub fn corpus_case(&self) -> String {
+        let mut slug = String::from("out-of-lane-");
+        for word in self
+            .class
+            .to_ascii_lowercase()
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|w| !w.is_empty())
+        {
+            slug.push_str(word);
+            slug.push('-');
+        }
+        slug.pop();
+        slug
+    }
+}
+
+/// The out-of-lane classes in the gates' lists: entries that open with
+/// `**Out of lane: <class>** (#<issue>)`, in document order of the gates' sections.
+pub fn lane_classes(gates_md: &str) -> Result<Vec<LaneClass>> {
+    let mut classes = Vec::new();
+    for (gate, entries) in gate_limits(gates_md) {
+        for entry in &entries {
+            let Some(rest) = entry.strip_prefix(OUT_OF_LANE) else {
+                continue;
+            };
+            let Some((class, after)) = rest.split_once("**") else {
+                bail!("`{gate}`: an out-of-lane entry does not close its bold label");
+            };
+            let issue = after
+                .strip_prefix(" (#")
+                .and_then(|s| s.split_once(')'))
+                .map(|(n, _)| n)
+                .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+            let Some(issue) = issue else {
+                bail!("`{gate}`: out-of-lane class `{class}` names no tracking issue as ` (#<number>)` after its label");
+            };
+            classes.push(LaneClass {
+                class: class.trim().to_string(),
+                gate: gate.clone(),
+                issue: format!("#{issue}"),
+            });
+        }
+    }
+    Ok(classes)
+}
+
+/// The README's Non-Goals: the out-of-lane classes with their corpus cases, and the size
+/// of every available gate's "What it does NOT catch" list, all read from `docs/GATES.md`
+/// so that the two statements of what discipline leaves out cannot diverge. A gate
+/// without a list stops the generation.
+pub fn render_non_goals_markdown(
+    gates: &[GateInfo],
+    gates_md: &str,
+    target_prefix: &str,
+    corpus_path: &str,
+) -> Result<String> {
+    let limits: BTreeMap<String, Vec<String>> = gate_limits(gates_md).into_iter().collect();
+    let missing: Vec<&str> = gates
+        .iter()
+        .filter(|g| g.available && limits.get(g.id).is_none_or(|l| l.is_empty()))
+        .map(|g| g.id)
+        .collect();
+    if !missing.is_empty() {
+        bail!(
+            "docs/GATES.md has no \"What it does NOT catch\" list for {}",
+            missing.join(", ")
+        );
+    }
+    let classes = lane_classes(gates_md)?;
+    let mut out =
+        String::from("| Class | Corpus case | Stated under | Tracking |\n|---|---|---|---|\n");
+    for c in &classes {
+        out.push_str(&format!(
+            "| {} | [`{}`]({corpus_path}) | [`{}`]({target_prefix}{}) | [{}](https://github.com/orieg/discipline/issues/{}) |\n",
+            docs_markdown_cell(&c.class),
+            c.corpus_case(),
+            c.gate,
+            c.gate,
+            c.issue,
+            c.issue.trim_start_matches('#'),
+        ));
+    }
+    out.push_str("\nEntries in each gate's \"What it does NOT catch\" list:\n\n");
+    let cells: Vec<String> = gates
+        .iter()
+        .filter(|g| g.available)
+        .map(|g| {
+            format!(
+                "[`{}`]({target_prefix}{}) {}",
+                g.id,
+                g.id,
+                limits[g.id].len()
+            )
+        })
+        .collect();
+    out.push_str(&cells.join(" · "));
+    out.push('\n');
+    Ok(out)
+}
+
 /// Replace regions between `<!-- generated:<name> -->` and `<!-- /generated -->`.
+/// `gates_md` is the text of `docs/GATES.md`, which the `non-goals` region is read from.
 pub fn update_generated_regions(
     path: &Path,
     content: &str,
     spec: &ActionSpec,
     gates: &[GateInfo],
+    gates_md: Option<&str>,
 ) -> Result<String> {
     let is_html = path.extension().and_then(|e| e.to_str()) == Some("html");
     let mut lines = content.lines().peekable();
@@ -681,6 +860,21 @@ pub fn update_generated_regions(
                 "cli" => render_cli_markdown(),
                 "cli-options" => render_cli_options_markdown(),
                 "finding-codes" => render_finding_codes_markdown(),
+                "non-goals" => {
+                    let Some(gates_md) = gates_md else {
+                        bail!(
+                            "generated marker 'non-goals' in {} needs docs/GATES.md, which does not exist",
+                            path.display()
+                        );
+                    };
+                    let corpus = if in_docs {
+                        "../tests/fixtures/evasion_corpus.json"
+                    } else {
+                        "tests/fixtures/evasion_corpus.json"
+                    };
+                    render_non_goals_markdown(gates, gates_md, target_prefix, corpus)
+                        .with_context(|| format!("in {}", path.display()))?
+                }
                 "smuggling-prose-files" => {
                     crate::guards::instruction_smuggling::prose_files_markdown()
                 }
@@ -828,6 +1022,19 @@ pub fn run_docs_check_or_write(root: &Path, write: bool) -> Result<bool> {
 
     let mut has_diffs = false;
 
+    // The README's Non-Goals are read from the gates' lists in docs/GATES.md. Those lists
+    // are outside any generated region, so reading the file before it is regenerated
+    // gives the same text as reading it after.
+    let gates_md_path = root.join("docs/GATES.md");
+    let gates_md = if gates_md_path.exists() {
+        Some(
+            std::fs::read_to_string(&gates_md_path)
+                .with_context(|| format!("failed to read {}", gates_md_path.display()))?,
+        )
+    } else {
+        None
+    };
+
     // 1. Process Markdown and HTML files containing markers
     for file_path in &candidate_files {
         if !file_path.exists() {
@@ -835,7 +1042,13 @@ pub fn run_docs_check_or_write(root: &Path, write: bool) -> Result<bool> {
         }
         let original = std::fs::read_to_string(file_path)
             .with_context(|| format!("failed to read {}", file_path.display()))?;
-        let updated = update_generated_regions(file_path, &original, &action_spec, GATES)?;
+        let updated = update_generated_regions(
+            file_path,
+            &original,
+            &action_spec,
+            GATES,
+            gates_md.as_deref(),
+        )?;
         has_diffs |= reconcile(file_path, &original, &updated, write)?;
     }
 
@@ -1009,7 +1222,7 @@ pub fn render_gates_roff(gates: &[GateInfo]) -> String {
             roff_escape(g.summary),
             g.suite.label(),
             default,
-            roff_escape(g.languages)
+            roff_escape(&g.languages())
         ));
     }
     out
@@ -1100,8 +1313,8 @@ mod tests {
         assert_eq!(render_gate_count(GATES), available.to_string());
         let doc = "<h3>\n<!-- generated:gate-count -->\n37\n<!-- /generated -->\n</h3>\n";
         let spec = ActionSpec::default();
-        let out =
-            update_generated_regions(Path::new("docs/index.html"), doc, &spec, GATES).unwrap();
+        let out = update_generated_regions(Path::new("docs/index.html"), doc, &spec, GATES, None)
+            .unwrap();
         assert!(out.contains(&format!("-->\n{available}\n<!--")), "{out}");
         assert!(!out.contains("\n37\n"), "{out}");
     }
@@ -1125,5 +1338,103 @@ mod tests {
         );
         assert!(update_roff_region("a\n", "gates", "x").is_err());
         assert!(update_roff_region(".\\\" generated:gates\nold\n", "gates", "x").is_err());
+    }
+
+    const LIMITS_DOC: &str = "\
+#### `alpha`
+- **Rule:** r.
+- **What it does NOT catch:**
+  - **Out of lane: runtime payload semantics** (#941). Not read.
+  - A second entry
+    continued on a nested line.
+- **Config keys:** `enabled`.
+
+#### `beta`
+- **What it does NOT catch:** inline text.
+  - One entry.
+
+##### `not-a-gate`
+#### Not a gate heading
+- **What it does NOT catch:**
+  - Belongs to no gate.
+";
+
+    #[test]
+    fn gate_limits_reads_each_list_and_stops_at_the_next_field() {
+        let limits = gate_limits(LIMITS_DOC);
+        assert_eq!(
+            limits,
+            vec![
+                (
+                    "alpha".to_string(),
+                    vec![
+                        "**Out of lane: runtime payload semantics** (#941). Not read.".to_string(),
+                        "A second entry\ncontinued on a nested line.".to_string(),
+                    ]
+                ),
+                (
+                    "beta".to_string(),
+                    vec!["inline text.".to_string(), "One entry.".to_string()]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn lane_classes_name_their_issue_and_corpus_case() {
+        let classes = lane_classes(LIMITS_DOC).unwrap();
+        assert_eq!(
+            classes,
+            vec![LaneClass {
+                class: "runtime payload semantics".into(),
+                gate: "alpha".into(),
+                issue: "#941".into(),
+            }]
+        );
+        assert_eq!(
+            classes[0].corpus_case(),
+            "out-of-lane-runtime-payload-semantics"
+        );
+        let slash = LaneClass {
+            class: "value/dataflow gating".into(),
+            ..classes[0].clone()
+        };
+        assert_eq!(slash.corpus_case(), "out-of-lane-value-dataflow-gating");
+        let untracked = LIMITS_DOC.replace(" (#941)", "");
+        assert!(
+            lane_classes(&untracked).is_err(),
+            "a class without its issue"
+        );
+    }
+
+    #[test]
+    fn non_goals_are_generated_from_the_lists_and_require_one_per_gate() {
+        let gate = |id: &'static str| GateInfo {
+            id,
+            suite: Suite::Hygiene,
+            summary: "s",
+            coverage: crate::config::Coverage::Stated("any"),
+            available: true,
+            delta_only: false,
+        };
+        let gates = [gate("alpha"), gate("beta")];
+        let out =
+            render_non_goals_markdown(&gates, LIMITS_DOC, "docs/GATES.md#", "c.json").unwrap();
+        assert!(out.contains(
+            "| runtime payload semantics | [`out-of-lane-runtime-payload-semantics`](c.json) | [`alpha`](docs/GATES.md#alpha) | [#941](https://github.com/orieg/discipline/issues/941) |"
+        ));
+        assert!(out.contains("[`alpha`](docs/GATES.md#alpha) 2 · [`beta`](docs/GATES.md#beta) 2"));
+        let without = [gate("alpha"), gate("beta"), gate("gamma")];
+        let err = render_non_goals_markdown(&without, LIMITS_DOC, "", "c.json").unwrap_err();
+        assert!(err.to_string().contains("gamma"), "{err}");
+    }
+
+    #[test]
+    fn the_shipped_gates_md_has_a_list_for_every_available_gate() {
+        let md =
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/GATES.md"))
+                .unwrap();
+        render_non_goals_markdown(GATES, &md, "docs/GATES.md#", "c.json").unwrap();
+        assert_eq!(lane_classes(&md).unwrap().len(), 4);
     }
 }

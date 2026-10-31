@@ -29,6 +29,7 @@ impl LanguagePack for RustPack {
                 | Fact::Handlers
                 | Fact::Prose
                 | Fact::Budgets
+                | Fact::CapabilitySinks
         )
     }
 
@@ -38,6 +39,20 @@ impl LanguagePack for RustPack {
 
     fn matches(&self, path: &str) -> bool {
         super::extension(path) == Some("rs")
+    }
+
+    fn capability_sinks(
+        &self,
+        path: &str,
+        src: &str,
+    ) -> Result<Vec<super::capability_sinks::SinkSite>> {
+        super::capability_sinks::sites_of(
+            &tree_sitter_rust::LANGUAGE.into(),
+            "the Rust",
+            path,
+            src,
+            &super::capability_sinks::RUST,
+        )
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
@@ -605,6 +620,7 @@ impl<'a> Extractor<'a> {
             trivial_asserts: 0,
             helper_checks: 0,
             bounds: Vec::new(),
+            comparisons: Vec::new(),
             expectations: Vec::new(),
             caught_assertions: Vec::new(),
             expected_exceptions: should_panic.into_iter().collect(),

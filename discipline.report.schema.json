@@ -96,6 +96,49 @@
       ],
       "type": "object"
     },
+    "HookContext": {
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "description": "The agent whose hook ran the check (`claude-code`, `copilot`, ...)",
+          "type": "string"
+        },
+        "binary_version": {
+          "description": "The version of the discipline binary that ran the check",
+          "type": "string"
+        },
+        "decision": {
+          "description": "`allowed` when the report passes, otherwise `blocked` (enforce) or `observed` (observe). The hook log (`discipline hook log`) records each run's decision, an end-of-turn refusal included",
+          "enum": [
+            "allowed",
+            "blocked",
+            "observed"
+          ]
+        },
+        "event": {
+          "description": "`edit` after an edit, `stop` at the end of a turn",
+          "enum": [
+            "edit",
+            "stop"
+          ]
+        },
+        "mode": {
+          "description": "`observe` never blocks and logs what it would have blocked; `enforce` blocks",
+          "enum": [
+            "observe",
+            "enforce"
+          ]
+        }
+      },
+      "required": [
+        "agent",
+        "event",
+        "mode",
+        "binary_version",
+        "decision"
+      ],
+      "type": "object"
+    },
     "Override": {
       "additionalProperties": false,
       "properties": {
@@ -220,6 +263,180 @@
         }
       ]
     },
+    "ReviewRouting": {
+      "additionalProperties": false,
+      "description": "Unstable until 1.0. Two halves: `deterministic` is exact, and automated routing may condition on it only with a repository's opt-in (a zero is not a clearance); `heuristic` is non-exhaustive and informs reviewers only",
+      "properties": {
+        "coverage": {
+          "additionalProperties": false,
+          "properties": {
+            "changed_files": {
+              "description": "Files the change adds, modifies or renames",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "inventoried_files": {
+              "description": "Of those, files in a language with a capability inventory that parsed",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "languages": {
+              "description": "The languages with a capability inventory in this binary",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "unparsed_files": {
+              "description": "Files in such a language that did not parse",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "changed_files",
+            "inventoried_files",
+            "unparsed_files",
+            "languages"
+          ],
+          "type": "object"
+        },
+        "deterministic": {
+          "additionalProperties": false,
+          "properties": {
+            "authority_files": {
+              "description": "Changed files that govern how the change is built, checked or run, in path order",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "change": {
+                    "enum": [
+                      "added",
+                      "modified",
+                      "deleted",
+                      "renamed"
+                    ]
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "surface": {
+                    "enum": [
+                      "policy",
+                      "ci",
+                      "lockfile",
+                      "build-hook",
+                      "code-owners",
+                      "agent-instructions",
+                      "toolchain",
+                      "sandbox"
+                    ]
+                  }
+                },
+                "required": [
+                  "path",
+                  "surface",
+                  "change"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "directive_kinds": {
+              "description": "Their names, lower case, each once, sorted",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "directives": {
+              "description": "Directives the run read from the change, whether or not they lifted anything",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "inline_markers_added": {
+              "description": "`discipline:allow(<gate>)` markers on lines the change adds",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "inline_markers_removed": {
+              "description": "Marker lines the base side had that the head side does not",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "directives",
+            "directive_kinds",
+            "inline_markers_added",
+            "inline_markers_removed",
+            "authority_files"
+          ],
+          "type": "object"
+        },
+        "heuristic": {
+          "additionalProperties": false,
+          "properties": {
+            "capability_sites": {
+              "description": "Calls to a capability sink on lines the change adds, from a closed vocabulary per language: non-exhaustive",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "file": {
+                    "type": "string"
+                  },
+                  "line": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "surface": {
+                    "enum": [
+                      "process-spawn",
+                      "dynamic-eval",
+                      "network"
+                    ]
+                  }
+                },
+                "required": [
+                  "file",
+                  "line",
+                  "surface"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "tests_added": {
+              "description": "Tests the head side has that the base side does not, by name",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tests_removed": {
+              "description": "Tests the base side has that the head side does not, by name",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "capability_sites",
+            "tests_added",
+            "tests_removed"
+          ],
+          "type": "object"
+        },
+        "stability": {
+          "description": "The section's stability statement",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stability",
+        "deterministic",
+        "heuristic",
+        "coverage"
+      ],
+      "type": "object"
+    },
     "UnusedDirective": {
       "additionalProperties": false,
       "properties": {
@@ -341,6 +558,10 @@
       "minimum": 0,
       "type": "integer"
     },
+    "hook": {
+      "$ref": "#/$defs/HookContext",
+      "description": "The agent hook that ran this check, and what it answers on this report. Omitted when no hook ran the check"
+    },
     "notes": {
       "description": "Findings of severity `note`",
       "minimum": 0,
@@ -372,9 +593,18 @@
       },
       "type": "array"
     },
+    "review_routing": {
+      "$ref": "#/$defs/ReviewRouting",
+      "description": "UNSTABLE until 1.0: names and shape may change in any release, and none is in the frozen interface. What the change touches that a reviewer routes on: an inventory, never a verdict. Omitted when the run has no change to describe"
+    },
     "schema_version": {
       "const": 1,
       "description": "This schema's version: a field added keeps it, one renamed, removed or retyped raises it"
+    },
+    "stale_baseline_entries": {
+      "description": "Baseline entries no finding of this run matched (resolved findings), a disabled gate's included; `discipline baseline --write` drops them. Omitted when there are none",
+      "minimum": 1,
+      "type": "integer"
     },
     "unused_directives": {
       "description": "Directives this run read that lifted no finding; never fails the run. Computed when every suite ran. Omitted when empty",

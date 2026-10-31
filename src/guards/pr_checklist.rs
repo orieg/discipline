@@ -25,11 +25,31 @@ pub fn evaluate_pr_checklist(ctx: &Context) -> Result<GateOutcome> {
     let settings = &ctx.config.gates.pr_checklist;
     let mut out = GateOutcome::new(GATE);
 
-    let Some(pr_body) = &ctx.pr_body else {
+    let declaration_text = ctx.declaration_body.text.as_deref();
+    let Some(pr_body) = ctx.pr_body.as_deref().or(declaration_text) else {
         out.notes
             .push("no PR body supplied; PR checklist reconciliation skipped".to_string());
         return Ok(out);
     };
+    // The declared-surface contract reads the body its directive source allows; when that
+    // is the body the checkbox rule reads, the section's entries are the contract's alone.
+    let declaration = declaration_text.and_then(read_declaration);
+    let contract_lines: Vec<usize> = match &declaration {
+        Some(d) if Some(pr_body) == declaration_text => d.entry_lines.clone(),
+        _ => Vec::new(),
+    };
+    let checkbox_body: String = pr_body
+        .lines()
+        .enumerate()
+        .map(|(i, l)| {
+            if contract_lines.contains(&(i + 1)) {
+                ""
+            } else {
+                l
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
 
     let changed = ctx.git.changed_files()?;
     let changed_paths: Vec<&str> = changed.iter().map(|f| f.path.as_str()).collect();
@@ -54,10 +74,10 @@ pub fn evaluate_pr_checklist(ctx: &Context) -> Result<GateOutcome> {
         .any(|p| p.contains("bench") || p.starts_with("benches/"));
 
     let box_re = Regex::new(r"(?i)^[ \t]*-[ \t]*\[[xX]\][ \t]*(.*)$").expect("static regex");
-    let checked_count = pr_body.lines().filter(|l| box_re.is_match(l)).count();
+    let checked_count = checkbox_body.lines().filter(|l| box_re.is_match(l)).count();
     out.examined = checked_count;
 
-    let claims = find_unsupported_claims(pr_body, has_tests, has_docs, has_benches);
+    let claims = find_unsupported_claims(&checkbox_body, has_tests, has_docs, has_benches);
     for claim in claims {
         let (kind, desc) = match claim.subject {
             "test" => (
@@ -123,7 +143,619 @@ pub fn evaluate_pr_checklist(ctx: &Context) -> Result<GateOutcome> {
     }
 
     out.examined = checked_count + prose.units_read;
+
+    let evidence = DiffEvidence {
+        has_tests,
+        has_docs,
+        has_benches,
+        has_directives: !ctx.directives.is_empty(),
+    };
+    reconcile_declared_surfaces(ctx, declaration, &changed, evidence, &mut out)?;
     Ok(out)
+}
+
+// ---------------------------------------------------------------------------------------
+// Declared surfaces (#942, #943)
+// ---------------------------------------------------------------------------------------
+
+/// The heading of the declaration section, compared case-insensitively.
+pub const SECTION_HEADING: &str = "Touched surfaces";
+
+/// One entry of the `Touched surfaces` section's fixed enumeration (#942).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Surface {
+    Workflows,
+    BuildHooks,
+    Manifests,
+    Config,
+    Directives,
+    Docs,
+    Tests,
+    Benches,
+}
+
+impl Surface {
+    /// Every entry, in the order the template lists them.
+    pub const ALL: [Surface; 8] = [
+        Surface::Workflows,
+        Surface::BuildHooks,
+        Surface::Manifests,
+        Surface::Config,
+        Surface::Directives,
+        Surface::Docs,
+        Surface::Tests,
+        Surface::Benches,
+    ];
+
+    /// The entry as the template writes it (backticks aside).
+    pub fn label(self) -> &'static str {
+        match self {
+            Surface::Workflows => "workflows",
+            Surface::BuildHooks => "build hooks",
+            Surface::Manifests => "manifests/lockfiles",
+            Surface::Config => "discipline.toml",
+            Surface::Directives => "directives",
+            Surface::Docs => "docs",
+            Surface::Tests => "tests",
+            Surface::Benches => "benches",
+        }
+    }
+
+    /// What an `allow-pr-checklist:` directive names to lift a finding about this entry.
+    /// `test`, `docs` and `bench` are the checkbox rule's subjects.
+    pub fn subject(self) -> &'static str {
+        match self {
+            Surface::Workflows => "workflows",
+            Surface::BuildHooks => "build-hooks",
+            Surface::Manifests => "manifests",
+            Surface::Config => "discipline.toml",
+            Surface::Directives => "directives",
+            Surface::Docs => "docs",
+            Surface::Tests => "test",
+            Surface::Benches => "bench",
+        }
+    }
+
+    /// The gate that judges a change to a file of this boundary class; `None` for an
+    /// entry the gap direction does not apply to.
+    pub fn boundary_gate(self) -> Option<&'static str> {
+        match self {
+            Surface::Workflows => Some("ci-integrity"),
+            Surface::BuildHooks => Some("build-hooks"),
+            Surface::Manifests => Some("dependency-delta"),
+            Surface::Config => Some("config-integrity"),
+            _ => None,
+        }
+    }
+
+    /// The entry an item's text names: the label, case and backticks aside, alone or
+    /// followed by an aside (`docs (README.md)`, `tests: the parser`). The aside is not
+    /// read: a path in it is not reconciled.
+    pub fn parse(item: &str) -> Option<Surface> {
+        let text = item.replace(['`', '*'], "").trim().to_ascii_lowercase();
+        let text = text.replace(" / ", "/");
+        Surface::ALL.into_iter().find(|s| {
+            text.strip_prefix(s.label()).is_some_and(|rest| {
+                rest.is_empty()
+                    || rest.starts_with([' ', '(', ':', ',', ';', '.'])
+                    || rest.starts_with('\u{2014}')
+            })
+        })
+    }
+}
+
+/// What the `Touched surfaces` section of a body declares.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Declaration {
+    /// 1-based line of the section heading.
+    pub heading_line: usize,
+    /// The ticked entries, with their lines.
+    pub declared: Vec<(Surface, usize)>,
+    /// Every checkbox line of the section, ticked or not: the contract's, not the
+    /// checkbox rule's.
+    pub entry_lines: Vec<usize>,
+    /// Checkbox items outside the enumeration, with their lines; not read.
+    pub unknown: Vec<(String, usize)>,
+}
+
+impl Declaration {
+    pub fn declares(&self, s: Surface) -> bool {
+        self.declared.iter().any(|(d, _)| *d == s)
+    }
+}
+
+static HEADING_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t#]*$").expect("static regex"));
+static ENTRY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[([ xX])\][ \t]*(.*)$").expect("static regex")
+});
+static FENCE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^ {0,3}(`{3,}|~{3,})").expect("static regex"));
+
+/// The `Touched surfaces` section of `body`, read as a closed vocabulary: the first
+/// heading of any level whose text is [`SECTION_HEADING`], up to the next heading of the
+/// same or a higher level. A heading or an entry inside a fenced code block, an HTML
+/// comment or a `>` quote is not read (#896: an example is not a declaration). `None`
+/// when the body has no such section.
+pub fn read_declaration(body: &str) -> Option<Declaration> {
+    let mut fence: Option<String> = None;
+    let mut in_comment = false;
+    let mut section: Option<(usize, Declaration)> = None;
+    for (idx, raw) in body.lines().enumerate() {
+        let line_no = idx + 1;
+        // HTML comments, which may span lines: the text outside them is kept.
+        let mut line = String::new();
+        let mut rest = raw;
+        loop {
+            if in_comment {
+                match rest.find("-->") {
+                    Some(end) => {
+                        rest = &rest[end + 3..];
+                        in_comment = false;
+                    }
+                    None => break,
+                }
+            } else {
+                match rest.find("<!--") {
+                    Some(start) => {
+                        line.push_str(&rest[..start]);
+                        rest = &rest[start + 4..];
+                        in_comment = true;
+                    }
+                    None => {
+                        line.push_str(rest);
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(open) = &fence {
+            let closes = FENCE_RE.captures(&line).is_some_and(|c| {
+                let m = &c[1];
+                m.starts_with(&open[..1]) && m.len() >= open.len()
+            }) && line
+                .trim_start()
+                .trim_start_matches(['`', '~'])
+                .trim()
+                .is_empty();
+            if closes {
+                fence = None;
+            }
+            continue;
+        }
+        if let Some(c) = FENCE_RE.captures(&line) {
+            fence = Some(c[1].to_string());
+            continue;
+        }
+        if line.trim_start().starts_with('>') {
+            continue;
+        }
+        if let Some(h) = HEADING_RE.captures(&line) {
+            let level = h[1].len();
+            let text = h
+                .get(2)
+                .map_or("", |m| m.as_str())
+                .replace(['*', '_', '`'], "");
+            match &section {
+                Some((open_level, _)) if level <= *open_level => break,
+                Some(_) => continue,
+                None if text.trim().eq_ignore_ascii_case(SECTION_HEADING) => {
+                    section = Some((
+                        level,
+                        Declaration {
+                            heading_line: line_no,
+                            ..Default::default()
+                        },
+                    ));
+                }
+                None => {}
+            }
+            continue;
+        }
+        let Some((_, decl)) = section.as_mut() else {
+            continue;
+        };
+        let Some(entry) = ENTRY_RE.captures(&line) else {
+            continue;
+        };
+        decl.entry_lines.push(line_no);
+        let ticked = !entry[1].trim().is_empty();
+        match Surface::parse(&entry[2]) {
+            Some(s) if ticked => decl.declared.push((s, line_no)),
+            Some(_) => {}
+            None => decl.unknown.push((entry[2].trim().to_string(), line_no)),
+        }
+    }
+    section.map(|(_, d)| d)
+}
+
+/// The body the declared-surface contract reads, chosen through the directive sources
+/// (`directives.sources`), and where it came from.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeclarationBody {
+    pub text: Option<String>,
+    /// Where `text` came from, or why there is none.
+    pub source: String,
+}
+
+/// The body the contract reads, by the same sources directives come through: the pull
+/// request's body (`pr-body`); on a push, the body of the one merged pull request the
+/// pushed commits arrived through (`merged-pr-body`, read by the directive lookup and
+/// passed in as `merged`); else the head commit's message (`commits`). A source the
+/// policy leaves out is not read, and the contract then sees no declaration.
+pub fn select_declaration_body(
+    pr_body: Option<&str>,
+    merged: &[crate::tokens::MergedBody],
+    head_commit_body: Option<&str>,
+    sources: &[String],
+) -> DeclarationBody {
+    let allowed = |s: &str| sources.iter().any(|x| x == s);
+    let none = |why: &str| DeclarationBody {
+        text: None,
+        source: why.to_string(),
+    };
+    if let Some(body) = pr_body {
+        return if allowed("pr-body") {
+            DeclarationBody {
+                text: Some(body.to_string()),
+                source: "the pull request body".to_string(),
+            }
+        } else {
+            none("the pull request body, which `directives.sources` does not list (`pr-body`)")
+        };
+    }
+    if let [m] = merged {
+        if allowed("merged-pr-body") {
+            return DeclarationBody {
+                text: Some(m.body.clone()),
+                source: format!("the body of merged pull request #{}", m.number),
+            };
+        }
+    }
+    match head_commit_body {
+        Some(body) if allowed("commits") => DeclarationBody {
+            text: Some(body.to_string()),
+            source: "the head commit message".to_string(),
+        },
+        Some(_) => {
+            none("the head commit message, which `directives.sources` does not list (`commits`)")
+        }
+        None => none("no pull request body or commit message"),
+    }
+}
+
+/// What the diff holds for the entries that are not file classes, and for the checkbox
+/// rule's own subjects (the same evidence, so a ticked `tests` means what a ticked
+/// `Tests added` means).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DiffEvidence {
+    pub has_tests: bool,
+    pub has_docs: bool,
+    pub has_benches: bool,
+    /// The run read at least one directive (PR body, commits, merged pull request).
+    pub has_directives: bool,
+}
+
+/// Which boundary and file classes a path falls in.
+pub struct SurfaceClassifier {
+    workflows: crate::guards::PathFilter,
+    manifests: crate::guards::PathFilter,
+    config_paths: Vec<String>,
+}
+
+impl SurfaceClassifier {
+    /// The classes as the gates that own them read them: `ci-integrity`'s `workflows`,
+    /// `dependency-delta`'s `manifests` and lockfile names, `build-hooks`' build scripts
+    /// and package-manager configuration, and the run's configuration file.
+    pub fn new(config: &crate::config::DisciplineConfig, config_path: &str) -> Result<Self> {
+        Ok(Self {
+            workflows: crate::guards::PathFilter::new(&config.gates.ci_integrity.workflows)?,
+            manifests: crate::guards::PathFilter::new(&config.gates.dependency_delta.manifests)?,
+            config_paths: [config_path, "discipline.toml"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        })
+    }
+
+    fn is_lockfile(path: &str) -> bool {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        crate::guards::dependency::LOCKFILE_NAMES.contains(&name)
+    }
+
+    /// The file classes of `path` (workflows, build hooks, manifests/lockfiles,
+    /// `discipline.toml`).
+    pub fn classes(&self, path: &str) -> Vec<Surface> {
+        let mut out = Vec::new();
+        if self.workflows.matches(path) {
+            out.push(Surface::Workflows);
+        }
+        if crate::guards::build_hooks::is_build_hook_path(path) {
+            out.push(Surface::BuildHooks);
+        }
+        if self.manifests.matches(path) || Self::is_lockfile(path) {
+            out.push(Surface::Manifests);
+        }
+        if self.config_paths.iter().any(|c| c == path) {
+            out.push(Surface::Config);
+        }
+        out
+    }
+
+    /// The authority-boundary class of `path` the gap direction holds to a declaration:
+    /// a workflow, a build hook, a lockfile (a manifest alone is not one) or the
+    /// configuration.
+    pub fn boundary_classes(&self, path: &str) -> Vec<Surface> {
+        self.classes(path)
+            .into_iter()
+            .filter(|s| *s != Surface::Manifests || Self::is_lockfile(path))
+            .collect()
+    }
+}
+
+/// One boundary class the change touches and the section does not declare.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndeclaredBoundary {
+    pub surface: Surface,
+    /// The changed files of that class; a rename is one entry, `old -> new`.
+    pub files: Vec<String>,
+}
+
+/// The two directions of the contract over plain inputs: the declared entries the diff
+/// does not resolve (false claims), and the boundary classes the diff touches that the
+/// declaration leaves out (gaps). `changed` is each changed file as (head path, base
+/// path); `generated(path)` says a lockfile is generated output no one declares.
+pub fn reconcile(
+    declaration: &Declaration,
+    changed: &[(String, String)],
+    classifier: &SurfaceClassifier,
+    evidence: DiffEvidence,
+    generated: &dyn Fn(&str) -> bool,
+) -> (Vec<(Surface, usize)>, Vec<UndeclaredBoundary>) {
+    let touched = |s: Surface| -> bool {
+        match s {
+            Surface::Directives => evidence.has_directives,
+            Surface::Docs => evidence.has_docs,
+            Surface::Tests => evidence.has_tests,
+            Surface::Benches => evidence.has_benches,
+            _ => changed.iter().any(|(p, o)| {
+                classifier.classes(p).contains(&s) || classifier.classes(o).contains(&s)
+            }),
+        }
+    };
+    let mut false_claims = Vec::new();
+    for (s, line) in &declaration.declared {
+        if !touched(*s) && !false_claims.iter().any(|(d, _)| d == s) {
+            false_claims.push((*s, *line));
+        }
+    }
+    let mut gaps: Vec<UndeclaredBoundary> = Vec::new();
+    for (path, old) in changed {
+        let mut classes = classifier.boundary_classes(path);
+        for c in classifier.boundary_classes(old) {
+            if !classes.contains(&c) {
+                classes.push(c);
+            }
+        }
+        for s in classes {
+            if declaration.declares(s) || (s == Surface::Manifests && generated(path)) {
+                continue;
+            }
+            let shown = if old != path {
+                format!("{old} -> {path}")
+            } else {
+                path.clone()
+            };
+            match gaps.iter_mut().find(|g| g.surface == s) {
+                Some(g) => g.files.push(shown),
+                None => gaps.push(UndeclaredBoundary {
+                    surface: s,
+                    files: vec![shown],
+                }),
+            }
+        }
+    }
+    gaps.sort_by_key(|g| g.surface);
+    (false_claims, gaps)
+}
+
+/// The pull request's author when `exempt_authors` lists it, as the event payload names
+/// it; a run with no payload author (a local run, a GitLab pipeline) has none.
+fn exempt_author(ctx: &Context, exempt: &[String]) -> Option<String> {
+    let author = ctx
+        .forge
+        .as_ref()
+        .and_then(|f| f.pull.as_ref())
+        .and_then(|p| p.author.clone())
+        .filter(|a| !a.is_empty())?;
+    exempt
+        .iter()
+        .any(|e| e.eq_ignore_ascii_case(&author))
+        .then_some(author)
+}
+
+/// The declared-surface contract (`docs/GATES.md`, `pr-checklist`): applies when the
+/// body the directive sources allow has a `Touched surfaces` section, or always under
+/// `require_declared_surfaces` (no section then declares nothing).
+fn reconcile_declared_surfaces(
+    ctx: &Context,
+    declaration: Option<Declaration>,
+    changed: &[crate::gitctx::ChangedFile],
+    evidence: DiffEvidence,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    let settings = &ctx.config.gates.pr_checklist;
+    if let Some(bad) = settings
+        .exempt_authors
+        .iter()
+        .find(|a| a.trim().is_empty() || a.chars().any(char::is_whitespace))
+    {
+        return Err(crate::could_not_check::tag(
+            crate::could_not_check::Reason::Configuration,
+            anyhow::anyhow!("`gates.pr-checklist.exempt_authors` entry {bad:?} is not a login"),
+        ));
+    }
+    let source = &ctx.declaration_body.source;
+    let declaration = match declaration {
+        Some(d) => {
+            out.notes.push(format!(
+                "`{SECTION_HEADING}` section read from {source}: {} entr{} declared",
+                d.declared.len(),
+                if d.declared.len() == 1 { "y" } else { "ies" }
+            ));
+            d
+        }
+        None if settings.require_declared_surfaces => {
+            out.notes.push(format!(
+                "no `{SECTION_HEADING}` section in {source}; with `require_declared_surfaces` it declares no surface"
+            ));
+            Declaration::default()
+        }
+        None => {
+            out.notes.push(format!(
+                "no `{SECTION_HEADING}` section in {source}; the declared-surface contract is not applied"
+            ));
+            return Ok(());
+        }
+    };
+    out.examined += declaration.entry_lines.len();
+    for (item, line) in &declaration.unknown {
+        out.notes.push(format!(
+            "`{SECTION_HEADING}` line {line}: `{item}` is not in the fixed list; not read"
+        ));
+    }
+    let exempt = crate::guards::exempt_filter(settings)?;
+    let pairs: Vec<(String, String)> = changed
+        .iter()
+        .filter(|f| !exempt.matches(&f.path))
+        .map(|f| (f.path.clone(), f.old_path.clone()))
+        .collect();
+    let classifier = SurfaceClassifier::new(ctx.config, ctx.config_path)?;
+    // A lockfile the base marks `linguist-generated` is generated output: the base's own
+    // root `.gitattributes`, never the change's, decides.
+    let mut attributes = crate::ast::gitattributes::GitAttributes::default();
+    if let Some(text) = ctx.git.base_content(".gitattributes")? {
+        attributes.add_file(".gitattributes", &text);
+    }
+    let generated = |path: &str| {
+        attributes
+            .set_on(path)
+            .is_some_and(|(attr, _)| attr == "linguist-generated")
+    };
+    let (false_claims, gaps) = reconcile(&declaration, &pairs, &classifier, evidence, &generated);
+    for (path, _) in &pairs {
+        if classifier
+            .boundary_classes(path)
+            .contains(&Surface::Manifests)
+            && !declaration.declares(Surface::Manifests)
+            && generated(path)
+        {
+            out.notes.push(format!(
+                "`{path}` is `linguist-generated` in the base `.gitattributes`: no declaration expected"
+            ));
+        }
+    }
+
+    for (surface, line) in false_claims {
+        let kind = match surface {
+            Surface::Tests => &crate::findings::CHECKLIST_CLAIMS_TESTS,
+            Surface::Docs => &crate::findings::CHECKLIST_CLAIMS_DOCS,
+            Surface::Benches => &crate::findings::CHECKLIST_CLAIMS_BENCHMARKS,
+            _ => &crate::findings::CHECKLIST_CLAIM_UNSUPPORTED,
+        };
+        let what = match surface {
+            Surface::Directives => "the change carries no directive".to_string(),
+            Surface::Tests => "the diff adds or extends no test file or test function".to_string(),
+            Surface::Docs => "the diff contains no documentation file".to_string(),
+            Surface::Benches => "the diff contains no benchmark file".to_string(),
+            s => format!("the diff changes no {} file", s.label()),
+        };
+        if let Some(ov) = ctx.find_override(GATE, kind, ALLOW_PR_CHECKLIST, surface.subject()) {
+            out.notes.push(format!(
+                "override applied: `{}: {}` for declared surface `{}` ({})",
+                ov.directive,
+                ov.reason,
+                surface.label(),
+                ov.source
+            ));
+            out.overrides.push(ov);
+            continue;
+        }
+        out.add_violation(
+            ctx.overridable(settings.severity),
+            kind,
+            "PR body",
+            line,
+            format!(
+                "`{SECTION_HEADING}` declares `{}`, but {what}",
+                surface.label()
+            ),
+            format!(
+                "The entry is ticked for a surface this change does not modify; `allow-pr-checklist: {} <reason>` records an exception.",
+                surface.subject()
+            ),
+        );
+    }
+
+    let bot = (!gaps.is_empty())
+        .then(|| exempt_author(ctx, &settings.exempt_authors))
+        .flatten();
+    for gap in gaps {
+        let surface = gap.surface;
+        let gate = surface.boundary_gate().unwrap_or(GATE);
+        let judged = ctx.config.gates.settings(gate).is_some_and(|s| s.enabled())
+            && !ctx.cli_disabled_gates.iter().any(|d| d == gate);
+        let files = gap
+            .files
+            .iter()
+            .map(|f| format!("`{f}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let judged_by = if judged {
+            format!("`{gate}` judges the change to the file itself")
+        } else {
+            format!("`{gate}` is not enabled, so no finding judges the file itself")
+        };
+        if let Some(author) = &bot {
+            out.notes.push(format!(
+                "{files} changed ({} surface) without a declaration; pull request opened by `{author}`, listed in `exempt_authors`, so the declaration is optional",
+                surface.label()
+            ));
+            continue;
+        }
+        let kind = &crate::findings::UNDECLARED_BOUNDARY_DELTA;
+        if let Some(ov) = ctx.find_override(GATE, kind, ALLOW_PR_CHECKLIST, surface.subject()) {
+            out.notes.push(format!(
+                "override applied: `{}: {}` for undeclared surface `{}` ({})",
+                ov.directive,
+                ov.reason,
+                surface.label(),
+                ov.source
+            ));
+            out.overrides.push(ov);
+            continue;
+        }
+        out.lift_or_push(
+            None,
+            ctx.overridable(settings.severity),
+            kind,
+            (
+                Some("PR body"),
+                (declaration.heading_line > 0).then_some(declaration.heading_line),
+            ),
+            format!(
+                "{files} changed (the `{}` surface), and the `{SECTION_HEADING}` section does not declare it; {judged_by}",
+                surface.label()
+            ),
+            &format!(
+                "A ticked `{}` entry declares the change; `allow-pr-checklist: {} <reason>` records an exception.",
+                surface.label(),
+                surface.subject()
+            ),
+        );
+        out.anchor_last(format!("surface:{}", surface.subject()));
+    }
+    Ok(())
 }
 
 /// Test functions the change adds or extends across every changed file a
@@ -947,5 +1579,323 @@ mod tests {
         let gate = PrChecklistGate::default();
         assert!(!gate.enabled);
         assert_eq!(gate.severity, Severity::Error);
+        assert!(!gate.require_declared_surfaces);
+        assert!(gate.exempt_authors.is_empty());
+    }
+
+    // ---- declared surfaces (#943) --------------------------------------------------
+
+    use super::{
+        read_declaration, reconcile, select_declaration_body, DiffEvidence, Surface,
+        SurfaceClassifier,
+    };
+
+    const LABELS: [&str; 8] = [
+        "workflows",
+        "build hooks",
+        "manifests/lockfiles",
+        "`discipline.toml`",
+        "directives",
+        "docs",
+        "tests",
+        "benches",
+    ];
+
+    fn section(ticked: &[&str]) -> String {
+        let mut b = String::from("Summary.\n\n## Touched surfaces\n\n");
+        for l in LABELS {
+            let mark = if ticked.contains(&l) { "x" } else { " " };
+            b.push_str(&format!("- [{mark}] {l}\n"));
+        }
+        b
+    }
+
+    fn classifier() -> SurfaceClassifier {
+        SurfaceClassifier::new(
+            &crate::config::DisciplineConfig::default(),
+            "discipline.toml",
+        )
+        .unwrap()
+    }
+
+    fn changed(paths: &[&str]) -> Vec<(String, String)> {
+        paths
+            .iter()
+            .map(|p| (p.to_string(), p.to_string()))
+            .collect()
+    }
+
+    fn run(
+        ticked: &[&str],
+        paths: &[(String, String)],
+        evidence: DiffEvidence,
+    ) -> (Vec<Surface>, Vec<(Surface, Vec<String>)>) {
+        let decl = read_declaration(&section(ticked)).unwrap();
+        let (claims, gaps) = reconcile(&decl, paths, &classifier(), evidence, &|_| false);
+        (
+            claims.into_iter().map(|(s, _)| s).collect(),
+            gaps.into_iter().map(|g| (g.surface, g.files)).collect(),
+        )
+    }
+
+    #[test]
+    fn the_section_is_read_as_a_closed_vocabulary() {
+        let decl =
+            read_declaration(&section(&["workflows", "`discipline.toml`", "tests"])).unwrap();
+        let declared: Vec<Surface> = decl.declared.iter().map(|(s, _)| *s).collect();
+        assert_eq!(
+            declared,
+            vec![Surface::Workflows, Surface::Config, Surface::Tests]
+        );
+        assert_eq!(decl.heading_line, 3);
+        assert_eq!(decl.entry_lines.len(), 8);
+        // Entry text: the label, case and backticks aside, with an aside that is not read.
+        assert_eq!(Surface::parse("Docs (README.md)"), Some(Surface::Docs));
+        assert_eq!(
+            Surface::parse("**build hooks**: build.rs"),
+            Some(Surface::BuildHooks)
+        );
+        assert_eq!(
+            Surface::parse("manifests / lockfiles"),
+            Some(Surface::Manifests)
+        );
+        assert_eq!(Surface::parse("`discipline.toml`"), Some(Surface::Config));
+        // Outside the list: not read, never guessed.
+        assert_eq!(Surface::parse("documentation"), None);
+        assert_eq!(Surface::parse("docsite"), None);
+        assert_eq!(Surface::parse("Added regression tests"), None);
+        let other = read_declaration("## Touched surfaces\n- [x] the parser\n").unwrap();
+        assert!(other.declared.is_empty());
+        assert_eq!(other.unknown, vec![("the parser".to_string(), 2)]);
+        // No section: none.
+        assert_eq!(read_declaration("## What & Why\n- [x] workflows\n"), None);
+        // The section ends at the next heading of its level or above.
+        let ended =
+            read_declaration("## Touched surfaces\n- [ ] docs\n### Detail\n- [x] tests\n## Verification\n- [x] workflows\n")
+                .unwrap();
+        let declared: Vec<Surface> = ended.declared.iter().map(|(s, _)| *s).collect();
+        assert_eq!(declared, vec![Surface::Tests]);
+    }
+
+    #[test]
+    fn a_fenced_quoted_or_commented_section_is_not_read() {
+        // #896: an example is not a declaration.
+        for body in [
+            "Example:\n\n```markdown\n## Touched surfaces\n- [x] workflows\n```\n",
+            "~~~\n## Touched surfaces\n- [x] workflows\n~~~\n",
+            "> ## Touched surfaces\n> - [x] workflows\n",
+            "<!--\n## Touched surfaces\n- [x] workflows\n-->\n",
+        ] {
+            assert_eq!(read_declaration(body), None, "{body:?}");
+        }
+        // Inside a real section, a fenced or commented entry is not read either.
+        let decl = read_declaration(
+            "## Touched surfaces\n<!-- - [x] docs -->\n```\n- [x] workflows\n```\n- [x] tests\n",
+        )
+        .unwrap();
+        let declared: Vec<Surface> = decl.declared.iter().map(|(s, _)| *s).collect();
+        assert_eq!(declared, vec![Surface::Tests]);
+        // A fence opened by four backticks is not closed by three.
+        assert_eq!(
+            read_declaration("````\n```\n## Touched surfaces\n- [x] docs\n```\n````\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn false_claim_direction_positive_and_negative() {
+        let none = DiffEvidence::default();
+        // Positive: each file class declared, the diff touches none of them.
+        let (claims, gaps) = run(
+            &[
+                "workflows",
+                "build hooks",
+                "manifests/lockfiles",
+                "`discipline.toml`",
+            ],
+            &changed(&["src/lib.rs"]),
+            none,
+        );
+        assert_eq!(
+            claims,
+            vec![
+                Surface::Workflows,
+                Surface::BuildHooks,
+                Surface::Manifests,
+                Surface::Config
+            ]
+        );
+        assert!(gaps.is_empty());
+        // Positive: the evidence entries with no evidence.
+        let (claims, _) = run(
+            &["directives", "docs", "tests", "benches"],
+            &changed(&["a.txt"]),
+            none,
+        );
+        assert_eq!(
+            claims,
+            vec![
+                Surface::Directives,
+                Surface::Docs,
+                Surface::Tests,
+                Surface::Benches
+            ]
+        );
+        // Negative: each declared entry resolves.
+        let all = DiffEvidence {
+            has_tests: true,
+            has_docs: true,
+            has_benches: true,
+            has_directives: true,
+        };
+        let (claims, gaps) = run(
+            &LABELS,
+            &changed(&[
+                ".github/workflows/ci.yml",
+                "build.rs",
+                "Cargo.toml",
+                "discipline.toml",
+            ]),
+            all,
+        );
+        assert!(claims.is_empty(), "{claims:?}");
+        assert!(gaps.is_empty(), "{gaps:?}");
+        // Negative: a manifest alone resolves `manifests/lockfiles`.
+        let (claims, _) = run(&["manifests/lockfiles"], &changed(&["Cargo.toml"]), none);
+        assert!(claims.is_empty());
+    }
+
+    #[test]
+    fn gap_direction_positive_and_negative() {
+        let none = DiffEvidence::default();
+        // Positive: each boundary class changed, nothing declared: one gap per class.
+        let (_, gaps) = run(
+            &[],
+            &changed(&[
+                ".github/workflows/ci.yml",
+                ".github/workflows/release.yml",
+                "build.rs",
+                "Cargo.lock",
+                "discipline.toml",
+            ]),
+            none,
+        );
+        assert_eq!(
+            gaps,
+            vec![
+                (
+                    Surface::Workflows,
+                    vec![
+                        ".github/workflows/ci.yml".to_string(),
+                        ".github/workflows/release.yml".to_string()
+                    ]
+                ),
+                (Surface::BuildHooks, vec!["build.rs".to_string()]),
+                (Surface::Manifests, vec!["Cargo.lock".to_string()]),
+                (Surface::Config, vec!["discipline.toml".to_string()]),
+            ]
+        );
+        // Negative: the same changes, declared.
+        let (_, gaps) = run(
+            &[
+                "workflows",
+                "build hooks",
+                "manifests/lockfiles",
+                "`discipline.toml`",
+            ],
+            &changed(&[
+                ".github/workflows/ci.yml",
+                "build.rs",
+                "Cargo.lock",
+                "discipline.toml",
+            ]),
+            none,
+        );
+        assert!(gaps.is_empty());
+        // Negative: a manifest alone, docs, tests and source files are no boundary.
+        let (_, gaps) = run(
+            &[],
+            &changed(&["Cargo.toml", "README.md", "tests/a.rs", "src/lib.rs"]),
+            none,
+        );
+        assert!(gaps.is_empty(), "{gaps:?}");
+    }
+
+    #[test]
+    fn a_rename_is_one_entry_and_counts_both_sides() {
+        let none = DiffEvidence::default();
+        let renamed = vec![(
+            ".github/workflows/test.yml".to_string(),
+            ".github/workflows/ci.yml".to_string(),
+        )];
+        // Declared: the rename resolves the entry, and no gap.
+        let (claims, gaps) = run(&["workflows"], &renamed, none);
+        assert!(claims.is_empty() && gaps.is_empty());
+        // Undeclared: one gap naming both sides, not two.
+        let (_, gaps) = run(&[], &renamed, none);
+        assert_eq!(
+            gaps,
+            vec![(
+                Surface::Workflows,
+                vec![".github/workflows/ci.yml -> .github/workflows/test.yml".to_string()]
+            )]
+        );
+        // A workflow moved out of the workflow directory is still a workflow change.
+        let moved = vec![(
+            "old/ci.yml".to_string(),
+            ".github/workflows/ci.yml".to_string(),
+        )];
+        let (_, gaps) = run(&[], &moved, none);
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].0, Surface::Workflows);
+    }
+
+    #[test]
+    fn a_generated_lockfile_needs_no_declaration() {
+        let decl = read_declaration(&section(&[])).unwrap();
+        let paths = changed(&["Cargo.lock", "build.rs"]);
+        let generated = |p: &str| p == "Cargo.lock";
+        let (_, gaps) = reconcile(
+            &decl,
+            &paths,
+            &classifier(),
+            DiffEvidence::default(),
+            &generated,
+        );
+        // The lockfile is exempt; a build hook is never generated output.
+        let surfaces: Vec<Surface> = gaps.iter().map(|g| g.surface).collect();
+        assert_eq!(surfaces, vec![Surface::BuildHooks]);
+    }
+
+    #[test]
+    fn the_declaration_body_follows_the_directive_sources() {
+        let all: Vec<String> = ["pr-body", "commits", "merged-pr-body"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let merged = [crate::tokens::MergedBody {
+            number: 7,
+            author: "a".into(),
+            body: "merged".into(),
+        }];
+        // A pull request's body, when `pr-body` is a source.
+        let b = select_declaration_body(Some("pr"), &merged, Some("commit"), &all);
+        assert_eq!(b.text.as_deref(), Some("pr"));
+        // Not a source: no declaration, and no fallback to another text.
+        let commits_only = vec!["commits".to_string()];
+        let b = select_declaration_body(Some("pr"), &[], Some("commit"), &commits_only);
+        assert_eq!(b.text, None);
+        assert!(b.source.contains("pr-body"), "{}", b.source);
+        // A push: the merged pull request's body, else the head commit's message.
+        let b = select_declaration_body(None, &merged, Some("commit"), &all);
+        assert_eq!(b.text.as_deref(), Some("merged"));
+        let b = select_declaration_body(None, &[], Some("commit"), &all);
+        assert_eq!(b.text.as_deref(), Some("commit"));
+        let no_commits = vec!["pr-body".to_string()];
+        assert_eq!(
+            select_declaration_body(None, &[], Some("commit"), &no_commits).text,
+            None
+        );
+        assert_eq!(select_declaration_body(None, &[], None, &all).text, None);
     }
 }

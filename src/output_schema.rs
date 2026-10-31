@@ -47,15 +47,98 @@ pub fn report_schema() -> Value {
             "notes": { "type": "integer", "minimum": 0, "description": "Findings of severity `note`" },
             "overrides": { "type": "integer", "minimum": 0, "description": "Directive overrides applied across all gates" },
             "baselined": { "type": "integer", "minimum": 0, "description": "Findings suppressed by the baseline file" },
+            "stale_baseline_entries": { "type": "integer", "minimum": 1, "description": "Baseline entries no finding of this run matched (resolved findings), a disabled gate's included; `discipline baseline --write` drops them. Omitted when there are none" },
             "outcomes": { "type": "array", "items": { "$ref": "#/$defs/GateOutcome" }, "description": "One entry per gate, in registry order" },
             "planned_gates": { "type": "array", "items": { "type": "string" }, "description": "Gate ids the roadmap plans but this binary does not ship" },
             "policy_failures": { "type": "array", "items": { "type": "string" }, "description": "Run-level refusals no single gate owns; any entry fails the run. Omitted when empty" },
             "deprecations": { "type": "array", "items": { "type": "string" }, "description": "Deprecated configuration keys this run read, one note each; never fails the run. Omitted when empty" },
             "directive_notes": { "type": "array", "items": { "type": "string" }, "description": "Notes about the directive sources as a whole (the merged pull request a pushed commit came through, a forge lookup that could not be made), once per run; a note about one directive is in its gate's notes. Omitted when empty" },
             "unused_directives": { "type": "array", "items": { "$ref": "#/$defs/UnusedDirective" }, "description": "Directives this run read that lifted no finding; never fails the run. Computed when every suite ran. Omitted when empty" },
-            "could_not_check": { "$ref": "#/$defs/CouldNotCheck", "description": "Why the check could not run (exit 2). Omitted otherwise" }
+            "could_not_check": { "$ref": "#/$defs/CouldNotCheck", "description": "Why the check could not run (exit 2). Omitted otherwise" },
+            "hook": { "$ref": "#/$defs/HookContext", "description": "The agent hook that ran this check, and what it answers on this report. Omitted when no hook ran the check" },
+            "review_routing": { "$ref": "#/$defs/ReviewRouting", "description": "UNSTABLE until 1.0: names and shape may change in any release, and none is in the frozen interface. What the change touches that a reviewer routes on: an inventory, never a verdict. Omitted when the run has no change to describe" }
         },
         "$defs": {
+            "ReviewRouting": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["stability", "deterministic", "heuristic", "coverage"],
+                "description": "Unstable until 1.0. Two halves: `deterministic` is exact, and automated routing may condition on it only with a repository's opt-in (a zero is not a clearance); `heuristic` is non-exhaustive and informs reviewers only",
+                "properties": {
+                    "stability": { "type": "string", "description": "The section's stability statement" },
+                    "deterministic": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["directives", "directive_kinds", "inline_markers_added", "inline_markers_removed", "authority_files"],
+                        "properties": {
+                            "directives": { "type": "integer", "minimum": 0, "description": "Directives the run read from the change, whether or not they lifted anything" },
+                            "directive_kinds": { "type": "array", "items": { "type": "string" }, "description": "Their names, lower case, each once, sorted" },
+                            "inline_markers_added": { "type": "integer", "minimum": 0, "description": "`discipline:allow(<gate>)` markers on lines the change adds" },
+                            "inline_markers_removed": { "type": "integer", "minimum": 0, "description": "Marker lines the base side had that the head side does not" },
+                            "authority_files": {
+                                "type": "array",
+                                "description": "Changed files that govern how the change is built, checked or run, in path order",
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": ["path", "surface", "change"],
+                                    "properties": {
+                                        "path": { "type": "string" },
+                                        "surface": { "enum": ["policy", "ci", "lockfile", "build-hook", "code-owners", "agent-instructions", "toolchain", "sandbox"] },
+                                        "change": { "enum": ["added", "modified", "deleted", "renamed"] }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "heuristic": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["capability_sites", "tests_added", "tests_removed"],
+                        "properties": {
+                            "capability_sites": {
+                                "type": "array",
+                                "description": "Calls to a capability sink on lines the change adds, from a closed vocabulary per language: non-exhaustive",
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": ["file", "line", "surface"],
+                                    "properties": {
+                                        "file": { "type": "string" },
+                                        "line": { "type": "integer", "minimum": 1 },
+                                        "surface": { "enum": ["process-spawn", "dynamic-eval", "network"] }
+                                    }
+                                }
+                            },
+                            "tests_added": { "type": "integer", "minimum": 0, "description": "Tests the head side has that the base side does not, by name" },
+                            "tests_removed": { "type": "integer", "minimum": 0, "description": "Tests the base side has that the head side does not, by name" }
+                        }
+                    },
+                    "coverage": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["changed_files", "inventoried_files", "unparsed_files", "languages"],
+                        "properties": {
+                            "changed_files": { "type": "integer", "minimum": 0, "description": "Files the change adds, modifies or renames" },
+                            "inventoried_files": { "type": "integer", "minimum": 0, "description": "Of those, files in a language with a capability inventory that parsed" },
+                            "unparsed_files": { "type": "integer", "minimum": 0, "description": "Files in such a language that did not parse" },
+                            "languages": { "type": "array", "items": { "type": "string" }, "description": "The languages with a capability inventory in this binary" }
+                        }
+                    }
+                }
+            },
+            "HookContext": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["agent", "event", "mode", "binary_version", "decision"],
+                "properties": {
+                    "agent": { "type": "string", "description": "The agent whose hook ran the check (`claude-code`, `copilot`, ...)" },
+                    "event": { "enum": ["edit", "stop"], "description": "`edit` after an edit, `stop` at the end of a turn" },
+                    "mode": { "enum": ["observe", "enforce"], "description": "`observe` never blocks and logs what it would have blocked; `enforce` blocks" },
+                    "binary_version": { "type": "string", "description": "The version of the discipline binary that ran the check" },
+                    "decision": { "enum": ["allowed", "blocked", "observed"], "description": "`allowed` when the report passes, otherwise `blocked` (enforce) or `observed` (observe). The hook log (`discipline hook log`) records each run's decision, an end-of-turn refusal included" }
+                }
+            },
             "CouldNotCheck": {
                 "type": "object",
                 "additionalProperties": false,
@@ -220,6 +303,7 @@ pub fn replay_schema() -> Value {
             },
             "could_not_check_by_reason": { "description": "The reason a change could not be checked (the report's `could_not_check.reason`) -> the changes", "$ref": "#/$defs/ChangeLists" },
             "skipped_by_gate": { "description": "Gate id -> the changes that skipped part of it because the configuration names a file the change does not have yet (the configuration is newer than the change)", "$ref": "#/$defs/ChangeLists" },
+            "cached": { "type": "integer", "minimum": 0, "description": "Changes whose verdict was read from the replay cache (`<git dir>/discipline/replay-cache/`) instead of checked again. Absent from a report written before the cache" },
             "cases_detail": { "type": "array", "items": { "$ref": "#/$defs/Case" }, "description": "Newest first" }
         },
         "$defs": {
@@ -242,7 +326,8 @@ pub fn replay_schema() -> Value {
                     "directives_from": { "type": "string", "description": "`pull request body`, or why only the commit message was read" },
                     "skipped_checks": { "type": "array", "items": { "$ref": "#/$defs/SkippedCheck" }, "description": "Parts of gates skipped because the configuration names a file this change does not have yet; empty when the check itself could not run" },
                     "reason": { "enum": reasons(), "description": "Why the change could not be checked: the report's `could_not_check.reason`, or `forge` when its merged pull request could not be read. Omitted otherwise" },
-                    "detail": { "type": "string", "description": "Why the change could not be checked. Omitted otherwise" }
+                    "detail": { "type": "string", "description": "Why the change could not be checked. Omitted otherwise" },
+                    "cached": { "const": true, "description": "The verdict was read from the replay cache: the change was checked before under the same binary, configuration under test and pull request. Omitted otherwise" }
                 }
             },
             "CaseOverride": {
@@ -340,6 +425,59 @@ pub fn audit_schema() -> Value {
                     }
                 }
             },
+            "density": {
+                "type": ["object", "null"],
+                "description": "The per-file assertion counts the tip's baseline records (`[assertions]`), against the tip's test files: the metric `test-floor`'s `test-density-regression` ratchets. Null when the baseline records none. Omitted by a binary older than this field",
+                "additionalProperties": false,
+                "required": ["files", "tests", "recorded", "current", "below"],
+                "properties": {
+                    "files": { "type": "integer", "minimum": 0, "description": "Test files the baseline records a count for" },
+                    "tests": { "type": "integer", "minimum": 0, "description": "Running tests in those files at the tip" },
+                    "recorded": { "type": "integer", "minimum": 0, "description": "The assertions the baseline records for them" },
+                    "current": { "type": "integer", "minimum": 0, "description": "The assertions they hold at the tip" },
+                    "below": {
+                        "type": "array",
+                        "description": "Each file holding fewer assertions than recorded, in path order; a file gone from the tip is not listed",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["path", "recorded", "current"],
+                            "properties": {
+                                "path": text("The test file"),
+                                "recorded": { "type": "integer", "minimum": 0 },
+                                "current": { "type": "integer", "minimum": 0 }
+                            }
+                        }
+                    }
+                }
+            },
+            "waiver_density": {
+                "type": "object",
+                "description": "Waivers per changed file of each audited change, oldest first, and the tripwire over them (#944). A trend for reviewers, not a verdict on one change. Omitted by a binary older than this field",
+                "additionalProperties": false,
+                "required": ["changes", "rising", "tripwire"],
+                "properties": {
+                    "changes": {
+                        "type": "array",
+                        "description": "Oldest first",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["sha", "pr", "waivers", "changed_files", "per_mille"],
+                            "properties": {
+                                "sha": text("The change's commit"),
+                                "pr": { "type": ["integer", "null"], "minimum": 1, "description": "Its pull request, from the subject or `--forge`" },
+                                "waivers": { "type": "integer", "minimum": 0, "description": "Its directive and inline-marker records" },
+                                "changed_files": { "type": "integer", "minimum": 0, "description": "Files it added, modified, deleted or renamed" },
+                                "per_mille": { "type": "integer", "minimum": 0, "description": "Waivers per 1000 changed files (a change with no file counts as one)" }
+                            }
+                        }
+                    },
+                    "rising": { "type": "integer", "minimum": 0, "description": "How many times in a row the density rose, ending at the newest change" },
+                    "tripwire": { "type": "integer", "minimum": 0, "description": "`[audit] waiver_density_rise` at the tip; 0 when the tripwire is off" }
+                }
+            },
+            "policy_failures": { "type": "array", "items": { "type": "string" }, "description": "What the tip's `[audit]` table refuses in this history (the waiver-density tripwire); any entry exits 1. Omitted when empty" },
             "replay": {
                 "type": ["object", "null"],
                 "description": "The `discipline replay --json` report `--replay` read; null without it",

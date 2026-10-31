@@ -10,6 +10,23 @@ use crate::style;
 use anyhow::{Context, Result};
 use std::io::Write;
 
+/// The JSON report (`--format json`, `--json-out`): the summary's fields, then the `hook`
+/// object when an agent hook ran the check ([`crate::hook_log::HookContext`]). `passed` is
+/// the run's verdict, which the hook's decision follows.
+pub fn json_report(summary: &CheckSummary, passed: bool) -> serde_json::Result<String> {
+    #[derive(serde::Serialize)]
+    struct Report<'a> {
+        #[serde(flatten)]
+        summary: &'a CheckSummary,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        hook: Option<crate::hook_log::HookContext>,
+    }
+    serde_json::to_string_pretty(&Report {
+        summary,
+        hook: crate::hook_log::HookContext::from_env(passed),
+    })
+}
+
 pub fn format_report_content(
     summary: &CheckSummary,
     format: OutputFormat,
@@ -22,7 +39,10 @@ pub fn format_report_content(
             render_terminal_to_writer(&mut buf, summary, fail_on_warnings, fail_on_overrides)?;
             Ok(String::from_utf8_lossy(&buf).to_string())
         }
-        OutputFormat::Json => Ok(serde_json::to_string_pretty(summary)?),
+        OutputFormat::Json => Ok(json_report(
+            summary,
+            summary.is_success(fail_on_warnings, fail_on_overrides),
+        )?),
         OutputFormat::Junit => Ok(junit::format_junit(summary, fail_on_warnings)),
         OutputFormat::Sarif => Ok(serde_json::to_string_pretty(&sarif::format_sarif(summary))?),
         OutputFormat::Gitlab => Ok(gitlab::format_gitlab(summary)),
@@ -79,7 +99,13 @@ pub fn render_report(
             render_step_summary(summary, fail_on_warnings, fail_on_overrides)?;
             render_step_outputs(summary, fail_on_warnings, fail_on_overrides)?;
         }
-        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(summary)?),
+        OutputFormat::Json => println!(
+            "{}",
+            json_report(
+                summary,
+                summary.is_success(fail_on_warnings, fail_on_overrides)
+            )?
+        ),
         OutputFormat::Junit => println!("{}", junit::format_junit(summary, fail_on_warnings)),
         OutputFormat::Sarif => {
             println!(
@@ -269,6 +295,14 @@ fn render_terminal_to_writer<W: Write>(
     for note in &summary.deprecations {
         writeln!(w, "deprecated: {}", text::terminal_line(note))?;
     }
+    if summary.stale_baseline_entries > 0 {
+        let n = summary.stale_baseline_entries;
+        writeln!(
+            w,
+            "baseline: {n} stale entr{} match no finding of this run (resolved findings); `discipline baseline --write` drops them, `--migrate` for a version-1 file",
+            if n == 1 { "y" } else { "ies" }
+        )?;
+    }
     for d in &summary.unused_directives {
         writeln!(
             w,
@@ -288,6 +322,10 @@ fn render_terminal_to_writer<W: Write>(
                 style::cyan("Tip: fix what this change introduced. Findings in code it did not touch (existing debt when adopting Discipline) can be recorded with 'discipline baseline --write'.")
             )?;
         }
+    }
+    // After the verdict, never part of it.
+    if let Some(routing) = &summary.review_routing {
+        write!(w, "{}", routing.terminal())?;
     }
     Ok(())
 }
@@ -361,11 +399,16 @@ pub fn render_step_summary_to_writer(
     } else {
         "### Discipline gate: FAILED"
     };
-    writeln!(
-        file,
-        "{heading}\n\nBase: {}\n",
-        text::code_span(&summary.base)
-    )?;
+    writeln!(file, "{heading}\n")?;
+    // The first line under the verdict: the counts a reviewer routes on (#944).
+    if let Some(counts) = summary
+        .review_routing
+        .as_ref()
+        .and_then(|r| r.counts_line())
+    {
+        writeln!(file, "**{}**\n", text::markdown(&counts))?;
+    }
+    writeln!(file, "Base: {}\n", text::code_span(&summary.base))?;
     for failure in &summary.policy_failures {
         writeln!(file, "**Refused:** {}\n", text::markdown(&failure.text))?;
     }
@@ -480,6 +523,9 @@ pub fn render_step_summary_to_writer(
             )?;
         }
     }
+    if let Some(routing) = &summary.review_routing {
+        write!(file, "{}", routing.markdown())?;
+    }
     Ok(())
 }
 
@@ -520,6 +566,15 @@ fn render_step_outputs(
     writeln!(file, "overridden_gates={}", overridden.join(","))?;
     writeln!(file, "passed_gates={passed}")?;
     writeln!(file, "examined_items={examined}")?;
+    // One line, the text a workflow that posts a commit status uses as its description.
+    // Unstable until 1.0, and not an output of the action (#944).
+    if let Some(counts) = summary
+        .review_routing
+        .as_ref()
+        .and_then(|r| r.counts_line())
+    {
+        writeln!(file, "review_routing={}", text::terminal_line(&counts))?;
+    }
     Ok(())
 }
 
@@ -535,6 +590,12 @@ pub fn format_agent_prompt(summary: &CheckSummary) -> String {
 /// touched, and an agent told to "fix each issue" edits it.
 pub fn format_agent_prompt_with(summary: &CheckSummary, fail_on_warnings: bool) -> String {
     let violations: Vec<&Violation> = summary.violations().collect();
+    // The review-routing section, after the verdict: counts and quoted pointers only.
+    let routing = summary
+        .review_routing
+        .as_ref()
+        .map(|r| r.agent_text())
+        .unwrap_or_default();
 
     if violations.is_empty() {
         let (passed, _, _, examined) = summary.gate_counts(false, false);
@@ -544,9 +605,9 @@ pub fn format_agent_prompt_with(summary: &CheckSummary, fail_on_warnings: bool) 
         } else {
             String::new()
         };
-        return format!(
-            "No discipline violations found ({passed} gates passed, {examined} {items_label} examined{baselined_part}).\n"
-        );
+        return scrub_override_directives(&format!(
+            "No discipline violations found ({passed} gates passed, {examined} {items_label} examined{baselined_part}).\n{routing}"
+        ));
     }
 
     let blocks = |v: &&Violation| fail_on_warnings || v.severity == Severity::Error;
@@ -591,6 +652,7 @@ pub fn format_agent_prompt_with(summary: &CheckSummary, fail_on_warnings: bool) 
     for v in &advisory {
         issue(&mut out, v);
     }
+    out.push_str(&routing);
 
     scrub_override_directives(&out)
 }
@@ -646,6 +708,7 @@ pub const REPAIRS: &[(&str, &str)] = &[
     ("assertion-reduction/source-parsed-with-errors-preprocessor", "Fix the syntax error so that the file parses cleanly."),
     ("assertion-reduction/nul-byte-added", "Remove the NUL bytes the change added to the file."),
     ("assertion-reduction/assertion-bound-loosened", "Restore the original bound in the assertion; a looser bound accepts results the old one rejected."),
+    ("assertion-reduction/weakened-bound", "Restore the original comparison operator in the assertion; the new one accepts results the old one rejected."),
     ("assertion-reduction/expected-value-changed", "Restore the expected value and fix the code until the test passes; an expected value edited to agree with the code no longer tests it."),
     ("assertion-reduction/mocking-increased-without-stronger-assertions", "Assert on what the code returns or changes, not only on the test doubles the change added."),
     ("assertion-reduction/fatal-assertions-weakened", "Restore the fatal form of the assertions, which stops the test at the first failure."),
@@ -813,7 +876,9 @@ mod tests {
             refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
+            review_routing: None,
         }
     }
 
@@ -1033,7 +1098,9 @@ mod tests {
             refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
+            review_routing: None,
         };
         let prompt = format_agent_prompt(&summary);
         assert!(
@@ -1178,7 +1245,9 @@ mod tests {
             refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
+            review_routing: None,
         };
 
         let prompt = format_agent_prompt(&summary);
@@ -1245,7 +1314,9 @@ mod tests {
             refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
+            review_routing: None,
         };
 
         let mut buf = Vec::new();
@@ -1347,7 +1418,9 @@ mod tests {
             refused_hidden_directives: Vec::new(),
             deprecations: vec!["`gates.x.old` is deprecated".into()],
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
+            review_routing: None,
         };
         let mut buf = Vec::new();
         render_terminal_to_writer(&mut buf, &summary, false, false).unwrap();
@@ -1363,6 +1436,7 @@ mod tests {
         let quiet = CheckSummary {
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
             ..summary
         };
@@ -1405,7 +1479,9 @@ mod tests {
             refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
+            review_routing: None,
         };
 
         let mut buf = Vec::new();
@@ -1442,7 +1518,9 @@ mod tests {
             refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
+            review_routing: None,
         };
 
         let prompt = format_agent_prompt(&summary);
@@ -1485,7 +1563,9 @@ mod tests {
             refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
+            review_routing: None,
         };
 
         let mut buf = Vec::new();

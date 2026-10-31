@@ -1,7 +1,7 @@
 //! Agent checks: the repository permission of an agent login, the hook files of each
 //! agent tool, and the `agent-sandbox` settings.
 
-use super::{access_hint, get, read, Finding, Status};
+use super::{access_hint, get, read, Finding, Protection, Status};
 use crate::forge::{gitlab_project_id, Forge, ForgeApi, ForgeKind};
 use std::path::Path;
 
@@ -133,7 +133,16 @@ type HookFile = (crate::hook::Agent, &'static str, Option<fn(&str) -> bool>);
 /// - `hook-mode`: the mode of each agent hook file (pass when enforcing, warning when observe,
 ///   naming the file and how to switch; unknown when unreadable; warning when no check or
 ///   stop entry is present).
+/// - `hook-binary`: once for the hook files the repository ships, whether `discipline` is
+///   on `PATH`, which each of their commands runs by name. Without it every hook prints a
+///   line on stderr and exits 0, so it never blocks and checks nothing: a warning, which
+///   `--strict` fails on (#937).
 pub fn multi_agent_findings(root: &Path) -> Vec<Finding> {
+    multi_agent_findings_on(root, std::env::var_os("PATH").as_deref())
+}
+
+/// [`multi_agent_findings`] with the `PATH` the hooks would search.
+pub fn multi_agent_findings_on(root: &Path, path: Option<&std::ffi::OsStr>) -> Vec<Finding> {
     let mut out = Vec::new();
     let Ok(repo) = crate::gitctx::discover_repository(root) else {
         return out;
@@ -239,6 +248,7 @@ pub fn multi_agent_findings(root: &Path) -> Vec<Finding> {
         ),
         (crate::hook::Agent::Cursor, ".cursor/hooks.json", None),
     ];
+    let mut shipped: Vec<&str> = Vec::new();
     for (agent, rel, has) in files {
         let Some(text) = read(root, rel) else {
             continue;
@@ -246,6 +256,7 @@ pub fn multi_agent_findings(root: &Path) -> Vec<Finding> {
         if !text.contains("discipline hook run") {
             continue;
         }
+        shipped.push(rel);
         let agent_id = agent.id();
         let is_observe = crate::hook::generated_mode(agent, false, &text) == Some(true)
             || text.contains("--event pre-tool --observe")
@@ -303,7 +314,57 @@ pub fn multi_agent_findings(root: &Path) -> Vec<Finding> {
             });
         }
     }
+    out.extend(hook_binary_finding(&shipped, path));
     out
+}
+
+/// `hook-binary` for the hook files `shipped`, against the directories of `path`.
+fn hook_binary_finding(shipped: &[&str], path: Option<&std::ffi::OsStr>) -> Option<Finding> {
+    if shipped.is_empty() {
+        return None;
+    }
+    let files = shipped
+        .iter()
+        .map(|f| format!("`{f}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(match executable_on(path, "discipline") {
+        Some(found) => Finding::new(
+            "hook-binary",
+            Status::Pass,
+            format!("the hooks in {files} find `discipline` on PATH ({})", found.display()),
+        ),
+        None => Finding::new(
+            "hook-binary",
+            Status::Warn,
+            format!("the hooks in {files} run `discipline` from PATH and there is none on PATH: each hook says so on stderr and exits 0, so no change is checked and nothing is blocked"),
+        )
+        .fix("Install discipline (https://orieg.github.io/discipline/) where the agents run, or put the directory that holds it on PATH; `discipline hook log` lists each run the hooks recorded."),
+    })
+}
+
+/// The first executable file named `name` in the directories of `path`.
+fn executable_on(path: Option<&std::ffi::OsStr>, name: &str) -> Option<std::path::PathBuf> {
+    let file = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+    std::env::split_paths(path?)
+        .filter(|d| !d.as_os_str().is_empty())
+        .map(|d| d.join(&file))
+        .find(|p| is_executable(p))
+}
+
+#[cfg(unix)]
+fn is_executable(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(p: &Path) -> bool {
+    p.is_file()
 }
 
 fn has_check_or_stop(agent: crate::hook::Agent, text: &str) -> bool {
@@ -410,11 +471,320 @@ pub fn copilot_trust_finding(root: &Path, home: Option<&Path>) -> Option<Finding
     )
 }
 
+/// What a configuration claims about agents: the settings that presume a reviewer the
+/// agent is not. `ratified-paths` `agent_logins` names logins whose word never counts, and
+/// `directives.require_approval` waits for an approval by someone other than the author.
+/// `None` when the configuration claims neither.
+pub fn agent_policy_claim(config: &crate::config::DisciplineConfig) -> Option<String> {
+    let mut claims = Vec::new();
+    if !config.gates.ratified_paths.agent_logins.is_empty() {
+        claims.push("`ratified-paths` `agent_logins` is set");
+    }
+    if config.directives.require_approval {
+        claims.push("`directives.require_approval` is on");
+    }
+    (!claims.is_empty()).then(|| claims.join(" and "))
+}
+
+/// What the forge said about the default branch's rules, for [`agent_policy_finding`].
+pub enum ProtectionRead<'a> {
+    /// `doctor --local-only`: the forge was not asked.
+    NotAsked,
+    /// The forge could not be read: no forge identified, no default branch, no rules.
+    Unreadable(&'a str),
+    Read(&'a Protection),
+}
+
+/// `agent-policy` (#942): an agent-aware policy ([`agent_policy_claim`]) presumes that a
+/// person other than the agent stands between an agent's change and the default branch.
+/// It holds when a required rule covers the referee surfaces (`referee`: the gate
+/// configuration and the workflows that run discipline): an approving review of every
+/// pull request, a code-owner review with `CODEOWNERS` owning each of them
+/// (`owners_cover`), a signed-commit rule, or (Gitea, Forgejo) protected file patterns
+/// that keep each of them out of a pull request. A pass when one is observed; a warning,
+/// which `--strict` fails on, when none is or when the token cannot see the settings that
+/// would decide it (`could not check`, as for every hidden setting); unknown when the
+/// forge cannot be read; information under `--local-only`. `None`
+/// when the configuration makes no such claim. The forge reads are the protection reads
+/// `doctor` already makes; this adds none.
+pub fn agent_policy_finding(
+    claim: Option<&str>,
+    protection: ProtectionRead,
+    referee: &[String],
+    owners_cover: bool,
+) -> Option<Finding> {
+    let claim = claim?;
+    let surfaces = referee.join(", ");
+    let p = match protection {
+        ProtectionRead::NotAsked => {
+            return Some(Finding::new(
+                "agent-policy",
+                Status::Info,
+                format!("{claim}; whether a required review or signature rule covers {surfaces} is read from the forge, which `--local-only` does not ask"),
+            ));
+        }
+        ProtectionRead::Unreadable(e) => {
+            return Some(Finding::new(
+                "agent-policy",
+                Status::Unknown,
+                format!("{claim}; whether a required review or signature rule covers {surfaces} could not be read: {e}"),
+            ));
+        }
+        ProtectionRead::Read(p) => p,
+    };
+    let protected_files = p.protected_file_patterns.as_ref().is_some_and(|patterns| {
+        !referee.is_empty()
+            && referee.iter().all(|path| {
+                let path = path.to_lowercase();
+                patterns
+                    .iter()
+                    .filter_map(|pat| super::protection_findings::forge_file_glob(pat))
+                    .any(|g| g.is_match(&path))
+            })
+    });
+    let reviewed = p.pull_request_required && p.required_approvals.is_some_and(|n| n >= 1);
+    let owner_reviewed = p.pull_request_required && p.code_owner_review && owners_cover;
+    let rule = if reviewed {
+        Some(format!(
+            "a pull request needs {} approving review(s)",
+            p.required_approvals.unwrap_or(1)
+        ))
+    } else if owner_reviewed {
+        Some("code owners must approve, and CODEOWNERS owns each of them".to_string())
+    } else if p.signatures_required {
+        Some("signed commits are required".to_string())
+    } else if protected_files {
+        Some("they are protected files no pull request can change".to_string())
+    } else {
+        None
+    };
+    if let Some(rule) = rule {
+        return Some(Finding::new(
+            "agent-policy",
+            Status::Pass,
+            format!("{claim}; a required rule covers {surfaces}: {rule}"),
+        ));
+    }
+    // A setting this token cannot see could be the rule that holds.
+    let hidden = p.protected
+        && ((p.pull_request_required && p.required_approvals.is_none())
+            || (p.pull_request_required && owners_cover && p.hidden.contains("code-owner-review"))
+            || (p.protected_file_patterns.is_none() && p.hidden.contains("workflow-protection")));
+    if hidden {
+        return Some(
+            Finding::new(
+                "agent-policy",
+                Status::Warn,
+                format!("{claim}; could not check (hidden): the rules that would cover {surfaces} (approving reviews, code-owner review, protected files) are not visible to this token"),
+            )
+            .fix("The rules are visible to an admin token."),
+        );
+    }
+    Some(
+        Finding::new(
+            "agent-policy",
+            Status::Warn,
+            format!("{claim}, which presumes a reviewer distinct from the agent; no required review or signature rule covers {surfaces}, so a change to them merges on its author's word"),
+        )
+        .fix("The claim is enforced by a required approving review, a required code-owner review with CODEOWNERS owning these paths, or a signed-commit rule on the default branch (docs/guides/ci-platforms.md, Repository Protection)."),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::doctor::test_support::*;
     use crate::forge::CannedApi;
+
+    fn referee() -> Vec<String> {
+        vec![
+            "discipline.toml".to_string(),
+            ".github/workflows/ci.yml".to_string(),
+        ]
+    }
+
+    fn claim_of(toml: &str) -> Option<String> {
+        agent_policy_claim(&crate::config::DisciplineConfig::from_toml_str(toml).unwrap())
+    }
+
+    #[test]
+    fn agent_policy_claim_reads_agent_logins_and_require_approval() {
+        assert_eq!(claim_of("[meta]\nversion = 1\n"), None);
+        assert!(claim_of("[directives]\nrequire_approval = true\n")
+            .unwrap()
+            .contains("require_approval"));
+        assert!(
+            claim_of("[gates.ratified-paths]\nagent_logins = [\"agent\"]\n")
+                .unwrap()
+                .contains("agent_logins")
+        );
+        // No claim, no finding, whatever the forge says.
+        assert!(agent_policy_finding(
+            None,
+            ProtectionRead::Read(&Protection::default()),
+            &referee(),
+            false
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn agent_policy_enforced_passes() {
+        let claim = Some("`directives.require_approval` is on");
+        let status = |p: &Protection, owners: bool| {
+            agent_policy_finding(claim, ProtectionRead::Read(p), &referee(), owners)
+                .unwrap()
+                .status
+        };
+        let base = Protection {
+            protected: true,
+            pull_request_required: true,
+            ..Default::default()
+        };
+        // An approving review of every pull request.
+        let reviewed = Protection {
+            required_approvals: Some(1),
+            ..base.clone()
+        };
+        assert_eq!(status(&reviewed, false), Status::Pass);
+        // A code-owner review, when CODEOWNERS owns the referee surfaces.
+        let owners = Protection {
+            required_approvals: Some(0),
+            code_owner_review: true,
+            ..base.clone()
+        };
+        assert_eq!(status(&owners, true), Status::Pass);
+        // A signed-commit rule.
+        let signed = Protection {
+            required_approvals: Some(0),
+            signatures_required: true,
+            ..base.clone()
+        };
+        assert_eq!(status(&signed, false), Status::Pass);
+        // Gitea / Forgejo protected file patterns covering every referee surface.
+        let files = Protection {
+            required_approvals: Some(0),
+            protected_file_patterns: Some(vec![
+                "discipline.toml".into(),
+                ".github/workflows/**".into(),
+            ]),
+            ..base.clone()
+        };
+        assert_eq!(status(&files, false), Status::Pass);
+    }
+
+    #[test]
+    fn agent_policy_not_enforced_is_a_strict_failure() {
+        let claim = Some("`ratified-paths` `agent_logins` is set");
+        let finding = |p: &Protection, owners: bool| {
+            agent_policy_finding(claim, ProtectionRead::Read(p), &referee(), owners).unwrap()
+        };
+        let none = Protection {
+            protected: true,
+            pull_request_required: true,
+            required_approvals: Some(0),
+            ..Default::default()
+        };
+        let f = finding(&none, true);
+        assert_eq!(f.status, Status::Warn, "{f:?}");
+        assert!(f.summary.contains("discipline.toml"), "{}", f.summary);
+        let report = super::super::Report {
+            platform: "github".into(),
+            forge_url: None,
+            repository: None,
+            branch: None,
+            findings: vec![f],
+        };
+        assert_eq!(report.exit_code(false), 0);
+        assert_eq!(report.exit_code(true), 1);
+        // A code-owner review counts only when CODEOWNERS owns the surfaces.
+        let owners_unowned = Protection {
+            code_owner_review: true,
+            ..none.clone()
+        };
+        assert_eq!(finding(&owners_unowned, false).status, Status::Warn);
+        // Protected file patterns that leave a workflow open do not cover it (#428).
+        let open = Protection {
+            protected_file_patterns: Some(vec![
+                "discipline.toml".into(),
+                ".github/workflows/*".into(),
+            ]),
+            ..none.clone()
+        };
+        assert_eq!(finding(&open, false).status, Status::Warn);
+        // An approval rule without the pull-request requirement binds nothing.
+        let direct = Protection {
+            pull_request_required: false,
+            required_approvals: Some(1),
+            ..none.clone()
+        };
+        assert_eq!(finding(&direct, false).status, Status::Warn);
+    }
+
+    #[test]
+    fn agent_policy_unreadable_is_undecided() {
+        let claim = Some("`directives.require_approval` is on");
+        let unreadable = agent_policy_finding(
+            claim,
+            ProtectionRead::Unreadable("HTTP 403"),
+            &referee(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(unreadable.status, Status::Unknown);
+        let report = super::super::Report {
+            platform: "github".into(),
+            forge_url: None,
+            repository: None,
+            branch: None,
+            findings: vec![unreadable],
+        };
+        assert_eq!(report.exit_code(false), 2);
+        // An approval count this token cannot see could be the rule that holds: a
+        // `could not check` warning, as doctor reports every hidden setting, never a pass.
+        let hidden = Protection {
+            protected: true,
+            pull_request_required: true,
+            required_approvals: None,
+            ..Default::default()
+        };
+        let f =
+            agent_policy_finding(claim, ProtectionRead::Read(&hidden), &referee(), false).unwrap();
+        assert_eq!(f.status, Status::Warn);
+        assert!(f.summary.contains("could not check"), "{}", f.summary);
+        // `--local-only` does not ask the forge: information, never a pass.
+        assert_eq!(
+            agent_policy_finding(claim, ProtectionRead::NotAsked, &referee(), true)
+                .unwrap()
+                .status,
+            Status::Info
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hook_binary_is_reported_only_for_shipped_hooks_and_found_only_when_executable() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let empty = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        let exe = bin.path().join("discipline");
+        std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+        let path = |dirs: &[&Path]| std::env::join_paths(dirs).unwrap();
+        let shipped = [".claude/settings.json"];
+
+        assert!(hook_binary_finding(&[], Some(&path(&[empty.path()]))).is_none());
+        let status = |p: &std::ffi::OsStr| hook_binary_finding(&shipped, Some(p)).unwrap().status;
+        // Not executable: the hooks' `command -v` would not find it either.
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(status(&path(&[empty.path(), bin.path()])), Status::Warn);
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(status(&path(&[empty.path(), bin.path()])), Status::Pass);
+        assert_eq!(status(&path(&[empty.path()])), Status::Warn);
+        assert_eq!(
+            hook_binary_finding(&shipped, None).unwrap().status,
+            Status::Warn
+        );
+    }
 
     #[test]
     fn agent_sandbox_warns_on_the_repository_and_informs_on_the_user() {

@@ -28,6 +28,11 @@ pub const DEFAULT_BASELINE_FILE: &str = "discipline-baseline.toml";
 /// The fingerprint version `discipline baseline` writes.
 pub const FINGERPRINT_VERSION: u32 = 2;
 
+/// The baseline version `discipline baseline` writes: version-2 fingerprints, and the
+/// per-file assertion counts of `[assertions]` (`test-floor`'s density ratchet). A
+/// version-2 file reads as one with no counts; `discipline baseline --migrate` seeds them.
+pub const BASELINE_VERSION: u32 = 3;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BaselineEntry {
     pub gate: String,
@@ -42,6 +47,10 @@ pub struct DisciplineBaseline {
     pub version: u32,
     #[serde(default)]
     pub findings: Vec<BaselineEntry>,
+    /// The assertions each test file held when the baseline was written, by path: the
+    /// floor `test-floor` holds the file to (`test-density-regression`). Version 3.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub assertions: BTreeMap<String, usize>,
 }
 
 fn default_version() -> u32 {
@@ -51,8 +60,9 @@ fn default_version() -> u32 {
 impl Default for DisciplineBaseline {
     fn default() -> Self {
         Self {
-            version: FINGERPRINT_VERSION,
+            version: BASELINE_VERSION,
             findings: Vec::new(),
+            assertions: BTreeMap::new(),
         }
     }
 }
@@ -484,7 +494,7 @@ pub struct Migration {
     pub dropped: usize,
 }
 
-/// Rewrite a version-1 baseline to version 2: each entry that a current finding still
+/// Rewrite a version-1 baseline's findings to version-2 fingerprints: each entry that a current finding still
 /// matches (under the version-1 formula) becomes that finding's version-2 entry. Entries
 /// nothing matches are stale and are dropped, so the migrated baseline never grows.
 pub fn migrate<F>(
@@ -514,7 +524,8 @@ where
     };
     (
         DisciplineBaseline {
-            version: FINGERPRINT_VERSION,
+            version: BASELINE_VERSION,
+            assertions: Default::default(),
             findings: out,
         },
         report,
@@ -753,9 +764,9 @@ pub fn run_cli(mut args: crate::cli::BaselineArgs) -> Result<bool> {
             );
             return Ok(true);
         };
-        if old.version >= crate::baseline::FINGERPRINT_VERSION {
+        if old.version >= crate::baseline::BASELINE_VERSION {
             println!(
-                "`{}` already uses fingerprint version {}; nothing to migrate.",
+                "`{}` already uses baseline version {}; nothing to migrate.",
                 baseline_shown, old.version
             );
             return Ok(true);
@@ -786,6 +797,7 @@ pub fn run_cli(mut args: crate::cli::BaselineArgs) -> Result<bool> {
         staged: false,
         pr_title: None,
         pr_body: None,
+        declaration_body: Default::default(),
         directives,
         directive_notes,
         bench_provenance: None,
@@ -812,11 +824,22 @@ pub fn run_cli(mut args: crate::cli::BaselineArgs) -> Result<bool> {
             .filter(|o| o.enabled)
             .flat_map(|o| &o.violations)
             .collect();
-        let (migrated, report) = crate::baseline::migrate(&old, &findings, &read_head);
+        // A version-2 file keeps its findings: only the assertion counts are new.
+        let (mut migrated, report) = if old.version < crate::baseline::FINGERPRINT_VERSION {
+            crate::baseline::migrate(&old, &findings, &read_head)
+        } else {
+            let report = crate::baseline::Migration {
+                migrated: old.findings.len(),
+                dropped: 0,
+            };
+            (old.clone(), report)
+        };
         reads.finish()?;
+        migrated.version = crate::baseline::BASELINE_VERSION;
+        migrated.assertions = crate::guards::test_floor::head_assertion_counts(&ctx)?;
         migrated.write_to_file(&baseline_path, &baseline_shown)?;
         println!(
-            "{} rewrote {} to fingerprint version {}: {} entr{} migrated, {} stale entr{} dropped",
+            "{} rewrote {} to baseline version {}: {} entr{} migrated, {} stale entr{} dropped, assertion counts seeded for {} test file{}",
             style::green("ok:"),
             baseline_shown,
             migrated.version,
@@ -824,6 +847,8 @@ pub fn run_cli(mut args: crate::cli::BaselineArgs) -> Result<bool> {
             if report.migrated == 1 { "y" } else { "ies" },
             report.dropped,
             if report.dropped == 1 { "y" } else { "ies" },
+            migrated.assertions.len(),
+            if migrated.assertions.len() == 1 { "" } else { "s" },
         );
         println!(
             "Commit it in a change of its own: `config-integrity` accepts a migration that changes nothing but the baseline."
@@ -834,6 +859,17 @@ pub fn run_cli(mut args: crate::cli::BaselineArgs) -> Result<bool> {
     let mut entries = Vec::new();
     let examined_gates: std::collections::HashSet<&str> =
         summary.outcomes.iter().map(|o| o.gate).collect();
+
+    // The assertion counts are the suite's state, taken whole: a run of part of the
+    // suites keeps the recorded ones.
+    let assertions = if args.suite == crate::cli::SuiteChoice::All {
+        crate::guards::test_floor::head_assertion_counts(&ctx)?
+    } else {
+        existing_baseline
+            .as_ref()
+            .map(|b| b.assertions.clone())
+            .unwrap_or_default()
+    };
 
     // Preserve existing findings for gates that were not examined in this run (e.g. when --suite was passed)
     if let Some(existing) = existing_baseline {
@@ -869,7 +905,8 @@ pub fn run_cli(mut args: crate::cli::BaselineArgs) -> Result<bool> {
     entries.sort();
 
     let baseline_obj = crate::baseline::DisciplineBaseline {
-        version: crate::baseline::FINGERPRINT_VERSION,
+        version: crate::baseline::BASELINE_VERSION,
+        assertions,
         findings: entries,
     };
 
@@ -905,6 +942,15 @@ pub fn run_cli(mut args: crate::cli::BaselineArgs) -> Result<bool> {
             baseline_shown
         );
         println!("{breakdown}");
+        println!(
+            "  assertion counts: {} test file{}",
+            baseline_obj.assertions.len(),
+            if baseline_obj.assertions.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
+        );
         if !baseline_obj.findings.is_empty() {
             println!(
                 "\nTo commit this baseline under `config-integrity`, include this directive on its own line in the commit message or PR body:\n  allow-gate-weakening: baseline initial grandfathered baseline"
@@ -1239,6 +1285,7 @@ mod tests {
         out.violations = found;
         let baseline = DisciplineBaseline {
             version: 2,
+            assertions: Default::default(),
             findings: entries
                 .into_iter()
                 .map(|fingerprint| BaselineEntry {
@@ -1367,6 +1414,7 @@ mod tests {
         );
         let v1 = DisciplineBaseline {
             version: 1,
+            assertions: Default::default(),
             findings: vec![
                 BaselineEntry {
                     gate: "unsafe-safety-comment".into(),
@@ -1390,7 +1438,7 @@ mod tests {
                 dropped: 1
             }
         );
-        assert_eq!(v2.version, FINGERPRINT_VERSION);
+        assert_eq!(v2.version, BASELINE_VERSION);
         assert_eq!(v2.findings, vec![entry_for(&live, none)]);
         assert_eq!(v2.findings[0].rule, live.code);
     }
@@ -1475,6 +1523,7 @@ mod tests {
 
         let baseline = DisciplineBaseline {
             version: 1,
+            assertions: Default::default(),
             findings: vec![BaselineEntry {
                 gate: "time-estimates".to_string(),
                 rule: "Time Estimates In Documentation".to_string(),

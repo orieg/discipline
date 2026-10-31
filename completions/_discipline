@@ -118,7 +118,7 @@ _arguments "${_arguments_options[@]}" : \
 '-s+[Specific suite to run\: all, agent-guard, hygiene, integrity ...]:SUITE:(all agent-guard hygiene integrity quality verification bench)' \
 '--suite=[Specific suite to run\: all, agent-guard, hygiene, integrity ...]:SUITE:(all agent-guard hygiene integrity quality verification bench)' \
 '--write[Record current findings to the baseline file]' \
-'(--write -b --base --whole-tree)--migrate[Rewrite a fingerprint-version-1 baseline to version 2\: every entry a current finding still matches is kept under its finding code, and stale entries are dropped. Commit the result in a change of its own, which \`config-integrity\` accepts without a directive. With no baseline file there is nothing to migrate\: it says so and exits 0; a file that cannot be read exits 2]' \
+'(--write -b --base --whole-tree)--migrate[Rewrite an older baseline to version 3\: a version-1 file'\''s entries that a current finding still matches are kept under their finding codes and stale ones dropped, a version-2 file'\''s entries are kept, and the per-file assertion counts are seeded. Commit the result in a change of its own, which \`config-integrity\` accepts without a directive. With no baseline file there is nothing to migrate\: it says so and exits 0; a file that cannot be read exits 2]' \
 '(-b --base)--whole-tree[Record every pre-existing finding in the tree, not just the diff. Use when adopting discipline on an existing repository; conflicts with --base]' \
 '--all-severities[Also record warnings and notes. By default only findings that would block under the current configuration are recorded\: \`error\`, plus \`warning\` under --fail-on-warnings]' \
 '--fail-on-warnings[Treat warnings as blocking when choosing what to record (same switch as \`check --fail-on-warnings\`)]' \
@@ -243,6 +243,14 @@ opencode\:"OpenCode (\`.opencode/plugins/discipline.js\`, a plugin on session st
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(log)
+_arguments "${_arguments_options[@]}" : \
+'--last=[Print only the last N records]:N:_default' \
+'--json[Print each record as one JSON object per line]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_discipline__subcmd__hook__subcmd__help_commands" \
@@ -260,6 +268,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (install)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(log)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -293,7 +305,9 @@ _arguments "${_arguments_options[@]}" : \
 '--ref=[Branch whose history is replayed (default\: origin'\''s default branch, else main / master)]:REFERENCE:_default' \
 '-c+[Configuration under test (default\: discipline.toml in the working tree)]:CONFIG:_files' \
 '--config=[Configuration under test (default\: discipline.toml in the working tree)]:CONFIG:_files' \
+'--jobs=[Changes checked at once (default\: one per core, at most 4)]:N:_default' \
 '--json[Print the summary as JSON]' \
+'--no-cache[Check every change again\: read no verdict from the replay cache and record none]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0
@@ -558,6 +572,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (install)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(log)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -851,6 +869,7 @@ _discipline__subcmd__help__subcmd__hook_commands() {
     local commands; commands=(
 'run:Check the change so far and answer in the agent'\''s hook contract (reads the hook payload on stdin)' \
 'install:Write the agent'\''s hook configuration at the repository root (or, with --user, the user-level one); an existing file is never rewritten' \
+'log:Print this repository'\''s hook records (<git dir>/discipline/hook-observe.log)\: time, agent, event, mode, binary version, decision, exit code and finding counts, oldest first' \
     )
     _describe -t commands 'discipline help hook commands' commands "$@"
 }
@@ -858,6 +877,11 @@ _discipline__subcmd__help__subcmd__hook_commands() {
 _discipline__subcmd__help__subcmd__hook__subcmd__install_commands() {
     local commands; commands=()
     _describe -t commands 'discipline help hook install commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__help__subcmd__hook__subcmd__log_commands] )) ||
+_discipline__subcmd__help__subcmd__hook__subcmd__log_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline help hook log commands' commands "$@"
 }
 (( $+functions[_discipline__subcmd__help__subcmd__hook__subcmd__run_commands] )) ||
 _discipline__subcmd__help__subcmd__hook__subcmd__run_commands() {
@@ -941,6 +965,7 @@ _discipline__subcmd__hook_commands() {
     local commands; commands=(
 'run:Check the change so far and answer in the agent'\''s hook contract (reads the hook payload on stdin)' \
 'install:Write the agent'\''s hook configuration at the repository root (or, with --user, the user-level one); an existing file is never rewritten' \
+'log:Print this repository'\''s hook records (<git dir>/discipline/hook-observe.log)\: time, agent, event, mode, binary version, decision, exit code and finding counts, oldest first' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'discipline hook commands' commands "$@"
@@ -950,6 +975,7 @@ _discipline__subcmd__hook__subcmd__help_commands() {
     local commands; commands=(
 'run:Check the change so far and answer in the agent'\''s hook contract (reads the hook payload on stdin)' \
 'install:Write the agent'\''s hook configuration at the repository root (or, with --user, the user-level one); an existing file is never rewritten' \
+'log:Print this repository'\''s hook records (<git dir>/discipline/hook-observe.log)\: time, agent, event, mode, binary version, decision, exit code and finding counts, oldest first' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'discipline hook help commands' commands "$@"
@@ -964,6 +990,11 @@ _discipline__subcmd__hook__subcmd__help__subcmd__install_commands() {
     local commands; commands=()
     _describe -t commands 'discipline hook help install commands' commands "$@"
 }
+(( $+functions[_discipline__subcmd__hook__subcmd__help__subcmd__log_commands] )) ||
+_discipline__subcmd__hook__subcmd__help__subcmd__log_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline hook help log commands' commands "$@"
+}
 (( $+functions[_discipline__subcmd__hook__subcmd__help__subcmd__run_commands] )) ||
 _discipline__subcmd__hook__subcmd__help__subcmd__run_commands() {
     local commands; commands=()
@@ -973,6 +1004,11 @@ _discipline__subcmd__hook__subcmd__help__subcmd__run_commands() {
 _discipline__subcmd__hook__subcmd__install_commands() {
     local commands; commands=()
     _describe -t commands 'discipline hook install commands' commands "$@"
+}
+(( $+functions[_discipline__subcmd__hook__subcmd__log_commands] )) ||
+_discipline__subcmd__hook__subcmd__log_commands() {
+    local commands; commands=()
+    _describe -t commands 'discipline hook log commands' commands "$@"
 }
 (( $+functions[_discipline__subcmd__hook__subcmd__run_commands] )) ||
 _discipline__subcmd__hook__subcmd__run_commands() {

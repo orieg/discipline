@@ -641,7 +641,7 @@ fn a_version_one_baseline_matches_until_migrated_and_a_migration_alone_is_accept
         "{v1:#}"
     );
 
-    // 2. `--migrate` rewrites it to version 2; the finding stays grandfathered.
+    // 2. `--migrate` rewrites it to version 3; the finding stays grandfathered.
     let migrate = repo.run(&["baseline", "--migrate"], &[]);
     assert_eq!(migrate.code, 0, "{}\n{}", migrate.stdout, migrate.stderr);
     assert!(
@@ -652,7 +652,7 @@ fn a_version_one_baseline_matches_until_migrated_and_a_migration_alone_is_accept
         migrate.stdout
     );
     let migrated = std::fs::read_to_string(repo.file("discipline-baseline.toml")).unwrap();
-    assert!(migrated.contains("version = 2"), "{migrated}");
+    assert!(migrated.contains("version = 3"), "{migrated}");
     assert!(
         migrated.contains("rule = \"unsafe-safety-comment/safety-comment-missing\""),
         "{migrated}"
@@ -668,7 +668,7 @@ fn a_version_one_baseline_matches_until_migrated_and_a_migration_alone_is_accept
     assert!(
         alone.outcome("config-integrity")["notes"]
             .to_string()
-            .contains("migrated from fingerprint version 1 to 2"),
+            .contains("migrated from baseline version 1 to 3"),
         "{}",
         alone.stdout
     );

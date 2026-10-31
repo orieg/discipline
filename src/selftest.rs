@@ -1161,6 +1161,26 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "overrides: a change cannot disarm a protective gate or raise the base budget",
+        || {
+            use crate::config::{DirectivesConfig, DisciplineConfig};
+            use crate::policy_floor::{disarms, stricter_directives};
+            let base = DisciplineConfig::from_toml_str("[gates.ci-integrity]\nenabled = true\n")?;
+            let off = DisciplineConfig::from_toml_str("[gates.ci-integrity]\nenabled = false\n")?;
+            let narrow = DisciplineConfig::from_toml_str(
+                "[gates.ci-integrity]\nexempt_paths = [\"tests/fixtures/**\"]\n",
+            )?;
+            let base_budget = DirectivesConfig {
+                max_overrides: Some(3),
+                ..Default::default()
+            };
+            let raised = stricter_directives(&DirectivesConfig::default(), Some(&base_budget));
+            Ok(disarms(&base, &off).len() == 1
+                && disarms(&base, &narrow).is_empty()
+                && raised.max_overrides == Some(3))
+        },
+    ),
+    (
         "overrides: the inline override budget refuses the marker past it, not the one at it",
         || {
             use crate::config::DirectivesConfig;
@@ -1246,7 +1266,9 @@ const CASES: &[Case] = &[
                     refused_hidden_directives: Vec::new(),
                     deprecations: Vec::new(),
                     directive_notes: Vec::new(),
+                    stale_baseline_entries: 0,
                     unused_directives: Vec::new(),
+                    review_routing: None,
                 };
                 let change = [ChangedFile {
                     path: "a.md".into(),
@@ -3906,7 +3928,9 @@ const CASES: &[Case] = &[
                 refused_hidden_directives: Vec::new(),
                 deprecations: Vec::new(),
                 directive_notes: Vec::new(),
+                stale_baseline_entries: 0,
                 unused_directives: Vec::new(),
+                review_routing: None,
             };
             // No refusal: no rule, no suite, no entry.
             let quiet = sarif::format_sarif(&summary)["runs"][0]["results"] == serde_json::json!([])
@@ -3916,6 +3940,8 @@ const CASES: &[Case] = &[
                 PolicyFailure::new(RefusalKind::MaxOverrides, quoted),
                 PolicyFailure::new(RefusalKind::MaxInlineOverrides, quoted),
                 PolicyFailure::new(RefusalKind::ApprovalRequired, quoted),
+                PolicyFailure::new(RefusalKind::ProtectiveGateDisarmed, quoted),
+                PolicyFailure::new(RefusalKind::PolicyFileDeleted, quoted),
             ];
             summary.refused_hidden_directives = vec![
                 crate::tokens::OverrideSource::PrBody,
@@ -3925,7 +3951,7 @@ const CASES: &[Case] = &[
             let results = doc["runs"][0]["results"].as_array().cloned().unwrap_or_default();
             let issues = gitlab::generate_gitlab_issues(&summary);
             let xml = junit::format_junit(&summary, false);
-            let mut ok = quiet && results.len() == 5 && issues.len() == 5;
+            let mut ok = quiet && results.len() == 7 && issues.len() == 7;
             for info in REFUSALS {
                 let id = info.rule_id();
                 let n = if info.blocks { 1 } else { 2 };
@@ -3935,11 +3961,11 @@ const CASES: &[Case] = &[
                     && xml.matches(&format!("<testcase name=\"{} [", info.code)).count() == n;
             }
             let prints: std::collections::HashSet<&str> = issues.iter().map(|i| i.fingerprint.as_str()).collect();
-            ok &= prints.len() == 5
-                && xml.contains("<testsuite name=\"policy\" tests=\"5\" failures=\"3\"")
+            ok &= prints.len() == 7
+                && xml.contains("<testsuite name=\"policy\" tests=\"7\" failures=\"5\"")
                 && xml == junit::format_junit(&summary, true)
                 && [doc.to_string(), xml, gitlab::format_gitlab(&summary)].iter().all(|t| !t.contains(quoted))
-                && serde_json::to_value(&summary)?["policy_failures"] == serde_json::json!([quoted, quoted, quoted]);
+                && serde_json::to_value(&summary)?["policy_failures"] == serde_json::json!([quoted, quoted, quoted, quoted, quoted]);
             Ok(ok)
         },
     ),
@@ -4468,6 +4494,34 @@ const CASES: &[Case] = &[
                 && patched("src.calc.f", "assert calc.f(1) == calc.g(8)")?.is_empty()
                 && codes("    t = 'src.calc.f'\n    with mock.patch(t, return_value=9):\n        assert calc.f(1) == 9\n")?
                     .is_empty())
+        },
+    ),
+    #[cfg(all(feature = "lang-python", feature = "lang-go"))]
+    (
+        "assertion-reduction: a comparison operator moved the loose way is a weakened bound in Python and Go (#934)",
+        || {
+            let py = |check: &str| format!("def test_t():\n    row = {{\"a\": 1}}\n    {check}\n");
+            let go = |cond: &str| {
+                format!("package p\n\nfunc TestT(t *testing.T) {{\n\tif {cond} {{\n\t\tt.Fatalf(\"bad\")\n\t}}\n}}\n")
+            };
+            let mut ok = true;
+            for (path, form, base, head) in [
+                ("tests/test_t.py", &py as &dyn Fn(&str) -> String, "assert f([]) == 0", "assert f([]) != 1"),
+                ("tests/test_t.py", &py, "assert f(6) > 6", "assert f(6) >= 6"),
+                ("tests/test_t.py", &py, "assert f([]) < 1", "assert f([]) <= 1"),
+                ("tests/test_t.py", &py, "assert \"a\" in row", "assert \"a\" not in row"),
+                ("p_test.go", &go, "Sum(1, 2) != 3", "Sum(1, 2) < 3"),
+            ] {
+                let change = |head: &str, body: &str| {
+                    helper_change(&[(path, &form(base), &form(head))], body)
+                };
+                ok &= change(head, "")? == ["assertion-reduction/weakened-bound"];
+                ok &= change(head, "allow-assertion-drop: test_t the range is intended")?.is_empty()
+                    || change(head, "allow-assertion-drop: TestT the range is intended")?.is_empty();
+                // Control: the comparison kept.
+                ok &= change(base, "")?.is_empty();
+            }
+            Ok(ok)
         },
     ),
     #[cfg(feature = "lang-python")]
@@ -6560,7 +6614,9 @@ command = "cargo test"
                 refused_hidden_directives: Vec::new(),
                 deprecations: Vec::new(),
                 directive_notes: Vec::new(),
+                stale_baseline_entries: 0,
                 unused_directives: Vec::new(),
+                review_routing: None,
             };
 
             let prompt = format_agent_prompt(&summary);
@@ -7410,6 +7466,26 @@ command = "cargo test"
             let out_unstrict = evaluate_deletion_rationale(&deleted, &[], &unstrict, &directives, false)?;
 
             Ok(out_strict.violations.len() == 1 && out_unstrict.violations.is_empty())
+        },
+    ),
+    (
+        "test-floor: a file's assertion count drops when a test body is gutted, and a version-2 baseline records none",
+        || {
+            use crate::guards::test_floor::file_assertions;
+            let registry = crate::ast::default_registry();
+            let v = crate::guards::agent_diff::assert_vocabulary(&crate::config::DisciplineConfig::default_for_repo("t"));
+            let strict = "#[test]\nfn parses() {\n    let n: i32 = \"42\".parse().unwrap();\n    assert_eq!(n, 42);\n    assert!(n > 0);\n    assert_ne!(n, 7);\n}\n";
+            let gutted = "#[test]\nfn parses() {\n    let n: i32 = \"42\".parse().unwrap();\n    assert!(n > 0);\n}\n";
+            let ignored = "#[test]\n#[ignore]\nfn parses() {\n    assert_eq!(1, 1 + 0);\n}\n";
+            let v2: crate::baseline::DisciplineBaseline = toml::from_str("version = 2\n")?;
+            let v3: crate::baseline::DisciplineBaseline =
+                toml::from_str("version = 3\n\n[assertions]\n\"tests/parse.rs\" = 3\n")?;
+            Ok(file_assertions("tests/parse.rs", strict, &registry, &v) == Some((1, 4))
+                && file_assertions("tests/parse.rs", gutted, &registry, &v) == Some((1, 2))
+                && file_assertions("tests/parse.rs", ignored, &registry, &v) == Some((0, 0))
+                && file_assertions("README.md", strict, &registry, &v).is_none()
+                && v2.assertions.is_empty()
+                && v3.assertions.get("tests/parse.rs") == Some(&3))
         },
     ),
     (
@@ -9009,6 +9085,7 @@ smoke_cost::set_contains
                 fill_fingerprints(&mut out.violations.iter_mut().collect::<Vec<_>>(), read);
                 let baseline = DisciplineBaseline {
                     version: 2,
+                    assertions: Default::default(),
                     findings: entries.into_iter().map(entry).collect(),
                 };
                 let mut outcomes = vec![out];
@@ -9258,6 +9335,32 @@ smoke_cost::set_contains
             };
             Ok(status(".gitea/workflows/*") == Some(Status::Warn)
                 && status(".gitea/workflows/**") == Some(Status::Pass))
+        },
+    ),
+    (
+        "doctor: an agent-aware policy passes with a required review, warns without one, and is undecided when the forge cannot be read",
+        || {
+            use crate::doctor::{agent_policy_finding, Protection, ProtectionRead, Status};
+            let referee = vec!["discipline.toml".to_string()];
+            let claim = Some("`directives.require_approval` is on");
+            let status = |read: ProtectionRead| {
+                agent_policy_finding(claim, read, &referee, false).map(|f| f.status)
+            };
+            let reviewed = Protection {
+                protected: true,
+                pull_request_required: true,
+                required_approvals: Some(1),
+                ..Protection::default()
+            };
+            let unreviewed = Protection {
+                required_approvals: Some(0),
+                ..reviewed.clone()
+            };
+            Ok(status(ProtectionRead::Read(&reviewed)) == Some(Status::Pass)
+                && status(ProtectionRead::Read(&unreviewed)) == Some(Status::Warn)
+                && status(ProtectionRead::Unreadable("HTTP 403")) == Some(Status::Unknown)
+                && agent_policy_finding(None, ProtectionRead::Read(&unreviewed), &referee, false)
+                    .is_none())
         },
     ),
     (
@@ -10012,6 +10115,44 @@ smoke_cost::set_contains
         },
     ),
     (
+        "pr-checklist: the Touched surfaces section is reconciled both ways; a fenced example is not read",
+        || {
+            use crate::guards::pr_checklist::{
+                read_declaration, reconcile, DiffEvidence, Surface, SurfaceClassifier,
+            };
+            let classifier = SurfaceClassifier::new(
+                &crate::config::DisciplineConfig::default(),
+                "discipline.toml",
+            )?;
+            let pair = |p: &str| (p.to_string(), p.to_string());
+            let body = "## Touched surfaces\n- [x] build hooks\n- [ ] workflows\n";
+            let Some(decl) = read_declaration(body) else {
+                return Ok(false);
+            };
+            let (claims, gaps) = reconcile(
+                &decl,
+                &[pair(".github/workflows/ci.yml")],
+                &classifier,
+                DiffEvidence::default(),
+                &|_| false,
+            );
+            let (no_claims, no_gaps) = reconcile(
+                &decl,
+                &[pair("build.rs")],
+                &classifier,
+                DiffEvidence::default(),
+                &|_| false,
+            );
+            let fenced = read_declaration("```\n## Touched surfaces\n- [x] workflows\n```\n");
+            Ok(claims.iter().map(|(s, _)| *s).collect::<Vec<_>>() == vec![Surface::BuildHooks]
+                && gaps.len() == 1
+                && gaps[0].surface == Surface::Workflows
+                && no_claims.is_empty()
+                && no_gaps.is_empty()
+                && fenced.is_none())
+        },
+    ),
+    (
         "pr-checklist: a test function added or extended in any file backs a test claim",
         || {
             use crate::guards::pr_checklist::added_or_extended_tests;
@@ -10122,6 +10263,7 @@ smoke_cost::set_contains
 
             let baseline = DisciplineBaseline {
                 version: crate::baseline::FINGERPRINT_VERSION,
+                assertions: Default::default(),
                 findings: vec![
                     BaselineEntry {
                         gate: "unsafe-safety-comment".to_string(),
