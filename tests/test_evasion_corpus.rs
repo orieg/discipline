@@ -450,6 +450,135 @@ fn every_listed_gate_has_a_case() {
     );
 }
 
+/// The out-of-lane classes that docs/GATES.md states (and the README's generated
+/// Non-Goals repeat) and the corpus's `out-of-lane-*` cases name each other: each class
+/// has its `known_miss` case, on the gate whose list states it and under its issue, and
+/// each such case has its class. A class whose case starts being caught fails
+/// `every_evasion_case_gets_its_recorded_verdict`; one stated without a case fails here.
+#[test]
+fn every_out_of_lane_class_is_a_known_miss_case() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/GATES.md");
+    let classes = discipline::docs::lane_classes(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert!(
+        !classes.is_empty(),
+        "docs/GATES.md states no out-of-lane class"
+    );
+    let corpus = corpus();
+    for class in &classes {
+        let name = class.corpus_case();
+        let case = corpus.cases.iter().find(|c| c.name == name);
+        let Some(case) = case else {
+            panic!(
+                "out-of-lane class `{}` has no corpus case `{name}`",
+                class.class
+            );
+        };
+        assert_eq!(
+            case.gate.as_deref(),
+            Some(class.gate.as_str()),
+            "{name}: gate"
+        );
+        assert!(
+            matches!(&case.verdict, Verdict::KnownMiss(issue) if *issue == class.issue),
+            "{name}: expected `known_miss` {}, got {:?}",
+            class.issue,
+            case.verdict
+        );
+    }
+    let stated: BTreeSet<String> = classes.iter().map(|c| c.corpus_case()).collect();
+    for case in corpus
+        .cases
+        .iter()
+        .filter(|c| c.name.starts_with("out-of-lane-"))
+    {
+        assert!(
+            stated.contains(&case.name),
+            "{}: no `**Out of lane: <class>**` entry in docs/GATES.md names this case",
+            case.name
+        );
+    }
+}
+
+/// Gates that were on by default at `error` before the severity lifecycle's promotion rule
+/// (docs/GATES.md "Severity Lifecycle", #941) and have no corpus controls yet. The list
+/// only shrinks: a gate leaves it when its catch case and false-positive control land.
+const ERROR_BEFORE_THE_RULE: &[&str] = &[
+    "agent-scratch",
+    "ci-skip-set",
+    "citation-metadata",
+    "pii",
+    "test-budget",
+];
+
+/// The gates on by default at `error` that the corpus coverage does not require, other
+/// than the grandfathered ones; and the grandfathered ones that no longer need to be.
+fn promotion_rule_breaches(
+    required: &[String],
+    error_by_default: &BTreeSet<String>,
+) -> (Vec<String>, Vec<String>) {
+    let required: BTreeSet<&String> = required.iter().collect();
+    let grandfathered: BTreeSet<String> = ERROR_BEFORE_THE_RULE
+        .iter()
+        .map(|g| g.to_string())
+        .collect();
+    let uncontrolled = error_by_default
+        .iter()
+        .filter(|g| !required.contains(g) && !grandfathered.contains(*g))
+        .cloned()
+        .collect();
+    let stale = grandfathered
+        .iter()
+        .filter(|g| required.contains(g) || !error_by_default.contains(*g))
+        .cloned()
+        .collect();
+    (uncontrolled, stale)
+}
+
+/// The promotion rule of the severity lifecycle: a gate on by default at `error` has
+/// corpus controls (it is on the coverage's `required` list).
+#[test]
+fn an_error_default_has_corpus_controls() {
+    use discipline::config::{GateSettings, Gates, Severity, GATES};
+    let defaults = Gates::default();
+    let error_by_default: BTreeSet<String> = GATES
+        .iter()
+        .filter(|g| g.available)
+        .filter(|g| {
+            defaults
+                .settings(g.id)
+                .is_some_and(|s: &dyn GateSettings| s.enabled() && s.severity() == Severity::Error)
+        })
+        .map(|g| g.id.to_string())
+        .collect();
+    assert!(
+        error_by_default.contains("assertion-reduction"),
+        "the default severities could not be read"
+    );
+    let corpus = corpus();
+    let (uncontrolled, stale) =
+        promotion_rule_breaches(&corpus.coverage.required, &error_by_default);
+    assert!(
+        uncontrolled.is_empty(),
+        "gates on by default at `error` without corpus controls: {uncontrolled:?}; add their catch case and false-positive control and list them under `coverage.required`, or default them below `error` (docs/GATES.md \"Severity Lifecycle\")"
+    );
+    assert!(
+        stale.is_empty(),
+        "gates on ERROR_BEFORE_THE_RULE that are now required or no longer `error` by default: {stale:?}; remove them from the list"
+    );
+    // The check discriminates: a required gate dropped from the coverage is reported.
+    let without: Vec<String> = corpus
+        .coverage
+        .required
+        .iter()
+        .filter(|g| *g != "assertion-reduction")
+        .cloned()
+        .collect();
+    assert_eq!(
+        promotion_rule_breaches(&without, &error_by_default).0,
+        vec!["assertion-reduction".to_string()]
+    );
+}
+
 /// The coverage check discriminates: removing a listed gate's catch cases, or its
 /// false-positive controls, reports that gate.
 #[test]
