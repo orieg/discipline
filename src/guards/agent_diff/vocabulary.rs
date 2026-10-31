@@ -265,6 +265,7 @@ mod head_rules_cache_tests {
             staged: false,
             pr_title: None,
             pr_body: None,
+            declaration_body: Default::default(),
             directives: Vec::new(),
             directive_notes: Vec::new(),
             bench_provenance: None,

@@ -58,7 +58,7 @@ fn context_matches(required: &str, candidate: &str, patterns: bool) -> bool {
 /// and `.gitea/workflows/*` does not match `ci.yml`; `**` crosses both. `[...]` / `[!...]`
 /// classes and `{a,b}` alternatives keep their meaning. The caller lowercases the path. A
 /// pattern the forge could not compile protects nothing (the forge skips it): `None`.
-fn forge_file_glob(pattern: &str) -> Option<regex::Regex> {
+pub(super) fn forge_file_glob(pattern: &str) -> Option<regex::Regex> {
     let mut re = String::from("^");
     let lowered = pattern.trim().to_lowercase();
     let mut chars = lowered.chars().peekable();
