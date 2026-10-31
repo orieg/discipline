@@ -321,7 +321,7 @@ pub fn sites(root: Node, src: &str, spec: &SinkSpec) -> Vec<SinkSite> {
         let hit = spec
             .entries
             .iter()
-            .find(|entry| names(&callee, entry.name) && entry.when_imported.is_none_or(&imported));
+            .find(|entry| names(&callee, entry.name) && entry.when_imported.is_none_or(imported));
         if let Some(entry) = hit {
             out.push(SinkSite {
                 line,
