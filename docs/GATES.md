@@ -25,9 +25,9 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`unsafe-safety-comment`](#unsafe-safety-comment) | agent-guard | **shipped** | Rust | unsafe blocks / impls carry a // SAFETY: comment |
 | [`deletion-rationale`](#deletion-rationale) | agent-guard | **shipped** | any | deleted files and removed tests need a scoped removes: rationale |
 | [`time-estimates`](#time-estimates) | hygiene | **shipped** | any | no calendar / duration estimates in markdown or the PR body |
-| [`pii`](#pii) | hygiene | **shipped** | any | no home paths, LAN IPs, denylisted hostnames, or fixed-format credentials (private keys, AWS, GitHub, Slack, OpenAI and Anthropic tokens, literal bearer headers) in tracked text |
+| [`pii`](#pii) | hygiene | **shipped** | any | no home paths, LAN IPs, denylisted hostnames, or fixed-format token literals (private-key headers; AWS, GitHub, Slack, OpenAI and Anthropic token formats; literal bearer headers) in tracked text: literal format matching, not credential scanning |
 | [`agent-scratch`](#agent-scratch) | hygiene | **shipped** | any | agent scratch state is never tracked |
-| [`shell-secrets`](#shell-secrets) | hygiene | **shipped** | shell, docker, workflows | no command-line secrets or unverified piped scripts in shell, docker, or CI |
+| [`shell-secrets`](#shell-secrets) | hygiene | **shipped** | shell, docker, workflows | no secrets on command lines, fixed-format token literals, or unverified piped scripts in shell, docker, or CI files: literal pattern matching, not secret scanning |
 | [`issue-link`](#issue-link) | hygiene | **shipped** | any | PR title or description links a tracking issue (#123, Fixes #123) |
 | [`review-threads`](#review-threads) | hygiene | **shipped** | any | the pull request has no unresolved review thread |
 | [`ratified-paths`](#ratified-paths) | agent-guard | **shipped** | any | edits to protected paths carry an owner's ratification on an issue the pull request closes |
@@ -465,6 +465,16 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **`pii` / Workstation Hygiene:**
   - Private RFC 1918 LAN IPs (`192.168.x.x`, `10.x.x.x`, `172.16.x.x`) are reported at the gate's severity (`error` by default) and echoed in the finding unless `redact_lan_ips = true`; in test code (a test path, or the lines of a test the language pack finds) they are reported as a warning that does not block. `gates.pii.lan_ips = false` turns the rule off.
 
+### Severity Lifecycle
+
+How a gate's default severity is allowed to move. This section is doctrine for changes to the built-in defaults; it changes no behaviour of the binary.
+
+- **`note` keeps its meaning.** `Severity::Note` is printed advisory output, mapped to `note` in SARIF, `info` in GitLab Code Quality and a `notice` annotation in GitHub Actions. It does not silence a finding and is not a stage a gate passes through on its way to `error`.
+- **Incubation rides the gate status.** A gate that is designed but not shipped is registered with `available: false` and is never accepted as configuration (`docs/ARCHITECTURE.md` §3). What a shipped gate would block in an agent's loop is visible in the hooks' observe-mode log (`<git dir>/discipline/hook-observe.log`). How a shipped gate incubates (a flag, or audit-only output) is decided when a real candidate needs it, not ahead of one.
+- **Promotion rule: no `error` default without corpus controls.** A gate on by default has `error` as its default severity only when the evasion corpus (`tests/fixtures/evasion_corpus.json`) lists the gate under `coverage.required`. `tests/test_evasion_corpus.rs` holds every required gate to a positive control (a case its finding codes catch, or a tracked known miss) and a negative control (a legitimate change it passes). `an_error_default_has_corpus_controls` in the same file fails when a gate is on by default at `error` without being required, except the gates that already defaulted to `error` before the rule: `pii`, `agent-scratch`, `citation-metadata`, `test-budget` and `ci-skip-set`. That list only shrinks: a gate leaves it when its controls land. A promotion is recorded in the [Default Changes ledger](ROADMAP.md#default-changes-compatibility-ledger), as every default change is. The binary does not check this: it is a rule for the defaults the project ships, not for a repository's own configuration.
+- **Precondition: the severity must be the base's.** A graduated severity only binds when the change under review cannot lower it. Since #932 (`src/policy_floor.rs`), the five protective gates (`config-integrity`, `ci-integrity`, `ratified-paths`, `sandbox-config`, `instruction-smuggling`) cannot be switched off, demoted or exempted from a protected path by the change, whichever side's configuration judges it, and the override budgets hold at the base's. For every other gate, a demotion in the change's own `discipline.toml` is a `config-integrity` finding that a directive lifts; it takes effect only after merge under `policy_from: base` (see [Configuration](CONFIGURATION.md)). A severity promoted for such a gate is a control against an agent only where CI runs with `policy_from: base`.
+- **Expiry rule.** A candidate design (a planned gate, or a promotion) whose blockers have landed and which gathers no false-positive or true-positive evidence (a corpus case, a replay finding, a field report) within the next two releases is closed, not kept open as design debt.
+
 ---
 
 ## Shipped Gates
@@ -561,6 +571,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   }
   ```
 - **What it does NOT catch:**
+  - **Out of lane: value/dataflow gating** (#941). An assertion kept in place but reached only under a condition on a value the test reads at run time (the clock, the environment, an input) counts as present: whether the condition holds on this run, or will on a later one, is not evaluated. The gate compares assertions, not the values that decide whether they run.
   - A comparison operator moved the loose way in a form the comparison reader does not record: a comparison inside an assertion call rather than an `assert` statement or a failing Go `if`, an identity operator, a reversed direction, a compound Go condition, a matcher or testify call swapped for its inclusive variant, and every pack other than Python and Go (#934).
   - Tests moved to another file under new names in the same change (#935). A moved test is paired with its base side by name, so a renamed one is read as a test removed and a test added, and what changed in its assertions on the way is not compared.
   - An expected value edited together with the assertion's other arguments (`assert_eq!(add(2, 2), 4)` -> `assert_eq!(add(3, 2), 5)`): the masked text differs, so the two are not paired. Running the base tests against the head code is the control for that (#387). Adding or removing parentheses around a literal while changing it (`4` -> `(5)`) is such an edit: the masked text keeps the parentheses, so `(4)` -> `(5)` is paired and `4` -> `(5)` is not.
@@ -771,6 +782,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   ```
   or, on the line, `# discipline:allow(error-swallowing): <reason>`.
 - **What it does NOT catch:**
+  - **Out of lane: dataflow to external sinks** (#941). Discipline does not trace where a program's data goes. Code that sends values it holds to a network, file or process sink is not judged by any gate; this gate reads error handlers, and reports such code only when it also drops an error.
   - A handler that does something besides logging (sets a flag, increments a counter, returns a fallback it computes) and then swallows the error: only an empty, bare-return, trivial-value or logging-only body is reported.
   - The expect-this-to-raise idiom: a `try` whose body ends in `assert False` / `raise` / `fail(...)`, whose `else:` raises or fails, or whose handler is `pass` / `...` / `continue` / a bare `return` and whose next statement records a failure, is an assertion and is not reported.
   - A binding of something that is not a call (`let _ = (a, b);`): only `let _ = <call>` and `<call>.ok();` are discarded results.
@@ -816,6 +828,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   allow-agent-instructions: docs/threats.md:41 quoting the injection we defend against
   ```
 - **What it does NOT catch:**
+  - **Out of lane: runtime payload semantics** (#941). The gate reads text for instructions aimed at an agent; it does not evaluate what code does when it runs. A payload that the program decodes and executes is judged only as text, so one that carries no instruction phrase is not reported, whatever it does.
   - An injection phrased outside the list: a paraphrase, a synonym, or another language (the list is English). The phrase tier is a tripwire.
   - An encoding it does not decode: ROT-n other than 13, base32, compressed or doubly encoded text, a phrase split across two encodings, letters spelled one per word (`i g n o r e`), a digit read otherwise than the map (`a11` for `all`), or a look-alike outside the blocks the confusables table covers.
   - A phrase split across a pre-existing line and an added one, across a blank line, or across a line comment and code.
@@ -1137,6 +1150,7 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   let target_node = "127.0.0.1";
   ```
 - **What it does NOT catch:**
+  - **Out of lane: credential validity** (#941). The `secrets` key matches fixed token formats; it does not decide whether a value is a working credential. A credential in a format outside the table is not reported in any file, and a fixed-format token is reported whether it is live, revoked or a fixture.
   - Standard documentation placeholders: `runner`, `user`, `username`, `you`, `me`, `name`, `example`, `shared` (the default `allowed_users`).
   - In test code (as above for LAN addresses), a home path whose user name is one tests conventionally write: `dev`, `developer`, `test`, `tester`, `testuser`, `test-user`, `test_user`, `foo`, `bar`, `baz`, `alice`, `bob`, `jdoe`, `john`, `jane`, `guest`, `demo`. Any other user name in test code, and every user name outside test code that `allowed_users` does not list, is reported.
   - Lines inside a function `[tests] functions` declares (Python and Rust files), and files under `[tests] paths`: declared test scope holds fixtures by definition.
@@ -1189,6 +1203,12 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **Finding Severity Breakdown:**
   - Gate severity (`error` by default): structured secret tokens (`SECRET-TOKEN-GITHUB` `ghp_` / `github_pat_`, `SECRET-TOKEN-AWS` `AKIA...` or a literal `AWS_SECRET_ACCESS_KEY=`, `SECRET-TOKEN-SLACK` `xox[baprs]-`, `SECRET-TOKEN-OPENAI` OpenAI and Anthropic keys, `SECRET-KEY-BLOCK` PEM private-key headers).
   - `warning`: heuristic argument, piping and literal patterns (`ARGV-ENV`, `ARGV-DOCKER`, `ARGV-INLINE`, `INJECT-PIPE`, `INJECT-XARGS`, `SECRET-ARGV-PASSWORD`, `SECRET-LITERAL-BEARER`, `SECRET-LITERAL-ENV`).
+- **What it does NOT catch:**
+  - A file outside its file set: a secret in a source module, a `.env` file, a Makefile or a YAML file outside a workflows directory is not read here. [`pii`](#pii) reads every text file for the fixed-format token classes.
+  - A secret with no fixed format assigned to a name that does not match the secret-name pattern (`SECRET`, `TOKEN`, `PASSWORD`, `PASSWD`, `PASSPHRASE`, `CREDENTIAL`, `API_KEY`, `ACCESS_KEY`, `PRIVATE_KEY`).
+  - Credential validity (#941, see [`pii`](#pii)): a matched token is reported whether it is live, revoked or a fixture, and a working credential in a format outside the table is not reported.
+  - Remote code fetched and run in separate steps (downloaded to a file, then executed), the pattern recommended above: only a download piped straight into an interpreter is `INJECT-PIPE`.
+  - A secret that reaches a command through a file, standard input or a step's environment mapping rather than its argument list.
 - **Lifting directive:** `secrets-argv-ok: <file-or-line> <reason>` in PR body or commit, or inline `discipline:allow(shell-secrets)`. A path lifts every finding in the file; `path:line` lifts the finding on that line only.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `extra_secret_patterns`, `allow_patterns`, `diff_only`.
 
@@ -1273,6 +1293,10 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - With `verify_references`: every reference in the title and body is looked up on the forge (see [Forge access](#forge-access)), and at least one must be an issue of this repository, or of a repository in `reference_repos`. `Issue Reference Not Found` when none is; `Issue Reference Closed` when every issue found is closed (with `require_open_issue`, the default). A reference to a pull or merge request, such as a squash title's own `(#123)`, counts only with `accept_pull_references`.
 - **Verified references:** `#123`, `owner/repo#123` (a GitLab `group/sub/project#123`), and issue or pull-request URLs on the forge's host; references inside code spans, fenced code blocks and HTML comments are not read. The issue is read first (`issues/{n}`), so a number that does not exist is a verdict, never a request for its comments: Gitea answers **500**, not 404, for the comments of a missing issue. Each reference's verdict is in the gate's notes: `ref-issue`, `ref-closed`, `ref-not-found`, `ref-is-pull` (a pull request, which GitHub, Gitea and Forgejo number with issues; a GitLab `!123`), `ref-cross-repo` (another repository, not looked up). A number that resolves nowhere is a note while another reference qualifies, so prose that mentions another project's issue by bare number does not block the change. At most ten references are looked up.
 - **Could not check (exit 2):** with `verify_references`, a forge that cannot be identified or reached, a repository the token cannot see (`forge-denied`: GitHub answers 404 for a private repository without access, which would make every reference look missing), a 5xx or rate limit that outlasts the retries (`forge-unavailable`, `forge-rate-limited`), more than ten references, or a custom `pattern` (it cannot be looked up). The label is at the start of `could_not_check.detail`.
+- **What it does NOT catch:**
+  - Whether the referenced issue is related to the change: any reference the gate accepts passes, and without `verify_references` a number that names no issue passes too.
+  - References inside code spans, fenced code blocks and HTML comments, which are not read.
+  - Pull requests by a login on `exempt_authors`, which need no reference.
 - **Lifting directive:** `no-issue: <reason>` on its own line in the PR description; `waiver = "none"` refuses it.
 - **Exempt authors** (`exempt_authors`, default empty): a pull request opened by a listed login (exact, case-insensitive; e.g. `dependabot[bot]`, `renovate[bot]`) needs no reference, and a note names the author. Dependency-update tools cannot write a reference or a `no-issue:` line into their pull requests. The author is the one the forge's event payload names (`pull_request.user.login` on GitHub, Gitea and Forgejo), never the run's actor: `github.actor` is whoever caused the latest event, and a workflow that trusts `actor == dependabot[bot]` can be shown Dependabot as the actor of an event someone else caused. On GitLab a merge-request pipeline names only the login that started it (`GITLAB_USER_LOGIN`: a push to the source branch, a re-run, a manual job), so when `exempt_authors` lists anyone the author is read from the merge request (`projects/:id/merge_requests/:iid`, `author.username`); a merge request the forge cannot answer for is exit `2`, never the pipeline starter instead. A run with no pull request (a local run, a push) has no author, so nothing is exempt. Only the reference requirement is lifted: `Directive In Subject Line` is still reported, and every other gate judges the change in full. A commit someone else pushes to the bot's pull request is exempt too, since the author of the pull request does not change. An entry that is empty or contains whitespace is a configuration error (exit 2). Adding an entry is a loosening for `config-integrity`.
 - **A custom `pattern` replaces the built-in one.** Left unset, `pattern` is the built-in expression (`#123`, `owner/repo#123`, and issue or pull-request URLs). A configured value is used in its place, never beside it, so `config-integrity` judges a `pattern` the change adds as the built-in one changed: any other value is reported (`pattern = "."` accepts every pull request), the built-in expression written down is not, and neither is removing a `pattern` equal to it. A repository whose issues live in another tracker adopts its pattern with the directive in the same pull request:
@@ -1294,6 +1318,11 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **When it runs:** the state changes without a push, and resolving a thread starts no workflow, so the verdict is that of the run. Trigger the workflow on review events (`pull_request_review`, `pull_request_review_comment`) and re-run it after resolving. A local run or a push has no pull request and examines nothing; a pull-request run in CI without the event payload is exit `2`.
 - **What it catches:** `Unresolved Review Thread`, one per thread, on its file. Threads on `exempt_paths` are not counted.
 - **Could not check (exit 2):** a forge that cannot be reached or identified, a list of reviews, comments or threads that cannot be read to its end.
+- **What it does NOT catch:**
+  - Review feedback outside a thread: a review's summary body, a top-level pull-request comment, a review's requested-changes state.
+  - Whether a resolved thread's concern was addressed: resolution is a forge fact the gate reads, not a judgement it makes.
+  - A thread opened or reopened after the run: the verdict is that of the run, so a workflow not triggered by review events goes stale.
+  - Threads on `exempt_paths`, and runs with no pull request (a local run or a push), which examine nothing.
 - **Lifting directive:** none: a thread is resolved, not waived by the change's author.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`.
 
@@ -1315,6 +1344,11 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
 - **A second login** (`refuse_author_ratification`, default `false`): a ratification written by the login that opened the pull request is refused (`Ratification By The Pull Request's Author`, compared case-insensitively), and so is every ratification when the run does not know that login. A solo maintainer who opens their own pull requests leaves it off; turn it on once agents open pull requests under a login of their own, so the owner's ratification is a second party's. The author comes from the event payload (`pull_request.user.login`). On GitLab no pipeline variable names it (`GITLAB_USER_LOGIN` is the login that started the pipeline: a push to the source branch, a re-run, a manual job), so it is read from the merge request (`projects/:id/merge_requests/:iid`, `author.username`); a merge request the forge cannot answer for is exit `2`, never the pipeline starter instead. With the option off, the author is not read.
 - **Could not check (exit 2):** a forge that cannot be identified or reached, a repository the token cannot see (`forge-denied`), a list of comments or closing issues that cannot be read to its end (`forge-partial-list`), `accept_edited = "by-author"` on a forge that does not name editors.
 - **What it catches:** `Protected Path Edited Without Ratification`, `Never-Ratifiable Path Edited`, `Ratification Entry Refused`, `Ratification Names A Never-Ratifiable Path`; at `note`, so the owner can see why a block did not count: `Ratification Author Not Accepted`, `Ratification Comment Not Accepted` (edited, imported, email), `Ratification Outside Its Window`, `Ratification By The Pull Request's Author`.
+- **What it does NOT catch:**
+  - An edit to a path that `protected_paths` does not match, and runs with no pull request (a local run, a hook, a push), which record the protected paths in a note and examine nothing.
+  - Whether the ratifier reviewed the change: an accepted ratification names the paths, and nothing about the content of the edit is compared with it.
+  - A site administrator acting as another user (Gitea and Forgejo `Sudo`, GitLab impersonation), which the API does not reveal.
+  - A ratification by the login that opened the pull request, unless `refuse_author_ratification` is on.
 - **Lifting directive:** none. The ratification is the escape hatch, and it is a forge fact the change's author does not control. `fail_on_overrides` does not apply.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `protected_paths`, `never_ratifiable`, `ratifiers`, `agent_logins`, `marker`, `closing_source`, `closing_keywords`, `require_open_issue`, `ratification_repos`, `ratification_valid_from`, `ratification_max_age_days`, `accept_edited`, `accept_email_replies`, `refuse_author_ratification`.
 - **Token scope:** GitHub `issues: read` and `pull-requests: read` (the GraphQL API needs a token); GitLab `read_api`; Gitea and Forgejo `read:issue`, `read:repository`.
@@ -1341,7 +1375,11 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Mechanism claim citing `perf stat` counters or labeled as `(hypothesis — unmeasured pending PMU counters)`.
   - Wall-clock speedup citing `[2.7x, 3.1x] BCa 95% CI` or `(provisional pending re-measurement)`.
   - Paired comparison citing `(workload: uniform-random)`.
-- **What it does not catch:** the citation rules make a claim consistent with the record; they do not show that the record was measured. An artifact written by hand and quoted consistently, with the id of a real commit, passes all three. A figure in a paragraph that cites no artifact is compared with nothing, and so is a figure in a paragraph with no `measured` tag. An artifact that changes while the document quoting it does not is not compared again until the document changes. A commit that resolves is not shown to be the one the figure was measured at. Figures produced by a CI run remain the stronger control.
+- **What it does NOT catch:**
+  - Whether the record was measured: the citation rules make a claim consistent with the record. An artifact written by hand and quoted consistently, with the id of a real commit, passes all three. Figures produced by a CI run remain the stronger control.
+  - A figure in a paragraph that cites no artifact, or in a paragraph with no `measured` tag: it is compared with nothing.
+  - An artifact that changes while the document quoting it does not: it is not compared again until the document changes.
+  - Whether a commit that resolves is the one the figure was measured at.
 - **Baseline:** a superseded figure in a JSON file has no line. Its fingerprint is anchored on the key path and the figure (`root.<key>:<figure id>`), so an entry for one key does not match another key of the same file. A record of a JSON file is anchored the same way, on its place and key (`[2].commit`, `provenance.commit`).
 - **Lifting directive:** `allow-provenance: <file-or-path> <reason>` in PR body or commit (aliases: `allow-unpaired-figures`, `discipline:allow(provenance-tags)`). Findings in the PR body itself are not liftable. The four citation findings are lifted by the directive naming the document or the record file; a marker inside the paragraph does not lift them.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `check_tables`, `check_mechanisms`, `check_intervals`, `check_paired_figures`, `superseded_registry`, `superseded_json_paths`, `check_pending_citations`, `require_open_pending_issues`, `pending_issue_repos`, `ratio_satisfied_by`, `deterministic_units`, `diff_only`, `verify_measured_commit`, `record_paths`, `record_commit_key`, `verify_cited_figures`, `figure_tolerance_pct`. The last five are off by default; switching `verify_measured_commit` or `verify_cited_figures` off, removing a `record_paths` glob, changing `record_commit_key` or raising `figure_tolerance_pct` is a `config-integrity` weakening.
@@ -1419,6 +1457,10 @@ Certain gates distinguish high-confidence rules from heuristic indicators within
   - Placeholder markers such as `(RUN: TODO)`, `(RUN: x)` or `(READ: path/to/file)` (`label-placeholder`). A placeholder does not satisfy the claim beside it. <!-- discipline:allow(claim-labels) -->
   - Structured `(READ: path[:line])` markers whose file does not exist in `HEAD`, escapes the repository root, or cites a line number past the end of the file (`read-label-unresolvable`). <!-- discipline:allow(claim-labels) -->
 - **Notes:** When a `(RUN: <command>)` marker names a command not vouched for by `[gates.command]`, a recorded session file under `<common git dir>/discipline/sessions/`, or the built-in test runner list (when neither is present), the gate emits an informational note rather than a finding. <!-- discipline:allow(claim-labels) -->
+- **What it does NOT catch:**
+  - A labelled claim that is false: `(RUN: cargo test)` written without running the command passes. The label gives a reviewer something to check; it does not show the claim is true.
+  - A verification claim phrased outside the built-in patterns and `extra_patterns`.
+  - Markdown lines the change does not add; the PR body and commit messages are read whole.
 - **Lifting directive:** `allow-claim-label: <subject> <reason>` (or `discipline:allow(claim-labels)` in Markdown).
 - **Default:** off, severity `warning`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `diff_only`, `extra_patterns`, `allow_patterns`.
@@ -2165,6 +2207,10 @@ Notes for adapting it:
   allow-behavior-change: test_calc intentional change to calculator behavior
   ```
 - **Baseline:** a finding located at the configuration file is anchored on the command (`command:<name>`, followed by the policy file or the forbidden pattern when the finding is about one), and a failed base test on the test (`test:<id>`), so an entry for one command or test does not match another.
+- **What it does NOT catch:**
+  - Anything the configured tool does not check: the gate reports the tool's exit status, its output patterns, its count and its canary, nothing about the change itself.
+  - A tool that succeeds while verifying less than before, when no `count_pattern` with `min_count`, `zero_items_pattern` or canary is configured to see it.
+  - Anything while inert: with no `command`, `preset` or `DISCIPLINE_COMMAND`, nothing runs.
 - **Lifting directive:** `allow-command: <command-or-preset-name> <reason>` for command execution failures and for `command/base-tests-no-cases`; `allow-behavior-change: <test-name> <reason>` for `command/base-test-failed` under the `base-tests` preset.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `preset`, `command`, `timeout_seconds`, `count_pattern`, `min_count`, `forbid_output`, `zero_items_pattern`, `allow_zero`, `canary_command`, `canary_expected_diagnostic`, `snapshot`, `snapshot_ignore`, `commands`.
 
@@ -2175,6 +2221,10 @@ Notes for adapting it:
   - Memory errors (out-of-bounds access, use-after-free) or data races detected by LLVM sanitizers, and a sanitizer run that cannot execute.
   - A canary that does not produce its expected diagnostic.
 - **Exit codes:** a sanitizer run that cannot start (the toolchain or the sanitizer runtime missing, over the timeout) verified nothing, so the check exits 2; no directive lifts it. A job without a nightly toolchain disables the gate in its configuration.
+- **What it does NOT catch:**
+  - Errors on paths the test suite does not execute: a sanitizer reports what the run reaches.
+  - Errors the selected sanitizer does not instrument: one sanitizer runs per configuration, and AddressSanitizer does not report data races, nor ThreadSanitizer out-of-bounds access.
+  - Code built without the sanitizer's instrumentation, such as a prebuilt foreign library the crate links.
 - **Lifting directive:** `allow-sanitizers: <subject> <reason>`: `canary` for the canary, `failure` for a failing run; `sanitizers` covers either, `toolchain` or `nightly` the failing run. The keyword is the first word: `allow-sanitizers: canary the race canary needs a runtime this runner lacks`.
 - **Executed keys:** `sanitizer` is placed in one argument of the built-in command (`-Zsanitizer=<sanitizer>`), and `canary` selects whether the built-in canary command runs first. A change cannot introduce or alter either: under the default policy side both are compared with the merge base copy before anything runs, and when one differs (or the base has no configuration, or one that does not load, and the change sets one away from its default) the gate reports `sanitizers/untrusted-command-modification` and runs nothing, neither the canary nor the tests. No directive lifts it; `DISCIPLINE_ALLOW_COMMAND_CHANGE` on the runner accepts the change (the switch of every gate that executes configured text, see [`command`](#command)), and `DISCIPLINE_COMMAND` does not. A CI run with no base at all is refused the same way. Under `--policy-from base` the base copy is in force and nothing is reported. A change that only enables the gate, with both keys as the base has them, runs the built-in command, and the gate's notes say that the change enabled it.
 - **The canary belongs to `thread`:** the built-in canary is a data race, and the diagnostic it is checked for is ThreadSanitizer's. No other sanitizer prints it, so `canary = true` with a `sanitizer` other than `thread` could only ever report a missing diagnostic: the pair is a configuration error before any gate runs (exit 2, reason `configuration`, naming `gates.sanitizers.canary`). Set `sanitizer = "thread"`, or leave `canary` off.
@@ -2188,6 +2238,10 @@ Notes for adapting it:
   - Undefined behavior flagged during Miri execution.
   - Zero tests executing under Miri when test filters match zero cases (prevents vacuous passes; the guard is always on). The guard reads every libtest `running N tests` line of the run, stdout and stderr together, the doc-tests' among them: the run executed zero tests when it printed at least one such line and every one has a count of zero, so an empty `Doc-tests` section after unit tests ran is not reported (#883). Output with no such line (`cargo miri nextest`, a failed build) is not read by the guard, as before. A run that never started for want of the toolchain is checked first and exits 2, whatever it printed.
 - **Exit codes:** a Miri run that cannot start (`cargo-miri` missing, over the timeout) verified nothing, so the check exits 2; no directive lifts it. A job without Miri disables the gate in its configuration.
+- **What it does NOT catch:**
+  - Undefined behaviour on paths the tests do not execute: Miri reports what the run reaches.
+  - Code Miri cannot interpret (foreign function calls, inline assembly): a test that reaches it fails under Miri or is excluded from the Miri run by the crate.
+  - Behaviour that depends on the target Miri does not emulate for this run: it interprets one target per configuration.
 - **Lifting directive:** `allow-miri: <subject> <reason>`: `zero-tests` (or `tests`) for the zero-tests guard, `failure` for a failing run; `miri`, `cargo-miri` or `toolchain` cover either. The keyword is the first word: `allow-miri: zero-tests the filter selects no case on this target`.
 - **Executed keys:** `args`, each item one argument after `cargo miri test`. A change cannot introduce or alter them: under the default policy side the list is compared with the merge base copy before anything runs, and when it differs (or the base has no configuration, or one that does not load, and the change sets `args`) the gate reports `miri/untrusted-command-modification` and runs nothing. No directive lifts it; `DISCIPLINE_ALLOW_COMMAND_CHANGE` on the runner accepts the change (the switch of every gate that executes configured text, see [`command`](#command)), and `DISCIPLINE_COMMAND` does not. A CI run with no base at all is refused the same way. Under `--policy-from base` the base copy is in force and nothing is reported. A change that only enables the gate, with `args` as the base has them, runs the built-in command with those arguments, and the gate's notes say that the change enabled it.
 - **Shape of an `args` item:** one argument: ASCII letters, digits and `_ . / : = , @ + -`, not empty. An item is passed to `cargo` as exactly one argument and is never split, so text meant as two arguments is two items (`args = ["--package", "core"]`, not `["--package core"]`). An item with whitespace, a quote or a shell metacharacter is a configuration error before any gate runs (exit 2, reason `configuration`, naming `gates.miri.args`). A leading `-` is accepted: that is what an option looks like.
@@ -2200,6 +2254,10 @@ Notes for adapting it:
   - Net additions of `unsafe` sites across changed source files (unless `allow_increase = true`), reported at each added site.
   - A head count above `max_unsafe`.
 - **A file that does not parse:** a changed file whose head side does not parse stops the run with exit 2 (``gate `unsafe-budget` could not run: could not parse `<path>`: ...``): its `unsafe` sites cannot be counted, and a note would pass a change that adds one. A base side that does not parse is noted, and every head-side site of the file is judged as new. No directive lifts it.
+- **What it does NOT catch:**
+  - `unsafe` sites in files the change does not touch: only changed files are counted.
+  - Whether a site is sound: the gate counts sites, and a change that replaces one site with another keeps the count. [`unsafe-safety-comment`](#unsafe-safety-comment) requires the justification.
+  - `unsafe` inside macro invocations, which the tree-sitter Rust grammar does not expand.
 - **Lifting directive:** `allow-unsafe: <subject> <reason>`: for an added site, its file path or name, `FFI`, or `unsafe-budget`; for the cap, `max_unsafe`, `unsafe-budget`, `budget`, `FFI` or `pointer`. The path or keyword is the first word: `allow-unsafe: FFI the binding dereferences a buffer the C library owns`.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `max_unsafe`, `allow_increase` (default `false`).
 
@@ -2214,6 +2272,10 @@ Notes for adapting it:
   - Missing `rust-version` declaration in `Cargo.toml`.
   - A configured `command` (for example a build under the MSRV toolchain) that fails.
 - **Exit codes:** a `command` that exits 0 passes; one that exits non-zero is a finding (1); one that cannot run (not found, cannot start, over the timeout) or a `Cargo.toml` that cannot be read means nothing was verified, so the check exits 2.
+- **What it does NOT catch:**
+  - Without `command`, whether the code builds under the declared version: only the declaration is checked.
+  - A dependency whose own minimum version is above the declaration, unless the configured command builds it.
+  - Behaviour differences between toolchains: a build that succeeds under the declared version is not run against tests there unless the command does so.
 - **Lifting directive:** `allow-msrv: <subject> <reason>`: `rust-version`, `Cargo.toml`, `msrv` or `crate` for a missing declaration; `command`, `msrv` or the command text for a failing command. The keyword is the first word: `allow-msrv: crate the workspace pins its toolchain in another file`.
 - **Executed keys:** `command`, a whole command line, split into a program and its arguments (quotes honoured, no shell) and run in the repository root. A change cannot introduce or alter it: under the default policy side it is compared with the merge base copy before anything runs, and when it differs (or the base has no configuration, or one that does not load, and the change sets a `command`) the gate reports `msrv/untrusted-command-modification` and runs nothing; the declaration is not checked either. No directive lifts it; `DISCIPLINE_ALLOW_COMMAND_CHANGE` on the runner accepts the change (the switch of every gate that executes configured text, see [`command`](#command)), and `DISCIPLINE_COMMAND` does not. A CI run with no base at all is refused the same way. Under `--policy-from base` the base copy is in force and nothing is reported. A change that only enables the gate, with the `command` the base already has, runs that command, and the gate's notes say that the change enabled it. `pinned_version` is reported and never passed to a process, so it is not part of this guard.
 - **`pinned_version`** is the version the gate reports and the command is said to pass under; nothing is executed from it. [`config-integrity`](#config-integrity) reports a change that lowers it (compared as a version) or removes it.

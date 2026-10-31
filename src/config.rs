@@ -164,7 +164,7 @@ pub const GATES: &[GateInfo] = &[
     GateInfo {
         id: "pii",
         suite: Suite::Hygiene,
-        summary: "no home paths, LAN IPs, denylisted hostnames, or fixed-format credentials (private keys, AWS, GitHub, Slack, OpenAI and Anthropic tokens, literal bearer headers) in tracked text",
+        summary: "no home paths, LAN IPs, denylisted hostnames, or fixed-format token literals (private-key headers; AWS, GitHub, Slack, OpenAI and Anthropic token formats; literal bearer headers) in tracked text: literal format matching, not credential scanning",
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
@@ -180,7 +180,7 @@ pub const GATES: &[GateInfo] = &[
     GateInfo {
         id: "shell-secrets",
         suite: Suite::Hygiene,
-        summary: "no command-line secrets or unverified piped scripts in shell, docker, or CI",
+        summary: "no secrets on command lines, fixed-format token literals, or unverified piped scripts in shell, docker, or CI files: literal pattern matching, not secret scanning",
         coverage: Coverage::Stated("shell, docker, workflows"),
         available: true,
         delta_only: false,

@@ -109,6 +109,57 @@ fn test_docs_check_detects_schema_drift() {
     assert!(combined.contains("TamperedConfig"));
 }
 
+/// The README's Non-Goals are generated from the gates' "What it does NOT catch" lists in
+/// docs/GATES.md: editing a list makes `docs --check` fail, and a gate without a list
+/// stops the generation.
+#[test]
+fn test_docs_check_covers_the_non_goals_generated_from_gate_lists() {
+    let repo = setup_docs_repo();
+    let gates_md = std::fs::read_to_string("docs/GATES.md").expect("read docs/GATES.md");
+    repo.write("docs/GATES.md", &gates_md);
+    repo.write(
+        "README.md",
+        "# Test Repo\n\n## Non-Goals\n<!-- generated:non-goals -->\n<!-- /generated -->\n",
+    );
+    let write = repo.run(&["docs", "--write"], &[]);
+    assert_eq!(write.code, 0, "{}\n{}", write.stdout, write.stderr);
+    let readme = std::fs::read_to_string(repo.file("README.md")).unwrap();
+    assert!(
+        readme.contains("[`out-of-lane-credential-validity`](tests/fixtures/evasion_corpus.json)"),
+        "{readme}"
+    );
+    let check = repo.run(&["docs", "--check"], &[]);
+    assert_eq!(check.code, 0, "{}\n{}", check.stdout, check.stderr);
+
+    // A class dropped from a gate's list: the README no longer agrees.
+    let dropped = gates_md
+        .lines()
+        .filter(|l| !l.starts_with("  - **Out of lane: credential validity**"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_ne!(dropped.lines().count(), gates_md.lines().count());
+    repo.write("docs/GATES.md", &dropped);
+    let check = repo.run(&["docs", "--check"], &[]);
+    assert_eq!(check.code, 1, "{}\n{}", check.stdout, check.stderr);
+    assert!(
+        check.stderr.contains("-| credential validity |"),
+        "the diff names the dropped class: {}",
+        check.stderr
+    );
+
+    // A gate without a list: the generation stops (exit 2), naming the gate.
+    let unlisted = gates_md.replacen(
+        "- **What it does NOT catch:**\n  - Non-standard guide names",
+        "- **Not caught:**\n  - Non-standard guide names",
+        1,
+    );
+    assert_ne!(unlisted, gates_md);
+    repo.write("docs/GATES.md", &unlisted);
+    let check = repo.run(&["docs", "--check"], &[]);
+    assert_eq!(check.code, 2, "{}\n{}", check.stdout, check.stderr);
+    assert!(check.stderr.contains("agents-md"), "{}", check.stderr);
+}
+
 #[test]
 fn test_docs_check_fails_on_unclosed_marker() {
     let repo = Repo::new();
