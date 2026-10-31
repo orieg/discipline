@@ -586,6 +586,13 @@
         "null"
       ]
     },
+    "policy_failures": {
+      "description": "What the tip's `[audit]` table refuses in this history (the waiver-density tripwire); any entry exits 1. Omitted when empty",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "protected_edits": {
       "description": "Edits to paths the change's parent configuration protects under `ratified-paths` (`kind` `protected-edit`, `detail` `gate on` or `gate off`); with `--forge` each carries its `ratification`",
       "items": {
@@ -684,6 +691,72 @@
     "version": {
       "description": "The discipline version that wrote the report",
       "type": "string"
+    },
+    "waiver_density": {
+      "additionalProperties": false,
+      "description": "Waivers per changed file of each audited change, oldest first, and the tripwire over them (#944). A trend for reviewers, not a verdict on one change. Omitted by a binary older than this field",
+      "properties": {
+        "changes": {
+          "description": "Oldest first",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "changed_files": {
+                "description": "Files it added, modified, deleted or renamed",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "per_mille": {
+                "description": "Waivers per 1000 changed files (a change with no file counts as one)",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pr": {
+                "description": "Its pull request, from the subject or `--forge`",
+                "minimum": 1,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "sha": {
+                "description": "The change's commit",
+                "type": "string"
+              },
+              "waivers": {
+                "description": "Its directive and inline-marker records",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "sha",
+              "pr",
+              "waivers",
+              "changed_files",
+              "per_mille"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "rising": {
+          "description": "How many times in a row the density rose, ending at the newest change",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tripwire": {
+          "description": "`[audit] waiver_density_rise` at the tip; 0 when the tripwire is off",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "changes",
+        "rising",
+        "tripwire"
+      ],
+      "type": "object"
     }
   },
   "required": [

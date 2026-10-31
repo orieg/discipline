@@ -368,15 +368,14 @@ pub fn diff_configs_under(
     }
 
     // [audit]: the waiver-density tripwire switched off, or made to need a longer rise.
-    let (b, h) = (base.audit.waiver_density_rise, head.audit.waiver_density_rise);
+    let (b, h) = (
+        base.audit.waiver_density_rise,
+        head.audit.waiver_density_rise,
+    );
     if b > 0 && h == 0 {
-        found.push(
-            Weakening::new("audit", "waiver_density_rise", Change::Changed).values(b, h),
-        );
+        found.push(Weakening::new("audit", "waiver_density_rise", Change::Changed).values(b, h));
     } else if b > 0 && h > b {
-        found.push(
-            Weakening::new("audit", "waiver_density_rise", Change::Increased).values(b, h),
-        );
+        found.push(Weakening::new("audit", "waiver_density_rise", Change::Increased).values(b, h));
     }
 
     // [hooks.premature-stop]: the end-of-turn check switched off or made quieter.
@@ -1426,6 +1425,36 @@ mod tests {
             ["snapshot_ignore"]
         );
         assert!(keys(with, "snapshot = \"api.txt\"\n").is_empty());
+    }
+
+    #[test]
+    fn switching_off_or_lengthening_the_audit_tripwire_is_a_loosening() {
+        let schema = crate::schema::generate_schema();
+        let audit = schema["properties"]["audit"]["properties"]
+            .as_object()
+            .unwrap();
+        assert_eq!(
+            audit.keys().collect::<Vec<_>>(),
+            ["waiver_density_rise"],
+            "judge a new [audit] option in diff_configs"
+        );
+        let cfg = |n: u32| {
+            DisciplineConfig::from_toml_str(&format!(
+                "[meta]\nversion = 1\nname = \"t\"\n[audit]\nwaiver_density_rise = {n}\n"
+            ))
+            .unwrap()
+        };
+        let keys = |b: u32, h: u32| -> Vec<String> {
+            diff_configs(&cfg(b), &cfg(h))
+                .unwrap()
+                .iter()
+                .map(|w| format!("{}.{}", w.gate, w.key))
+                .collect()
+        };
+        assert_eq!(keys(3, 0), ["audit.waiver_density_rise"]);
+        assert_eq!(keys(3, 5), ["audit.waiver_density_rise"]);
+        assert!(keys(3, 2).is_empty());
+        assert!(keys(0, 2).is_empty());
     }
 
     #[test]

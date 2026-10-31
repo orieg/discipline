@@ -1673,11 +1673,7 @@ pub fn run(opts: &Options) -> Result<Summary> {
             *pr = pulls.iter().find(|p| &p.sha == sha).map(|p| p.pr);
         }
     }
-    s.waiver_density = WaiverDensity::of(
-        &sizes,
-        &s.records,
-        tip_config.audit.waiver_density_rise,
-    );
+    s.waiver_density = WaiverDensity::of(&sizes, &s.records, tip_config.audit.waiver_density_rise);
     waiver_density_check(&mut s.checks, &s.waiver_density);
     s.policy_failures.extend(s.waiver_density.failure());
     s.pulls = pulls;
@@ -2632,6 +2628,47 @@ mod tests {
             ord: 0,
             subject: "s".into(),
         }
+    }
+
+    #[test]
+    fn waiver_density_rises_and_trips_only_at_its_configured_length() {
+        let change = |sha: &str, files: usize| (sha.to_string(), None, files);
+        let rec = |sha: &str, kind: &'static str| {
+            let mut info = info();
+            info.sha = sha.into();
+            Record::new(&info.to_owned(), kind, "detector")
+        };
+        // Newest first, as the audit reads them: c (2 waivers / 1 file), b (1 / 1), a (1 / 2).
+        let changes = [change("c", 1), change("b", 1), change("a", 2)];
+        let records = [
+            rec("c", "directive"),
+            rec("c", "inline-marker"),
+            rec("b", "directive"),
+            rec("a", "directive"),
+            rec("a", "config"),
+        ];
+        let d = WaiverDensity::of(&changes, &records, 0);
+        let per: Vec<u64> = d.changes.iter().map(|c| c.per_mille).collect();
+        assert_eq!(per, [500, 1000, 2000]);
+        assert_eq!(d.rising, 2);
+        assert!(d.failure().is_none(), "off");
+        assert!(WaiverDensity::of(&changes, &records, 3).failure().is_none());
+        let tripped = WaiverDensity::of(&changes, &records, 2).failure().unwrap();
+        assert!(tripped.contains("from 500 to 2000"), "{tripped}");
+        // A fall ends the run: only the newest rise counts.
+        let records = [
+            rec("c", "directive"),
+            rec("b", "directive"),
+            rec("b", "directive"),
+        ];
+        let d = WaiverDensity::of(&changes, &records, 1);
+        assert_eq!(d.rising, 0);
+        assert!(d.failure().is_none());
+        // A change of no file counts as one file.
+        assert_eq!(
+            WaiverDensity::of(&[change("c", 0)], &[rec("c", "directive")], 0).changes[0].per_mille,
+            1000
+        );
     }
 
     #[test]

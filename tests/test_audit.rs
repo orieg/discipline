@@ -326,3 +326,91 @@ fn forge_reads_with_no_forge_to_read_are_exit_2() {
     assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
     assert!(run.stderr.contains("--forge"), "{}", run.stderr);
 }
+
+/// Three changes, each of one file, carrying one, two and three waivers: the waiver
+/// density rose twice in a row. `tripwire` is the tip's `[audit] waiver_density_rise`.
+fn rising_history(tripwire: u32) -> Repo {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}[audit]\nwaiver_density_rise = {tripwire}\n"),
+    );
+    repo.commit("chore: adopt (#1)");
+    for (n, body) in [
+        (2, "no-issue: a"),
+        (3, "no-issue: b\nallow-dependency: serde parser"),
+        (
+            4,
+            "no-issue: c\nallow-dependency: serde parser\nallow-command: build tool",
+        ),
+    ] {
+        repo.write(&format!("src/f{n}.rs"), "pub fn f() {}\n");
+        repo.commit(&format!("feat: f{n} (#{n})\n\n{body}\n"));
+    }
+    repo
+}
+
+fn audit3(repo: &Repo) -> Value {
+    let run = repo.run(
+        &["audit", "--last", "3", "--ref", "main", "--json"],
+        &[("DISCIPLINE_NO_NETWORK", "1")],
+    );
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    serde_json::from_str(&run.stdout).unwrap()
+}
+
+/// The waiver-density trend is reported oldest first with its rise; the tripwire is off
+/// by default and, set at or below the rise, fails the audit (#944).
+#[test]
+fn a_sustained_waiver_density_rise_trips_the_configured_tripwire() {
+    let off = rising_history(0);
+    let s = audit3(&off);
+    let w = &s["waiver_density"];
+    let per_mille: Vec<u64> = w["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["per_mille"].as_u64().unwrap())
+        .collect();
+    assert_eq!(per_mille, [1000, 2000, 3000], "{w:#}");
+    assert_eq!(w["rising"], 2);
+    assert_eq!(w["tripwire"], 0);
+    assert!(s.get("policy_failures").is_none(), "{s:#}");
+    let check = |s: &Value| {
+        s["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == "waiver-density-rise")
+            .unwrap()["state"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(check(&s), "not-checked");
+
+    let below = rising_history(3);
+    assert_eq!(check(&audit3(&below)), "clean");
+
+    let tripped = rising_history(2);
+    let run = tripped.run(
+        &["audit", "--last", "3", "--ref", "main", "--json"],
+        &[("DISCIPLINE_NO_NETWORK", "1")],
+    );
+    assert_eq!(run.code, 1, "{}\n{}", run.stdout, run.stderr);
+    let s: Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(check(&s), "found");
+    assert!(
+        s["policy_failures"][0]
+            .as_str()
+            .unwrap()
+            .contains("waiver_density_rise = 2"),
+        "{s:#}"
+    );
+    assert!(
+        run.stderr.contains("audit: waiver density rose"),
+        "{}",
+        run.stderr
+    );
+}

@@ -159,6 +159,8 @@ const AUDIT_FIELDS: &[&str] = &[
     "links.issue_comment: string",
     "links.pull: string",
     "links.repository: string",
+    "policy_failures?: array",
+    "policy_failures[]: string",
     "protected_edits: array",
     "protected_edits[]: object",
     "protected_edits[].after?: string",
@@ -294,6 +296,16 @@ const AUDIT_FIELDS: &[&str] = &[
     "tightenings[].time: integer",
     "tip: string",
     "version: string",
+    "waiver_density?: object",
+    "waiver_density.changes: array",
+    "waiver_density.changes[]: object",
+    "waiver_density.changes[].changed_files: integer",
+    "waiver_density.changes[].per_mille: integer",
+    "waiver_density.changes[].pr: integer|null",
+    "waiver_density.changes[].sha: string",
+    "waiver_density.changes[].waivers: integer",
+    "waiver_density.rising: integer",
+    "waiver_density.tripwire: integer",
 ];
 
 const REPLAY_FIELDS: &[&str] = &[
