@@ -24,7 +24,7 @@ RUN cargo build --release --locked
 # -----------------------------------------------------------------------------
 # Stage 2: Runtime Image
 # -----------------------------------------------------------------------------
-FROM alpine:3.21@sha256:ce64758a109eb420d874a118f87920e625e12d3634e03b4a5573fd9f6e5d3507
+FROM alpine:3.21@sha256:ee16d92f96db08d9d2d07da48555a27f3a69d8f0759021dbc601195ed0d2b5bd
 
 # Install CA certificates for secure checkouts and git for local repository operations
 # Configure system-wide safe.directory = '/workspace' while still root before switching to unprivileged user
