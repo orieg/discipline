@@ -47,6 +47,7 @@ pub fn report_schema() -> Value {
             "notes": { "type": "integer", "minimum": 0, "description": "Findings of severity `note`" },
             "overrides": { "type": "integer", "minimum": 0, "description": "Directive overrides applied across all gates" },
             "baselined": { "type": "integer", "minimum": 0, "description": "Findings suppressed by the baseline file" },
+            "stale_baseline_entries": { "type": "integer", "minimum": 1, "description": "Baseline entries no finding of this run matched (resolved findings), a disabled gate's included; `discipline baseline --write` drops them. Omitted when there are none" },
             "outcomes": { "type": "array", "items": { "$ref": "#/$defs/GateOutcome" }, "description": "One entry per gate, in registry order" },
             "planned_gates": { "type": "array", "items": { "type": "string" }, "description": "Gate ids the roadmap plans but this binary does not ship" },
             "policy_failures": { "type": "array", "items": { "type": "string" }, "description": "Run-level refusals no single gate owns; any entry fails the run. Omitted when empty" },
@@ -220,6 +221,7 @@ pub fn replay_schema() -> Value {
             },
             "could_not_check_by_reason": { "description": "The reason a change could not be checked (the report's `could_not_check.reason`) -> the changes", "$ref": "#/$defs/ChangeLists" },
             "skipped_by_gate": { "description": "Gate id -> the changes that skipped part of it because the configuration names a file the change does not have yet (the configuration is newer than the change)", "$ref": "#/$defs/ChangeLists" },
+            "cached": { "type": "integer", "minimum": 0, "description": "Changes whose verdict was read from the replay cache (`<git dir>/discipline/replay-cache/`) instead of checked again. Absent from a report written before the cache" },
             "cases_detail": { "type": "array", "items": { "$ref": "#/$defs/Case" }, "description": "Newest first" }
         },
         "$defs": {
@@ -242,7 +244,8 @@ pub fn replay_schema() -> Value {
                     "directives_from": { "type": "string", "description": "`pull request body`, or why only the commit message was read" },
                     "skipped_checks": { "type": "array", "items": { "$ref": "#/$defs/SkippedCheck" }, "description": "Parts of gates skipped because the configuration names a file this change does not have yet; empty when the check itself could not run" },
                     "reason": { "enum": reasons(), "description": "Why the change could not be checked: the report's `could_not_check.reason`, or `forge` when its merged pull request could not be read. Omitted otherwise" },
-                    "detail": { "type": "string", "description": "Why the change could not be checked. Omitted otherwise" }
+                    "detail": { "type": "string", "description": "Why the change could not be checked. Omitted otherwise" },
+                    "cached": { "const": true, "description": "The verdict was read from the replay cache: the change was checked before under the same binary, configuration under test and pull request. Omitted otherwise" }
                 }
             },
             "CaseOverride": {
@@ -337,6 +340,32 @@ pub fn audit_schema() -> Value {
                         "pr": { "type": "integer", "minimum": 1 },
                         "approved_by_other": { "type": "boolean", "description": "A login other than the pull request's author approved its head" },
                         "body_edited_after_merge": { "type": "boolean", "description": "Its body was edited after the merge (GitHub's `lastEditedAt`), so the directives read from it now may not be the ones the gates read; absent when not known" }
+                    }
+                }
+            },
+            "density": {
+                "type": ["object", "null"],
+                "description": "The per-file assertion counts the tip's baseline records (`[assertions]`), against the tip's test files: the metric `test-floor`'s `test-density-regression` ratchets. Null when the baseline records none. Omitted by a binary older than this field",
+                "additionalProperties": false,
+                "required": ["files", "tests", "recorded", "current", "below"],
+                "properties": {
+                    "files": { "type": "integer", "minimum": 0, "description": "Test files the baseline records a count for" },
+                    "tests": { "type": "integer", "minimum": 0, "description": "Running tests in those files at the tip" },
+                    "recorded": { "type": "integer", "minimum": 0, "description": "The assertions the baseline records for them" },
+                    "current": { "type": "integer", "minimum": 0, "description": "The assertions they hold at the tip" },
+                    "below": {
+                        "type": "array",
+                        "description": "Each file holding fewer assertions than recorded, in path order; a file gone from the tip is not listed",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["path", "recorded", "current"],
+                            "properties": {
+                                "path": text("The test file"),
+                                "recorded": { "type": "integer", "minimum": 0 },
+                                "current": { "type": "integer", "minimum": 0 }
+                            }
+                        }
                     }
                 }
             },

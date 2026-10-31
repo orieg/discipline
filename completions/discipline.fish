@@ -138,7 +138,7 @@ quality\t''
 verification\t''
 bench\t''"
 complete -c discipline -n "__fish_discipline_using_subcommand baseline" -l write -d 'Record current findings to the baseline file'
-complete -c discipline -n "__fish_discipline_using_subcommand baseline" -l migrate -d 'Rewrite a fingerprint-version-1 baseline to version 2: every entry a current finding still matches is kept under its finding code, and stale entries are dropped. Commit the result in a change of its own, which `config-integrity` accepts without a directive. With no baseline file there is nothing to migrate: it says so and exits 0; a file that cannot be read exits 2'
+complete -c discipline -n "__fish_discipline_using_subcommand baseline" -l migrate -d 'Rewrite an older baseline to version 3: a version-1 file\'s entries that a current finding still matches are kept under their finding codes and stale ones dropped, a version-2 file\'s entries are kept, and the per-file assertion counts are seeded. Commit the result in a change of its own, which `config-integrity` accepts without a directive. With no baseline file there is nothing to migrate: it says so and exits 0; a file that cannot be read exits 2'
 complete -c discipline -n "__fish_discipline_using_subcommand baseline" -l whole-tree -d 'Record every pre-existing finding in the tree, not just the diff. Use when adopting discipline on an existing repository; conflicts with --base'
 complete -c discipline -n "__fish_discipline_using_subcommand baseline" -l all-severities -d 'Also record warnings and notes. By default only findings that would block under the current configuration are recorded: `error`, plus `warning` under --fail-on-warnings'
 complete -c discipline -n "__fish_discipline_using_subcommand baseline" -l fail-on-warnings -d 'Treat warnings as blocking when choosing what to record (same switch as `check --fail-on-warnings`)'
@@ -209,7 +209,9 @@ complete -c discipline -n "__fish_discipline_using_subcommand explain" -s h -l h
 complete -c discipline -n "__fish_discipline_using_subcommand replay" -l last -d 'Number of first-parent commits (merged changes) to replay, newest first' -r
 complete -c discipline -n "__fish_discipline_using_subcommand replay" -l ref -d 'Branch whose history is replayed (default: origin\'s default branch, else main / master)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand replay" -s c -l config -d 'Configuration under test (default: discipline.toml in the working tree)' -r -F
+complete -c discipline -n "__fish_discipline_using_subcommand replay" -l jobs -d 'Changes checked at once (default: one per core, at most 4)' -r
 complete -c discipline -n "__fish_discipline_using_subcommand replay" -l json -d 'Print the summary as JSON'
+complete -c discipline -n "__fish_discipline_using_subcommand replay" -l no-cache -d 'Check every change again: read no verdict from the replay cache and record none'
 complete -c discipline -n "__fish_discipline_using_subcommand replay" -s h -l help -d 'Print help'
 complete -c discipline -n "__fish_discipline_using_subcommand audit" -l last -d 'Number of first-parent commits (merged changes) to audit, newest first' -r
 complete -c discipline -n "__fish_discipline_using_subcommand audit" -l ref -d 'Branch whose history is audited (default: origin\'s default branch, else main / master)' -r

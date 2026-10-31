@@ -5,8 +5,10 @@
 //! - Floor constant in base ref cannot be lowered without an `allow-test-shrink:` directive.
 //! - Required test suite files must exist on disk unless explicitly excused.
 //! - Fails closed if the base floor cannot be resolved when configured.
+//! - A test file does not hold fewer assertions than the baseline records for it
+//!   (`test-density-regression`, a warning).
 
-use crate::config::UncommittedReportFallback;
+use crate::config::{Severity, UncommittedReportFallback};
 use crate::escape::unescape_xml;
 use crate::guards::{exempt_filter, Context, GateOutcome};
 use crate::tokens;
@@ -125,6 +127,9 @@ pub fn evaluate_test_floor(ctx: &Context) -> Result<GateOutcome> {
     // directive lifted does not: the directive named the count, not the rule.
     let count_reported = before_count != out.violations.len();
     report_tests_moved_out(ctx, &mut out, &moved, count_reported);
+
+    // 12. Per-file assertion density against the counts the baseline records.
+    check_assertion_density(ctx, &filter, &sides, &mut out)?;
 
     Ok(out)
 }
@@ -1623,6 +1628,175 @@ pub fn compare_test_identities(
     }
 
     violations
+}
+
+/// The assertions of the tests in one file's `content`: the checks of each test that
+/// runs, as the floor of `vacuous-tests` counts them (`TestFn::checks`). `None` when no
+/// language pack reads the file, and `Some((0, 0))` for a file with no test.
+pub fn file_assertions(
+    path: &str,
+    content: &str,
+    registry: &crate::ast::LanguageRegistry,
+    v: &crate::ast::AssertVocabulary,
+) -> Option<(usize, usize)> {
+    let facts = registry.find_pack(path)?.extract(path, content, v).ok()?;
+    let running = facts
+        .tests
+        .iter()
+        .filter(|t| !(t.ignored && t.conditional_ignore.is_none()));
+    let (tests, assertions) = running.fold((0, 0), |(n, a), t| (n + 1, a + t.checks()));
+    Some((tests, assertions))
+}
+
+/// The assertion count of every tracked test file on the head side, by path: what
+/// `discipline baseline` records under `[assertions]`. A file whose tests the change's
+/// runner rules do not collect, an exempt file and a file with no running test are left
+/// out.
+pub fn head_assertion_counts(ctx: &Context) -> Result<std::collections::BTreeMap<String, usize>> {
+    let filter = exempt_filter(&ctx.config.gates.test_floor)?;
+    let v = crate::guards::agent_diff::assert_vocabulary_for_head(ctx)?;
+    let registry = crate::ast::default_registry();
+    let mut counts = std::collections::BTreeMap::new();
+    for path in ctx.git.tracked_files()? {
+        if filter.matches(&path) || !registry.is_supported(&path) {
+            continue;
+        }
+        use crate::ast::runner_collection::{check_runner_collected, RunnerCollectionStatus};
+        if matches!(
+            check_runner_collected(&path, &v),
+            RunnerCollectionStatus::NotCollected | RunnerCollectionStatus::NoRunner(_)
+        ) {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(Path::new(ctx.git.root()).join(&path)) else {
+            continue;
+        };
+        if let Some((tests, assertions)) = file_assertions(&path, &content, &registry, &v) {
+            if tests > 0 {
+                counts.insert(path, assertions);
+            }
+        }
+    }
+    Ok(counts)
+}
+
+/// The per-file assertion floor in force: for each file, the larger of the count the
+/// base side's baseline records and the count the change's own baseline records. A
+/// change cannot lower its own floor: the base side's entry stands until a change that
+/// carries `allow-test-shrink: <path>` has merged with the lower count.
+fn assertion_floor(
+    ctx: &Context,
+    out: &mut GateOutcome,
+) -> Result<std::collections::BTreeMap<String, usize>> {
+    let name = ctx
+        .baseline_path
+        .unwrap_or(crate::baseline::DEFAULT_BASELINE_FILE);
+    let mut floor = ctx
+        .baseline
+        .map(|b| b.assertions.clone())
+        .unwrap_or_default();
+    let in_tree = crate::baseline::path_in_repository(
+        Path::new(ctx.git.root()),
+        &Path::new(ctx.git.root()).join(name),
+    );
+    if let Some(rel) = in_tree.filter(|_| ctx.git.has_base()) {
+        if let Some(text) = ctx.git.base_content(&rel)? {
+            match toml::from_str::<crate::baseline::DisciplineBaseline>(&text) {
+                Ok(base) => {
+                    for (path, n) in base.assertions {
+                        let e = floor.entry(path).or_insert(0);
+                        *e = (*e).max(n);
+                    }
+                }
+                Err(_) => out.notes.push(format!(
+                    "`{rel}` does not parse on the base side; the assertion counts it records were not compared"
+                )),
+            }
+        }
+    }
+    Ok(floor)
+}
+
+/// The assertion-density ratchet: a test file holding fewer assertions than the baseline
+/// records for it is a `test-density-regression` warning, whatever the change's own diff
+/// shows. The count is the suite's state, not the diff's, so a relaxation that a
+/// directive lifted, or one each review accepted in turn, still shows here.
+fn check_assertion_density(
+    ctx: &Context,
+    filter: &crate::guards::PathFilter,
+    sides: &SideVocabularies,
+    out: &mut GateOutcome,
+) -> Result<()> {
+    let floor = assertion_floor(ctx, out)?;
+    if floor.is_empty() {
+        if ctx.baseline.is_some() {
+            out.notes.push(
+                "the baseline records no per-file assertion counts, so assertion density was not compared; `discipline baseline --migrate` seeds them".to_string(),
+            );
+        }
+        return Ok(());
+    }
+    let registry = crate::ast::default_registry();
+    let v = sides.head()?;
+    let (mut compared, mut missing, mut above) = (0usize, Vec::new(), 0usize);
+    for (path, &recorded) in &floor {
+        if filter.matches(path) {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(Path::new(ctx.git.root()).join(path)) else {
+            missing.push(path.as_str());
+            continue;
+        };
+        let Some((tests, current)) = file_assertions(path, &content, &registry, v) else {
+            out.notes.push(format!(
+                "`{path}`: no language pack reads it, so its assertions were not counted"
+            ));
+            continue;
+        };
+        compared += 1;
+        if current > recorded {
+            above += 1;
+        }
+        if current >= recorded {
+            continue;
+        }
+        let lifted = ctx.find_override(
+            GATE,
+            &crate::findings::TEST_DENSITY_REGRESSION,
+            tokens::ALLOW_TEST_SHRINK,
+            path,
+        );
+        out.lift_or_push(
+            lifted,
+            Severity::Warning,
+            &crate::findings::TEST_DENSITY_REGRESSION,
+            (Some(path), None),
+            format!(
+                "`{path}` holds {current} assertion(s) across {tests} running test(s); the baseline records {recorded} for it, and that count only ratchets up."
+            ),
+            &format!(
+                "Restore the assertions. When the drop is intended, justify it on its own line in the PR body or a commit message (`allow-test-shrink: {path} <reason>`) and record the new count with `discipline baseline --write`."
+            ),
+        );
+    }
+    out.notes.push(format!(
+        "assertion density: {compared} test file(s) compared with the counts the baseline records"
+    ));
+    if above > 0 {
+        out.notes.push(format!(
+            "{above} test file(s) hold more assertions than the baseline records; `discipline baseline --write` ratchets their entries up"
+        ));
+    }
+    if !missing.is_empty() {
+        let shown: Vec<&str> = missing.iter().take(5).copied().collect();
+        out.notes.push(format!(
+            "{} file(s) the baseline records assertion counts for are not in the tree ({}{}); a removed test is `deletion-rationale`'s to judge",
+            missing.len(),
+            shown.join(", "),
+            if missing.len() > shown.len() { ", ..." } else { "" }
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

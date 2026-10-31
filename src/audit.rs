@@ -502,6 +502,108 @@ pub struct Summary {
     pub identities: Vec<Identity>,
     /// What `--replay` read; `None` without it.
     pub replay: Option<ReplayRead>,
+    /// The per-file assertion counts the tip's baseline records, against the tip's test
+    /// files; `None` when it records none.
+    pub density: Option<Density>,
+}
+
+/// The assertion counts the tip's baseline records (`[assertions]`), against the tip:
+/// the metric `test-floor` ratchets (`test-density-regression`), so the cumulative view
+/// and the per-change check read the same number.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Density {
+    /// Test files the baseline records a count for.
+    pub files: usize,
+    /// Running tests in those files at the tip.
+    pub tests: usize,
+    /// The assertions the baseline records for them.
+    pub recorded: usize,
+    /// The assertions they hold at the tip.
+    pub current: usize,
+    /// Each file holding fewer than recorded, in path order.
+    pub below: Vec<DensityDrop>,
+}
+
+/// A test file holding fewer assertions than the baseline records for it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DensityDrop {
+    pub path: String,
+    pub recorded: usize,
+    pub current: usize,
+}
+
+/// [`Density`] at the tip `tree`, read with `config`'s assertion vocabulary. `None` when
+/// the tip has no baseline, or one that records no counts or does not parse.
+pub fn tip_density(
+    repo: &Repository,
+    tree: &git2::Tree,
+    config: &DisciplineConfig,
+) -> Result<Option<Density>> {
+    let Some(text) = blob_text(repo, tree, BASELINE_NAME)? else {
+        return Ok(None);
+    };
+    let Ok(baseline) = toml::from_str::<DisciplineBaseline>(&text) else {
+        return Ok(None);
+    };
+    if baseline.assertions.is_empty() {
+        return Ok(None);
+    }
+    let registry = crate::ast::default_registry();
+    let v = crate::guards::agent_diff::assert_vocabulary(config);
+    let mut d = Density::default();
+    for (path, &recorded) in &baseline.assertions {
+        d.files += 1;
+        d.recorded += recorded;
+        let Some(content) = blob_text(repo, tree, path)? else {
+            continue;
+        };
+        let (tests, current) =
+            crate::guards::test_floor::file_assertions(path, &content, &registry, &v)
+                .unwrap_or((0, 0));
+        d.tests += tests;
+        d.current += current;
+        if current < recorded {
+            d.below.push(DensityDrop {
+                path: path.clone(),
+                recorded,
+                current,
+            });
+        }
+    }
+    Ok(Some(d))
+}
+
+/// The `assertion-density` check: whether each file holds the count the baseline records.
+pub fn density_check(checks: &mut Vec<Check>, density: Option<&Density>) {
+    let (state, detail) = match density {
+        None => (
+            "not-checked",
+            "the baseline records no per-file assertion counts: `discipline baseline --migrate` seeds them".to_string(),
+        ),
+        Some(d) if d.below.is_empty() => (
+            "clean",
+            format!(
+                "{} hold the counts the baseline records",
+                crate::audit_html::plural(d.files, "test file", "test files")
+            ),
+        ),
+        Some(d) => (
+            "found",
+            format!(
+                "{} below its recorded count, of {} recorded (e.g. `{}`: {} of {})",
+                crate::audit_html::plural(d.below.len(), "test file", "test files"),
+                d.files,
+                d.below[0].path,
+                d.below[0].current,
+                d.below[0].recorded
+            ),
+        ),
+    };
+    checks.push(Check {
+        id: "assertion-density",
+        state,
+        detail,
+    });
 }
 
 /// The replay report `--replay` read.
@@ -670,6 +772,28 @@ impl Summary {
                 crate::audit_html::plural(self.protected_edits.len(), "edit", "edits"),
                 crate::audit_html::plural(changes.len(), "change", "changes")
             ));
+        }
+        if let Some(d) = &self.density {
+            out.push_str(&format!(
+                "\nTests at the tip: {} in the {} the baseline records; {} assertions there, {} recorded{}\n",
+                d.tests,
+                crate::audit_html::plural(d.files, "test file", "test files"),
+                d.current,
+                d.recorded,
+                if d.below.is_empty() {
+                    String::new()
+                } else {
+                    format!("; {} below its count", crate::audit_html::plural(d.below.len(), "file", "files"))
+                }
+            ));
+            for b in d.below.iter().take(8) {
+                out.push_str(&format!(
+                    "  below    {}  {} of {} recorded\n",
+                    line(&b.path),
+                    b.current,
+                    b.recorded
+                ));
+            }
         }
         out.push_str("\nChecks:\n");
         for c in &self.checks {
@@ -1397,6 +1521,8 @@ pub fn run(opts: &Options) -> Result<Summary> {
         &tip_config.gates.ratified_paths.agent_logins,
     );
     identity_check(&mut s.checks, &s.identities, s.forge.is_some());
+    s.density = tip_density(&repo, &repo.find_commit(tip)?.tree()?, &tip_config)?;
+    density_check(&mut s.checks, s.density.as_ref());
     s.pulls = pulls;
     s.issues = issues;
     Ok(s)

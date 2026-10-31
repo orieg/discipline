@@ -269,6 +269,7 @@ mod tests {
             refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
         };
         let json = format_gitlab(&summary);
@@ -307,6 +308,7 @@ mod tests {
             refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
         };
 
@@ -362,6 +364,7 @@ mod tests {
             refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
         };
 
@@ -408,6 +411,7 @@ mod tests {
             refused_hidden_directives: Vec::new(),
             deprecations: Vec::new(),
             directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
             unused_directives: Vec::new(),
         };
 

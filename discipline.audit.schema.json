@@ -348,6 +348,70 @@
       },
       "type": "array"
     },
+    "density": {
+      "additionalProperties": false,
+      "description": "The per-file assertion counts the tip's baseline records (`[assertions]`), against the tip's test files: the metric `test-floor`'s `test-density-regression` ratchets. Null when the baseline records none. Omitted by a binary older than this field",
+      "properties": {
+        "below": {
+          "description": "Each file holding fewer assertions than recorded, in path order; a file gone from the tip is not listed",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "current": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "description": "The test file",
+                "type": "string"
+              },
+              "recorded": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "path",
+              "recorded",
+              "current"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "current": {
+          "description": "The assertions they hold at the tip",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "files": {
+          "description": "Test files the baseline records a count for",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recorded": {
+          "description": "The assertions the baseline records for them",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tests": {
+          "description": "Running tests in those files at the tip",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "files",
+        "tests",
+        "recorded",
+        "current",
+        "below"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "forge": {
       "additionalProperties": false,
       "description": "What `--forge` read; null without it",
