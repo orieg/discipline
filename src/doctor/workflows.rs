@@ -600,9 +600,8 @@ pub fn analyse_workflows(files: &[(String, String)], self_action: bool) -> Local
     if facts.jobs.is_empty() {
         facts.findings.insert(
             0,
-            Finding::new("workflows", Status::Fail, "no workflow job runs discipline").fix(
-                "Add a job with `uses: orieg/discipline@v0` (see docs/guides/ci-platforms.md).",
-            ),
+            Finding::new("workflows", Status::Fail, "no workflow job runs discipline")
+                .fix(add_job_advice()),
         );
     } else {
         let names: Vec<String> = facts
@@ -620,6 +619,18 @@ pub fn analyse_workflows(files: &[(String, String)], self_action: bool) -> Local
         );
     }
     facts
+}
+
+/// The advice for a repository with no job that runs discipline. It names this
+/// release pinned to a commit, as `ci-integrity` asks: a tag ref such as `@v0` is the
+/// first thing it reports.
+pub fn add_job_advice() -> String {
+    let v = env!("CARGO_PKG_VERSION");
+    let sha = crate::hook::release_sha().unwrap_or("<commit-sha>");
+    format!(
+        "Add a job with `uses: orieg/discipline@{sha} # v{v}` (pinned to the release commit; \
+         GitLab and other CI: docs/guides/ci-platforms.md)."
+    )
 }
 
 #[cfg(test)]

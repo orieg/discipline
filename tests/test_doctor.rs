@@ -448,6 +448,23 @@ fn doctor_local_findings_warn_and_strict_fails_on_them() {
     let none = empty.run(&["doctor", "--local-only"], &[]);
     assert_eq!(none.code, 1, "{}", none.stdout);
     assert!(none.stdout.contains("no workflow job runs discipline"));
+    // The advice pins a release commit, which `ci-integrity` accepts, never a tag ref it
+    // reports (#966), and names a CODEOWNERS place every forge reads.
+    let v = env!("CARGO_PKG_VERSION");
+    assert!(
+        none.stdout.contains("uses: orieg/discipline@")
+            && none.stdout.contains(&format!(" # v{v}`"))
+            && !none.stdout.contains("orieg/discipline@v0"),
+        "{}",
+        none.stdout
+    );
+    assert!(
+        none.stdout
+            .contains("CODEOWNERS file at the repository root")
+            && !none.stdout.contains(".github/CODEOWNERS"),
+        "{}",
+        none.stdout
+    );
 }
 
 #[test]
