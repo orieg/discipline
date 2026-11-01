@@ -173,6 +173,8 @@ Adoption and editor tooling:
 - [Explaining a Gate (`discipline explain`)](docs/CONFIGURATION.md#explaining-a-gate)
 - [VS Code Problems Panel](docs/CONFIGURATION.md#vs-code-problems-panel)
 - [Keeping Pins Current with Renovate](docs/CONFIGURATION.md#keeping-pins-current-with-renovate)
+- [Keeping Pins Current with Dependabot](docs/CONFIGURATION.md#keeping-pins-current-with-dependabot)
+- [Agent Hook Files in a Bot's Update](docs/CONFIGURATION.md#agent-hook-files-in-a-bots-update)
 
 ## Gates
 

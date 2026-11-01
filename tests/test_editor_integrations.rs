@@ -154,3 +154,47 @@ fn the_renovate_preset_groups_every_pin_and_reads_the_documented_gitlab_include(
     assert!(file_matches(".gitlab-ci.yml") && file_matches("ci/.gitlab/discipline.yaml"));
     assert!(!file_matches("README.md"));
 }
+
+#[test]
+fn the_renovate_preset_moves_only_a_bootstrap_that_trusts_the_release_sums() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let preset: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("renovate/discipline.json")).unwrap(),
+    )
+    .unwrap();
+    let manager = &preset["customManagers"][1];
+    assert_eq!(manager["datasourceTemplate"], "github-releases");
+    assert_eq!(manager["depNameTemplate"], "orieg/discipline");
+    let pattern = regex::Regex::new(manager["matchStrings"][0].as_str().unwrap()).unwrap();
+    let file = regex::Regex::new(
+        manager["managerFilePatterns"][0]
+            .as_str()
+            .unwrap()
+            .trim_matches('/'),
+    )
+    .unwrap();
+    assert!(file.is_match(discipline::hook::CLAUDE_BOOTSTRAP));
+    assert!(!file.is_match(".claude/settings.json"));
+
+    // The bootstrap `hook install` writes without `--pin-sums`: its version is found.
+    let release = discipline::hook::claude_bootstrap_script();
+    let found: Vec<String> = pattern
+        .captures_iter(&release)
+        .map(|c| c["currentValue"].to_string())
+        .collect();
+    assert_eq!(
+        found,
+        [format!("v{}", env!("CARGO_PKG_VERSION"))],
+        "{release}"
+    );
+
+    // A pinned one carries digests of that release's assets, which a version bump alone
+    // would leave stale: the manager does not touch it.
+    let pinned =
+        discipline::hook::claude_bootstrap_script_with(Some(&discipline::hook::ReleaseDigests {
+            x86_64: "a".repeat(64),
+            aarch64: "b".repeat(64),
+        }));
+    assert!(pinned.contains("sums=pinned"), "{pinned}");
+    assert!(!pattern.is_match(&pinned), "{pinned}");
+}

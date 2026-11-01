@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Keep every pin of orieg/discipline moving together: the action, the container image (tag and digest), the pre-commit rev and the GitLab CI include.",
+  "description": "Keep every pin of orieg/discipline moving together: the action, the container image (tag and digest), the pre-commit rev, the GitLab CI include and the Claude Code bootstrap without pinned digests.",
   "extends": [":enablePreCommit"],
   "packageRules": [
     {
@@ -20,6 +20,16 @@
       ],
       "depNameTemplate": "orieg/discipline",
       "datasourceTemplate": "github-tags"
+    },
+    {
+      "customType": "regex",
+      "description": "The Claude Code bootstrap `discipline hook install` writes without pinned digests (`sums=release`: it checks the download against the release's own SHA256SUMS), so only its version moves. One with pinned digests (`sums=pinned`) is left to `discipline hook install --agent claude-code --upgrade --pin-sums <SHA256SUMS>`.",
+      "managerFilePatterns": ["/(^|/)\\.claude/hooks/discipline-bootstrap\\.sh$/"],
+      "matchStrings": [
+        "discipline-hook-file: sums=release sha256=[0-9a-f]{64}\\n(?:.*\\n)*?version=\"(?<currentValue>v\\d+\\.\\d+\\.\\d+)\"\\n"
+      ],
+      "depNameTemplate": "orieg/discipline",
+      "datasourceTemplate": "github-releases"
     }
   ]
 }

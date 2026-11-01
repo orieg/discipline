@@ -1443,7 +1443,43 @@ A repository pins discipline in up to four places: the action (`uses: orieg/disc
 { "extends": ["github>orieg/discipline//renovate/discipline"] }
 ```
 
-It groups every discipline dependency under one `discipline` update, pins digests (the image's, and the action to a commit SHA; it does not set the action's `version:` input), turns on Renovate's `pre-commit` manager (off by default in Renovate; this enables it for every hook in the repository), and adds a regex manager for the GitLab `include: remote:` URL, which no built-in manager reads. Renovate's own `github-actions` manager already covers `.github`, `.gitea` and `.forgejo` workflows, including `container: image:` with a digest.
+It groups every discipline dependency under one `discipline` update, pins digests (the image's, and the action to a commit SHA; it does not set the action's `version:` input), turns on Renovate's `pre-commit` manager (off by default in Renovate; this enables it for every hook in the repository), and adds regex managers for the GitLab `include: remote:` URL and the Claude Code bootstrap's version, which no built-in manager reads. Renovate's own `github-actions` manager already covers `.github`, `.gitea` and `.forgejo` workflows, including `container: image:` with a digest, and so the Copilot setup workflow. The agent hook files have rules of their own: see [Agent Hook Files in a Bot's Update](#agent-hook-files-in-a-bots-update).
+
+### Keeping Pins Current with Dependabot
+
+Dependabot's `github-actions` ecosystem moves the action pin, `uses: orieg/discipline@<sha> # vX.Y.Z` included: it reads discipline's releases, writes the new release's commit and rewrites the version comment. A release candidate (`vX.Y.Z-rc.N`) is a pre-release version, which it does not offer to a pin on a stable release. In `.github/dependabot.yml`:
+
+```yaml
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      discipline:
+        patterns: ["orieg/discipline"]
+```
+
+- **The binary follows the pin.** With no `version:` input, the action downloads the release named in its own `Cargo.toml` at the pinned commit, so moving the pin moves the binary. A `version:` input stops that: Dependabot moves the pin and the binary stays where `version:` says. Leave it out unless the binary is held back on purpose.
+- **A new release is held back at first.** Dependabot skips versions published within its cooldown (its job logs print the setting as `cooldown days N`), so a run right after a release proposes the one before it. A later run moves the pull request on.
+- **A grouped pull request blocks the next one.** While a grouped update is open, a scheduled run updates it in place and opens no other. If it no longer moves to the latest release, closing it lets the next run open a fresh one.
+- **What it does not move:** the pre-commit `rev:`, the GitLab CI `include:` URL and the Claude Code bootstrap. The Renovate preset moves the first two; the bootstrap is described below.
+
+### Agent Hook Files in a Bot's Update
+
+Two files `discipline hook install` writes name a release: the Copilot setup workflow (`.github/workflows/copilot-setup-steps.yml`, the action pin) and the Claude Code bootstrap (`.claude/hooks/discipline-bootstrap.sh`, `version="vX.Y.Z"`). Each carries a `discipline-hook-file:` digest line, by which `hook install --upgrade` tells a file a release wrote from one a person edited. The digest leaves the release on those lines out, so a pin a bot moved is not an edit: `--upgrade` rewrites the file without `--force`. Anything else changed on those lines, or elsewhere in the file, still is. Files written by 0.29.0 and earlier carry a digest of the whole text: run `hook install --upgrade` once with the current release, and later bumps are recognised.
+
+- **Copilot setup workflow:** Dependabot and Renovate move its pin like any other action.
+- **Bootstrap without pinned digests** (`sums=release` on its digest line: the download is checked against the release's own `SHA256SUMS`): the Renovate preset moves its version. Dependabot does not read it; move it with `discipline hook install --agent claude-code --upgrade` after the release.
+- **Bootstrap with pinned digests** (`sums=pinned`, written with `--pin-sums`): the digests are of that release's assets, so no bot moves it; a version moved alone would fail the checksum and the session would run unchecked. Move it with the release's `SHA256SUMS`:
+
+```bash
+gh release download vX.Y.Z --repo orieg/discipline --pattern SHA256SUMS
+discipline hook install --agent claude-code --upgrade --pin-sums SHA256SUMS
+```
+
+Either way the bootstrap is an agent-instruction file: its change needs `allow-agent-instructions` like any other edit of it.
 
 ### Explaining a Gate
 
