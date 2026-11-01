@@ -23,7 +23,12 @@ fail() {
 DEST_DIR="${DEST_DIR:-}"
 VERSION="${VERSION:-}"
 DOWNLOAD_URL="${DOWNLOAD_URL:-https://github.com/orieg/discipline/releases}"
-VERIFY_PROVENANCE="${DISCIPLINE_VERIFY_PROVENANCE:-}"
+# A safety switch: a value it does not know fails rather than reading as off.
+case "${DISCIPLINE_VERIFY_PROVENANCE:-}" in
+  ""|0) VERIFY_PROVENANCE="" ;;
+  1) VERIFY_PROVENANCE=1 ;;
+  *) fail "DISCIPLINE_VERIFY_PROVENANCE='${DISCIPLINE_VERIFY_PROVENANCE}' is not an accepted value (1 to verify, 0 or empty not to)" ;;
+esac
 TRUSTED_ROOT="${DISCIPLINE_TRUSTED_ROOT:-}"
 gpg_removed="releases publish no SHA256SUMS.asc, so --gpg-key / DISCIPLINE_GPG_KEY could never verify: use --verify-provenance"
 [ -z "${DISCIPLINE_GPG_KEY:-}" ] || fail "${gpg_removed}"

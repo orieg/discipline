@@ -529,6 +529,50 @@ fn install_sh_verify_provenance_checks_the_sigstore_bundle_before_installing() {
     assert!(err.contains("use --verify-provenance"), "{err}");
 }
 
+#[test]
+fn install_sh_refuses_an_unrecognised_verify_provenance_value_before_downloading() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = tempfile::tempdir().unwrap();
+    let run = |value: &str| {
+        let out = common::script_command("bash")
+            .arg(root.join("install.sh"))
+            .arg("--to")
+            .arg(dir.path().join("dest"))
+            .arg("--version")
+            .arg("v0.0.0-test")
+            // An empty store: a run that reaches the download fails there.
+            .arg("--download-url")
+            .arg(format!("file://{}/store", dir.path().display()))
+            .env("DISCIPLINE_VERIFY_PROVENANCE", value)
+            .output()
+            .unwrap();
+        (
+            out.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    };
+    // A safety switch never reads an unknown value as off.
+    for value in ["true", "yes", "on", "2", "TRUE"] {
+        let (ok, err) = run(value);
+        assert!(!ok, "{value}: {err}");
+        assert!(
+            err.contains("DISCIPLINE_VERIFY_PROVENANCE") && err.contains("accepted"),
+            "{value}: {err}"
+        );
+        assert!(!err.contains("Downloading"), "{value} downloaded: {err}");
+    }
+    // `0` and empty are off: the run reaches the download.
+    for value in ["0", ""] {
+        let (ok, err) = run(value);
+        assert!(!ok);
+        assert!(err.contains("could not download"), "{value:?}: {err}");
+    }
+}
+
 /// Runs the lines between the `download-url` markers of `action.yml` for `url`, with
 /// `extra` set in the environment. Returns (exit status, stdout).
 fn download_url_check(url: &str, extra: &[(&str, &str)]) -> (bool, String) {
