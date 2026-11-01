@@ -2486,6 +2486,21 @@ fn v7_preregistration_sample_sizes_match_rust_bounds() {
         })
         .unwrap();
     assert_eq!(int(&pb["structural_first_clearing_n"]), first_clearing);
+    // The non-clearing sizes the rationale names between the first clearing size and the
+    // point-estimate requirement.
+    let point_estimate = int(&pb["structural_point_estimate_n"]);
+    let non_clearing: Vec<usize> = (first_clearing..point_estimate)
+        .filter(|&m| {
+            let k = (sp * m as f64 + 0.5).floor() as usize;
+            wilson_score_interval(k, m, conf).unwrap().0 < sf
+        })
+        .collect();
+    let named: Vec<usize> = (131..=139).chain(151..=152).collect();
+    assert_eq!(non_clearing, named);
+    assert!(pb["required_n_rationale"]
+        .as_str()
+        .unwrap()
+        .contains("131 to 139 and 151 to 152 do not clear"));
     let per_gate = sample_size_for_wilson_lower_bound_power(sp, sf, conf, power, n_max).unwrap();
     assert_eq!(int(&pb["structural_required_n_per_gate"]), per_gate);
     assert_eq!(
@@ -2527,7 +2542,9 @@ fn v7_preregistration_sample_sizes_match_rust_bounds() {
     assert_eq!(int(&floors[0]["required_n_per_gate"]), per_gate);
     assert_eq!(int(&floors[0]["class_required_n"]), structural_class);
     assert_eq!(float(&floors[0]["precision_floor"]), sf);
+    assert_eq!(float(&floors[0]["assumed_precision"]), sp);
     assert_eq!(int(&floors[1]["required_n_per_gate"]), heuristic);
+    assert_eq!(float(&floors[1]["assumed_precision"]), hp);
     assert_eq!(int(&floors[1]["class_required_n"]), heuristic_class);
     assert_eq!(float(&floors[1]["precision_floor"]), hf);
     // The class lists are v6's.

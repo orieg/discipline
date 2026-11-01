@@ -914,8 +914,9 @@ fn poisson_at_least_with(n: usize, mu: f64, ln_fact: &[f64]) -> Result<f64> {
 ///
 /// A unit is one finding per gate per pull request, so a stratum's count over `N` pull
 /// requests is a sum of independent Bernoulli indicators with small rates. The Poisson law
-/// with the same mean approximates it (Barbour and Hall bound the total-variation distance by
-/// the largest rate) and is the more dispersed of the two, its variance being its mean. The
+/// with the same mean `lambda` approximates it (Barbour and Hall bound the total-variation
+/// distance by `(1 - e^-lambda) * sum(p_i^2) / lambda`, which is at most the largest rate) and
+/// is the more dispersed of the two, its variance being its mean. The
 /// tail is increasing in `N`, so the answer is found by bisection and is exact for
 /// the Poisson model. At `assurance = 0.5` it is close to `n_units / units_per_pull_request`.
 ///
