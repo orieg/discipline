@@ -10160,6 +10160,31 @@ enabled = false
     );
     let outcome = run_authorized.outcome("deletion-rationale");
     assert_eq!(outcome["overrides"].as_array().unwrap().len(), 1);
+    // The bypass is recorded in the report, without the login (#966); a run that
+    // `fail_on_overrides` refused has no such note.
+    let notes = |run: &Run| -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+        v["directive_notes"]
+            .as_array()
+            .map(|a| a.iter().map(|n| n.as_str().unwrap().to_string()).collect())
+            .unwrap_or_default()
+    };
+    let recorded = notes(&run_authorized);
+    assert!(
+        recorded
+            .iter()
+            .any(|n| n.contains("`fail_on_overrides` not applied")
+                && n.contains("1 override(s)")
+                && !n.to_ascii_lowercase().contains("maintainer-handle")),
+        "{recorded:?}"
+    );
+    assert!(
+        !notes(&run_unauthorized)
+            .iter()
+            .any(|n| n.contains("fail_on_overrides")),
+        "{}",
+        run_unauthorized.stdout
+    );
 
     // 4. Authorized via DISCIPLINE_ACTOR environment variable -> exit 0
     let run_env_actor = repo.run(
