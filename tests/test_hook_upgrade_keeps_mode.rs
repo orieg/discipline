@@ -575,8 +575,10 @@ fn the_upgrade_output_names_the_mode_it_wrote() {
         .unwrap_or_else(|| panic!("no upgrade line: {}", up.stdout));
     assert!(line.ends_with(&format!("to discipline {v}")), "{line}");
 
-    // The same alteration under the digest of the unaltered script is an edit: no
-    // upgrade line, the difference, and the script as it was.
+    // The version moved alone under the digest of the unaltered script is what a bot
+    // writes, not an edit (#964); with a line of a person's own it is: no upgrade line,
+    // the difference, and the script as it was.
+    let altered = format!("{altered}# kept on purpose\n");
     repo.write(boot, &altered);
     let refused = install(&repo, home.path(), &["--agent", "claude-code", "--upgrade"]);
     assert_eq!(refused.code, 1, "{}{}", refused.stdout, refused.stderr);

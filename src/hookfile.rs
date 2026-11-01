@@ -12,7 +12,8 @@ pub const STAMP: &str = "discipline-hook-file:";
 /// What a file with the generated header says about its own content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stamp {
-    /// Its digest line matches the rest of the file: exactly what a release wrote.
+    /// Its digest line matches the rest of the file: what a release wrote, the release
+    /// its pin lines name aside ([`release_neutral`]).
     Unedited,
     /// It has a digest line (or several) that does not match: changed since it was written.
     Edited,
@@ -29,21 +30,44 @@ static STAMP_LINE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(
         .unwrap()
 });
 
-/// What the digest is taken over: `text` with line endings as `\n` (a checkout can rewrite
-/// them) and the digest itself left out of its line, so the options on that line are
-/// covered too.
-fn digest_of(text: &str, hex: &str) -> String {
-    let unix = text.replace("\r\n", "\n");
-    sha256_hex(
-        unix.replacen(&format!("sha256={hex}"), "sha256=", 1)
-            .as_bytes(),
+/// The lines that name the release a generated file installs: the action pin of a setup
+/// workflow (`uses: orieg/discipline@<sha> # v1.2.3`) and the bootstrap's `version="v1.2.3"`.
+/// Dependabot and Renovate move these when a release comes out, so the digest leaves the
+/// release out of them ([`release_neutral`]).
+static RELEASE_PIN: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(
+        r#"(?m)^(?P<uses>[ \t]*(?:- )?uses: orieg/discipline@)[0-9A-Za-z._-]+(?: # v[0-9A-Za-z.+-]+)?$|^(?P<version>version=")v[0-9A-Za-z.+-]+"$"#,
     )
+    .unwrap()
+});
+
+/// `text` with the release on each [`RELEASE_PIN`] line replaced by a fixed placeholder.
+fn release_neutral(text: &str) -> std::borrow::Cow<'_, str> {
+    RELEASE_PIN.replace_all(text, |c: &regex::Captures| match c.name("uses") {
+        Some(uses) => format!("{}RELEASE", uses.as_str()),
+        None => format!("{}RELEASE\"", &c["version"]),
+    })
+}
+
+/// What the digest is taken over: `text` with line endings as `\n` (a checkout can rewrite
+/// them), the digest itself left out of its line, so the options on that line are
+/// covered too, and, with `neutral`, the release left out of its pin lines
+/// ([`release_neutral`]). Files written by 0.29.0 and earlier carry the digest without `neutral`.
+fn digest_of(text: &str, hex: &str, neutral: bool) -> String {
+    let unix = text.replace("\r\n", "\n");
+    let unix = unix.replacen(&format!("sha256={hex}"), "sha256=", 1);
+    if neutral {
+        sha256_hex(release_neutral(&unix).as_bytes())
+    } else {
+        sha256_hex(unix.as_bytes())
+    }
 }
 
 /// `content`, a generated file whose first comment line carrying `header` says what wrote
 /// it, with the digest line after that line. `options` (`mode=observe`, `sums=pinned`)
-/// records what the file was written with. The digest detects a later edit; it is not a
-/// signature, since whoever edits the file can also recompute it.
+/// records what the file was written with. The digest detects a later edit, a pin moved to
+/// another release excepted ([`release_neutral`]); it is not a signature, since whoever
+/// edits the file can also recompute it.
 pub fn stamp(content: &str, header: &str, options: &[&str]) -> String {
     let Some(at) = content.lines().position(|l| l.contains(header)) else {
         return content.to_string();
@@ -68,7 +92,7 @@ pub fn stamp(content: &str, header: &str, options: &[&str]) -> String {
         }
         out
     };
-    build(&digest_of(&build(""), ""))
+    build(&digest_of(&build(""), "", true))
 }
 
 /// Whether `text` is exactly what a release wrote, by its digest line.
@@ -81,7 +105,12 @@ pub fn stamp_state(text: &str) -> Stamp {
     match stamped.as_slice() {
         [] => Stamp::Absent,
         [line] => match STAMP_LINE.captures(line) {
-            Some(c) if digest_of(text, &c[1]) == c[1] => Stamp::Unedited,
+            Some(c)
+                if digest_of(text, &c[1], true) == c[1]
+                    || digest_of(text, &c[1], false) == c[1] =>
+            {
+                Stamp::Unedited
+            }
             _ => Stamp::Edited,
         },
         _ => Stamp::Edited,
@@ -328,6 +357,56 @@ mod tests {
         let js = stamp("// Written by `tool`.\nexport {}\n", HEADER, &[]);
         assert!(js.lines().nth(1).unwrap().starts_with("// "), "{js}");
         assert_eq!(stamp_state(&js), Stamp::Unedited);
+    }
+
+    #[test]
+    fn a_pin_moved_to_another_release_is_not_an_edit() {
+        let body = "# Written by `tool`.\nversion=\"v0.29.0\"\nsteps:\n      - name: Install\n        uses: orieg/discipline@49f0d47e774244615e084e207784a9a0e6082cd5 # v0.29.0\n        with:\n          install_only: 'true'\n";
+        let stamped = stamp(body, HEADER, &["sums=release"]);
+        assert_eq!(stamp_state(&stamped), Stamp::Unedited);
+        // What Dependabot or Renovate writes for a later release: the commit, its comment,
+        // a tag ref, the bootstrap's version.
+        for moved in [
+            stamped.replace(
+                "49f0d47e774244615e084e207784a9a0e6082cd5 # v0.29.0",
+                "0123456789abcdef0123456789abcdef01234567 # v0.30.1",
+            ),
+            stamped.replace(
+                "49f0d47e774244615e084e207784a9a0e6082cd5 # v0.29.0",
+                "v0.30.0",
+            ),
+            stamped.replace("version=\"v0.29.0\"", "version=\"v0.31.0-rc.1\""),
+        ] {
+            assert_ne!(moved, stamped);
+            assert_eq!(stamp_state(&moved), Stamp::Unedited, "{moved}");
+        }
+        // Anything else on those lines, or another action, is still an edit.
+        for edited in [
+            stamped.replace("orieg/discipline@", "orieg/discipl1ne@"),
+            stamped.replace("# v0.29.0", "# v0.29.0 kept on purpose"),
+            stamped.replace("        uses:", "        # uses:"),
+            stamped.replace("version=\"v0.29.0\"", "version=\"v0.29.0\" # kept"),
+            stamped.replace("install_only: 'true'", "install_only: 'false'"),
+        ] {
+            assert_ne!(edited, stamped);
+            assert_eq!(stamp_state(&edited), Stamp::Edited, "{edited}");
+        }
+        // A file an earlier release wrote carries the digest of its whole text: it is
+        // unedited as it stands, and a moved pin is an edit there, as it was before.
+        let at = stamped.find("sha256=").unwrap() + "sha256=".len();
+        let blank = format!("{}{}", &stamped[..at], &stamped[at + 64..]);
+        let earlier = format!(
+            "{}{}{}",
+            &stamped[..at],
+            digest_of(&blank, "", false),
+            &stamped[at + 64..]
+        );
+        assert_ne!(earlier, stamped);
+        assert_eq!(stamp_state(&earlier), Stamp::Unedited);
+        assert_eq!(
+            stamp_state(&earlier.replace("version=\"v0.29.0\"", "version=\"v0.30.0\"")),
+            Stamp::Edited
+        );
     }
 
     #[test]

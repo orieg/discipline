@@ -1336,8 +1336,21 @@ fn install_upgrade_rewrites_only_files_an_earlier_release_generated() {
     assert_eq!(read(&repo, setup), current_setup);
     assert_eq!(read(&repo, boot), current_boot);
 
-    // The same alteration under the digest of the unaltered file is an edit: refused with
-    // the difference, and both files are left as they were.
+    // The bootstrap's version moved alone under the digest of the unaltered file is what
+    // Dependabot or Renovate writes, not an edit: it is upgraded (#964).
+    repo.write(boot, &altered_boot);
+    let run = repo.run(
+        &["hook", "install", "--agent", "claude-code", "--upgrade"],
+        &[],
+    );
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(run.stdout.contains("upgraded"), "{}", run.stdout);
+    assert_eq!(read(&repo, boot), current_boot);
+
+    // The same alteration with a line of a person's own is an edit: refused with the
+    // difference, and both files are left as they were.
+    let altered_setup = format!("{altered_setup}# kept on purpose\n");
+    let altered_boot = format!("{altered_boot}# kept on purpose\n");
     repo.write(setup, &altered_setup);
     repo.write(boot, &altered_boot);
     for (args, file, altered) in [

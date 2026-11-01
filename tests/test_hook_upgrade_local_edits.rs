@@ -179,6 +179,61 @@ fn upgrade_refuses_an_edited_file_and_force_overwrites_it() {
     }
 }
 
+/// `text` with its release pins moved to `0.99.0` the way Dependabot or Renovate moves
+/// them: the action's commit and version comment (or tag ref), the bootstrap's version.
+fn bot_bumped(text: &str) -> String {
+    text.lines()
+        .map(|l| {
+            let indent = l.len() - l.trim_start().len();
+            if l[indent..].starts_with("uses: orieg/discipline@") {
+                format!(
+                    "{}uses: orieg/discipline@0123456789abcdef0123456789abcdef01234567 # v0.99.0",
+                    &l[..indent]
+                )
+            } else if l.starts_with("version=\"v") {
+                "version=\"v0.99.0\"".to_string()
+            } else {
+                l.to_string()
+            }
+        })
+        .map(|l| l + "\n")
+        .collect()
+}
+
+#[test]
+fn upgrade_rewrites_a_file_whose_pin_a_bot_moved() {
+    for layout in &LAYOUTS[..2] {
+        let now = current(layout);
+        let moved = bot_bumped(&now);
+        assert_ne!(moved, now, "{}: the bump changes the file", layout.file);
+        let repo = Repo::new();
+        repo.write(layout.file, &moved);
+
+        let up = install(&repo, layout.args, &["--upgrade"]);
+        assert_eq!(up.code, 0, "{}: {}", layout.file, up.stdout);
+        assert!(
+            up.stdout.contains("upgraded") && !up.stdout.contains("was changed after"),
+            "{}: {}",
+            layout.file,
+            up.stdout
+        );
+        assert_eq!(read(&repo, layout.file), now, "{}", layout.file);
+
+        // Control: the same bump with a line of the person's own is still refused.
+        let edited = format!("{moved}{}\n", layout.comment);
+        let repo = Repo::new();
+        repo.write(layout.file, &edited);
+        let refused = install(&repo, layout.args, &["--upgrade"]);
+        assert_eq!(refused.code, 1, "{}: {}", layout.file, refused.stdout);
+        assert!(
+            refused.stdout.contains("was changed after"),
+            "{}",
+            refused.stdout
+        );
+        assert_eq!(read(&repo, layout.file), edited, "{}", layout.file);
+    }
+}
+
 /// The edits of the report: a digest pinned by hand with a comment saying why, and a
 /// guard added before the download.
 #[test]
