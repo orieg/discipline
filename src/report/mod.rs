@@ -451,28 +451,6 @@ pub fn render_step_summary_to_writer(
         passed, failed, disabled_suffix, examined, items_label, summary.errors, summary.warnings, total_ov, baselined_part
     )?;
 
-    writeln!(
-        file,
-        "| Gate | State | Examined | Violations |\n|---|---|---:|---:|"
-    )?;
-    for o in &summary.outcomes {
-        writeln!(
-            file,
-            "| `{}` | {} | {} | {} |",
-            o.gate,
-            if o.enabled { "on" } else { "**off**" },
-            o.examined,
-            o.violations.len()
-        )?;
-    }
-    if !summary.planned_gates.is_empty() {
-        writeln!(
-            file,
-            "\nNot checked (planned): {}",
-            summary.planned_gates.join(", ")
-        )?;
-    }
-    let total_ov = summary.total_overrides();
     if total_ov > 0 {
         writeln!(
             file,
@@ -526,6 +504,32 @@ pub fn render_step_summary_to_writer(
     if let Some(routing) = &summary.review_routing {
         write!(file, "{}", routing.markdown())?;
     }
+    // The gate table last and folded: the findings above are what a reader acts on, and
+    // a fresh repository lists every disabled gate here (#985).
+    writeln!(
+        file,
+        "\n<details><summary>Gates ({} on, {} off)</summary>\n\n| Gate | State | Examined | Violations |\n|---|---|---:|---:|",
+        summary.outcomes.iter().filter(|o| o.enabled).count(),
+        summary.outcomes.iter().filter(|o| !o.enabled).count()
+    )?;
+    for o in &summary.outcomes {
+        writeln!(
+            file,
+            "| `{}` | {} | {} | {} |",
+            o.gate,
+            if o.enabled { "on" } else { "**off**" },
+            o.examined,
+            o.violations.len()
+        )?;
+    }
+    if !summary.planned_gates.is_empty() {
+        writeln!(
+            file,
+            "\nNot checked (planned): {}",
+            summary.planned_gates.join(", ")
+        )?;
+    }
+    writeln!(file, "\n</details>")?;
     Ok(())
 }
 
@@ -1586,5 +1590,72 @@ mod tests {
             out.contains("`<pr-body>:42`"),
             "expected code span for location to retain raw backtick content in: {out}"
         );
+    }
+
+    /// The job summary leads with the verdict and the findings; the gate table, which in
+    /// a fresh repository is mostly disabled gates, comes last and folded (#985).
+    #[test]
+    fn the_step_summary_puts_findings_before_a_folded_gate_table() {
+        let mut on = GateOutcome::new("time-estimates");
+        on.examined = 1;
+        on.violations.push(Violation {
+            gate: "time-estimates",
+            code: "time-estimates/fixture".to_string(),
+            fingerprint: String::new(),
+            anchor: None,
+            legacy_title: None,
+            severity: Severity::Error,
+            title: "Time Estimate".into(),
+            file: Some("docs/plan.md".into()),
+            line: Some(3),
+            message: "names a duration".into(),
+            remediation: None,
+        });
+        let mut off = GateOutcome::new("bench-regression");
+        off.enabled = false;
+        let summary = CheckSummary {
+            schema_version: crate::output_schema::REPORT_SCHEMA_VERSION,
+            could_not_check: None,
+            base: "main".to_string(),
+            errors: 1,
+            warnings: 0,
+            notes: 0,
+            overrides: 0,
+            baselined: 0,
+            outcomes: vec![on, off],
+            planned_gates: vec![],
+            policy_failures: Vec::new(),
+            refused_hidden_directives: Vec::new(),
+            deprecations: Vec::new(),
+            directive_notes: Vec::new(),
+            stale_baseline_entries: 0,
+            unused_directives: Vec::new(),
+            review_routing: None,
+        };
+        let out = step_summary_of(&summary);
+        let at = |needle: &str| {
+            out.find(needle)
+                .unwrap_or_else(|| panic!("no `{needle}` in:\n{out}"))
+        };
+        assert!(
+            at("### Discipline gate: FAILED") < at("**Summary:**"),
+            "{out}"
+        );
+        assert!(at("**Summary:**") < at("| Severity | Gate |"), "{out}");
+        assert!(
+            at("| Severity | Gate |") < at("<details><summary>Gates (1 on, 1 off)</summary>"),
+            "{out}"
+        );
+        let table = at("| Gate | State | Examined | Violations |");
+        assert!(at("<details>") < table, "{out}");
+        assert!(
+            table < at("| `bench-regression` | **off** | 0 | 0 |"),
+            "{out}"
+        );
+        assert!(
+            at("| `bench-regression` | **off**") < at("</details>"),
+            "{out}"
+        );
+        assert!(out.trim_end().ends_with("</details>"), "{out}");
     }
 }
