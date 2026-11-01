@@ -129,6 +129,21 @@ pub struct PiiRule {
     pub token_class: Option<&'static TokenClass>,
 }
 
+impl PiiRule {
+    /// What to do about a match. A credential is live wherever the change was pushed, so
+    /// removing it is not enough; anything else is replaced with a placeholder.
+    pub fn remediation(&self) -> &'static str {
+        if self.token_class.is_some() {
+            "Revoke or rotate this credential, then remove it: once pushed it stays in the \
+             history, so deleting the line does not withdraw it. A fixture that must keep a \
+             token-shaped value can carry `discipline:allow(pii)`."
+        } else {
+            "Replace it with a placeholder such as `<home>` or `<host>`. A line that must \
+             keep it can carry `discipline:allow(pii)` or `docs-lint: allow`."
+        }
+    }
+}
+
 pub fn pii_rules(settings: &PiiGate) -> Result<Vec<PiiRule>> {
     let mut rules = Vec::new();
     if settings.home_paths {
@@ -431,8 +446,7 @@ fn scan_json(opts: &PiiScanOptions<'_>, text: &str, out: &mut GateOutcome) -> bo
                         Some(rep_file),
                         Some(line_num),
                         format!("Found a {detail}."),
-                        "Replace it with a placeholder such as `<home>` or `<host>`. A line that must \
-                         keep it can carry `discipline:allow(pii)` or `docs-lint: allow`.",
+                        rule.remediation(),
                     );
                     reported = true;
                     break;
@@ -630,8 +644,7 @@ pub fn pii(ctx: &Context) -> Result<GateOutcome> {
                     "Found a {detail}{}.",
                     if test_lan { " in test code" } else { "" }
                 ),
-                "Replace it with a placeholder such as `<home>` or `<host>`. A line that must \
-                 keep it can carry `discipline:allow(pii)` or `docs-lint: allow`.",
+                rule.remediation(),
             );
         }
     };
