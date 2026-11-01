@@ -1843,6 +1843,16 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
       <td>Base URL of the release store, for mirrors: https://, file://, or http:// to a loopback address. Set DISCIPLINE_INSTALL_ALLOW_INSECURE_HTTP=1 in the environment to accept another cleartext mirror.</td>
     </tr>
     <tr>
+      <td class="gate-id">require_provenance</td>
+      <td><code>false</code></td>
+      <td>Fail the install, before the binary runs, when its build provenance cannot be verified (provenance output unverified). A binary_path binary is accepted. Set it on a mirror install once the mirror serves discipline.intoto.jsonl and the runner has gh.</td>
+    </tr>
+    <tr>
+      <td class="gate-id">trusted_root</td>
+      <td><em>(none)</em></td>
+      <td>Path on the runner to a Sigstore trusted root (the output of gh attestation trusted-root) for the bundle check of a mirror install, so it needs no network. Never take it from the mirror itself. Default: Sigstore TUF repository, online.</td>
+    </tr>
+    <tr>
       <td class="gate-id">install_only</td>
       <td><code>false</code></td>
       <td>Install discipline and put it on PATH for the steps that follow, without running a check. For `.github/workflows/copilot-setup-steps.yml`, so the hooks of Copilot cloud agent find the binary.</td>
@@ -1940,7 +1950,7 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
     </tr>
     <tr>
       <td class="gate-id">provenance</td>
-      <td>How the binary was checked: verified (the build provenance attestation of the discipline release workflow), unverified (SHA256SUMS of the release store only: a mirror, another forge, or no gh), or local (binary_path)</td>
+      <td>How the binary was checked: verified (the build provenance attestation of the discipline release workflow, from the GitHub API or from the Sigstore bundle discipline.intoto.jsonl of a mirror), unverified (SHA256SUMS of the release store only: no gh, or a mirror without the bundle), or local (binary_path)</td>
     </tr>
     <tr>
       <td class="gate-id">install_error</td>

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # install.sh — Non-cargo shell installer for Discipline
 # Downloads pre-built release binary, verifies SHA256 checksum, and installs it.
+# --verify-provenance also checks the release's Sigstore bundle with `gh`, before
+# the binary runs: a mirror can replace the archive and SHA256SUMS together, not the bundle.
 #
 # Usage:
 #   # Recommended: download, inspect, and run
@@ -8,6 +10,7 @@
 #   # Or via one-liner:
 #   curl -fsSL https://orieg.github.io/discipline/install.sh | bash
 #   ./install.sh [--to <dir>] [--version <version>] [--download-url <url>]
+#                [--verify-provenance [--trusted-root <file>]]
 #
 set -euo pipefail
 
@@ -20,7 +23,15 @@ fail() {
 DEST_DIR="${DEST_DIR:-}"
 VERSION="${VERSION:-}"
 DOWNLOAD_URL="${DOWNLOAD_URL:-https://github.com/orieg/discipline/releases}"
-GPG_KEY="${DISCIPLINE_GPG_KEY:-}"
+# A safety switch: a value it does not know fails rather than reading as off.
+case "${DISCIPLINE_VERIFY_PROVENANCE:-}" in
+  ""|0) VERIFY_PROVENANCE="" ;;
+  1) VERIFY_PROVENANCE=1 ;;
+  *) fail "DISCIPLINE_VERIFY_PROVENANCE='${DISCIPLINE_VERIFY_PROVENANCE}' is not an accepted value (1 to verify, 0 or empty not to)" ;;
+esac
+TRUSTED_ROOT="${DISCIPLINE_TRUSTED_ROOT:-}"
+gpg_removed="releases publish no SHA256SUMS.asc, so --gpg-key / DISCIPLINE_GPG_KEY could never verify: use --verify-provenance"
+[ -z "${DISCIPLINE_GPG_KEY:-}" ] || fail "${gpg_removed}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -36,18 +47,26 @@ while [[ $# -gt 0 ]]; do
       DOWNLOAD_URL="$2"
       shift 2
       ;;
-    --gpg-key)
-      GPG_KEY="$2"
+    --verify-provenance)
+      VERIFY_PROVENANCE=1
+      shift
+      ;;
+    --trusted-root)
+      TRUSTED_ROOT="$2"
       shift 2
       ;;
+    --gpg-key)
+      fail "${gpg_removed}"
+      ;;
     -h|--help)
-      echo "Usage: install.sh [--to <dir>] [--version <version>] [--download-url <url>] [--gpg-key <key-file>]"
+      echo "Usage: install.sh [--to <dir>] [--version <version>] [--download-url <url>] [--verify-provenance [--trusted-root <file>]]"
       echo ""
       echo "Options:"
       echo "  --to <dir>            Install directory (default: /usr/local/bin or ~/.local/bin)"
       echo "  --version <v>         Release tag to install (e.g. v0.1.0; default: latest)"
       echo "  --download-url <url>  Base release download URL (for mirrors/testing)"
-      echo "  --gpg-key <file>      Public key file to verify SHA256SUMS.asc with gpg"
+      echo "  --verify-provenance   Check the release's Sigstore bundle with gh before installing (needs --version)"
+      echo "  --trusted-root <file> Sigstore trusted root for --verify-provenance offline (gh attestation trusted-root)"
       exit 0
       ;;
     *)
@@ -55,6 +74,15 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [ "${VERIFY_PROVENANCE}" = "1" ]; then
+  command -v gh >/dev/null 2>&1 || fail "--verify-provenance needs gh (https://cli.github.com)"
+  # Without a tag to bind to, any older signed release would pass.
+  [ -n "${VERSION}" ] || fail "--verify-provenance needs --version"
+  if [ -n "${TRUSTED_ROOT}" ]; then
+    [ -r "${TRUSTED_ROOT}" ] || fail "trusted root '${TRUSTED_ROOT}' is not a readable file"
+  fi
+fi
 
 # Architecture detection
 case "$(uname -m)" in
@@ -162,16 +190,6 @@ echo "Downloading discipline (${triple})..."
 fetch "${base}/${archive}" "${tmp_dir}/${archive}" || fail "could not download ${base}/${archive}"
 fetch "${base}/SHA256SUMS" "${tmp_dir}/SHA256SUMS" || fail "could not download ${base}/SHA256SUMS"
 
-if [ -n "${GPG_KEY}" ]; then
-  command -v gpg >/dev/null 2>&1 || fail "gpg is required when --gpg-key / DISCIPLINE_GPG_KEY is set"
-  [ -r "${GPG_KEY}" ] || fail "GPG key file '${GPG_KEY}' is not readable"
-  fetch "${base}/SHA256SUMS.asc" "${tmp_dir}/SHA256SUMS.asc" || fail "could not download ${base}/SHA256SUMS.asc"
-  gpg_home="${tmp_dir}/gnupg"
-  mkdir -m 0700 "${gpg_home}"
-  gpg --homedir "${gpg_home}" --batch --quiet --import "${GPG_KEY}" || fail "failed to import GPG key '${GPG_KEY}'"
-  gpg --homedir "${gpg_home}" --batch --verify "${tmp_dir}/SHA256SUMS.asc" "${tmp_dir}/SHA256SUMS" || fail "GPG signature verification of SHA256SUMS.asc failed"
-fi
-
 # SHA256 checksum verification
 echo "Verifying SHA256 checksum..."
 expected="$(awk -v f="${archive}" '$2 == f || $2 == "*" f { print $1 }' "${tmp_dir}/SHA256SUMS")"
@@ -187,6 +205,18 @@ fi
 
 if [ "${expected}" != "${actual}" ]; then
   fail "checksum mismatch for ${archive}: expected ${expected}, got ${actual}"
+fi
+
+# Build provenance from the Sigstore bundle. The trusted root is Sigstore's (online)
+# or the one passed with --trusted-root, never one from the download URL.
+if [ "${VERIFY_PROVENANCE}" = "1" ]; then
+  fetch "${base}/discipline.intoto.jsonl" "${tmp_dir}/discipline.intoto.jsonl" || fail "could not download ${base}/discipline.intoto.jsonl"
+  attest=(gh attestation verify "${tmp_dir}/${archive}" --bundle "${tmp_dir}/discipline.intoto.jsonl"
+    --repo orieg/discipline --signer-workflow orieg/discipline/.github/workflows/release.yml
+    --source-ref "refs/tags/${VERSION}")
+  [ -z "${TRUSTED_ROOT}" ] || attest+=(--custom-trusted-root "${TRUSTED_ROOT}")
+  "${attest[@]}" > /dev/null || fail "build provenance of ${archive} (${VERSION}) did not verify"
+  echo "Verified build provenance of ${archive} (${VERSION})."
 fi
 
 # Extract and install atomically

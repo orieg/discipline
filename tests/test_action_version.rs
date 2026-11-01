@@ -51,101 +51,525 @@ fn a_pinned_action_runs_the_binary_of_its_own_release() {
     assert_eq!(resolve("", sha, None), "");
 }
 
-/// Runs the lines between the `provenance` markers with a stub `gh` that records its
-/// arguments and exits with `gh_exit`. Returns (exit status, stdout, recorded args).
-fn provenance(
-    server: &str,
-    download_url: &str,
-    version: &str,
-    gh_exit: i32,
-) -> (bool, String, String) {
-    let action = std::fs::read_to_string("action.yml").unwrap();
-    let begin = action.find("# provenance:begin").unwrap();
-    let end = action.find("# provenance:end").unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    let bin = dir.path().join("bin");
-    std::fs::create_dir(&bin).unwrap();
-    let log = dir.path().join("gh.args");
-    let stub = bin.join("gh");
-    std::fs::write(
-        &stub,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}'\necho 'stub failure' >&2\nexit {gh_exit}\n",
-            log.display()
-        ),
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    let script = format!(
-        "set -euo pipefail\nfail() {{ echo \"FAIL: $*\"; exit 1; }}\n{}",
-        &action[begin..end]
-    );
-    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
-    let out = common::script_command("bash")
-        .arg("-c")
-        .arg(script)
-        .env("PATH", path)
-        .env("GITHUB_SERVER_URL", server)
-        .env("INPUT_DOWNLOAD_URL", download_url)
-        .env("GH_TOKEN", "token")
-        .env("version", version)
-        .env("dir", dir.path())
-        .env("archive", "discipline-x86_64-unknown-linux-musl.tar.gz")
-        .env("GITHUB_OUTPUT", dir.path().join("outputs"))
-        .output()
-        .unwrap();
-    let args = std::fs::read_to_string(&log).unwrap_or_default();
-    // The step outputs written follow the step's own stdout.
-    let outputs = std::fs::read_to_string(dir.path().join("outputs")).unwrap_or_default();
-    (
-        out.status.success(),
-        format!("{}{outputs}", String::from_utf8_lossy(&out.stdout)),
-        args,
-    )
+/// One run of the install step's lines from `provenance:begin` through `probe:end`: the
+/// provenance decision, the extraction and the `--version` probe of the binary.
+struct Install<'a> {
+    server: &'a str,
+    download_url: &'a str,
+    version: &'a str,
+    /// Exit status of a stub `gh` that records its arguments; `None` puts no `gh` on PATH.
+    gh: Option<i32>,
+    /// Whether the release store serves `discipline.intoto.jsonl`.
+    bundle: bool,
+    require_provenance: &'a str,
+    trusted_root: &'a str,
 }
 
 const STORE: &str = "https://github.com/orieg/discipline/releases";
 
+impl Default for Install<'_> {
+    fn default() -> Self {
+        Install {
+            server: "https://github.com",
+            download_url: STORE,
+            version: "v0.14.4",
+            gh: Some(0),
+            bundle: false,
+            require_provenance: "",
+            trusted_root: "",
+        }
+    }
+}
+
+struct Ran {
+    ok: bool,
+    /// The step's stdout followed by the step outputs it wrote.
+    out: String,
+    /// The arguments `gh` ran with, empty when it did not run.
+    gh_args: String,
+    /// `GH_TOKEN` as `gh` saw it (`unset` when absent).
+    gh_token: String,
+    /// What the canary binary wrote when it ran, `None` when it never ran.
+    canary: Option<String>,
+}
+
+/// A directory holding only the programs the install step's lines call, so whether
+/// `gh` is on PATH is the test's choice and not the machine's.
+fn tool_dir(dir: &std::path::Path) {
+    let path = std::env::var_os("PATH").unwrap();
+    for tool in ["bash", "env", "tar", "gzip", "cp", "tail"] {
+        let found = std::env::split_paths(&path)
+            .map(|d| d.join(tool))
+            .find(|p| p.is_file())
+            .unwrap_or_else(|| panic!("{tool} is not on PATH"));
+        std::os::unix::fs::symlink(found, dir.join(tool)).unwrap();
+    }
+}
+
+fn executable(path: &std::path::Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(path, body).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn install(c: &Install) -> Ran {
+    let action = std::fs::read_to_string("action.yml").unwrap();
+    let begin = action.find("# provenance:begin").unwrap();
+    let end = action.find("# probe:end").unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = tmp.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    tool_dir(&bin);
+    let gh_args = tmp.path().join("gh.args");
+    let gh_token = tmp.path().join("gh.token");
+    if let Some(code) = c.gh {
+        executable(
+            &bin.join("gh"),
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}'\nprintf '%s' \"${{GH_TOKEN-unset}}\" > '{}'\necho 'stub failure' >&2\nexit {code}\n",
+                gh_args.display(),
+                gh_token.display()
+            ),
+        );
+    }
+    // The archive holds a canary `discipline` that records that it ran, and with which token.
+    let canary = tmp.path().join("canary");
+    let src = tmp.path().join("src");
+    std::fs::create_dir(&src).unwrap();
+    executable(
+        &src.join("discipline"),
+        &format!(
+            "#!/bin/sh\nprintf 'ran GH_TOKEN=%s' \"${{GH_TOKEN-unset}}\" > '{}'\n",
+            canary.display()
+        ),
+    );
+    let dir = tmp.path().join("dir");
+    std::fs::create_dir(&dir).unwrap();
+    let archive = "discipline-x86_64-unknown-linux-musl.tar.gz";
+    assert!(std::process::Command::new("tar")
+        .arg("-czf")
+        .arg(dir.join(archive))
+        .arg("-C")
+        .arg(&src)
+        .arg("discipline")
+        .status()
+        .unwrap()
+        .success());
+    // The release store `fetch` reads from.
+    let store = tmp.path().join("store");
+    std::fs::create_dir(&store).unwrap();
+    if c.bundle {
+        std::fs::write(store.join("discipline.intoto.jsonl"), "{}\n").unwrap();
+    }
+    // `if true; then` stands for the `else` of `binary_path` that the `fi` closes.
+    let script = format!(
+        "set -euo pipefail\nfail() {{ echo \"FAIL: $*\"; exit 1; }}\nfetch() {{ cp \"$1\" \"$2\"; }}\nif true; then\n{}",
+        &action[begin..end]
+    );
+    let out = common::script_command("bash")
+        .arg("-c")
+        .arg(script)
+        .env("PATH", &bin)
+        .env("GITHUB_SERVER_URL", c.server)
+        .env("INPUT_DOWNLOAD_URL", c.download_url)
+        .env("INPUT_REQUIRE_PROVENANCE", c.require_provenance)
+        .env("INPUT_TRUSTED_ROOT", c.trusted_root)
+        .env("GH_TOKEN", "token")
+        .env("version", c.version)
+        .env("base", &store)
+        .env("dir", &dir)
+        .env("archive", archive)
+        .env("GITHUB_OUTPUT", tmp.path().join("outputs"))
+        .output()
+        .unwrap();
+    let outputs = std::fs::read_to_string(tmp.path().join("outputs")).unwrap_or_default();
+    Ran {
+        ok: out.status.success(),
+        out: format!(
+            "{}{}{outputs}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+        gh_args: std::fs::read_to_string(&gh_args).unwrap_or_default(),
+        gh_token: std::fs::read_to_string(&gh_token).unwrap_or_default(),
+        canary: std::fs::read_to_string(&canary).ok(),
+    }
+}
+
 #[test]
 fn a_downloaded_archive_must_carry_the_release_workflow_attestation_for_its_tag() {
-    let (ok, out, args) = provenance("https://github.com", STORE, "v0.14.4", 0);
-    assert!(ok);
-    assert!(args.starts_with("attestation verify "), "{args}");
+    let r = install(&Install::default());
+    assert!(r.ok, "{}", r.out);
+    assert!(
+        r.gh_args.starts_with("attestation verify "),
+        "{}",
+        r.gh_args
+    );
+    assert!(!r.gh_args.contains("--bundle"), "{}", r.gh_args);
     // A verified attestation says so in the step's outputs (#966).
-    assert!(out.contains("provenance=verified"), "{out}");
+    assert!(r.out.contains("provenance=verified"), "{}", r.out);
+    assert!(
+        r.gh_args.contains("--repo orieg/discipline"),
+        "{}",
+        r.gh_args
+    );
+    assert!(
+        r.gh_args
+            .contains("--signer-workflow orieg/discipline/.github/workflows/release.yml"),
+        "{}",
+        r.gh_args
+    );
+    assert!(
+        r.gh_args.contains("--source-ref refs/tags/v0.14.4"),
+        "{}",
+        r.gh_args
+    );
+
+    // `latest` has no tag to bind to; the signer is still checked.
+    let r = install(&Install {
+        version: "",
+        ..Install::default()
+    });
+    assert!(r.ok, "{}", r.out);
+    assert!(!r.gh_args.contains("--source-ref"), "{}", r.gh_args);
+
+    // An attestation that does not verify stops the install before the binary runs.
+    let r = install(&Install {
+        gh: Some(1),
+        ..Install::default()
+    });
+    assert!(!r.ok);
+    assert!(r.out.contains("did not verify: stub failure"), "{}", r.out);
+    assert_eq!(r.canary, None);
+}
+
+#[test]
+fn provenance_is_skipped_with_a_notice_off_github_or_off_the_default_store() {
+    for (server, store, gh, level) in [
+        ("https://gitea.example", STORE, Some(1), "::notice"),
+        (
+            "https://github.com",
+            "http://127.0.0.1:8765",
+            Some(1),
+            "::warning",
+        ),
+        // On github.com without gh nothing is checked: a warning, not a notice (#987).
+        ("https://github.com", STORE, None, "::warning"),
+    ] {
+        let r = install(&Install {
+            server,
+            download_url: store,
+            gh,
+            ..Install::default()
+        });
+        assert!(r.ok, "{}", r.out);
+        assert!(r.gh_args.is_empty(), "gh ran: {}", r.gh_args);
+        assert!(
+            r.out.contains(&format!(
+                "{level} title=discipline install::build provenance not verified"
+            )),
+            "{}",
+            r.out
+        );
+        assert!(r.out.contains("provenance=unverified"), "{}", r.out);
+        // Unless required, an unverified binary still installs as before.
+        assert!(r.canary.is_some(), "{}", r.out);
+    }
+}
+
+#[test]
+fn the_version_probe_runs_without_the_job_token() {
+    let r = install(&Install::default());
+    assert_eq!(r.canary.as_deref(), Some("ran GH_TOKEN=unset"), "{}", r.out);
+}
+
+#[test]
+fn require_provenance_refuses_an_unverified_binary_before_it_runs() {
+    for (server, gh) in [
+        ("https://gitea.example", Some(0)),
+        ("https://github.com", None),
+    ] {
+        let r = install(&Install {
+            server,
+            gh,
+            require_provenance: "true",
+            ..Install::default()
+        });
+        assert!(!r.ok, "{}", r.out);
+        assert!(r.out.contains("FAIL: require_provenance:"), "{}", r.out);
+        assert!(r.out.contains("the binary was not run"), "{}", r.out);
+        assert_eq!(r.canary, None, "the binary ran: {}", r.out);
+        assert!(r.gh_args.is_empty(), "gh ran: {}", r.gh_args);
+    }
+    // A verified install passes the same requirement.
+    let r = install(&Install {
+        require_provenance: "true",
+        ..Install::default()
+    });
+    assert!(r.ok, "{}", r.out);
+    assert!(r.canary.is_some());
+}
+
+#[test]
+fn a_mirror_install_verifies_the_release_sigstore_bundle_without_the_forge_token() {
+    let mirror = Install {
+        server: "https://gitea.example",
+        download_url: "https://mirror.example/discipline",
+        bundle: true,
+        require_provenance: "true",
+        ..Install::default()
+    };
+    let r = install(&mirror);
+    assert!(r.ok, "{}", r.out);
+    assert!(r.out.contains("provenance=verified"), "{}", r.out);
+    assert!(
+        r.gh_args.starts_with("attestation verify "),
+        "{}",
+        r.gh_args
+    );
+    assert!(
+        r.gh_args.contains("--bundle ") && r.gh_args.contains("/discipline.intoto.jsonl"),
+        "{}",
+        r.gh_args
+    );
+    assert!(
+        r.gh_args.contains("--repo orieg/discipline"),
+        "{}",
+        r.gh_args
+    );
+    assert!(
+        r.gh_args
+            .contains("--signer-workflow orieg/discipline/.github/workflows/release.yml"),
+        "{}",
+        r.gh_args
+    );
+    assert!(
+        r.gh_args.contains("--source-ref refs/tags/v0.14.4"),
+        "{}",
+        r.gh_args
+    );
+    // No root came with the mirror: gh uses Sigstore's own.
+    assert!(
+        !r.gh_args.contains("--custom-trusted-root"),
+        "{}",
+        r.gh_args
+    );
+    assert_eq!(r.gh_token, "unset");
+    assert!(r.canary.is_some());
+
+    // A bundle that does not verify stops the install, required or not.
+    for require in ["true", ""] {
+        let r = install(&Install {
+            gh: Some(1),
+            require_provenance: require,
+            ..mirror
+        });
+        assert!(!r.ok, "{}", r.out);
+        assert!(r.out.contains("Sigstore bundle"), "{}", r.out);
+        assert!(r.out.contains("did not verify: stub failure"), "{}", r.out);
+        assert_eq!(r.canary, None);
+    }
+
+    // Without a tag, any older signed release would pass: refused before gh runs.
+    let r = install(&Install {
+        version: "",
+        ..mirror
+    });
+    assert!(!r.ok, "{}", r.out);
+    assert!(r.out.contains("set the version input"), "{}", r.out);
+    assert!(r.gh_args.is_empty(), "gh ran: {}", r.gh_args);
+
+    // The operator's trusted root, for a runner with no network.
+    let root = tempfile::NamedTempFile::new().unwrap();
+    let root_path = root.path().to_str().unwrap();
+    let r = install(&Install {
+        trusted_root: root_path,
+        ..mirror
+    });
+    assert!(r.ok, "{}", r.out);
+    assert!(
+        r.gh_args
+            .contains(&format!("--custom-trusted-root {root_path}")),
+        "{}",
+        r.gh_args
+    );
+    let r = install(&Install {
+        trusted_root: "/nonexistent/trusted_root.jsonl",
+        ..mirror
+    });
+    assert!(!r.ok, "{}", r.out);
+    assert!(r.out.contains("is not a readable file"), "{}", r.out);
+}
+
+/// Runs `install.sh --verify-provenance` against a `file://` release `v0.0.0-test` whose
+/// store serves a Sigstore bundle, with a stub `gh` exiting `gh_exit` first on PATH.
+/// Returns (exit status, stderr, recorded `gh` arguments, whether the binary was installed).
+fn install_sh_verified(extra: &[&str], gh_exit: i32) -> (bool, String, String, bool) {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("store/download/v0.0.0-test");
+    std::fs::create_dir_all(&store).unwrap();
+    executable(
+        &dir.path().join("discipline"),
+        "#!/bin/sh\necho 'discipline 0.0.0-test'\n",
+    );
+    let triple = match (std::env::consts::ARCH, std::env::consts::OS) {
+        ("x86_64", "linux") => "x86_64-unknown-linux-musl",
+        ("aarch64", "linux") => "aarch64-unknown-linux-musl",
+        ("x86_64", "macos") => "x86_64-apple-darwin",
+        ("aarch64", "macos") => "aarch64-apple-darwin",
+        (a, o) => panic!("unsupported test target: {a}-{o}"),
+    };
+    let archive = format!("discipline-{triple}.tar.gz");
+    let archive_path = store.join(&archive);
+    assert!(common::script_command("tar")
+        .arg("-czf")
+        .arg(&archive_path)
+        .arg("-C")
+        .arg(dir.path())
+        .arg("discipline")
+        .status()
+        .unwrap()
+        .success());
+    let sha = common::script_command("sh")
+        .arg("-c")
+        .arg(format!(
+            "(sha256sum '{0}' 2>/dev/null || shasum -a 256 '{0}') | awk '{{print $1}}'",
+            archive_path.display()
+        ))
+        .output()
+        .unwrap();
+    std::fs::write(
+        store.join("SHA256SUMS"),
+        format!(
+            "{}  {archive}\n",
+            String::from_utf8(sha.stdout).unwrap().trim()
+        ),
+    )
+    .unwrap();
+    std::fs::write(store.join("discipline.intoto.jsonl"), "{}\n").unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let gh_args = dir.path().join("gh.args");
+    executable(
+        &bin.join("gh"),
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}'\nexit {gh_exit}\n",
+            gh_args.display()
+        ),
+    );
+    let dest = dir.path().join("dest");
+    let out = common::script_command("bash")
+        .arg(root.join("install.sh"))
+        .arg("--to")
+        .arg(&dest)
+        .arg("--download-url")
+        .arg(format!("file://{}/store", dir.path().display()))
+        .arg("--verify-provenance")
+        .args(extra)
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        )
+        .output()
+        .unwrap();
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        std::fs::read_to_string(&gh_args).unwrap_or_default(),
+        dest.join("discipline").exists(),
+    )
+}
+
+#[test]
+fn install_sh_verify_provenance_checks_the_sigstore_bundle_before_installing() {
+    let (ok, err, args, installed) = install_sh_verified(&["--version", "v0.0.0-test"], 0);
+    assert!(ok, "{err}");
+    assert!(installed);
+    assert!(args.starts_with("attestation verify "), "{args}");
+    assert!(args.contains("/discipline.intoto.jsonl"), "{args}");
+    assert!(args.contains("--bundle "), "{args}");
     assert!(args.contains("--repo orieg/discipline"), "{args}");
     assert!(
         args.contains("--signer-workflow orieg/discipline/.github/workflows/release.yml"),
         "{args}"
     );
-    assert!(args.contains("--source-ref refs/tags/v0.14.4"), "{args}");
+    assert!(
+        args.contains("--source-ref refs/tags/v0.0.0-test"),
+        "{args}"
+    );
 
-    // `latest` has no tag to bind to; the signer is still checked.
-    let (ok, _, args) = provenance("https://github.com", STORE, "", 0);
-    assert!(ok);
-    assert!(!args.contains("--source-ref"), "{args}");
-
-    // An attestation that does not verify stops the install.
-    let (ok, out, _) = provenance("https://github.com", STORE, "v0.14.4", 1);
+    let (ok, err, _, installed) = install_sh_verified(&["--version", "v0.0.0-test"], 1);
     assert!(!ok);
-    assert!(out.contains("did not verify: stub failure"), "{out}");
+    assert!(err.contains("did not verify"), "{err}");
+    assert!(!installed, "an unverified binary was installed");
+
+    // Without a release tag any older signed release would pass.
+    let (ok, err, args, installed) = install_sh_verified(&[], 0);
+    assert!(!ok);
+    assert!(err.contains("--verify-provenance needs --version"), "{err}");
+    assert!(args.is_empty() && !installed);
+
+    // An offline trusted root is passed through.
+    let root = tempfile::NamedTempFile::new().unwrap();
+    let root_path = root.path().to_str().unwrap();
+    let (ok, err, args, _) = install_sh_verified(
+        &["--version", "v0.0.0-test", "--trusted-root", root_path],
+        0,
+    );
+    assert!(ok, "{err}");
+    assert!(
+        args.contains(&format!("--custom-trusted-root {root_path}")),
+        "{args}"
+    );
+
+    // The removed GPG path, which could never succeed, says what replaced it.
+    let (ok, err, _, _) = install_sh_verified(&["--gpg-key", "key.asc"], 0);
+    assert!(!ok);
+    assert!(err.contains("use --verify-provenance"), "{err}");
 }
 
 #[test]
-fn provenance_is_skipped_with_a_notice_off_github_or_off_the_default_store() {
-    for (server, store) in [
-        ("https://gitea.example", STORE),
-        ("https://github.com", "http://127.0.0.1:8765"),
-    ] {
-        let (ok, out, args) = provenance(server, store, "v0.14.4", 1);
-        assert!(ok, "{out}");
-        assert!(args.is_empty(), "gh ran: {args}");
-        assert!(out.contains("build provenance not verified"), "{out}");
-        assert!(out.contains("provenance=unverified"), "{out}");
+fn install_sh_refuses_an_unrecognised_verify_provenance_value_before_downloading() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = tempfile::tempdir().unwrap();
+    let run = |value: &str| {
+        let out = common::script_command("bash")
+            .arg(root.join("install.sh"))
+            .arg("--to")
+            .arg(dir.path().join("dest"))
+            .arg("--version")
+            .arg("v0.0.0-test")
+            // An empty store: a run that reaches the download fails there.
+            .arg("--download-url")
+            .arg(format!("file://{}/store", dir.path().display()))
+            .env("DISCIPLINE_VERIFY_PROVENANCE", value)
+            .output()
+            .unwrap();
+        (
+            out.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    };
+    // A safety switch never reads an unknown value as off.
+    for value in ["true", "yes", "on", "2", "TRUE"] {
+        let (ok, err) = run(value);
+        assert!(!ok, "{value}: {err}");
+        assert!(
+            err.contains("DISCIPLINE_VERIFY_PROVENANCE") && err.contains("accepted"),
+            "{value}: {err}"
+        );
+        assert!(!err.contains("Downloading"), "{value} downloaded: {err}");
+    }
+    // `0` and empty are off: the run reaches the download.
+    for value in ["0", ""] {
+        let (ok, err) = run(value);
+        assert!(!ok);
+        assert!(err.contains("could not download"), "{value:?}: {err}");
     }
 }
 
@@ -699,7 +1123,7 @@ fn step26_container_and_infra_hardening_enforces_cap_drop_seccomp_safe_dir_and_g
         "docker-entrypoint.sh must not add safe.directory for untrusted non-CI host directories, got: {gitconfig}"
     );
 
-    // 4. install.sh and docs/install.sh must stay identical, reject cleartext non-loopback HTTP DOWNLOAD_URL, and fail closed when DISCIPLINE_GPG_KEY is set without a valid SHA256SUMS.asc
+    // 4. install.sh and docs/install.sh must stay identical and reject cleartext non-loopback HTTP DOWNLOAD_URL
     let install_sh = std::fs::read_to_string(root.join("install.sh")).unwrap();
     let docs_install_sh = std::fs::read_to_string(root.join("docs/install.sh")).unwrap();
     assert_eq!(

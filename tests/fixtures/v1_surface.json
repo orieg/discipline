@@ -23,11 +23,13 @@
       "policy_from",
       "pr_body",
       "pr_title",
+      "require_provenance",
       "suite",
       "test_base_report",
       "test_head_report",
       "test_report",
       "token",
+      "trusted_root",
       "version",
       "working_directory"
     ],
