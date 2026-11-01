@@ -218,9 +218,10 @@
       "head": {
         "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\nmode = \"advisory\"\n"
       },
-      "gate": "config-integrity",
       "verdict": {
-        "known_miss": "#984"
+        "caught": [
+          "config-integrity/gate-weakened"
+        ]
       }
     },
     {
@@ -231,10 +232,37 @@
       "head": {
         "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.vacuous-tests]\nenabled = false\n"
       },
-      "gate": "config-integrity",
       "verdict": {
-        "known_miss": "#984"
+        "caught": [
+          "config-integrity/gate-weakened"
+        ]
       }
+    },
+    {
+      "name": "discipline-toml-first-file-advisory-with-reason",
+      "base": {
+        "README.md": "# t\n"
+      },
+      "head": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\nmode = \"advisory\"\n"
+      },
+      "body": "allow-gate-weakening: meta adopting discipline in advisory mode first\n",
+      "verdict": {
+        "lifted": [
+          "config-integrity/gate-weakened"
+        ]
+      }
+    },
+    {
+      "name": "discipline-toml-first-file-at-defaults",
+      "base": {
+        "README.md": "# t\n"
+      },
+      "head": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.vacuous-tests]\nseverity = \"error\"\n"
+      },
+      "gate": "config-integrity",
+      "verdict": "clean"
     },
     {
       "name": "ci-continue-on-error-added",

@@ -841,6 +841,21 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "integrity: a first configuration file is compared with the built-in defaults; the starter file loosens nothing",
+        || {
+            let defaults = DisciplineConfig::default();
+            let starter = DisciplineConfig::from_toml_str(&crate::init::generate_starter(
+                "t",
+                std::path::Path::new("."),
+            ))?;
+            let advisory = DisciplineConfig::from_toml_str(
+                "[meta]\nversion = 1\nname = \"t\"\nmode = \"advisory\"\n",
+            )?;
+            Ok(diff_configs(&defaults, &starter)?.is_empty()
+                && diff_configs(&defaults, &advisory)?.len() == 1)
+        },
+    ),
+    (
         "report: in Markdown a quoted issue number, commit id or mail address is a code span, a documentation link stays one",
         || {
             use crate::report::text::{markdown, terminal_line};

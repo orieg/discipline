@@ -73,6 +73,8 @@ When evaluating Discipline on high-velocity repositories with legacy technical d
 
 Adding `advisory: true` is itself a `ci-integrity` finding (`ci-integrity/discipline-action-advisory`, "Discipline Action Weakened (advisory: true)"), since the step then exits 0 whatever the gates report. Record the decision in the pull-request body with `allow-gate-weakening: ci-integrity <reason>`.
 
+Setting `mode = "advisory"` under `[meta]` in `discipline.toml` works the same way, including in the change that adds the repository's first `discipline.toml`: that file is compared with the built-in defaults, so the change carries `allow-gate-weakening: meta <reason>`, and advisory mode applies once it has merged.
+
 ---
 
 ### Rollup skip-set wiring (`ci-skip-set`)

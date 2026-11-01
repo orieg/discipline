@@ -2806,6 +2806,83 @@ fn a_change_cannot_switch_its_own_run_to_advisory() {
     assert_eq!(run.code, 0);
 }
 
+/// A base with no `discipline.toml` ran at the built-in defaults: the change that adds the
+/// first file is compared with them, so it cannot switch its own run to advisory or switch
+/// a gate off unreported (#984).
+#[test]
+fn a_first_configuration_file_is_compared_with_the_built_in_defaults() {
+    let repo = Repo::new();
+    repo.write("tests/a.rs", "#[test]\nfn adds() {}\n");
+    repo.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}mode = \"advisory\"\n"),
+    );
+    repo.commit("chore: adopt");
+    let run = repo.check(&[]);
+    assert_eq!(
+        run.code, 1,
+        "stdout: {}\nstderr: {}",
+        run.stdout, run.stderr
+    );
+    assert_eq!(
+        run.titles("config-integrity"),
+        vec!["Gate Weakened By This Change"]
+    );
+    assert!(run.stderr.contains("is not honoured until it merges"));
+    assert!(run
+        .stdout
+        .contains("compared against the built-in defaults"));
+
+    // Adopting in advisory mode is one scoped line.
+    repo.commit("chore: explain\n\nallow-gate-weakening: meta adopting in advisory mode first");
+    let lifted = repo.check(&[]);
+    assert!(lifted.titles("config-integrity").is_empty());
+    assert_eq!(lifted.code, 0);
+
+    // The gate that judges the file runs although the new file switches it off.
+    let off = Repo::new();
+    off.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}\n[gates.config-integrity]\nenabled = false\n\n[gates.vacuous-tests]\nenabled = false\n"),
+    );
+    off.commit("chore: adopt");
+    let run = off.check(&[]);
+    assert_eq!(run.code, 1, "stdout: {}", run.stdout);
+    assert_eq!(
+        run.titles("config-integrity"),
+        vec![
+            "Gate Weakened By This Change",
+            "Gate Weakened By This Change"
+        ]
+    );
+
+    // Control: with no file on either side, the operator's `--config-override` is not the
+    // change's doing, so it is not compared.
+    let operator = Repo::new();
+    operator.write(
+        "docs/plan.md",
+        "# Plan\n\nPhase 1 then Phase 2 then Phase 3.\n",
+    );
+    operator.commit("docs: plan");
+    let run = operator.check(&[
+        "--config-override",
+        "[gates.time-estimates]\nexempt_paths = [\"docs/**\"]",
+    ]);
+    assert!(run.titles("config-integrity").is_empty(), "{}", run.stdout);
+    assert_eq!(run.code, 0, "stdout: {}", run.stdout);
+
+    // Control: a first file that restates the defaults reports nothing.
+    let starter = Repo::new();
+    starter.write(
+        "discipline.toml",
+        &format!("{CONFIG_HEAD}\n[gates.vacuous-tests]\nseverity = \"error\"\n"),
+    );
+    starter.commit("chore: adopt");
+    let run = starter.check(&[]);
+    assert!(run.titles("config-integrity").is_empty(), "{}", run.stdout);
+    assert_eq!(run.code, 0, "stdout: {}", run.stdout);
+}
+
 /// A `version-lockstep` configuration with one group `name` holding `sources`.
 fn lockstep_config(name: &str, sources: &[(&str, &str)]) -> String {
     let mut cfg = format!(
@@ -9587,7 +9664,9 @@ fn policy_from_base_judges_a_change_by_the_configuration_it_did_not_write() {
         "discipline.toml",
         &format!("{CONFIG_HEAD}[gates.vacuous-tests]\nenabled = false\n"),
     );
-    adopt.commit("test: add");
+    // The change's own file is compared with the defaults too (#984): its loosening
+    // carries a directive, as on an existing file.
+    adopt.commit("test: add\n\nallow-gate-weakening: vacuous-tests adopting with the gate off");
     assert_eq!(adopt.check(&[]).code, 0);
     let run = adopt.check(&["--policy-from", "base"]);
     assert_eq!(run.code, 1);
@@ -10076,11 +10155,9 @@ fn empty_repo_unstaged_mode_fails_closed_exit_2() {
 
 #[test]
 fn override_record_audit_trail_and_step_outputs() {
-    let repo = Repo::new();
-    repo.write(
-        "discipline.toml",
-        &format!("{CONFIG_HEAD}[gates.test-floor]\nenabled = false\n"),
-    );
+    let repo = repo_with_base_config(&format!(
+        "{CONFIG_HEAD}[gates.test-floor]\nenabled = false\n"
+    ));
     repo.write(
         "tests/a.rs",
         &GOOD_TEST.replace(
@@ -10108,7 +10185,7 @@ fn override_record_audit_trail_and_step_outputs() {
     ));
     assert!(
         run.stdout.contains(
-            "gates:  26 passed, 0 failed, 19 disabled, 1 not evaluated (22 items examined)"
+            "gates:  26 passed, 0 failed, 19 disabled, 1 not evaluated (66 items examined)"
         ),
         "{}",
         run.stdout
@@ -10124,13 +10201,13 @@ fn override_record_audit_trail_and_step_outputs() {
     );
     assert!(step_output.contains("status=pass"), "{step_output}");
     assert!(step_output.contains("passed_gates=26"), "{step_output}");
-    assert!(step_output.contains("examined_items=22"), "{step_output}");
+    assert!(step_output.contains("examined_items=66"), "{step_output}");
 
     // Check GITHUB_STEP_SUMMARY contents
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
         step_summary.contains(
-            "**Summary:** 26 passed, 0 failed, 19 disabled, 1 not evaluated (22 items examined)"
+            "**Summary:** 26 passed, 0 failed, 19 disabled, 1 not evaluated (66 items examined)"
         ),
         "{step_summary}"
     );
@@ -10181,9 +10258,7 @@ fn fail_on_overrides_blocks_change_with_exit_1() {
 
 #[test]
 fn allowed_override_actors_permits_authorized_actor_and_blocks_unauthorized() {
-    let repo = Repo::new();
-    repo.write(
-        "discipline.toml",
+    let repo = repo_with_base_config(
         r#"[meta]
 version = 1
 name = "t"
@@ -10349,20 +10424,17 @@ fn a_refused_hidden_no_issue_directive_is_noted_once_on_issue_link() {
 
 #[test]
 fn hidden_directives_rejected_by_default_and_accepted_when_configured() {
-    let repo = Repo::new();
-    repo.write(
-        "discipline.toml",
-        &format!("{CONFIG_HEAD}[gates.test-floor]\nenabled = false\n"),
-    );
-    repo.write(
-        "tests/a.rs",
-        &GOOD_TEST.replace(
-            "#[test]\nfn orders() {\n    let x = 1;\n    assert!(x < 2);\n}\n",
-            "",
-        ),
+    let repo = repo_with_base_config(&format!(
+        "{CONFIG_HEAD}[gates.test-floor]\nenabled = false\n"
+    ));
+    let removed = GOOD_TEST.replace(
+        "#[test]\nfn orders() {\n    let x = 1;\n    assert!(x < 2);\n}\n",
+        "",
     );
     // Hidden in HTML comments
-    repo.commit("test: remove orders\n\n<!-- removes: tests/a.rs orders moved to proptest -->");
+    let message = "test: remove orders\n\n<!-- removes: tests/a.rs orders moved to proptest -->";
+    repo.write("tests/a.rs", &removed);
+    repo.commit(message);
 
     // By default, allow_hidden = false, so directive is ignored
     let run = repo.check(&[]);
@@ -10389,14 +10461,17 @@ fn hidden_directives_rejected_by_default_and_accepted_when_configured() {
         .count();
     assert_eq!(copies, 1, "{}", run.stdout);
 
-    // Now configure allow_hidden = true in discipline.toml
-    repo.write(
+    // Now configure allow_hidden = true in the base's discipline.toml (a change cannot
+    // loosen the policy it is judged by) and make the same change on top of it.
+    repo.commit_base(
         "discipline.toml",
         &format!(
             "{CONFIG_HEAD}[directives]\nallow_hidden = true\n[gates.test-floor]\nenabled = false\n"
         ),
+        "chore: allow hidden directives",
     );
-    repo.commit("chore: allow hidden directives");
+    repo.write("tests/a.rs", &removed);
+    repo.commit(message);
     let run_allowed = repo.check(&[]);
     assert_eq!(
         run_allowed.code, 0,
@@ -10411,11 +10486,9 @@ fn hidden_directives_rejected_by_default_and_accepted_when_configured() {
 
 #[test]
 fn directive_sources_policy_restricts_sources() {
-    let repo = Repo::new();
-    repo.write(
-        "discipline.toml",
-        &format!("{CONFIG_HEAD}[directives]\nsources = [\"pr-body\"]\n[gates.test-floor]\nenabled = false\n"),
-    );
+    let repo = repo_with_base_config(&format!(
+        "{CONFIG_HEAD}[directives]\nsources = [\"pr-body\"]\n[gates.test-floor]\nenabled = false\n"
+    ));
     repo.write(
         "tests/a.rs",
         &GOOD_TEST.replace(
@@ -10470,11 +10543,9 @@ fn json_pr_body_outcome_source(json: &serde_json::Value) -> String {
 
 #[test]
 fn config_override_sources_reset_narrows_directive_sources() {
-    let repo = Repo::new();
-    repo.write(
-        "discipline.toml",
-        &format!("{CONFIG_HEAD}[gates.test-floor]\nenabled = false\n"),
-    );
+    let repo = repo_with_base_config(&format!(
+        "{CONFIG_HEAD}[gates.test-floor]\nenabled = false\n"
+    ));
     repo.write(
         "tests/a.rs",
         &GOOD_TEST.replace(
@@ -13870,19 +13941,19 @@ fn bench_noise_warning_and_margin() {
     }
   ]
 }"#;
-    repo.write("bench.json", base_json);
-    repo.commit("bench: base");
-
-    repo.write("bench.json", head_json);
-    repo.commit("bench: head");
-
-    // With max_noise_cv = 0.20, CV = 30/100 = 30% > 20% -> warning emitted in notes
+    // With max_noise_cv = 0.20, CV = 30/100 = 30% > 20% -> warning emitted in notes. The
+    // configuration is the base's, so the change under test does not loosen it.
     repo.write(
         "discipline.toml",
         &format!(
             "{CONFIG_HEAD}[gates.bench-regression]\nmax_noise_cv = 0.20\nnoise_margin_pct = 2.0\n"
         ),
     );
+    repo.write("bench.json", base_json);
+    repo.commit("bench: base");
+
+    repo.write("bench.json", head_json);
+    repo.commit("bench: head");
 
     let run = repo.check(&["--base", "HEAD~1"]);
     // Since noise_margin_pct = 2.0%, regression of 1.0% is within tolerance
@@ -14283,9 +14354,7 @@ fn issue_link_gate_e2e() {
 /// with no pull request, and never `Directive In Subject Line`.
 #[test]
 fn issue_link_exempt_authors_follow_the_event_author_not_the_actor() {
-    let repo = Repo::new();
-    repo.write(
-        "discipline.toml",
+    let repo = repo_with_base_config(
         "[meta]\nversion = 1\nname = \"repo\"\n[gates.issue-link]\nenabled = true\nexempt_authors = [\"dependabot[bot]\"]\n",
     );
     repo.write("Cargo.lock", "# bumped\n");
@@ -14378,9 +14447,7 @@ fn issue_link_exempt_authors_follow_the_event_author_not_the_actor() {
 /// forge cannot answer for is exit 2.
 #[test]
 fn issue_link_exempt_authors_on_gitlab_read_the_merge_request_author() {
-    let repo = Repo::new();
-    repo.write(
-        "discipline.toml",
+    let repo = repo_with_base_config(
         "[meta]\nversion = 1\nname = \"repo\"\n[gates.issue-link]\nenabled = true\nexempt_authors = [\"dependabot[bot]\"]\n",
     );
     repo.write("Cargo.lock", "# bumped\n");
@@ -18797,10 +18864,8 @@ fn test_version_and_help_exit_code_zero() {
 #[test]
 fn advisory_mode_flag_and_config_exit_zero_on_violations() {
     let repo = Repo::new();
-    repo.write(
-        "tests/a.rs",
-        "#[test]\nfn adds() {\n    assert!(1 + 1 == 2);\n}\n",
-    );
+    let weakened = "#[test]\nfn adds() {\n    assert!(1 + 1 == 2);\n}\n";
+    repo.write("tests/a.rs", weakened);
     repo.commit("test: weaken assertion");
 
     // 1. In default enforcing mode, check must exit code 1
@@ -18819,12 +18884,16 @@ fn advisory_mode_flag_and_config_exit_zero_on_violations() {
     let json_advisory = run_advisory_flag.json();
     assert!(json_advisory["errors"].as_u64().unwrap() > 0);
 
-    // 3. With mode = "advisory" in discipline.toml, check must exit code 0
-    repo.write(
+    // 3. With mode = "advisory" in the base's discipline.toml, check must exit code 0.
+    // A change cannot set the mode it runs under (config-integrity), so the setting is
+    // committed on the base and the weakening is made again on top of it.
+    repo.commit_base(
         "discipline.toml",
         "[meta]\nversion = 1\nname = \"repo\"\nmode = \"advisory\"\n",
+        "chore: set advisory mode in config",
     );
-    repo.commit("chore: set advisory mode in config");
+    repo.write("tests/a.rs", weakened);
+    repo.commit("test: weaken assertion");
     let run_config_advisory = repo.check(&[]);
     assert_eq!(
         run_config_advisory.code, 0,
