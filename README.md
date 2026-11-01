@@ -152,6 +152,19 @@ The action fetches the matching release archive and its `SHA256SUMS` from GitHub
           binary_path: /opt/discipline/discipline
 ```
 
+A mirror can replace an archive and its `SHA256SUMS` together, so a mirror install is checked further only when the mirror also serves the release's Sigstore bundle, `discipline.intoto.jsonl`, and the runner has `gh`: the bundle must be signed by this repository's release workflow for the requested tag, which a mirror cannot forge. `require_provenance: true` fails the install, before the binary runs, when that check cannot be made; `trusted_root` (a file from `gh attestation trusted-root`) lets it run without network:
+
+```yaml
+      - uses: https://github.com/orieg/discipline@<full commit SHA> # v0.29.0
+        with:
+          version: v0.29.0
+          download_url: https://mirror.example.com/discipline/releases
+          require_provenance: true
+          trusted_root: /opt/sigstore/trusted_root.jsonl # optional, for no network
+```
+
+This protects only when `action.yml` itself comes from a trusted source pinned by commit SHA, not from the same mirror: whoever serves the action serves the check.
+
 The `runs-on` label must map to a runner image with `git`, `curl` (or `wget`) and Node.js (`actions/checkout` is a JavaScript action; the default `act_runner` images qualify). The action itself is shell-only. Gitea and Forgejo name the resulting status check `CI Sentinel / discipline (pull_request)`; use that name when making it a required check on the default branch. `discipline doctor` reads a `GITEA_TOKEN` or `FORGEJO_TOKEN` to confirm the protection is in place. See the [Forgejo & Gitea Actions guide](docs/guides/ci-platforms.md#3-forgejo--gitea-actions) for the full walkthrough.
 
 For other CI platforms and orchestrators (copy-paste pipelines for GitLab, Argo, Azure Pipelines, Bitbucket, CircleCI and Jenkins are in [`templates/`](templates/), indexed in the [CI guide](docs/guides/ci-platforms.md#7-other-ci-platforms-templates)):
@@ -381,6 +394,21 @@ gh attestation verify discipline-x86_64-unknown-linux-musl.tar.gz --repo orieg/d
 # Inspect the CycloneDX SBOM directly
 jq . discipline.cdx.json
 ```
+
+An archive from a mirror, or on a machine with no network, is checked against the release's Sigstore bundle instead of GitHub's API. Fetch the trusted root once from a trusted machine, never from the mirror: whoever supplies the root chooses the certificate authority. Refresh it when you upgrade, since Sigstore rotates its keys.
+
+```bash
+# On a machine with network access
+gh attestation trusted-root > trusted_root.jsonl
+
+# Offline: the archive and discipline.intoto.jsonl of the same release, with its tag
+gh attestation verify discipline-x86_64-unknown-linux-musl.tar.gz \
+  --bundle discipline.intoto.jsonl --custom-trusted-root trusted_root.jsonl \
+  --repo orieg/discipline --signer-workflow orieg/discipline/.github/workflows/release.yml \
+  --source-ref refs/tags/v0.29.0
+```
+
+`install.sh --version v0.29.0 --verify-provenance [--trusted-root trusted_root.jsonl]` runs the same check before it installs.
 
 ## Documentation
 
