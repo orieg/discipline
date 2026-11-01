@@ -89,6 +89,8 @@ jobs:
           python3 scripts/release_notes_upgrade.py --version "${version}" > /dev/null
       - name: Test change detector
         run: python3 scripts/detect_changes.py --test
+      - name: Test hook latency script
+        run: python3 scripts/measure_hook_latency.py --test
       - name: Test major tag drift detector
         run: tests/action/test-check-major-tag.sh
       - name: Test release tagging script
