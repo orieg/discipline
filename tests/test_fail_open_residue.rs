@@ -34,17 +34,17 @@ fn workflow(extra: &str) -> String {
 
 const WF: &str = ".github/workflows/ci.yml";
 
-/// A repository whose base has a two-job workflow and a document stating `doc`, and whose
-/// change edits the workflow under a configuration with `pattern`.
+/// A repository whose base has a two-job workflow, a document stating `doc` and a
+/// configuration with `pattern`, and whose change edits the workflow.
 fn job_count_repo(doc: &[u8], pattern: &str) -> Repo {
     let repo = Repo::new();
     repo.git(&["checkout", "-q", "main"]);
     repo.write(WF, &workflow(""));
     std::fs::write(repo.file("docs/ci.md"), doc).unwrap();
+    repo.write("discipline.toml", &job_count_config(pattern));
     repo.commit("ci: add");
     repo.git(&["checkout", "-q", "-B", "work"]);
     repo.write(WF, &workflow(" --all"));
-    repo.write("discipline.toml", &job_count_config(pattern));
     repo.commit("ci: test everything");
     repo
 }
@@ -144,13 +144,13 @@ fn a_valid_job_count_pattern_accepts_a_matching_count() {
 #[test]
 fn a_disabled_gate_with_a_bad_job_count_pattern_does_not_stop_the_run() {
     let repo = Repo::new();
-    repo.write(
+    repo.commit_base(
         "discipline.toml",
         &format!(
             "{HEAD}[gates.ci-integrity]\nenabled = false\ndocumented_job_count_pattern = '(a'\n"
         ),
+        "chore: policy",
     );
-    repo.commit("chore: policy");
     let run = repo.check(&[]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
 }
@@ -299,13 +299,13 @@ fn a_malformed_exempt_arms_glob_stops_a_change_with_no_benchmark_artifact() {
 #[test]
 fn a_valid_exempt_arms_list_does_not_stop_the_run() {
     let repo = Repo::new();
-    repo.write(
+    repo.commit_base(
         "discipline.toml",
         &format!(
             "{HEAD}[gates.bench-regression]\nenabled = true\nexempt_arms = [\"*.heap.*\", \"map_get/random\"]\n"
         ),
+        "chore: policy",
     );
-    repo.commit("chore: policy");
     let run = repo.check(&[]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
 }
