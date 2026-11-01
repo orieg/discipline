@@ -813,7 +813,7 @@ The first line lifts the finding on the test `adds`. The second names `test_tota
 
 The subject is written as the finding prints it (a test name, a path, a gate id, a key), optionally in quotes (`"adds"`, `'adds'`, `` `adds` ``). A subject of several words, or with a colon in it (`type: ignore`, a test title with spaces, `path:line`), is written out in full at the start. Three shorter spellings of the first token are read, and nothing else:
 
-- for a path, its file name (`old.rs` for `tests/legacy/old.rs`) or a directory above it written with a slash (`tests/legacy/`, `tests/`; a bare `tests` is a word, not a directory);
+- for a path, its file name (`old.rs` for `tests/legacy/old.rs`) or a directory above it written with a slash (`tests/legacy/`, `tests/`; a bare `tests` is a word, not a directory). A file name names every file of that name, in any directory: `allow-assertion-drop: test_api.py <reason>` lifts the findings of both `a/tests/test_api.py` and `b/tests/test_api.py`, each recorded as an override on its own path. Write the path to name one file;
 - for a test, a qualified name, which names its last segment (`tests::parses_header` and `HeaderTest#parses_header` name `parses_header`);
 - for an action, the reference with its version (`actions/checkout@v4` names `actions/checkout`).
 
