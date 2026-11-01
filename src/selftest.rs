@@ -1175,8 +1175,8 @@ const CASES: &[Case] = &[
                 ..Default::default()
             };
             let raised = stricter_directives(&DirectivesConfig::default(), Some(&base_budget));
-            Ok(disarms(&base, &off).len() == 1
-                && disarms(&base, &narrow).is_empty()
+            Ok(disarms(&base, &off, "discipline.toml").len() == 1
+                && disarms(&base, &narrow, "discipline.toml").is_empty()
                 && raised.max_overrides == Some(3))
         },
     ),
