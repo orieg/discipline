@@ -472,7 +472,7 @@ The action runs on `pull_request`, `merge_group` and `push` events (the base is 
 | `working_directory` | `.` | Directory of the repository to check. |
 | `version` | *(none)* | Release to download (e.g. v0.1.0). Default: the tag this action was referenced by (`@vX.Y.Z`); for a major tag, a commit SHA or a branch, the release in the action''s own Cargo.toml; the latest release only when neither is available. |
 | `binary_path` | *(none)* | Use this discipline binary instead of downloading one (air-gapped Gitea/Forgejo runners, self-tests). |
-| `download_url` | `https://github.com/orieg/discipline/releases` | Base URL of the release store, for mirrors. |
+| `download_url` | `https://github.com/orieg/discipline/releases` | Base URL of the release store, for mirrors: https://, file://, or http:// to a loopback address. Set DISCIPLINE_INSTALL_ALLOW_INSECURE_HTTP=1 in the environment to accept another cleartext mirror. |
 | `install_only` | `false` | Install discipline and put it on PATH for the steps that follow, without running a check. For `.github/workflows/copilot-setup-steps.yml`, so the hooks of Copilot cloud agent find the binary. |
 | `baseline_file` | *(none)* | Path to grandfathering baseline file (defaults to discipline-baseline.toml if present). |
 | `no_baseline` | `false` | Ignore grandfathering baseline even if present. |
@@ -497,6 +497,7 @@ The action runs on `pull_request`, `merge_group` and `push` events (the base is 
 | `passed_gates` | Number of passing gates |
 | `examined_items` | Total number of items examined across all enabled gates |
 | `report` | Path of the JSON report |
+| `provenance` | How the binary was checked: verified (the build provenance attestation of the discipline release workflow), unverified (SHA256SUMS of the release store only: a mirror, another forge, or no gh), or local (binary_path) |
 | `install_error` | Why installing the binary failed (empty on success) |
 | `bin` | Path to the installed discipline executable |
 <!-- /generated -->

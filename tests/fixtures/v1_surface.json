@@ -41,6 +41,7 @@
       "overridden_gates",
       "overrides",
       "passed_gates",
+      "provenance",
       "report",
       "status",
       "warnings"

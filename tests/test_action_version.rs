@@ -95,12 +95,15 @@ fn provenance(
         .env("version", version)
         .env("dir", dir.path())
         .env("archive", "discipline-x86_64-unknown-linux-musl.tar.gz")
+        .env("GITHUB_OUTPUT", dir.path().join("outputs"))
         .output()
         .unwrap();
     let args = std::fs::read_to_string(&log).unwrap_or_default();
+    // The step outputs written follow the step's own stdout.
+    let outputs = std::fs::read_to_string(dir.path().join("outputs")).unwrap_or_default();
     (
         out.status.success(),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
+        format!("{}{outputs}", String::from_utf8_lossy(&out.stdout)),
         args,
     )
 }
@@ -109,9 +112,11 @@ const STORE: &str = "https://github.com/orieg/discipline/releases";
 
 #[test]
 fn a_downloaded_archive_must_carry_the_release_workflow_attestation_for_its_tag() {
-    let (ok, _, args) = provenance("https://github.com", STORE, "v0.14.4", 0);
+    let (ok, out, args) = provenance("https://github.com", STORE, "v0.14.4", 0);
     assert!(ok);
     assert!(args.starts_with("attestation verify "), "{args}");
+    // A verified attestation says so in the step's outputs (#966).
+    assert!(out.contains("provenance=verified"), "{out}");
     assert!(args.contains("--repo orieg/discipline"), "{args}");
     assert!(
         args.contains("--signer-workflow orieg/discipline/.github/workflows/release.yml"),
@@ -140,7 +145,64 @@ fn provenance_is_skipped_with_a_notice_off_github_or_off_the_default_store() {
         assert!(ok, "{out}");
         assert!(args.is_empty(), "gh ran: {args}");
         assert!(out.contains("build provenance not verified"), "{out}");
+        assert!(out.contains("provenance=unverified"), "{out}");
     }
+}
+
+/// Runs the lines between the `download-url` markers of `action.yml` for `url`, with
+/// `extra` set in the environment. Returns (exit status, stdout).
+fn download_url_check(url: &str, extra: &[(&str, &str)]) -> (bool, String) {
+    let action = std::fs::read_to_string("action.yml").unwrap();
+    let begin = action.find("# download-url:begin").unwrap();
+    let end = action.find("# download-url:end").unwrap();
+    let script = format!(
+        "set -euo pipefail\nfail() {{ echo \"FAIL: $*\"; exit 1; }}\n{}",
+        &action[begin..end]
+    );
+    let mut cmd = common::script_command("bash");
+    cmd.arg("-c")
+        .arg(script)
+        .env("INPUT_DOWNLOAD_URL", url)
+        .env_remove("DISCIPLINE_INSTALL_ALLOW_INSECURE_HTTP");
+    for (k, v) in extra {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().unwrap();
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+    )
+}
+
+#[test]
+fn the_action_refuses_a_cleartext_download_url_as_install_sh_does() {
+    for ok in [
+        STORE,
+        "https://mirror.example.com/discipline",
+        "file:///srv/mirror",
+        "http://127.0.0.1:8765",
+        "http://localhost/releases",
+        "http://[::1]:9000",
+    ] {
+        let (pass, out) = download_url_check(ok, &[]);
+        assert!(pass, "{ok}: {out}");
+    }
+    for bad in [
+        "http://mirror.example.com/discipline",
+        "http://127.0.0.1.example.com/x",
+        "http://user@127.0.0.1/x",
+        "ftp://mirror.example.com/x",
+    ] {
+        let (pass, out) = download_url_check(bad, &[]);
+        assert!(!pass, "{bad} was accepted: {out}");
+        assert!(out.contains("FAIL:") && out.contains(bad), "{bad}: {out}");
+    }
+    // The same opt-in as install.sh accepts a cleartext mirror on purpose.
+    let (pass, out) = download_url_check(
+        "http://mirror.example.com/discipline",
+        &[("DISCIPLINE_INSTALL_ALLOW_INSECURE_HTTP", "1")],
+    );
+    assert!(pass, "{out}");
 }
 
 #[test]
