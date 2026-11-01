@@ -13903,7 +13903,34 @@ fn pii_secrets_detection_and_redaction() {
         let msg = v["message"].as_str().unwrap();
         assert!(!msg.contains(&aws_token), "AWS key must not be echoed");
         assert!(!msg.contains(&gh_token), "GitHub token must not be echoed");
+        // A credential is revoked, not swapped for a placeholder (#966).
+        let fix = v["remediation"].as_str().unwrap();
+        assert!(
+            fix.contains("Revoke or rotate") && !fix.contains("<home>"),
+            "{v}"
+        );
     }
+
+    // Control: a home-directory path keeps the placeholder advice.
+    let other = Repo::new();
+    let home = format!("/{}/someone/notes.txt", "Users");
+    other.write("notes.md", &format!("See {home}\n"));
+    other.commit("docs: a local path");
+    let run_home = other.check(&["--base", "HEAD~1"]);
+    let home_fix: Vec<String> = run_home.outcome("pii")["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|v| v["file"] == "notes.md")
+        .map(|v| v["remediation"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        !home_fix.is_empty()
+            && home_fix
+                .iter()
+                .all(|f| f.contains("`<home>`") && !f.contains("Revoke")),
+        "{home_fix:?}"
+    );
 
     // Waived with inline directive on the same line
     let waived_content = format!(
