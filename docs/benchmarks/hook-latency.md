@@ -39,7 +39,7 @@ A per-gate timer in the JSON report would replace source 3; it is not part of th
 
 ## 3. Host requirement
 
-Before the first run and before every run of every cell, the script checks the host and stops with exit 3 when it is not idle: one-minute load above half the core count, or any process other than itself above 100% CPU. It never waits and never times on a busy host. A stopped run writes the cell it stopped at and the reason to the output JSON.
+Before the first run and before every run of every cell, the script checks the host and stops with exit 3 when it is not idle: `load1` above half the core count, or any process other than itself above 100% CPU. It never waits and never times on a busy host. A stopped run writes the cell it stopped at and the reason to the output JSON.
 
 Run it with free disk of 20 GB or more and nothing else building:
 
@@ -52,7 +52,7 @@ The script's own checks: `python3 scripts/measure_hook_latency.py --test` (run i
 
 ## 4. Figures
 
-**Not measured: host not idle.** On 2026-11-01 the development host (Apple M1, 8 cores, 16 GB) was shared with other sessions building and replaying this repository: one-minute load 119.38 at the first snapshot and 90.49 at the preflight, CPU 0.6% idle, 338 MB of memory unused (`RUN: uptime`, `top -l 1`), with a display utility at 95% CPU and two `discipline replay` runs and an installed `discipline check` hook each at 63–80% CPU (`RUN: ps -A -o %cpu,%mem,command`). The script refused to time on it (`RUN: python3 scripts/measure_hook_latency.py --repo .`, exit 3, `load1 29.54 > 4`).
+**Not measured: host not idle.** On 2026-11-01 the development host (Apple M1, 8 cores, 16 GB) was shared with other sessions building and replaying this repository: `load1` 119.38 at the first snapshot and 90.49 at the preflight, CPU 0.6% idle, 338 MB of memory unused (`RUN: uptime`, `top -l 1`), with a display utility at 95% CPU and two `discipline replay` runs and an installed `discipline check` hook each at 63–80% CPU (`RUN: ps -A -o %cpu,%mem,command`). The script refused to time on it (`RUN: python3 scripts/measure_hook_latency.py --repo .`, exit 3, `load1 29.54 > 4`).
 
 The 60–120 s wall time reported for `check` and `diff` in the `#966` review was taken at a load around 60–70 and is not used here.
 
