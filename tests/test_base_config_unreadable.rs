@@ -66,9 +66,24 @@ fn advisory_mode_is_not_honoured_over_an_unloadable_base() {
 /// Control for the test above: with no base configuration at all, adopting in advisory
 /// mode is honoured.
 #[test]
-fn advisory_mode_is_honoured_when_the_base_has_no_configuration() {
+fn advisory_mode_is_not_honoured_when_the_base_has_no_configuration() {
+    // A base with no configuration ran at the built-in defaults, which enforce (#984).
     let repo = Repo::new();
     repo.write("discipline.toml", &format!("{HEAD}mode = \"advisory\"\n"));
+    repo.write(
+        "src/swallow.py",
+        "import os\n\n\ndef remove(path):\n    try:\n        os.remove(path)\n    except OSError:\n        pass\n",
+    );
+    repo.commit("feat: remove helper");
+    let run = repo.check(&[]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(run.stderr.contains("is not honoured until it merges"));
+
+    // Once the advisory configuration is on the base side, it is the repository's mode.
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("discipline.toml", &format!("{HEAD}mode = \"advisory\"\n"));
+    repo.commit("chore: config");
+    repo.git(&["checkout", "-q", "-B", "work"]);
     repo.write(
         "src/swallow.py",
         "import os\n\n\ndef remove(path):\n    try:\n        os.remove(path)\n    except OSError:\n        pass\n",

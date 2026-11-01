@@ -7,9 +7,10 @@ use common::{FakeForge, Repo};
 
 const ISSUE_LINK: &str = "[gates.issue-link]\nenabled = true\nverify_references = true\n";
 
+/// A repository whose base carries `config`, and whose change adds a note.
 fn pr(config: &str) -> Repo {
     let repo = Repo::new();
-    repo.write("discipline.toml", config);
+    repo.commit_base("discipline.toml", config, "chore: config");
     repo.write("docs/notes.md", "# Notes\n\nA change.\n");
     repo.commit("docs: notes");
     repo

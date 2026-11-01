@@ -192,11 +192,11 @@ fn a_canary_diagnostic_that_compiles_is_still_judged() {
 #[test]
 fn a_disabled_command_gate_with_a_bad_output_pattern_does_not_stop_the_run() {
     let repo = Repo::new();
-    repo.write(
+    repo.commit_base(
         "discipline.toml",
         &format!("{HEAD}[gates.command]\nenabled = false\n{FORBID_UNCLOSED_GROUP}"),
+        "chore: policy",
     );
-    repo.commit("chore: policy");
     let run = repo.check(&[]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
 }
@@ -441,17 +441,17 @@ const COUNT_BOTH_NO_SUCH_ROLLUP: &str = "[gates.ci-integrity]\nrollup_job = \"al
 const COUNT_PATH_ONLY_GATE_OFF: &str =
     "[gates.ci-integrity]\nenabled = false\ndocumented_job_count_path = \"docs/ci.md\"\n";
 
-/// A repository whose base has a two-job workflow and a document stating `doc`, and whose
-/// change edits the workflow under the configuration `table`.
+/// A repository whose base has a two-job workflow, a document stating `doc` and the
+/// configuration `table`, and whose change edits the workflow.
 fn job_count_repo(doc: &str, table: &str) -> Repo {
     let repo = Repo::new();
     repo.git(&["checkout", "-q", "main"]);
     repo.write(WF, &workflow(""));
     repo.write("docs/ci.md", doc);
+    repo.write("discipline.toml", &format!("{HEAD}{table}"));
     repo.commit("ci: add");
     repo.git(&["checkout", "-q", "-B", "work"]);
     repo.write(WF, &workflow(" --all"));
-    repo.write("discipline.toml", &format!("{HEAD}{table}"));
     repo.commit("ci: test everything");
     repo
 }
@@ -536,11 +536,11 @@ fn a_fully_configured_job_count_is_still_compared() {
 #[test]
 fn a_disabled_gate_with_a_half_configured_job_count_does_not_stop_the_run() {
     let repo = Repo::new();
-    repo.write(
+    repo.commit_base(
         "discipline.toml",
         &format!("{HEAD}{COUNT_PATH_ONLY_GATE_OFF}"),
+        "chore: policy",
     );
-    repo.commit("chore: policy");
     let run = repo.check(&[]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
 }

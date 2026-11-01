@@ -85,16 +85,14 @@ fn ci_integrity_names_a_workflow_whose_head_side_does_not_parse() {
 #[test]
 fn a_directory_at_a_configured_path_reads_as_absent_not_as_a_failed_read() {
     let repo = Repo::new();
-    repo.commit_base(
-        "somedir/inner.txt",
-        "inside\n",
+    let config =
+        format!("{CONFIG_HEAD}[gates.dependency-delta]\nenabled = true\ndeny_file = \"somedir\"\n");
+    repo.commit_base_files(
+        &[
+            ("somedir/inner.txt", "inside\n"),
+            ("discipline.toml", &config),
+        ],
         "chore: a directory both sides have",
-    );
-    repo.write(
-        "discipline.toml",
-        &format!(
-            "{CONFIG_HEAD}[gates.dependency-delta]\nenabled = true\ndeny_file = \"somedir\"\n"
-        ),
     );
     repo.write("docs/plan.md", "# Plan\n\nPhase 1 then Phase 2, more.\n");
     let run = repo.check(&[]);

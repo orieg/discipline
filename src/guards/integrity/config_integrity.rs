@@ -14,14 +14,26 @@ fn base_config_source(ctx: &Context) -> Result<Option<String>> {
     ctx.base_config_text()
 }
 
+/// Whether this change adds the configuration file where the base side has none. The
+/// base then ran at the built-in defaults, and the change is judged as if the base had a
+/// file holding them (#984). With no file on either side the change wrote no
+/// configuration, and a `--config-override` alone is the operator's: nothing is compared.
+fn adds_first_file(ctx: &Context) -> Result<bool> {
+    Ok(base_config_source(ctx)?.is_none() && ctx.head_config_text()?.is_some())
+}
+
 /// Whether the base side runs this gate. The change under review cannot switch off the
 /// gate that judges its configuration: `enabled = false` takes effect once it has merged.
 ///
-/// A base configuration that exists but does not load cannot say the gate was off, so it
-/// counts as on: the gate then reports that it could not compare.
+/// A base with no configuration file ran every gate at its built-in default, so the gate
+/// runs whenever the change adds a first file (#984). A base configuration that exists
+/// but does not load cannot say the gate was off, so it counts as on: the gate then
+/// reports that it could not compare.
 pub fn enabled_on_base(ctx: &Context) -> Result<bool> {
     Ok(match base_config_source(ctx)? {
-        None => false,
+        None => {
+            adds_first_file(ctx)? && DisciplineConfig::default().gates.config_integrity.enabled()
+        }
         Some(src) => DisciplineConfig::from_toml_str(&src)
             .map_or(true, |base| base.gates.config_integrity.enabled()),
     })
@@ -29,15 +41,18 @@ pub fn enabled_on_base(ctx: &Context) -> Result<bool> {
 
 /// Whether this change is what switched the run to advisory mode, with no scoped override
 /// lifting it. Advisory mode exits 0 whatever the gates report, so honouring it here would
-/// let the change excuse itself. Adopting discipline in advisory mode (no base
-/// configuration) is unaffected.
+/// let the change excuse itself. A base with no configuration file ran at the built-in
+/// defaults, which enforce, so a first `discipline.toml` that sets advisory mode needs the
+/// same override (#984).
 pub fn advisory_mode_unapproved(ctx: &Context) -> Result<bool> {
     if ctx.config.meta.mode != RunMode::Advisory {
         return Ok(false);
     }
     // A base configuration that does not load cannot say the run was advisory already.
     let base_enforcing = match base_config_source(ctx)? {
-        None => false,
+        None => {
+            adds_first_file(ctx)? && DisciplineConfig::default().meta.mode == RunMode::Enforcing
+        }
         Some(src) => DisciplineConfig::from_toml_str(&src)
             .map_or(true, |base| base.meta.mode == RunMode::Enforcing),
     };
@@ -97,9 +112,29 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
             "the configuration in force (`{}`) is outside the repository, so this change cannot edit it; no weakening compared",
             ctx.config_path
         ));
-    } else if let Some(base_src) = base_config_source(ctx)? {
-        match DisciplineConfig::from_toml_str(&base_src) {
-            Ok(base) => {
+    } else {
+        // A base with no configuration file ran every gate at its built-in defaults, so a
+        // file the change adds is compared with them (#984).
+        let base = match base_config_source(ctx)? {
+            Some(base_src) => Some(DisciplineConfig::from_toml_str(&base_src)),
+            None if adds_first_file(ctx)? => {
+                out.notes.push(format!(
+                    "`{}` does not exist on the base side; the file this change adds is compared against the built-in defaults",
+                    ctx.config_path
+                ));
+                Some(Ok(DisciplineConfig::default()))
+            }
+            None => {
+                out.notes.push(format!(
+                    "`{}` does not exist on either side; nothing to compare against",
+                    ctx.config_path
+                ));
+                None
+            }
+        };
+        match base {
+            None => {}
+            Some(Ok(base)) => {
                 let head = ctx.head_config.unwrap_or(ctx.config);
                 severity = stricter(severity, base.gates.config_integrity.severity());
                 if !settings.enabled() {
@@ -154,7 +189,7 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                     }
                 }
             }
-            Err(e) => {
+            Some(Err(e)) => {
                 // Blocking here would deadlock the PR that repairs the base config.
                 out.push(
                     Severity::Warning,
@@ -166,11 +201,6 @@ pub fn config_integrity(ctx: &Context) -> Result<GateOutcome> {
                 );
             }
         }
-    } else {
-        out.notes.push(format!(
-            "`{}` does not exist on the base side; nothing to compare against",
-            ctx.config_path
-        ));
     }
 
     // Baseline file integrity: growing grandfathered baseline or adding new ungrandfathered fingerprints is a weakening
