@@ -1258,7 +1258,44 @@ pub fn extract_directives_with_merged(
     config: &crate::config::DisciplineConfig,
 ) -> (Vec<ParsedDirective>, Vec<String>) {
     let read = read_directives(pr_body, commits, merged, config);
-    (read.active, read.notes)
+    (
+        read.active,
+        read.notes.into_iter().map(|n| n.text).collect(),
+    )
+}
+
+/// A note about a run's directive sources, with the gate whose notes report it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectiveNote {
+    pub text: String,
+    /// The gate of the directive the note is about, from its [`DirectiveSpec`]. `None`
+    /// for a note about a source as a whole (a policy that disables it, a merged pull
+    /// request it was resolved to).
+    pub gate: Option<&'static str>,
+}
+
+impl DirectiveNote {
+    /// A note about a source as a whole, no one directive's.
+    pub fn about_sources(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            gate: None,
+        }
+    }
+
+    /// A note about the directive written as `name`, any of its names: it goes to that
+    /// directive's gate.
+    fn about_directive(name: &str, text: String) -> Self {
+        let gate = DIRECTIVE_SPECS
+            .iter()
+            .find(|spec| {
+                names_for_directive(spec.canonical)
+                    .iter()
+                    .any(|n| n.eq_ignore_ascii_case(name))
+            })
+            .map(|spec| spec.gate);
+        Self { text, gate }
+    }
 }
 
 /// What [`read_directives`] made of a run's directive sources.
@@ -1267,7 +1304,7 @@ pub struct DirectivesRead {
     /// The directives the gates may apply.
     pub active: Vec<ParsedDirective>,
     /// One note per directive, or per source, that was not read.
-    pub notes: Vec<String>,
+    pub notes: Vec<DirectiveNote>,
     /// Where each hidden directive that was not read is written, one entry per
     /// directive, in the order they were met. Only the source: the name is in the note,
     /// and the reason is nowhere.
@@ -1309,16 +1346,21 @@ pub fn read_directives(
             for d in parsed {
                 if d.hidden && !is_hidden_allowed(&d) {
                     refused_hidden.push(d.source.clone());
-                    notes.push(format!(
-                        "hidden directive `{}` in PR body ignored (directives.allow_hidden is false)",
-                        d.directive
+                    notes.push(DirectiveNote::about_directive(
+                        &d.directive,
+                        format!(
+                            "hidden directive `{}` in PR body ignored (directives.allow_hidden is false)",
+                            d.directive
+                        ),
                     ));
                 } else {
                     active.push(d);
                 }
             }
         } else if !parsed.is_empty() {
-            notes.push("PR-body directives are disabled by policy; ignored".to_string());
+            notes.push(DirectiveNote::about_sources(
+                "PR-body directives are disabled by policy; ignored",
+            ));
         }
     }
 
@@ -1328,18 +1370,21 @@ pub fn read_directives(
             for d in parsed {
                 if d.hidden && !is_hidden_allowed(&d) {
                     refused_hidden.push(d.source.clone());
-                    notes.push(format!(
-                        "hidden directive `{}` in commit {oid} ignored (directives.allow_hidden is false)",
-                        d.directive
+                    notes.push(DirectiveNote::about_directive(
+                        &d.directive,
+                        format!(
+                            "hidden directive `{}` in commit {oid} ignored (directives.allow_hidden is false)",
+                            d.directive
+                        ),
                     ));
                 } else {
                     active.push(d);
                 }
             }
         } else if !parsed.is_empty() {
-            notes.push(format!(
+            notes.push(DirectiveNote::about_sources(format!(
                 "commit-message directives are disabled by policy; ignored directive from commit {oid}"
-            ));
+            )));
         }
     }
 
@@ -1347,10 +1392,10 @@ pub fn read_directives(
         let parsed = parse_directives(&m.body, OverrideSource::MergedPrBody(m.number));
         if !merged_allowed {
             if !parsed.is_empty() {
-                notes.push(format!(
+                notes.push(DirectiveNote::about_sources(format!(
                     "merged pull request #{} body directives are disabled by policy; ignored",
                     m.number
-                ));
+                )));
             }
             continue;
         }
@@ -1361,10 +1406,10 @@ pub fn read_directives(
                 .any(|a| a.eq_ignore_ascii_case(&m.author));
         if !author_ok {
             if !parsed.is_empty() {
-                notes.push(format!(
+                notes.push(DirectiveNote::about_sources(format!(
                     "directives in merged pull request #{} ignored: its author is not in `allowed_override_actors`",
                     m.number
-                ));
+                )));
             }
             continue;
         }
@@ -1372,19 +1417,22 @@ pub fn read_directives(
         for d in parsed {
             if d.hidden && !is_hidden_allowed(&d) {
                 refused_hidden.push(d.source.clone());
-                notes.push(format!(
-                    "hidden directive `{}` in merged pull request #{} ignored (directives.allow_hidden is false)",
-                    d.directive, m.number
+                notes.push(DirectiveNote::about_directive(
+                    &d.directive,
+                    format!(
+                        "hidden directive `{}` in merged pull request #{} ignored (directives.allow_hidden is false)",
+                        d.directive, m.number
+                    ),
                 ));
             } else {
                 n += 1;
                 active.push(d);
             }
         }
-        notes.push(format!(
+        notes.push(DirectiveNote::about_sources(format!(
             "{n} directive(s) read from merged pull request #{} (author {})",
             m.number, m.author
-        ));
+        )));
     }
 
     DirectivesRead {
