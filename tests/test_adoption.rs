@@ -39,8 +39,10 @@ enabled = false
 /// by `--whole-tree`), or on the working branch itself (reached by the diff).
 fn severity_fixture_with_debt_on(branch: &str) -> Repo {
     let repo = Repo::new();
+    // The configuration is the base's: a first `discipline.toml` in the change would be
+    // compared with the built-in defaults it loosens.
+    repo.commit_base("discipline.toml", SEVERITY_CONFIG, "chore: config");
     repo.git(&["checkout", "-q", branch]);
-    repo.write("discipline.toml", SEVERITY_CONFIG);
     repo.write("docs/legacy.md", "Ships in 3 weeks.\n");
     repo.write(
         "tests/legacy.rs",

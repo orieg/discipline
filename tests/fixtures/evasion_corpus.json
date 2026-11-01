@@ -211,6 +211,60 @@
       }
     },
     {
+      "name": "discipline-toml-first-file-advisory",
+      "base": {
+        "README.md": "# t\n"
+      },
+      "head": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\nmode = \"advisory\"\n"
+      },
+      "verdict": {
+        "caught": [
+          "config-integrity/gate-weakened"
+        ]
+      }
+    },
+    {
+      "name": "discipline-toml-first-file-gate-disabled",
+      "base": {
+        "README.md": "# t\n"
+      },
+      "head": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.vacuous-tests]\nenabled = false\n"
+      },
+      "verdict": {
+        "caught": [
+          "config-integrity/gate-weakened"
+        ]
+      }
+    },
+    {
+      "name": "discipline-toml-first-file-advisory-with-reason",
+      "base": {
+        "README.md": "# t\n"
+      },
+      "head": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\nmode = \"advisory\"\n"
+      },
+      "body": "allow-gate-weakening: meta adopting discipline in advisory mode first\n",
+      "verdict": {
+        "lifted": [
+          "config-integrity/gate-weakened"
+        ]
+      }
+    },
+    {
+      "name": "discipline-toml-first-file-at-defaults",
+      "base": {
+        "README.md": "# t\n"
+      },
+      "head": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.vacuous-tests]\nseverity = \"error\"\n"
+      },
+      "gate": "config-integrity",
+      "verdict": "clean"
+    },
+    {
       "name": "ci-continue-on-error-added",
       "base": {
         ".github/workflows/ci.yml": "name: ci\non: [pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: cargo test\n  ci-gate:\n    runs-on: ubuntu-latest\n    needs: [test]\n    steps:\n      - run: echo ok\n"
