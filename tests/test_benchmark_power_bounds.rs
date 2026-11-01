@@ -1,7 +1,9 @@
 use discipline::guards::perf::bounds::{
-    minimum_detectable_difference, sample_size_for_interval, sample_size_for_wilson_lower_bound,
+    design_effect_inflated_n, implied_design_effect, kappa_sample_size,
+    minimum_detectable_difference, poisson_at_least, pull_requests_for_yield,
+    sample_size_for_interval, sample_size_for_wilson_lower_bound,
     sample_size_for_wilson_lower_bound_power, standard_normal_quantile, trajectories_required,
-    wilson_pass_probability, wilson_score_interval,
+    wilson_pass_probability, wilson_score_interval, zero_event_upper_bound,
 };
 
 #[test]
@@ -2290,4 +2292,388 @@ fn flipping_one_v6_label_breaks_the_v6_cross_check() {
     let mut adj = fresh();
     adj.adjudications[0].label_source = "inherited-v5".into();
     assert!(check_rerun_results(&V6, &summary, &adj, &findings).is_err());
+}
+
+// ---- agent-pr-precision-v7 (stratified AIDev design) -----------------------------------
+
+const V7_PREREG: &str = "docs/benchmarks/precision-preregistration-v7.toml";
+
+#[test]
+fn v7_zero_event_upper_bound_is_the_exact_clopper_pearson_bound() {
+    // 1 - 0.05^(1/232): v6's 232 pull requests bound a gate that never fired below 1.283%.
+    let v6 = zero_event_upper_bound(232, 0.95).unwrap();
+    assert!((v6 - 0.012_829_628_664_530_968).abs() < 1e-15, "{v6}");
+    // One trial at 95%: the bound is the confidence level itself.
+    assert!((zero_event_upper_bound(1, 0.95).unwrap() - 0.95).abs() < 1e-15);
+    // The rule of three overstates the exact bound, and the two converge as n grows.
+    for n in [30, 232, 1533, 100_000] {
+        let exact = zero_event_upper_bound(n, 0.95).unwrap();
+        assert!(exact < 3.0 / n as f64, "n = {n}");
+        assert!(
+            (exact * n as f64 - 20f64.ln()).abs() < 0.05 * 20f64.ln(),
+            "n = {n}"
+        );
+    }
+    assert!(zero_event_upper_bound(0, 0.95).is_err());
+    assert!(zero_event_upper_bound(10, 1.0).is_err());
+    assert!(zero_event_upper_bound(10, f64::NAN).is_err());
+}
+
+#[test]
+fn v7_poisson_at_least_matches_closed_forms() {
+    // P(X >= 1 | mu = 1) = 1 - e^-1; P(X >= 3 | mu = 2) = 1 - 5 e^-2.
+    let one = poisson_at_least(1, 1.0).unwrap();
+    assert!((one - (1.0 - (-1.0f64).exp())).abs() < 1e-15, "{one}");
+    let three = poisson_at_least(3, 2.0).unwrap();
+    assert!(
+        (three - (1.0 - 5.0 * (-2.0f64).exp())).abs() < 1e-15,
+        "{three}"
+    );
+    assert_eq!(poisson_at_least(0, 7.0).unwrap(), 1.0);
+    assert_eq!(poisson_at_least(4, 0.0).unwrap(), 0.0);
+    // Large means stay finite where e^-mu alone underflows.
+    let big = poisson_at_least(1000, 2000.0).unwrap();
+    assert!(big.is_finite() && big > 1.0 - 1e-12, "{big}");
+    let small = poisson_at_least(2000, 1000.0).unwrap();
+    assert!((0.0..1e-12).contains(&small), "{small}");
+    assert!(poisson_at_least(3, -1.0).is_err());
+    assert!(poisson_at_least(3, f64::INFINITY).is_err());
+}
+
+#[test]
+fn v7_pull_requests_for_yield_is_the_smallest_meeting_size() {
+    // One unit at 0.1 per pull request: 1 - e^(-0.1 N) >= 0.5 first holds at N = 7 (ln 2 / 0.1 = 6.93).
+    assert_eq!(pull_requests_for_yield(1, 0.1, 0.5).unwrap(), 7);
+    // One unit at one per pull request: 1 - e^-1 = 0.63 >= 0.5 at N = 1.
+    assert_eq!(pull_requests_for_yield(1, 1.0, 0.5).unwrap(), 1);
+    // The v7 sizes are the boundary: the size meets the assurance and the one below does not.
+    for (units, rate, assurance, expected) in [
+        (254, 11.0 / 149.0, 0.80, 3621),
+        (307, 29.0 / 149.0, 0.80, 1653),
+        (184, 3.0 / 149.0, 0.80, 9701),
+        (141, 20.0 / 232.0, 0.50, 1632),
+    ] {
+        let n = pull_requests_for_yield(units, rate, assurance).unwrap();
+        assert_eq!(n, expected, "{units} units at {rate}");
+        assert!(poisson_at_least(units, n as f64 * rate).unwrap() >= assurance);
+        assert!(poisson_at_least(units, (n - 1) as f64 * rate).unwrap() < assurance);
+    }
+    // At assurance 0.5 the size sits just under the mean-yield size units / rate.
+    let median = pull_requests_for_yield(141, 20.0 / 232.0, 0.5).unwrap();
+    assert!(median <= (141.0 * 232.0 / 20.0f64).ceil() as usize);
+    assert!(pull_requests_for_yield(0, 0.1, 0.5).is_err());
+    assert!(pull_requests_for_yield(10, 0.0, 0.5).is_err());
+    assert!(pull_requests_for_yield(10, f64::NAN, 0.5).is_err());
+    assert!(pull_requests_for_yield(10, 0.1, 1.0).is_err());
+    assert!(pull_requests_for_yield(10, 1e-12, 0.5).is_err());
+}
+
+#[test]
+fn v7_design_effect_inflated_n_is_kish_and_rounds_up_but_not_on_float_noise() {
+    // v6: 29 structural units held by 24 pull requests, worst-case correlation 1.
+    assert_eq!(
+        design_effect_inflated_n(254, 29.0 / 24.0, 1.0).unwrap(),
+        307
+    );
+    // One unit per cluster, or no correlation: no inflation.
+    assert_eq!(design_effect_inflated_n(254, 1.0, 1.0).unwrap(), 254);
+    assert_eq!(design_effect_inflated_n(100, 3.0, 0.0).unwrap(), 100);
+    // 100 * (1 + 1 * 0.5) = 150 exactly; 0.1-steps in binary may not add a unit.
+    assert_eq!(design_effect_inflated_n(100, 2.0, 0.5).unwrap(), 150);
+    assert_eq!(design_effect_inflated_n(10, 1.1, 1.0).unwrap(), 11);
+    assert!(design_effect_inflated_n(0, 1.0, 1.0).is_err());
+    assert!(design_effect_inflated_n(10, 0.9, 1.0).is_err());
+    assert!(design_effect_inflated_n(10, 2.0, 1.5).is_err());
+    assert!(design_effect_inflated_n(10, 2.0, -0.1).is_err());
+    assert!(design_effect_inflated_n(10, f64::NAN, 0.5).is_err());
+}
+
+#[test]
+fn v7_implied_design_effect_reads_v6_intervals() {
+    // v6 on 119/125: Wilson [0.899, 0.978] against the PR-clustered bootstrap [0.841, 0.994].
+    let (lo, hi) = wilson_score_interval(119, 125, 0.95).unwrap();
+    assert!(
+        (lo - 0.899).abs() < 5e-4 && (hi - 0.978).abs() < 5e-4,
+        "{lo} {hi}"
+    );
+    let deff = implied_design_effect(0.994 - 0.841, 0.978 - 0.899).unwrap();
+    assert!((deff - 3.750_841_211_344_340_6).abs() < 1e-12, "{deff}");
+    assert_eq!(implied_design_effect(0.2, 0.2).unwrap(), 1.0);
+    assert!(implied_design_effect(0.0, 0.1).is_err());
+    assert!(implied_design_effect(0.1, -0.1).is_err());
+    assert!(implied_design_effect(f64::INFINITY, 0.1).is_err());
+}
+
+#[test]
+fn v7_kappa_sample_size_matches_cohens_standard_error() {
+    // Balanced label, kappa 0.80: p_e = 0.5, p_o = 0.9,
+    // n = ceil(1.959964^2 * 0.09 / (0.01 * 0.25)) = ceil(138.29) = 139.
+    assert_eq!(kappa_sample_size(0.80, 0.5, 0.10, 0.95).unwrap(), 139);
+    // Majority label on 80% of items: p_e = 0.68, p_o = 0.936 -> 225.
+    assert_eq!(kappa_sample_size(0.80, 0.80, 0.10, 0.95).unwrap(), 225);
+    // The requirement grows as the label skews, and shrinks as the half-width widens.
+    let skewed = kappa_sample_size(0.80, 0.95, 0.10, 0.95).unwrap();
+    assert!(skewed > 3 * 225, "{skewed}");
+    assert!(kappa_sample_size(0.80, 0.80, 0.20, 0.95).unwrap() < 225);
+    // The size it returns gives a half-width at or under the target; one fewer does not.
+    let half_width = |n: usize, kappa: f64, share: f64| -> f64 {
+        let z = standard_normal_quantile(0.975).unwrap();
+        let p_e = share * share + (1.0 - share) * (1.0 - share);
+        let p_o = p_e + kappa * (1.0 - p_e);
+        z * (p_o * (1.0 - p_o) / (n as f64 * (1.0 - p_e).powi(2))).sqrt()
+    };
+    assert!(half_width(225, 0.80, 0.80) <= 0.10);
+    assert!(half_width(224, 0.80, 0.80) > 0.10);
+    assert!(kappa_sample_size(0.0, 0.8, 0.1, 0.95).is_err());
+    assert!(kappa_sample_size(0.8, 0.4, 0.1, 0.95).is_err());
+    assert!(kappa_sample_size(0.8, 1.0, 0.1, 0.95).is_err());
+    assert!(kappa_sample_size(0.8, 0.8, 0.0, 0.95).is_err());
+    assert!(kappa_sample_size(0.8, 0.8, 0.1, f64::NAN).is_err());
+}
+
+fn ratio(v: &toml::Value) -> f64 {
+    let a = v.as_array().expect("a [numerator, denominator] pair");
+    a[0].as_integer().unwrap() as f64 / a[1].as_integer().unwrap() as f64
+}
+
+fn width(v: &toml::Value) -> f64 {
+    let a = v.as_array().expect("an [upper, lower] pair");
+    a[0].as_float().unwrap() - a[1].as_float().unwrap()
+}
+
+fn int(v: &toml::Value) -> usize {
+    v.as_integer().expect("an integer") as usize
+}
+
+fn float(v: &toml::Value) -> f64 {
+    v.as_float().expect("a float")
+}
+
+/// Every sample size the v7 pre-registration states is what the Rust function returns for
+/// its stated inputs.
+#[test]
+fn v7_preregistration_sample_sizes_match_rust_bounds() {
+    let v7 = read_toml(V7_PREREG);
+    let s = &v7["study"];
+    assert_eq!(s["id"].as_str(), Some("agent-pr-precision-v7"));
+    assert_eq!(
+        s["previous_study_id"].as_str(),
+        Some("agent-pr-precision-v6")
+    );
+    assert_eq!(s["status"].as_str(), Some("locked-pre-data"));
+    assert_eq!(s["recall_claimed"].as_bool(), Some(false));
+
+    let pb = &v7["power_and_bounds"];
+    let conf = float(&pb["confidence_level"]);
+    let power = float(&pb["statistical_power"]);
+    let n_max = int(&pb["wilson_n_max"]);
+    let (sp, sf) = (
+        float(&pb["structural_assumed_precision"]),
+        float(&pb["structural_floor"]),
+    );
+    let (hp, hf) = (
+        float(&pb["heuristic_assumed_precision"]),
+        float(&pb["heuristic_floor"]),
+    );
+    assert_eq!(
+        int(&pb["structural_point_estimate_n"]),
+        sample_size_for_wilson_lower_bound(sp, sf, conf, n_max).unwrap()
+    );
+    let first_clearing = (1..n_max)
+        .find(|&m| {
+            let k = (sp * m as f64 + 0.5).floor() as usize;
+            wilson_score_interval(k, m, conf).unwrap().0 >= sf
+        })
+        .unwrap();
+    assert_eq!(int(&pb["structural_first_clearing_n"]), first_clearing);
+    // The non-clearing sizes the rationale names between the first clearing size and the
+    // point-estimate requirement.
+    let point_estimate = int(&pb["structural_point_estimate_n"]);
+    let non_clearing: Vec<usize> = (first_clearing..point_estimate)
+        .filter(|&m| {
+            let k = (sp * m as f64 + 0.5).floor() as usize;
+            wilson_score_interval(k, m, conf).unwrap().0 < sf
+        })
+        .collect();
+    let named: Vec<usize> = (131..=139).chain(151..=152).collect();
+    assert_eq!(non_clearing, named);
+    assert!(pb["required_n_rationale"]
+        .as_str()
+        .unwrap()
+        .contains("131 to 139 and 151 to 152 do not clear"));
+    let per_gate = sample_size_for_wilson_lower_bound_power(sp, sf, conf, power, n_max).unwrap();
+    assert_eq!(int(&pb["structural_required_n_per_gate"]), per_gate);
+    assert_eq!(
+        int(&pb["v6_required_n"]),
+        sample_size_for_interval(0.90, 0.05, conf).unwrap()
+    );
+    let v6_power = wilson_pass_probability(int(&pb["v6_required_n"]), sp, sf, conf).unwrap();
+    assert!((float(&pb["v6_required_n_pass_probability"]) - v6_power).abs() < 1e-9);
+    let structural_class = design_effect_inflated_n(
+        per_gate,
+        ratio(&pb["structural_units_per_firing_pull_request"]),
+        1.0,
+    )
+    .unwrap();
+    assert_eq!(int(&pb["structural_class_required_n"]), structural_class);
+    let test_code = design_effect_inflated_n(
+        per_gate,
+        ratio(&pb["test_code_units_per_firing_pull_request"]),
+        1.0,
+    )
+    .unwrap();
+    assert_eq!(int(&pb["test_code_required_n"]), test_code);
+    assert_eq!(
+        int(&pb["heuristic_point_estimate_n"]),
+        sample_size_for_wilson_lower_bound(hp, hf, conf, n_max).unwrap()
+    );
+    let heuristic = sample_size_for_wilson_lower_bound_power(hp, hf, conf, power, n_max).unwrap();
+    assert_eq!(int(&pb["heuristic_required_n"]), heuristic);
+    let heuristic_class = design_effect_inflated_n(
+        heuristic,
+        ratio(&pb["heuristic_units_per_firing_pull_request"]),
+        1.0,
+    )
+    .unwrap();
+    assert_eq!(int(&pb["heuristic_class_required_n"]), heuristic_class);
+
+    // The gate-floor tables repeat the same requirements.
+    let floors = v7["gate_floors"].as_array().unwrap();
+    assert_eq!(int(&floors[0]["required_n_per_gate"]), per_gate);
+    assert_eq!(int(&floors[0]["class_required_n"]), structural_class);
+    assert_eq!(float(&floors[0]["precision_floor"]), sf);
+    assert_eq!(float(&floors[0]["assumed_precision"]), sp);
+    assert_eq!(int(&floors[1]["required_n_per_gate"]), heuristic);
+    assert_eq!(float(&floors[1]["assumed_precision"]), hp);
+    assert_eq!(int(&floors[1]["class_required_n"]), heuristic_class);
+    assert_eq!(float(&floors[1]["precision_floor"]), hf);
+    // The class lists are v6's.
+    let v6 = read_toml(V6_PREREG);
+    for (i, floor) in floors.iter().enumerate() {
+        assert_eq!(floor["gates"], v6["gate_floors"][i]["gates"]);
+    }
+
+    // Stage 1: the block-rate prefix, the zero-event bounds and the yield sizes.
+    let s1 = &v7["stage_1"];
+    let prefix = sample_size_for_interval(
+        float(&s1["block_rate_planning_proportion"]),
+        float(&s1["block_rate_target_half_width"]),
+        conf,
+    )
+    .unwrap();
+    assert_eq!(int(&s1["rate_prefix_n"]), prefix);
+    let close = |a: f64, b: f64| (a - b).abs() < 1e-12;
+    assert!(close(
+        float(&s1["zero_event_upper_bound_at_rate_prefix"]),
+        zero_event_upper_bound(prefix, conf).unwrap()
+    ));
+    assert!(close(
+        float(&s1["v6_zero_event_upper_bound"]),
+        zero_event_upper_bound(int(&s1["v6_pull_requests"]), conf).unwrap()
+    ));
+    let assurance = float(&s1["yield_assurance"]);
+    let test_rate = ratio(&s1["test_code_units_per_pull_request"]);
+    assert_eq!(
+        int(&s1["test_code_pull_requests_for_yield"]),
+        pull_requests_for_yield(test_code, test_rate, assurance).unwrap()
+    );
+    assert_eq!(
+        int(&s1["structural_pull_requests_for_yield"]),
+        pull_requests_for_yield(
+            structural_class,
+            ratio(&s1["structural_units_per_pull_request"]),
+            assurance
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        int(&s1["heuristic_pull_requests_for_yield"]),
+        pull_requests_for_yield(
+            heuristic_class,
+            ratio(&s1["heuristic_units_per_pull_request"]),
+            assurance
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        int(&s1["v6_code_gate_pull_requests_for_141"]),
+        pull_requests_for_yield(
+            141,
+            ratio(&s1["v6_code_gate_findings_per_pull_request"]),
+            float(&s1["v6_code_gate_assurance"])
+        )
+        .unwrap()
+    );
+    let tc = s1["test_code_units_per_pull_request"].as_array().unwrap();
+    let lower = wilson_score_interval(
+        tc[0].as_integer().unwrap() as usize,
+        tc[1].as_integer().unwrap() as usize,
+        conf,
+    )
+    .unwrap()
+    .0;
+    assert!(close(
+        float(&s1["test_code_rate_wilson_lower_bound"]),
+        lower
+    ));
+    let max_n = pull_requests_for_yield(test_code, lower, assurance).unwrap();
+    assert_eq!(int(&s1["max_n"]), max_n);
+    // The heuristic class cannot be reached within the cap, as the stopping rule states.
+    assert!(int(&s1["heuristic_pull_requests_for_yield"]) > max_n);
+    assert!(int(&s1["test_code_pull_requests_for_yield"]) > prefix);
+
+    // Stage 2: the v6 design effect and the targeted candidate cap.
+    let s2 = &v7["stage_2"];
+    let deff = implied_design_effect(
+        width(&s2["v6_bootstrap_width"]),
+        width(&s2["v6_wilson_width"]),
+    )
+    .unwrap();
+    assert!(close(float(&s2["v6_implied_design_effect"]), deff));
+    assert_eq!(int(&s2["targeted_candidate_cap"]), prefix);
+
+    // Twin: minimum detectable differences against the class and gate requirements.
+    let twin = &v7["twin_baseline"];
+    let flags = int(&twin["sampled_flags"]);
+    let p_twin = float(&twin["assumed_baseline_precision"]);
+    assert!(close(
+        float(&twin["mdd_structural_class_vs_twin"]),
+        minimum_detectable_difference(flags, structural_class, p_twin, conf, power).unwrap()
+    ));
+    assert!(close(
+        float(&twin["mdd_structural_gate_vs_twin"]),
+        minimum_detectable_difference(flags, per_gate, p_twin, conf, power).unwrap()
+    ));
+    assert_eq!(
+        twin["rule"].as_str().map(|r| r.contains("v6's rule")),
+        Some(true)
+    );
+
+    // Human subset for an informative kappa, and the reliability verdict.
+    let human = &v7["adjudication"]["human"];
+    assert_eq!(
+        int(&human["human_subset_n"]),
+        kappa_sample_size(
+            float(&human["planning_kappa"]),
+            float(&human["planning_majority_share"]),
+            float(&human["kappa_target_half_width"]),
+            conf
+        )
+        .unwrap()
+    );
+    assert_eq!(int(&human["raters"]), 2);
+    let rel = &v7["reliability"];
+    assert_eq!(float(&rel["min_acceptable_kappa"]), 0.75);
+    assert_eq!(
+        rel["unreliable_labels_verdict"].as_str(),
+        Some("INTERMEDIATE_unreliable_labels")
+    );
+
+    // Batches below v6's 40; both rubric questions are scored.
+    let adj = &v7["adjudication"];
+    assert!(int(&adj["batch_size"]) < int(&v6["adjudication"]["batch_size"]));
+    assert_ne!(adj["llm_raters"]["rater_1"], adj["llm_raters"]["rater_2"]);
+    let prompt = adj["rater_prompt"].as_str().unwrap();
+    assert!(prompt.contains("{BATCH_FILE}"));
+    assert!(prompt.contains("rule_fidelity") && prompt.contains("actionability"));
 }
