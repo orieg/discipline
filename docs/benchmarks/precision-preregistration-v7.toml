@@ -1,0 +1,687 @@
+# Pre-registration for `agent-pr-precision-v7`: a stratified precision study of discipline's
+# blocking findings on coding-agent pull requests drawn from the AIDev dataset.
+#
+# Locked before any v7 replay output, manifest or label exists. Any modification to floors,
+# population, sampling, stopping, labelling, adjudication or verdict rules after v7 replay
+# data is inspected relabels the affected verdicts `INTERMEDIATE_amended_threshold_redesign`
+# and is recorded in the results.
+#
+# Every sample size below is returned by a function in `src/guards/perf/bounds.rs` and is
+# checked against that function by
+# `tests/test_benchmark_power_bounds.rs::v7_preregistration_sample_sizes_match_rust_bounds`;
+# none is hand-computed.
+#
+# Why a v7: `agent-pr-precision-v6` (`docs/benchmarks/precision-preregistration-v6.toml`,
+# results in `docs/benchmarks/results-v6/`) replayed 232 merged pull requests of 8
+# repositories (149 coding-agent, 83 Dependabot or Renovate) and reached `insufficient-n` in
+# both classes. 75 of its 127 findings came from dependency bots, one tokio Dependabot pull
+# request held 52 of them, and its fresh rater pool reached Cohen's kappa 0.384, under the
+# 0.75 bar, with no verdict attached to that. What differs from v6:
+# - population: AIDev's coding-agent pull requests from repositories with more than 100
+#   stars, sampled at random across repositories, dependency bots excluded, instead of 8
+#   hand-picked repositories;
+# - two stages: an unlabelled replay sized for the block rate and firing rates, and a
+#   labelled stage sized per gate class from a power calculation instead of an interval
+#   half-width;
+# - at most one labelled finding per gate per pull request, and at most two pull requests per
+#   repository, so one change cannot fill a class;
+# - a targeted search for the four gates that never fired in v6, estimating precision given
+#   firing, not prevalence;
+# - two rubric questions scored separately (rule fidelity, actionability) where v2 to v6 had
+#   one label that mixed them;
+# - human labels on a stratified subset, with the LLM raters kept as a cross-check, and a
+#   verdict (`INTERMEDIATE_unreliable_labels`) for kappa below the bar;
+# - PASS also requires the repository-clustered bootstrap lower bound to clear the floor;
+# - rater batches of at most 20 items instead of 40.
+
+[study]
+id = "agent-pr-precision-v7"
+previous_study_id = "agent-pr-precision-v6"
+status = "locked-pre-data"
+locked_date = "2026-11-01"
+novelty_tier_claimed = "Characterisation"
+tier_justification = """
+Measures the precision of discipline 0.29.0's blocking findings, with 95% Wilson score and
+cluster-bootstrap confidence intervals, on a random sample of merged coding-agent pull
+requests from the AIDev dataset, per gate class and per gate where the sample allows, against
+the same naive sensitive-path twin as v2 to v6. Claims a measured property of shipped
+detectors on a defined population, not a causal mechanism or a closed-form law.
+"""
+discipline_version = "0.29.0"
+discipline_binary = """
+`discipline-aarch64-apple-darwin.tar.gz` (or the `x86_64-unknown-linux-musl` /
+`aarch64-unknown-linux-musl` asset on a Linux replay host) from the v0.29.0 GitHub release of
+`orieg/discipline` (published 2026-11-01T03:19:29Z, before this lock), verified against that
+release's `SHA256SUMS` before the replay starts; it must report `discipline 0.29.0`. The tag
+`v0.29.0` is the tag object `19f6174ec5529adbc6ba27fb02c597a861f28638` on commit
+`49f0d47e774244615e084e207784a9a0e6082cd5`. If the asset cannot be downloaded or does not
+verify, the binary is `cargo build --release --locked` at that commit on the replay host. If
+a later release is wanted, this file is amended before any replay output exists. The results
+name the binary used.
+"""
+configuration_mode = "default-with-test-entrypoints"
+primary_unit_of_analysis = "gate-unit: one error-severity finding per gate per pull request"
+secondary_unit_of_analysis = "per-pull-request block rate and per-gate firing rate"
+recall_claimed = false
+corpus_prior_inspection = """
+No pull request of the frame was replayed or labelled by v2 to v6, whose corpus was 8 other
+repositories. While designing this study, four AIDev rows (`gsd-build/gsd-2#1090`,
+`benbjohnson/litestream#1129`, `FinAegis/core-banking-prototype-laravel#589`,
+`heygen-com/skills#3`) were looked up on the GitHub REST API to confirm their base, head and
+merge commit SHAs are recoverable. Nothing else about them was read: no diff, no replay, no
+label. They stay in the frame like any other row.
+"""
+
+[dataset]
+name = "AIDev"
+paper = "arXiv:2602.09185, \"AIDev: Studying AI Coding Agents on GitHub\""
+code = "https://github.com/SAILResearch/AI_Teammates_in_SE3"
+huggingface_id = "hao-li/AIDev"
+revision_tag = "v5"
+revision_commit = "b37f9fd1613cfec55886105bb76721918d015dc7"
+release_cutoff = "2026-03-31 (created_at); merged_at runs to 2026-04-07"
+license = "CC-BY-4.0"
+license_source = "the Hugging Face dataset card (`license: cc-by-4.0`), read 2026-11-01"
+attribution_rule = """
+CC-BY-4.0 requires attribution: the results, the committed manifest and any post that quotes
+them cite the AIDev paper and the Hugging Face revision above. The Zenodo record
+`10.5281/zenodo.16919272` is AIDev's v3 release, not v5, and is cited only as the dataset's
+archive, never as the source of these rows.
+"""
+tables = [
+  "pull_request.parquet sha256 a9341e2ef692ae4220830b046da228000becc623a1591c5634728d78c331c32b",
+  "repository.parquet sha256 1c84f195fd9813c4bb2c1f2436a9dde71329348f23b5ddd7b92f66125e626f3d",
+  "pr_commit_details.parquet sha256 feec2f74de1ea7a43d7b2a07daac54e02ddac4cf83808cc0f6c296ff5c95cb51",
+]
+table_hash_rule = """
+The hashes are the Git LFS object ids the Hugging Face tree API lists for these files at tag
+`v5` (the same ids on `main` when read). The manifest builder downloads the three files at
+`revision_commit` and refuses to run when a sha256 differs.
+"""
+commit_sha_availability = """
+AIDev carries no base, head or merge commit SHA for a pull request: `pull_request` has `id`,
+`number`, `title`, `body`, `agent`, `user_id`, `user`, `state`, `created_at`, `closed_at`,
+`merged_at`, `repo_id`, `repo_url`, `html_url`; per-commit SHAs are in `pr_commits` and
+`pr_commit_details`. The SHAs are recovered once, when the manifest is built, from
+`GET /repos/{owner}/{repo}/pulls/{number}` (`base.sha`, `head.sha`, `merge_commit_sha`,
+`merged`), and frozen in the committed manifest; the replay itself reads no forge API. The
+four lookups under `[study] corpus_prior_inspection` returned all four fields for merged pull
+requests.
+"""
+frame_counts_read = """
+READ from the Hugging Face dataset viewer's statistics for the parquet conversion of `main`,
+whose three data files carry the hashes above: `pull_request` 361,296 rows, of which 246,777
+have `merged_at`; agents Claude_Code 172,597, Copilot 98,384, OpenAI_Codex 62,731, Cursor
+12,908, Devin 11,219, Google_Jules 3,457 (all rows, merged or not); `repository` 25,402 rows,
+`license` null on 2,213 and `NOASSERTION` on 2,916, `is_forked` true on 331. These describe
+the dataset, not the frame; the manifest builder recomputes and records the frame size.
+"""
+
+[population]
+visibility = "public-only"
+pull_request_state = "merged-only"
+source = "aidev-v5-pull_request-table"
+frame_rule = """
+The frame is every row of `pull_request` (AIDev's scope of repositories with more than 100
+stars) that satisfies all of:
+1. `merged_at` is not null;
+2. joined to `repository` on `repo_id`, the repository has `is_forked` false and a `license`
+   that is an SPDX identifier (not null and not `NOASSERTION`), so the diff excerpts committed
+   in the rater packet come from repositories whose licence is stated;
+3. the author is not a dependency bot: `user` is not `dependabot[bot]`, `renovate[bot]`, or
+   any other `*[bot]` login outside the coding-agent accounts AIDev attributes to its six
+   agents, and the head commit's author is neither of the two dependency bots (checked at
+   manifest build);
+4. the repository is not owned by `orieg` (discipline's own repositories), and the pull
+   request is not one of the 232 `(repo, pr_number)` pairs of
+   `docs/benchmarks/results-v6/manifest.json`.
+The manifest records the frame size after each rule.
+"""
+sampling_rule = """
+Each frame row gets the rank `sha256("<sample_seed>:<full_name>#<number>")` (lowercase hex,
+`full_name` from `repository`), and rows are taken in ascending rank. A row is skipped when
+its repository already holds `per_repository_cap` included pull requests, when the GitHub
+REST API does not report it merged, or when its base or head commit cannot be fetched; every
+skip is recorded with its reason and the next row in rank order is taken. Taking rows in
+random-rank order makes every prefix of the included list a simple random sample of the
+frame (subject to the repository cap). Nothing about a row other than its rank, its
+repository and the fetch outcome decides whether it is included.
+"""
+sample_seed = 70701
+per_repository_cap = 2
+per_repository_cap_rationale = """
+v4 to v6 showed one change filling a class (tokio#8229, 52 of 122 structural findings).
+Capping pull requests per repository bounds how much one repository's conventions weigh,
+and the repository-clustered bootstrap below absorbs what remains.
+"""
+head_base_definition = """
+Each change unit is the pull request's own diff: `head_sha` is the API's `head.sha`
+(fetched through `refs/pull/<number>/head`), `base_sha` is `git merge-base <base.sha>
+<head.sha>` in the clone, so the unit is what a check on the open pull request sees,
+whatever merge strategy the repository used. It is replayed as in v2 to v6: the files
+`git diff-tree -r base_sha head_sha` lists, materialised at both commits in a scratch
+repository (submodule entries dropped), with the head commit's full message as the replay
+commit message and the AIDev `body` (empty when null) as `--pr-body-file`, checked by
+`discipline check --config <default-with-test-entrypoints> --format json --base <base>` with
+`DISCIPLINE_REPLAY_CASE=1` and `DISCIPLINE_NO_NETWORK=1`. Only `error`-severity violations
+are findings. Exit codes other than 0 and 1 abort the run. The
+`default-with-test-entrypoints` configuration text is v6's, unchanged.
+"""
+manifest_path = "docs/benchmarks/results-v7/manifest.json"
+manifest_rule = """
+The manifest holds, in rank order, every row considered: repo, pr_number, AIDev `id`,
+agent, hashed author, rank, `base_sha`, `head_sha`, `merge_commit_sha`, inclusion or skip
+reason, and the stage and stratum that replayed it. The manifest builder and the AIDev
+replay mode of `scripts/benchmark_precision.py` are written after this lock and before any
+replay output exists; they implement these rules, and a rule they cannot implement as
+written is amended here first.
+"""
+clone_mode = "git clone --filter=blob:none (blob-less partial clone), outside the repository"
+
+[stage_1]
+# Unlabelled replay. Measures the block rate and per-gate firing rates on the first
+# `rate_prefix_n` included pull requests, then keeps replaying in rank order until the
+# labelled strata have their findings.
+purpose = "block rate, per-gate firing rates, and the natural-firing findings Stage 2 labels"
+block_rate_planning_proportion = 0.5
+block_rate_target_half_width = 0.025
+# sample_size_for_interval(0.5, 0.025, 0.95): the worst-case proportion, so the half-width
+# holds whatever the block rate is (v6: 41/232 = 0.177).
+rate_prefix_n = 1533
+# zero_event_upper_bound(1533, 0.95): a gate with no firing in the rate prefix has a 95%
+# upper bound on its firing rate of about 0.2%; v6's 232 pull requests gave
+# zero_event_upper_bound(232, 0.95), about 1.3% (the rule of three gives 3/232 = 1.29%).
+zero_event_upper_bound_at_rate_prefix = 0.001952255123492952
+v6_zero_event_upper_bound = 0.012829628664530968
+v6_pull_requests = 232
+firing_rate_rule = """
+On the rate prefix: the block rate (pull requests with at least one finding) and, per gate,
+the firing rate (pull requests where the gate reports at least one finding), each with its
+Wilson 95% interval and its repository-clustered bootstrap interval; a gate with no firing is
+reported with `zero_event_upper_bound(rate_prefix_n, 0.95)`. Per-agent block rates are
+reported as descriptive figures. The twin's block rate is reported beside discipline's.
+"""
+yield_rates = """
+Stage 2 needs findings, and the rate at which a stratum yields gate-units sets how many pull
+requests the replay must reach. Planning rates from v6's 149 coding-agent pull requests,
+counting one unit per gate per pull request:
+- test-code gates (`test_code_gates` below): 11 units on 149 pull requests;
+- structural class: 29 units on 149 pull requests, held by 24 pull requests;
+- heuristic class: 3 units on 149 pull requests.
+The task's rough figure, 0.086 findings per pull request for the code gates, is v6's 20
+uncapped findings from `assertion-reduction`, `deletion-rationale`, `error-swallowing` and
+`stub-bodies` over all 232 pull requests, bots included; at that rate 141 findings need about
+141 / 0.086, roughly 1,600 pull requests (`v6_code_gate_pull_requests_for_141` below, the
+median of the Poisson yield). The capped coding-agent rate is lower, 11 / 149 = 0.074, and is
+the one used here.
+"""
+# pull_requests_for_yield(n_units, units / pull_requests, assurance):
+test_code_units_per_pull_request = [11, 149]
+test_code_pull_requests_for_yield = 3621
+structural_units_per_pull_request = [29, 149]
+structural_pull_requests_for_yield = 1653
+heuristic_units_per_pull_request = [3, 149]
+heuristic_pull_requests_for_yield = 9701
+yield_assurance = 0.80
+v6_code_gate_findings_per_pull_request = [20, 232]
+v6_code_gate_pull_requests_for_141 = 1632
+v6_code_gate_assurance = 0.50
+# The test-code rate rests on 11 events. The hard cap is the yield at the Wilson 95% lower
+# bound of 11/149 (wilson_score_interval(11, 149, 0.95).0), so the cap still reaches the
+# test-code requirement with probability 0.80 if the true rate is that low.
+test_code_rate_wilson_lower_bound = 0.04172033311633155
+max_n = 6408
+stopping_rule = """
+Replay continues in rank order, one included pull request at a time, and stops at the first
+included count N with N >= rate_prefix_n, at least `test_code_required_n` test-code units and
+at least `structural_class_required_n` structural units; or at N = max_n. The rule reads only
+counts of findings, never a label, so it cannot select for precision. The expected stopping
+point at the planning rates is `test_code_pull_requests_for_yield`. The heuristic class is
+not part of the rule: at the planning rate it needs `heuristic_pull_requests_for_yield`,
+beyond `max_n`, so its expected verdict is `insufficient-n`, and that is stated in advance.
+The block rate and firing rates are measured on the rate prefix only, which no stopping
+decision touches.
+"""
+
+[stage_2]
+# Labelled stage.
+unit_rule = """
+A gate-unit is one finding per (pull request, gate). When a gate reports several findings on
+one pull request, the unit is the finding with the smallest
+`sha256("<unit_seed>:<repo>#<pr_number>:<gate>:<code>:<file>:<line>")`; the others are
+recorded in findings.json and never labelled. The estimand is therefore unit precision: the
+probability that a randomly chosen finding of a gate firing on a pull request exhibits the
+gate's defect. v6's design effect on 119/125 (Wilson [0.899, 0.978] against a PR-clustered
+bootstrap [0.841, 0.994]) is `v6_implied_design_effect`, and most of it came from one pull
+request holding many findings of one gate; the unit cap removes that within-gate repetition.
+"""
+unit_seed = 70702
+v6_implied_design_effect = 3.7508412113443406
+v6_wilson_width = [0.978, 0.899]
+v6_bootstrap_width = [0.994, 0.841]
+natural_strata = """
+Every gate-unit of every included Stage 1 pull request (up to the stopping point) is
+labelled, in three strata by gate class: `test-code` (the gates in `test_code_gates`),
+`structural-other` (the other structural gates) and `heuristic`. Labelling every unit keeps
+each class self-weighting: no reweighting is needed for a class estimate. The structural
+class result pools `test-code` and `structural-other`.
+"""
+test_code_gates = [
+  "assertion-reduction",
+  "deletion-rationale",
+  "error-swallowing",
+  "stub-bodies",
+  "vacuous-tests",
+  "ignored-tests",
+]
+targeted_gates = ["ignored-tests", "vacuous-tests", "harness-tampering", "sandbox-config"]
+targeted_rationale = """
+These four fired on none of v6's 232 pull requests (each firing rate below about 1.3% at 95%
+confidence), so a random sample of any affordable size would leave them without findings.
+For each, a candidate frame is drawn from the population frame by a pre-registered filter on
+AIDev's `pr_commit_details` rows, and its candidates are replayed in rank order. The estimate
+for such a gate is precision given that it fires on a pull request matching the filter. It is
+not the gate's prevalence, not its firing rate on agent pull requests in general, and it is
+never pooled into a natural-stratum class result.
+"""
+targeted_frame_rule = """
+Candidates for gate g are the frame rows with rank above the Stage 1 stopping point (so no
+pull request is in both stages), with the same repository cap counted over Stage 1 and all
+targeted strata together, whose `pr_commit_details` rows match g's filter. Filters read
+`filename` and the added lines (`+` lines, not `+++`) of `patch`; AIDev omits large patches,
+so a filter on patch text misses pull requests whose patch was not stored, and the results
+report how many candidate rows had a null patch.
+- ignored-tests: an added line containing one of `#[ignore`, `cfg_attr(`, `@pytest.mark.skip`,
+  `@pytest.mark.xfail`, `pytestmark`, `@unittest.skip`, `.skip(`, `xit(`, `xdescribe(`,
+  `xtest(`, `t.Skip(`, `@Disabled`, `@Ignore`, `[Ignore`, `Skip =`, `markTestSkipped`,
+  `XCTSkip`, `pending(`.
+- vacuous-tests: an added line, in a file whose path contains `test` or `spec`, containing one
+  of `def test_`, `#[test]`, `#[tokio::test]`, `func Test`, `it(`, `test(`, `@Test`,
+  `[Fact`, `[Test`, `TEST(`, `TEST_F(`, `public function test`.
+- harness-tampering: a changed file named `conftest.py`, `sitecustomize.py` or
+  `usercustomize.py`, or matching `jest.config.*`, `vitest.config.*` or `vite.config.*`; a
+  changed `*_test.go` with an added line containing `func TestMain(`; a changed `Cargo.toml`
+  with an added line containing `harness`.
+- sandbox-config: a changed file at one of the paths `docs/GATES.md` lists for the gate at
+  v0.29.0 (`.claude/settings.json`, `.claude/settings.local.json`, `.codex/config.toml`,
+  `.gemini/settings.json`, `.qwen/settings.json`, `opencode.json`, `opencode.jsonc`,
+  `.cursor/cli.json`, `.cursor/sandbox.json`, `.github/copilot/settings.json`,
+  `.github/copilot/settings.local.json`, `.mcp.json`, `.cursor/mcp.json`, `.github/mcp.json`,
+  `.vscode/mcp.json`, `devcontainer.json`, `.devcontainer.json`, `compose.yaml`,
+  `docker-compose.yml` and `compose.<name>.yaml`), a workflow file under
+  `.github/workflows/`, `.gitea/workflows/` or `.forgejo/workflows/` with an added line
+  containing `container:` or `services:`, or a changed file with `firewall` in its name.
+A filter is a sampling device, not a detector: matching it says nothing about whether the
+gate fires.
+"""
+targeted_stopping_rule = """
+For each targeted gate g separately, candidates are replayed in rank order until g has
+`structural_required_n_per_gate` units from candidates matching g's filter, or
+`targeted_candidate_cap` candidates of g have been replayed. A candidate matching several
+filters is replayed once and counts as a candidate of each; a stratum's units are only g's
+units on g's candidates. Other gates' findings on targeted candidates are recorded and never
+labelled. The firing rate of g among its candidates is reported with its Wilson interval, as
+a property of the filter.
+"""
+# rate_prefix_n reused: a targeted gate that fires on none of its capped candidates has a 95%
+# upper bound of zero_event_upper_bound(1533, 0.95), about 0.2%, on its firing rate given
+# the filter.
+targeted_candidate_cap = 1533
+
+[twin_baseline]
+id = "naive-sensitive-path-filter"
+sampled_flags = 150
+sample_seed = 70703
+rule = """
+v6's rule, unchanged: flag any modified file in an agent-authored pull request that matches
+(1) an existing test file present on `base_sha` (`tests/`, `test/`, `__tests__/`, `*_test.*`,
+`*.test.*`, `*.spec.*`), (2) a CI workflow file (`.github/workflows/**`, `.gitlab-ci.yml`,
+`.gitea/workflows/**`, `.forgejo/workflows/**`), or (3) a project manifest, linter, or
+test-runner configuration file (`Cargo.toml`, `pyproject.toml`, `package.json`,
+`deno.json(c)`, `pom.xml`, `build.gradle(.kts)`, `tsconfig*.json`, `.eslintrc*`,
+`eslint.config.*`, `biome.json(c)`, `(.)ruff.toml`, `mypy.ini`, `.flake8`, `pytest.ini`,
+`vitest.config.*`, `jest.config.*`, `.golangci.ya?ml`, `(.)clippy.toml`, `(.)rustfmt.toml`,
+`codecov.ya?ml`). The 150 flags are a seeded random sample of the twin's flags on the
+included Stage 1 pull requests, at most one per (pull request, file).
+"""
+winning_regime = """
+Recall and operational simplicity: zero AST parsing required, guaranteed 100% recall
+on any test-file, workflow-file, or manifest/linter/runner config erosion within those
+paths, and wins whenever a team prefers reviewing every agent touch to tests, CI, or
+project configuration over maintaining language-specific structural parsers.
+"""
+assumed_baseline_precision = 0.55
+# minimum_detectable_difference(150, 307, 0.55, 0.95, 0.80): the twin arm against the
+# structural class requirement; minimum_detectable_difference(150, 254, 0.55, 0.95, 0.80):
+# against one gate at its requirement.
+mdd_structural_class_vs_twin = 0.13586406869280618
+mdd_structural_gate_vs_twin = 0.13986418882245377
+
+[labels]
+questions = ["rule_fidelity", "actionability"]
+question_rule = """
+Each item is scored on two questions, separately. v5 and v6 diverged where one label asked
+both at once ("exhibits the defect ... and a maintainer would want it repaired"): one rater
+answered the rule, the other the maintainer. Here the verdict reads rule fidelity only, and
+actionability is reported beside it.
+"""
+
+[[labels.rule_fidelity]]
+id = "true-positive"
+counts_as_success = true
+counts_in_denominator = true
+definition = """
+The flagged location exhibits the defect the rule describes, read literally: the code, test,
+workflow or configuration change at that location is the kind of change the rule names,
+whether or not this repository would care.
+"""
+worked_example = """
+An agent pull request modifies an existing test `test_parse_header` and deletes two
+`assert_eq!` statements while keeping the function body compiling; the rule "Existing test
+function has fewer assertions or weaker assertion strength than on base" flags
+`tests/header.rs:42`.
+"""
+
+[[labels.rule_fidelity]]
+id = "false-positive"
+counts_as_success = false
+counts_in_denominator = true
+definition = """
+The flagged location does not exhibit the defect the rule describes (for example, an
+equivalent assertion refactor that preserves verification strength, a benign identifier
+matching a heuristic pattern, or a parser misattribution).
+"""
+worked_example = """
+An agent pull request moves an unchanged test module lower in the same file without altering
+any test body or assertion; if the rule flags the moved tests as reduced, the finding is a
+false-positive.
+"""
+
+[[labels.rule_fidelity]]
+id = "cannot-tell"
+counts_as_success = false
+counts_in_denominator = true
+definition = """
+The diff and surrounding file context are insufficient to decide whether the location
+exhibits the defect without executing external tools or consulting private context. Counted
+in the denominator as a non-success so ambiguity never inflates reported precision.
+"""
+worked_example = """
+A pull request removes a test function and replaces it in another crate not included in the
+local diff context where equivalence cannot be verified from the repository tree.
+"""
+
+[[labels.actionability]]
+id = "would-block"
+definition = """
+A maintainer of this repository, seeing this finding on this pull request, would hold the
+merge until the change is repaired or explicitly waived.
+"""
+worked_example = """
+The two deleted `assert_eq!` statements above leave `test_parse_header` checking nothing the
+parser could get wrong; a maintainer asks for them back or for a reason.
+"""
+
+[[labels.actionability]]
+id = "would-not-block"
+definition = """
+A maintainer of this repository would merge without acting on the finding, whether or not it
+exhibits the rule's defect: the defect is real but follows a convention the repository
+accepts, or it is not a defect at all.
+"""
+worked_example = """
+A Dependabot-style bump of `actions/checkout` from one tag to the next in a repository that
+pins every action by tag: the action is unpinned by the rule's reading, and the repository's
+convention accepts it.
+"""
+
+[[labels.actionability]]
+id = "cannot-tell"
+definition = """
+The item does not show enough of the repository's conventions to judge what its maintainers
+would do.
+"""
+worked_example = """
+A golden snapshot is rewritten wholesale, and nothing in the excerpt says whether the
+repository regenerates its snapshots routinely.
+"""
+
+[adjudication]
+blind_to_source_tool = true
+blind_to_gate_name = true
+blind_to_previous_labels = true
+hash_contributor_and_rater_identities = true
+committed_rater_packet = "docs/benchmarks/results-v7/rater-packet.json"
+packet_scope = """
+The packet holds every labelled gate-unit (Stage 2 natural and targeted strata) and the 150
+twin flags, shuffled together with `packet_shuffle_seed`. Packet items have v6's fields only
+(repo, 12-character commit, subject, file, line, rule summary, diff excerpt, line context):
+no source tool, gate id, finding code, message, stratum or label. A finding code without a
+prose rule summary gets one written from `docs/GATES.md` before the packet is built; the
+generic `Gate <code> violation` fallback, which would name the gate, is refused. There are no
+anchor items: v6's labels did not reach the kappa bar, so they are no reference to measure
+drift against, and the human subset below takes that role.
+"""
+packet_shuffle_seed = 70704
+batch_size = 20
+batch_size_rationale = """
+In v6, 13 of 15 rater subagents read their 40-item batch in two parts. v6's packet items
+average 1,384 bytes as indented JSON, so a 40-item batch averaged about 55,000 bytes; the 20
+largest v6 items together are 52,803 bytes, so a 20-item batch of v6-sized items stays under
+the mean batch that was split.
+"""
+llm_raters = { rater_1 = "opus", rater_2 = "sonnet", tie_breaker = "opus" }
+llm_rater_procedure = """
+v6's procedure for the two LLM rater slots, with `batch_size` 20 and both questions: each
+batch of each slot goes to a new isolated LLM subagent given `rater_prompt` with that batch's
+file path; it reads that one file with its file-read tool, uses no other tool, and returns
+one JSON object. A slot's labels are the union of its batches. Disagreements, per question,
+go in batches of at most `batch_size` to new isolated `opus` subagents given
+`tie_breaker_prompt`, who see the item but neither rater's label. A batch whose answer is not
+one valid pair of labels per item id is re-asked once with the same prompt to a new
+subagent; a second invalid answer stops the study. v6's `rater_degeneracy_rule` applies per
+slot and per question, with "the anchors' v5 final labels include at least two distinct
+labels" replaced by "the human final labels on the subset include at least two distinct
+labels".
+"""
+rater_prompt = """
+You are an independent code-review rater in a blinded labelling study. Judge each item from the text of one file alone: read the file {BATCH_FILE} with your file-read tool, once. Do not read any other file, run commands, search, browse, or use any other tool. Do not try to find out which tool produced an item or how anyone else labelled it.
+
+Each item is a location in a merged public pull request (repository, 12-character commit, commit subject, file, line), a one-sentence rule describing a defect, a diff excerpt and, where available, the lines around the location in the changed file. Answer two separate questions about each item.
+
+Question 1, rule_fidelity: does the flagged location exhibit the defect the rule describes, read literally, whether or not this repository would care?
+true-positive: the location exhibits the defect the rule describes. Example: an existing test loses two assert_eq! statements and the rule is "Existing test function has fewer assertions or weaker assertion strength than on base".
+false-positive: the location does not exhibit the defect (an equivalent refactor that keeps verification strength, a benign identifier matching a pattern, a parser misattribution). Example: an unchanged test module is moved lower in the same file and the rule flags its tests as reduced.
+cannot-tell: the diff and context are not enough to decide without running tools or private context. Example: a test is removed and its replacement may be in another crate outside the excerpt.
+
+Question 2, actionability: would a maintainer of this repository hold the merge until this is repaired or explicitly waived?
+would-block: yes. Example: the two deleted assertions leave the test checking nothing the code could get wrong.
+would-not-block: no, whether or not the defect is real (the repository's conventions accept it, or it is no defect). Example: an action bumped from one tag to the next in a repository that pins every action by tag.
+cannot-tell: the item does not show enough of the repository's conventions to judge.
+
+Answer the two questions independently: a true-positive may be would-not-block, and a false-positive is normally would-not-block.
+
+Answer with one JSON object and nothing else: {"PKT-0001": {"rule_fidelity": "true-positive", "actionability": "would-block"}, ...}, one key per item id in the file.
+"""
+tie_breaker_prompt = """
+The rater prompt above, unchanged, with this sentence added after its first paragraph: "Each item in the file was labelled differently by two other raters on the question named for it; you do not see their labels. Answer only that question for that item. If you cannot establish the answer from the diff and context, answer cannot-tell."
+"""
+
+[adjudication.human]
+raters = 2
+subset_rule = """
+Two human raters label a stratified random subset of `human_subset_n` packet items, both
+questions, with the same packet fields and the rubric text of `rater_prompt` (instructions
+on tools aside). Strata: test-code, structural-other, heuristic, each targeted gate, and the
+twin, allocated in proportion to each stratum's packet count by largest remainder, at least
+one item per non-empty stratum, drawn with `human_subset_seed`. The human raters do not see
+each other's labels, the LLM labels, the source tool, the gate names or the stratum. A
+disagreement between them is final as `cannot-tell` on the subset (a non-success), with no
+human tie-breaker, so the human figures cannot be raised by adjudication.
+"""
+human_subset_seed = 70705
+# kappa_sample_size(0.80, 0.80, 0.10, 0.95): items for a 95% half-width of 0.10 on Cohen's
+# kappa at planning kappa 0.80 with the majority label on 80% of items. In v6, Rater 1 gave
+# its majority label to 225 of 277 items (81%). If the realised majority share is higher the
+# interval is wider; the results report the realised half-width.
+human_subset_n = 225
+planning_kappa = 0.80
+planning_majority_share = 0.80
+kappa_target_half_width = 0.10
+project_author_rule = """
+The project author may be one of the two human raters, never both. Every item a project
+author labels is flagged `rater_is_project_author` in adjudication.json, the human results
+carry the qualifier `author-rated`, and the summary says so in the same sentence as any human
+figure. Rater identities are hashed as in v6.
+"""
+synthetic_rater_disclosure = """
+adjudication.json records `rater_1_kind`, `rater_2_kind`, `tie_breaker_kind`
+(`"llm-subagent"`) and `human_rater_kind` (`"human"`), with v6's synthetic-rater disclosure:
+LLM labels are a cross-check on the human ones, and model-to-model agreement is never
+presented as human review. An LLM label is a final label only where the reliability rule
+below holds.
+"""
+
+[reliability]
+min_acceptable_kappa = 0.75
+agreement_metric = "cohens_kappa"
+checks = """
+Cohen's kappa on rule_fidelity, each with its 95% interval, for:
+(a) LLM Rater 1 against LLM Rater 2, on every packet item;
+(b) human rater 1 against human rater 2, on the human subset;
+(c) the human final label against the LLM final label, on the human subset.
+The same three are reported for actionability, as figures, not as verdict inputs. Beside each
+kappa the results report the share of the majority label and the prevalence-adjusted
+agreement 2 * p_o - 1, because a skewed label holds kappa down at any agreement.
+"""
+verdict_rule = """
+If any of (a), (b) or (c) on rule_fidelity has a point kappa below `min_acceptable_kappa`,
+every class and gate verdict that would otherwise be PASS, `INTERMEDIATE_floor_within_ci` or
+REJECTED becomes `INTERMEDIATE_unreliable_labels`; `insufficient-n` stays `insufficient-n`.
+The verdict the labels would have given is reported beside it. If the human subset is not
+labelled by two humans, (b) and (c) cannot be computed and the same relabelling applies with
+the qualifier `no-human-labels`. A point kappa at or above the bar whose interval reaches
+below it keeps the verdict with the qualifier `kappa-ci-below-floor`. v2 to v6 had a bar and
+no verdict for missing it; v6 missed it (0.384).
+"""
+unreliable_labels_verdict = "INTERMEDIATE_unreliable_labels"
+
+[power_and_bounds]
+confidence_level = 0.95
+statistical_power = 0.80
+wilson_n_max = 2000
+insufficient_n_verdict = "insufficient-n"
+amendment_verdict = "INTERMEDIATE_amended_threshold_redesign"
+bootstrap_seed = 20261101
+bootstrap_resamples = 20000
+verdict_rule = """
+Per class, test-code subclass, and gate, on rule_fidelity final labels: PASS iff n >= the
+required n, the Wilson 95% lower bound >= the floor, the repository-clustered bootstrap 95%
+lower bound >= the floor, and `[reliability]` holds; n below the required n is
+`insufficient-n` whatever the interval; otherwise `INTERMEDIATE_floor_within_ci` when the
+point estimate clears the floor and REJECTED when it does not. The repository-clustered
+bootstrap resamples repositories with their (at most two) pull requests and every unit they
+hold (seed and resample count above); the PR-clustered bootstrap is reported beside it, and
+the realised design effect is `implied_design_effect(bootstrap width, Wilson width)`.
+Actionability is reported per class as the would-block share with its Wilson interval and no
+verdict: no floor for it has been justified.
+"""
+required_n_rationale = """
+v2 to v6 required `sample_size_for_interval(0.90, 0.05, 0.95)` = 141 structural findings, an
+interval half-width at the floor. At assumed precision 0.95 the Wilson lower bound first
+clears 0.90 at n = 127 (the task's rough figure of about 130), but rounding makes clearance
+non-monotone (131 to 139 and 151 to 152 do not clear), so the point-estimate requirement is
+`sample_size_for_wilson_lower_bound(0.95, 0.90, 0.95, 2000)` = 153, and a study of exactly
+that size passes only when it observes at least the assumed precision. At n = 141 the
+probability of passing when the true precision is 0.95 is
+`wilson_pass_probability(141, 0.95, 0.90, 0.95)`, about 0.59. v7 requires power 0.80:
+`sample_size_for_wilson_lower_bound_power(0.95, 0.90, 0.95, 0.80, 2000)` = 254 per structural
+gate and for the test-code subclass, 184 for the heuristic class at (0.88, 0.80). Pooling
+gates lets one pull request hold several units of a class, so the structural class requirement
+is `design_effect_inflated_n(254, 29 / 24, 1.0)` = 307: v6's 29 structural units sat in 24
+pull requests, and an intra-cluster correlation of 1 is the worst case. v6's test-code and
+heuristic units each sat one per pull request, so their requirements are not inflated.
+"""
+structural_assumed_precision = 0.95
+structural_floor = 0.90
+structural_point_estimate_n = 153
+structural_first_clearing_n = 127
+structural_required_n_per_gate = 254
+v6_required_n = 141
+v6_required_n_pass_probability = 0.5911030642668149
+structural_units_per_firing_pull_request = [29, 24]
+structural_class_required_n = 307
+test_code_units_per_firing_pull_request = [11, 11]
+test_code_required_n = 254
+heuristic_assumed_precision = 0.88
+heuristic_floor = 0.80
+heuristic_point_estimate_n = 106
+heuristic_required_n = 184
+heuristic_units_per_firing_pull_request = [3, 3]
+heuristic_class_required_n = 184
+assumed_precision_disclosure = """
+The assumed precisions are v2 to v6's planning values. v6's fresh raters labelled 12 of 122
+structural findings true-positive (kappa 0.384), and v2's raters, whose labels v3 to v5
+inherited, 119 of 122. The assumption sets power, not the verdict: if the true precision is
+lower, the study reports INTERMEDIATE or REJECTED at the same n.
+"""
+
+[[gate_floors]]
+class = "structural-ast-and-deterministic"
+precision_floor = 0.90
+assumed_precision = 0.95
+required_n_per_gate = 254
+class_required_n = 307
+gates = [
+  "agents-md",
+  "assertion-reduction",
+  "vacuous-tests",
+  "ignored-tests",
+  "unsafe-safety-comment",
+  "deletion-rationale",
+  "agent-scratch",
+  "shell-secrets",
+  "issue-link",
+  "citation-metadata",
+  "config-integrity",
+  "stub-bodies",
+  "harness-tampering",
+  "error-swallowing",
+  "build-hooks",
+  "toolchain-config",
+  "sandbox-config",
+  "scope-confinement",
+  "suppression-delta",
+  "ci-integrity",
+  "ci-skip-set",
+  "test-floor",
+  "golden-output",
+  "dependency-delta",
+  "test-budget",
+  "pr-checklist",
+  "archive-contents",
+  "manifest-sync",
+  "version-lockstep",
+]
+
+[[gate_floors]]
+class = "heuristic-and-prose"
+precision_floor = 0.80
+assumed_precision = 0.88
+required_n_per_gate = 184
+class_required_n = 184
+gates = [
+  "time-estimates",
+  "pii",
+  "instruction-smuggling",
+  "provenance-tags",
+  "gate-command-lint",
+  "mechanism-sections",
+  "citation-anchors",
+]
+unlisted_gate_rule = """
+v6's rule: a finding from a gate in neither list (`claim-labels`, `commit-provenance`,
+`review-threads`, `ratified-paths` and the opt-in tool gates) is counted in
+`heuristic-and-prose` and named in the results. The class lists are v6's; the results state
+whether the v0.29.0 registry holds a gate in neither list.
+"""

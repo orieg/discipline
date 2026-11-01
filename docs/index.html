@@ -1840,7 +1840,7 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
     <tr>
       <td class="gate-id">download_url</td>
       <td><code>https://github.com/orieg/discipline/releases</code></td>
-      <td>Base URL of the release store, for mirrors.</td>
+      <td>Base URL of the release store, for mirrors: https://, file://, or http:// to a loopback address. Set DISCIPLINE_INSTALL_ALLOW_INSECURE_HTTP=1 in the environment to accept another cleartext mirror.</td>
     </tr>
     <tr>
       <td class="gate-id">install_only</td>
@@ -1937,6 +1937,10 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
     <tr>
       <td class="gate-id">report</td>
       <td>Path of the JSON report</td>
+    </tr>
+    <tr>
+      <td class="gate-id">provenance</td>
+      <td>How the binary was checked: verified (the build provenance attestation of the discipline release workflow), unverified (SHA256SUMS of the release store only: a mirror, another forge, or no gh), or local (binary_path)</td>
     </tr>
     <tr>
       <td class="gate-id">install_error</td>

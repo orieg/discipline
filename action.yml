@@ -90,7 +90,7 @@ inputs:
     required: false
     default: ''
   download_url:
-    description: 'Base URL of the release store, for mirrors.'
+    description: 'Base URL of the release store, for mirrors: https://, file://, or http:// to a loopback address. Set DISCIPLINE_INSTALL_ALLOW_INSECURE_HTTP=1 in the environment to accept another cleartext mirror.'
     required: false
     default: 'https://github.com/orieg/discipline/releases'
   install_only:
@@ -153,6 +153,9 @@ outputs:
   report:
     description: 'Path of the JSON report'
     value: ${{ steps.run.outputs.report }}
+  provenance:
+    description: 'How the binary was checked: verified (the build provenance attestation of the discipline release workflow), unverified (SHA256SUMS of the release store only: a mirror, another forge, or no gh), or local (binary_path)'
+    value: ${{ steps.install.outputs.provenance }}
   install_error:
     description: 'Why installing the binary failed (empty on success)'
     value: ${{ steps.install.outputs.install_error }}
@@ -184,7 +187,33 @@ runs:
         if [ -n "${INPUT_BINARY_PATH}" ]; then
           [ -x "${INPUT_BINARY_PATH}" ] || fail "binary_path '${INPUT_BINARY_PATH}' is not an executable file"
           bin="$(cd "$(dirname "${INPUT_BINARY_PATH}")" && pwd)/$(basename "${INPUT_BINARY_PATH}")"
+          echo "provenance=local" >> "${GITHUB_OUTPUT}"
         else
+          # download-url:begin (tests/test_action_version.rs runs these lines)
+          # The same rule as install.sh: https or file, or cleartext only to a loopback address.
+          # A cleartext mirror lets anyone on the path replace the archive and SHA256SUMS
+          # together. DISCIPLINE_INSTALL_ALLOW_INSECURE_HTTP=1 accepts one on purpose.
+          case "${INPUT_DOWNLOAD_URL}" in
+            https://*|file://*) ;;
+            http://*)
+              url_auth="${INPUT_DOWNLOAD_URL#http://}"
+              url_auth="${url_auth%%/*}"
+              case "${url_auth}" in
+                *@*) url_host="" ;;
+                \[::1\]|\[::1\]:*) url_host="[::1]" ;;
+                *) url_host="${url_auth%%:*}" ;;
+              esac
+              case "${url_host}" in
+                127.0.0.1|localhost|\[::1\]) ;;
+                *)
+                  [ "${DISCIPLINE_INSTALL_ALLOW_INSECURE_HTTP:-}" = "1" ] \
+                    || fail "refusing cleartext HTTP download_url '${INPUT_DOWNLOAD_URL}' (use https://, a loopback address, or set DISCIPLINE_INSTALL_ALLOW_INSECURE_HTTP=1)"
+                  ;;
+              esac
+              ;;
+            *) fail "unsupported download_url scheme in '${INPUT_DOWNLOAD_URL}'" ;;
+          esac
+          # download-url:end
           case "$(uname -m)" in
             x86_64|amd64) arch="x86_64" ;;
             aarch64|arm64) arch="aarch64" ;;
@@ -264,8 +293,10 @@ runs:
             fi
             "${attest[@]}" > /dev/null 2> "${dir}/attestation.err" \
               || fail "build provenance of ${archive} (${version:-latest}) did not verify: $(tail -n 1 "${dir}/attestation.err")"
+            echo "provenance=verified" >> "${GITHUB_OUTPUT:-/dev/null}"
           else
             echo "::notice title=discipline install::build provenance not verified (needs github.com, the default download_url and gh); checked against SHA256SUMS only"
+            echo "provenance=unverified" >> "${GITHUB_OUTPUT:-/dev/null}"
           fi
           # provenance:end
 

@@ -855,6 +855,206 @@ pub fn minimum_detectable_difference(
     Ok(delta)
 }
 
+// ---- Stratified precision study (v7) ----------------------------------------------
+//
+// Sample sizes of `docs/benchmarks/precision-preregistration-v7.toml`: how many pull
+// requests a replay needs before a stratum yields its labelled findings, what a gate that
+// never fires bounds, how much clustering inflates a required count, and how many items a
+// rater pair labels for an informative Cohen's kappa.
+
+/// Exact one-sided upper confidence bound on a proportion after `0` events in `n` trials:
+/// `1 - (1 - confidence_level)^(1 / n)`.
+///
+/// This is the Clopper-Pearson bound for zero events; `3 / n` (the rule of three) is its
+/// first-order approximation at 95% confidence and slightly overstates it.
+///
+/// Errors when `n` is 0 or `confidence_level` is outside `(0, 1)`.
+///
+/// References:
+/// - Clopper, C. J., & Pearson, E. S. (1934). "The use of confidence or fiducial limits
+///   illustrated in the case of the binomial". Biometrika, 26(4), 404-413.
+/// - Hanley, J. A., & Lippman-Hand, A. (1983). "If nothing goes wrong, is everything all
+///   right? Interpreting zero numerators". JAMA, 249(13), 1743-1745.
+pub fn zero_event_upper_bound(n: usize, confidence_level: f64) -> Result<f64> {
+    if n == 0 {
+        bail!("sample size n must be greater than 0");
+    }
+    check_unit_interval("confidence level", confidence_level)?;
+    Ok(-((1.0 - confidence_level).ln() / n as f64).exp_m1())
+}
+
+/// `P(X >= n)` for `X ~ Poisson(mu)`, summed in log space so neither `e^-mu` nor `mu^k / k!`
+/// underflows or overflows to a wrong total.
+///
+/// Errors when `mu` is not finite or is negative.
+pub fn poisson_at_least(n: usize, mu: f64) -> Result<f64> {
+    if !mu.is_finite() || mu < 0.0 {
+        bail!("Poisson mean must be finite and non-negative, got {mu}");
+    }
+    poisson_at_least_with(n, mu, &ln_factorial_table(n))
+}
+
+fn poisson_at_least_with(n: usize, mu: f64, ln_fact: &[f64]) -> Result<f64> {
+    if n == 0 {
+        return Ok(1.0);
+    }
+    if mu == 0.0 {
+        return Ok(0.0);
+    }
+    let ln_mu = mu.ln();
+    let below: f64 = (0..n)
+        .map(|k| (k as f64 * ln_mu - mu - ln_fact[k]).exp())
+        .sum();
+    Ok((1.0 - below).clamp(0.0, 1.0))
+}
+
+/// Smallest number of pull requests `N` whose replay yields at least `n_units` findings with
+/// probability `assurance`, when findings arrive at `units_per_pull_request` per pull request:
+/// the smallest `N` with `P(Poisson(N * units_per_pull_request) >= n_units) >= assurance`.
+///
+/// A unit is one finding per gate per pull request, so a stratum's count over `N` pull
+/// requests is a sum of independent Bernoulli indicators with small rates. The Poisson law
+/// with the same mean `lambda` approximates it (Barbour and Hall bound the total-variation
+/// distance by `(1 - e^-lambda) * sum(p_i^2) / lambda`, which is at most the largest rate) and
+/// is the more dispersed of the two, its variance being its mean. The
+/// tail is increasing in `N`, so the answer is found by bisection and is exact for
+/// the Poisson model. At `assurance = 0.5` it is close to `n_units / units_per_pull_request`.
+///
+/// Errors when `n_units` is 0, the rate is not finite and positive, `assurance` is outside
+/// `(0, 1)`, or the answer exceeds [`MAX_SAMPLE_SIZE`].
+///
+/// Reference: Barbour, A. D., & Hall, P. (1984). "On the rate of Poisson convergence".
+/// Mathematical Proceedings of the Cambridge Philosophical Society, 95(3), 473-480.
+pub fn pull_requests_for_yield(
+    n_units: usize,
+    units_per_pull_request: f64,
+    assurance: f64,
+) -> Result<usize> {
+    if n_units == 0 {
+        bail!("n_units must be a positive integer, got 0");
+    }
+    if !units_per_pull_request.is_finite() || units_per_pull_request <= 0.0 {
+        bail!("units per pull request must be finite and positive, got {units_per_pull_request}");
+    }
+    check_unit_interval("assurance", assurance)?;
+    let ln_fact = ln_factorial_table(n_units);
+    let meets = |m: usize| -> Result<bool> {
+        Ok(
+            poisson_at_least_with(n_units, m as f64 * units_per_pull_request, &ln_fact)?
+                >= assurance,
+        )
+    };
+    if !meets(MAX_SAMPLE_SIZE)? {
+        bail!(
+            "yield of {n_units} units at {units_per_pull_request} per pull request needs more than \
+             {MAX_SAMPLE_SIZE} pull requests"
+        );
+    }
+    let (mut lo, mut hi) = (1usize, MAX_SAMPLE_SIZE);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if meets(mid)? {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    Ok(lo)
+}
+
+/// Sample size needed under clustering: `ceil(n * deff)` with the Kish design effect
+/// `deff = 1 + (mean_cluster_size - 1) * icc`.
+///
+/// `n` is the size a simple random sample would need, `mean_cluster_size` the mean number of
+/// sampled units per cluster (at least 1), `icc` the intra-cluster correlation in `[0, 1]`;
+/// `icc = 1` is the worst case, where every unit of a cluster carries the same label. A product
+/// within 1e-9 (relative) of an integer is taken as that integer.
+///
+/// Errors when `n` is 0, `mean_cluster_size < 1`, `icc` is outside `[0, 1]`, or the result
+/// exceeds [`MAX_SAMPLE_SIZE`].
+///
+/// Reference: Kish, L. (1965). "Survey Sampling". New York: Wiley.
+pub fn design_effect_inflated_n(n: usize, mean_cluster_size: f64, icc: f64) -> Result<usize> {
+    if n == 0 {
+        bail!("n must be a positive integer, got 0");
+    }
+    if !mean_cluster_size.is_finite() || mean_cluster_size < 1.0 {
+        bail!("mean cluster size must be finite and at least 1, got {mean_cluster_size}");
+    }
+    if !icc.is_finite() || !(0.0..=1.0).contains(&icc) {
+        bail!("intra-cluster correlation must be in [0, 1], got {icc}");
+    }
+    let x = n as f64 * (1.0 + (mean_cluster_size - 1.0) * icc);
+    if x > MAX_SAMPLE_SIZE as f64 {
+        bail!("design-effect sample size ({x}) exceeds {MAX_SAMPLE_SIZE}");
+    }
+    let nearest = x.round();
+    if (x - nearest).abs() <= 1e-9 * x.max(1.0) {
+        return Ok(nearest as usize);
+    }
+    Ok(x.ceil() as usize)
+}
+
+/// Design effect implied by two intervals for the same estimate:
+/// `(clustered_width / simple_width)^2`.
+///
+/// A variance ratio read off interval widths, as when a cluster bootstrap interval is set
+/// beside the Wilson interval that assumes independent findings. Both widths are positive.
+///
+/// Errors when a width is not finite and positive.
+///
+/// Reference: Kish, L. (1965). "Survey Sampling". New York: Wiley (the design effect as a
+/// ratio of variances).
+pub fn implied_design_effect(clustered_width: f64, simple_width: f64) -> Result<f64> {
+    for (name, w) in [
+        ("clustered width", clustered_width),
+        ("simple width", simple_width),
+    ] {
+        if !w.is_finite() || w <= 0.0 {
+            bail!("{name} must be finite and positive, got {w}");
+        }
+    }
+    Ok((clustered_width / simple_width).powi(2))
+}
+
+/// Items two raters must both label for Cohen's kappa to have a confidence-interval
+/// half-width of at most `half_width`, for a binary label whose two raters share the
+/// marginal `majority_share`.
+///
+/// With chance agreement `p_e = s^2 + (1 - s)^2` (`s = majority_share`) and observed
+/// agreement `p_o = p_e + kappa * (1 - p_e)`, Cohen's large-sample standard error
+/// `sqrt(p_o (1 - p_o) / (n (1 - p_e)^2))` gives
+/// `n = ceil(z^2 p_o (1 - p_o) / (half_width^2 (1 - p_e)^2))`. The requirement grows quickly
+/// as `majority_share` nears 1: a skewed label leaves little room above chance agreement.
+///
+/// Errors when `kappa` or `half_width` is outside `(0, 1)`, `majority_share` is outside
+/// `[0.5, 1)`, `confidence_level` is outside `(0, 1)`, or the result exceeds
+/// [`MAX_SAMPLE_SIZE`].
+///
+/// Reference: Cohen, J. (1960). "A coefficient of agreement for nominal scales". Educational
+/// and Psychological Measurement, 20(1), 37-46.
+pub fn kappa_sample_size(
+    kappa: f64,
+    majority_share: f64,
+    half_width: f64,
+    confidence_level: f64,
+) -> Result<usize> {
+    check_unit_interval("kappa", kappa)?;
+    check_unit_interval("half-width", half_width)?;
+    check_unit_interval("confidence level", confidence_level)?;
+    if !majority_share.is_finite() || !(0.5..1.0).contains(&majority_share) {
+        bail!("majority share must be in [0.5, 1), got {majority_share}");
+    }
+    let z = standard_normal_quantile(1.0 - (1.0 - confidence_level) / 2.0)?;
+    let p_e = majority_share.powi(2) + (1.0 - majority_share).powi(2);
+    let p_o = p_e + kappa * (1.0 - p_e);
+    let n = z * z * p_o * (1.0 - p_o) / (half_width.powi(2) * (1.0 - p_e).powi(2));
+    if !n.is_finite() || n > MAX_SAMPLE_SIZE as f64 {
+        bail!("kappa sample size ({n}) exceeds {MAX_SAMPLE_SIZE}");
+    }
+    Ok((n.ceil() as usize).max(1))
+}
+
 // ---- Paired within-run ratio bounds --------------------------------------------
 //
 // The `paired-ratio` evaluation mode compares a ratio of two arms measured in the same
