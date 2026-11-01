@@ -48,7 +48,7 @@ cargo build --release --locked
 python3 scripts/measure_hook_latency.py --binary target/release/discipline --repo . --repo https://github.com/BurntSushi/ripgrep --out hook-latency.json
 ```
 
-The script's own checks: `python3 scripts/measure_hook_latency.py --test` (run in CI).
+The script's own checks: `python3 scripts/measure_hook_latency.py --test` (not wired into CI: `.github/workflows/` is a ratified path).
 
 ## 4. Figures
 
