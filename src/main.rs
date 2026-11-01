@@ -992,6 +992,15 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
     } else {
         raw_fail_on_overrides
     };
+    // The bypass is the policy working as configured, but it is still a bypass: the report
+    // says so, so the record does not read as though `fail_on_overrides` held (#966). The
+    // login is not echoed; the run's own logs name its actor.
+    let bypassed = summary.change_overrides();
+    if raw_fail_on_overrides && actor_authorized && bypassed > 0 {
+        summary.directive_notes.push(format!(
+            "`fail_on_overrides` not applied: the run's actor is in `allowed_override_actors`, so {bypassed} override(s) this change writes stand"
+        ));
+    }
 
     let success = summary.is_success(args.fail_on_warnings, fail_on_overrides);
     progress.reported = true;
