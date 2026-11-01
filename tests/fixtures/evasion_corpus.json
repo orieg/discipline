@@ -211,6 +211,32 @@
       }
     },
     {
+      "name": "discipline-toml-first-file-advisory",
+      "base": {
+        "README.md": "# t\n"
+      },
+      "head": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\nmode = \"advisory\"\n"
+      },
+      "gate": "config-integrity",
+      "verdict": {
+        "known_miss": "#984"
+      }
+    },
+    {
+      "name": "discipline-toml-first-file-gate-disabled",
+      "base": {
+        "README.md": "# t\n"
+      },
+      "head": {
+        "discipline.toml": "[meta]\nversion = 1\nname = \"t\"\n\n[gates.vacuous-tests]\nenabled = false\n"
+      },
+      "gate": "config-integrity",
+      "verdict": {
+        "known_miss": "#984"
+      }
+    },
+    {
       "name": "ci-continue-on-error-added",
       "base": {
         ".github/workflows/ci.yml": "name: ci\non: [pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: cargo test\n  ci-gate:\n    runs-on: ubuntu-latest\n    needs: [test]\n    steps:\n      - run: echo ok\n"
