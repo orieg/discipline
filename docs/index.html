@@ -1147,9 +1147,9 @@
           <span class="code-prop">fetch-depth:</span> 0   <span class="code-comment"># Ensure git merge-base is reachable</span>
 
       - <span class="code-prop">name:</span> Run Discipline Sentinel
-        <span class="code-prop">uses:</span> orieg/discipline@v0</div>
+        <span class="code-prop">uses:</span> orieg/discipline@49f0d47e774244615e084e207784a9a0e6082cd5 <span class="code-comment"># v0.29.0</span></div>
         <p style="margin-top: 1rem; color: var(--text-muted); font-size: 0.9rem;">
-          The default <code>ci-integrity</code> gate rejects a newly added action that is not pinned by commit SHA, <code>@v0</code> included. Pin it to a commit SHA, which runs the binary of the release that commit names: <code>uses: orieg/discipline@&lt;commit-sha&gt; # v0.29.0</code>.
+          The action is pinned by commit SHA because the default <code>ci-integrity</code> gate rejects a newly added action that is not, <code>@v0</code> included. A SHA ref runs the binary of the release that commit names. The step fails on errors only; add <code>fail_on_warnings: true</code> under <code>with:</code> once the warnings are fixed or baselined.
         </p>
       </div>
 
@@ -1211,9 +1211,10 @@
       - <span class="code-prop">uses:</span> actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 <span class="code-comment"># v7.0.1</span>
         <span class="code-prop">with:</span>
           <span class="code-prop">fetch-depth:</span> 0
+          <span class="code-prop">persist-credentials:</span> false   <span class="code-comment"># the job's token can write</span>
 
       - <span class="code-prop">name:</span> Run Discipline
-        <span class="code-prop">uses:</span> https://github.com/orieg/discipline@v0
+        <span class="code-prop">uses:</span> https://github.com/orieg/discipline@49f0d47e774244615e084e207784a9a0e6082cd5 <span class="code-comment"># v0.29.0</span>
         <span class="code-comment"># Runner without internet access: with: { binary_path: /opt/discipline/discipline }</span></div>
       </div>
 
@@ -1236,9 +1237,10 @@
       - <span class="code-prop">uses:</span> actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 <span class="code-comment"># v7.0.1</span>
         <span class="code-prop">with:</span>
           <span class="code-prop">fetch-depth:</span> 0
+          <span class="code-prop">persist-credentials:</span> false   <span class="code-comment"># the job's token can write</span>
 
       - <span class="code-prop">name:</span> Run Discipline
-        <span class="code-prop">uses:</span> https://github.com/orieg/discipline@v0
+        <span class="code-prop">uses:</span> https://github.com/orieg/discipline@49f0d47e774244615e084e207784a9a0e6082cd5 <span class="code-comment"># v0.29.0</span>
         <span class="code-comment"># Runner without internet access: with: { binary_path: /opt/discipline/discipline }</span></div>
       </div>
 
@@ -2142,9 +2144,9 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
         <div class="install-row">
           <div class="install-meta">
             <h4>GitHub Action</h4>
-            <p>Composite action with automatic binary bootstrap. Under the default <code>ci-integrity</code> gate, pin it by commit SHA and set <code>version:</code>.</p>
+            <p>Composite action with automatic binary bootstrap. Pinned by commit SHA, which the default <code>ci-integrity</code> gate requires.</p>
           </div>
-          <div class="install-snippet">uses: orieg/discipline@v0</div>
+          <div class="install-snippet">uses: orieg/discipline@49f0d47e774244615e084e207784a9a0e6082cd5 # v0.29.0</div>
         </div>
         <div class="install-row">
           <div class="install-meta">
@@ -2159,14 +2161,14 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
             <h4>Forgejo Action</h4>
             <p>Compatible with Forgejo Actions and forgejo-runner.</p>
           </div>
-          <div class="install-snippet">uses: https://github.com/orieg/discipline@v0</div>
+          <div class="install-snippet">uses: https://github.com/orieg/discipline@49f0d47e774244615e084e207784a9a0e6082cd5 # v0.29.0</div>
         </div>
         <div class="install-row">
           <div class="install-meta">
             <h4>Gitea Action</h4>
             <p>Compatible with self-hosted Gitea and act_runner.</p>
           </div>
-          <div class="install-snippet">uses: https://github.com/orieg/discipline@v0</div>
+          <div class="install-snippet">uses: https://github.com/orieg/discipline@49f0d47e774244615e084e207784a9a0e6082cd5 # v0.29.0</div>
         </div>
         <div class="install-row">
           <div class="install-meta">

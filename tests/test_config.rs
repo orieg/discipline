@@ -450,6 +450,47 @@ fn test_init_starter_detects_runners_and_generates_valid_config() {
     );
 }
 
+/// The starter carries advisory mode as a commented line: written as it is, the run
+/// enforces; uncommented, it is advisory (#985).
+#[test]
+fn test_init_starter_offers_advisory_mode_commented_out() {
+    use discipline::config::RunMode;
+    use discipline::init::generate_starter;
+
+    let dir = tempfile::tempdir().unwrap();
+    let starter = generate_starter("demo", dir.path());
+    assert!(starter.contains("\n# mode = \"advisory\"\n"), "{starter}");
+    assert!(
+        starter.contains("allow-gate-weakening: meta <reason>"),
+        "{starter}"
+    );
+    let cfg = DisciplineConfig::from_toml_str(&starter).unwrap();
+    assert_eq!(cfg.meta.mode, RunMode::Enforcing);
+
+    let advisory = starter.replace("# mode = \"advisory\"", "mode = \"advisory\"");
+    let cfg = DisciplineConfig::from_toml_str(&advisory).unwrap();
+    assert_eq!(cfg.meta.mode, RunMode::Advisory);
+}
+
+/// A plain `tests/test_*.py` layout, pytest's default discovery, is a pytest project;
+/// a `tests/` directory without such a file is not (#985).
+#[test]
+fn test_init_detects_pytest_from_a_tests_test_py_layout() {
+    use discipline::init::TestRunner;
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("tests")).unwrap();
+    std::fs::write(dir.path().join("tests/helpers.py"), "X = 1\n").unwrap();
+    assert_eq!(TestRunner::detect(dir.path()), None);
+
+    std::fs::write(
+        dir.path().join("tests/test_app.py"),
+        "def test_add():\n    assert 1 + 2 == 3\n",
+    )
+    .unwrap();
+    assert_eq!(TestRunner::detect(dir.path()), Some(TestRunner::Pytest));
+}
+
 #[test]
 fn test_empty_test_report_env_vars_parse_without_error() {
     use clap::Parser;

@@ -476,3 +476,129 @@ fn version_lockstep_documented_example_passes_in_sync_and_names_each_drifted_fil
         );
     }
 }
+
+// ---- README quickstart: the CI examples pass the pull request that adds them -
+
+const README: &str = include_str!("../README.md");
+const CI_GUIDE: &str = include_str!("../docs/guides/ci-platforms.md");
+
+/// The first ```yaml block under the heading `heading` of `doc`, verbatim.
+fn documented_workflow(doc: &str, heading: &str) -> String {
+    let start = doc
+        .find(heading)
+        .unwrap_or_else(|| panic!("no `{heading}` heading"));
+    let level = heading.bytes().take_while(|&b| b == b'#').count();
+    let section = &doc[start + heading.len()..];
+    // Up to the next heading at the same level or above.
+    let end = section
+        .match_indices("\n#")
+        .find(|(i, _)| {
+            let hashes = section[i + 1..].bytes().take_while(|&b| b == b'#').count();
+            hashes <= level && section[i + 1 + hashes..].starts_with(' ')
+        })
+        .map_or(section.len(), |(i, _)| i);
+    let section = &section[..end];
+    let body = section
+        .split_once("```yaml\n")
+        .unwrap_or_else(|| panic!("`{heading}` has no ```yaml block"))
+        .1;
+    body.split_once("```")
+        .expect("the yaml fence must be closed")
+        .0
+        .to_string()
+}
+
+/// `<sha> # vX.Y.Z` of the published release this repository's own agent setup
+/// pins. A release bump leaves both pins alone; a follow-up moves them once the
+/// release is out (docs/ARCHITECTURE.md §8.2).
+fn published_pin() -> &'static str {
+    const SETUP: &str = include_str!("../.github/workflows/copilot-setup-steps.yml");
+    let pin = SETUP
+        .lines()
+        .find_map(|l| {
+            l.split_once("uses: orieg/discipline@")
+                .map(|(_, r)| r.trim())
+        })
+        .expect("copilot-setup-steps.yml runs the action");
+    let (sha, version) = pin.split_once(" # v").expect("`<sha> # vX.Y.Z`");
+    assert!(
+        sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()),
+        "{pin}"
+    );
+    assert!(!version.is_empty(), "{pin}");
+    pin
+}
+
+/// A repository as a team meets it before adopting: one Python file, no
+/// `AGENTS.md`, no `discipline.toml`.
+fn fresh_repository() -> Repo {
+    let repo = Repo {
+        dir: tempfile::tempdir().unwrap(),
+    };
+    repo.git(&["init", "-q", "-b", "main"]);
+    repo.write("app.py", "def add(a, b):\n    return a + b\n");
+    repo.commit("chore: base");
+    repo.git(&["checkout", "-q", "-b", "work"]);
+    repo
+}
+
+/// The README's CI quickstart, and the full workflows of the CI guide, copied
+/// verbatim into a fresh repository as the pull request's change, pass that
+/// pull request: a team that follows them does not meet a red check on the
+/// adoption change itself (#985). The step's `fail_on_warnings` input is applied
+/// as the action applies it.
+#[test]
+fn readme_ci_examples_pass_the_pull_request_that_adds_them() {
+    let readme_github = "### 3. Pre-Merge CI Sentinel (GitHub Actions)";
+    let readme_gitea = "### 4. Pre-Merge CI Sentinel (Gitea & Forgejo Actions)";
+    for (doc, heading, path) in [
+        (README, readme_github, ".github/workflows/discipline.yml"),
+        (README, readme_gitea, ".gitea/workflows/discipline.yml"),
+        (README, readme_gitea, ".forgejo/workflows/discipline.yml"),
+        (
+            CI_GUIDE,
+            "### Basic Pull Request Sentinel",
+            ".github/workflows/discipline.yml",
+        ),
+        (
+            CI_GUIDE,
+            "## 3. Forgejo & Gitea Actions",
+            ".forgejo/workflows/discipline.yaml",
+        ),
+    ] {
+        let workflow = documented_workflow(doc, heading);
+        assert!(
+            workflow.contains("discipline@"),
+            "{heading}: the example must run the action:\n{workflow}"
+        );
+        // An advisory run passes whatever it finds: the example would prove nothing.
+        assert!(
+            !workflow.contains("advisory:"),
+            "{heading}: the quickstart must enforce:\n{workflow}"
+        );
+        let pin = workflow
+            .lines()
+            .find_map(|l| l.split_once("orieg/discipline@").map(|(_, r)| r.trim()))
+            .unwrap();
+        assert_eq!(
+            pin,
+            published_pin(),
+            "{heading}: the example pins the release this repository's own \
+             copilot-setup-steps.yml pins (both move after a release is published)"
+        );
+        let mut flags = Vec::new();
+        if workflow.contains("fail_on_warnings: true") {
+            flags.push("--fail-on-warnings");
+        }
+
+        let repo = fresh_repository();
+        repo.write(path, &workflow);
+        repo.commit("ci: add the discipline check");
+        let run = repo.check_with_pr(&flags, "Adds the discipline check from the README.");
+        assert_eq!(
+            run.code, 0,
+            "{heading} as {path} fails the pull request that adds it:\n{}{}",
+            run.stdout, run.stderr
+        );
+    }
+}

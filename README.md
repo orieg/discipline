@@ -108,12 +108,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # merge base must be reachable
-      - uses: orieg/discipline@v0
-        with:
-          fail_on_warnings: true
+      - uses: orieg/discipline@49f0d47e774244615e084e207784a9a0e6082cd5 # v0.29.0
 ```
 
-The floating `@v0` ref tracks the latest `v0.x.y` release, and moves only after that release has passed its smoke tests. Before 1.0, a minor release can change gate behaviour; each one lists those changes under "Upgrading" in its release notes and in the [compatibility ledger](docs/ROADMAP.md#default-changes-compatibility-ledger). Pin `@v0.29.0` when a verdict must be reproducible from the workflow file alone. The default `ci-integrity` gate reports any tag ref (`@v0`, `@v0.29.0`) newly added to a workflow as an unpinned action; a repository that runs it pins a commit SHA: `uses: orieg/discipline@<commit-sha> # v0.29.0`. A SHA ref runs the binary of the release that commit's `Cargo.toml` names; `version:` under `with:` picks another release.
+The action is pinned by commit SHA because the default `ci-integrity` gate reports any tag ref (`@v0`, `@v0.29.0`) newly added to a workflow as an unpinned action, so a tag would fail the pull request that adds it. A SHA ref runs the binary of the release that commit's `Cargo.toml` names; `version:` under `with:` picks another release, and [Renovate](docs/CONFIGURATION.md#keeping-pins-current-with-renovate) or [Dependabot](docs/CONFIGURATION.md#keeping-pins-current-with-dependabot) move the pin. A repository that turns `ci-integrity` off can use the floating `@v0` ref, which tracks the latest `v0.x.y` release and moves only after that release has passed its smoke tests. Pin `@v0.29.0` or a commit SHA when a verdict must be reproducible from the workflow file alone. Before 1.0, a minor release can change gate behaviour; each one lists those changes under "Upgrading" in its release notes and in the [compatibility ledger](docs/ROADMAP.md#default-changes-compatibility-ledger).
+
+The step fails on errors only. A warning, such as `AGENTS.md Missing` in a repository without one, shows in the report and the step summary without failing it. Add `fail_on_warnings: true` under `with:` once the warnings are fixed or baselined; [First Week](#5-first-week-from-advisory-to-enforcing) gives the order.
 
 > **Note on `edited`:** GitHub Actions does not trigger workflows on PR description edits by default. Specifying `types: [opened, synchronize, reopened, edited]` ensures that updating the PR body (such as adding an authorized override directive or resolving a PR-body hygiene finding) immediately re-runs the gate without requiring an empty commit.
 >
@@ -139,10 +139,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # merge base must be reachable
-      - uses: https://github.com/orieg/discipline@v0
-        with:
-          fail_on_warnings: true
+          persist-credentials: false # the job's token can write: keep it out of .git/config
+      - uses: https://github.com/orieg/discipline@49f0d47e774244615e084e207784a9a0e6082cd5 # v0.29.0
 ```
+
+The commit SHA and `fail_on_warnings` work as in the GitHub example above.
 
 The action fetches the matching release archive and its `SHA256SUMS` from GitHub and verifies the checksum before running, so the runner needs outbound HTTPS to `github.com`. On an air-gapped runner, point `binary_path` at a discipline binary already on the runner image (see [Installation](#installation)), or set `download_url` to an internal mirror of the release store:
 
@@ -175,6 +176,17 @@ Adoption and editor tooling:
 - [Keeping Pins Current with Renovate](docs/CONFIGURATION.md#keeping-pins-current-with-renovate)
 - [Keeping Pins Current with Dependabot](docs/CONFIGURATION.md#keeping-pins-current-with-dependabot)
 - [Agent Hook Files in a Bot's Update](docs/CONFIGURATION.md#agent-hook-files-in-a-bots-update)
+
+### 5. First Week: From Advisory to Enforcing
+
+An order of adoption in which every change passes its own check. A step that changes a file is a pull request, and a directive it needs goes on its own line in that pull request's body.
+
+1. `discipline init` writes a starter `discipline.toml`. Commit it.
+2. `discipline replay --last 50` shows what the gates would have blocked in the last 50 merged changes: the findings to expect, and the configuration to tune before the check runs.
+3. `discipline baseline --write` records the findings already in the tree. Commit `discipline-baseline.toml` with `allow-gate-weakening: baseline <reason>` ([Brownfield](#2-adopting-on-an-existing-repository-brownfield)).
+4. Add the workflow from part 3 or 4 with `advisory: true` under `with:`: the step reports what it finds and never fails. That input is itself a `ci-integrity` finding (`ci-integrity/discipline-action-advisory`), so the pull request that adds it carries `allow-gate-weakening: ci-integrity <reason>`.
+5. Once a run of pull requests has shown findings the team acts on, delete `advisory: true` and make the check required ([Repository Protection](docs/guides/ci-platforms.md#8-repository-protection)). Removing it loosens nothing, so it needs no directive.
+6. Fix the warnings (write the `AGENTS.md`, for one) or record them with `discipline baseline --write --fail-on-warnings`, then add `fail_on_warnings: true` under `with:`. A baseline that records more findings carries `allow-gate-weakening: baseline <reason>` again.
 
 ## Gates
 
