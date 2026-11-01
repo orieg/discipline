@@ -66,7 +66,7 @@ pub fn codeowners_covers(content: &str, path: &str) -> bool {
 pub fn codeowners_finding(codeowners: Option<(&str, &str)>, targets: &[String]) -> Finding {
     let Some((path, content)) = codeowners else {
         return Finding::new("codeowners", Status::Warn, "no CODEOWNERS file").fix(format!(
-            "Add .github/CODEOWNERS owning {} so weakening them needs a named reviewer.",
+            "Add a CODEOWNERS file at the repository root (every forge reads it there) owning {} so weakening them needs a named reviewer.",
             targets.join(", ")
         ));
     };
