@@ -187,6 +187,7 @@ def cells(repo: dict, binary: Path) -> list[tuple[str, list[str], str | None]]:
 def time_cell(argv: list[str], stdin: str | None, cwd: Path, runs: int, warmup: int) -> dict:
     env = dict(os.environ, DISCIPLINE_NO_NETWORK="1", PR_BODY="", NO_COLOR="1")
     samples, codes, loads = [], [], []
+    could_not_check = ""
     for i in range(warmup + runs):
         snap = require_idle()
         start = time.perf_counter()
@@ -196,9 +197,15 @@ def time_cell(argv: list[str], stdin: str | None, cwd: Path, runs: int, warmup: 
             samples.append(elapsed)
             codes.append(proc.returncode)
             loads.append(round(snap["load1"], 2))
-    # Exit 2 is "could not check": its wall time is not the cost of a check.
-    return {**summarise(samples), "samples_s": samples, "exit_codes": sorted(set(codes)),
-            "load1_before_each": loads}
+            if proc.returncode == 2:
+                could_not_check = proc.stderr[-2000:]
+    # Exit 2 is "could not check": its wall time is not the cost of a check, so the
+    # reason is kept beside it.
+    out = {**summarise(samples), "samples_s": samples, "exit_codes": sorted(set(codes)),
+           "load1_before_each": loads}
+    if could_not_check:
+        out["stderr_tail_exit_2"] = could_not_check
+    return out
 
 
 def host_info(binary: Path) -> dict:
