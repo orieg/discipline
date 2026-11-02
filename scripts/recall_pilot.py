@@ -54,6 +54,7 @@ def _load_sibling(name: str) -> Any:
 
 power = _load_sibling("benchmark_power_audit")
 pairs_mod = _load_sibling("recall_pairs")
+strata_mod = _load_sibling("recall_strata")
 replay_mod = _load_sibling("recall_replay")
 
 # Locked in the pre-registration before the pilot.
@@ -153,8 +154,9 @@ def wilson(k: int, n: int) -> dict[str, Any]:
 
 
 def access_arm_rates(manifest: dict[str, Any], strata: dict[str, Any], done: dict[str, dict[str, Any]],
-                     access_arm: str) -> dict[str, Any]:
+                     access_arm: str, in_scope: str = "registered") -> dict[str, Any]:
     """`trajectories_rule` rates for one access arm, over planned impossible-split agent cells."""
+    is_in_scope = strata_mod.IN_SCOPE_RULES[in_scope]
     planned = [r for r in done.values() if r.get("dummy") is None and r.get("arm") == access_arm
                and r.get("split") in IMPOSSIBLE_SPLITS]
     skipped: dict[str, int] = {}
@@ -181,11 +183,13 @@ def access_arm_rates(manifest: dict[str, Any], strata: dict[str, Any], done: dic
     by_id = {s["pair_id"]: s for s in strata["pairs"]}
     passes = [p for p in valid if p.get("passed")]
     strata_counts: dict[str, int] = {}
+    in_scope_passes = 0
     for p in passes:
-        st = by_id.get(p["pair_id"], {}).get("stratum", "missing")
+        entry = by_id.get(p["pair_id"], {})
+        st = entry.get("stratum", "missing")
         strata_counts[st] = strata_counts.get(st, 0) + 1
+        in_scope_passes += is_in_scope(st, {t["sub_stratum"] for t in entry.get("techniques", [])})
     labelled = sum(v for k, v in strata_counts.items() if k not in ("out-of-diff", "unlabelled", "missing"))
-    test_side = strata_counts.get("test-side", 0)
     return {
         "planned_cells": len(planned),
         "not_generated": dict(sorted(skipped.items())),
@@ -197,7 +201,7 @@ def access_arm_rates(manifest: dict[str, Any], strata: dict[str, Any], done: dic
         "pass_strata": dict(sorted(strata_counts.items())),
         "valid_share": wilson(len(valid), len(planned)),
         "pass_rate": wilson(len(passes), len(valid)),
-        "in_scope_share": wilson(test_side, labelled),
+        "in_scope_share": wilson(in_scope_passes, labelled),
     }
 
 
@@ -233,17 +237,19 @@ def trajectories(n_req: int, rates: dict[str, Any]) -> dict[str, Any]:
     return {"inputs": pe, "trajectories_required": t, "feasible_within_confirmatory_runs": t <= CONFIRMATORY_RUNS_PER_ARM}
 
 
-def compute_values(results_dir: Path) -> dict[str, Any]:
+def compute_values(results_dir: Path, in_scope: str = "registered") -> dict[str, Any]:
     manifest = json.loads((results_dir / "manifest.json").read_text())
     strata = json.loads((results_dir / "strata.json").read_text())
     results = json.loads((results_dir / "replay.json").read_text())
-    summary = replay_mod.summarise(results, None)
+    summary = replay_mod.summarise(results, None, in_scope)
+    is_in_scope = strata_mod.IN_SCOPE_RULES[in_scope]
     state_lines = (results_dir / "runner-state.jsonl").read_text().splitlines()
     start, done = final_cells(state_lines)
     units: dict[str, int] = {}
     seen: set[tuple[str, str, str]] = set()
     for r in results["pairs"]:
-        if r["benchmark"] != "swe" or r["split"] == "original" or r["stratum"] != "test-side":
+        subs = {t["sub_stratum"] for t in r["config_arms"][PRIMARY_CONFIG_ARM]["techniques"]}
+        if r["benchmark"] != "swe" or r["split"] == "original" or not is_in_scope(r["stratum"], subs):
             continue
         for t in r["config_arms"][PRIMARY_CONFIG_ARM]["techniques"]:
             key = (r["instance_id"], t["sub_stratum"], t["hunk_sha256"])
@@ -264,9 +270,9 @@ def compute_values(results_dir: Path) -> dict[str, Any]:
     n_req = required_n(de["value"]) if de["value"] is not None else None
     per_arm = {}
     for arm in ACCESS_ARMS:
-        rates = access_arm_rates(manifest, strata, done, arm)
+        rates = access_arm_rates(manifest, strata, done, arm, in_scope)
         per_arm[arm] = {"rates": rates, "trajectories": trajectories(n_req, rates) if n_req else None}
-    return {
+    out = {
         "study_id": pairs_mod.STUDY_ID,
         "generated_by": "python3 scripts/recall_pilot.py values",
         "inputs_sha256": {name: sha256_file(results_dir / name) for name in
@@ -285,6 +291,45 @@ def compute_values(results_dir: Path) -> dict[str, Any]:
         "access_arms": per_arm,
         "summary_primary_swe": summary["by_benchmark"].get("swe", {}).get("config_arms", {}).get(PRIMARY_CONFIG_ARM),
         "summary_secondary_swe": summary["by_benchmark"].get("swe", {}).get("config_arms", {}).get("secondary"),
+    }
+    if in_scope != "registered":
+        out["in_scope_rule"] = in_scope
+    return out
+
+
+def runs_per_cell_needed(trajectories_required: int | None) -> int | None:
+    """Smallest `runs_per_cell` whose confirmatory runs (CONFIRMATORY_RUNS_PER_ARM per cell pass) reach `trajectories_required`."""
+    if trajectories_required is None:
+        return None
+    return max(1, math.ceil(trajectories_required / CONFIRMATORY_RUNS_PER_ARM))
+
+
+def amendment_3(results_dir: Path) -> dict[str, Any]:
+    """Amendment 3's Step-0 bounds: `compute_values` under each in-scope rule, from the same pilot artefacts."""
+    rules = {}
+    for rule in strata_mod.IN_SCOPE_RULES:
+        v = compute_values(results_dir, rule)
+        p = (v["summary_primary_swe"] or {}).get("P")
+        rules[rule] = {
+            "design_effect": v["design_effect"],
+            "required_n": v["required_n"],
+            "P_primary": p,
+            "R_primary": (v["summary_primary_swe"] or {}).get("R"),
+            "R_secondary": (v["summary_secondary_swe"] or {}).get("R"),
+            "falsifiers_primary": (v["summary_primary_swe"] or {}).get("falsifiers"),
+            "access_arms": {arm: {"in_scope_share": a["rates"]["in_scope_share"], "pass_rate": a["rates"]["pass_rate"],
+                                  "valid_share": a["rates"]["valid_share"], "trajectories": a["trajectories"],
+                                  "runs_per_cell_needed": runs_per_cell_needed(
+                                      (a["trajectories"] or {}).get("trajectories_required"))}
+                            for arm, a in v["access_arms"].items()},
+        }
+    return {
+        "study_id": pairs_mod.STUDY_ID,
+        "generated_by": "python3 scripts/recall_pilot.py amendment-3",
+        "inputs_sha256": {name: sha256_file(results_dir / name) for name in
+                          ("manifest.json", "strata.json", "replay.json", "runner-state.jsonl")},
+        "confirmatory_runs_per_arm": CONFIRMATORY_RUNS_PER_ARM,
+        "rules": rules,
     }
 
 
@@ -348,6 +393,34 @@ def run_self_checks() -> None:
     assert rates["valid_share"]["k"] == 3 and rates["valid_share"]["n"] == 4
     assert (rates["pass_rate"]["k"], rates["pass_rate"]["n"]) == (2, 3)
     assert (rates["in_scope_share"]["k"], rates["in_scope_share"]["n"]) == (1, 2)
+    strata["pairs"].append({"pair_id": "p4b", "stratum": "mixed", "techniques": [{"sub_stratum": "S1-revert"}]})
+    manifest["pairs"].append({"pair_id": "p4b", "dummy": None, "arm": "access_full", "split": "oneoff",
+                              "population_split": "pilot", "exclusion": None, "reproduction": "verified", "passed": True})
+    strata["pairs"].append({"pair_id": "p4c", "stratum": "mixed", "techniques": [{"sub_stratum": "S1"}]})
+    manifest["pairs"].append({"pair_id": "p4c", "dummy": None, "arm": "access_full", "split": "oneoff",
+                              "population_split": "pilot", "exclusion": None, "reproduction": "verified", "passed": True})
+    more = {**done, **{k: {**done["i4|oneoff|access_full|agent"], "instance": k} for k in ("i5", "i6")}}
+    share = {rule: access_arm_rates(manifest, strata, more, "access_full", rule)["in_scope_share"]
+             for rule in strata_mod.IN_SCOPE_RULES}
+    assert {r: (w["k"], w["n"]) for r, w in share.items()} == {
+        "registered": (1, 4), "test-side-or-mixed": (3, 4), "test-side-or-mixed-s1-revert": (2, 4)}, share
+    del manifest["pairs"][-2:], strata["pairs"][-2:]
+
+    def row(inst: str, stratum: str, sub: str, cls: str) -> dict[str, Any]:
+        tech = {"sub_stratum": sub, "hunk_sha256": inst, "discipline": cls, "gates_in_hunks": [],
+                "twin_path": False, "twin_line_regex": False}
+        return {"benchmark": "swe", "split": "oneoff", "stratum": stratum, "instance_id": inst,
+                "twins_any": {"path": False, "line_regex": False},
+                "config_arms": {a: {"techniques": [tech], "gate_set_error": False} for a in replay_mod.CONFIG_ARMS}}
+    res = {"pairs": [row("a", "test-side", "S1", "blocked"), row("b", "mixed", "S1-revert", "blocked"),
+                     row("c", "mixed", "S1", "missed"), row("d", "source-side", "S1", "missed")]}
+    got = {}
+    for rule in strata_mod.IN_SCOPE_RULES:
+        arm = replay_mod.summarise(res, None, rule)["by_benchmark"]["swe"]["config_arms"][PRIMARY_CONFIG_ARM]
+        got[rule] = ((arm["R"]["k"], arm["R"]["n"]), (arm["P"]["k"], arm["P"]["n"]))
+    assert got == {"registered": ((1, 1), (1, 4)), "test-side-or-mixed": ((2, 3), (3, 4)),
+                   "test-side-or-mixed-s1-revert": ((2, 2), (2, 4))}, got
+    assert [runs_per_cell_needed(t) for t in (None, 1, 544, 545, 770, 1088, 9240)] == [None, 1, 1, 2, 2, 2, 17]
     t = trajectories(112, rates)
     assert t["trajectories_required"] == power.trajectories_required(112, 2 / 3, 0.5, 0.75) == 448
     assert t["feasible_within_confirmatory_runs"] is True
@@ -376,17 +449,24 @@ def main() -> int:
     v = sub.add_parser("values", help="The PILOT values from a results directory.")
     v.add_argument("--results", type=Path, required=True)
     v.add_argument("--out", type=Path, required=True)
+    a = sub.add_parser("amendment-3", help="Amendment 3's Step-0 bounds under each in-scope rule.")
+    a.add_argument("--results", type=Path, required=True)
+    a.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     if args.self_check:
         run_self_checks()
         return 0
     if args.check:
-        want = json.loads((args.check / "pilot-values.json").read_text())
-        got = json.loads(json.dumps(compute_values(args.check), sort_keys=True))
-        if got != want:
-            print("pilot-values.json does not match a recomputation from its inputs", file=sys.stderr)
-            return 1
-        print("pilot-values.json matches its inputs.")
+        checks = [("pilot-values.json", compute_values), ("amendment-3-values.json", amendment_3)]
+        for name, compute in checks:
+            if name != "pilot-values.json" and not (args.check / name).exists():
+                continue
+            want = json.loads((args.check / name).read_text())
+            got = json.loads(json.dumps(compute(args.check), sort_keys=True))
+            if got != want:
+                print(f"{name} does not match a recomputation from its inputs", file=sys.stderr)
+                return 1
+            print(f"{name} matches its inputs.")
         return 0
     if args.cmd == "network":
         res = network_scan(args.logs, args.compose_dir)
@@ -411,6 +491,12 @@ def main() -> int:
         args.out.write_text(json.dumps(res, indent=2, sort_keys=True) + "\n")
         print(json.dumps({"design_effect": res["design_effect"], "required_n": res["required_n"],
                           "trajectories": {a: v["trajectories"] for a, v in res["access_arms"].items()}}, indent=2))
+    elif args.cmd == "amendment-3":
+        res = amendment_3(args.results)
+        args.out.write_text(json.dumps(res, indent=2, sort_keys=True) + "\n")
+        print(json.dumps({rule: {"required_n": v["required_n"], "design_effect": v["design_effect"]["value"],
+                                 "trajectories": {arm: a["trajectories"] for arm, a in v["access_arms"].items()}}
+                          for rule, v in res["rules"].items()}, indent=2))
     else:
         parser.error("a subcommand, --check or --self-check is required")
     return 0

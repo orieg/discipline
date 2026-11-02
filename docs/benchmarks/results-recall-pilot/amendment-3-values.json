@@ -1,0 +1,458 @@
+{
+  "confirmatory_runs_per_arm": 544,
+  "generated_by": "python3 scripts/recall_pilot.py amendment-3",
+  "inputs_sha256": {
+    "manifest.json": "3f7692e1cd36eb5c2956eb4ac1a55867974c81993957d0244515ef3c76cc6dd9",
+    "replay.json": "32ac50f8ecea327c4910f7eb77e4d04f14909c4a4ca5adcd441fc0b9187d94e8",
+    "runner-state.jsonl": "d5a569e05e03e97d264714e47fd4a2b634b85eefb9cbe22cea772278f883b051",
+    "strata.json": "fcede5230d846798fad9811b8ec5225cfc45bc500644429c260f5ac21f624055"
+  },
+  "rules": {
+    "registered": {
+      "P_primary": {
+        "ci95": [
+          0.0,
+          0.08762160119728665
+        ],
+        "k": 0,
+        "labelled_passes": 40,
+        "mixed": 26,
+        "n": 40,
+        "point_estimate": 0.0,
+        "unlabelled_passes": 0
+      },
+      "R_primary": {
+        "ci95": null,
+        "classes": {
+          "blocked": 0,
+          "could-not-check": 0,
+          "incidental": 0,
+          "missed": 0,
+          "surfaced": 0
+        },
+        "cluster": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null,
+        "verdict": "required-n-not-locked"
+      },
+      "R_secondary": {
+        "ci95": null,
+        "classes": {
+          "blocked": 0,
+          "could-not-check": 0,
+          "incidental": 0,
+          "missed": 0,
+          "surfaced": 0
+        },
+        "cluster": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null,
+        "verdict": "required-n-not-locked"
+      },
+      "access_arms": {
+        "access_full": {
+          "in_scope_share": {
+            "ci95": [
+              0.0,
+              0.11351339317396876
+            ],
+            "k": 0,
+            "n": 30,
+            "point_estimate": 0.0
+          },
+          "pass_rate": {
+            "ci95": [
+              0.14189553702057578,
+              0.2677609132193307
+            ],
+            "k": 30,
+            "n": 152,
+            "point_estimate": 0.19736842105263158
+          },
+          "runs_per_cell_needed": null,
+          "trajectories": {
+            "feasible_within_confirmatory_runs": false,
+            "inputs": {
+              "in_scope_share": 0.0,
+              "pass_rate": 0.19736842105263158,
+              "valid_share": 0.987012987012987
+            },
+            "note": "a pilot rate is zero or undefined, so no number of runs reaches required_n",
+            "trajectories_required": null
+          },
+          "valid_share": {
+            "ci95": [
+              0.9538894269441661,
+              0.9964312373522662
+            ],
+            "k": 152,
+            "n": 154,
+            "point_estimate": 0.987012987012987
+          }
+        },
+        "access_readonly": {
+          "in_scope_share": {
+            "ci95": [
+              0.0,
+              0.2775327998628892
+            ],
+            "k": 0,
+            "n": 10,
+            "point_estimate": 0.0
+          },
+          "pass_rate": {
+            "ci95": [
+              0.03612480732136652,
+              0.11686053432719501
+            ],
+            "k": 10,
+            "n": 152,
+            "point_estimate": 0.06578947368421052
+          },
+          "runs_per_cell_needed": null,
+          "trajectories": {
+            "feasible_within_confirmatory_runs": false,
+            "inputs": {
+              "in_scope_share": 0.0,
+              "pass_rate": 0.06578947368421052,
+              "valid_share": 0.987012987012987
+            },
+            "note": "a pilot rate is zero or undefined, so no number of runs reaches required_n",
+            "trajectories_required": null
+          },
+          "valid_share": {
+            "ci95": [
+              0.9538894269441661,
+              0.9964312373522662
+            ],
+            "k": 152,
+            "n": 154,
+            "point_estimate": 0.987012987012987
+          }
+        }
+      },
+      "design_effect": {
+        "cluster_robust_estimate": null,
+        "instances_with_test_side_unit": 0,
+        "rule_applied": "fewer than 10 instances carry a test-side unit",
+        "test_side_units": 0,
+        "value": 2.0
+      },
+      "falsifiers_primary": {
+        "a_recall_lower_bound_below_floor": false,
+        "b_line_regex_not_worse": false,
+        "c_false_block_lower_bound_above_ceiling": false,
+        "d_in_scope_share_below_floor": true
+      },
+      "required_n": 224
+    },
+    "test-side-or-mixed": {
+      "P_primary": {
+        "ci95": [
+          0.49505880837257693,
+          0.7786547112682372
+        ],
+        "k": 26,
+        "labelled_passes": 40,
+        "mixed": 26,
+        "n": 40,
+        "point_estimate": 0.65,
+        "unlabelled_passes": 0
+      },
+      "R_primary": {
+        "ci95": [
+          0.007096233501987265,
+          0.19544063736193734
+        ],
+        "classes": {
+          "blocked": 1,
+          "could-not-check": 0,
+          "incidental": 24,
+          "missed": 0,
+          "surfaced": 0
+        },
+        "cluster": {
+          "clusters": 21,
+          "design_effect": 1.0640000000000007,
+          "effective_n": 23.496240601503743
+        },
+        "k": 1,
+        "n": 25,
+        "point_estimate": 0.04,
+        "verdict": "required-n-not-locked"
+      },
+      "R_secondary": {
+        "ci95": [
+          0.007096233501987265,
+          0.19544063736193734
+        ],
+        "classes": {
+          "blocked": 1,
+          "could-not-check": 0,
+          "incidental": 24,
+          "missed": 0,
+          "surfaced": 0
+        },
+        "cluster": {
+          "clusters": 21,
+          "design_effect": 1.0640000000000007,
+          "effective_n": 23.496240601503743
+        },
+        "k": 1,
+        "n": 25,
+        "point_estimate": 0.04,
+        "verdict": "required-n-not-locked"
+      },
+      "access_arms": {
+        "access_full": {
+          "in_scope_share": {
+            "ci95": [
+              0.6269430358685175,
+              0.9049489282271013
+            ],
+            "k": 24,
+            "n": 30,
+            "point_estimate": 0.8
+          },
+          "pass_rate": {
+            "ci95": [
+              0.14189553702057578,
+              0.2677609132193307
+            ],
+            "k": 30,
+            "n": 152,
+            "point_estimate": 0.19736842105263158
+          },
+          "runs_per_cell_needed": 2,
+          "trajectories": {
+            "feasible_within_confirmatory_runs": false,
+            "inputs": {
+              "in_scope_share": 0.8,
+              "pass_rate": 0.19736842105263158,
+              "valid_share": 0.987012987012987
+            },
+            "trajectories_required": 770
+          },
+          "valid_share": {
+            "ci95": [
+              0.9538894269441661,
+              0.9964312373522662
+            ],
+            "k": 152,
+            "n": 154,
+            "point_estimate": 0.987012987012987
+          }
+        },
+        "access_readonly": {
+          "in_scope_share": {
+            "ci95": [
+              0.05668215145437519,
+              0.5098375284633583
+            ],
+            "k": 2,
+            "n": 10,
+            "point_estimate": 0.2
+          },
+          "pass_rate": {
+            "ci95": [
+              0.03612480732136652,
+              0.11686053432719501
+            ],
+            "k": 10,
+            "n": 152,
+            "point_estimate": 0.06578947368421052
+          },
+          "runs_per_cell_needed": 17,
+          "trajectories": {
+            "feasible_within_confirmatory_runs": false,
+            "inputs": {
+              "in_scope_share": 0.2,
+              "pass_rate": 0.06578947368421052,
+              "valid_share": 0.987012987012987
+            },
+            "trajectories_required": 9240
+          },
+          "valid_share": {
+            "ci95": [
+              0.9538894269441661,
+              0.9964312373522662
+            ],
+            "k": 152,
+            "n": 154,
+            "point_estimate": 0.987012987012987
+          }
+        }
+      },
+      "design_effect": {
+        "cluster_robust_estimate": 1.0640000000000007,
+        "instances_with_test_side_unit": 21,
+        "rule_applied": "max(1.0, cluster_robust_ratio point estimate)",
+        "test_side_units": 25,
+        "value": 1.0640000000000007
+      },
+      "falsifiers_primary": {
+        "a_recall_lower_bound_below_floor": true,
+        "b_line_regex_not_worse": true,
+        "c_false_block_lower_bound_above_ceiling": false,
+        "d_in_scope_share_below_floor": false
+      },
+      "required_n": 120
+    },
+    "test-side-or-mixed-s1-revert": {
+      "P_primary": {
+        "ci95": [
+          0.39829091798932054,
+          0.6929469218909508
+        ],
+        "k": 22,
+        "labelled_passes": 40,
+        "mixed": 26,
+        "n": 40,
+        "point_estimate": 0.55,
+        "unlabelled_passes": 0
+      },
+      "R_primary": {
+        "ci95": [
+          0.00806942762126385,
+          0.21798045838657332
+        ],
+        "classes": {
+          "blocked": 1,
+          "could-not-check": 0,
+          "incidental": 21,
+          "missed": 0,
+          "surfaced": 0
+        },
+        "cluster": {
+          "clusters": 19,
+          "design_effect": 1.0692640692640702,
+          "effective_n": 20.57489878542508
+        },
+        "k": 1,
+        "n": 22,
+        "point_estimate": 0.045454545454545456,
+        "verdict": "required-n-not-locked"
+      },
+      "R_secondary": {
+        "ci95": [
+          0.00806942762126385,
+          0.21798045838657332
+        ],
+        "classes": {
+          "blocked": 1,
+          "could-not-check": 0,
+          "incidental": 21,
+          "missed": 0,
+          "surfaced": 0
+        },
+        "cluster": {
+          "clusters": 19,
+          "design_effect": 1.0692640692640702,
+          "effective_n": 20.57489878542508
+        },
+        "k": 1,
+        "n": 22,
+        "point_estimate": 0.045454545454545456,
+        "verdict": "required-n-not-locked"
+      },
+      "access_arms": {
+        "access_full": {
+          "in_scope_share": {
+            "ci95": [
+              0.555520383048111,
+              0.8581733668040368
+            ],
+            "k": 22,
+            "n": 30,
+            "point_estimate": 0.7333333333333333
+          },
+          "pass_rate": {
+            "ci95": [
+              0.14189553702057578,
+              0.2677609132193307
+            ],
+            "k": 30,
+            "n": 152,
+            "point_estimate": 0.19736842105263158
+          },
+          "runs_per_cell_needed": 2,
+          "trajectories": {
+            "feasible_within_confirmatory_runs": false,
+            "inputs": {
+              "in_scope_share": 0.7333333333333333,
+              "pass_rate": 0.19736842105263158,
+              "valid_share": 0.987012987012987
+            },
+            "trajectories_required": 840
+          },
+          "valid_share": {
+            "ci95": [
+              0.9538894269441661,
+              0.9964312373522662
+            ],
+            "k": 152,
+            "n": 154,
+            "point_estimate": 0.987012987012987
+          }
+        },
+        "access_readonly": {
+          "in_scope_share": {
+            "ci95": [
+              0.0,
+              0.2775327998628892
+            ],
+            "k": 0,
+            "n": 10,
+            "point_estimate": 0.0
+          },
+          "pass_rate": {
+            "ci95": [
+              0.03612480732136652,
+              0.11686053432719501
+            ],
+            "k": 10,
+            "n": 152,
+            "point_estimate": 0.06578947368421052
+          },
+          "runs_per_cell_needed": null,
+          "trajectories": {
+            "feasible_within_confirmatory_runs": false,
+            "inputs": {
+              "in_scope_share": 0.0,
+              "pass_rate": 0.06578947368421052,
+              "valid_share": 0.987012987012987
+            },
+            "note": "a pilot rate is zero or undefined, so no number of runs reaches required_n",
+            "trajectories_required": null
+          },
+          "valid_share": {
+            "ci95": [
+              0.9538894269441661,
+              0.9964312373522662
+            ],
+            "k": 152,
+            "n": 154,
+            "point_estimate": 0.987012987012987
+          }
+        }
+      },
+      "design_effect": {
+        "cluster_robust_estimate": 1.0692640692640702,
+        "instances_with_test_side_unit": 19,
+        "rule_applied": "max(1.0, cluster_robust_ratio point estimate)",
+        "test_side_units": 22,
+        "value": 1.0692640692640702
+      },
+      "falsifiers_primary": {
+        "a_recall_lower_bound_below_floor": true,
+        "b_line_regex_not_worse": true,
+        "c_false_block_lower_bound_above_ceiling": false,
+        "d_in_scope_share_below_floor": false
+      },
+      "required_n": 120
+    }
+  },
+  "study_id": "impossible-recall-v1"
+}
