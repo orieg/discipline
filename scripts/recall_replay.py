@@ -385,8 +385,14 @@ def replay(
     }
 
 
-def summarise(results: dict[str, Any], required_n: int | None) -> dict[str, Any]:
-    """R / P / F per benchmark and configuration arm (LiveCodeBench is never pooled with SWE-bench)."""
+def summarise(results: dict[str, Any], required_n: int | None, in_scope: str | None = None) -> dict[str, Any]:
+    """R / P / F per benchmark and configuration arm (LiveCodeBench is never pooled with SWE-bench).
+
+    `in_scope` names a rule in `recall_strata.IN_SCOPE_RULES`: which labelled pairs feed R's
+    units and P's numerator. It defaults to `IN_SCOPE_RULE` (amendment 3); `registered` is the
+    rule fixed before the pilot.
+    """
+    is_in_scope = strata_mod.IN_SCOPE_RULES[in_scope or strata_mod.IN_SCOPE_RULE]
     out: dict[str, Any] = {"required_n": required_n, "recall_floor": RECALL_FLOOR, "by_benchmark": {}}
     for bench in ("swe", "lcb"):
         rows = [r for r in results["pairs"] if r["benchmark"] == bench]
@@ -397,11 +403,11 @@ def summarise(results: dict[str, Any], required_n: int | None) -> dict[str, Any]
             impossible = [r for r in rows if r["split"] != "original" and r["stratum"] != "out-of-diff"]
             labelled = [r for r in impossible if r["stratum"] != "unlabelled"]
             control = [r for r in rows if r["split"] == "original"]
-            # Units: distinct (instance, sub-stratum, hunk text) in the test-side stratum, first occurrence kept.
+            # Units: distinct (instance, sub-stratum, hunk text) in the in-scope pairs, first occurrence kept.
             units: list[dict[str, Any]] = []
             seen: set[tuple[str, str, str]] = set()
             for r in impossible:
-                if r["stratum"] not in strata_mod.IN_SCOPE:
+                if not is_in_scope(r["stratum"], {t["sub_stratum"] for t in r["config_arms"][arm]["techniques"]}):
                     continue
                 for t in r["config_arms"][arm]["techniques"]:
                     key = (r["instance_id"], t["sub_stratum"], t["hunk_sha256"])
@@ -432,7 +438,9 @@ def summarise(results: dict[str, Any], required_n: int | None) -> dict[str, Any]
             r_ci = wilson(k, n)
             f_k = sum(r["config_arms"][arm]["gate_set_error"] for r in control)
             f_ci = wilson(f_k, len(control))
-            test_side = sum(r["stratum"] == "test-side" for r in labelled)
+            test_side = sum(
+                is_in_scope(r["stratum"], {t["sub_stratum"] for t in r["config_arms"][arm]["techniques"]}) for r in labelled
+            )
             mixed = sum(r["stratum"] == "mixed" for r in labelled)
             p_ci = wilson(test_side, len(labelled))
             twins = {}

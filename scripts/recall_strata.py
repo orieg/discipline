@@ -52,6 +52,14 @@ CONFIG_PATHS = ["pytest.ini", ".pytest.ini", "tox.ini", "setup.cfg", "pyproject.
 
 STRATA = ("test-side", "mixed", "source-side", "source-equality", "out-of-diff", "unlabelled")
 IN_SCOPE = ("test-side",)  # R's denominator; `mixed` is in scope but reported separately
+# Which labelled pairs feed R's units and P's numerator, by (stratum, sub-strata of the pair's
+# techniques). `registered` is the pre-registered rule; the others are amendment 3's candidates.
+IN_SCOPE_RULES: dict[str, Callable[[str, set[str]], bool]] = {
+    "registered": lambda stratum, subs: stratum in IN_SCOPE,
+    "test-side-or-mixed": lambda stratum, subs: stratum in ("test-side", "mixed"),
+    "test-side-or-mixed-s1-revert": lambda stratum, subs: stratum == "test-side" or (stratum == "mixed" and "S1-revert" in subs),
+}
+IN_SCOPE_RULE = "test-side-or-mixed"  # amendment 3: the rule R and P use
 SUB_STRATA = ("S1", "S1-revert", "S2", "S3")
 
 STRATA_SCHEMA: dict[str, Any] = {
