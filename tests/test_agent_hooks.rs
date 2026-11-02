@@ -1064,6 +1064,8 @@ fn observe_mode_reports_and_logs_without_blocking() {
         (&"observe".into(), &"allowed".into(), &"pass".into()),
         "{first}"
     );
+    // The per-edit latency the agent waited for (#995).
+    assert!(first["duration_ms"].as_u64().is_some(), "{first}");
 
     weakened(&repo);
     let edit = hook(

@@ -126,6 +126,37 @@ pub trait LanguagePack: Send + Sync {
     }
 }
 
+/// A registered pack: the pack itself, its extractions counted.
+struct Counted(Box<dyn LanguagePack>);
+
+impl LanguagePack for Counted {
+    fn id(&self) -> &'static str {
+        self.0.id()
+    }
+    fn supplies(&self, fact: Fact) -> bool {
+        self.0.supplies(fact)
+    }
+    fn name(&self) -> &'static str {
+        self.0.name()
+    }
+    fn label(&self) -> &'static str {
+        self.0.label()
+    }
+    fn matches(&self, path: &str) -> bool {
+        self.0.matches(path)
+    }
+    fn is_test_path(&self, path: &str) -> bool {
+        self.0.is_test_path(path)
+    }
+    fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
+        crate::timings::count(crate::timings::Counter::Extract { bytes: src.len() });
+        self.0.extract(path, src, vocab)
+    }
+    fn capability_sinks(&self, path: &str, src: &str) -> Result<Vec<capability_sinks::SinkSite>> {
+        self.0.capability_sinks(path, src)
+    }
+}
+
 /// A kind of fact a pack may or may not extract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fact {
@@ -153,8 +184,10 @@ impl LanguageRegistry {
         Self { packs: Vec::new() }
     }
 
+    /// Adds `pack`. Its extractions are counted for `check --timings`
+    /// ([`crate::timings::Counter::Extract`]).
     pub fn register(&mut self, pack: Box<dyn LanguagePack>) {
-        self.packs.push(pack);
+        self.packs.push(Box::new(Counted(pack)));
     }
 
     pub fn find_pack(&self, path: &str) -> Option<&dyn LanguagePack> {

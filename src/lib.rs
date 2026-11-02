@@ -57,6 +57,7 @@ pub mod schema;
 pub mod selftest;
 pub mod session;
 pub mod style;
+pub mod timings;
 pub mod tokens;
 pub mod transcript;
 pub mod turn;

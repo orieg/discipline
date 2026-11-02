@@ -1023,11 +1023,14 @@ pub fn run_checks(
     // not, and the change's own copy is not otherwise read when the policy comes from the
     // base side.
     let selected_ids: Vec<&'static str> = selected.iter().map(|g| g.id).collect();
-    for checked in std::iter::once(config).chain(ctx.head_config) {
-        check_configured_globs(checked, &selected_ids)?;
-        check_configured_patterns(checked, &selected_ids)?;
-        check_configured_pairs(checked, &selected_ids)?;
-    }
+    crate::timings::phase("configured-values", || -> Result<()> {
+        for checked in std::iter::once(config).chain(ctx.head_config) {
+            check_configured_globs(checked, &selected_ids)?;
+            check_configured_patterns(checked, &selected_ids)?;
+            check_configured_pairs(checked, &selected_ids)?;
+        }
+        Ok(())
+    })?;
 
     let whole_tree = ctx.git.is_whole_tree();
 
@@ -1059,7 +1062,7 @@ pub fn run_checks(
             outcomes.push(o);
             continue;
         }
-        let outcome = match gate.id {
+        let outcome = crate::timings::gate(gate.id, || match gate.id {
             "agents-md" => hygiene::agents_md(ctx),
             "time-estimates" => hygiene::time_estimates(ctx),
             "pii" => hygiene::pii(ctx),
@@ -1107,11 +1110,11 @@ pub fn run_checks(
             | "unsafe-safety-comment"
             | "deletion-rationale" => {
                 if ast_outcomes.is_none() {
-                    ast_outcomes = Some(
+                    // Shared by five gates: its own entry, not the first gate's. An error
+                    // is named for this gate by the context added below the match.
+                    ast_outcomes = Some(crate::timings::phase("agent-diff", || {
                         agent_diff::run(ctx)
-                            .with_context(|| format!("gate `{}` could not run", gate.id))
-                            .map_err(|e| crate::could_not_check::tag_gate(gate.id, e))?,
-                    );
+                    })?);
                 }
                 let all: &Vec<GateOutcome> = ast_outcomes.as_ref().expect("just set");
                 Ok(all
@@ -1121,7 +1124,7 @@ pub fn run_checks(
                     .expect("agent_diff returns every agent-guard diff gate"))
             }
             other => bail!("gate `{other}` is marked available but has no implementation"),
-        }
+        })
         .with_context(|| format!("gate `{}` could not run", gate.id))
         .map_err(|e| crate::could_not_check::tag_gate(gate.id, e))?;
         outcomes.push(outcome);
@@ -1188,7 +1191,7 @@ pub fn run_checks(
         });
     }
 
-    {
+    crate::timings::phase("fingerprints", || -> Result<()> {
         let mut all: Vec<&mut Violation> = outcomes
             .iter_mut()
             .flat_map(|o| o.violations.iter_mut())
@@ -1204,15 +1207,17 @@ pub fn run_checks(
                 _ => head(path),
             }
         });
-        reads.finish()?;
-    }
+        reads.finish()
+    })?;
 
     // Grandfathered findings baseline matching
     let mut deprecations = ctx.config.deprecations.clone();
     let mut stale_baseline_entries = 0;
     if let Some(baseline) = ctx.baseline {
-        stale_baseline_entries =
-            crate::baseline::apply_baseline_with_git(ctx.git, baseline, &mut outcomes)?.stale_count;
+        stale_baseline_entries = crate::timings::phase("baseline", || {
+            crate::baseline::apply_baseline_with_git(ctx.git, baseline, &mut outcomes)
+        })?
+        .stale_count;
         if baseline.version < crate::baseline::FINGERPRINT_VERSION {
             deprecations.push(format!(
                 "`{}` uses fingerprint version {}, which keys on finding titles: run `discipline baseline --migrate` in a change of its own to rewrite it to version {}",

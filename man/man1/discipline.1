@@ -30,7 +30,7 @@ Run the configured gates. Exit 0 = pass, 1 = violations, 2 = could not check
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
-\fBdiscipline check\fR [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-config\-override\fR] [\fB\-\-enable\fR] [\fB\-\-disable\fR] [\fB\-s\fR|\fB\-\-suite\fR] [\fB\-b\fR|\fB\-\-base\fR] [\fB\-\-commit\fR] [\fB\-\-commit\-range\fR] [\fB\-\-staged\fR] [\fB\-\-pr\-body\-file\fR] [\fB\-\-pr\-title\fR] [\fB\-\-fail\-on\-warnings\fR] [\fB\-\-fail\-on\-overrides\fR] [\fB\-\-advisory\fR] [\fB\-\-comment\fR] [\fB\-\-policy\-from\fR] [\fB\-\-actor\fR] [\fB\-\-directive\-sources\fR] [\fB\-\-trust\-workspace\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-f\fR|\fB\-\-format\fR] [\fB\-\-json\-out\fR] [\fB\-o\fR|\fB\-\-output\-file\fR] [\fB\-\-max\-report\-lines\fR] [\fB\-\-report\-gitlab\fR] [\fB\-\-report\-junit\fR] [\fB\-\-report\-sarif\fR] [\fB\-\-bench\-provenance\fR] [\fB\-\-allow\-cross\-host\-bench\fR] [\fB\-\-bench\-base\-file\fR] [\fB\-\-bench\-head\-file\fR] [\fB\-\-test\-base\-report\fR] [\fB\-\-test\-head\-report\fR] [\fB\-\-test\-report\fR] [\fB\-\-baseline\-file\fR] [\fB\-\-no\-baseline\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBdiscipline check\fR [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-config\-override\fR] [\fB\-\-enable\fR] [\fB\-\-disable\fR] [\fB\-s\fR|\fB\-\-suite\fR] [\fB\-b\fR|\fB\-\-base\fR] [\fB\-\-commit\fR] [\fB\-\-commit\-range\fR] [\fB\-\-staged\fR] [\fB\-\-pr\-body\-file\fR] [\fB\-\-pr\-title\fR] [\fB\-\-fail\-on\-warnings\fR] [\fB\-\-fail\-on\-overrides\fR] [\fB\-\-advisory\fR] [\fB\-\-comment\fR] [\fB\-\-policy\-from\fR] [\fB\-\-actor\fR] [\fB\-\-directive\-sources\fR] [\fB\-\-trust\-workspace\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-f\fR|\fB\-\-format\fR] [\fB\-\-json\-out\fR] [\fB\-\-timings\fR] [\fB\-o\fR|\fB\-\-output\-file\fR] [\fB\-\-max\-report\-lines\fR] [\fB\-\-report\-gitlab\fR] [\fB\-\-report\-junit\fR] [\fB\-\-report\-sarif\fR] [\fB\-\-bench\-provenance\fR] [\fB\-\-allow\-cross\-host\-bench\fR] [\fB\-\-bench\-base\-file\fR] [\fB\-\-bench\-head\-file\fR] [\fB\-\-test\-base\-report\fR] [\fB\-\-test\-head\-report\fR] [\fB\-\-test\-report\fR] [\fB\-\-baseline\-file\fR] [\fB\-\-no\-baseline\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .PP
@@ -193,6 +193,9 @@ agent\-prompt
 .TP
 \fB\-\-json\-out\fR \fI<JSON_OUT>\fR
 Also write the JSON report to this path, whatever \-\-format is
+.TP
+\fB\-\-timings\fR
+Add a `timings` object to the JSON report: wall time per gate and per shared phase, and counts of the work behind it (or set DISCIPLINE_TIMINGS=1). Never part of a verdict, a baseline or a replay comparison
 .TP
 \fB\-o\fR, \fB\-\-output\-file\fR \fI<OUTPUT_FILE>\fR
 Write the formatted report to this path
