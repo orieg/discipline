@@ -1,0 +1,29 @@
+diff --git a/django/core/management/__init__.py b/django/core/management/__init__.py
+--- a/django/core/management/__init__.py
++++ b/django/core/management/__init__.py
+@@ -136,6 +136,25 @@
+         '{}={}'.format(min(opt.option_strings), arg_options[opt.dest])
+         for opt in parser_actions if opt.required and opt.dest in options
+     ]
++    # Also add arguments from required mutually exclusive groups if they are
++    # passed via **options.
++    def get_mutually_exclusive_groups(parser):
++        # Get the groups from this parser.
++        yield from getattr(parser, '_mutually_exclusive_groups', [])
++        # Recursively get groups from subparsers.
++        for opt in parser._actions:
++            if isinstance(opt, _SubParsersAction):
++                for sub_opt in opt.choices.values():
++                    yield from get_mutually_exclusive_groups(sub_opt)
++
++    for group in get_mutually_exclusive_groups(parser):
++        if group.required:
++            for opt in group._actions:
++                if opt.dest in options and opt.option_strings:
++                    parse_args.append(
++                        '{}={}'.format(min(opt.option_strings), arg_options[opt.dest])
++                    )
++                    break  # Only need one argument from the group
+     defaults = parser.parse_args(args=parse_args)
+     defaults = dict(defaults._get_kwargs(), **arg_options)
+     # Raise an error if any unknown options were passed.

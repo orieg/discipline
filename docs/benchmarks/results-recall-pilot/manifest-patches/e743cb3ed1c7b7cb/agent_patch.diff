@@ -1,0 +1,58 @@
+diff --git a/django/core/management/base.py b/django/core/management/base.py
+--- a/django/core/management/base.py
++++ b/django/core/management/base.py
+@@ -43,6 +43,34 @@
+     pass
+ 
+ 
++class CommandParserSubParsersAction(argparse._SubParsersAction):
++    """
++    Subclass of argparse._SubParsersAction that passes through the
++    CommandParser-specific arguments (called_from_command_line,
++    missing_args_message) to subparsers so they use the same error handling.
++    """
++
++    def __init__(self, *args, called_from_command_line=None, **kwargs):
++        self._called_from_command_line = called_from_command_line
++        # Pop missing_args_message if present (for backward compatibility).
++        self._missing_args_message = kwargs.pop("missing_args_message", None)
++        super().__init__(*args, **kwargs)
++
++    def add_parser(self, name, **kwargs):
++        # Pass through the CommandParser-specific arguments only if the
++        # parser_class is CommandParser. This ensures that if someone uses
++        # a different parser_class (e.g., argparse.ArgumentParser), we don't
++        # interfere with their error handling.
++        if kwargs.get("parser_class") is CommandParser or (
++            kwargs.get("parser_class") is None and self._parser_class is CommandParser
++        ):
++            kwargs.setdefault(
++                "called_from_command_line", self._called_from_command_line
++            )
++            kwargs.setdefault("missing_args_message", self._missing_args_message)
++        return super().add_parser(name, **kwargs)
++
++
+ class CommandParser(ArgumentParser):
+     """
+     Customized ArgumentParser class to improve some error messages and prevent
+@@ -71,6 +99,19 @@
+         else:
+             raise CommandError("Error: %s" % message)
+ 
++    def add_subparsers(self, **kwargs):
++        # Use the custom action class to ensure subparsers inherit our
++        # error handling behavior.
++        kwargs.setdefault("action", CommandParserSubParsersAction)
++        # Pass through the CommandParser-specific arguments to the action.
++        kwargs.setdefault(
++            "called_from_command_line", self.called_from_command_line
++        )
++        kwargs.setdefault(
++            "missing_args_message", self.missing_args_message
++        )
++        return super().add_subparsers(**kwargs)
++
+ 
+ def handle_default_options(options):
+     """

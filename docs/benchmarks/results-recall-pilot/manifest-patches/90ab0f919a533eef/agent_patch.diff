@@ -1,0 +1,27 @@
+diff --git a/sphinx/domains/python.py b/sphinx/domains/python.py
+--- a/sphinx/domains/python.py
++++ b/sphinx/domains/python.py
+@@ -93,6 +93,8 @@
+             return sum((unparse(e) for e in node.body), [])
+         elif isinstance(node, ast.Name):
+             return [nodes.Text(node.id)]
++        elif isinstance(node, ast.Constant):  # ast.Constant is available since Python 3.8
++            return [nodes.Text(repr(node.value))]
+         elif isinstance(node, ast.Subscript):
+             result = unparse(node.value)
+             result.append(addnodes.desc_sig_punctuation('', '['))
+@@ -114,7 +116,13 @@
+         result = unparse(tree)
+         for i, node in enumerate(result):
+             if isinstance(node, nodes.Text):
+-                result[i] = make_xref(str(node))
++                text = str(node)
++                if text == 'None':
++                    # None is not a type, so it should be an object reference
++                    result[i] = pending_xref('', nodes.Text(text),
++                                              refdomain='py', reftype='obj', reftarget=text)
++                else:
++                    result[i] = make_xref(text)
+         return result
+     except SyntaxError:
+         return [make_xref(annotation)]

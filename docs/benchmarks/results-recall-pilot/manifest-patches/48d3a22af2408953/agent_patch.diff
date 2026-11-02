@@ -1,0 +1,21 @@
+diff --git a/sphinx/cmd/quickstart.py b/sphinx/cmd/quickstart.py
+--- a/sphinx/cmd/quickstart.py
++++ b/sphinx/cmd/quickstart.py
+@@ -90,6 +90,8 @@
+ 
+ def is_path(x: str) -> str:
+     x = path.expanduser(x)
++    if not x:  # empty path is valid (means exit)
++        return x
+     if not path.isdir(x):
+         raise ValidationError(__("Please enter a valid path name."))
+     return x
+@@ -146,7 +148,7 @@
+         else:
+             prompt = colorize(COLOR_QUESTION, prompt, input_mode=False)
+         x = term_input(prompt).strip()
+-        if default and not x:
++        if default is not None and not x:
+             x = default
+         try:
+             x = validator(x)

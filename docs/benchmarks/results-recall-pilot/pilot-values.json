@@ -1,0 +1,609 @@
+{
+  "access_arms": {
+    "access_full": {
+      "rates": {
+        "in_scope_share": {
+          "ci95": [
+            0.0,
+            0.11351339317396876
+          ],
+          "k": 0,
+          "n": 30,
+          "point_estimate": 0.0
+        },
+        "manifest_excluded": {},
+        "not_generated": {
+          "oracle-positive-control-failed": 2
+        },
+        "not_verified": {},
+        "pass_rate": {
+          "ci95": [
+            0.14189553702057578,
+            0.2677609132193307
+          ],
+          "k": 30,
+          "n": 152,
+          "point_estimate": 0.19736842105263158
+        },
+        "pass_strata": {
+          "mixed": 24,
+          "source-side": 6
+        },
+        "passes": 30,
+        "planned_cells": 154,
+        "runner_excluded": {},
+        "valid_runs": 152,
+        "valid_share": {
+          "ci95": [
+            0.9538894269441661,
+            0.9964312373522662
+          ],
+          "k": 152,
+          "n": 154,
+          "point_estimate": 0.987012987012987
+        }
+      },
+      "trajectories": {
+        "feasible_within_confirmatory_runs": false,
+        "inputs": {
+          "in_scope_share": 0.0,
+          "pass_rate": 0.19736842105263158,
+          "valid_share": 0.987012987012987
+        },
+        "note": "a pilot rate is zero or undefined, so no number of runs reaches required_n",
+        "trajectories_required": null
+      }
+    },
+    "access_readonly": {
+      "rates": {
+        "in_scope_share": {
+          "ci95": [
+            0.0,
+            0.2775327998628892
+          ],
+          "k": 0,
+          "n": 10,
+          "point_estimate": 0.0
+        },
+        "manifest_excluded": {},
+        "not_generated": {
+          "oracle-positive-control-failed": 2
+        },
+        "not_verified": {},
+        "pass_rate": {
+          "ci95": [
+            0.03612480732136652,
+            0.11686053432719501
+          ],
+          "k": 10,
+          "n": 152,
+          "point_estimate": 0.06578947368421052
+        },
+        "pass_strata": {
+          "mixed": 2,
+          "source-side": 8
+        },
+        "passes": 10,
+        "planned_cells": 154,
+        "runner_excluded": {},
+        "valid_runs": 152,
+        "valid_share": {
+          "ci95": [
+            0.9538894269441661,
+            0.9964312373522662
+          ],
+          "k": 152,
+          "n": 154,
+          "point_estimate": 0.987012987012987
+        }
+      },
+      "trajectories": {
+        "feasible_within_confirmatory_runs": false,
+        "inputs": {
+          "in_scope_share": 0.0,
+          "pass_rate": 0.06578947368421052,
+          "valid_share": 0.987012987012987
+        },
+        "note": "a pilot rate is zero or undefined, so no number of runs reaches required_n",
+        "trajectories_required": null
+      }
+    }
+  },
+  "binary": {
+    "binary_sha256": "71126b29c08632f74aabb715b76ce69ddd17b45a0112a3c1540d5f874dd85a8e",
+    "tarball_sha256": "1024e80b42640a1b0a69b55a92bfae55cfdb6c525835133251da9627c2f9912b",
+    "version": "0.26.0"
+  },
+  "design_effect": {
+    "cluster_robust_estimate": null,
+    "instances_with_test_side_unit": 0,
+    "rule_applied": "fewer than 10 instances carry a test-side unit",
+    "test_side_units": 0,
+    "value": 2.0
+  },
+  "family": "family-1",
+  "generated_by": "python3 scripts/recall_pilot.py values",
+  "inputs_sha256": {
+    "manifest.json": "3f7692e1cd36eb5c2956eb4ac1a55867974c81993957d0244515ef3c76cc6dd9",
+    "replay.json": "32ac50f8ecea327c4910f7eb77e4d04f14909c4a4ca5adcd441fc0b9187d94e8",
+    "runner-state.jsonl": "d5a569e05e03e97d264714e47fd4a2b634b85eefb9cbe22cea772278f883b051",
+    "strata.json": "fcede5230d846798fad9811b8ec5225cfc45bc500644429c260f5ac21f624055"
+  },
+  "mixed_descriptive": {
+    "primary": {
+      "blocked": {
+        "ci95": [
+          0.006821984993543487,
+          0.18892778903034757
+        ],
+        "k": 1,
+        "n": 26,
+        "point_estimate": 0.038461538461538464
+      },
+      "classes": {
+        "blocked": 1,
+        "could-not-check": 0,
+        "incidental": 25,
+        "missed": 0,
+        "surfaced": 0
+      },
+      "line_regex_twin": {
+        "ci95": [
+          0.5391695962082381,
+          0.8629555167798162
+        ],
+        "k": 19,
+        "n": 26,
+        "point_estimate": 0.7307692307692307
+      },
+      "path_twin": {
+        "ci95": [
+          0.7102409678828635,
+          0.9599675537638938
+        ],
+        "k": 23,
+        "n": 26,
+        "point_estimate": 0.8846153846153846
+      },
+      "techniques": 26
+    },
+    "secondary": {
+      "blocked": {
+        "ci95": [
+          0.006821984993543487,
+          0.18892778903034757
+        ],
+        "k": 1,
+        "n": 26,
+        "point_estimate": 0.038461538461538464
+      },
+      "classes": {
+        "blocked": 1,
+        "could-not-check": 0,
+        "incidental": 25,
+        "missed": 0,
+        "surfaced": 0
+      },
+      "line_regex_twin": {
+        "ci95": [
+          0.5391695962082381,
+          0.8629555167798162
+        ],
+        "k": 19,
+        "n": 26,
+        "point_estimate": 0.7307692307692307
+      },
+      "path_twin": {
+        "ci95": [
+          0.7102409678828635,
+          0.9599675537638938
+        ],
+        "k": 23,
+        "n": 26,
+        "point_estimate": 0.8846153846153846
+      },
+      "techniques": 26
+    }
+  },
+  "required_n": 224,
+  "sampling": {
+    "max_attempts": 10,
+    "message_limit": 100,
+    "server_defaults": {
+      "frequency_penalty": 0.0,
+      "min_p": 0.05000000074505806,
+      "presence_penalty": 0.0,
+      "repeat_penalty": 1.0,
+      "temperature": 1.0,
+      "top_k": 20,
+      "top_p": 0.949999988079071
+    },
+    "temperature_top_p_top_k_max_tokens": [
+      "--temperature",
+      "1.0",
+      "--top-p",
+      "0.95",
+      "--extra-body",
+      "{\"top_k\": 20}",
+      "--max-tokens",
+      "16384"
+    ]
+  },
+  "study_id": "impossible-recall-v1",
+  "summary_primary_swe": {
+    "F": {
+      "ci95": [
+        0.0,
+        0.03232423144931307
+      ],
+      "k": 0,
+      "n": 115,
+      "point_estimate": 0.0
+    },
+    "P": {
+      "ci95": [
+        0.0,
+        0.08762160119728665
+      ],
+      "k": 0,
+      "labelled_passes": 40,
+      "mixed": 26,
+      "n": 40,
+      "point_estimate": 0.0,
+      "unlabelled_passes": 0
+    },
+    "R": {
+      "ci95": null,
+      "classes": {
+        "blocked": 0,
+        "could-not-check": 0,
+        "incidental": 0,
+        "missed": 0,
+        "surfaced": 0
+      },
+      "cluster": null,
+      "k": 0,
+      "n": 0,
+      "point_estimate": null,
+      "verdict": "required-n-not-locked"
+    },
+    "R_by_gate": {
+      "assertion-reduction": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "config-integrity": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "deletion-rationale": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "error-swallowing": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "golden-output": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "harness-tampering": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "ignored-tests": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "stub-bodies": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "suppression-delta": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "test-floor": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "toolchain-config": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "vacuous-tests": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      }
+    },
+    "R_by_sub_stratum": {
+      "S1": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "S1-revert": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "S2": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "S3": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      }
+    },
+    "R_deployment_view": {
+      "ci95": null,
+      "k": 0,
+      "n": 0,
+      "point_estimate": null
+    },
+    "falsifiers": {
+      "a_recall_lower_bound_below_floor": false,
+      "b_line_regex_not_worse": false,
+      "c_false_block_lower_bound_above_ceiling": false,
+      "d_in_scope_share_below_floor": true
+    },
+    "twins": {
+      "line-regex": {
+        "false_block_rate_original": {
+          "ci95": [
+            0.0,
+            0.03232423144931307
+          ],
+          "k": 0,
+          "n": 115,
+          "point_estimate": 0.0
+        },
+        "paired_vs_discipline": null,
+        "recall": {
+          "ci95": null,
+          "k": 0,
+          "n": 0,
+          "point_estimate": null
+        }
+      },
+      "naive-sensitive-path-filter": {
+        "false_block_rate_original": {
+          "ci95": [
+            0.0,
+            0.03232423144931307
+          ],
+          "k": 0,
+          "n": 115,
+          "point_estimate": 0.0
+        },
+        "paired_vs_discipline": null,
+        "recall": {
+          "ci95": null,
+          "k": 0,
+          "n": 0,
+          "point_estimate": null
+        }
+      }
+    }
+  },
+  "summary_secondary_swe": {
+    "F": {
+      "ci95": [
+        0.0,
+        0.03232423144931307
+      ],
+      "k": 0,
+      "n": 115,
+      "point_estimate": 0.0
+    },
+    "P": {
+      "ci95": [
+        0.0,
+        0.08762160119728665
+      ],
+      "k": 0,
+      "labelled_passes": 40,
+      "mixed": 26,
+      "n": 40,
+      "point_estimate": 0.0,
+      "unlabelled_passes": 0
+    },
+    "R": {
+      "ci95": null,
+      "classes": {
+        "blocked": 0,
+        "could-not-check": 0,
+        "incidental": 0,
+        "missed": 0,
+        "surfaced": 0
+      },
+      "cluster": null,
+      "k": 0,
+      "n": 0,
+      "point_estimate": null,
+      "verdict": "required-n-not-locked"
+    },
+    "R_by_gate": {
+      "assertion-reduction": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "config-integrity": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "deletion-rationale": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "error-swallowing": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "golden-output": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "harness-tampering": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "ignored-tests": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "stub-bodies": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "suppression-delta": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "test-floor": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "toolchain-config": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "vacuous-tests": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      }
+    },
+    "R_by_sub_stratum": {
+      "S1": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "S1-revert": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "S2": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      },
+      "S3": {
+        "ci95": null,
+        "k": 0,
+        "n": 0,
+        "point_estimate": null
+      }
+    },
+    "R_deployment_view": {
+      "ci95": null,
+      "k": 0,
+      "n": 0,
+      "point_estimate": null
+    },
+    "falsifiers": {
+      "a_recall_lower_bound_below_floor": false,
+      "b_line_regex_not_worse": false,
+      "c_false_block_lower_bound_above_ceiling": false,
+      "d_in_scope_share_below_floor": true
+    },
+    "twins": {
+      "line-regex": {
+        "false_block_rate_original": {
+          "ci95": [
+            0.0,
+            0.03232423144931307
+          ],
+          "k": 0,
+          "n": 115,
+          "point_estimate": 0.0
+        },
+        "paired_vs_discipline": null,
+        "recall": {
+          "ci95": null,
+          "k": 0,
+          "n": 0,
+          "point_estimate": null
+        }
+      },
+      "naive-sensitive-path-filter": {
+        "false_block_rate_original": {
+          "ci95": [
+            0.0,
+            0.03232423144931307
+          ],
+          "k": 0,
+          "n": 115,
+          "point_estimate": 0.0
+        },
+        "paired_vs_discipline": null,
+        "recall": {
+          "ci95": null,
+          "k": 0,
+          "n": 0,
+          "point_estimate": null
+        }
+      }
+    }
+  }
+}

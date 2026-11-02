@@ -1,0 +1,89 @@
+diff --git a/src/_pytest/mark/structures.py b/src/_pytest/mark/structures.py
+--- a/src/_pytest/mark/structures.py
++++ b/src/_pytest/mark/structures.py
+@@ -355,12 +355,68 @@
+         return self.with_args(*args, **kwargs)
+ 
+ 
+-def get_unpacked_marks(obj: object) -> Iterable[Mark]:
+-    """Obtain the unpacked marks that are stored on an object."""
+-    mark_list = getattr(obj, "pytestmark", [])
+-    if not isinstance(mark_list, list):
+-        mark_list = [mark_list]
+-    return normalize_mark_list(mark_list)
++def get_unpacked_marks(
++    obj: object, consider_mro: bool = True
++) -> List[Mark]:
++    """Obtain the unpacked marks that are stored on an object.
++
++    :param consider_mro:
++        If True (default), marks are collected from all classes in the MRO.
++        If False, only marks from the object's own __dict__ are collected.
++
++    .. versionchanged:: 7.2
++        Add the *consider_mro* parameter.
++    """
++    if not consider_mro:
++        mark_list = obj.__dict__.get("pytestmark", [])
++        if not isinstance(mark_list, list):
++            mark_list = [mark_list]
++        return list(normalize_mark_list(mark_list))
++
++    result: List[Mark] = []
++    # Collect marks from all classes in MRO, directly from __dict__.
++    # This ensures we don't get duplicate marks from MRO lookups.
++    if hasattr(obj, "__mro__"):
++        # For classes with MRO, collect marks in the following order:
++        # 1. First parent's marks (MRO[1])
++        # 2. Self's marks (MRO[0])
++        # 3. Remaining parents' marks (MRO[2:])
++        # This order ensures that for multiple inheritance, all marks are collected
++        # and the order makes sense for mark inheritance.
++        mro = obj.__mro__
++        # First parent (MRO[1])
++        if len(mro) > 1:
++            mark_list = mro[1].__dict__.get("pytestmark", [])
++            if mark_list:
++                if not isinstance(mark_list, list):
++                    mark_list = [mark_list]
++                for mark in normalize_mark_list(mark_list):
++                    result.append(mark)
++        # Self (MRO[0])
++        mark_list = obj.__dict__.get("pytestmark", [])
++        if mark_list:
++            if not isinstance(mark_list, list):
++                mark_list = [mark_list]
++            for mark in normalize_mark_list(mark_list):
++                result.append(mark)
++        # Remaining parents (MRO[2:])
++        for base in mro[2:]:
++            mark_list = base.__dict__.get("pytestmark", [])
++            if mark_list:
++                if not isinstance(mark_list, list):
++                    mark_list = [mark_list]
++                for mark in normalize_mark_list(mark_list):
++                    result.append(mark)
++    else:
++        # obj doesn't have __mro__ (e.g., it's a function)
++        mark_list = obj.__dict__.get("pytestmark", [])
++        if mark_list:
++            if not isinstance(mark_list, list):
++                mark_list = [mark_list]
++            for mark in normalize_mark_list(mark_list):
++                result.append(mark)
++
++    return result
+ 
+ 
+ def normalize_mark_list(
+@@ -388,7 +444,9 @@
+     assert isinstance(mark, Mark), mark
+     # Always reassign name to avoid updating pytestmark in a reference that
+     # was only borrowed.
+-    obj.pytestmark = [*get_unpacked_marks(obj), mark]
++    # Use consider_mro=False to only collect marks from the object itself,
++    # not from its parents. Parent marks are collected separately when needed.
++    obj.pytestmark = [*get_unpacked_marks(obj, consider_mro=False), mark]
+ 
+ 
+ # Typing for builtin pytest marks. This is cheating; it gives builtin marks

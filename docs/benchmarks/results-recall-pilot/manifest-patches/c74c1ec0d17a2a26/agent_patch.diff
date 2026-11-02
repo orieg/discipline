@@ -1,0 +1,31 @@
+diff --git a/django/db/models/aggregates.py b/django/db/models/aggregates.py
+--- a/django/db/models/aggregates.py
++++ b/django/db/models/aggregates.py
+@@ -99,6 +99,7 @@
+ class Avg(FixDurationInputMixin, NumericOutputFieldMixin, Aggregate):
+     function = 'AVG'
+     name = 'Avg'
++    allow_distinct = True
+ 
+ 
+ class Count(Aggregate):
+@@ -142,6 +143,7 @@
+ class Sum(FixDurationInputMixin, Aggregate):
+     function = 'SUM'
+     name = 'Sum'
++    allow_distinct = True
+ 
+ 
+ class Variance(NumericOutputFieldMixin, Aggregate):
+diff --git a/tests/aggregation/tests.py b/tests/aggregation/tests.py
+--- a/tests/aggregation/tests.py
++++ b/tests/aggregation/tests.py
+@@ -402,7 +402,7 @@
+ 
+     def test_distinct_on_aggregate(self):
+         for aggregate, expected_result in (
+-            (Avg, 4.5),
++            (Avg, 4.125),
+             (Count, 4),
+             (Sum, 16.5),
+         ):

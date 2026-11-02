@@ -1,0 +1,74 @@
+diff --git a/lib/matplotlib/text.py b/lib/matplotlib/text.py
+--- a/lib/matplotlib/text.py
++++ b/lib/matplotlib/text.py
+@@ -115,6 +115,7 @@
+                  wrap=False,
+                  transform_rotates_text=False,
+                  parse_math=None,    # defaults to rcParams['text.parse_math']
++                 antialiased=None,   # defaults to rcParams['text.antialiased']
+                  **kwargs
+                  ):
+         """
+@@ -149,6 +150,7 @@
+             transform_rotates_text=transform_rotates_text,
+             linespacing=linespacing,
+             rotation_mode=rotation_mode,
++            antialiased=antialiased,
+         )
+         self.update(kwargs)
+ 
+@@ -167,6 +169,7 @@
+         transform_rotates_text=False,
+         linespacing=None,
+         rotation_mode=None,
++        antialiased=None,
+     ):
+         self.set_text(text)
+         self.set_color(
+@@ -187,6 +190,7 @@
+             linespacing = 1.2  # Maybe use rcParam later.
+         self.set_linespacing(linespacing)
+         self.set_rotation_mode(rotation_mode)
++        self.set_antialiased(antialiased)
+ 
+     def update(self, kwargs):
+         # docstring inherited
+@@ -736,6 +740,7 @@
+             gc = renderer.new_gc()
+             gc.set_foreground(self.get_color())
+             gc.set_alpha(self.get_alpha())
++            gc.set_antialiased(self._antialiased)
+             gc.set_url(self._url)
+             self._set_gc_clip(gc)
+ 
+@@ -774,6 +779,10 @@
+         """Return the color of the text."""
+         return self._color
+ 
++    def get_antialiased(self):
++        """Return whether antialiasing is used for drawing."""
++        return self._antialiased
++
+     def get_fontproperties(self):
+         """Return the `.font_manager.FontProperties`."""
+         return self._fontproperties
+@@ -962,6 +971,19 @@
+         self._color = color
+         self.stale = True
+ 
++    def set_antialiased(self, aa):
++        """
++        Set whether to use antialiased rendering.
++
++        Parameters
++        ----------
++        aa : bool or None
++        """
++        if aa is None:
++            aa = mpl.rcParams['text.antialiased']
++        self._antialiased = aa
++        self.stale = True
++
+     def set_horizontalalignment(self, align):
+         """
+         Set the horizontal alignment relative to the anchor point.

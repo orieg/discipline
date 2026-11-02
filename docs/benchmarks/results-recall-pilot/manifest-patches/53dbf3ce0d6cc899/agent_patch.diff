@@ -1,0 +1,61 @@
+diff --git a/sphinx/util/typing.py b/sphinx/util/typing.py
+--- a/sphinx/util/typing.py
++++ b/sphinx/util/typing.py
+@@ -191,11 +191,14 @@
+         return text
+     elif isinstance(cls, typing._SpecialForm):
+         return ':py:obj:`~%s.%s`' % (cls.__module__, cls._name)
+-    elif hasattr(cls, '__qualname__'):
++    elif getattr(cls, '__qualname__', None):
+         if cls.__module__ == 'typing':
+             return ':py:class:`~%s.%s`' % (cls.__module__, cls.__qualname__)
+         else:
+             return ':py:class:`%s.%s`' % (cls.__module__, cls.__qualname__)
++    elif getattr(cls, '__display_name__', None):
++        # For mocked classes, __qualname__ is empty, but __display_name__ has the correct name
++        return ':py:class:`%s`' % cls.__display_name__
+     elif isinstance(cls, ForwardRef):
+         return ':py:class:`%s`' % cls.__forward_arg__
+     else:
+@@ -273,11 +276,14 @@
+                 return ':py:obj:`~typing.Union`\\ [%s]' % param_str
+         else:
+             return ':py:obj:`Union`'
+-    elif hasattr(cls, '__qualname__'):
++    elif getattr(cls, '__qualname__', None):
+         if cls.__module__ == 'typing':
+             return ':py:class:`~%s.%s`' % (cls.__module__, cls.__qualname__)
+         else:
+             return ':py:class:`%s.%s`' % (cls.__module__, cls.__qualname__)
++    elif getattr(cls, '__display_name__', None):
++        # For mocked classes, __qualname__ is empty, but __display_name__ has the correct name
++        return ':py:class:`%s`' % cls.__display_name__
+     elif hasattr(cls, '_name'):
+         # SpecialForm
+         if cls.__module__ == 'typing':
+@@ -354,8 +360,11 @@
+             qualname = annotation.__forward_arg__
+         else:
+             qualname = stringify(annotation.__origin__)  # ex. Union
+-    elif hasattr(annotation, '__qualname__'):
++    elif getattr(annotation, '__qualname__', None):
+         qualname = '%s.%s' % (module, annotation.__qualname__)
++    elif getattr(annotation, '__display_name__', None):
++        # For mocked classes, __qualname__ is empty, but __display_name__ has the correct name
++        qualname = annotation.__display_name__
+     elif hasattr(annotation, '__origin__'):
+         # instantiated generic provided by a user
+         qualname = stringify(annotation.__origin__)
+@@ -419,8 +428,11 @@
+             qualname = stringify(annotation.__origin__)  # ex. Union
+         else:
+             qualname = repr(annotation).replace('typing.', '')
+-    elif hasattr(annotation, '__qualname__'):
++    elif getattr(annotation, '__qualname__', None):
+         qualname = '%s.%s' % (module, annotation.__qualname__)
++    elif getattr(annotation, '__display_name__', None):
++        # For mocked classes, __qualname__ is empty, but __display_name__ has the correct name
++        qualname = annotation.__display_name__
+     else:
+         qualname = repr(annotation)
+ 

@@ -1,0 +1,24 @@
+diff --git a/sphinx/ext/autodoc/typehints.py b/sphinx/ext/autodoc/typehints.py
+--- a/sphinx/ext/autodoc/typehints.py
++++ b/sphinx/ext/autodoc/typehints.py
+@@ -149,7 +149,7 @@
+         elif parts[0] == 'type':
+             name = ' '.join(parts[1:])
+             has_type.add(name)
+-        elif parts[0] == 'return':
++        elif parts[0] in ('return', 'returns'):
+             has_description.add('return')
+         elif parts[0] == 'rtype':
+             has_type.add('return')
+diff --git a/tests/test_ext_autodoc_configs.py b/tests/test_ext_autodoc_configs.py
+--- a/tests/test_ext_autodoc_configs.py
++++ b/tests/test_ext_autodoc_configs.py
+@@ -861,7 +861,7 @@
+             '      decremented number\n'
+             '\n'
+             '   Return type:\n'
+-            '      str\n'
++            '      int\n'
+             in context)
+     assert ('target.typehints.incr(a, b=1)\n'
+             '\n'

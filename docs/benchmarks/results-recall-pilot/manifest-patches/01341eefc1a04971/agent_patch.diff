@@ -1,0 +1,14 @@
+diff --git a/django/db/models/sql/datastructures.py b/django/db/models/sql/datastructures.py
+--- a/django/db/models/sql/datastructures.py
++++ b/django/db/models/sql/datastructures.py
+@@ -162,7 +162,9 @@
+         return hash(self.identity)
+ 
+     def equals(self, other):
+-        # Ignore filtered_relation in equality check.
++        # Include filtered_relation in equality check when present.
++        if self.filtered_relation is not None or other.filtered_relation is not None:
++            return self.identity == other.identity
+         return self.identity[:-1] == other.identity[:-1]
+ 
+     def demote(self):

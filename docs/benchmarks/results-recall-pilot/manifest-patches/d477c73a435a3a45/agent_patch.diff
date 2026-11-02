@@ -1,0 +1,16 @@
+diff --git a/django/db/models/query.py b/django/db/models/query.py
+--- a/django/db/models/query.py
++++ b/django/db/models/query.py
+@@ -920,6 +920,12 @@
+         """Return an empty QuerySet."""
+         clone = self._chain()
+         clone.query.set_empty()
++        if clone.query.combinator:
++            clone.query.combined_queries = tuple(
++                query.clone() for query in clone.query.combined_queries
++            )
++            for query in clone.query.combined_queries:
++                query.set_empty()
+         return clone
+ 
+     ##################################################################

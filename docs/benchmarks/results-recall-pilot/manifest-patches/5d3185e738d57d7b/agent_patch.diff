@@ -1,0 +1,29 @@
+diff --git a/lib/matplotlib/offsetbox.py b/lib/matplotlib/offsetbox.py
+--- a/lib/matplotlib/offsetbox.py
++++ b/lib/matplotlib/offsetbox.py
+@@ -1452,6 +1452,7 @@
+             self._renderer = renderer
+         if not self.get_visible() or not self._check_xy(renderer):
+             return
++        renderer.open_group('annotationbbox', gid=self.get_gid())
+         self.update_positions(renderer)
+         if self.arrow_patch is not None:
+             if self.arrow_patch.figure is None and self.figure is not None:
+@@ -1459,6 +1460,7 @@
+             self.arrow_patch.draw(renderer)
+         self.patch.draw(renderer)
+         self.offsetbox.draw(renderer)
++        renderer.close_group('annotationbbox')
+         self.stale = False
+ 
+ 
+diff --git a/lib/matplotlib/tests/test_backend_svg.py b/lib/matplotlib/tests/test_backend_svg.py
+--- a/lib/matplotlib/tests/test_backend_svg.py
++++ b/lib/matplotlib/tests/test_backend_svg.py
+@@ -639,5 +639,5 @@
+         fig.savefig(fd, format='svg')
+         buf = fd.getvalue().decode('utf-8')
+ 
+-    expected = '<g id="a test for issue 20045">'
++    expected = '<g id="a test for issue 20044">'
+     assert expected in buf

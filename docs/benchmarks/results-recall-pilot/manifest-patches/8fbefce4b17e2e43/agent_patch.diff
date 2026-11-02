@@ -1,0 +1,50 @@
+diff --git a/sympy/combinatorics/homomorphisms.py b/sympy/combinatorics/homomorphisms.py
+--- a/sympy/combinatorics/homomorphisms.py
++++ b/sympy/combinatorics/homomorphisms.py
+@@ -320,29 +320,28 @@
+             return identity
+         else:
+             w = identity
+-            r_arr = r.array_form
+-            i = 0
+-            j = 0
+-            # i is the index for r and j is for
+-            # r_arr. r_arr[j] is the tuple (sym, p)
+-            # where sym is the generator symbol
+-            # and p is the power to which it is
+-            # raised while r[i] is a generator
+-            # (not just its symbol) or the inverse of
+-            # a generator - hence the need for
+-            # both indices
+-            while i < len(r):
+-                power = r_arr[j][1]
+-                if isinstance(domain, PermutationGroup) and r[i] in gens:
+-                    s = domain.generators[gens.index(r[i])]
++            # Use array_form directly instead of dual indexing.
++            # array_form gives ((sym, power), ...) where sym is always
++            # the base generator (not its inverse) and power indicates
++            # whether it's the generator (positive) or inverse (negative).
++            for sym, power in r.array_form:
++                if isinstance(domain, PermutationGroup):
++                    # sym is a Symbol (e.g., x_0, x_1) from the free group.
++                    # gens contains FreeGroupElements with the same names.
++                    # Find the corresponding generator by name.
++                    gen_index = None
++                    for j, g in enumerate(gens):
++                        if g.ext_rep[0].name == sym.name:
++                            gen_index = j
++                            break
++                    s = domain.generators[gen_index]
+                 else:
+-                    s = r[i]
++                    # For FpGroup, sym is the generator symbol itself
++                    s = sym
+                 if s in images:
+                     w = w*images[s]**power
+                 elif s**-1 in images:
+                     w = w*images[s**-1]**power
+-                i += abs(power)
+-                j += 1
+             return w
+ 
+     for r in rels:

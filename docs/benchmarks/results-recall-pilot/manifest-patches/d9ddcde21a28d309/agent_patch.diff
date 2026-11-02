@@ -1,0 +1,28 @@
+diff --git a/sphinx/util/inspect.py b/sphinx/util/inspect.py
+--- a/sphinx/util/inspect.py
++++ b/sphinx/util/inspect.py
+@@ -521,10 +521,22 @@
+     params = []
+ 
+     if hasattr(args, "posonlyargs"):
+-        for arg in args.posonlyargs:  # type: ignore
++        # defaults are shared between posonlyargs and args, right-aligned
++        num_posonly = len(args.posonlyargs)
++        num_args = len(args.args)
++        num_defaults = len(args.defaults) if args.defaults else 0
++
++        for i, arg in enumerate(args.posonlyargs):  # type: ignore
+             annotation = ast_unparse(arg.annotation) or Parameter.empty
++            # Check if this posonlyarg has a default
++            # posonlyarg at index i has position i in the combined list
++            if i >= num_posonly + num_args - num_defaults:
++                default_index = i - (num_posonly + num_args - num_defaults)
++                default = ast_unparse(args.defaults[default_index])
++            else:
++                default = Parameter.empty
+             params.append(Parameter(arg.arg, Parameter.POSITIONAL_ONLY,
+-                                    annotation=annotation))
++                                    default=default, annotation=annotation))
+ 
+     for i, arg in enumerate(args.args):
+         if len(args.args) - i <= len(args.defaults):

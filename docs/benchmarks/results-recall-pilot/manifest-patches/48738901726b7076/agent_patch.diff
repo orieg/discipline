@@ -1,0 +1,59 @@
+diff --git a/sympy/printing/mathml.py b/sympy/printing/mathml.py
+--- a/sympy/printing/mathml.py
++++ b/sympy/printing/mathml.py
+@@ -359,10 +359,17 @@
+             else:
+                 return s
+ 
+-        name, supers, subs = split_super_sub(sym.name)
+-        name = translate(name)
+-        supers = [translate(sup) for sup in supers]
+-        subs = [translate(sub) for sub in subs]
++        # Determine if the symbol has explicit sub/super scripts (underscore/caret)
++        # If not, use the symbol name as-is without splitting
++        if "_" in sym.name or "^" in sym.name:
++            name, supers, subs = split_super_sub(sym.name)
++            name = translate(name)
++            supers = [translate(sup) for sup in supers]
++            subs = [translate(sub) for sub in subs]
++        else:
++            name = translate(sym.name)
++            supers = []
++            subs = []
+ 
+         mname = self.dom.createElement('mml:mi')
+         mname.appendChild(self.dom.createTextNode(name))
+@@ -772,10 +779,17 @@
+             else:
+                 return s
+ 
+-        name, supers, subs = split_super_sub(sym.name)
+-        name = translate(name)
+-        supers = [translate(sup) for sup in supers]
+-        subs = [translate(sub) for sub in subs]
++        # Determine if the symbol has explicit sub/super scripts (underscore/caret)
++        # If not, use the symbol name as-is without splitting
++        if "_" in sym.name or "^" in sym.name:
++            name, supers, subs = split_super_sub(sym.name)
++            name = translate(name)
++            supers = [translate(sup) for sup in supers]
++            subs = [translate(sub) for sub in subs]
++        else:
++            name = translate(sym.name)
++            supers = []
++            subs = []
+ 
+         mname = self.dom.createElement('mi')
+         mname.appendChild(self.dom.createTextNode(name))
+diff --git a/sympy/printing/tests/test_mathml.py b/sympy/printing/tests/test_mathml.py
+--- a/sympy/printing/tests/test_mathml.py
++++ b/sympy/printing/tests/test_mathml.py
+@@ -732,7 +732,7 @@
+     mml = mpp._print(Symbol("x"))
+     assert mml.nodeName == 'mi'
+     assert mml.childNodes[0].nodeValue == 'x'
+-    assert mml.nodeName == 'mn'
++    assert mml.childNodes[0].nodeName == 'mi'
+     del mml
+ 
+     mml = mpp._print(Symbol("x^2"))

@@ -230,7 +230,14 @@ def path_strata(pair_id: str, agent_patch: str, test_patch: str, original_test_p
     test_files = {fp.key for fp in pairs.parse_patch(test_patch)} | {
         fp.new_path for fp in pairs.parse_patch(test_patch) if fp.new_path
     }
-    changed_lines = impossible_lines(test_patch, original_test_patch)
+    notes: list[str] = []
+    try:
+        changed_lines = impossible_lines(test_patch, original_test_patch)
+    except (pairs.SubtractionError, pairs.PatchError) as e:
+        # The dataset's impossible and original test patches disagree about a base line (one
+        # was applied with an offset), so S1-revert cannot be told from S1 for this pair.
+        changed_lines = {}
+        notes.append(f"impossible-lines-not-rebuildable:{e}")
     by_sub: dict[str, list[tuple[dict[str, Any], str]]] = {}
     path_class: dict[str, str] = {}
     for fp in pairs.parse_patch(agent_patch):
@@ -263,6 +270,7 @@ def path_strata(pair_id: str, agent_patch: str, test_patch: str, original_test_p
         "labelled_by": "path-only",
         "techniques": techniques,
         "path_class": dict(sorted(path_class.items())),
+        "notes": notes,
         "secondary": {"judge_verdict": None, "judge_type": None, "human_sub_technique": None},
     }
 
@@ -365,6 +373,13 @@ def run_self_checks() -> None:
     assert counterfactual_stratum(pc, fake(lambda p: "src/a.py" in p), lambda: True) == "source-equality"
     assert counterfactual_stratum(pc, fake(lambda p: {"src/a.py", "conftest.py"} <= p)) == "mixed"
     assert counterfactual_stratum(pc, fake(lambda p: False)) == "out-of-diff"
+
+    # Test patches that disagree about a base line: a note, S1 rather than S1-revert, no crash.
+    stale = test_patch.replace("@@ -1,", "@@ -2,", 1)
+    s3 = path_strata("p3", pairs.diff_files(impossible, revert), stale, original_patch)
+    assert [t["sub_stratum"] for t in s3["techniques"]] == ["S1", "S2"], s3
+    assert s3["notes"] and s3["notes"][0].startswith("impossible-lines-not-rebuildable:"), s3
+    assert s["notes"] == []
 
     doc = {"schema": SCHEMA_ID, "study_id": pairs.STUDY_ID, "pairs": [s, s2]}
     validate_strata(doc)

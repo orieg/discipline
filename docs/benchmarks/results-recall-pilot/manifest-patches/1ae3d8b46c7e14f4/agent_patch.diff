@@ -1,0 +1,21 @@
+diff --git a/django/utils/http.py b/django/utils/http.py
+--- a/django/utils/http.py
++++ b/django/utils/http.py
+@@ -176,10 +176,14 @@
+     try:
+         year = int(m.group('year'))
+         if year < 100:
+-            if year < 70:
+-                year += 2000
++            # RFC 7231: two-digit years in rfc850-date format
++            # A timestamp more than 50 years in the future is interpreted
++            # as the most recent year in the past with the same last two digits.
++            current_year = datetime.datetime.utcnow().year
++            if (year - current_year % 100) > 50:
++                year = (current_year // 100) * 100 + year - 100
+             else:
+-                year += 1900
++                year = (current_year // 100) * 100 + year
+         month = MONTHS.index(m.group('mon').lower()) + 1
+         day = int(m.group('day'))
+         hour = int(m.group('hour'))

@@ -1,0 +1,49 @@
+diff --git a/src/_pytest/mark/structures.py b/src/_pytest/mark/structures.py
+--- a/src/_pytest/mark/structures.py
++++ b/src/_pytest/mark/structures.py
+@@ -355,12 +355,30 @@
+         return self.with_args(*args, **kwargs)
+ 
+ 
+-def get_unpacked_marks(obj: object) -> Iterable[Mark]:
+-    """Obtain the unpacked marks that are stored on an object."""
+-    mark_list = getattr(obj, "pytestmark", [])
+-    if not isinstance(mark_list, list):
+-        mark_list = [mark_list]
+-    return normalize_mark_list(mark_list)
++def get_unpacked_marks(
++    obj: object, *, consider_mro: bool = True
++) -> List[Mark]:
++    """Obtain the unpacked marks that are stored on an object.
++
++    :param obj:
++        The object to obtain marks from.
++    :param consider_mro:
++        If True (default), marks from parent classes in the MRO will also be
++        included. If False, only marks directly on the object will be returned.
++    """
++    if consider_mro:
++        mark_list: List[Union[Mark, MarkDecorator]] = []
++        for klass in getattr(obj, "__mro__", [type(obj)]):
++            klass_marks = klass.__dict__.get("pytestmark", [])
++            if not isinstance(klass_marks, list):
++                klass_marks = [klass_marks]
++            mark_list.extend(klass_marks)
++        return list(normalize_mark_list(mark_list))
++    else:
++        mark_list = getattr(obj, "__dict__", {}).get("pytestmark", [])
++        if not isinstance(mark_list, list):
++            mark_list = [mark_list]
++        return list(normalize_mark_list(mark_list))
+ 
+ 
+ def normalize_mark_list(
+@@ -388,7 +406,7 @@
+     assert isinstance(mark, Mark), mark
+     # Always reassign name to avoid updating pytestmark in a reference that
+     # was only borrowed.
+-    obj.pytestmark = [*get_unpacked_marks(obj), mark]
++    obj.pytestmark = [*get_unpacked_marks(obj, consider_mro=False), mark]
+ 
+ 
+ # Typing for builtin pytest marks. This is cheating; it gives builtin marks

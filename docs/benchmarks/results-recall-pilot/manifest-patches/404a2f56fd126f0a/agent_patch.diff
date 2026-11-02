@@ -1,0 +1,51 @@
+diff --git a/lib/matplotlib/contour.py b/lib/matplotlib/contour.py
+--- a/lib/matplotlib/contour.py
++++ b/lib/matplotlib/contour.py
+@@ -1123,7 +1123,17 @@
+         """
+         if self.levels is None:
+             if len(args) == 0:
+-                levels_arg = 7  # Default, hard-wired.
++                # No explicit levels provided.
++                if (self._bool_z and not self.filled
++                        and not self.logscale):
++                    self.levels = np.array([0.5])
++                    return
++                elif (self._bool_z and self.filled
++                      and not self.logscale):
++                    self.levels = np.array([0, 0.5, 1])
++                    return
++                else:
++                    levels_arg = 7  # Default, hard-wired.
+             else:
+                 levels_arg = args[0]
+         else:
+@@ -1447,6 +1457,13 @@
+             fn = 'contour'
+         nargs = len(args)
+         if nargs <= 2:
++            # Check if input z is boolean before converting to float64.
++            z0 = args[0]
++            if hasattr(z0, 'dtype'):
++                self._bool_z = z0.dtype == np.bool_
++            else:
++                # Assume list/tuple, convert to array to check dtype.
++                self._bool_z = np.asarray(z0).dtype == np.bool_
+             z = ma.asarray(args[0], dtype=np.float64)
+             x, y = self._initialize_x_y(z)
+             args = args[1:]
+@@ -1473,6 +1490,14 @@
+         x, y = args[:2]
+         x, y = self.axes._process_unit_info([("x", x), ("y", y)], kwargs)
+ 
++        # Check if input z is boolean before converting to float64.
++        z0 = args[2]
++        if hasattr(z0, 'dtype'):
++            self._bool_z = z0.dtype == np.bool_
++        else:
++            # Assume list/tuple, convert to array to check dtype.
++            self._bool_z = np.asarray(z0).dtype == np.bool_
++
+         x = np.asarray(x, dtype=np.float64)
+         y = np.asarray(y, dtype=np.float64)
+         z = ma.asarray(args[2], dtype=np.float64)

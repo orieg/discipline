@@ -1,0 +1,17 @@
+diff --git a/django/forms/models.py b/django/forms/models.py
+--- a/django/forms/models.py
++++ b/django/forms/models.py
+@@ -1168,9 +1168,12 @@
+ 
+     def __eq__(self, other):
+         if isinstance(other, ModelChoiceIteratorValue):
+-            other = other.value
++            return self.value == other.value and self.instance == other.instance
+         return self.value == other
+ 
++    def __hash__(self):
++        return hash((self.value, self.instance))
++
+ 
+ class ModelChoiceIterator:
+     def __init__(self, field):

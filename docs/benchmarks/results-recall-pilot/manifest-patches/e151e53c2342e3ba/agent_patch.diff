@@ -1,0 +1,19 @@
+diff --git a/django/utils/http.py b/django/utils/http.py
+--- a/django/utils/http.py
++++ b/django/utils/http.py
+@@ -176,10 +176,12 @@
+     try:
+         year = int(m.group('year'))
+         if year < 100:
+-            if year < 70:
+-                year += 2000
+-            else:
++            # RFC 7231 section 7.1.1.1: if the two-digit year appears to be more
++            # than 50 years in the future, interpret it as a year in the past.
++            if (year + 2000) - datetime.datetime.utcnow().year > 50:
+                 year += 1900
++            else:
++                year += 2000
+         month = MONTHS.index(m.group('mon').lower()) + 1
+         day = int(m.group('day'))
+         hour = int(m.group('hour'))

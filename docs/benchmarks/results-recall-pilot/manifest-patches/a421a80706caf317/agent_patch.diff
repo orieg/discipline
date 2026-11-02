@@ -1,0 +1,49 @@
+diff --git a/django/core/management/base.py b/django/core/management/base.py
+--- a/django/core/management/base.py
++++ b/django/core/management/base.py
+@@ -43,6 +43,27 @@
+     pass
+ 
+ 
++class SubParsersAction(argparse._SubParsersAction):
++    """
++    Custom _SubParsersAction that copies CommandParser-specific attributes
++    when creating subparsers.
++    """
++
++    def add_parser(self, name, **kwargs):
++        # Copy CommandParser-specific attributes from the parent parser.
++        if hasattr(self, "_parent_parser"):
++            parent = self._parent_parser
++            if parent.called_from_command_line is not None:
++                kwargs.setdefault(
++                    "called_from_command_line", parent.called_from_command_line
++                )
++            if parent.missing_args_message is not None:
++                kwargs.setdefault(
++                    "missing_args_message", parent.missing_args_message
++                )
++        return super().add_parser(name, **kwargs)
++
++
+ class CommandParser(ArgumentParser):
+     """
+     Customized ArgumentParser class to improve some error messages and prevent
+@@ -71,6 +92,17 @@
+         else:
+             raise CommandError("Error: %s" % message)
+ 
++    def add_subparsers(self, **kwargs):
++        # Use a custom SubParsersAction that copies CommandParser attributes.
++        # Register the custom action class for the 'parsers' key.
++        self.register("action", "parsers", SubParsersAction)
++        parser_class = kwargs.pop("parser_class", CommandParser)
++        kwargs["parser_class"] = parser_class
++        action = super().add_subparsers(**kwargs)
++        # Store reference to parent parser for attribute copying.
++        action._parent_parser = self
++        return action
++
+ 
+ def handle_default_options(options):
+     """

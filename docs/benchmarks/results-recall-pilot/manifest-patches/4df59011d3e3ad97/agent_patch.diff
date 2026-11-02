@@ -1,0 +1,27 @@
+diff --git a/django/contrib/admindocs/utils.py b/django/contrib/admindocs/utils.py
+--- a/django/contrib/admindocs/utils.py
++++ b/django/contrib/admindocs/utils.py
+@@ -180,6 +180,11 @@
+             elif val == ')' and prev_char != '\\':
+                 unmatched_open_brackets -= 1
+             prev_char = val
++        else:
++            # The loop finished without breaking which means the closing bracket
++            # was the last character in the string (e.g., `(?P<name>pattern)`).
++            if unmatched_open_brackets == 0:
++                group_pattern_and_name.append((pattern[start:end + idx + 1], group_name))
+ 
+     # Replace the string for named capture groups with their group names.
+     for group_pattern, group_name in group_pattern_and_name:
+@@ -212,6 +217,11 @@
+             elif val == ')' and prev_char != '\\':
+                 unmatched_open_brackets -= 1
+             prev_char = val
++        else:
++            # The loop finished without breaking which means the closing bracket
++            # was the last character in the string (e.g., `(\w+)`).
++            if unmatched_open_brackets == 0:
++                group_indices.append((start, start + 1 + idx + 1))
+ 
+     # Remove unnamed group matches inside other unnamed capture groups.
+     group_start_end_indices = []

@@ -1,0 +1,17 @@
+diff --git a/sphinx/domains/python.py b/sphinx/domains/python.py
+--- a/sphinx/domains/python.py
++++ b/sphinx/domains/python.py
+@@ -1224,6 +1224,13 @@
+             if mod.docname == docname:
+                 del self.modules[modname]
+ 
++    def process_field_xref(self, pnode: pending_xref) -> None:
++        domain_name = pnode.get('refdomain')
++        if domain_name != 'py':
++            return
++
++        pnode.attributes.update(self.env.ref_context)
++
+     def merge_domaindata(self, docnames: List[str], otherdata: Dict) -> None:
+         # XXX check duplicates?
+         for fullname, obj in otherdata['objects'].items():

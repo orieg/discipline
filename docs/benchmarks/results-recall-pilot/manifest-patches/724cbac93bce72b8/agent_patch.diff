@@ -1,0 +1,15 @@
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -1777,6 +1777,11 @@
+ 
+     def set_empty(self):
+         self.where.add(NothingNode(), AND)
++        if self.combined_queries:
++            # Clone combined queries to avoid mutating the original queries.
++            self.combined_queries = tuple(q.clone() for q in self.combined_queries)
++            for combined_query in self.combined_queries:
++                combined_query.set_empty()
+ 
+     def is_empty(self):
+         return any(isinstance(c, NothingNode) for c in self.where.children)

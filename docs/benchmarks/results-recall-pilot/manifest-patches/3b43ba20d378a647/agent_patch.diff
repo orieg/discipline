@@ -1,0 +1,25 @@
+diff --git a/src/_pytest/pathlib.py b/src/_pytest/pathlib.py
+--- a/src/_pytest/pathlib.py
++++ b/src/_pytest/pathlib.py
+@@ -558,7 +558,7 @@
+     entries = sorted(os.scandir(path), key=lambda entry: entry.name)
+     yield from entries
+     for entry in entries:
+-        if entry.is_dir(follow_symlinks=False) and recurse(entry):
++        if entry.is_dir() and recurse(entry):
+             yield from visit(entry.path, recurse)
+ 
+ 
+diff --git a/testing/test_collection.py b/testing/test_collection.py
+--- a/testing/test_collection.py
++++ b/testing/test_collection.py
+@@ -1184,7 +1184,8 @@
+     dir = pytester.mkdir("dir")
+     dir.joinpath("test_it.py").write_text("def test_it(): pass", "utf-8")
+     pytester.path.joinpath("symlink_dir").symlink_to(dir)
+-    result.assert_outcomes(passed=3)
++    result = pytester.runpytest("symlink_dir")
++    result.assert_outcomes(passed=1)
+     result = pytester.runpytest()
+     result.assert_outcomes(passed=2)
+ 

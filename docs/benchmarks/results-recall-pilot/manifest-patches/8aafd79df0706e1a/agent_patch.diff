@@ -1,0 +1,19 @@
+diff --git a/sympy/polys/polytools.py b/sympy/polys/polytools.py
+--- a/sympy/polys/polytools.py
++++ b/sympy/polys/polytools.py
+@@ -5877,6 +5877,15 @@
+ def _sorted_factors(factors, method):
+     """Sort a list of ``(expr, exp)`` pairs. """
+     if method == 'sqf':
++        # Group factors by exponent and combine them
++        grouped = {}
++        for poly, exp in factors:
++            if exp in grouped:
++                grouped[exp] = poly * grouped[exp]
++            else:
++                grouped[exp] = poly
++        factors = [(poly, exp) for exp, poly in grouped.items()]
++
+         def key(obj):
+             poly, exp = obj
+             rep = poly.rep.rep

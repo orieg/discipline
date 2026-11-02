@@ -1,0 +1,12 @@
+diff --git a/django/db/models/sql/compiler.py b/django/db/models/sql/compiler.py
+--- a/django/db/models/sql/compiler.py
++++ b/django/db/models/sql/compiler.py
+@@ -432,6 +432,8 @@
+ 
+     def get_combinator_sql(self, combinator, all):
+         features = self.connection.features
++        if self.query.is_empty():
++            raise EmptyResultSet
+         compilers = [
+             query.get_compiler(self.using, self.connection)
+             for query in self.query.combined_queries if not query.is_empty()

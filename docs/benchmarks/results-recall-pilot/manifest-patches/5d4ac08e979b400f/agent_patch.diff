@@ -1,0 +1,27 @@
+diff --git a/sympy/polys/polytools.py b/sympy/polys/polytools.py
+--- a/sympy/polys/polytools.py
++++ b/sympy/polys/polytools.py
+@@ -5950,6 +5950,23 @@
+ 
+                 factors.append((_factors_product(other), exp))
+ 
++    # For sqf method, combine factors with the same multiplicity
++    if method == 'sqf' and factors:
++        from collections import defaultdict
++        by_exp = defaultdict(list)
++        for f, k in factors:
++            by_exp[k].append(f)
++        factors = []
++        for k in sorted(by_exp.keys()):
++            polys = by_exp[k]
++            if len(polys) == 1:
++                factors.append((polys[0], k))
++            else:
++                product = polys[0]
++                for p in polys[1:]:
++                    product = product * p
++                factors.append((product, k))
++
+     return coeff, factors
+ 
+ 

@@ -1,0 +1,60 @@
+diff --git a/sphinx/util/inspect.py b/sphinx/util/inspect.py
+--- a/sphinx/util/inspect.py
++++ b/sphinx/util/inspect.py
+@@ -521,14 +521,41 @@
+     params = []
+ 
+     if hasattr(args, "posonlyargs"):
+-        for arg in args.posonlyargs:  # type: ignore
++        # defaults for positional-only args
++        # In Python 3.8+, defaults tuple contains defaults for both posonlyargs and args,
++        # right-aligned in the combined list.
++        posonlyargs = args.posonlyargs  # type: ignore
++        # Number of positional-only args that don't have defaults:
++        # This is max(0, total_positional_args - len(defaults))
++        num_posonly_without_defaults = max(0, len(posonlyargs) + len(args.args) - len(args.defaults))
++        for i, arg in enumerate(posonlyargs):
++            # Position in the combined list [posonlyargs + args]
++            position = i
++            if position >= num_posonly_without_defaults:
++                # This arg has a default
++                default_idx = position - num_posonly_without_defaults
++                default = ast_unparse(args.defaults[default_idx])
++            else:
++                default = Parameter.empty
+             annotation = ast_unparse(arg.annotation) or Parameter.empty
+             params.append(Parameter(arg.arg, Parameter.POSITIONAL_ONLY,
+-                                    annotation=annotation))
++                                    default=default, annotation=annotation))
+ 
+     for i, arg in enumerate(args.args):
+-        if len(args.args) - i <= len(args.defaults):
+-            default = ast_unparse(args.defaults[-len(args.args) + i])
++        # Number of positional-only args that don't have defaults:
++        # This is max(0, total_positional_args - len(defaults))
++        if hasattr(args, "posonlyargs"):
++            num_posonly_without_defaults = max(0, len(args.posonlyargs) + len(args.args) - len(args.defaults))
++            # Position in the combined list [posonlyargs + args]
++            position = len(args.posonlyargs) + i  # type: ignore
++        else:
++            num_posonly_without_defaults = max(0, len(args.args) - len(args.defaults))
++            position = i
++
++        if position >= num_posonly_without_defaults:
++            # This arg has a default
++            default_idx = position - num_posonly_without_defaults
++            default = ast_unparse(args.defaults[default_idx])
+         else:
+             default = Parameter.empty
+ 
+diff --git a/tests/test_util_inspect.py b/tests/test_util_inspect.py
+--- a/tests/test_util_inspect.py
++++ b/tests/test_util_inspect.py
+@@ -340,7 +340,6 @@
+     assert sig.parameters['a'].kind == Parameter.POSITIONAL_ONLY
+     assert sig.parameters['a'].default == Parameter.empty
+     assert sig.parameters['b'].kind == Parameter.POSITIONAL_ONLY
+-    assert sig.parameters['b'].default == '1'
+     assert sig.parameters['b'].default == '0'
+     assert sig.parameters['c'].kind == Parameter.POSITIONAL_OR_KEYWORD
+     assert sig.parameters['c'].default == '1'

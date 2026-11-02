@@ -1,0 +1,55 @@
+diff --git a/django/contrib/admindocs/utils.py b/django/contrib/admindocs/utils.py
+--- a/django/contrib/admindocs/utils.py
++++ b/django/contrib/admindocs/utils.py
+@@ -166,13 +166,7 @@
+     for start, end, group_name in named_group_indices:
+         # Handle nested parentheses, e.g. '^(?P<a>(x|y))/b'.
+         unmatched_open_brackets, prev_char = 1, None
+-        for idx, val in enumerate(pattern[end:]):
+-            # If brackets are balanced, the end of the string for the current
+-            # named capture group pattern has been reached.
+-            if unmatched_open_brackets == 0:
+-                group_pattern_and_name.append((pattern[start:end + idx], group_name))
+-                break
+-
++        for idx, val in enumerate(pattern[end:], start=end):
+             # Check for unescaped `(` and `)`. They mark the start and end of a
+             # nested group.
+             if val == '(' and prev_char != '\\':
+@@ -181,6 +175,12 @@
+                 unmatched_open_brackets -= 1
+             prev_char = val
+ 
++            # If brackets are balanced, the end of the string for the current
++            # named capture group pattern has been reached.
++            if unmatched_open_brackets == 0:
++                group_pattern_and_name.append((pattern[start:idx + 1], group_name))
++                break
++
+     # Replace the string for named capture groups with their group names.
+     for group_pattern, group_name in group_pattern_and_name:
+         pattern = pattern.replace(group_pattern, group_name)
+@@ -200,11 +200,7 @@
+     for start in unnamed_group_indices:
+         # Handle nested parentheses, e.g. '^b/((x|y)\w+)$'.
+         unmatched_open_brackets, prev_char = 1, None
+-        for idx, val in enumerate(pattern[start + 1:]):
+-            if unmatched_open_brackets == 0:
+-                group_indices.append((start, start + 1 + idx))
+-                break
+-
++        for idx, val in enumerate(pattern[start + 1:], start=start + 1):
+             # Check for unescaped `(` and `)`. They mark the start and end of
+             # a nested group.
+             if val == '(' and prev_char != '\\':
+@@ -213,6 +209,10 @@
+                 unmatched_open_brackets -= 1
+             prev_char = val
+ 
++            if unmatched_open_brackets == 0:
++                group_indices.append((start, idx + 1))
++                break
++
+     # Remove unnamed group matches inside other unnamed capture groups.
+     group_start_end_indices = []
+     prev_end = None

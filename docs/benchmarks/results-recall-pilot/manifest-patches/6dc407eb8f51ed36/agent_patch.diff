@@ -1,0 +1,122 @@
+diff --git a/debug_test.py b/debug_test.py
+new file mode 100644
+--- /dev/null
++++ b/debug_test.py
+@@ -0,0 +1,60 @@
++# Add tests to path
++import sys
++sys.path.insert(0, 'tests')
++
++# Setup Django
++import os
++os.environ['DJANGO_SETTINGS_MODULE'] = 'test_sqlite'
++
++import django
++django.setup()
++
++from django.db import connection
++from queries.models import ReservedName
++
++# Create tables using Django's migration framework
++from django.core.management import call_command
++from django.db import connection
++
++# Create the tables
++from django.db.migrations.executor import MigrationExecutor
++from django.db.migrations.loader import MigrationLoader
++
++# Use a simpler approach - create the tables directly
++with connection.schema_editor() as schema_editor:
++    schema_editor.create_model(ReservedName)
++
++# Create test data
++ReservedName.objects.all().delete()
++ReservedName.objects.bulk_create([
++    ReservedName(name='rn1', order=7),
++    ReservedName(name='rn2', order=5),
++    ReservedName(name='rn0', order=6),
++    ReservedName(name='rn9', order=-1),
++])
++
++# Test case
++qs1 = ReservedName.objects.filter(order__gte=6)
++qs2 = ReservedName.objects.filter(order__lte=5)
++union_qs = qs1.union(qs2)
++
++print(f"Union order_by: {union_qs.query.order_by}")
++
++ordered_qs = union_qs.order_by('-pk')
++print(f"Ordered order_by: {ordered_qs.query.order_by}")
++print(f"Ordered values_select: {ordered_qs.query.values_select}")
++
++values_qs = ordered_qs.values_list('order', flat=True)
++print(f"Values order_by: {values_qs.query.order_by}")
++print(f"Values values_select: {values_qs.query.values_select}")
++
++# Print the SQL
++try:
++    from django.db import connection
++    compiler = values_qs.query.get_compiler(using=connection.alias)
++    sql, params = compiler.as_sql()
++    print(f"\nSQL: {sql}")
++    print(f"Params: {params}")
++except Exception as e:
++    import traceback
++    traceback.print_exc()
+diff --git a/test_reproduce.py b/test_reproduce.py
+new file mode 100644
+--- /dev/null
++++ b/test_reproduce.py
+@@ -0,0 +1,52 @@
++import sys
++sys.path.insert(0, 'tests')
++
++import os
++os.environ['DJANGO_SETTINGS_MODULE'] = 'test_sqlite'
++
++import django
++from django.conf import settings
++
++# Setup Django
++django.setup()
++
++# Run migrations
++from django.core.management import call_command
++call_command('migrate', '--run-syncdb', verbosity=0)
++
++# Now test the issue
++from queries.models import ReservedName
++
++# Clean up
++ReservedName.objects.all().delete()
++
++# Create test data
++ReservedName.objects.bulk_create([
++    ReservedName(name='rn1', order=7),
++    ReservedName(name='rn2', order=5),
++    ReservedName(name='rn0', order=6),
++    ReservedName(name='rn9', order=-1),
++])
++
++# Test case 1: order_by then values_list
++print("Test 1: union.order_by('pk').values_list('order', flat=True)")
++qs1 = ReservedName.objects.filter(order__gte=6)
++qs2 = ReservedName.objects.filter(order__lte=5)
++union_qs = qs1.union(qs2)
++try:
++    result = list(union_qs.order_by('pk').values_list('order', flat=True))
++    print(f"Result: {result}")
++except Exception as e:
++    import traceback
++    traceback.print_exc()
++
++print("\nTest 2: union.values_list('order', flat=True).order_by('pk')")
++qs1 = ReservedName.objects.filter(order__gte=6)
++qs2 = ReservedName.objects.filter(order__lte=5)
++union_qs = qs1.union(qs2)
++try:
++    result = list(union_qs.values_list('order', flat=True).order_by('pk'))
++    print(f"Result: {result}")
++except Exception as e:
++    import traceback
++    traceback.print_exc()

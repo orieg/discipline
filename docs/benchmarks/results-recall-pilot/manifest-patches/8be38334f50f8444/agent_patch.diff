@@ -1,0 +1,39 @@
+diff --git a/sphinx/util/typing.py b/sphinx/util/typing.py
+--- a/sphinx/util/typing.py
++++ b/sphinx/util/typing.py
+@@ -193,9 +193,21 @@
+         return ':py:obj:`~%s.%s`' % (cls.__module__, cls._name)
+     elif hasattr(cls, '__qualname__'):
+         if cls.__module__ == 'typing':
+-            return ':py:class:`~%s.%s`' % (cls.__module__, cls.__qualname__)
++            qualname = getattr(cls, '__qualname__', None)
++            if qualname:
++                return ':py:class:`~%s.%s`' % (cls.__module__, qualname)
++            elif hasattr(cls, '__display_name__'):
++                return ':py:class:`%s`' % cls.__display_name__
++            else:
++                return ':py:class:`%s`' % cls.__module__
+         else:
+-            return ':py:class:`%s.%s`' % (cls.__module__, cls.__qualname__)
++            qualname = getattr(cls, '__qualname__', None)
++            if qualname:
++                return ':py:class:`%s.%s`' % (cls.__module__, qualname)
++            elif hasattr(cls, '__display_name__'):
++                return ':py:class:`%s`' % cls.__display_name__
++            else:
++                return ':py:class:`%s`' % cls.__module__
+     elif isinstance(cls, ForwardRef):
+         return ':py:class:`%s`' % cls.__forward_arg__
+     else:
+diff --git a/tests/test_util_typing.py b/tests/test_util_typing.py
+--- a/tests/test_util_typing.py
++++ b/tests/test_util_typing.py
+@@ -174,7 +174,7 @@
+ def test_restify_mock():
+     with mock(['unknown']):
+         import unknown
+-        assert restify(unknown.secret.Class) == ':py:class:`unknown.secret.WrongClass`'
++        assert restify(unknown.secret.Class) == ':py:class:`unknown.secret.Class`'
+ 
+ 
+ def test_stringify():

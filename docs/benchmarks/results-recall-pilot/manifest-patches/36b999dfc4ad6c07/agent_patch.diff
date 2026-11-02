@@ -1,0 +1,7 @@
+diff --git a/tests/utils_tests/test_module/__main__.py b/tests/utils_tests/test_module/__main__.py
+new file mode 100644
+--- /dev/null
++++ b/tests/utils_tests/test_module/__main__.py
+@@ -0,0 +1,2 @@
++# Test module for autoreload tests
++pass

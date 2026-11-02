@@ -1,0 +1,25 @@
+diff --git a/sympy/printing/conventions.py b/sympy/printing/conventions.py
+--- a/sympy/printing/conventions.py
++++ b/sympy/printing/conventions.py
+@@ -61,12 +61,15 @@
+         else:
+             raise RuntimeError("This should never happen.")
+ 
+-    # make a little exception when a name ends with digits, i.e. treat them
+-    # as a subscript too.
+-    m = _name_with_digits_p.match(name)
+-    if m:
+-        name, sub = m.groups()
+-        subs.insert(0, sub)
++    # make a little exception when a name ends with digits and there's no
++    # explicit subscript notation in the string, i.e. treat them as a subscript too.
++    # However, if the original text contains only a name ending with digits (no _ or ^),
++    # treat the whole thing as the name.
++    if "_" in text or "^" in text:
++        m = _name_with_digits_p.match(name)
++        if m:
++            name, sub = m.groups()
++            subs.insert(0, sub)
+ 
+     return name, supers, subs
+ 

@@ -1,0 +1,46 @@
+{
+  "attempts": [
+    {
+      "client": "pip install",
+      "instance_id": "pylint-dev__pylint-4604",
+      "log_file": "2026-10-29T11-31-57-00-00_swebench-oneoff-tools_jx2owhSekwdFPRoU5fMxJr.json",
+      "run_id": "mmxrwzNSRADKChEL3AwK4r",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-5787",
+      "log_file": "2026-10-29T08-02-07-00-00_swebench-oneoff-reset-tools_VtaG4B6smZMCRhytpsQu25.json",
+      "run_id": "dNPHSsvzs6ALp7RKpb9Naq",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "scikit-learn__scikit-learn-11578",
+      "log_file": "2026-10-28T20-59-43-00-00_swebench-oneoff-tools_bJH8b8TPif8ehj9FezJyVm.json",
+      "run_id": "AsktoTSGatJPnLBt58Yfaa",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sphinx-doc__sphinx-9320",
+      "log_file": "2026-10-28T23-08-04-00-00_swebench-oneoff-tools_ERC23quXRJo94MwVYKHRFm.json",
+      "run_id": "hZ56DtQBZ4z7JJiZE8o8DZ",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-14711",
+      "log_file": "2026-10-28T20-54-02-00-00_swebench-original-tools_jW7g4LDfEbzkxEAyCF6Wj7.json",
+      "run_id": "P9vayDtYG6JSKsbAuNqmQc",
+      "transfer_completed": false
+    }
+  ],
+  "compose": {
+    "network_mode_none": 843,
+    "not_found": 0,
+    "other": 0
+  },
+  "flagged": [],
+  "samples": 843
+}

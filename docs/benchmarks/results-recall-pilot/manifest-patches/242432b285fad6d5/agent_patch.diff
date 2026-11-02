@@ -1,0 +1,31 @@
+diff --git a/django/core/management/__init__.py b/django/core/management/__init__.py
+--- a/django/core/management/__init__.py
++++ b/django/core/management/__init__.py
+@@ -129,12 +129,26 @@
+             else:
+                 yield opt
+ 
++    def get_actions_in_required_mutex_groups(parser):
++        # Get all actions that are part of required mutually exclusive groups.
++        actions = []
++        for group in parser._mutually_exclusive_groups:
++            if group.required:
++                actions.extend(group._group_actions)
++        for opt in parser._actions:
++            if isinstance(opt, _SubParsersAction):
++                for subparser in opt.choices.values():
++                    actions.extend(get_actions_in_required_mutex_groups(subparser))
++        return actions
++
+     parser_actions = list(get_actions(parser))
+     # Any required arguments which are passed in via **options must be passed
+     # to parse_args().
++    required_mutex_actions = get_actions_in_required_mutex_groups(parser)
+     parse_args += [
+         '{}={}'.format(min(opt.option_strings), arg_options[opt.dest])
+-        for opt in parser_actions if opt.required and opt.dest in options
++        for opt in parser_actions
++        if (opt.required or opt in required_mutex_actions) and opt.dest in options
+     ]
+     defaults = parser.parse_args(args=parse_args)
+     defaults = dict(defaults._get_kwargs(), **arg_options)

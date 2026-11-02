@@ -1,0 +1,12 @@
+diff --git a/tests/aggregation_regress/tests.py b/tests/aggregation_regress/tests.py
+--- a/tests/aggregation_regress/tests.py
++++ b/tests/aggregation_regress/tests.py
+@@ -1531,7 +1531,7 @@
+         books = Book.objects.annotate(Count('authors')).filter(
+             Q(authors__in=authors) | Q(authors__count__gt=2)
+         )
+-    self.assertEqual(set(books), {self.b1, self.b3})
++        self.assertEqual(set(books), {self.b1, self.b3})
+         self.assertEqual(set(books), {self.b1, self.b4})
+ 
+ 

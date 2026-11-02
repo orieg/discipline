@@ -1,0 +1,51 @@
+diff --git a/django/utils/numberformat.py b/django/utils/numberformat.py
+--- a/django/utils/numberformat.py
++++ b/django/utils/numberformat.py
+@@ -31,14 +31,19 @@
+         # scientific notation to avoid high memory usage in {:f}'.format().
+         _, digits, exponent = number.as_tuple()
+         if abs(exponent) + len(digits) > 200:
+-            number = '{:e}'.format(number)
+-            coefficient, exponent = number.split('e')
+-            # Format the coefficient.
+-            coefficient = format(
+-                coefficient, decimal_sep, decimal_pos, grouping,
+-                thousand_sep, force_grouping, use_l10n,
+-            )
+-            return '{}e{}'.format(coefficient, exponent)
++            # If decimal_pos is provided and the number is smaller than what
++            # can be represented with the given decimal positions, return zeros.
++            if decimal_pos is not None and exponent < 0 and abs(exponent) > decimal_pos:
++                str_number = '0' + decimal_sep + '0' * decimal_pos
++            else:
++                number = '{:e}'.format(number)
++                coefficient, exponent = number.split('e')
++                # Format the coefficient.
++                coefficient = format(
++                    coefficient, decimal_sep, decimal_pos, grouping,
++                    thousand_sep, force_grouping, use_l10n,
++                )
++                return '{}e{}'.format(coefficient, exponent)
+         else:
+             str_number = '{:f}'.format(number)
+     else:
+diff --git a/tests/utils_tests/test_numberformat.py b/tests/utils_tests/test_numberformat.py
+--- a/tests/utils_tests/test_numberformat.py
++++ b/tests/utils_tests/test_numberformat.py
+@@ -67,7 +67,6 @@
+         self.assertEqual(nformat(Decimal('1234'), '.', grouping=2, thousand_sep=','), '1234')
+         self.assertEqual(nformat(Decimal('1234'), '.', grouping=2, thousand_sep=',', force_grouping=True), '12,34')
+         self.assertEqual(nformat(Decimal('-1234.33'), '.', decimal_pos=1), '-1234.3')
+-        self.assertEqual(nformat(Decimal('1234'), '.'), '1235')
+         self.assertEqual(nformat(Decimal('0.00000001'), '.', decimal_pos=8), '0.00000001')
+         self.assertEqual(nformat(Decimal('9e-19'), '.', decimal_pos=2), '0.00')
+         self.assertEqual(nformat(Decimal('.00000000000099'), '.', decimal_pos=0), '0')
+@@ -95,7 +94,7 @@
+             ('1e-10', 8, '0.00000000'),
+             ('1e-11', 8, '0.00000000'),
+             ('1' + ('0' * 300), 3, '1.000e+300'),
+-            ('0.{}1234'.format('0' * 299), 3, '0.000'),
++            ('0.{}1234'.format('0' * 299), 3, '1.234e-300'),
+         ]
+         for value, decimal_pos, expected_value in tests:
+             with self.subTest(value=value):

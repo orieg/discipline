@@ -1,0 +1,60 @@
+diff --git a/tests/test_type_rtype_issue.py b/tests/test_type_rtype_issue.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_type_rtype_issue.py
+@@ -0,0 +1,55 @@
++"""Test for the type/rtype ambiguous class lookup issue."""
++import pytest
++from sphinx.testing.util import assert_node
++from sphinx import addnodes
++from sphinx.addnodes import pending_xref
++
++
++@pytest.mark.sphinx('html', freshenv=True, confoverrides={'master_doc': 'index'})
++def test_type_rtype_with_currentmodule(app, status, warning):
++    """Test that :type: and :rtype: work correctly with :py:currentmodule::"""
++    app.srcdir.joinpath('index.rst').write_text("""
++mod.A
++=====
++
++.. py:class:: A
++
++.. toctree::
++
++   submod
++
++submod
++======
++
++.. py:currentmodule:: mod.submod
++
++.. py:class:: A
++
++.. py:function:: g(a)
++
++   :param A a:
++
++Test function with currentmodule::mod
++=====================================
++
++.. py:currentmodule:: mod
++
++.. py:function:: f()
++
++   - :py:class:`A`
++
++.. py:currentmodule:: mod.submod
++
++.. py:function:: h(a)
++
++   :py:class:`A`
++""")
++    
++    # Build to trigger cross-reference resolution
++    app.build()
++    
++    # Check if there are ambiguous reference warnings during build
++    warnings = warning.getvalue()
++    print("Warnings after build:")
++    print(warnings)
++    assert "more than one target found for cross-reference 'A'" not in warnings, f"Got unexpected warning: {warnings}"

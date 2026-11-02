@@ -1,0 +1,21 @@
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -1661,11 +1661,17 @@
+         saner null handling, and is easier for the backend's optimizer to
+         handle.
+         """
++        import sys
++        print(f"DEBUG split_exclude: filter_expr={filter_expr}", file=sys.stderr)
++        print(f"DEBUG split_exclude: names_with_path={names_with_path}", file=sys.stderr)
++        print(f"DEBUG split_exclude: self._filtered_relations={self._filtered_relations}", file=sys.stderr)
+         filter_lhs, filter_rhs = filter_expr
+         if isinstance(filter_rhs, F):
+             filter_expr = (filter_lhs, OuterRef(filter_rhs.name))
+         # Generate the inner query.
+         query = Query(self.model)
++        query._filtered_relations = self._filtered_relations.copy()
++        print(f"DEBUG split_exclude: before add_filter, query._filtered_relations={query._filtered_relations}", file=sys.stderr)
+         query.add_filter(filter_expr)
+         query.clear_ordering(True)
+         # Try to have as simple as possible subquery -> trim leading joins from

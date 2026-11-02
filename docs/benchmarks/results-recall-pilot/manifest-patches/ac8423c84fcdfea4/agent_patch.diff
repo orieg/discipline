@@ -1,0 +1,21 @@
+diff --git a/sphinx/cmd/quickstart.py b/sphinx/cmd/quickstart.py
+--- a/sphinx/cmd/quickstart.py
++++ b/sphinx/cmd/quickstart.py
+@@ -148,6 +148,8 @@
+         x = term_input(prompt).strip()
+         if default and not x:
+             x = default
++        elif not x and default == '':
++            return x  # Allow empty input when default is empty (for exit)
+         try:
+             x = validator(x)
+         except ValidationError as err:
+@@ -225,7 +227,7 @@
+         d['path'] = do_prompt(__('Please enter a new root path (or just Enter to exit)'),
+                               '', is_path)
+         if not d['path']:
+-            sys.exit(1)
++            raise ValueError('')
+ 
+     if 'sep' not in d:
+         print()

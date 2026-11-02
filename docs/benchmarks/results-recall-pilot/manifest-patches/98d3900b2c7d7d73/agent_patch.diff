@@ -1,0 +1,42 @@
+diff --git a/astropy/utils/introspection.py b/astropy/utils/introspection.py
+--- a/astropy/utils/introspection.py
++++ b/astropy/utils/introspection.py
+@@ -13,6 +13,15 @@
+            'isinstancemethod']
+ 
+ 
++try:
++    from packaging.version import parse as parse_version
++except ImportError:
++    try:
++        from pkg_resources import parse_version
++    except ImportError:
++        parse_version = None
++
++
+ __doctest_skip__ = ['find_current_module']
+ 
+ 
+@@ -139,10 +148,19 @@
+     else:
+         have_version = resolve_name(module.__name__, version_path)
+ 
+-    if inclusive:
+-        return LooseVersion(have_version) >= LooseVersion(version)
++    # Use a proper version parser if available to avoid bugs in
++    # distutils.version.LooseVersion (e.g., TypeError when comparing
++    # versions like '1.14.3' >= '1.14dev')
++    if parse_version is not None:
++        if inclusive:
++            return parse_version(have_version) >= parse_version(version)
++        else:
++            return parse_version(have_version) > parse_version(version)
+     else:
+-        return LooseVersion(have_version) > LooseVersion(version)
++        if inclusive:
++            return LooseVersion(have_version) >= LooseVersion(version)
++        else:
++            return LooseVersion(have_version) > LooseVersion(version)
+ 
+ 
+ def find_current_module(depth=1, finddiff=False):

@@ -1,0 +1,37 @@
+diff --git a/sympy/combinatorics/homomorphisms.py b/sympy/combinatorics/homomorphisms.py
+--- a/sympy/combinatorics/homomorphisms.py
++++ b/sympy/combinatorics/homomorphisms.py
+@@ -333,14 +333,27 @@
+             # both indices
+             while i < len(r):
+                 power = r_arr[j][1]
+-                if isinstance(domain, PermutationGroup) and r[i] in gens:
+-                    s = domain.generators[gens.index(r[i])]
++                if isinstance(domain, PermutationGroup):
++                    if r[i] in gens:
++                        # r[i] is a positive generator
++                        s = domain.generators[gens.index(r[i])]
++                        w = w*images[s]**power
++                    elif r[i]**-1 in gens:
++                        # r[i] is an inverse of a generator
++                        gen = r[i]**-1
++                        s = domain.generators[gens.index(gen)]
++                        w = w*images[s]**power
++                    else:
++                        # This should not happen for valid relators
++                        i += abs(power)
++                        j += 1
++                        continue
+                 else:
+                     s = r[i]
+-                if s in images:
+-                    w = w*images[s]**power
+-                elif s**-1 in images:
+-                    w = w*images[s**-1]**power
++                    if s in images:
++                        w = w*images[s]**power
++                    elif s**-1 in images:
++                        w = w*images[s**-1]**power
+                 i += abs(power)
+                 j += 1
+             return w

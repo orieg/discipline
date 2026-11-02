@@ -1,0 +1,80 @@
+diff --git a/src/_pytest/mark/structures.py b/src/_pytest/mark/structures.py
+--- a/src/_pytest/mark/structures.py
++++ b/src/_pytest/mark/structures.py
+@@ -355,12 +355,64 @@
+         return self.with_args(*args, **kwargs)
+ 
+ 
+-def get_unpacked_marks(obj: object) -> Iterable[Mark]:
+-    """Obtain the unpacked marks that are stored on an object."""
++def get_unpacked_marks(
++    obj: object, consider_mro: bool = True
++) -> Iterable[Mark]:
++    """Obtain the unpacked marks that are stored on an object.
++
++    :param obj:
++        The object to get marks from.
++    :param consider_mro:
++        Whether to consider marks from base classes in the MRO.
++        If True, marks are collected from the object and all classes in its MRO.
++        If False, only the object's own marks are returned.
++    """
+     mark_list = getattr(obj, "pytestmark", [])
+     if not isinstance(mark_list, list):
+         mark_list = [mark_list]
+-    return normalize_mark_list(mark_list)
++
++    if not consider_mro:
++        return list(normalize_mark_list(mark_list))
++
++    # Collect marks from all classes in MRO, but insert the class's own marks
++    # after the first base class's marks (to handle multiple inheritance correctly).
++    mro = getattr(obj, "__mro__", None)
++    if mro is None:
++        # obj is not a class, just return the marks
++        return list(normalize_mark_list(mark_list))
++
++    # Get own marks first (these are in mark_list)
++    own_marks = list(normalize_mark_list(mark_list))
++
++    # Collect marks from base classes in MRO order, inserting own marks
++    # after the first parent's marks (to get the expected order A, C, B for C(A,B))
++    all_marks = []
++    for i, cls in enumerate(mro[1:]):  # Skip the class itself
++        cls_mark_list = getattr(cls, "pytestmark", [])
++        if not isinstance(cls_mark_list, list):
++            cls_mark_list = [cls_mark_list]
++        # Insert own marks after the first base class's marks
++        if i == 0:
++            all_marks.extend(normalize_mark_list(cls_mark_list))
++            all_marks.extend(own_marks)
++        else:
++            all_marks.extend(normalize_mark_list(cls_mark_list))
++
++    return all_marks
++
++
++def _get_marks_from_obj(obj: object) -> List[Mark]:
++    """Get only the marks stored directly on the object (not from MRO).
++
++    This is used internally to get the object's own marks for storage purposes.
++    """
++    # Use __dict__ to access the object's own attributes directly,
++    # bypassing the MRO. This ensures we only get marks that are
++    # directly set on this object, not inherited from base classes.
++    mark_list = obj.__dict__.get("pytestmark", [])
++    if not isinstance(mark_list, list):
++        mark_list = [mark_list]
++    return list(normalize_mark_list(mark_list))
+ 
+ 
+ def normalize_mark_list(
+@@ -388,7 +440,7 @@
+     assert isinstance(mark, Mark), mark
+     # Always reassign name to avoid updating pytestmark in a reference that
+     # was only borrowed.
+-    obj.pytestmark = [*get_unpacked_marks(obj), mark]
++    obj.pytestmark = [*_get_marks_from_obj(obj), mark]
+ 
+ 
+ # Typing for builtin pytest marks. This is cheating; it gives builtin marks

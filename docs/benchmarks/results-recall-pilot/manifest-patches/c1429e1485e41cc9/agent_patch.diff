@@ -1,0 +1,12 @@
+diff --git a/django/core/management/commands/runserver.py b/django/core/management/commands/runserver.py
+--- a/django/core/management/commands/runserver.py
++++ b/django/core/management/commands/runserver.py
+@@ -98,6 +98,8 @@
+             self.addr, _ipv4, _ipv6, _fqdn, self.port = m.groups()
+             if not self.port.isdigit():
+                 raise CommandError("%r is not a valid port number." % self.port)
++            if self.addr == "0":
++                self.addr = ""
+             if self.addr:
+                 if _ipv6:
+                     self.addr = self.addr[1:-1]

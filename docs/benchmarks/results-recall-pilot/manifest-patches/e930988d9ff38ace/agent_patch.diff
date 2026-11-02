@@ -1,0 +1,29 @@
+diff --git a/sklearn/model_selection/_split.py b/sklearn/model_selection/_split.py
+--- a/sklearn/model_selection/_split.py
++++ b/sklearn/model_selection/_split.py
+@@ -651,10 +651,23 @@
+         # NOTE: Passing the data corresponding to ith class say X[y==class_i]
+         # will break when the data is not 100% stratifiable for all classes.
+         # So we pass np.zeroes(max(c, n_splits)) as data to the KFold
++        if rng is None:
++            per_cls_random_state = [None] * len(y_counts)
++        elif isinstance(rng, (numbers.Integral, np.integer)):
++            per_cls_random_state = [rng + i for i in range(len(y_counts))]
++        elif isinstance(rng, np.random.RandomState):
++            # Use the RandomState to generate different seeds for each class
++            # We extract scalars from the array to avoid passing arrays as seeds
++            per_cls_random_state = [int(s) for s in rng.randint(
++                np.iinfo(np.int32).max, size=len(y_counts))]
++        else:
++            raise ValueError("Invalid random_state. Expected None, int, "
++                             "or np.random.RandomState.")
++
+         per_cls_cvs = [
+             KFold(self.n_splits, shuffle=self.shuffle,
+-                  random_state=rng).split(np.zeros(max(count, self.n_splits)))
+-            for count in y_counts]
++                  random_state=rs).split(np.zeros(max(count, self.n_splits)))
++            for count, rs in zip(y_counts, per_cls_random_state)]
+ 
+         test_folds = np.zeros(n_samples, dtype=np.int)
+         for test_fold_indices, per_cls_splits in enumerate(zip(*per_cls_cvs)):

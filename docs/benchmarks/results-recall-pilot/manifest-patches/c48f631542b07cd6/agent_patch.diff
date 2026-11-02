@@ -1,0 +1,21 @@
+diff --git a/sympy/codegen/ast.py b/sympy/codegen/ast.py
+--- a/sympy/codegen/ast.py
++++ b/sympy/codegen/ast.py
+@@ -895,7 +895,6 @@
+ 
+     """
+     __slots__ = ('text',)
+-    not_in_args = ['text']
+     is_Atom = True
+ 
+     @classmethod
+@@ -907,6 +906,9 @@
+     def _sympystr(self, printer, *args, **kwargs):
+         return self.text
+ 
++    def _hashable_content(self):
++        return (self.text,)
++
+ 
+ class QuotedString(String):
+     """ Represents a string which should be printed with quotes. """

@@ -1,0 +1,47 @@
+diff --git a/sympy/polys/polytools.py b/sympy/polys/polytools.py
+--- a/sympy/polys/polytools.py
++++ b/sympy/polys/polytools.py
+@@ -5877,17 +5877,42 @@
+ def _sorted_factors(factors, method):
+     """Sort a list of ``(expr, exp)`` pairs. """
+     if method == 'sqf':
++        # For square-free factorization, combine factors with the same exponent
++        groups = {}
++        for poly, exp in factors:
++            if exp not in groups:
++                groups[exp] = []
++            groups[exp].append(poly)
++
++        result = []
++        for exp in sorted(groups.keys()):
++            polys = groups[exp]
++            if len(polys) == 1:
++                result.append((polys[0], exp))
++            else:
++                # Multiply all polynomials with the same exponent
++                from sympy.polys.densearith import dup_mul
++                from sympy.polys.densebasic import dup_strip
++                from sympy.polys.domains import ZZ
++                combined = polys[0]
++                for p in polys[1:]:
++                    combined = combined.mul(p)
++                result.append((combined, exp))
++
++        # Sort by exponent, then by degree, then by generators, then by representation
+         def key(obj):
+             poly, exp = obj
+             rep = poly.rep.rep
+             return (exp, len(rep), len(poly.gens), rep)
++
++        return sorted(result, key=key)
+     else:
+         def key(obj):
+             poly, exp = obj
+             rep = poly.rep.rep
+             return (len(rep), len(poly.gens), exp, rep)
+ 
+-    return sorted(factors, key=key)
++        return sorted(factors, key=key)
+ 
+ 
+ def _factors_product(factors):
