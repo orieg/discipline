@@ -3840,6 +3840,41 @@ fn test_floor_counts_tests_that_run_not_tests_that_exist() {
     assert!(notes.contains("tests/test_broken.py"), "{notes}");
 }
 
+/// The static counts of `test-floor` extract a file the change leaves alone once for
+/// both sides (#994). Through the binary, the base and head counts still stand for each
+/// side's own files: a test removed from an edited file and the tests of a deleted file
+/// are missing from the head count, an added file's are in it, and the unchanged files
+/// count on both sides.
+#[test]
+fn test_floor_counts_each_side_when_unchanged_files_are_counted_once() {
+    let tests = |names: &[&str]| -> String {
+        names
+            .iter()
+            .map(|n| format!("#[test]\nfn {n}() {{ assert_eq!({n}(), 1); }}\n"))
+            .collect()
+    };
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("tests/unchanged.rs", &tests(&["u1", "u2"]));
+    repo.write("tests/changed.rs", &tests(&["c1", "c2", "c3"]));
+    repo.write("tests/gone.rs", &tests(&["g1", "g2"]));
+    repo.commit("test: seven");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write("tests/changed.rs", &tests(&["c1"]));
+    repo.git(&["rm", "-q", "tests/gone.rs"]);
+    repo.write("tests/added.rs", &tests(&["a1"]));
+    repo.commit("test: rework\n\nallow-test-delete: tests/gone.rs merged into changed.rs");
+    let run = repo.check(&[]);
+    assert_eq!(run.titles("test-floor"), vec!["Test Count Below Floor"]);
+    // `Repo::new` holds two tests of its own (`tests/a.rs`), unchanged on both sides.
+    let found = run.outcome("test-floor").to_string();
+    assert!(
+        found.contains("Workspace test count (6) dropped below base ref count (9)"),
+        "{found}"
+    );
+    assert_eq!(run.outcome("test-floor")["examined"], 6, "{found}");
+}
+
 // ---- sandbox-config ---------------------------------------------------------
 
 /// A CI job or service container made privileged, given host namespaces or capabilities, or
