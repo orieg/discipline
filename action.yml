@@ -93,6 +93,14 @@ inputs:
     description: 'Base URL of the release store, for mirrors: https://, file://, or http:// to a loopback address. Set DISCIPLINE_INSTALL_ALLOW_INSECURE_HTTP=1 in the environment to accept another cleartext mirror.'
     required: false
     default: 'https://github.com/orieg/discipline/releases'
+  require_provenance:
+    description: 'Fail the install, before the binary runs, when its build provenance cannot be verified (provenance output unverified). A binary_path binary is accepted. Set it on a mirror install once the mirror serves discipline.intoto.jsonl and the runner has gh.'
+    required: false
+    default: 'false'
+  trusted_root:
+    description: 'Path on the runner to a Sigstore trusted root (the output of gh attestation trusted-root) for the bundle check of a mirror install, so it needs no network. Never take it from the mirror itself. Default: Sigstore TUF repository, online.'
+    required: false
+    default: ''
   install_only:
     description: 'Install discipline and put it on PATH for the steps that follow, without running a check. For `.github/workflows/copilot-setup-steps.yml`, so the hooks of Copilot cloud agent find the binary.'
     required: false
@@ -154,7 +162,7 @@ outputs:
     description: 'Path of the JSON report'
     value: ${{ steps.run.outputs.report }}
   provenance:
-    description: 'How the binary was checked: verified (the build provenance attestation of the discipline release workflow), unverified (SHA256SUMS of the release store only: a mirror, another forge, or no gh), or local (binary_path)'
+    description: 'How the binary was checked: verified (the build provenance attestation of the discipline release workflow, from the GitHub API or from the Sigstore bundle discipline.intoto.jsonl of a mirror), unverified (SHA256SUMS of the release store only: no gh, or a mirror without the bundle), or local (binary_path)'
     value: ${{ steps.install.outputs.provenance }}
   install_error:
     description: 'Why installing the binary failed (empty on success)'
@@ -173,6 +181,8 @@ runs:
         INPUT_VERSION: ${{ inputs.version }}
         INPUT_BINARY_PATH: ${{ inputs.binary_path }}
         INPUT_DOWNLOAD_URL: ${{ inputs.download_url }}
+        INPUT_REQUIRE_PROVENANCE: ${{ inputs.require_provenance }}
+        INPUT_TRUSTED_ROOT: ${{ inputs.trusted_root }}
         ACTION_REF: ${{ github.action_ref }}
         GH_TOKEN: ${{ github.token }}
       run: |
@@ -277,27 +287,51 @@ runs:
           fi
           [ "${expected}" = "${actual}" ] || fail "checksum mismatch for ${archive}: expected ${expected}, got ${actual}"
 
-          # provenance:begin (tests/test_action_version.rs runs these lines)
+          # provenance:begin (tests/test_action_version.rs runs these lines, through probe:end)
           # SHA256SUMS comes from the same release as the archive, so replacing both
           # passes the checksum. The build provenance attestation cannot be replaced
           # that way: it must be signed by this repository's release workflow, for the
-          # requested tag. Checked on github.com with the default release store and
-          # `gh` on the runner; elsewhere the checksum is the check, and a notice says so.
+          # requested tag. On github.com with the default release store and a token, `gh`
+          # reads it from the API. Elsewhere, `gh` checks the release's Sigstore bundle
+          # (discipline.intoto.jsonl): a mirror can serve it but cannot forge it. The
+          # trusted root is Sigstore's, online, or the operator's `trusted_root`, never
+          # the mirror's: whoever supplies the root chooses the CA.
+          provenance=unverified
+          signer=(--repo orieg/discipline
+            --signer-workflow orieg/discipline/.github/workflows/release.yml)
           if [ "${GITHUB_SERVER_URL:-}" = "https://github.com" ] \
             && [ "${INPUT_DOWNLOAD_URL}" = "https://github.com/orieg/discipline/releases" ] \
             && [ -n "${GH_TOKEN:-}" ] && command -v gh >/dev/null 2>&1; then
-            attest=(gh attestation verify "${dir}/${archive}" --repo orieg/discipline
-              --signer-workflow orieg/discipline/.github/workflows/release.yml)
+            attest=(gh attestation verify "${dir}/${archive}" "${signer[@]}")
             if [ -n "${version}" ]; then
               attest+=(--source-ref "refs/tags/${version}")
             fi
             "${attest[@]}" > /dev/null 2> "${dir}/attestation.err" \
               || fail "build provenance of ${archive} (${version:-latest}) did not verify: $(tail -n 1 "${dir}/attestation.err")"
-            echo "provenance=verified" >> "${GITHUB_OUTPUT:-/dev/null}"
-          else
-            echo "::notice title=discipline install::build provenance not verified (needs github.com, the default download_url and gh); checked against SHA256SUMS only"
-            echo "provenance=unverified" >> "${GITHUB_OUTPUT:-/dev/null}"
+            provenance=verified
+          elif command -v gh >/dev/null 2>&1 \
+            && fetch "${base}/discipline.intoto.jsonl" "${dir}/discipline.intoto.jsonl" 2> /dev/null; then
+            # Without --source-ref any older signed release would pass.
+            [ -n "${version}" ] || fail "the Sigstore bundle of ${archive} needs a release tag to check against: set the version input"
+            attest=(gh attestation verify "${dir}/${archive}" --bundle "${dir}/discipline.intoto.jsonl"
+              "${signer[@]}" --source-ref "refs/tags/${version}")
+            if [ -n "${INPUT_TRUSTED_ROOT:-}" ]; then
+              [ -r "${INPUT_TRUSTED_ROOT}" ] || fail "trusted_root '${INPUT_TRUSTED_ROOT}' is not a readable file"
+              attest+=(--custom-trusted-root "${INPUT_TRUSTED_ROOT}")
+            fi
+            # The forge's token is not GitHub's: keep it away from gh.
+            env -u GH_TOKEN -u GITHUB_TOKEN "${attest[@]}" > /dev/null 2> "${dir}/attestation.err" \
+              || fail "the Sigstore bundle of ${archive} (${version}) did not verify: $(tail -n 1 "${dir}/attestation.err")"
+            provenance=verified
           fi
+          if [ "${provenance}" = "unverified" ]; then
+            [ "${INPUT_REQUIRE_PROVENANCE:-false}" != "true" ] \
+              || fail "require_provenance: build provenance of ${archive} could not be checked (needs gh, and on a mirror discipline.intoto.jsonl beside the archive); the binary was not run"
+            level=notice
+            [ "${GITHUB_SERVER_URL:-}" = "https://github.com" ] && level=warning
+            echo "::${level} title=discipline install::build provenance not verified (needs gh, and on a mirror discipline.intoto.jsonl beside the archive); checked against SHA256SUMS only"
+          fi
+          echo "provenance=${provenance}" >> "${GITHUB_OUTPUT:-/dev/null}"
           # provenance:end
 
           tar --no-same-owner --no-same-permissions -xzf "${dir}/${archive}" -C "${dir}"
@@ -305,7 +339,9 @@ runs:
           [ -x "${bin}" ] || fail "archive did not contain an executable 'discipline'"
         fi
 
-        "${bin}" --version
+        # The job token is not the binary's until the check runs it.
+        env -u GH_TOKEN "${bin}" --version
+        # probe:end
         echo "bin=${bin}" >> "${GITHUB_OUTPUT}"
         dirname "${bin}" >> "${GITHUB_PATH}"
 
