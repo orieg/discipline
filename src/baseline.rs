@@ -784,8 +784,8 @@ pub fn run_cli(mut args: crate::cli::BaselineArgs) -> Result<bool> {
     }
 
     let commits = git.commits()?;
-    let (directives, directive_notes) =
-        crate::tokens::extract_directives_for_config(None, &commits, &config);
+    let read = crate::tokens::read_directives(None, &commits, &[], &config);
+    let (directives, directive_notes) = (read.active, read.notes);
 
     let ctx = Context {
         config: &config,

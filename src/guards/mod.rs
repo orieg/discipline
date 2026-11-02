@@ -813,7 +813,7 @@ pub struct Context<'a> {
     /// `directives.sources` ([`pr_checklist::select_declaration_body`]).
     pub declaration_body: pr_checklist::DeclarationBody,
     pub directives: Vec<crate::tokens::ParsedDirective>,
-    pub directive_notes: Vec<String>,
+    pub directive_notes: Vec<crate::tokens::DirectiveNote>,
     pub bench_provenance: Option<String>,
     pub allow_cross_host_bench: bool,
     pub bench_base_file: Option<std::path::PathBuf>,
@@ -1143,142 +1143,7 @@ pub fn run_checks(
         }
     }
 
-    let mut run_directive_notes: Vec<String> = Vec::new();
-    for note in &ctx.directive_notes {
-        // Where a pushed commit came from: about the run's sources, not any gate's
-        // directives, so it is reported once for the run. Decided before the words in the
-        // note are read for a gate: it carries an author login and can carry a forge's
-        // refusal, and neither names a directive (#568).
-        if crate::tokens::is_merged_source_note(note) {
-            if !run_directive_notes.contains(note) {
-                run_directive_notes.push(note.clone());
-            }
-            continue;
-        }
-        // A refused hidden directive's note names the directive and nothing it says (#362):
-        // it belongs to that directive's gate alone.
-        let hidden_gate = note
-            .strip_prefix("hidden directive `")
-            .and_then(|rest| rest.split_once('`'))
-            .and_then(|(name, _)| crate::tokens::spec_for_directive(name))
-            .map(|spec| spec.gate);
-        let target_gate = if let Some(gate) = hidden_gate {
-            gate
-        } else if note.contains("removes") || note.contains("deletes") {
-            "deletion-rationale"
-        } else if note.contains("allow-assertion-drop") {
-            "assertion-reduction"
-        } else if note.contains("allow-ignore") {
-            "ignored-tests"
-        } else if note.contains("allow-gate-weakening") {
-            "config-integrity"
-        } else if note.contains("allow-golden-update") {
-            "golden-output"
-        } else if note.contains("allow-regression") {
-            "bench-regression"
-        } else if note.contains("allow-command") {
-            "command"
-        } else if note.contains("allow-dependency") {
-            "dependency-delta"
-        } else if note.contains("allow-test-shrink") || note.contains("allow-floor-drop") {
-            "test-floor"
-        } else if note.contains("allow-test-budget") {
-            "test-budget"
-        } else if note.contains("allow-ci-weakening")
-            || note.contains("allow-unpinned-action")
-            || note.contains("allow-ci-change")
-        {
-            "ci-integrity"
-        } else if note.contains("allow-archive-leak") {
-            "archive-contents"
-        } else if note.contains("allow-manifest-drift") {
-            "manifest-sync"
-        } else if note.contains("allow-version-mismatch") {
-            "version-lockstep"
-        } else if note.contains("allow-scope") {
-            "scope-confinement"
-        } else if note.contains("allow-build-hook") {
-            "build-hooks"
-        } else if note.contains("allow-commit-provenance") {
-            "commit-provenance"
-        } else if note.contains("allow-citation-metadata") {
-            "citation-metadata"
-        } else if note.contains("allow-agent-instructions") {
-            "instruction-smuggling"
-        } else if note.contains("allow-swallow") {
-            "error-swallowing"
-        } else if note.contains("allow-stub") {
-            "stub-bodies"
-        } else if note.contains("allow-harness-tampering") {
-            "harness-tampering"
-        } else if note.contains("allow-toolchain-weakening") {
-            "toolchain-config"
-        } else if note.contains("allow-sandbox-widening") {
-            "sandbox-config"
-        } else if note.contains("allow-suppression") {
-            "suppression-delta"
-        } else if note.contains("allow-checklist") {
-            "pr-checklist"
-        } else if note.contains("allow-unsafe") {
-            "unsafe-budget"
-        } else if note.contains("allow-msrv") {
-            "msrv"
-        } else if note.contains("allow-miri") {
-            "miri"
-        } else if note.contains("allow-sanitizers") {
-            "sanitizers"
-        } else if note.contains("allow-vacuous-test") {
-            "vacuous-tests"
-        } else if note.contains("allow-claim-label") {
-            "claim-labels"
-        } else if note.contains("allow-nul") || note.contains("allow-corrupt") {
-            "assertion-reduction"
-        } else {
-            ""
-        };
-        for o in &mut outcomes {
-            if target_gate.is_empty() {
-                if matches!(
-                    o.gate,
-                    "deletion-rationale"
-                        | "assertion-reduction"
-                        | "ignored-tests"
-                        | "config-integrity"
-                        | "toolchain-config"
-                        | "sandbox-config"
-                        | "stub-bodies"
-                        | "harness-tampering"
-                        | "error-swallowing"
-                        | "instruction-smuggling"
-                        | "commit-provenance"
-                        | "citation-metadata"
-                        | "build-hooks"
-                        | "golden-output"
-                        | "bench-regression"
-                        | "command"
-                        | "dependency-delta"
-                        | "test-budget"
-                        | "test-floor"
-                        | "ci-integrity"
-                        | "archive-contents"
-                        | "manifest-sync"
-                        | "version-lockstep"
-                        | "scope-confinement"
-                        | "suppression-delta"
-                        | "pr-checklist"
-                        | "unsafe-budget"
-                        | "msrv"
-                        | "miri"
-                        | "sanitizers"
-                        | "claim-labels"
-                ) {
-                    o.notes.push(note.clone());
-                }
-            } else if o.gate == target_gate {
-                o.notes.push(note.clone());
-            }
-        }
-    }
+    let run_directive_notes = place_directive_notes(&mut outcomes, &ctx.directive_notes);
 
     // A directive that names another subject and only mentions this one further on does
     // not cover it (`tokens::find_override`). The gate that still reports a finding says
@@ -2116,9 +1981,146 @@ pub(crate) mod test_support {
     }
 }
 
+/// Puts each directive note in the notes of the gate it is about, and returns the notes
+/// reported once for the run.
+fn place_directive_notes(
+    outcomes: &mut [GateOutcome],
+    notes: &[crate::tokens::DirectiveNote],
+) -> Vec<String> {
+    let mut run_directive_notes: Vec<String> = Vec::new();
+    for note in notes {
+        // Where a pushed commit came from: about the run's sources, not any gate's
+        // directives, so it is reported once for the run (#568).
+        if crate::tokens::is_merged_source_note(&note.text) {
+            if !run_directive_notes.contains(&note.text) {
+                run_directive_notes.push(note.text.clone());
+            }
+            continue;
+        }
+        // A note about one directive, a refused hidden one among them (#362), carries
+        // that directive's gate from where it was made; its text is never read for a
+        // directive name (#983). A note about a source as a whole goes to every gate a
+        // directive can lift.
+        let noted = |o: &GateOutcome| match note.gate {
+            Some(gate) => o.gate == gate,
+            None => matches!(
+                o.gate,
+                "deletion-rationale"
+                    | "assertion-reduction"
+                    | "ignored-tests"
+                    | "config-integrity"
+                    | "toolchain-config"
+                    | "sandbox-config"
+                    | "stub-bodies"
+                    | "harness-tampering"
+                    | "error-swallowing"
+                    | "instruction-smuggling"
+                    | "commit-provenance"
+                    | "citation-metadata"
+                    | "build-hooks"
+                    | "golden-output"
+                    | "bench-regression"
+                    | "command"
+                    | "dependency-delta"
+                    | "test-budget"
+                    | "test-floor"
+                    | "ci-integrity"
+                    | "archive-contents"
+                    | "manifest-sync"
+                    | "version-lockstep"
+                    | "scope-confinement"
+                    | "suppression-delta"
+                    | "pr-checklist"
+                    | "unsafe-budget"
+                    | "msrv"
+                    | "miri"
+                    | "sanitizers"
+                    | "claim-labels"
+            ),
+        };
+        for o in outcomes.iter_mut().filter(|o| noted(o)) {
+            o.notes.push(note.text.clone());
+        }
+    }
+    run_directive_notes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn every_gate_outcome() -> Vec<GateOutcome> {
+        GATES.iter().map(|g| GateOutcome::new(g.id)).collect()
+    }
+
+    fn gates_noting(outcomes: &[GateOutcome], text: &str) -> Vec<&'static str> {
+        outcomes
+            .iter()
+            .filter(|o| o.notes.iter().any(|n| n == text))
+            .map(|o| o.gate)
+            .collect()
+    }
+
+    /// Every name of every directive, refused as a hidden directive, is noted on its own
+    /// gate and no other (#983).
+    #[test]
+    fn every_directive_specs_note_reaches_its_own_gate() {
+        let config =
+            crate::config::DisciplineConfig::from_toml_str("[meta]\nversion = 1\nname = \"t\"\n")
+                .unwrap();
+        for spec in crate::tokens::DIRECTIVE_SPECS {
+            for &name in crate::tokens::names_for_directive(spec.canonical) {
+                let body = format!("<!-- {name}: tests/old.rs the helper moved -->");
+                let read = crate::tokens::read_directives(Some(&body), &[], &[], &config);
+                assert!(read.active.is_empty(), "{name}: {:?}", read.active);
+                assert_eq!(read.notes.len(), 1, "{name}: {:?}", read.notes);
+                assert_eq!(read.notes[0].gate, Some(spec.gate), "{name}");
+                let mut outcomes = every_gate_outcome();
+                let run = place_directive_notes(&mut outcomes, &read.notes);
+                assert!(run.is_empty(), "{name}: {run:?}");
+                assert_eq!(
+                    gates_noting(&outcomes, &read.notes[0].text),
+                    vec![spec.gate],
+                    "{name}"
+                );
+            }
+        }
+    }
+
+    /// A note goes to the gate of the directive it is about, whatever other directive's
+    /// name its text carries (#983).
+    #[test]
+    fn a_directive_note_quoting_another_directives_name_stays_on_its_own_gate() {
+        let note = crate::tokens::DirectiveNote {
+            text: "directive `allow-stub` not read: its text says the change removes a branch"
+                .to_string(),
+            gate: Some("stub-bodies"),
+        };
+        let mut outcomes = every_gate_outcome();
+        let run = place_directive_notes(&mut outcomes, std::slice::from_ref(&note));
+        assert!(run.is_empty(), "{run:?}");
+        assert_eq!(gates_noting(&outcomes, &note.text), vec!["stub-bodies"]);
+    }
+
+    /// A note about a source as a whole is on every gate a directive can lift; a note
+    /// about the merged pull requests of a push is reported once for the run.
+    #[test]
+    fn a_note_about_the_sources_is_not_one_gates() {
+        let policy = crate::tokens::DirectiveNote::about_sources(
+            "PR-body directives are disabled by policy; ignored",
+        );
+        let merged = crate::tokens::DirectiveNote::about_sources(
+            "merged-pr-body: commit abc1234567 arrived through merged pull request #7 (author removes)",
+        );
+        let mut outcomes = every_gate_outcome();
+        let run = place_directive_notes(&mut outcomes, &[policy.clone(), merged.clone()]);
+        assert_eq!(run, vec![merged.text.clone()]);
+        assert!(gates_noting(&outcomes, &merged.text).is_empty());
+        let noted = gates_noting(&outcomes, &policy.text);
+        assert!(noted.contains(&"deletion-rationale"), "{noted:?}");
+        assert!(noted.contains(&"claim-labels"), "{noted:?}");
+        assert!(!noted.contains(&"shell-secrets"), "{noted:?}");
+    }
 
     /// The gates a whole-tree run does not evaluate, by `GateInfo::delta_only`: the set is
     /// written out here so that a flag flipped in `config::GATES` fails this test.

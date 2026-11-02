@@ -18,10 +18,10 @@ Discipline provides an official composite GitHub Action at `orieg/discipline@v0`
 A repository that runs the default `ci-integrity` gate must pin third-party actions by commit SHA, so adding `uses: orieg/discipline@v0` is itself an `Unpinned Third-Party Action` error. Pin the action to a commit; a SHA ref runs the binary of the release that commit's `Cargo.toml` names (`version:` under `with:` picks another):
 
 ```yaml
-      - uses: orieg/discipline@<commit-sha> # v0.29.0
+      - uses: orieg/discipline@49f0d47e774244615e084e207784a9a0e6082cd5 # v0.29.0
 ```
 
-The examples below use `@v0` for readability.
+The basic sentinel below is pinned that way and can be copied as it is; the later fragments use `@v0` for readability.
 
 ### Basic Pull Request Sentinel
 
@@ -47,15 +47,16 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # Full history required to reach merge base
+          persist-credentials: false # the job's token can write: keep it out of .git/config
 
       - name: Run Discipline Gatekeeper
-        uses: orieg/discipline@v0
+        uses: orieg/discipline@49f0d47e774244615e084e207784a9a0e6082cd5 # v0.29.0
         env:
           DISCIPLINE_REPORT_SARIF: results.sarif
 
       - name: Upload SARIF Security Findings
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
           sarif_file: results.sarif
 ```
@@ -238,9 +239,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false # the job's token can write: keep it out of .git/config
 
       - name: Run Gatekeeper
-        uses: https://github.com/orieg/discipline@v0
+        uses: https://github.com/orieg/discipline@49f0d47e774244615e084e207784a9a0e6082cd5 # v0.29.0
 ```
 
 ---

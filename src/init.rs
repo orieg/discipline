@@ -179,16 +179,29 @@ impl TestRunner {
             return Some(TestRunner::Gradle);
         }
 
-        // Fallback for Python repositories with requirements or setup.py
+        // Fallback for Python repositories with requirements or setup.py, or a
+        // `tests/test_*.py` layout, pytest's default discovery
         if root.join("requirements.txt").exists()
             || root.join("setup.py").exists()
             || root.join("pyproject.toml").exists()
+            || has_pytest_test_file(&root.join("tests"))
         {
             return Some(TestRunner::Pytest);
         }
 
         None
     }
+}
+
+/// Whether `dir` holds a `test_*.py` file, the name pytest collects by default.
+fn has_pytest_test_file(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|entries| {
+        entries.flatten().any(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("test_") && name.ends_with(".py")
+        })
+    })
 }
 
 /// Generates the starter `discipline.toml` content for a project.
@@ -219,6 +232,11 @@ pub fn generate_starter(project_name: &str, root: &Path) -> String {
 version = 1
 name = "{project_name}"
 # description = "Brief description of the project"
+# Advisory mode reports findings without failing the run. Uncomment it for a first
+# period of pull requests, and delete it to enforce once their findings are fixed or
+# baselined (`discipline baseline --write`). Setting it loosens every gate, so the change
+# that does carries `allow-gate-weakening: meta <reason>`.
+# mode = "advisory"
 
 # [directives]
 # sources = ["pr-body", "commits", "merged-pr-body"]

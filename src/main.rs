@@ -777,7 +777,12 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
     );
     let (directives, mut directive_notes, refused_hidden_directives) =
         (read.active, read.notes, read.refused_hidden);
-    directive_notes.extend(merged.notes.iter().cloned());
+    directive_notes.extend(
+        merged
+            .notes
+            .iter()
+            .map(discipline::tokens::DirectiveNote::about_sources),
+    );
 
     let had_pr_body = raw_pr_body.is_some();
     let pr_body = if had_pr_body {
