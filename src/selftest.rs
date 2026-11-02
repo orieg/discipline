@@ -7504,6 +7504,24 @@ command = "cargo test"
         },
     ),
     (
+        "test-floor: the tests-only extraction a static count reads equals the projection of the full one",
+        || {
+            use crate::ast::{LanguagePack, TestCounts};
+            let pack = crate::ast::rust::RustPack;
+            let v = crate::ast::AssertVocabulary::default();
+            let src = "#[test]\nfn runs() {\n    assert_eq!(1 + 1, 2);\n}\n\n#[test]\n#[ignore]\nfn off() {}\n\n#[test]\n#[cfg_attr(miri, ignore)]\nfn sometimes() {\n    assert!(true);\n}\n";
+            let full = TestCounts::of(&pack.extract("tests/a.rs", src, &v)?);
+            let tests_only = pack.extract_test_counts("tests/a.rs", src, &v)?;
+            // An assertion inside another macro's tokens, deeper than the tree limit once
+            // read again: both extractions refuse the file.
+            let terms = vec!["1"; crate::ast::source_text::TREE_DEPTH_LIMIT + 8].join(" + ");
+            let deep = format!("#[test]\nfn deep() {{\n    wrap! {{ assert!(f({terms}) > 0) }}\n}}\n");
+            let refused = pack.extract("tests/deep.rs", &deep, &v).is_err()
+                && pack.extract_test_counts("tests/deep.rs", &deep, &v).is_err();
+            Ok(tests_only == full && full.running == 2 && full.ignored == 1 && refused)
+        },
+    ),
+    (
         "test-floor: constant extraction and test count output discrimination",
         || {
             use crate::guards::test_floor::parse_test_count_output;
