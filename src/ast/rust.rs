@@ -56,86 +56,121 @@ impl LanguagePack for RustPack {
     }
 
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
-        let tree = crate::ast::source_text::parse_file_as(
-            &tree_sitter_rust::LANGUAGE.into(),
-            "the Rust",
-            path,
-            src,
-        )?;
-        let root = tree.root_node();
-        crate::ast::source_text::forget_unread_part();
-
-        let (owning_features, manifest_error) =
-            vocab.runner_rules.rust.find_owning_crate_features(path);
-        let mut facts = ParsedFileFacts {
-            has_parse_errors: root.has_error(),
-            ..Default::default()
-        };
-        if let Some(err_path) = manifest_error {
-            facts
-                .notes
-                .push(format!("failed to parse manifest at '{err_path}'"));
-        }
-
-        let anc = Ancestry::new(root);
-        let mut cx = Extractor {
-            dead: super::reach::dead_ranges(root, src, &RS_REACH),
-            src: src.as_bytes(),
-            src_str: src,
-            anc: &anc,
-            lines: src.lines().collect(),
-            line_starts: std::iter::once(0)
-                .chain(src.match_indices('\n').map(|(i, _)| i + 1))
-                .collect(),
-            vocab,
-            comments: Vec::new(),
-            in_fn: 0,
-            in_const: 0,
-            in_test: 0,
-            gates: Vec::new(),
-            test_file: super::functions::test_path(path)
-                || super::functions::declared_test_path(path, &vocab.test_paths),
-            library_helper: false,
-            facts,
-            helpers: std::collections::HashMap::new(),
-            test_calls: Vec::new(),
-            owning_features,
-        };
-        cx.collect_comments(root);
-        cx.visit(root, &mut Vec::new());
-        cx.resolve_same_file_helpers();
-        cx.facts.build_compile_time_test();
-        RUST_PACK.shared_facts(root, &anc, src, path, vocab, &mut cx.facts);
-        RUST_PACK.runner_probes(
-            super::runner_probes::Lang::Rust,
-            root,
-            src,
-            path,
-            vocab,
-            &mut cx.facts,
-        );
-        super::bounds::rust(root, src, &mut cx.facts.tests);
-        super::expectations::rust(root, src, &mut cx.facts.tests);
-        super::caught_assertions::rust(root, &anc, src, &mut cx.facts.tests, vocab);
-        super::caught_assertions::through_helpers(root, src, &mut cx.facts, 1, |helpers| {
-            super::caught_assertions::rust(root, &anc, src, helpers, vocab)
-        });
-        cx.facts.prose = super::prose::extract(
-            root,
-            src,
-            &[
-                "line_comment",
-                "block_comment",
-                "string_literal",
-                "raw_string_literal",
-            ],
-        );
-        cx.facts.budgets = super::budgets::extract(root, src, &RS_BUDGETS);
-        // A macro argument with no tree was not read: its assertion was counted without
-        // being judged, so the file has no facts, as when the file itself has no tree.
-        crate::ast::source_text::unread_part(path)?;
-        Ok(cx.facts)
+        extract_rust(path, src, vocab, Analyses::All)
     }
+
+    fn extract_test_counts(
+        &self,
+        path: &str,
+        src: &str,
+        vocab: &AssertVocabulary,
+    ) -> Result<super::TestCounts> {
+        extract_rust(path, src, vocab, Analyses::TestCounts).map(|f| super::TestCounts::of(&f))
+    }
+}
+
+/// Which analyses [`extract_rust`] runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Analyses {
+    All,
+    /// Only what [`super::TestCounts`] reads: the walk that finds the tests, their
+    /// ignores and the notes, and the call count, which may record a macro argument with
+    /// no tree and so leave the file without facts. The helper, method-check, handler,
+    /// runner-probe, bound, expectation, caught-assertion, prose and budget passes add
+    /// none of those, so they are skipped.
+    TestCounts,
+}
+
+fn extract_rust(
+    path: &str,
+    src: &str,
+    vocab: &AssertVocabulary,
+    analyses: Analyses,
+) -> Result<ParsedFileFacts> {
+    let tree = crate::ast::source_text::parse_file_as(
+        &tree_sitter_rust::LANGUAGE.into(),
+        "the Rust",
+        path,
+        src,
+    )?;
+    let root = tree.root_node();
+    crate::ast::source_text::forget_unread_part();
+
+    let (owning_features, manifest_error) =
+        vocab.runner_rules.rust.find_owning_crate_features(path);
+    let mut facts = ParsedFileFacts {
+        has_parse_errors: root.has_error(),
+        ..Default::default()
+    };
+    if let Some(err_path) = manifest_error {
+        facts
+            .notes
+            .push(format!("failed to parse manifest at '{err_path}'"));
+    }
+
+    let anc = Ancestry::new(root);
+    let mut cx = Extractor {
+        dead: super::reach::dead_ranges(root, src, &RS_REACH),
+        src: src.as_bytes(),
+        src_str: src,
+        anc: &anc,
+        lines: src.lines().collect(),
+        line_starts: std::iter::once(0)
+            .chain(src.match_indices('\n').map(|(i, _)| i + 1))
+            .collect(),
+        vocab,
+        comments: Vec::new(),
+        in_fn: 0,
+        in_const: 0,
+        in_test: 0,
+        gates: Vec::new(),
+        test_file: super::functions::test_path(path)
+            || super::functions::declared_test_path(path, &vocab.test_paths),
+        library_helper: false,
+        facts,
+        helpers: std::collections::HashMap::new(),
+        test_calls: Vec::new(),
+        owning_features,
+    };
+    cx.collect_comments(root);
+    cx.visit(root, &mut Vec::new());
+    if analyses == Analyses::TestCounts {
+        RUST_PACK.count_calls(root, src, vocab, &mut cx.facts.tests);
+        crate::ast::source_text::unread_part(path)?;
+        return Ok(cx.facts);
+    }
+    cx.resolve_same_file_helpers();
+    cx.facts.build_compile_time_test();
+    RUST_PACK.shared_facts(root, &anc, src, path, vocab, &mut cx.facts);
+    RUST_PACK.runner_probes(
+        super::runner_probes::Lang::Rust,
+        root,
+        src,
+        path,
+        vocab,
+        &mut cx.facts,
+    );
+    super::bounds::rust(root, src, &mut cx.facts.tests);
+    super::expectations::rust(root, src, &mut cx.facts.tests);
+    super::caught_assertions::rust(root, &anc, src, &mut cx.facts.tests, vocab);
+    super::caught_assertions::through_helpers(root, src, &mut cx.facts, 1, |helpers| {
+        super::caught_assertions::rust(root, &anc, src, helpers, vocab)
+    });
+    cx.facts.prose = super::prose::extract(
+        root,
+        src,
+        &[
+            "line_comment",
+            "block_comment",
+            "string_literal",
+            "raw_string_literal",
+        ],
+    );
+    cx.facts.budgets = super::budgets::extract(root, src, &RS_BUDGETS);
+    // A macro argument with no tree was not read: its assertion was counted without
+    // being judged, so the file has no facts, as when the file itself has no tree.
+    crate::ast::source_text::unread_part(path)?;
+    Ok(cx.facts)
 }
 
 use super::HelperFacts;

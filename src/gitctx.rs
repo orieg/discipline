@@ -1151,6 +1151,22 @@ impl GitCtx {
         }
     }
 
+    /// The object id of `path` on the base side, when it is a file there whose object
+    /// the repository holds; `None` otherwise. It names the bytes [`Self::base_bytes`]
+    /// reads, without reading them.
+    pub fn base_blob_id(&self, path: &str) -> Result<Option<Oid>> {
+        let Some(tree) = self.base_tree()? else {
+            return Ok(None);
+        };
+        let rel_path = self.normalize_repo_path(path);
+        match tree.get_path(std::path::Path::new(rel_path)) {
+            Ok(entry) if entry.kind() != Some(git2::ObjectType::Blob) => Ok(None),
+            Ok(entry) => Ok(self.repo.odb()?.exists(entry.id()).then(|| entry.id())),
+            Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Content of `path` on the base side; `None` when it did not exist there or is binary.
     pub fn base_content(&self, path: &str) -> Result<Option<String>> {
         let Some(bytes) = self

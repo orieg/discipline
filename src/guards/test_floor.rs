@@ -597,7 +597,7 @@ fn measure_test_count(
     } else if let Some(count) = cmd_count {
         count
     } else {
-        let head = count_workspace_ast_tests(ctx, filter, sides.head()?)?;
+        let head = count_workspace_ast_tests(ctx, filter, sides)?;
         for note in head.notes("head") {
             if !out.notes.contains(&note) {
                 out.notes.push(note);
@@ -652,7 +652,7 @@ fn compare_with_floor(
     } else if reports.base_uncommitted {
         match ctx.config.gates.test_floor.uncommitted_report_fallback {
             UncommittedReportFallback::Static => {
-                let head = count_workspace_ast_tests(ctx, filter, sides.head()?)?;
+                let head = count_workspace_ast_tests(ctx, filter, sides)?;
                 for note in head.notes("head") {
                     if !out.notes.contains(&note) {
                         out.notes.push(note);
@@ -698,7 +698,7 @@ fn verify_static_floor_did_not_drop(
     out: &mut GateOutcome,
 ) -> Result<()> {
     let settings = &ctx.config.gates.test_floor;
-    let base = count_base_workspace_ast_tests(ctx, filter, sides.base()?)?;
+    let base = count_base_workspace_ast_tests(ctx, filter, sides)?;
     for note in base.notes("base") {
         if !out.notes.contains(&note) {
             out.notes.push(note);
@@ -709,7 +709,7 @@ fn verify_static_floor_did_not_drop(
         return Ok(());
     }
 
-    let head = count_workspace_ast_tests(ctx, filter, sides.head()?)?;
+    let head = count_workspace_ast_tests(ctx, filter, sides)?;
     for note in head.notes("head") {
         if !out.notes.contains(&note) {
             out.notes.push(note);
@@ -846,7 +846,7 @@ fn compare_with_base_static_count(
     let settings = &ctx.config.gates.test_floor;
     let measured_count = measured.count;
     // Zero-config ratchet: compare head AST test count against base ref AST test count.
-    let base = count_base_workspace_ast_tests(ctx, filter, sides.base()?)?;
+    let base = count_base_workspace_ast_tests(ctx, filter, sides)?;
     for note in base.notes("base") {
         if !out.notes.contains(&note) {
             out.notes.push(note);
@@ -885,11 +885,13 @@ fn compare_with_base_static_count(
 }
 
 /// The assertion vocabulary of each side, with its runner collection rules, built at
-/// most once for one evaluation of the gate.
+/// most once for one evaluation of the gate, and the files the static counts of that
+/// evaluation have counted.
 struct SideVocabularies<'a, 'c> {
     ctx: &'a Context<'c>,
     base: std::cell::OnceCell<crate::ast::AssertVocabulary>,
     head: std::cell::OnceCell<crate::ast::AssertVocabulary>,
+    counted: CountMemo,
 }
 
 impl<'a, 'c> SideVocabularies<'a, 'c> {
@@ -898,6 +900,7 @@ impl<'a, 'c> SideVocabularies<'a, 'c> {
             ctx,
             base: std::cell::OnceCell::new(),
             head: std::cell::OnceCell::new(),
+            counted: CountMemo::default(),
         }
     }
 
@@ -1145,6 +1148,137 @@ fn find_test_floor_override(
     Ok(None)
 }
 
+/// Where the content of a file a static count reads comes from.
+#[derive(Clone, Copy)]
+enum CountSource<'a> {
+    /// The working tree, under the repository root: read, then named by the git blob id
+    /// of what was read.
+    Worktree(&'a Path),
+    /// The base tree: named by its tree entry, and read only when the file is not
+    /// counted already.
+    Base(&'a crate::gitctx::GitCtx),
+}
+
+/// What each file contributed to the static counts of one evaluation of the gate, by
+/// its path, the git blob id of the content counted and the vocabulary it was counted
+/// with. A count is a function of those three: the parse budget counts steps, not time
+/// (`source_text::parse_within_budget`). So a file the change leaves alone, under the
+/// same vocabulary on both sides, is extracted once rather than once per side; a change
+/// to the vocabulary or its runner rules counts both sides in full. Nothing outlives
+/// the evaluation.
+#[derive(Default)]
+struct CountMemo {
+    /// Each distinct vocabulary counted with. Its index is its fingerprint, so two
+    /// vocabularies share counts only when they are equal.
+    vocabularies: std::cell::RefCell<Vec<crate::ast::AssertVocabulary>>,
+    files: std::cell::RefCell<
+        std::collections::HashMap<(String, git2::Oid, usize), Option<crate::ast::TestCounts>>,
+    >,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Every file a static count extracted, in order, and every file it answered from
+    /// an earlier count of the same content, for the tests that count them.
+    static EXTRACTED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    static REUSED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// Counts every file afresh, as before the memo, for the tests that compare the two.
+    static MEMO_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+impl CountMemo {
+    /// The fingerprint of `v` among the vocabularies of this evaluation.
+    fn fingerprint(&self, v: &crate::ast::AssertVocabulary) -> usize {
+        let mut seen = self.vocabularies.borrow_mut();
+        match seen.iter().position(|kept| kept == v) {
+            Some(i) => i,
+            None => {
+                seen.push(v.clone());
+                seen.len() - 1
+            }
+        }
+    }
+
+    fn enabled() -> bool {
+        #[cfg(test)]
+        if MEMO_OFF.with(|off| off.get()) {
+            return false;
+        }
+        true
+    }
+
+    fn kept(
+        &self,
+        path: &str,
+        id: git2::Oid,
+        fingerprint: usize,
+    ) -> Option<Option<crate::ast::TestCounts>> {
+        if !Self::enabled() {
+            return None;
+        }
+        let kept = self
+            .files
+            .borrow()
+            .get(&(path.to_string(), id, fingerprint))
+            .cloned()?;
+        #[cfg(test)]
+        REUSED.with(|seen| seen.borrow_mut().push(path.to_string()));
+        Some(kept)
+    }
+
+    /// What `path` contributes to a static count read from `source` with `v`.
+    fn file_counts(
+        &self,
+        path: &str,
+        source: CountSource,
+        fingerprint: usize,
+        registry: &crate::ast::LanguageRegistry,
+        v: &crate::ast::AssertVocabulary,
+    ) -> Result<Option<crate::ast::TestCounts>> {
+        let (id, content) = match source {
+            CountSource::Base(git) => {
+                let id = git.base_blob_id(path)?;
+                if let Some(kept) = id.and_then(|id| self.kept(path, id, fingerprint)) {
+                    return Ok(kept);
+                }
+                let content = git.base_content(path)?;
+                // No content (binary) is not what the id names: nothing is kept for it.
+                (id.filter(|_| content.is_some()), content)
+            }
+            CountSource::Worktree(root) => {
+                let content = std::fs::read_to_string(root.join(path)).ok();
+                // Named only as the base side would read the same bytes: text, within
+                // the size the base side reads, so a shared id means the same count.
+                let id = content
+                    .as_deref()
+                    .filter(|c| {
+                        c.len() as u64 <= crate::gitctx::MAX_SOURCE_FILE_BYTES
+                            && !crate::gitctx::is_binary_file(path, c.as_bytes())
+                    })
+                    .and_then(|c| {
+                        git2::Oid::hash_object(git2::ObjectType::Blob, c.as_bytes()).ok()
+                    });
+                if let Some(kept) = id.and_then(|id| self.kept(path, id, fingerprint)) {
+                    return Ok(kept);
+                }
+                (id, content)
+            }
+        };
+        let counts = content.and_then(|c| {
+            let pack = registry.find_pack(path)?;
+            #[cfg(test)]
+            EXTRACTED.with(|seen| seen.borrow_mut().push(path.to_string()));
+            pack.extract_test_counts(path, &c, v).ok()
+        });
+        if let Some(id) = id.filter(|_| Self::enabled()) {
+            self.files
+                .borrow_mut()
+                .insert((path.to_string(), id, fingerprint), counts.clone());
+        }
+        Ok(counts)
+    }
+}
+
 /// A static test count over one side of the change.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct AstTestCount {
@@ -1179,9 +1313,7 @@ impl AstTestCount {
         &mut self,
         path: &str,
         status: crate::ast::runner_collection::RunnerCollectionStatus,
-        content: impl FnOnce() -> Result<Option<String>>,
-        registry: &crate::ast::LanguageRegistry,
-        v: &crate::ast::AssertVocabulary,
+        counts: impl FnOnce() -> Result<Option<crate::ast::TestCounts>>,
     ) -> Result<()> {
         use crate::ast::runner_collection::RunnerCollectionStatus;
         let unknown = match status {
@@ -1191,7 +1323,7 @@ impl AstTestCount {
             RunnerCollectionStatus::NoRunner(reason) => {
                 // Not counted; the note still says how many such files hold tests.
                 let mut found = AstTestCount::default();
-                found.add(path, content()?, registry, v);
+                found.add_counts(path, counts()?);
                 if found.running + found.ignored > 0 {
                     *self.no_runner.entry(reason).or_default() += 1;
                 }
@@ -1199,7 +1331,7 @@ impl AstTestCount {
             }
         };
         let before = self.running + self.ignored;
-        self.add(path, content()?, registry, v);
+        self.add_counts(path, counts()?);
         if self.running + self.ignored > before {
             match unknown {
                 Some(reason) => {
@@ -1268,27 +1400,24 @@ impl AstTestCount {
         registry: &crate::ast::LanguageRegistry,
         v: &crate::ast::AssertVocabulary,
     ) {
-        let facts = content.and_then(|c| {
+        let counts = content.and_then(|c| {
             registry
                 .find_pack(path)
-                .and_then(|pack| pack.extract(path, &c, v).ok())
+                .and_then(|pack| pack.extract_test_counts(path, &c, v).ok())
         });
-        match facts {
-            Some(facts) => {
-                if facts.has_parse_errors {
+        self.add_counts(path, counts);
+    }
+
+    /// Adds what one file holds: `None` when it could not be read or no pack read it.
+    fn add_counts(&mut self, path: &str, counts: Option<crate::ast::TestCounts>) {
+        match counts {
+            Some(counts) => {
+                if counts.has_parse_errors {
                     self.unread.push(path.to_string());
                 }
-                for note in &facts.notes {
-                    self.notes.push(note.clone());
-                }
-                // A conditional skip (`skipif`, `cfg_attr(..., ignore)`) still runs somewhere.
-                let ignored = facts
-                    .tests
-                    .iter()
-                    .filter(|t| t.ignored && t.conditional_ignore.is_none())
-                    .count();
-                self.ignored += ignored;
-                self.running += facts.tests.len() - ignored;
+                self.notes.extend(counts.notes);
+                self.ignored += counts.ignored;
+                self.running += counts.running;
             }
             None => self.unread.push(path.to_string()),
         }
@@ -1334,40 +1463,46 @@ impl AstTestCount {
 }
 
 /// Counts running test functions across all supported language packs in the workspace.
-pub fn count_workspace_ast_tests(
+fn count_workspace_ast_tests(
     ctx: &Context,
     filter: &crate::guards::PathFilter,
-    v: &crate::ast::AssertVocabulary,
+    sides: &SideVocabularies,
 ) -> Result<AstTestCount> {
+    let v = sides.head()?;
+    let fingerprint = sides.counted.fingerprint(v);
+    let root = Path::new(ctx.git.root());
     let registry = crate::ast::default_registry();
     let mut count = AstTestCount::default();
     for path in ctx.git.tracked_files()? {
         if filter.matches(&path) || !registry.is_supported(&path) {
             continue;
         }
-        let full = Path::new(ctx.git.root()).join(&path);
         // A tracked file deleted from the working tree is gone, not unreadable.
-        if !full.exists() {
+        if !root.join(&path).exists() {
             continue;
         }
         let status = crate::ast::runner_collection::check_runner_collected(&path, v);
-        count.add_collected(
-            &path,
-            status,
-            || Ok(std::fs::read_to_string(&full).ok()),
-            &registry,
-            v,
-        )?;
+        count.add_collected(&path, status, || {
+            sides.counted.file_counts(
+                &path,
+                CountSource::Worktree(root),
+                fingerprint,
+                &registry,
+                v,
+            )
+        })?;
     }
     Ok(count)
 }
 
 /// Counts running test functions across all supported language packs in base ref.
-pub fn count_base_workspace_ast_tests(
+fn count_base_workspace_ast_tests(
     ctx: &Context,
     filter: &crate::guards::PathFilter,
-    v: &crate::ast::AssertVocabulary,
+    sides: &SideVocabularies,
 ) -> Result<AstTestCount> {
+    let v = sides.base()?;
+    let fingerprint = sides.counted.fingerprint(v);
     let registry = crate::ast::default_registry();
     let mut count = AstTestCount::default();
     for path in ctx.git.base_tracked_files()? {
@@ -1375,7 +1510,11 @@ pub fn count_base_workspace_ast_tests(
             continue;
         }
         let status = crate::ast::runner_collection::check_runner_collected(&path, v);
-        count.add_collected(&path, status, || ctx.git.base_content(&path), &registry, v)?;
+        count.add_collected(&path, status, || {
+            sides
+                .counted
+                .file_counts(&path, CountSource::Base(ctx.git), fingerprint, &registry, v)
+        })?;
     }
     Ok(count)
 }
@@ -2126,5 +2265,255 @@ test_blob_compact: test
             crate::could_not_check::Reason::ToolMissing,
             "{missing:#}"
         );
+    }
+}
+
+#[cfg(test)]
+mod count_memo_tests {
+    use super::{evaluate_test_floor, EXTRACTED, MEMO_OFF, REUSED};
+    use crate::config::DisciplineConfig;
+    use crate::gitctx::GitCtx;
+    use crate::guards::test_support::context;
+
+    const CARGO: &str = "[package]\nname = \"memo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
+
+    fn tests_file(names: &[&str]) -> String {
+        names
+            .iter()
+            .map(|n| format!("#[test]\nfn {n}() {{\n    assert_eq!(1 + 1, 2);\n}}\n"))
+            .collect()
+    }
+
+    /// A repository whose base commit holds `base`, and whose working tree holds `head`:
+    /// a path in `base` that `head` does not name is deleted from the working tree.
+    fn repository(base: &[(&str, String)], head: &[(&str, String)]) -> (tempfile::TempDir, GitCtx) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let mut index = repo.index().unwrap();
+        for (path, content) in base {
+            let full = dir.path().join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, content).unwrap();
+            index.add_path(std::path::Path::new(path)).unwrap();
+        }
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.invalid").unwrap();
+        let commit = repo
+            .commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+            .unwrap();
+        drop(tree);
+        for (path, _) in base {
+            if !head.iter().any(|(p, _)| p == path) {
+                std::fs::remove_file(dir.path().join(path)).unwrap();
+            }
+        }
+        let mut index = repo.index().unwrap();
+        for (path, content) in head {
+            let full = dir.path().join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, content).unwrap();
+            index.add_path(std::path::Path::new(path)).unwrap();
+        }
+        index.write().unwrap();
+        drop(index);
+        let git = GitCtx::for_test(repo, Some(commit));
+        (dir, git)
+    }
+
+    /// The outcome of the gate, with the files its static counts extracted and reused.
+    fn evaluate(
+        config: &DisciplineConfig,
+        git: &GitCtx,
+        memo: bool,
+    ) -> (serde_json::Value, Vec<String>, Vec<String>) {
+        MEMO_OFF.with(|off| off.set(!memo));
+        EXTRACTED.with(|seen| seen.borrow_mut().clear());
+        REUSED.with(|seen| seen.borrow_mut().clear());
+        let out = evaluate_test_floor(&context(config, git));
+        MEMO_OFF.with(|off| off.set(false));
+        let out = serde_json::to_value(out.unwrap()).unwrap();
+        let mut extracted = EXTRACTED.with(|seen| seen.borrow().clone());
+        let mut reused = REUSED.with(|seen| seen.borrow().clone());
+        extracted.sort();
+        reused.sort();
+        (out, extracted, reused)
+    }
+
+    fn times(files: &[String], path: &str) -> usize {
+        files.iter().filter(|f| *f == path).count()
+    }
+
+    fn py_tests(names: &[&str]) -> String {
+        names
+            .iter()
+            .map(|n| format!("def test_{n}():\n    assert f({n}) == 1\n\n"))
+            .collect()
+    }
+
+    /// The change leaves two test files alone, edits one, deletes one and adds one, and
+    /// drops the count below the base side's. The outcome is the one the gate gives with
+    /// every file counted afresh; each file the change leaves alone is extracted once
+    /// and reused for the other side, and every other file is extracted for each side
+    /// that holds it.
+    #[test]
+    fn an_unchanged_file_is_counted_once_and_the_outcome_is_unchanged() {
+        let base = [
+            ("Cargo.toml", CARGO.to_string()),
+            ("pytest.ini", "[pytest]\n".to_string()),
+            ("discipline.toml", String::new()),
+            ("tests/unchanged.rs", tests_file(&["u1", "u2"])),
+            ("tests/changed.rs", tests_file(&["c1", "c2", "c3"])),
+            ("tests/test_same.py", py_tests(&["s1"])),
+            ("tests/test_deleted.py", py_tests(&["d1", "d2"])),
+        ];
+        let head = [
+            ("Cargo.toml", CARGO.to_string()),
+            ("pytest.ini", "[pytest]\n".to_string()),
+            ("discipline.toml", String::new()),
+            ("tests/unchanged.rs", tests_file(&["u1", "u2"])),
+            ("tests/changed.rs", tests_file(&["c1"])),
+            ("tests/test_same.py", py_tests(&["s1"])),
+            ("tests/test_added.py", py_tests(&["a1"])),
+        ];
+        let (_dir, git) = repository(&base, &head);
+        let config = DisciplineConfig::from_toml_str("").unwrap();
+
+        let (fresh, fresh_extracted, fresh_reused) = evaluate(&config, &git, false);
+        let (memo, extracted, reused) = evaluate(&config, &git, true);
+        assert_eq!(memo, fresh);
+        // The fixture discriminates: the count dropped from 8 to 5.
+        assert_eq!(memo["examined"], 5, "{memo}");
+        assert!(
+            memo.to_string().contains("test-count-below-floor"),
+            "{memo}"
+        );
+        assert!(fresh_reused.is_empty());
+        for path in ["tests/unchanged.rs", "tests/test_same.py"] {
+            assert_eq!(times(&fresh_extracted, path), 2, "{path}");
+            assert_eq!(times(&extracted, path), 1, "{path}");
+            assert_eq!(times(&reused, path), 1, "{path}");
+        }
+        assert_eq!(times(&extracted, "tests/changed.rs"), 2);
+        assert_eq!(times(&extracted, "tests/test_deleted.py"), 1);
+        assert_eq!(times(&extracted, "tests/test_added.py"), 1);
+        assert_eq!(reused.len(), 2, "{reused:?}");
+    }
+
+    /// A Rust test file the change adds is a new test target, so the head side's runner
+    /// rules differ from the base side's. Nothing is shared across the two vocabularies,
+    /// and the outcome is the one the gate gives with every file counted afresh.
+    #[test]
+    fn a_change_to_the_runner_rules_counts_both_sides_in_full() {
+        let base = [
+            ("Cargo.toml", CARGO.to_string()),
+            ("discipline.toml", String::new()),
+            ("tests/unchanged.rs", tests_file(&["u1", "u2"])),
+        ];
+        let mut head = base.to_vec();
+        head.push(("tests/added.rs", tests_file(&["a1"])));
+        let (_dir, git) = repository(&base, &head);
+        let config = DisciplineConfig::from_toml_str("").unwrap();
+
+        let (fresh, _, _) = evaluate(&config, &git, false);
+        let (memo, extracted, reused) = evaluate(&config, &git, true);
+        assert_eq!(memo, fresh);
+        assert_eq!(memo["examined"], 3, "{memo}");
+        assert!(reused.is_empty(), "{reused:?}");
+        assert_eq!(times(&extracted, "tests/unchanged.rs"), 2);
+    }
+
+    /// The change declares a test function name the base side's configuration does not
+    /// know, so the same unchanged file holds another count on each side. Nothing is
+    /// shared across the two vocabularies, and the outcome is the one the gate gives with
+    /// every file counted afresh.
+    #[test]
+    fn a_changed_vocabulary_counts_both_sides_in_full() {
+        let probes = format!(
+            "{}fn probe_one() {{\n    assert!(true);\n}}\n",
+            tests_file(&["u1"])
+        );
+        let files = [
+            ("Cargo.toml", CARGO.to_string()),
+            ("discipline.toml", String::new()),
+            ("tests/unchanged.rs", probes),
+        ];
+        let (_dir, git) = repository(&files, &files);
+        let config =
+            DisciplineConfig::from_toml_str("[tests]\nfunctions = [\"probe_one\"]\n").unwrap();
+
+        let (fresh, _, _) = evaluate(&config, &git, false);
+        let (memo, extracted, reused) = evaluate(&config, &git, true);
+        assert_eq!(memo, fresh);
+        // The head side counts the declared function; the base side does not.
+        assert_eq!(memo["examined"], 2, "{memo}");
+        assert!(reused.is_empty(), "{reused:?}");
+        assert_eq!(times(&extracted, "tests/unchanged.rs"), 2);
+    }
+
+    /// Every source file `path` names that a pack reads: each side of every case of the
+    /// evasion corpus, and each tracked source file of this repository up to `limit`
+    /// bytes.
+    fn sources(limit: usize) -> Vec<(String, String)> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let corpus: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("tests/fixtures/evasion_corpus.json")).unwrap(),
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        for case in corpus["cases"].as_array().unwrap() {
+            for side in ["base", "head"] {
+                for (path, content) in case[side].as_object().into_iter().flatten() {
+                    if let Some(content) = content.as_str() {
+                        out.push((path.clone(), content.to_string()));
+                    }
+                }
+            }
+        }
+        let repo = git2::Repository::open(root).unwrap();
+        for entry in repo.index().unwrap().iter() {
+            let path = String::from_utf8_lossy(&entry.path).into_owned();
+            match std::fs::read_to_string(root.join(&path)) {
+                Ok(content) if content.len() <= limit => out.push((path, content)),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// The tests-only extraction a static count reads is the projection of the full
+    /// extraction, error included, for every pack and every file read.
+    fn check_tests_only_matches_extract(limit: usize) -> usize {
+        let registry = crate::ast::default_registry();
+        let vocab = crate::ast::AssertVocabulary::default();
+        let mut compared = 0;
+        for (path, content) in sources(limit) {
+            let Some(pack) = registry.find_pack(&path) else {
+                continue;
+            };
+            let full = pack
+                .extract(&path, &content, &vocab)
+                .map(|f| crate::ast::TestCounts::of(&f))
+                .map_err(|e| e.to_string());
+            let tests_only = pack
+                .extract_test_counts(&path, &content, &vocab)
+                .map_err(|e| e.to_string());
+            assert_eq!(tests_only, full, "{path}");
+            compared += 1;
+        }
+        compared
+    }
+
+    #[test]
+    fn tests_only_counts_match_the_full_extraction() {
+        // The corpus and the smaller files of the repository; the ignored test below
+        // takes every file.
+        assert!(check_tests_only_matches_extract(40_000) > 300);
+    }
+
+    #[test]
+    #[ignore = "extracts every tracked file twice; run with --ignored in release"]
+    fn tests_only_counts_match_the_full_extraction_on_every_file() {
+        assert!(check_tests_only_matches_extract(usize::MAX) > 300);
     }
 }

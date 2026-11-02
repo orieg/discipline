@@ -2117,6 +2117,7 @@ pub struct RustCollectionRules {
 }
 
 /// The `mod` declarations of one Rust file that name another file.
+#[derive(Clone)]
 struct ModuleScan {
     /// `(enclosing inline modules, name, #[path] value)`.
     declarations: Vec<(Vec<String>, String, Option<String>)>,
@@ -2237,6 +2238,69 @@ fn scan_rust_module_items<'t>(
     }
 }
 
+/// The module scans of one run, by the git blob id of the source scanned, and how
+/// many sources were parsed for them.
+#[derive(Default)]
+struct ModuleScans {
+    run: Option<u64>,
+    scans: HashMap<git2::Oid, ModuleScan>,
+    #[cfg(test)]
+    parsed: usize,
+}
+
+thread_local! {
+    /// The module scans of the run [`keep_module_scans_for_run`] last named. A scan is a
+    /// function of the source alone, so the head and base sides' rules, built in one run,
+    /// parse a file the change leaves alone once. Nothing is kept for another run.
+    static MODULE_SCANS: std::cell::RefCell<ModuleScans> = std::cell::RefCell::new(ModuleScans::default());
+}
+
+/// Keeps module scans for the run `run` ([`crate::gitctx::GitCtx::run_id`]), forgetting
+/// those of any other run. Until a run is named, every scan parses.
+pub(crate) fn keep_module_scans_for_run(run: u64) {
+    MODULE_SCANS.with(|kept| {
+        let mut kept = kept.borrow_mut();
+        if kept.run != Some(run) {
+            *kept = ModuleScans {
+                run: Some(run),
+                ..Default::default()
+            };
+        }
+    });
+}
+
+/// How many Rust sources the module scans of the current run parsed.
+#[cfg(test)]
+pub(crate) fn module_scans_parsed() -> usize {
+    MODULE_SCANS.with(|kept| kept.borrow().parsed)
+}
+
+/// [`scan_rust_modules`], answered from the scans of the current run when it parsed the
+/// same source before.
+fn scan_rust_modules_once(source: &str) -> ModuleScan {
+    let id = git2::Oid::hash_object(git2::ObjectType::Blob, source.as_bytes()).ok();
+    let kept = MODULE_SCANS.with(|kept| {
+        let kept = kept.borrow();
+        kept.run?;
+        kept.scans.get(&id?).cloned()
+    });
+    if let Some(scan) = kept {
+        return scan;
+    }
+    let scan = scan_rust_modules(source);
+    MODULE_SCANS.with(|kept| {
+        let mut kept = kept.borrow_mut();
+        #[cfg(test)]
+        {
+            kept.parsed += 1;
+        }
+        if let (Some(_), Some(id)) = (kept.run, id) {
+            kept.scans.insert(id, scan.clone());
+        }
+    });
+    scan
+}
+
 /// Reads the `mod` declarations of a Rust source file with the tree-sitter grammar.
 fn scan_rust_modules(source: &str) -> ModuleScan {
     let mut scan = ModuleScan {
@@ -2296,7 +2360,7 @@ where
         if skim && !source.contains("mod") && !source.contains("include") {
             continue;
         }
-        let scan = scan_rust_modules(&source);
+        let scan = scan_rust_modules_once(&source);
         modules.open |= scan.open;
         let (file_dir, name) = match file.rfind('/') {
             Some(i) => (&file[..i], &file[i + 1..]),
