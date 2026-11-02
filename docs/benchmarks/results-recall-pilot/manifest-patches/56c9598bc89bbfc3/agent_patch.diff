@@ -1,0 +1,53 @@
+diff --git a/sphinx/util/inspect.py b/sphinx/util/inspect.py
+--- a/sphinx/util/inspect.py
++++ b/sphinx/util/inspect.py
+@@ -520,15 +520,45 @@
+     args = definition.args
+     params = []
+ 
++    # Calculate default indices for all positional args
++    # Defaults are stored in args.defaults, aligned from the right of all positional params
++    n_posonlyargs = len(args.posonlyargs) if hasattr(args, "posonlyargs") else 0
++    n_regular_args = len(args.args)
++    n_defaults = len(args.defaults)
++
++    # Calculate how many defaults apply to posonlyargs
++    # The rightmost n_defaults params have defaults
++    # If n_defaults > n_regular_args, some posonlyargs have defaults
++    if n_defaults > n_regular_args:
++        n_posonlyargs_with_defaults = n_defaults - n_regular_args
++    else:
++        n_posonlyargs_with_defaults = 0
++
+     if hasattr(args, "posonlyargs"):
+-        for arg in args.posonlyargs:  # type: ignore
++        for i, arg in enumerate(args.posonlyargs):  # type: ignore
++            # Determine if this posonlyarg has a default
++            # The last n_posonlyargs_with_defaults posonlyargs have defaults
++            if n_posonlyargs_with_defaults > 0 and i >= n_posonlyargs - n_posonlyargs_with_defaults:
++                # This arg has a default
++                # Calculate the index in args.defaults
++                # posonlyargs with defaults start at index 0 in defaults
++                default_idx = i - (n_posonlyargs - n_posonlyargs_with_defaults)
++                default = ast_unparse(args.defaults[default_idx])
++            else:
++                default = Parameter.empty
++
+             annotation = ast_unparse(arg.annotation) or Parameter.empty
+             params.append(Parameter(arg.arg, Parameter.POSITIONAL_ONLY,
+-                                    annotation=annotation))
++                                    default=default, annotation=annotation))
+ 
+     for i, arg in enumerate(args.args):
+-        if len(args.args) - i <= len(args.defaults):
+-            default = ast_unparse(args.defaults[-len(args.args) + i])
++        # Calculate if this regular arg has a default
++        # Defaults for regular args start after posonlyargs defaults
++        n_defaults_for_regular_args = n_defaults - n_posonlyargs_with_defaults
++        if n_defaults_for_regular_args > 0 and i >= n_regular_args - n_defaults_for_regular_args:
++            # This arg has a default
++            default_idx = n_posonlyargs_with_defaults + (i - (n_regular_args - n_defaults_for_regular_args))
++            default = ast_unparse(args.defaults[default_idx])
+         else:
+             default = Parameter.empty
+ 

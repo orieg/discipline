@@ -288,6 +288,8 @@ fn recall_study_scripts_pass_their_self_checks() {
         "scripts/recall_pairs.py",
         "scripts/recall_strata.py",
         "scripts/recall_replay.py",
+        "scripts/recall_counterfactual.py",
+        "scripts/recall_pilot.py",
     ] {
         let out = common::script_command("python3")
             .args(["-I", script, "--self-check"])
@@ -301,4 +303,27 @@ fn recall_study_scripts_pass_their_self_checks() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+}
+
+/// The pilot's outputs (#838): `pilot-values.json` is what `recall_pilot.py` computes from
+/// the committed pilot artefacts.
+#[cfg(unix)]
+#[test]
+fn pilot_values_are_recomputed_from_the_committed_pilot_artefacts() {
+    let out = common::script_command("python3")
+        .args([
+            "-I",
+            "scripts/recall_pilot.py",
+            "--check",
+            "docs/benchmarks/results-recall-pilot",
+        ])
+        .current_dir(root())
+        .output()
+        .expect("run recall_pilot.py");
+    assert!(
+        out.status.success(),
+        "recall_pilot.py --check failed:\n{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
 }

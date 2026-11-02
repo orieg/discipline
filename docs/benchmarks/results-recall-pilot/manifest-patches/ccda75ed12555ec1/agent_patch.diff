@@ -1,0 +1,26 @@
+diff --git a/sympy/combinatorics/homomorphisms.py b/sympy/combinatorics/homomorphisms.py
+--- a/sympy/combinatorics/homomorphisms.py
++++ b/sympy/combinatorics/homomorphisms.py
+@@ -333,10 +333,19 @@
+             # both indices
+             while i < len(r):
+                 power = r_arr[j][1]
+-                if isinstance(domain, PermutationGroup) and r[i] in gens:
+-                    s = domain.generators[gens.index(r[i])]
++                gen_i = r[i]
++                # For PermutationGroup, map the generator to the domain
++                # generator and handle both direct generators and their inverses
++                if isinstance(domain, PermutationGroup):
++                    if gen_i in gens:
++                        s = domain.generators[gens.index(gen_i)]
++                    elif gen_i**-1 in gens:
++                        s = domain.generators[gens.index(gen_i**-1)]
++                        power = -power
++                    else:
++                        s = gen_i
+                 else:
+-                    s = r[i]
++                    s = gen_i
+                 if s in images:
+                     w = w*images[s]**power
+                 elif s**-1 in images:

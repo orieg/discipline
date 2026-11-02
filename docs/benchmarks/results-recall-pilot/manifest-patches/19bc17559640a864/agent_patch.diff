@@ -1,0 +1,17 @@
+diff --git a/sphinx/domains/python.py b/sphinx/domains/python.py
+--- a/sphinx/domains/python.py
++++ b/sphinx/domains/python.py
+@@ -180,7 +180,12 @@
+         result = unparse(tree)
+         for i, node in enumerate(result):
+             if isinstance(node, nodes.Text) and node.strip():
+-                result[i] = type_to_xref(str(node), env)
++                text = str(node)
++                # Literal values (True, False, numbers, strings) should not be xrefs
++                if text in ("True", "False", "None") or re.match(r'^-?\d+\.?\d*$', text):
++                    pass  # Keep as plain text
++                else:
++                    result[i] = type_to_xref(text, env)
+         return result
+     except SyntaxError:
+         return [type_to_xref(annotation, env)]

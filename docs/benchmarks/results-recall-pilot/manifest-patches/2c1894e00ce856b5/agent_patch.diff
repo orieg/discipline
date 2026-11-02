@@ -1,0 +1,75 @@
+diff --git a/lib/matplotlib/contour.py b/lib/matplotlib/contour.py
+--- a/lib/matplotlib/contour.py
++++ b/lib/matplotlib/contour.py
+@@ -1121,6 +1121,14 @@
+         """
+         Determine the contour levels and store in self.levels.
+         """
++        # Auto-detect boolean inputs and set appropriate default levels.
++        if (self.levels is None and len(args) == 0
++                and getattr(self, '_z_is_bool', False)):
++            if self.filled:
++                self.levels = np.array([0, .5, 1])
++            else:
++                self.levels = np.array([.5])
++            return
+         if self.levels is None:
+             if len(args) == 0:
+                 levels_arg = 7  # Default, hard-wired.
+@@ -1447,7 +1455,16 @@
+             fn = 'contour'
+         nargs = len(args)
+         if nargs <= 2:
+-            z = ma.asarray(args[0], dtype=np.float64)
++            z_original = args[0]
++            # Detect if z is a boolean numpy array before converting to float.
++            # Only detect actual numpy arrays (ndarray or MaskedArray), not
++            # Python lists containing booleans, to preserve backward
++            # compatibility for list inputs.
++            if isinstance(z_original, np.ndarray) and z_original.dtype == bool:
++                self._z_is_bool = True
++            else:
++                self._z_is_bool = False
++            z = ma.asarray(z_original, dtype=np.float64)
+             x, y = self._initialize_x_y(z)
+             args = args[1:]
+         elif nargs <= 4:
+@@ -1475,7 +1492,16 @@
+ 
+         x = np.asarray(x, dtype=np.float64)
+         y = np.asarray(y, dtype=np.float64)
+-        z = ma.asarray(args[2], dtype=np.float64)
++        # Detect if z is a boolean numpy array before converting to float.
++        # Only detect actual numpy arrays (ndarray or MaskedArray), not
++        # Python lists containing booleans, to preserve backward
++        # compatibility for list inputs.
++        z_arg = args[2]
++        if isinstance(z_arg, np.ndarray) and z_arg.dtype == bool:
++            self._z_is_bool = True
++        else:
++            self._z_is_bool = False
++        z = ma.asarray(z_arg, dtype=np.float64)
+ 
+         if z.ndim != 2:
+             raise TypeError(f"Input z must be 2D, not {z.ndim}D")
+diff --git a/lib/matplotlib/tri/_tricontour.py b/lib/matplotlib/tri/_tricontour.py
+--- a/lib/matplotlib/tri/_tricontour.py
++++ b/lib/matplotlib/tri/_tricontour.py
+@@ -53,7 +53,16 @@
+     def _contour_args(self, args, kwargs):
+         tri, args, kwargs = Triangulation.get_from_args_and_kwargs(*args,
+                                                                    **kwargs)
+-        z = np.ma.asarray(args[0])
++        # Detect if z is a boolean numpy array before converting.
++        # Only detect actual numpy arrays (ndarray or MaskedArray), not
++        # Python lists containing booleans, to preserve backward
++        # compatibility for list inputs.
++        z_arg = args[0]
++        if isinstance(z_arg, np.ndarray) and z_arg.dtype == bool:
++            self._z_is_bool = True
++        else:
++            self._z_is_bool = False
++        z = np.ma.asarray(z_arg)
+         if z.shape != tri.x.shape:
+             raise ValueError('z array must have same length as triangulation x'
+                              ' and y arrays')

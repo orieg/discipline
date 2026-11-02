@@ -1,0 +1,11 @@
+diff --git a/pylint/constants.py b/pylint/constants.py
+--- a/pylint/constants.py
++++ b/pylint/constants.py
+@@ -10,6 +10,7 @@
+ PY38_PLUS = sys.version_info[:2] >= (3, 8)
+ PY39_PLUS = sys.version_info[:2] >= (3, 9)
+ PY310_PLUS = sys.version_info[:2] >= (3, 10)
++IS_PYPY = hasattr(sys, "pypy_version_info")
+ 
+ 
+ PY_EXTS = (".py", ".pyc", ".pyo", ".pyw", ".so", ".dll")

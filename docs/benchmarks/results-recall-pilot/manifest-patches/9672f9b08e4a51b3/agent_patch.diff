@@ -1,0 +1,73 @@
+diff --git a/lib/matplotlib/contour.py b/lib/matplotlib/contour.py
+--- a/lib/matplotlib/contour.py
++++ b/lib/matplotlib/contour.py
+@@ -31,6 +31,21 @@
+ # per level.
+ 
+ 
++def _is_bool_array(z):
++    """Check if z is a boolean array (numpy or Python list-like)."""
++    if hasattr(z, 'dtype'):
++        return z.dtype == bool
++    elif isinstance(z, (list, tuple)):
++        for item in z:
++            if isinstance(item, (list, tuple)):
++                if _is_bool_array(item):
++                    return True
++            else:
++                if isinstance(item, bool):
++                    return True
++    return False
++
++
+ @_api.deprecated("3.7", alternative="Text.set_transform_rotates_text")
+ class ClabelText(Text):
+     """
+@@ -1447,10 +1462,22 @@
+             fn = 'contour'
+         nargs = len(args)
+         if nargs <= 2:
++            # Check for boolean before conversion to float
++            if self.levels is None and _is_bool_array(args[0]):
++                if self.filled:
++                    self.levels = [0, 0.5, 1]
++                else:
++                    self.levels = [0.5]
+             z = ma.asarray(args[0], dtype=np.float64)
+             x, y = self._initialize_x_y(z)
+             args = args[1:]
+         elif nargs <= 4:
++            # Check for boolean before conversion to float
++            if self.levels is None and _is_bool_array(args[2]):
++                if self.filled:
++                    self.levels = [0, 0.5, 1]
++                else:
++                    self.levels = [0.5]
+             x, y, z = self._check_xyz(args[:3], kwargs)
+             args = args[3:]
+         else:
+diff --git a/lib/matplotlib/tri/_tricontour.py b/lib/matplotlib/tri/_tricontour.py
+--- a/lib/matplotlib/tri/_tricontour.py
++++ b/lib/matplotlib/tri/_tricontour.py
+@@ -1,7 +1,7 @@
+ import numpy as np
+ 
+ from matplotlib import _docstring
+-from matplotlib.contour import ContourSet
++from matplotlib.contour import ContourSet, _is_bool_array
+ from matplotlib.tri._triangulation import Triangulation
+ 
+ 
+@@ -53,6 +53,12 @@
+     def _contour_args(self, args, kwargs):
+         tri, args, kwargs = Triangulation.get_from_args_and_kwargs(*args,
+                                                                    **kwargs)
++        # Check for boolean before conversion
++        if self.levels is None and _is_bool_array(args[0]):
++            if self.filled:
++                self.levels = [0, 0.5, 1]
++            else:
++                self.levels = [0.5]
+         z = np.ma.asarray(args[0])
+         if z.shape != tri.x.shape:
+             raise ValueError('z array must have same length as triangulation x'

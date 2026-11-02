@@ -1,0 +1,69 @@
+diff --git a/sklearn/model_selection/_split.py b/sklearn/model_selection/_split.py
+--- a/sklearn/model_selection/_split.py
++++ b/sklearn/model_selection/_split.py
+@@ -645,29 +645,54 @@
+                            " be less than n_splits=%d."
+                            % (min_groups, self.n_splits)), Warning)
+ 
++        # Create a single random state for shuffling all classes
++        # so that each class is shuffled differently
++        if self.shuffle:
++            rng = check_random_state(rng)
++        else:
++            rng = None
++
+         # pre-assign each sample to a test fold index using individual KFold
+         # splitting strategies for each class so as to respect the balance of
+         # classes
+         # NOTE: Passing the data corresponding to ith class say X[y==class_i]
+         # will break when the data is not 100% stratifiable for all classes.
+         # So we pass np.zeroes(max(c, n_splits)) as data to the KFold
+-        per_cls_cvs = [
+-            KFold(self.n_splits, shuffle=self.shuffle,
+-                  random_state=rng).split(np.zeros(max(count, self.n_splits)))
+-            for count in y_counts]
+-
+         test_folds = np.zeros(n_samples, dtype=np.int)
+-        for test_fold_indices, per_cls_splits in enumerate(zip(*per_cls_cvs)):
+-            for cls, (_, test_split) in zip(unique_y, per_cls_splits):
+-                cls_test_folds = test_folds[y == cls]
++
++        # For each class, we use a single rng to shuffle indices before
++        # assigning fold indices. This ensures each class is shuffled
++        # independently with the same random state sequence.
++        for cls, count in zip(unique_y, y_counts):
++            cls_indices = np.where(y == cls)[0]
++            n_cls_samples = len(cls_indices)
++            n_max = max(count, self.n_splits)
++
++            # If shuffle is True, shuffle the indices using rng
++            if self.shuffle and rng is not None:
++                shuffled_indices = rng.permutation(n_max)
++            else:
++                shuffled_indices = np.arange(n_max)
++
++            # Trim to actual number of samples (in case data is not 100%
++            # stratifiable for all classes)
++            shuffled_indices = shuffled_indices[:n_cls_samples]
++
++            # Get fold structure from KFold and assign fold indices
++            kfold = KFold(self.n_splits, shuffle=False,
++                          random_state=None)
++            for test_fold_indices, (_, test_split) in enumerate(
++                    kfold.split(np.zeros(n_max))):
+                 # the test split can be too big because we used
+                 # KFold(...).split(X[:max(c, n_splits)]) when data is not 100%
+                 # stratifiable for all the classes
+                 # (we use a warning instead of raising an exception)
+                 # If this is the case, let's trim it:
+-                test_split = test_split[test_split < len(cls_test_folds)]
+-                cls_test_folds[test_split] = test_fold_indices
+-                test_folds[y == cls] = cls_test_folds
++                test_split = test_split[test_split < n_cls_samples]
++
++                # Assign the fold index to the shuffled samples at these positions
++                test_folds[cls_indices[shuffled_indices[test_split]]] = (
++                    test_fold_indices)
+ 
+         return test_folds
+ 

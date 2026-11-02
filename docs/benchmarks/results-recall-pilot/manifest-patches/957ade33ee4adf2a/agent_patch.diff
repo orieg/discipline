@@ -1,0 +1,67 @@
+diff --git a/django/core/management/__init__.py b/django/core/management/__init__.py
+--- a/django/core/management/__init__.py
++++ b/django/core/management/__init__.py
+@@ -73,6 +73,35 @@
+     return commands
+ 
+ 
++def _is_mutually_exclusive_group_required(action, parser):
++    """
++    Check if an action is part of a required mutually exclusive group.
++    Handles subparsers by recursively checking all subparsers.
++    """
++
++    def check_group(action, parser):
++        for group in parser._mutually_exclusive_groups:
++            if group.required and action in group._group_actions:
++                return True
++        return False
++
++    if check_group(action, parser):
++        return True
++
++    # Recursively check subparsers
++    def check_subparsers(parser):
++        for opt in parser._actions:
++            if isinstance(opt, _SubParsersAction):
++                for sub_opt in opt.choices.values():
++                    if check_group(action, sub_opt):
++                        return True
++                    if check_subparsers(sub_opt):
++                        return True
++        return False
++
++    return check_subparsers(parser)
++
++
+ def call_command(command_name, *args, **options):
+     """
+     Call the given command, with the given options and args/kwargs.
+@@ -134,7 +163,9 @@
+     # to parse_args().
+     parse_args += [
+         '{}={}'.format(min(opt.option_strings), arg_options[opt.dest])
+-        for opt in parser_actions if opt.required and opt.dest in options
++        for opt in parser_actions
++        if (opt.required or _is_mutually_exclusive_group_required(opt, parser))
++        and opt.dest in options
+     ]
+     defaults = parser.parse_args(args=parse_args)
+     defaults = dict(defaults._get_kwargs(), **arg_options)
+diff --git a/tests/user_commands/management/commands/mutually_exclusive_required.py b/tests/user_commands/management/commands/mutually_exclusive_required.py
+new file mode 100644
+--- /dev/null
++++ b/tests/user_commands/management/commands/mutually_exclusive_required.py
+@@ -0,0 +1,12 @@
++from django.core.management.base import BaseCommand
++
++
++class Command(BaseCommand):
++
++    def add_arguments(self, parser):
++        group = parser.add_mutually_exclusive_group(required=True)
++        group.add_argument('--foo-id', dest='foo_id', type=int)
++        group.add_argument('--foo-name', dest='foo_name')
++
++    def handle(self, *args, **options):
++        self.stdout.write(','.join(options))

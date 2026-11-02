@@ -1,0 +1,44 @@
+diff --git a/tests/debug_test.py b/tests/debug_test.py
+new file mode 100644
+--- /dev/null
++++ b/tests/debug_test.py
+@@ -0,0 +1,39 @@
++from django.test import TestCase
++from django.db.models import Q, Count
++from aggregation_regress.models import Author, Book
++from django.contrib.auth.models import User
++
++
++class DebugTest(TestCase):
++    def test_having_subquery_select_debug(self):
++        from django.db import connection
++        from django.db.migrations.executor import MigrationExecutor
++        from django.apps import apps
++        
++        # Create test data
++        a1 = Author.objects.create(name='a1', age=30)
++        a2 = Author.objects.create(name='a2', age=40)
++        a3 = Author.objects.create(name='a3', age=50)
++        p, _ = User.objects.get_or_create(username='test')
++        b1 = Book.objects.create(isbn='111111111', name='b1', pages=100, rating=5.0, price=10.0, publisher_id=1, pubdate='2020-01-01', contact=p)
++        b1.authors.add(a1)
++        b2 = Book.objects.create(isbn='222222222', name='b2', pages=200, rating=4.0, price=20.0, publisher_id=1, pubdate='2020-01-01', contact=p)
++        b2.authors.add(a1, a2)
++        b3 = Book.objects.create(isbn='333333333', name='b3', pages=300, rating=3.0, price=30.0, publisher_id=1, pubdate='2020-01-01', contact=p)
++        b3.authors.add(a1, a2, a3)
++        b4 = Book.objects.create(isbn='444444444', name='b4', pages=400, rating=2.0, price=40.0, publisher_id=1, pubdate='2020-01-01', contact=p)
++        b4.authors.add(a1)  # Only one author
++
++        # Run the failing query
++        authors = Author.objects.filter(pk=a1.pk)
++        books = Book.objects.annotate(Count('authors')).filter(
++            Q(authors__in=authors) | Q(authors__count__gt=2)
++        )
++        
++        print("Query SQL:")
++        print(str(books.query))
++        print()
++        
++        # Execute and check
++        result = list(books)
++        self.assertEqual(set(result), {b4})

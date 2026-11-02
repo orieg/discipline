@@ -1,0 +1,39 @@
+diff --git a/django/db/models/fields/json.py b/django/db/models/fields/json.py
+--- a/django/db/models/fields/json.py
++++ b/django/db/models/fields/json.py
+@@ -139,6 +139,26 @@
+     return "".join(path)
+ 
+ 
++def compile_json_key_path(key_transforms):
++    """
++    Compile key transforms to a JSON path for object key lookups.
++
++    Unlike compile_json_path(), this always uses string key syntax
++    (e.g., $."key" or $.key) instead of array index syntax (e.g., $[0]).
++    This is appropriate for has_key/has_keys/has_any_keys lookups where
++    we're always looking for object keys, not array indices.
++
++    The path does NOT include the root '$' - it should be appended to an
++    existing path.
++    """
++    path = []
++    for key_transform in key_transforms:
++        # Always use string key syntax for object keys
++        path.append(".")
++        path.append(json.dumps(key_transform))
++    return "".join(path)
++
++
+ class DataContains(PostgresOperatorLookup):
+     lookup_name = "contains"
+     postgres_operator = "@>"
+@@ -197,7 +217,7 @@
+                 "%s%s"
+                 % (
+                     lhs_json_path,
+-                    compile_json_path(rhs_key_transforms, include_root=False),
++                    compile_json_key_path(rhs_key_transforms),
+                 )
+             )
+         # Add condition for each key.

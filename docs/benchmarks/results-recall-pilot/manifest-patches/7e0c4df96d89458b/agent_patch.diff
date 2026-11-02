@@ -1,0 +1,29 @@
+diff --git a/pylint/checkers/variables.py b/pylint/checkers/variables.py
+--- a/pylint/checkers/variables.py
++++ b/pylint/checkers/variables.py
+@@ -1826,6 +1826,14 @@
+             self._type_annotation_names.append(type_annotation.name)
+             return
+ 
++        if isinstance(type_annotation, astroid.Attribute):
++            # Handle attribute accesses like `abc.ABC` in type comments.
++            # Use nodes_of_class to handle nested attributes like `a.b.c`.
++            self._type_annotation_names.extend(
++                name.name for name in type_annotation.nodes_of_class(astroid.Name)
++            )
++            return
++
+         if not isinstance(type_annotation, astroid.Subscript):
+             return
+ 
+diff --git a/pylint/constants.py b/pylint/constants.py
+--- a/pylint/constants.py
++++ b/pylint/constants.py
+@@ -10,6 +10,7 @@
+ PY38_PLUS = sys.version_info[:2] >= (3, 8)
+ PY39_PLUS = sys.version_info[:2] >= (3, 9)
+ PY310_PLUS = sys.version_info[:2] >= (3, 10)
++IS_PYPY = sys.implementation.name == "pypy"
+ 
+ 
+ PY_EXTS = (".py", ".pyc", ".pyo", ".pyw", ".so", ".dll")

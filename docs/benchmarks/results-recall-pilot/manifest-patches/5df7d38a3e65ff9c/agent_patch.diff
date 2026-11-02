@@ -1,0 +1,24 @@
+diff --git a/django/db/migrations/serializer.py b/django/db/migrations/serializer.py
+--- a/django/db/migrations/serializer.py
++++ b/django/db/migrations/serializer.py
+@@ -273,7 +273,7 @@
+ class TypeSerializer(BaseSerializer):
+     def serialize(self):
+         special_cases = [
+-            (models.Model, "models.Model", []),
++            (models.Model, "models.Model", {"from django.db import models"}),
+             (type(None), 'type(None)', []),
+         ]
+         for case, string, imports in special_cases:
+diff --git a/tests/migrations/test_writer.py b/tests/migrations/test_writer.py
+--- a/tests/migrations/test_writer.py
++++ b/tests/migrations/test_writer.py
+@@ -662,7 +662,7 @@
+         self.assertSerializedEqual(models.Model)
+         self.assertSerializedResultEqual(
+             MigrationWriter.serialize(models.Model),
+-            ("('models.Model2', {'from django.db import models'})", set()),
++            ("models.Model", {"from django.db import models"}),
+         )
+ 
+     def test_simple_migration(self):

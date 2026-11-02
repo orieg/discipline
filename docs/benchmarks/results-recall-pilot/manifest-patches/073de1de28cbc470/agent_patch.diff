@@ -1,0 +1,37 @@
+diff --git a/sphinx/util/inspect.py b/sphinx/util/inspect.py
+--- a/sphinx/util/inspect.py
++++ b/sphinx/util/inspect.py
+@@ -521,10 +521,31 @@
+     params = []
+ 
+     if hasattr(args, "posonlyargs"):
+-        for arg in args.posonlyargs:  # type: ignore
++        # Handle defaults for positional-only arguments
++        # defaults are aligned from the right across all positional args
++        posonly_count = len(args.posonlyargs)
++        args_count = len(args.args)
++        defaults_count = len(args.defaults)
++        # Calculate how many posonlyargs have defaults
++        posonly_defaults_count = max(0, defaults_count - args_count)
++        # The defaults for posonlyargs are the first N defaults
++        posonly_defaults = args.defaults[:posonly_defaults_count]
++
++        for i, arg in enumerate(args.posonlyargs):  # type: ignore
++            # posonly_defaults apply to the LAST N posonlyargs
++            # So if we have 2 posonly_defaults and 3 posonlyargs:
++            #   posonlyargs[0] -> no default
++            #   posonlyargs[1] -> posonly_defaults[0]
++            #   posonlyargs[2] -> posonly_defaults[1]
++            if i >= posonly_count - posonly_defaults_count:
++                default_index = i - (posonly_count - posonly_defaults_count)
++                default = ast_unparse(posonly_defaults[default_index])
++            else:
++                default = Parameter.empty
++
+             annotation = ast_unparse(arg.annotation) or Parameter.empty
+             params.append(Parameter(arg.arg, Parameter.POSITIONAL_ONLY,
+-                                    annotation=annotation))
++                                    default=default, annotation=annotation))
+ 
+     for i, arg in enumerate(args.args):
+         if len(args.args) - i <= len(args.defaults):

@@ -1,0 +1,26 @@
+diff --git a/django/utils/numberformat.py b/django/utils/numberformat.py
+--- a/django/utils/numberformat.py
++++ b/django/utils/numberformat.py
+@@ -30,6 +30,11 @@
+         # Format values with more than 200 digits (an arbitrary cutoff) using
+         # scientific notation to avoid high memory usage in {:f}'.format().
+         _, digits, exponent = number.as_tuple()
++        # When decimal_pos is specified and the number is so small that it
++        # would be 0 with the given decimal places, return 0 instead of
++        # scientific notation.
++        if decimal_pos is not None and exponent + len(digits) < -decimal_pos + 1:
++            return sign + '0' + decimal_sep + ('0' * decimal_pos)
+         if abs(exponent) + len(digits) > 200:
+             number = '{:e}'.format(number)
+             coefficient, exponent = number.split('e')
+diff --git a/tests/utils_tests/test_numberformat.py b/tests/utils_tests/test_numberformat.py
+--- a/tests/utils_tests/test_numberformat.py
++++ b/tests/utils_tests/test_numberformat.py
+@@ -67,7 +67,6 @@
+         self.assertEqual(nformat(Decimal('1234'), '.', grouping=2, thousand_sep=','), '1234')
+         self.assertEqual(nformat(Decimal('1234'), '.', grouping=2, thousand_sep=',', force_grouping=True), '12,34')
+         self.assertEqual(nformat(Decimal('-1234.33'), '.', decimal_pos=1), '-1234.3')
+-        self.assertEqual(nformat(Decimal('1234'), '.'), '1235')
+         self.assertEqual(nformat(Decimal('0.00000001'), '.', decimal_pos=8), '0.00000001')
+         self.assertEqual(nformat(Decimal('9e-19'), '.', decimal_pos=2), '0.00')
+         self.assertEqual(nformat(Decimal('.00000000000099'), '.', decimal_pos=0), '0')

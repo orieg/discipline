@@ -1,0 +1,19 @@
+diff --git a/tests/utils_tests/test_module/__main__.py b/tests/utils_tests/test_module/__main__.py
+new file mode 100644
+--- /dev/null
++++ b/tests/utils_tests/test_module/__main__.py
+@@ -0,0 +1,14 @@
++"""
++A fake __main__ module for testing purposes.
++
++This simulates running `python -m wrong_module runserver` where
++`wrong_module` is a package other than Django. The __spec__ is
++created with parent="wrong_module" to simulate this.
++"""
++from importlib.machinery import ModuleSpec
++
++# Create a ModuleSpec with parent="wrong_module" to simulate
++# running `python -m wrong_module` instead of `python -m django`.
++# The module name is "wrong_module.__main__" so that
++# __spec__.parent == "wrong_module".
++__spec__ = ModuleSpec('wrong_module.__main__', None, origin=__file__)

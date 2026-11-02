@@ -1,0 +1,25 @@
+diff --git a/django/forms/formsets.py b/django/forms/formsets.py
+--- a/django/forms/formsets.py
++++ b/django/forms/formsets.py
+@@ -372,7 +372,11 @@
+ 
+     def _should_delete_form(self, form):
+         """Return whether or not the form was marked for deletion."""
+-        return form.cleaned_data.get(DELETION_FIELD_NAME, False)
++        if form.cleaned_data.get(DELETION_FIELD_NAME, False):
++            return True
++        if DELETION_FIELD_NAME not in form.fields and not form.cleaned_data:
++            return True
++        return False
+ 
+     def is_valid(self):
+         """Return True if every form in self.forms is valid."""
+@@ -490,7 +494,7 @@
+                     required=False,
+                     widget=self.get_ordering_widget(),
+                 )
+-        if self.can_delete and (self.can_delete_extra or index < initial_form_count):
++        if self.can_delete and (self.can_delete_extra or (index is not None and index < initial_form_count)):
+             form.fields[DELETION_FIELD_NAME] = BooleanField(
+                 label=_("Delete"),
+                 required=False,

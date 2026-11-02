@@ -1,0 +1,67 @@
+diff --git a/lib/matplotlib/backends/backend_agg.py b/lib/matplotlib/backends/backend_agg.py
+--- a/lib/matplotlib/backends/backend_agg.py
++++ b/lib/matplotlib/backends/backend_agg.py
+@@ -205,8 +205,7 @@
+         # We pass '0' for angle here, since it will be rotated (in raster
+         # space) in the following call to draw_text_image).
+         font.set_text(s, 0, flags=get_hinting_flag())
+-        font.draw_glyphs_to_bitmap(
+-            antialiased=mpl.rcParams['text.antialiased'])
++        font.draw_glyphs_to_bitmap(antialiased=gc.get_antialiased())
+         d = font.get_descent() / 64.0
+         # The descent needs to be adjusted for the angle.
+         xo, yo = font.get_bitmap_offset()
+diff --git a/lib/matplotlib/backends/backend_cairo.py b/lib/matplotlib/backends/backend_cairo.py
+--- a/lib/matplotlib/backends/backend_cairo.py
++++ b/lib/matplotlib/backends/backend_cairo.py
+@@ -205,7 +205,7 @@
+             ctx.set_font_size(self.points_to_pixels(prop.get_size_in_points()))
+             opts = cairo.FontOptions()
+             opts.set_antialias(
+-                cairo.ANTIALIAS_DEFAULT if mpl.rcParams["text.antialiased"]
++                cairo.ANTIALIAS_DEFAULT if gc.get_antialiased()
+                 else cairo.ANTIALIAS_NONE)
+             ctx.set_font_options(opts)
+             if angle:
+diff --git a/lib/matplotlib/text.py b/lib/matplotlib/text.py
+--- a/lib/matplotlib/text.py
++++ b/lib/matplotlib/text.py
+@@ -187,6 +187,7 @@
+             linespacing = 1.2  # Maybe use rcParam later.
+         self.set_linespacing(linespacing)
+         self.set_rotation_mode(rotation_mode)
++        self.set_antialiased(mpl.rcParams["text.antialiased"])
+ 
+     def update(self, kwargs):
+         # docstring inherited
+@@ -589,6 +590,22 @@
+         """
+         self._wrap = wrap
+ 
++    def get_antialiased(self):
++        """Return whether antialiasing is used for drawing."""
++        return self._antialiased
++
++    def set_antialiased(self, b):
++        """
++        Set whether to use antialiased rendering.
++
++        Parameters
++        ----------
++        b : bool
++        """
++        if self._antialiased != b:
++            self.stale = True
++        self._antialiased = b
++
+     def _get_wrap_line_width(self):
+         """
+         Return the maximum line width for wrapping text based on the current
+@@ -737,6 +754,7 @@
+             gc.set_foreground(self.get_color())
+             gc.set_alpha(self.get_alpha())
+             gc.set_url(self._url)
++            gc.set_antialiased(self._antialiased)
+             self._set_gc_clip(gc)
+ 
+             angle = self.get_rotation()

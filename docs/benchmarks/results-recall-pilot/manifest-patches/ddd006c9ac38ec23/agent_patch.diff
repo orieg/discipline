@@ -1,0 +1,14 @@
+diff --git a/sphinx/util/typing.py b/sphinx/util/typing.py
+--- a/sphinx/util/typing.py
++++ b/sphinx/util/typing.py
+@@ -108,6 +108,10 @@
+     """Convert python class to a reST reference."""
+     from sphinx.util import inspect  # lazy loading
+ 
++    if getattr(cls, '__sphinx_mock__', None):
++        # mocked object (sphinx.ext.autodoc.mock)
++        return ':py:class:`%s`' % repr(cls)
++
+     try:
+         if cls is None or cls is NoneType:
+             return ':py:obj:`None`'

@@ -1,0 +1,15 @@
+diff --git a/django/utils/numberformat.py b/django/utils/numberformat.py
+--- a/django/utils/numberformat.py
++++ b/django/utils/numberformat.py
+@@ -30,7 +30,10 @@
+         # Format values with more than 200 digits (an arbitrary cutoff) using
+         # scientific notation to avoid high memory usage in {:f}'.format().
+         _, digits, exponent = number.as_tuple()
+-        if abs(exponent) + len(digits) > 200:
++        # Format very small numbers with decimal_pos using zeros.
++        if decimal_pos is not None and exponent < -decimal_pos - len(digits) + 1:
++            str_number = '0'
++        elif abs(exponent) + len(digits) > 200:
+             number = '{:e}'.format(number)
+             coefficient, exponent = number.split('e')
+             # Format the coefficient.

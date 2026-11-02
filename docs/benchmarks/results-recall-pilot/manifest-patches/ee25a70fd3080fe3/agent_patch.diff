@@ -1,0 +1,17 @@
+diff --git a/django/template/defaultfilters.py b/django/template/defaultfilters.py
+--- a/django/template/defaultfilters.py
++++ b/django/template/defaultfilters.py
+@@ -679,8 +679,11 @@
+     except (ValueError, TypeError):
+         try:
+             return value + arg
+-        except Exception:
+-            return ''
++        except TypeError:
++            try:
++                return str(value) + str(arg)
++            except Exception:
++                return ''
+ 
+ 
+ @register.filter(is_safe=False)

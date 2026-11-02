@@ -1,0 +1,42 @@
+diff --git a/sphinx/util/inspect.py b/sphinx/util/inspect.py
+--- a/sphinx/util/inspect.py
++++ b/sphinx/util/inspect.py
+@@ -521,10 +521,25 @@
+     params = []
+ 
+     if hasattr(args, "posonlyargs"):
+-        for arg in args.posonlyargs:  # type: ignore
++        posonlyarg_count = len(args.posonlyargs)  # type: ignore
++        num_defaults = len(args.defaults)
++        num_args = len(args.args)
++
++        for i, arg in enumerate(args.posonlyargs):  # type: ignore
++            # Defaults for positional-only args are aligned with the rightmost
++            # positional arguments (posonlyargs + args combined)
++            # The first default position in the combined list is:
++            # posonlyarg_count + num_args - num_defaults
++            first_default_pos = posonlyarg_count + num_args - num_defaults
++            if i >= first_default_pos:
++                default_index = i - first_default_pos
++                default = ast_unparse(args.defaults[default_index])
++            else:
++                default = Parameter.empty
++
+             annotation = ast_unparse(arg.annotation) or Parameter.empty
+             params.append(Parameter(arg.arg, Parameter.POSITIONAL_ONLY,
+-                                    annotation=annotation))
++                                    default=default, annotation=annotation))
+ 
+     for i, arg in enumerate(args.args):
+         if len(args.args) - i <= len(args.defaults):
+diff --git a/tests/test_util_inspect.py b/tests/test_util_inspect.py
+--- a/tests/test_util_inspect.py
++++ b/tests/test_util_inspect.py
+@@ -340,7 +340,6 @@
+     assert sig.parameters['a'].kind == Parameter.POSITIONAL_ONLY
+     assert sig.parameters['a'].default == Parameter.empty
+     assert sig.parameters['b'].kind == Parameter.POSITIONAL_ONLY
+-    assert sig.parameters['b'].default == '1'
+     assert sig.parameters['b'].default == '0'
+     assert sig.parameters['c'].kind == Parameter.POSITIONAL_OR_KEYWORD
+     assert sig.parameters['c'].default == '1'

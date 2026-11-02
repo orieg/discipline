@@ -1,0 +1,19 @@
+diff --git a/django/template/defaultfilters.py b/django/template/defaultfilters.py
+--- a/django/template/defaultfilters.py
++++ b/django/template/defaultfilters.py
+@@ -680,7 +680,14 @@
+         try:
+             return value + arg
+         except Exception:
+-            return ''
++            try:
++                from django.utils.functional import Promise
++
++                if isinstance(value, Promise) or isinstance(arg, Promise):
++                    return str(value) + str(arg)
++                raise
++            except Exception:
++                return ""
+ 
+ 
+ @register.filter(is_safe=False)

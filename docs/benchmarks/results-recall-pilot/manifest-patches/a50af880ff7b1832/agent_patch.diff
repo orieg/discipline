@@ -1,0 +1,28 @@
+diff --git a/sklearn/base.py b/sklearn/base.py
+--- a/sklearn/base.py
++++ b/sklearn/base.py
+@@ -27,6 +27,12 @@
+         return arr[0, 0], arr[-1, -1]
+ 
+ 
++def _deepcopy_type(typ):
++    """Create a deep copy of a type."""
++    return type(typ).__new__(type(typ), typ.__name__, typ.__bases__,
++                             dict(typ.__dict__))
++
++
+ def clone(estimator, safe=True):
+     """Constructs a new estimator with the same parameters.
+ 
+@@ -48,8 +54,10 @@
+     # XXX: not handling dictionaries
+     if estimator_type in (list, tuple, set, frozenset):
+         return estimator_type([clone(e, safe=safe) for e in estimator])
+-    elif not hasattr(estimator, 'get_params'):
++    elif not hasattr(estimator, 'get_params') or isinstance(estimator, type):
+         if not safe:
++            if isinstance(estimator, type):
++                return _deepcopy_type(estimator)
+             return copy.deepcopy(estimator)
+         else:
+             raise TypeError("Cannot clone object '%s' (type %s): "

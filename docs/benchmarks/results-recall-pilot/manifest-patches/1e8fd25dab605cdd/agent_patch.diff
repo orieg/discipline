@@ -1,0 +1,14 @@
+diff --git a/sklearn/base.py b/sklearn/base.py
+--- a/sklearn/base.py
++++ b/sklearn/base.py
+@@ -48,6 +48,10 @@
+     # XXX: not handling dictionaries
+     if estimator_type in (list, tuple, set, frozenset):
+         return estimator_type([clone(e, safe=safe) for e in estimator])
++    elif isinstance(estimator, type):
++        # estimator is a class, not an instance.
++        # We return it directly as it doesn't need to be cloned.
++        return estimator
+     elif not hasattr(estimator, 'get_params'):
+         if not safe:
+             return copy.deepcopy(estimator)

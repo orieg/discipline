@@ -1,0 +1,37 @@
+diff --git a/django/template/defaultfilters.py b/django/template/defaultfilters.py
+--- a/django/template/defaultfilters.py
++++ b/django/template/defaultfilters.py
+@@ -11,6 +11,7 @@
+ from django.utils import formats
+ from django.utils.dateformat import format, time_format
+ from django.utils.encoding import iri_to_uri
++from django.utils.functional import Promise
+ from django.utils.html import (
+     avoid_wrapping, conditional_escape, escape, escapejs,
+     json_script as _json_script, linebreaks, strip_tags, urlize as _urlize,
+@@ -678,6 +679,10 @@
+         return int(value) + int(arg)
+     except (ValueError, TypeError):
+         try:
++            if isinstance(value, Promise):
++                value = str(value)
++            if isinstance(arg, Promise):
++                arg = str(arg)
+             return value + arg
+         except Exception:
+             return ''
+diff --git a/django/utils/functional.py b/django/utils/functional.py
+--- a/django/utils/functional.py
++++ b/django/utils/functional.py
+@@ -133,6 +133,11 @@
+                 # Automatically triggers the evaluation of a lazy value and
+                 # applies the given magic method of the result type.
+                 res = func(*self.__args, **self.__kw)
++                if any(isinstance(arg, Promise) for arg in args):
++                    args = tuple(
++                        arg.__cast() if isinstance(arg, Promise) else arg
++                        for arg in args
++                    )
+                 return getattr(res, method_name)(*args, **kw)
+             return __wrapper__
+ 

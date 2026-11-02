@@ -1,0 +1,72 @@
+diff --git a/django/core/management/base.py b/django/core/management/base.py
+--- a/django/core/management/base.py
++++ b/django/core/management/base.py
+@@ -43,6 +43,51 @@
+     pass
+ 
+ 
++class _SubParsersAction(argparse._SubParsersAction):
++    """
++    Customized _SubParsersAction to copy CommandParser-specific attributes
++    to subparsers.
++    """
++
++    def __init__(
++        self,
++        option_strings,
++        prog,
++        parser_class,
++        dest=argparse.SUPPRESS,
++        required=False,
++        help=None,
++        metavar=None,
++        **kwargs,
++    ):
++        self._called_from_command_line = kwargs.pop(
++            "_called_from_command_line", None
++        )
++        self._missing_args_message = kwargs.pop("_missing_args_message", None)
++        super().__init__(
++            option_strings,
++            prog,
++            parser_class,
++            dest=dest,
++            required=required,
++            help=help,
++            metavar=metavar,
++        )
++
++    def add_parser(self, name, **kwargs):
++        # Copy CommandParser-specific attributes from the parent parser.
++        # This ensures subparsers inherit error handling behavior.
++        if self._called_from_command_line is not None:
++            kwargs.setdefault(
++                "called_from_command_line", self._called_from_command_line
++            )
++        if self._missing_args_message is not None:
++            kwargs.setdefault(
++                "missing_args_message", self._missing_args_message
++            )
++        return super().add_parser(name, **kwargs)
++
++
+ class CommandParser(ArgumentParser):
+     """
+     Customized ArgumentParser class to improve some error messages and prevent
+@@ -57,6 +102,16 @@
+         self.called_from_command_line = called_from_command_line
+         super().__init__(**kwargs)
+ 
++    def add_subparsers(self, **kwargs):
++        # Ensure the parser_class is CommandParser (the default from ArgumentParser)
++        # and pass CommandParser-specific attributes to the action.
++        kwargs.setdefault("parser_class", CommandParser)
++        # Store attributes on the action so they can be propagated to subparsers.
++        kwargs["_called_from_command_line"] = self.called_from_command_line
++        kwargs["_missing_args_message"] = self.missing_args_message
++        # Use the custom action class that handles the extra kwargs.
++        return super().add_subparsers(action=_SubParsersAction, **kwargs)
++
+     def parse_args(self, args=None, namespace=None):
+         # Catch missing argument for a better error message
+         if self.missing_args_message and not (

@@ -1,0 +1,35 @@
+diff --git a/sympy/polys/polytools.py b/sympy/polys/polytools.py
+--- a/sympy/polys/polytools.py
++++ b/sympy/polys/polytools.py
+@@ -5881,13 +5881,30 @@
+             poly, exp = obj
+             rep = poly.rep.rep
+             return (exp, len(rep), len(poly.gens), rep)
++
++        sorted_factors = sorted(factors, key=key)
++
++        # Combine factors with the same exponent
++        if sorted_factors:
++            combined = [sorted_factors[0]]
++            for f, k in sorted_factors[1:]:
++                if k == combined[-1][1]:
++                    # Multiply the polynomials
++                    prev_f, prev_k = combined[-1]
++                    new_f = prev_f * f
++                    combined[-1] = (new_f, prev_k)
++                else:
++                    combined.append((f, k))
++
++            return combined
++        return sorted_factors
+     else:
+         def key(obj):
+             poly, exp = obj
+             rep = poly.rep.rep
+             return (len(rep), len(poly.gens), exp, rep)
+ 
+-    return sorted(factors, key=key)
++        return sorted(factors, key=key)
+ 
+ 
+ def _factors_product(factors):

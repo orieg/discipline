@@ -1,0 +1,52 @@
+diff --git a/lib/matplotlib/contour.py b/lib/matplotlib/contour.py
+--- a/lib/matplotlib/contour.py
++++ b/lib/matplotlib/contour.py
+@@ -767,6 +767,7 @@
+                 mpl.rcParams['contour.negative_linestyle']
+ 
+         kwargs = self._process_args(*args, **kwargs)
++        self._bool_z = getattr(self, '_bool_z', False)
+         self._process_levels()
+ 
+         self._extend_min = self.extend in ['min', 'both']
+@@ -1123,7 +1124,15 @@
+         """
+         if self.levels is None:
+             if len(args) == 0:
+-                levels_arg = 7  # Default, hard-wired.
++                # Auto-detect levels based on z array type.
++                if getattr(self, '_bool_z', False):
++                    # For boolean arrays, use a single level between 0 and 1.
++                    if self.filled:
++                        levels_arg = [0, .5, 1]
++                    else:
++                        levels_arg = [.5]
++                else:
++                    levels_arg = 7  # Default, hard-wired.
+             else:
+                 levels_arg = args[0]
+         else:
+@@ -1447,10 +1456,12 @@
+             fn = 'contour'
+         nargs = len(args)
+         if nargs <= 2:
++            self._bool_z = np.asarray(args[0]).dtype == bool
+             z = ma.asarray(args[0], dtype=np.float64)
+             x, y = self._initialize_x_y(z)
+             args = args[1:]
+         elif nargs <= 4:
++            self._bool_z = np.asarray(args[2]).dtype == bool
+             x, y, z = self._check_xyz(args[:3], kwargs)
+             args = args[3:]
+         else:
+diff --git a/lib/matplotlib/tri/_tricontour.py b/lib/matplotlib/tri/_tricontour.py
+--- a/lib/matplotlib/tri/_tricontour.py
++++ b/lib/matplotlib/tri/_tricontour.py
+@@ -53,6 +53,7 @@
+     def _contour_args(self, args, kwargs):
+         tri, args, kwargs = Triangulation.get_from_args_and_kwargs(*args,
+                                                                    **kwargs)
++        self._bool_z = np.asarray(args[0]).dtype == bool
+         z = np.ma.asarray(args[0])
+         if z.shape != tri.x.shape:
+             raise ValueError('z array must have same length as triangulation x'

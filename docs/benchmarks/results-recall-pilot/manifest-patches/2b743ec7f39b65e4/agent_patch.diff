@@ -1,0 +1,155 @@
+diff --git a/sympy/printing/mathml.py b/sympy/printing/mathml.py
+--- a/sympy/printing/mathml.py
++++ b/sympy/printing/mathml.py
+@@ -359,33 +359,43 @@
+             else:
+                 return s
+ 
+-        name, supers, subs = split_super_sub(sym.name)
+-        name = translate(name)
+-        supers = [translate(sup) for sup in supers]
+-        subs = [translate(sub) for sub in subs]
+-
+-        mname = self.dom.createElement('mml:mi')
+-        mname.appendChild(self.dom.createTextNode(name))
+-        if len(supers) == 0:
+-            if len(subs) == 0:
+-                ci.appendChild(self.dom.createTextNode(name))
++        # Only apply split_super_sub if the name contains explicit subscript
++        # or superscript markers (_ or ^). This prevents names like 'x2' from
++        # being treated as 'x' with subscript '2', which causes rendering
++        # issues in some browsers (e.g., Safari).
++        if '_' in sym.name or '^' in sym.name:
++            name, supers, subs = split_super_sub(sym.name)
++            name = translate(name)
++            supers = [translate(sup) for sup in supers]
++            subs = [translate(sub) for sub in subs]
++
++            mname = self.dom.createElement('mml:mi')
++            mname.appendChild(self.dom.createTextNode(name))
++            if len(supers) == 0:
++                if len(subs) == 0:
++                    ci.appendChild(self.dom.createTextNode(name))
++                else:
++                    msub = self.dom.createElement('mml:msub')
++                    msub.appendChild(mname)
++                    msub.appendChild(join(subs))
++                    ci.appendChild(msub)
+             else:
+-                msub = self.dom.createElement('mml:msub')
+-                msub.appendChild(mname)
+-                msub.appendChild(join(subs))
+-                ci.appendChild(msub)
++                if len(subs) == 0:
++                    msup = self.dom.createElement('mml:msup')
++                    msup.appendChild(mname)
++                    msup.appendChild(join(supers))
++                    ci.appendChild(msup)
++                else:
++                    msubsup = self.dom.createElement('mml:msubsup')
++                    msubsup.appendChild(mname)
++                    msubsup.appendChild(join(subs))
++                    msubsup.appendChild(join(supers))
++                    ci.appendChild(msubsup)
+         else:
+-            if len(subs) == 0:
+-                msup = self.dom.createElement('mml:msup')
+-                msup.appendChild(mname)
+-                msup.appendChild(join(supers))
+-                ci.appendChild(msup)
+-            else:
+-                msubsup = self.dom.createElement('mml:msubsup')
+-                msubsup.appendChild(mname)
+-                msubsup.appendChild(join(subs))
+-                msubsup.appendChild(join(supers))
+-                ci.appendChild(msubsup)
++            # For names without explicit markers (e.g., 'x2'), treat the
++            # entire name as the symbol name
++            ci.appendChild(self.dom.createTextNode(translate(sym.name)))
++
+         return ci
+ 
+     _print_MatrixSymbol = _print_Symbol
+@@ -743,10 +753,6 @@
+         return mrow
+ 
+     def _print_Symbol(self, sym, style='plain'):
+-        x = self.dom.createElement('mi')
+-
+-        if style == 'bold':
+-            x.setAttribute('mathvariant', 'bold')
+ 
+         def join(items):
+             if len(items) > 1:
+@@ -772,33 +778,46 @@
+             else:
+                 return s
+ 
+-        name, supers, subs = split_super_sub(sym.name)
+-        name = translate(name)
+-        supers = [translate(sup) for sup in supers]
+-        subs = [translate(sub) for sub in subs]
+-
+-        mname = self.dom.createElement('mi')
+-        mname.appendChild(self.dom.createTextNode(name))
+-        if len(supers) == 0:
+-            if len(subs) == 0:
+-                x.appendChild(self.dom.createTextNode(name))
++        # Only apply split_super_sub if the name contains explicit subscript
++        # or superscript markers (_ or ^). This prevents names like 'x2' from
++        # being treated as 'x' with subscript '2', which causes rendering
++        # issues in some browsers (e.g., Safari).
++        if '_' in sym.name or '^' in sym.name:
++            name, supers, subs = split_super_sub(sym.name)
++            name = translate(name)
++            supers = [translate(sup) for sup in supers]
++            subs = [translate(sub) for sub in subs]
++
++            mname = self.dom.createElement('mi')
++            mname.appendChild(self.dom.createTextNode(name))
++            if len(supers) == 0:
++                if len(subs) == 0:
++                    x = self.dom.createElement('mi')
++                    x.appendChild(self.dom.createTextNode(name))
++                else:
++                    x = self.dom.createElement('msub')
++                    x.appendChild(mname)
++                    x.appendChild(join(subs))
+             else:
+-                msub = self.dom.createElement('msub')
+-                msub.appendChild(mname)
+-                msub.appendChild(join(subs))
+-                x.appendChild(msub)
++                if len(subs) == 0:
++                    x = self.dom.createElement('msup')
++                    x.appendChild(mname)
++                    x.appendChild(join(supers))
++                else:
++                    x = self.dom.createElement('msubsup')
++                    x.appendChild(mname)
++                    x.appendChild(join(subs))
++                    x.appendChild(join(supers))
+         else:
+-            if len(subs) == 0:
+-                msup = self.dom.createElement('msup')
+-                msup.appendChild(mname)
+-                msup.appendChild(join(supers))
+-                x.appendChild(msup)
+-            else:
+-                msubsup = self.dom.createElement('msubsup')
+-                msubsup.appendChild(mname)
+-                msubsup.appendChild(join(subs))
+-                msubsup.appendChild(join(supers))
+-                x.appendChild(msubsup)
++            # For names without explicit markers (e.g., 'x2'), treat the
++            # entire name as the symbol name
++            name = translate(sym.name)
++            x = self.dom.createElement('mi')
++            x.appendChild(self.dom.createTextNode(name))
++
++        if style == 'bold':
++            x.setAttribute('mathvariant', 'bold')
++
+         return x
+ 
+     def _print_MatrixSymbol(self, sym):

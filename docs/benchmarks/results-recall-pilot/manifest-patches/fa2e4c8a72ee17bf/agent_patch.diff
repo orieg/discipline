@@ -1,0 +1,37 @@
+diff --git a/django/core/cache/backends/db.py b/django/core/cache/backends/db.py
+--- a/django/core/cache/backends/db.py
++++ b/django/core/cache/backends/db.py
+@@ -267,9 +267,30 @@
+                 cursor.execute(
+                     connection.ops.cache_key_culling_sql() % table,
+                     [cull_num])
+-                cursor.execute("DELETE FROM %s "
+-                               "WHERE cache_key < %%s" % table,
+-                               [cursor.fetchone()[0]])
++                result = cursor.fetchone()
++                if result:
++                    cursor.execute("DELETE FROM %s "
++                                   "WHERE cache_key < %%s" % table,
++                                   [result[0]])
++                else:
++                    # If there's no row at the offset (which can happen if the
++                    # offset is larger than the number of rows), fall back to
++                    # deleting the oldest entries directly. We need to delete
++                    # num - _max_entries + 1 entries (not just num - _max_entries)
++                    # because we'll add one entry after culling.
++                    delete_count = num - self._max_entries + 1
++                    cursor.execute(
++                        "SELECT cache_key FROM %s ORDER BY cache_key LIMIT %%s" % table,
++                        [delete_count])
++                    keys = [row[0] for row in cursor.fetchall()]
++                    if keys:
++                        cursor.execute(
++                            "DELETE FROM %s WHERE cache_key IN (%s)" % (
++                                table,
++                                ','.join(['%s'] * len(keys))
++                            ),
++                            keys
++                        )
+ 
+     def clear(self):
+         db = router.db_for_write(self.cache_model_class)

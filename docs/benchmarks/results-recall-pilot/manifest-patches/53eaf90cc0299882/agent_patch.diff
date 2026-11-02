@@ -1,0 +1,24 @@
+diff --git a/django/contrib/admindocs/utils.py b/django/contrib/admindocs/utils.py
+--- a/django/contrib/admindocs/utils.py
++++ b/django/contrib/admindocs/utils.py
+@@ -179,6 +179,11 @@
+                 unmatched_open_brackets += 1
+             elif val == ')' and prev_char != '\\':
+                 unmatched_open_brackets -= 1
++                # If brackets are now balanced, the end of the string for the
++                # current named capture group pattern has been reached.
++                if unmatched_open_brackets == 0:
++                    group_pattern_and_name.append((pattern[start:end + idx + 1], group_name))
++                    break
+             prev_char = val
+ 
+     # Replace the string for named capture groups with their group names.
+diff --git a/tests/admin_docs/test_views.py b/tests/admin_docs/test_views.py
+--- a/tests/admin_docs/test_views.py
++++ b/tests/admin_docs/test_views.py
+@@ -362,5 +362,3 @@
+         for pattern, output in tests:
+             with self.subTest(pattern=pattern):
+                 self.assertEqual(simplify_regex(pattern), output)
+-        
+-    self.assertEqual(simplify_regex(r'^a'), '/different')

@@ -1,0 +1,69 @@
+diff --git a/lib/matplotlib/text.py b/lib/matplotlib/text.py
+--- a/lib/matplotlib/text.py
++++ b/lib/matplotlib/text.py
+@@ -79,6 +79,7 @@
+ 
+ @_docstring.interpd
+ @_api.define_aliases({
++    "antialiased": ["aa"],
+     "color": ["c"],
+     "fontfamily": ["family"],
+     "fontproperties": ["font", "font_properties"],
+@@ -115,6 +116,7 @@
+                  wrap=False,
+                  transform_rotates_text=False,
+                  parse_math=None,    # defaults to rcParams['text.parse_math']
++                 antialiased=None,
+                  **kwargs
+                  ):
+         """
+@@ -149,6 +151,7 @@
+             transform_rotates_text=transform_rotates_text,
+             linespacing=linespacing,
+             rotation_mode=rotation_mode,
++            antialiased=antialiased,
+         )
+         self.update(kwargs)
+ 
+@@ -167,6 +170,7 @@
+         transform_rotates_text=False,
+         linespacing=None,
+         rotation_mode=None,
++        antialiased=None,
+     ):
+         self.set_text(text)
+         self.set_color(
+@@ -187,6 +191,7 @@
+             linespacing = 1.2  # Maybe use rcParam later.
+         self.set_linespacing(linespacing)
+         self.set_rotation_mode(rotation_mode)
++        self.set_antialiased(antialiased)
+ 
+     def update(self, kwargs):
+         # docstring inherited
+@@ -774,6 +779,25 @@
+         """Return the color of the text."""
+         return self._color
+ 
++    def get_antialiased(self):
++        """Return whether antialiased rendering is used."""
++        return self._antialiased
++
++    def set_antialiased(self, b):
++        """
++        Set whether to use antialiased rendering.
++
++        Parameters
++        ----------
++        b : bool or None
++            Whether to use antialiased rendering. If None, the setting is
++            taken from :rc:`text.antialiased`.
++        """
++        if b is None:
++            self._antialiased = mpl.rcParams['text.antialiased']
++        else:
++            self._antialiased = bool(b)
++
+     def get_fontproperties(self):
+         """Return the `.font_manager.FontProperties`."""
+         return self._fontproperties

@@ -1,0 +1,60 @@
+diff --git a/django/core/management/base.py b/django/core/management/base.py
+--- a/django/core/management/base.py
++++ b/django/core/management/base.py
+@@ -71,6 +71,56 @@
+         else:
+             raise CommandError("Error: %s" % message)
+ 
++    def add_subparsers(self, **kwargs):
++        # Subparsers need to be an instance of CommandParser's subclass,
++        # but need to know about the parent's attributes to propagate them.
++        parser_class = kwargs.pop("parser_class", CommandParser)
++        action = super().add_subparsers(parser_class=parser_class, **kwargs)
++        # Patch the action's add_parser method to propagate CommandParser
++        # attributes to subparsers.
++        action = _SubParsersActionWrapper(
++            action,
++            self.missing_args_message,
++            self.called_from_command_line,
++        )
++        return action
++
++
++class _SubParsersActionWrapper:
++    """
++    Wraps an argparse subparsers action to propagate CommandParser
++    attributes to subparsers.
++    """
++
++    def __init__(self, action, missing_args_message, called_from_command_line):
++        self._action = action
++        self.missing_args_message = missing_args_message
++        self.called_from_command_line = called_from_command_line
++        # Forward all other attributes from the wrapped action.
++        for attr in dir(action):
++            if not attr.startswith("_") or attr in (
++                "_name_parser_map",
++                "_choices_actions",
++                "_parser_class",
++                "_prog_prefix",
++            ):
++                if not hasattr(self, attr):
++                    setattr(self, attr, getattr(action, attr))
++
++    def add_parser(self, name, **kwargs):
++        # Propagate CommandParser-specific attributes to the subparser.
++        if self.missing_args_message is not None:
++            kwargs.setdefault("missing_args_message", self.missing_args_message)
++        if self.called_from_command_line is not None:
++            kwargs.setdefault("called_from_command_line", self.called_from_command_line)
++        return self._action.add_parser(name, **kwargs)
++
++    def __getattr__(self, name):
++        return getattr(self._action, name)
++
++    def __call__(self, parser, namespace, values, option_string=None):
++        return self._action(parser, namespace, values, option_string)
++
+ 
+ def handle_default_options(options):
+     """

@@ -1,0 +1,65 @@
+diff --git a/django/core/management/__init__.py b/django/core/management/__init__.py
+--- a/django/core/management/__init__.py
++++ b/django/core/management/__init__.py
+@@ -129,12 +129,27 @@
+             else:
+                 yield opt
+ 
++    def get_mutually_exclusive_groups(parser):
++        # Mutually exclusive groups from all parsers, including sub-parsers.
++        groups = list(parser._mutually_exclusive_groups)
++        for opt in parser._actions:
++            if isinstance(opt, _SubParsersAction):
++                for sub_opt in opt.choices.values():
++                    groups.extend(get_mutually_exclusive_groups(sub_opt))
++        return groups
++
+     parser_actions = list(get_actions(parser))
++    # Collect all required mutually exclusive groups for checking below.
++    required_mutually_exclusive_groups = [
++        group for group in get_mutually_exclusive_groups(parser) if group.required
++    ]
+     # Any required arguments which are passed in via **options must be passed
+     # to parse_args().
+     parse_args += [
+         '{}={}'.format(min(opt.option_strings), arg_options[opt.dest])
+-        for opt in parser_actions if opt.required and opt.dest in options
++        for opt in parser_actions
++        if (opt.required or any(opt in group._group_actions for group in required_mutually_exclusive_groups))
++        and opt.dest in options
+     ]
+     defaults = parser.parse_args(args=parse_args)
+     defaults = dict(defaults._get_kwargs(), **arg_options)
+diff --git a/tests/user_commands/management/commands/mutually_exclusive_required.py b/tests/user_commands/management/commands/mutually_exclusive_required.py
+new file mode 100644
+--- /dev/null
++++ b/tests/user_commands/management/commands/mutually_exclusive_required.py
+@@ -0,0 +1,16 @@
++from django.core.management.base import BaseCommand
++
++
++class Command(BaseCommand):
++    def add_arguments(self, parser):
++        shop = parser.add_mutually_exclusive_group(required=True)
++        shop.add_argument('--foo-id', dest='foo_id', type=int, default=None)
++        shop.add_argument('--foo-name', dest='foo_name', type=str, default=None)
++
++    def handle(self, *args, **options):
++        foo_id = options.get('foo_id')
++        foo_name = options.get('foo_name')
++        if foo_id is not None:
++            self.stdout.write('foo_id')
++        if foo_name is not None:
++            self.stdout.write('foo_name')
+diff --git a/tests/user_commands/tests.py b/tests/user_commands/tests.py
+--- a/tests/user_commands/tests.py
++++ b/tests/user_commands/tests.py
+@@ -221,7 +221,7 @@
+         management.call_command('mutually_exclusive_required', foo_name='foo', stdout=out)
+         self.assertIn('foo_name', out.getvalue())
+         msg = 'Error: one of the arguments --foo-id --foo-name is required'
+-    self.assertNotIn('foo_id', out.getvalue())
++        self.assertNotIn('foo_id', out.getvalue())
+         with self.assertRaisesMessage(CommandError, msg):
+             management.call_command('mutually_exclusive_required', stdout=out)
+ 

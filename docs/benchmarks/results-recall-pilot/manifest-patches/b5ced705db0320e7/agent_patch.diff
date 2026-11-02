@@ -1,0 +1,14 @@
+diff --git a/sympy/codegen/ast.py b/sympy/codegen/ast.py
+--- a/sympy/codegen/ast.py
++++ b/sympy/codegen/ast.py
+@@ -904,6 +904,10 @@
+             raise TypeError("Argument text is not a string type.")
+         return text
+ 
++    @property
++    def args(self):
++        return (self.text,)
++
+     def _sympystr(self, printer, *args, **kwargs):
+         return self.text
+ 

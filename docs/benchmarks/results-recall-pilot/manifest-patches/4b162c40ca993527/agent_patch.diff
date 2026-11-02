@@ -1,0 +1,37 @@
+diff --git a/lib/matplotlib/text.py b/lib/matplotlib/text.py
+--- a/lib/matplotlib/text.py
++++ b/lib/matplotlib/text.py
+@@ -79,6 +79,7 @@
+ 
+ @_docstring.interpd
+ @_api.define_aliases({
++    "antialiased": ["aa"],
+     "color": ["c"],
+     "fontfamily": ["family"],
+     "fontproperties": ["font", "font_properties"],
+@@ -115,6 +116,7 @@
+                  wrap=False,
+                  transform_rotates_text=False,
+                  parse_math=None,    # defaults to rcParams['text.parse_math']
++                 antialiased=None,   # defaults to rcParams['text.antialiased']
+                  **kwargs
+                  ):
+         """
+@@ -167,6 +169,7 @@
+         transform_rotates_text=False,
+         linespacing=None,
+         rotation_mode=None,
++        antialiased=None,
+     ):
+         self.set_text(text)
+         self.set_color(
+@@ -187,6 +190,9 @@
+             linespacing = 1.2  # Maybe use rcParam later.
+         self.set_linespacing(linespacing)
+         self.set_rotation_mode(rotation_mode)
++        self.set_antialiased(
++            antialiased if antialiased is not None else
++            mpl.rcParams['text.antialiased'])
+ 
+     def update(self, kwargs):
+         # docstring inherited

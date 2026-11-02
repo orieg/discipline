@@ -1,0 +1,60 @@
+diff --git a/lib/matplotlib/text.py b/lib/matplotlib/text.py
+--- a/lib/matplotlib/text.py
++++ b/lib/matplotlib/text.py
+@@ -115,6 +115,7 @@
+                  wrap=False,
+                  transform_rotates_text=False,
+                  parse_math=None,    # defaults to rcParams['text.parse_math']
++                 antialiased=None,   # defaults to rcParams['text.antialiased']
+                  **kwargs
+                  ):
+         """
+@@ -149,6 +150,7 @@
+             transform_rotates_text=transform_rotates_text,
+             linespacing=linespacing,
+             rotation_mode=rotation_mode,
++            antialiased=antialiased,
+         )
+         self.update(kwargs)
+ 
+@@ -167,6 +169,7 @@
+         transform_rotates_text=False,
+         linespacing=None,
+         rotation_mode=None,
++        antialiased=None,  # defaults to rcParams['text.antialiased']
+     ):
+         self.set_text(text)
+         self.set_color(
+@@ -187,6 +190,9 @@
+             linespacing = 1.2  # Maybe use rcParam later.
+         self.set_linespacing(linespacing)
+         self.set_rotation_mode(rotation_mode)
++        self._antialiased = (antialiased
++                             if antialiased is not None
++                             else mpl.rcParams['text.antialiased'])
+ 
+     def update(self, kwargs):
+         # docstring inherited
+@@ -589,6 +595,22 @@
+         """
+         self._wrap = wrap
+ 
++    def get_antialiased(self):
++        """Return whether antialiased rendering is used."""
++        return self._antialiased
++
++    def set_antialiased(self, b):
++        """
++        Set whether to use antialiased rendering.
++
++        Parameters
++        ----------
++        b : bool
++        """
++        if self._antialiased != b:
++            self.stale = True
++        self._antialiased = b
++
+     def _get_wrap_line_width(self):
+         """
+         Return the maximum line width for wrapping text based on the current

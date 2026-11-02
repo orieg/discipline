@@ -1,0 +1,35 @@
+diff --git a/django/middleware/cache.py b/django/middleware/cache.py
+--- a/django/middleware/cache.py
++++ b/django/middleware/cache.py
+@@ -71,6 +71,7 @@
+         self.cache_alias = settings.CACHE_MIDDLEWARE_ALIAS
+         self.cache = caches[self.cache_alias]
+         self.get_response = get_response
++        super().__init__()
+ 
+     def _should_update_cache(self, request, response):
+         return hasattr(request, '_cache_update_cache') and request._cache_update_cache
+@@ -133,6 +134,7 @@
+         self.cache_alias = settings.CACHE_MIDDLEWARE_ALIAS
+         self.cache = caches[self.cache_alias]
+         self.get_response = get_response
++        super().__init__(get_response)
+ 
+     def process_request(self, request):
+         """
+@@ -201,3 +203,4 @@
+         self.cache_timeout = cache_timeout
+         self.page_timeout = page_timeout
+         self.cache = caches[self.cache_alias]
++        super().__init__(get_response)
+diff --git a/django/middleware/security.py b/django/middleware/security.py
+--- a/django/middleware/security.py
++++ b/django/middleware/security.py
+@@ -20,6 +20,7 @@
+         self.redirect_exempt = [re.compile(r) for r in settings.SECURE_REDIRECT_EXEMPT]
+         self.referrer_policy = settings.SECURE_REFERRER_POLICY
+         self.get_response = get_response
++        super().__init__(get_response)
+ 
+     def process_request(self, request):
+         path = request.path.lstrip("/")

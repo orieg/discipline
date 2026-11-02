@@ -1,0 +1,29 @@
+diff --git a/django/contrib/admindocs/utils.py b/django/contrib/admindocs/utils.py
+--- a/django/contrib/admindocs/utils.py
++++ b/django/contrib/admindocs/utils.py
+@@ -180,6 +180,12 @@
+             elif val == ')' and prev_char != '\\':
+                 unmatched_open_brackets -= 1
+             prev_char = val
++        else:
++            # The group extends to the end of the pattern (e.g., when the
++            # pattern has no trailing characters after the group's closing
++            # bracket).
++            if unmatched_open_brackets == 0:
++                group_pattern_and_name.append((pattern[start:], group_name))
+ 
+     # Replace the string for named capture groups with their group names.
+     for group_pattern, group_name in group_pattern_and_name:
+@@ -212,6 +218,12 @@
+             elif val == ')' and prev_char != '\\':
+                 unmatched_open_brackets -= 1
+             prev_char = val
++        else:
++            # The group extends to the end of the pattern (e.g., when the
++            # pattern has no trailing characters after the group's closing
++            # bracket).
++            if unmatched_open_brackets == 0:
++                group_indices.append((start, start + 1 + idx))
+ 
+     # Remove unnamed group matches inside other unnamed capture groups.
+     group_start_end_indices = []

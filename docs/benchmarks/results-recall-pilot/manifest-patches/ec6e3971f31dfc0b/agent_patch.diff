@@ -1,0 +1,88 @@
+diff --git a/sphinx/domains/python.py b/sphinx/domains/python.py
+--- a/sphinx/domains/python.py
++++ b/sphinx/domains/python.py
+@@ -107,9 +107,14 @@
+                         refdomain='py', reftype=reftype, reftarget=text, **kwargs)
+ 
+ 
++class _LiteralValue(nodes.Text):
++    """A text node representing a literal value that should not be converted to a cross-reference."""
++    pass
++
++
+ def _parse_annotation(annotation: str, env: BuildEnvironment = None) -> List[Node]:
+     """Parse type annotation."""
+-    def unparse(node: ast.AST) -> List[Node]:
++    def unparse(node: ast.AST, inside_literal: bool = False) -> List[Node]:
+         if isinstance(node, ast.Attribute):
+             return [nodes.Text("%s.%s" % (unparse(node.value)[0], node.attr))]
+         elif isinstance(node, ast.BinOp):
+@@ -122,12 +127,16 @@
+         elif isinstance(node, ast.Constant):  # type: ignore
+             if node.value is Ellipsis:
+                 return [addnodes.desc_sig_punctuation('', "...")]
++            elif inside_literal:
++                # Literal value inside Literal[...]: return as plain text
++                # that won't be converted to a cross-reference
++                return [_LiteralValue(str(node.value))]
+             else:
+                 return [nodes.Text(node.value)]
+         elif isinstance(node, ast.Expr):
+-            return unparse(node.value)
++            return unparse(node.value, inside_literal)
+         elif isinstance(node, ast.Index):
+-            return unparse(node.value)
++            return unparse(node.value, inside_literal)
+         elif isinstance(node, ast.List):
+             result = [addnodes.desc_sig_punctuation('', '[')]
+             if node.elts:
+@@ -135,26 +144,34 @@
+                 # last element of result if the for-loop was run at least
+                 # once
+                 for elem in node.elts:
+-                    result.extend(unparse(elem))
++                    result.extend(unparse(elem, inside_literal))
+                     result.append(addnodes.desc_sig_punctuation('', ', '))
+                 result.pop()
+             result.append(addnodes.desc_sig_punctuation('', ']'))
+             return result
+         elif isinstance(node, ast.Module):
+-            return sum((unparse(e) for e in node.body), [])
++            return sum((unparse(e, inside_literal) for e in node.body), [])
+         elif isinstance(node, ast.Name):
+             return [nodes.Text(node.id)]
+         elif isinstance(node, ast.Subscript):
+-            result = unparse(node.value)
++            result = unparse(node.value, inside_literal)
+             result.append(addnodes.desc_sig_punctuation('', '['))
+-            result.extend(unparse(node.slice))
++
++            # Check if this is a Literal type
++            is_literal = False
++            if isinstance(node.value, ast.Name) and node.value.id == 'Literal':
++                is_literal = True
++            elif isinstance(node.value, ast.Attribute) and node.value.attr == 'Literal':
++                is_literal = True
++
++            result.extend(unparse(node.slice, inside_literal or is_literal))
+             result.append(addnodes.desc_sig_punctuation('', ']'))
+             return result
+         elif isinstance(node, ast.Tuple):
+             if node.elts:
+                 result = []
+                 for elem in node.elts:
+-                    result.extend(unparse(elem))
++                    result.extend(unparse(elem, inside_literal))
+                     result.append(addnodes.desc_sig_punctuation('', ', '))
+                 result.pop()
+             else:
+@@ -179,7 +196,8 @@
+         tree = ast_parse(annotation)
+         result = unparse(tree)
+         for i, node in enumerate(result):
+-            if isinstance(node, nodes.Text) and node.strip():
++            # Convert text nodes to cross-references, but not literal values
++            if isinstance(node, nodes.Text) and not isinstance(node, _LiteralValue) and node.strip():
+                 result[i] = type_to_xref(str(node), env)
+         return result
+     except SyntaxError:
