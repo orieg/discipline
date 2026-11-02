@@ -333,10 +333,27 @@ def amendment_3(results_dir: Path) -> dict[str, Any]:
     }
 
 
+def same_values(got: Any, want: Any) -> bool:
+    """Equal, except that floats agree to 1e-9 relative: `sum` rounds differently from Python 3.12."""
+    if isinstance(got, float) or isinstance(want, float):
+        return (isinstance(got, (int, float)) and isinstance(want, (int, float))
+                and not isinstance(got, bool) and not isinstance(want, bool)
+                and math.isclose(got, want, rel_tol=1e-9, abs_tol=1e-12))
+    if isinstance(got, dict) and isinstance(want, dict):
+        return got.keys() == want.keys() and all(same_values(got[k], want[k]) for k in got)
+    if isinstance(got, list) and isinstance(want, list):
+        return len(got) == len(want) and all(same_values(g, w) for g, w in zip(got, want))
+    return type(got) is type(want) and got == want
+
+
 # --- Self-check -----------------------------------------------------------------------
 
 
 def run_self_checks() -> None:
+    assert same_values({"d": [1.0640000000000007, 224]}, {"d": [1.0640000000000003, 224]})
+    assert not same_values({"d": [1.064, 224]}, {"d": [1.065, 224]})
+    assert not same_values({"n": 224}, {"n": 225}) and not same_values({"n": 1}, {"n": True})
+    assert not same_values({"a": 1.0}, {"a": 1.0, "b": 2}) and not same_values([1.0], [1.0, 2.0])
     assert redact_state('{"m": "vendor/x-35B"}', {"vendor/x-35B": "family-1"}) == '{"m": "family-1"}'
     try:
         redact_state("vendor/x", {"vendor/x": "vendor/x"})
@@ -463,7 +480,7 @@ def main() -> int:
                 continue
             want = json.loads((args.check / name).read_text())
             got = json.loads(json.dumps(compute(args.check), sort_keys=True))
-            if got != want:
+            if not same_values(got, want):
                 print(f"{name} does not match a recomputation from its inputs", file=sys.stderr)
                 return 1
             print(f"{name} matches its inputs.")
