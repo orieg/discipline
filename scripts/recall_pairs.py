@@ -855,6 +855,10 @@ def build_lcb_pair(entry: dict[str, Any], sample: dict[str, Any], patch_dir: Pat
 
 ORACLE_APPLY_CMD = "git apply --check /tmp/oracle_patch.diff"
 
+# Exclusions that leave a dummy run without a score (`[population].validity_filter`: "a dummy
+# run that errors or has no score is a missing dummy").
+DUMMY_MISSING = ("no-final-state", "reached-network")
+
 
 def oracle_applied(sample: dict[str, Any]) -> bool | None:
     """Whether the harness's `oracle` dummy applied its patch: the exit code of its `git apply` in the
@@ -873,7 +877,10 @@ def apply_validity_filter(entries: list[dict[str, Any]]) -> str:
     dummies: dict[tuple[str, str], dict[str, tuple[bool | None, bool | None]]] = {}
     for e in entries:
         if e["dummy"]:
-            passed = None if e["exclusion"] else e["passed"]
+            # Only a dummy without a score is missing; a pair-reconstruction exclusion (its
+            # `model_patch` against the test patch) says nothing about the dummy's score.
+            missing = (e["exclusion"] or "").split(":", 1)[0] in DUMMY_MISSING
+            passed = None if missing else e["passed"]
             dummies.setdefault((e["instance_id"], str(e["split"])), {})[e["dummy"]] = (passed, e.get("oracle_applied"))
     if not dummies:
         return "not-run"
@@ -894,6 +901,16 @@ def apply_validity_filter(entries: list[dict[str, Any]]) -> str:
     return "applied"
 
 
+def alias_model(model: Any, aliases: dict[str, str]) -> Any:
+    """`[arms].model_families`: the provider's model identifier stays out of committed files, so with
+    `aliases` every model must have one (a model without an alias raises instead of leaking)."""
+    if not aliases:
+        return model
+    if model not in aliases:
+        raise ValueError(f"no --model-alias for a model in the logs ({len(str(model))} characters)")
+    return aliases[model]
+
+
 def build_manifest(
     log_dir: Path,
     out: Path,
@@ -901,11 +918,13 @@ def build_manifest(
     materialise: Path | None = None,
     split_salt: str | None = None,
     network_flagged: set[tuple[str, str]] | None = None,
+    model_aliases: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     patch_dir = out.parent / (out.stem + "-patches")
     entries: list[dict[str, Any]] = []
     for log_path, header, sample in iter_log_samples(log_dir):
         entry = _entry_skeleton(log_path, header, sample)
+        entry["model"] = alias_model(entry["model"], model_aliases or {})
         if split_salt:
             entry["population_split"] = population_split(entry["instance_id"], split_salt)
         if network_flagged and (entry["run_id"], entry["instance_id"]) in network_flagged:
@@ -1184,6 +1203,12 @@ def _self_check_validity_and_split() -> None:
                       d("i7", "oneoff", "nochange", False), d("i7", "oneoff", None, True)]
     apply_validity_filter(failed_control)
     assert failed_control[-1]["exclusion"] == "oracle-positive-control-failed"
+    # A positive control whose pair could not be rebuilt still ran, applied and passed.
+    rebuilt = [d("i8", "original", "oracle", True, True, "head-not-rebuildable:inconsistent-base-lines:t.py:3"),
+               d("i8", "oneoff", "oracle", False, True), d("i8", "oneoff", "nochange", False),
+               d("i8", "oneoff", None, False)]
+    apply_validity_filter(rebuilt)
+    assert rebuilt[-1]["exclusion"] is None, rebuilt[-1]
     def apply_event(result: int) -> dict[str, Any]:
         cmd = f"bash -c 'cd /testbed && {ORACLE_APPLY_CMD} && git apply /tmp/oracle_patch.diff'"
         return {"event": "sandbox", "action": "exec", "cmd": cmd, "result": result}
@@ -1198,7 +1223,19 @@ def _self_check_validity_and_split() -> None:
     assert population_split("inst-1", salt) == population_split("inst-1", salt)
 
 
+def _self_check_model_alias() -> None:
+    assert alias_model("vendor/model-x", {}) == "vendor/model-x"
+    assert alias_model("vendor/model-x", {"vendor/model-x": "family-1"}) == "family-1"
+    try:
+        alias_model("vendor/model-y", {"vendor/model-x": "family-1"})
+    except ValueError as e:
+        assert "model-y" not in str(e), e
+    else:
+        raise AssertionError("a model without an alias was written through")
+
+
 def run_self_checks() -> None:
+    _self_check_model_alias()
     _self_check_subtraction()
     _self_check_fuzz()
     _self_check_logs()
@@ -1218,6 +1255,10 @@ def main() -> int:
     parser.add_argument("--materialise", type=Path, help="Keep one git repository per pair under this directory.")
     parser.add_argument("--split-salt", help="`[population].split_salt`: assigns each instance to pilot or confirmatory.")
     parser.add_argument(
+        "--model-alias", action="append", default=[], metavar="MODEL=LABEL",
+        help="Write LABEL (e.g. family-1) for MODEL in the manifest; with any alias, every model needs one (repeatable).",
+    )
+    parser.add_argument(
         "--network-flagged", type=Path,
         help="JSON list of [run_id, instance_id] runs that reached a host other than the model API (excluded).",
     )
@@ -1236,7 +1277,13 @@ def main() -> int:
     flagged: set[tuple[str, str]] = set()
     if args.network_flagged:
         flagged = {(str(r), str(i)) for r, i in json.loads(args.network_flagged.read_text())}
-    manifest = build_manifest(args.logs, args.out, clones, args.materialise, args.split_salt, flagged)
+    aliases: dict[str, str] = {}
+    for spec in args.model_alias:
+        model, _, label = spec.rpartition("=")
+        if not model or not label:
+            parser.error(f"--model-alias expects MODEL=LABEL, got {spec}")
+        aliases[model] = label
+    manifest = build_manifest(args.logs, args.out, clones, args.materialise, args.split_salt, flagged, aliases)
     print(json.dumps({
         "pairs": len(manifest["pairs"]),
         "verified": sum(p["reproduction"] == "verified" for p in manifest["pairs"]),
