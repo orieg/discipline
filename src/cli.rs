@@ -519,6 +519,12 @@ pub struct CheckArgs {
     #[arg(long)]
     pub json_out: Option<PathBuf>,
 
+    /// Add a `timings` object to the JSON report: wall time per gate and per shared phase,
+    /// and counts of the work behind it (or set DISCIPLINE_TIMINGS=1). Never part of a
+    /// verdict, a baseline or a replay comparison
+    #[arg(long)]
+    pub timings: bool,
+
     /// Write the formatted report to this path
     #[arg(short = 'o', long = "output-file")]
     pub output_file: Option<PathBuf>,

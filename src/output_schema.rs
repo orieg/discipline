@@ -56,9 +56,46 @@ pub fn report_schema() -> Value {
             "unused_directives": { "type": "array", "items": { "$ref": "#/$defs/UnusedDirective" }, "description": "Directives this run read that lifted no finding; never fails the run. Computed when every suite ran. Omitted when empty" },
             "could_not_check": { "$ref": "#/$defs/CouldNotCheck", "description": "Why the check could not run (exit 2). Omitted otherwise" },
             "hook": { "$ref": "#/$defs/HookContext", "description": "The agent hook that ran this check, and what it answers on this report. Omitted when no hook ran the check" },
-            "review_routing": { "$ref": "#/$defs/ReviewRouting", "description": "UNSTABLE until 1.0: names and shape may change in any release, and none is in the frozen interface. What the change touches that a reviewer routes on: an inventory, never a verdict. Omitted when the run has no change to describe" }
+            "review_routing": { "$ref": "#/$defs/ReviewRouting", "description": "UNSTABLE until 1.0: names and shape may change in any release, and none is in the frozen interface. What the change touches that a reviewer routes on: an inventory, never a verdict. Omitted when the run has no change to describe" },
+            "timings": { "$ref": "#/$defs/Timings", "description": "UNSTABLE until 1.0: names and shape may change in any release, and none is in the frozen interface. Wall time per gate and per shared phase, and counts of the work behind it. Present only when asked for (`--timings`, `DISCIPLINE_TIMINGS=1`); never part of a verdict, a baseline or a replay comparison" }
         },
         "$defs": {
+            "Timings": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["stability", "total_ms", "phases", "gates", "counters"],
+                "description": "Unstable until 1.0. A scope nested in another (the shared diff extraction inside a gate) is charged to itself only, so the entries add up to the run",
+                "properties": {
+                    "stability": { "type": "string", "description": "The section's stability statement" },
+                    "total_ms": { "type": "number", "minimum": 0, "description": "Wall time from the start of the run to the report" },
+                    "phases": { "type": "array", "items": { "$ref": "#/$defs/TimingEntry" }, "description": "Shared phases (configuration, repository, agent-diff, vocabulary, ...), in the order first entered" },
+                    "gates": { "type": "array", "items": { "$ref": "#/$defs/TimingEntry" }, "description": "Gates, in the order they ran; a gate not run has no entry" },
+                    "counters": { "$ref": "#/$defs/TimingCounters", "description": "Every count of the run" }
+                }
+            },
+            "TimingEntry": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "calls", "duration_ms", "counters"],
+                "properties": {
+                    "name": { "type": "string" },
+                    "calls": { "type": "integer", "minimum": 1, "description": "Times the scope was entered" },
+                    "duration_ms": { "type": "number", "minimum": 0, "description": "Wall time in the scope, less the scopes nested in it" },
+                    "counters": { "$ref": "#/$defs/TimingCounters" }
+                }
+            },
+            "TimingCounters": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["extract_calls", "extract_bytes", "changed_files_calls", "tracked_files_calls"],
+                "description": "Deterministic for one tree and configuration",
+                "properties": {
+                    "extract_calls": { "type": "integer", "minimum": 0, "description": "Files a language pack fully extracted" },
+                    "extract_bytes": { "type": "integer", "minimum": 0, "description": "Bytes of source those extractions read" },
+                    "changed_files_calls": { "type": "integer", "minimum": 0, "description": "Listings of the change's files" },
+                    "tracked_files_calls": { "type": "integer", "minimum": 0, "description": "Listings of the repository's tracked files" }
+                }
+            },
             "ReviewRouting": {
                 "type": "object",
                 "additionalProperties": false,

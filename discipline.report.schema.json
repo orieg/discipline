@@ -437,6 +437,108 @@
       ],
       "type": "object"
     },
+    "TimingCounters": {
+      "additionalProperties": false,
+      "description": "Deterministic for one tree and configuration",
+      "properties": {
+        "changed_files_calls": {
+          "description": "Listings of the change's files",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "extract_bytes": {
+          "description": "Bytes of source those extractions read",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "extract_calls": {
+          "description": "Files a language pack fully extracted",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tracked_files_calls": {
+          "description": "Listings of the repository's tracked files",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "extract_calls",
+        "extract_bytes",
+        "changed_files_calls",
+        "tracked_files_calls"
+      ],
+      "type": "object"
+    },
+    "TimingEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "calls": {
+          "description": "Times the scope was entered",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "counters": {
+          "$ref": "#/$defs/TimingCounters"
+        },
+        "duration_ms": {
+          "description": "Wall time in the scope, less the scopes nested in it",
+          "minimum": 0,
+          "type": "number"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "calls",
+        "duration_ms",
+        "counters"
+      ],
+      "type": "object"
+    },
+    "Timings": {
+      "additionalProperties": false,
+      "description": "Unstable until 1.0. A scope nested in another (the shared diff extraction inside a gate) is charged to itself only, so the entries add up to the run",
+      "properties": {
+        "counters": {
+          "$ref": "#/$defs/TimingCounters",
+          "description": "Every count of the run"
+        },
+        "gates": {
+          "description": "Gates, in the order they ran; a gate not run has no entry",
+          "items": {
+            "$ref": "#/$defs/TimingEntry"
+          },
+          "type": "array"
+        },
+        "phases": {
+          "description": "Shared phases (configuration, repository, agent-diff, vocabulary, ...), in the order first entered",
+          "items": {
+            "$ref": "#/$defs/TimingEntry"
+          },
+          "type": "array"
+        },
+        "stability": {
+          "description": "The section's stability statement",
+          "type": "string"
+        },
+        "total_ms": {
+          "description": "Wall time from the start of the run to the report",
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "stability",
+        "total_ms",
+        "phases",
+        "gates",
+        "counters"
+      ],
+      "type": "object"
+    },
     "UnusedDirective": {
       "additionalProperties": false,
       "properties": {
@@ -605,6 +707,10 @@
       "description": "Baseline entries no finding of this run matched (resolved findings), a disabled gate's included; `discipline baseline --write` drops them. Omitted when there are none",
       "minimum": 1,
       "type": "integer"
+    },
+    "timings": {
+      "$ref": "#/$defs/Timings",
+      "description": "UNSTABLE until 1.0: names and shape may change in any release, and none is in the frozen interface. Wall time per gate and per shared phase, and counts of the work behind it. Present only when asked for (`--timings`, `DISCIPLINE_TIMINGS=1`); never part of a verdict, a baseline or a replay comparison"
     },
     "unused_directives": {
       "description": "Directives this run read that lifted no finding; never fails the run. Computed when every suite ran. Omitted when empty",

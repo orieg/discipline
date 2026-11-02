@@ -72,6 +72,7 @@ base\:"The configuration on the base ref"))' \
 '--trust-workspace[Trust the workspace and disable libgit2 repository owner validation (off by default, or set DISCIPLINE_TRUST_WORKSPACE=1)]' \
 '-q[Suppress output on success (only print output when violations are found)]' \
 '--quiet[Suppress output on success (only print output when violations are found)]' \
+'--timings[Add a \`timings\` object to the JSON report\: wall time per gate and per shared phase, and counts of the work behind it (or set DISCIPLINE_TIMINGS=1). Never part of a verdict, a baseline or a replay comparison]' \
 '--allow-cross-host-bench[Allow benchmark comparison across mismatched host/runner provenance tags]' \
 '--no-baseline[Ignore grandfathering baseline even if present]' \
 '-h[Print help (see more with '\''--help'\'')]' \

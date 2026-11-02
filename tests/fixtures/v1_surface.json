@@ -142,6 +142,7 @@
       "check --test-base-report",
       "check --test-head-report",
       "check --test-report",
+      "check --timings",
       "check --trust-workspace",
       "check -b",
       "check -c",
@@ -1175,6 +1176,7 @@
       "DISCIPLINE_TEST_BASE_REPORT",
       "DISCIPLINE_TEST_HEAD_REPORT",
       "DISCIPLINE_TEST_REPORT",
+      "DISCIPLINE_TIMINGS",
       "DISCIPLINE_TRUST_WORKSPACE"
     ],
     "exit_codes": [

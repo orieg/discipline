@@ -763,6 +763,9 @@ const STRIPPED: &[&str] = &[
     "GITEA_ACTOR",
     "FORGEJO_ACTOR",
     "GITLAB_USER_LOGIN",
+    // Wall time is not deterministic: a replayed check never records it, and asking for
+    // it does not change a cached verdict's key.
+    crate::timings::TIMINGS_ENV,
 ];
 
 /// The verdict recorded under `key`, marked as read from the cache. A record that does

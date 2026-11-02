@@ -124,6 +124,8 @@ fn run_command(command: Commands) -> Result<bool> {
             quiet: false,
             format: args.format,
             json_out: args.json_out,
+            // DISCIPLINE_TIMINGS still asks for them.
+            timings: false,
             output_file: args.output_file,
             max_report_lines: None,
             report_gitlab: args.report_gitlab,
@@ -653,6 +655,11 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
     if args.trust_workspace {
         std::env::set_var("DISCIPLINE_TRUST_WORKSPACE", "1");
     }
+    if args.timings || discipline::timings::requested_by_env() {
+        discipline::timings::start();
+    } else {
+        discipline::timings::clear();
+    }
     // Before the base is detected and before any reader of the payload: a payload variable
     // that names an unusable file stops the run here, so the readers below, which cannot
     // fail, never take it for a run with no payload.
@@ -666,9 +673,10 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
         discipline::gitctx::named_head(args.commit.as_deref(), args.commit_range.as_deref())
             .map_or(Ok(()), |n| discipline::gitctx::verify_named_head(&n));
     progress.base = base_ref.clone();
-    let git = named
-        .and_then(|()| GitCtx::open(&base_ref, args.staged))
-        .map_err(|e| tag(Reason::Repository, e))?;
+    let git = discipline::timings::phase("repository", || {
+        named.and_then(|()| GitCtx::open(&base_ref, args.staged))
+    })
+    .map_err(|e| tag(Reason::Repository, e))?;
     progress.base = git.base_label().to_string();
     let extra_fail = if args.fail_on_overrides {
         Some(true)
@@ -685,19 +693,23 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
     } else {
         Some(non_empty_sources)
     };
-    let (config, config_path) = load_config(
-        &args.config,
-        Some(git.root()),
-        extra_fail,
-        extra_sources.clone(),
-    )
+    let (config, config_path) = discipline::timings::phase("configuration", || {
+        load_config(
+            &args.config,
+            Some(git.root()),
+            extra_fail,
+            extra_sources.clone(),
+        )
+    })
     .map_err(|e| tag(Reason::Configuration, e))?;
     // `--policy-from base`: the change is judged by the base ref's configuration. Its own
     // copy is still loaded (it must parse) and kept for `config-integrity` to diff.
     let (config, head_config) = if args.policy_from == discipline::cli::PolicyFrom::Base {
         let overrides = build_overrides(&args.config, extra_fail, extra_sources);
-        let base = load_base_policy(&git, &config_path, &overrides)
-            .map_err(|e| tag(Reason::Configuration, e))?;
+        let base = discipline::timings::phase("configuration", || {
+            load_base_policy(&git, &config_path, &overrides)
+        })
+        .map_err(|e| tag(Reason::Configuration, e))?;
         (base, Some(config))
     } else {
         (config, None)
@@ -764,11 +776,14 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
         }
     };
 
-    let commits = git.commits().map_err(|e| tag(Reason::Repository, e))?;
+    let commits = discipline::timings::phase("directives", || git.commits())
+        .map_err(|e| tag(Reason::Repository, e))?;
     // `merged-pr-body`: on a push event with no pull request body, the body of the merged
     // pull request each pushed commit arrived through is the review record that approved
     // its directives. A squash or rebase merge drops it from the commit message.
-    let merged = merged_pull_bodies(args, &config, &git, &commits, raw_pr_body.is_some())?;
+    let merged = discipline::timings::phase("directives", || {
+        merged_pull_bodies(args, &config, &git, &commits, raw_pr_body.is_some())
+    })?;
     let read = discipline::tokens::read_directives(
         raw_pr_body.as_deref(),
         &commits,
@@ -952,8 +967,10 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
         discipline::override_policy::inline_overrides_added(summary.overrides(), &changed);
     // The base side's floor: its budgets and approval rule hold whichever side judges the
     // change, and a protective gate or the file itself cannot be disarmed by it.
-    let floor = discipline::policy_floor::evaluate(&git, &config_path)
-        .map_err(|e| tag(Reason::Configuration, e))?;
+    let floor = discipline::timings::phase("policy-floor", || {
+        discipline::policy_floor::evaluate(&git, &config_path)
+    })
+    .map_err(|e| tag(Reason::Configuration, e))?;
     let directives = discipline::policy_floor::stricter_directives(
         &config.directives,
         floor.base_directives.as_ref(),
@@ -970,7 +987,8 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
     // What the change touches that a reviewer routes on: an inventory beside the verdict,
     // never part of it (#944).
     summary.review_routing =
-        discipline::routing::compute(&ctx).map_err(|e| tag(Reason::Repository, e))?;
+        discipline::timings::phase("review-routing", || discipline::routing::compute(&ctx))
+            .map_err(|e| tag(Reason::Repository, e))?;
 
     let raw_fail_on_overrides = config.directives.fail_on_overrides;
     let actor = args
@@ -1008,6 +1026,8 @@ fn check_inner(args: &CheckArgs, is_gitlab: bool, progress: &mut Progress) -> Re
     }
 
     let success = summary.is_success(args.fail_on_warnings, fail_on_overrides);
+    // The record ends before the report is written: `json_report` adds it.
+    discipline::timings::finish();
     progress.reported = true;
     if !(args.quiet && success) {
         match args.max_report_lines {
