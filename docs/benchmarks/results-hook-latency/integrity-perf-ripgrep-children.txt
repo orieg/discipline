@@ -1,0 +1,121 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 1K of event 'cycles'
+# Event count (approx.): 16048033635
+#
+# Children      Self  Command     Shared Object          Symbol
+# ........  ........  ..........  .....................  ........................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+#
+    79.55%     0.72%  main        discipline             [.] <discipline::ast::rust::RustPack as discipline::ast::LanguagePack>::extract
+    66.42%     0.00%  main        discipline             [.] discipline::guards::test_floor::evaluate_test_floor
+    60.41%     0.00%  main        discipline             [.] <discipline::guards::test_floor::AstTestCount>::add
+    60.33%     0.00%  main        discipline             [.] add (inlined)
+    60.33%     0.00%  main        discipline             [.] and_then<&dyn discipline::ast::LanguagePack, discipline::ast::ParsedFileFacts, discipline::guards::test_floor::{impl#2}::add::{closure#0}::{closure_env#0}> (inlined)
+    60.33%     0.00%  main        discipline             [.] and_then<alloc::string::String, discipline::ast::ParsedFileFacts, discipline::guards::test_floor::{impl#2}::add::{closure_env#0}> (inlined)
+    60.33%     0.00%  main        discipline             [.] {closure#0} (inlined)
+    47.91%     0.00%  main        discipline             [.] discipline::check_inner
+    38.70%     0.00%  main        discipline             [.] discipline::guards::run_checks
+    30.66%     0.00%  main        discipline             [.] count_workspace_ast_tests (inlined)
+    30.66%     0.00%  main        discipline             [.] discipline::guards::test_floor::count_workspace_ast_tests
+    30.39%     0.00%  main        discipline             [.] discipline::guards::test_floor::compare_with_base_static_count
+    30.39%     0.00%  main        discipline             [.] discipline::guards::test_floor::compare_with_floor
+    30.31%     0.00%  main        discipline             [.] count_base_workspace_ast_tests (inlined)
+    30.31%     0.00%  main        discipline             [.] discipline::guards::test_floor::count_base_workspace_ast_tests
+    29.35%     0.16%  main        discipline             [.] ts_tree_cursor_goto_next_sibling
+    23.86%     0.00%  main        discipline             [.] ts_tree_cursor_goto_next_sibling_internal (inlined)
+    23.86%     0.00%  main        discipline             [.] ts_tree_cursor_goto_sibling_internal (inlined)
+    22.81%     0.00%  main        discipline             [.] parse_within_budget (inlined)
+    22.25%     0.00%  main        discipline             [.] discipline::ast::source_text::parse_within_budget
+    19.60%     2.80%  main        discipline             [.] ts_parser_parse
+    19.60%     0.00%  main        discipline             [.] parse_counting_steps (inlined)
+    19.60%     0.00%  main        discipline             [.] ts_parser_parse_with_options
+    18.22%     0.00%  main        discipline             [.] ts_parser__advance (inlined)
+    15.21%    15.21%  main        discipline             [.] ts_tree_cursor_goto_sibling_internal.constprop.0
+    14.32%     0.00%  main        discipline             [.] shared_facts (inlined)
+    12.96%     0.00%  main        discipline             [.] <discipline::ast::PackSpec>::facts_to_method_checks
+    12.32%     0.32%  main        discipline             [.] <discipline::ast::rust::Extractor>::enter
+    10.81%     0.00%  main        discipline             [.] discipline::routing::compute
+    10.72%     0.00%  main        discipline             [.] discipline::ast::source_text::parse_file_as
+    10.72%     0.00%  main        discipline             [.] parse_file_as (inlined)
+    10.72%     0.00%  main        discipline             [.] facts_from_helper_loops (inlined)
+    10.64%     0.40%  main        discipline             [.] discipline::ast::calls::count
+    10.41%     0.00%  main        discipline             [.] discipline::guards::test_budget::evaluate_test_budget
+    10.33%     0.00%  main        discipline             [.] discipline::guards::test_budget::read_ast_budgets
+    10.17%     0.00%  main        discipline             [.] discipline::routing::test_names
+     9.97%     0.72%  main        discipline             [.] ts_tree_cursor_goto_first_child
+     9.59%     0.00%  main        discipline             [.] discipline::ast::runner_collection::scan_rust_modules
+     9.25%     7.89%  main        discipline             [.] ts_tree_cursor_goto_first_child_internal
+     8.72%     0.24%  main        discipline             [.] discipline::ast::caught_assertions::walk_tree
+     7.28%     0.00%  main        discipline             [.] ts_tree_cursor_child_iterator_next (inlined)
+     7.21%     7.21%  main        discipline             [.] ts_tree_cursor_child_iterator_next
+     7.04%     0.00%  main        discipline             [.] test_fn (inlined)
+     6.88%     0.00%  main        discipline             [.] discipline::guards::test_floor::tests_moved_out
+     6.39%     0.00%  main        discipline             [.] ts_parser__reduce (inlined)
+     6.13%     1.04%  main        discipline             [.] ts_parser__lex
+     5.76%     2.08%  main        discipline             [.] ts_tree_cursor_new
+     5.69%     0.24%  main        discipline             [.] discipline::ast::reach::dead_ranges
+     5.42%     0.00%  main        discipline             [.] <discipline::ast::runner_collection::RustCollectionRules>::read_tree::<<discipline::gitctx::ReadRecorder>::base::{closure#0}>
+     5.42%     0.00%  main        discipline             [.] <discipline::guards::test_floor::SideVocabularies>::base
+     5.42%     0.00%  main        discipline             [.] assert_vocabulary_for_base (inlined)
+     5.42%     0.00%  main        discipline             [.] base_runner_rules (inlined)
+     5.42%     0.00%  main        discipline             [.] discipline::guards::agent_diff::vocabulary::assert_vocabulary_for_base
+     5.42%     0.00%  main        discipline             [.] discipline::guards::agent_diff::vocabulary::base_runner_rules::{closure#0}
+     5.42%     0.00%  main        discipline             [.] rules_for_tree<discipline::guards::agent_diff::vocabulary::base_runner_rules::{closure_env#0}> (inlined)
+     5.34%     0.00%  main        discipline             [.] <discipline::ast::runner_collection::RunnerCollectionRules>::from_tree::<<discipline::gitctx::ReadRecorder>::base::{closure#0}>
+     5.34%     0.00%  main        discipline             [.] discipline::ast::runner_collection::follow_rust_modules::<<discipline::gitctx::ReadRecorder>::base::{closure#0}>
+     5.21%     0.00%  main        discipline             [.] <discipline::guards::test_floor::SideVocabularies>::head
+     5.21%     0.00%  main        discipline             [.] assert_vocabulary_for_head (inlined)
+     5.21%     0.00%  main        discipline             [.] discipline::guards::agent_diff::vocabulary::assert_vocabulary_for_head
+     5.21%     0.00%  main        discipline             [.] head_runner_rules (inlined)
+     5.21%     0.00%  main        discipline             [.] rules_for_key<discipline::guards::agent_diff::vocabulary::head_runner_rules::{closure_env#0}> (inlined)
+     5.20%     0.00%  main        discipline             [.] ts_tree_cursor_init (inlined)
+     5.13%     0.00%  main        discipline             [.] <discipline::ast::runner_collection::RunnerCollectionRules>::from_tree::<discipline::guards::agent_diff::vocabulary::head_runner_rules::{closure#0}::{closure#0}>
+     5.13%     0.00%  main        discipline             [.] <discipline::ast::runner_collection::RustCollectionRules>::read_tree::<discipline::guards::agent_diff::vocabulary::head_runner_rules::{closure#0}::{closure#0}>
+     5.09%     0.00%  main        discipline             [.] ts_tree_cursor_child_iterator_next (inlined)
+     5.05%     0.00%  main        discipline             [.] discipline::ast::runner_collection::follow_rust_modules::<discipline::guards::agent_diff::vocabulary::head_runner_rules::{closure#0}::{closure#0}>
+     4.62%     0.00%  main        discipline             [.] stack__iter (inlined)
+     4.56%     0.00%  main        discipline             [.] ts_tree_cursor_iterate_children (inlined)
+     4.48%     0.00%  main        discipline             [.] discipline::ast::caught_assertions::rust
+     4.40%     0.08%  main        discipline             [.] <discipline::ast::rust::Extractor>::count_asserts
+     4.40%     0.00%  main        discipline             [.] count_asserts (inlined)
+     4.40%     0.00%  main        discipline             [.] count_asserts_unmarked (inlined)
+     4.32%     0.24%  main        discipline             [.] discipline::ast::functions::extract
+     4.16%     2.08%  main        discipline             [.] ts_tree_cursor_reset
+     4.00%     4.00%  main        discipline             [.] ts_node_start_point
+     3.92%     0.00%  main        discipline             [.] <discipline::ast::rust::Extractor>::collect_comments
+     3.84%     3.84%  main        discipline             [.] ts_node_type
+     3.76%     3.76%  main        libc.so.6              [.] _int_free
+     3.68%     0.00%  main        discipline             [.] extract (inlined)
+     3.61%     2.49%  main        discipline             [.] ts_lex
+     3.61%     0.00%  main        discipline             [.] ts_parser__call_main_lex_fn (inlined)
+     3.60%     0.00%  main        discipline             [.] discipline::ast::budgets::extract
+     3.60%     0.24%  main        discipline             [.] discipline::ast::helper_loops::count
+     3.60%     0.00%  main        discipline             [.] collect<core::iter::adapters::map::Map<core::ops::range::Range<usize>, tree_sitter::{impl#19}::children::{closure_env#0}>, alloc::vec::Vec<tree_sitter::Node, alloc::alloc::Global>> (inlined)
+     3.60%     0.00%  main        discipline             [.] extend_trusted<tree_sitter::Node, alloc::alloc::Global, core::iter::adapters::map::Map<core::ops::range::Range<usize>, tree_sitter::{impl#19}::children::{closure_env#0}>> (inlined)
+     3.60%     0.00%  main        discipline             [.] fold<core::ops::range::Range<usize>, (), core::iter::adapters::map::map_fold::{closure_env#0}<usize, tree_sitter::Node, (), tree_sitter::{impl#19}::children::{closure_env#0}, core::iter::traits::iterator::Iterator::for_each::call::{closure_env#0}<tree_sitter::Node, alloc::vec::{impl#22}::extend_trusted::{closure_env#0}<tree_sitter::Node, alloc::alloc::Global, core::iter::adapters::map::Map<core::ops::range::Range<usize>, tree_sitter::{impl#19}::children::{closure_env#0}>>>>> (inlined)
+     3.60%     0.00%  main        discipline             [.] fold<tree_sitter::Node, core::ops::range::Range<usize>, tree_sitter::{impl#19}::children::{closure_env#0}, (), core::iter::traits::iterator::Iterator::for_each::call::{closure_env#0}<tree_sitter::Node, alloc::vec::{impl#22}::extend_trusted::{closure_env#0}<tree_sitter::Node, alloc::alloc::Global, core::iter::adapters::map::Map<core::ops::range::Range<usize>, tree_sitter::{impl#19}::children::{closure_env#0}>>>> (inlined)
+     3.60%     0.00%  main        discipline             [.] for_each<core::iter::adapters::map::Map<core::ops::range::Range<usize>, tree_sitter::{impl#19}::children::{closure_env#0}>, alloc::vec::{impl#22}::extend_trusted::{closure_env#0}<tree_sitter::Node, alloc::alloc::Global, core::iter::adapters::map::Map<core::ops::range::Range<usize>, tree_sitter::{impl#19}::children::{closure_env#0}>>> (inlined)
+     3.60%     0.00%  main        discipline             [.] from_iter<tree_sitter::Node, core::iter::adapters::map::Map<core::ops::range::Range<usize>, tree_sitter::{impl#19}::children::{closure_env#0}>> (inlined)
+     3.60%     0.00%  main        discipline             [.] spec_extend<tree_sitter::Node, core::iter::adapters::map::Map<core::ops::range::Range<usize>, tree_sitter::{impl#19}::children::{closure_env#0}>, alloc::alloc::Global> (inlined)
+     3.60%     0.00%  main        discipline             [.] {closure#0} (inlined)
+     3.60%     0.00%  main        discipline             [.] {closure#0}<usize, tree_sitter::Node, (), tree_sitter::{impl#19}::children::{closure_env#0}, core::iter::traits::iterator::Iterator::for_each::call::{closure_env#0}<tree_sitter::Node, alloc::vec::{impl#22}::extend_trusted::{closure_env#0}<tree_sitter::Node, alloc::alloc::Global, core::iter::adapters::map::Map<core::ops::range::Range<usize>, tree_sitter::{impl#19}::children::{closure_env#0}>>>> (inlined)
+     3.44%     0.00%  main        discipline             [.] extract_with_constants (inlined)
+     3.28%     0.00%  main        discipline             [.] macro_judged (inlined)
+     3.28%     0.24%  main        discipline             [.] discipline::ast::calls::blank_text
+     3.28%     0.00%  main        discipline             [.] discipline::ast::calls::code_text
+     3.28%     0.00%  main        discipline             [.] count (inlined)
+     3.21%     0.00%  main        discipline             [.] tree_depth (inlined)
+     3.20%     0.00%  main        discipline             [.] then<alloc::string::String, discipline::ast::rust::macro_judged::{closure_env#0}> (inlined)
+     3.20%     0.00%  main        discipline             [.] {closure#0} (inlined)
+     3.05%     3.05%  main        libc.so.6              [.] malloc
+     3.05%     0.00%  main        libc.so.6              [.] __GI___libc_malloc (inlined)
+     3.04%     0.00%  main        discipline             [.] discipline::ast::rust::macro_judged
+     3.04%     0.00%  main        discipline             [.] count (inlined)
+     2.96%     0.00%  main        discipline             [.] discipline::ast::rust::asserted_conditions
+     2.93%     0.00%  main        discipline             [.] ts_stack_pop_count (inlined)
+     2.88%     0.32%  main        discipline             [.] discipline::ast::method_checks::count
+     2.80%     0.00%  main        discipline             [.] ts_tree_cursor_iterate_children (inlined)
+
