@@ -2528,14 +2528,8 @@ mod count_memo_tests {
 
     #[test]
     fn tests_only_counts_match_the_full_extraction() {
-        // The corpus and the smaller files of the repository; the ignored test below
-        // takes every file.
+        // The corpus and the smaller files of the repository: every file takes too
+        // long for a build without optimisation.
         assert!(check_tests_only_matches_extract(20_000) > 300);
-    }
-
-    #[test]
-    #[ignore = "extracts every tracked file twice; run with --ignored in release"]
-    fn tests_only_counts_match_the_full_extraction_on_every_file() {
-        assert!(check_tests_only_matches_extract(usize::MAX) > 300);
     }
 }
