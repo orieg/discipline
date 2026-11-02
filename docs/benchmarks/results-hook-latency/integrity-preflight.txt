@@ -1,0 +1,12 @@
+ 05:01:14 up 8 min,  0 users,  load average: 0.92, 1.02, 0.64
+               total        used        free      shared  buff/cache   available
+Mem:           15671         282       12925           0        2464       15165
+Swap:              0           0           0
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1   60G  4.1G   56G   7% /
+%CPU COMMAND
+ 1.0 ssm-document-wo
+ 0.1 systemd
+ 0.0 kthreadd
+ 0.0 pool_workqueue_release
+
