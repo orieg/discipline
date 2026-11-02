@@ -598,6 +598,7 @@ pub fn format_agent_prompt(summary: &CheckSummary) -> String {
 /// touched, and an agent told to "fix each issue" edits it.
 pub fn format_agent_prompt_with(summary: &CheckSummary, fail_on_warnings: bool) -> String {
     let violations: Vec<&Violation> = summary.violations().collect();
+    let left_for_later = edit_skipped_line(summary);
     // The review-routing section, after the verdict: counts and quoted pointers only.
     let routing = summary
         .review_routing
@@ -614,7 +615,7 @@ pub fn format_agent_prompt_with(summary: &CheckSummary, fail_on_warnings: bool) 
             String::new()
         };
         return scrub_override_directives(&format!(
-            "No discipline violations found ({passed} gates passed, {examined} {items_label} examined{baselined_part}).\n{routing}"
+            "No discipline violations found ({passed} gates passed, {examined} {items_label} examined{baselined_part}).\n{left_for_later}{routing}"
         ));
     }
 
@@ -660,9 +661,33 @@ pub fn format_agent_prompt_with(summary: &CheckSummary, fail_on_warnings: bool) 
     for v in &advisory {
         issue(&mut out, v);
     }
+    out.push_str(&left_for_later);
     out.push_str(&routing);
 
     scrub_override_directives(&out)
+}
+
+/// The gates an agent's edit hook left to the end of the turn, as one line: they were not
+/// checked, so a clean edit report is not a pass on them. Empty when there are none.
+fn edit_skipped_line(summary: &CheckSummary) -> String {
+    let gates: Vec<&str> = summary
+        .outcomes
+        .iter()
+        .filter(|o| {
+            o.notes
+                .iter()
+                .any(|n| n.starts_with(crate::guards::NOT_EVALUATED_ON_EDIT))
+        })
+        .map(|o| o.gate)
+        .collect();
+    if gates.is_empty() {
+        return String::new();
+    }
+    format!(
+        "Not checked on this edit ({} gates; checked at the end of the turn and in CI): {}.\n",
+        gates.len(),
+        gates.join(", ")
+    )
 }
 
 /// `text` as a fenced block no line of it can close: the fence is one backtick longer
