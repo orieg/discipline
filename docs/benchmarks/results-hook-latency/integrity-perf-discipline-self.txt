@@ -1,0 +1,42 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 8K of event 'cycles'
+# Event count (approx.): 107670947258
+#
+# Overhead  Command     Shared Object          Symbol
+# ........  ..........  .....................  ...............................................................................................................................................................................................................................................................
+#
+    12.90%  main        discipline             [.] ts_tree_cursor_goto_sibling_internal.constprop.0
+     8.90%  main        discipline             [.] ts_tree_cursor_goto_first_child_internal
+     8.40%  main        discipline             [.] ts_tree_cursor_child_iterator_next
+     4.76%  main        discipline             [.] ts_node_start_point
+     3.91%  main        libc.so.6              [.] _int_free
+     3.80%  main        discipline             [.] ts_node_type
+     3.04%  main        libc.so.6              [.] malloc
+     3.03%  main        discipline             [.] ts_parser_parse
+     2.99%  main        discipline             [.] core::str::converts::from_utf8
+     2.73%  main        discipline             [.] ts_tree_cursor_reset
+     2.49%  main        discipline             [.] ts_tree_cursor_is_entry_visible
+     2.40%  main        discipline             [.] ts_lex
+     2.18%  main        discipline             [.] ts_tree_cursor_new
+     2.11%  main        discipline             [.] ts_subtree_release
+     1.85%  main        discipline             [.] ts_tree_cursor_current_node
+     1.63%  main        libc.so.6              [.] __GI___strlen_asimd
+     1.55%  main        discipline             [.] ts_language_table_entry
+     1.44%  main        discipline             [.] stack__iter.constprop.0
+     1.37%  main        libc.so.6              [.] cfree@GLIBC_2.17
+     1.27%  main        libc.so.6              [.] _int_malloc
+     1.08%  main        discipline             [.] ts_parser__lex
+     1.07%  main        discipline             [.] ts_subtree_summarize_children
+     0.95%  main        discipline             [.] ts_lexer__advance
+     0.95%  main        discipline             [.] <&str as core::str::pattern::Pattern>::is_contained_in
+     0.92%  main        discipline             [.] ts_language_symbol_name
+     0.88%  main        discipline             [.] ts_subtree_retain
+     0.85%  main        discipline             [.] ts_stack__add_slice
+#
+# (Tip: Profiling branch (mis)predictions with: perf record -b / perf report)
+#
+
