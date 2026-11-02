@@ -1,7 +1,8 @@
 # Pre-registration for `impossible-recall-v1`: recall of discipline's test-integrity gates on
 # changes that make ImpossibleBench's impossible tests pass (#838).
 #
-# Status `draft-pre-pilot`: everything below is fixed before any agent run except the
+# Status `locked-pre-confirmatory` (was `draft-pre-pilot`, locked 2026-11-02 after the
+# pilot and amendment 3): everything below was fixed before any agent run except the
 # values marked `PILOT`, which the pilot split estimates and which are then written here
 # in one commit, before the first confirmatory run, changing status to
 # `locked-pre-confirmatory`. Any later change to a floor, the population, the strata
@@ -21,7 +22,7 @@
 
 [study]
 id = "impossible-recall-v1"
-status = "draft-pre-pilot"
+status = "locked-pre-confirmatory"
 issue = 838
 novelty_tier_claimed = "Characterisation"
 recall_claimed = true
@@ -156,7 +157,9 @@ local agent CLI run headless with the same model on the same instances; it is lo
 further amendment before its first run, reported separately and never pooled with A.
 """
 runs_per_cell = 1   # one run per (instance, split, model, access arm); amendment 3: 2 for access_full in the confirmatory split
-sampling = "PILOT"   # temperature, max tokens, message_limit, max_attempts, recorded per family
+# PILOT, written at the lock from `results-recall-pilot/pilot-values.json` (`sampling`, the
+# runner's last start record); server defaults not set by the client are recorded there.
+sampling = { family-1 = { temperature = 1.0, top_p = 0.95, top_k = 20, max_tokens = 16384, message_limit = 100, max_attempts = 10 } }
 
 [population]
 splits = ["oneoff", "conflicting"]
@@ -382,7 +385,10 @@ pinned = "Step 0 fills these from the committed functions; none is hand-computed
 # - sensitivity rows: (0.90, 0.75) -> 37 / 58, (0.85, 0.70) -> 39 / 69
 required_n_point_estimate = 68
 required_n_before_design_effect = 112
-design_effect = "PILOT"
+# PILOT, written at the lock: `rules.test-side-or-mixed.design_effect.value` in
+# `results-recall-pilot/amendment-3-values.json` (1.0640000000000007, 25 in-scope units in
+# 21 instances); required_n = ceil(112 x 1.064) = 120 there.
+design_effect = 1.064
 design_effect_rule = """
 Amendment 2, fixed before any pilot data: design_effect = max(1.0, the point estimate of
 `cluster_robust_ratio` over the pilot's in-scope units (amendment 3: test-side and `mixed`

@@ -327,3 +327,62 @@ fn pilot_values_are_recomputed_from_the_committed_pilot_artefacts() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// The lock (#838): the pre-registration's `PILOT` values are the committed pilot outputs,
+/// `design_effect` under amendment 3's in-scope rule and `sampling` from the runner.
+#[test]
+fn locked_pilot_values_match_the_committed_pilot_outputs() {
+    let read = |p: &str| std::fs::read_to_string(root().join(p)).expect(p);
+    let doc: toml::Value =
+        toml::from_str(&read("docs/benchmarks/recall-preregistration.toml")).expect("TOML");
+    let json = |p: &str| -> Value { serde_json::from_str(&read(p)).expect(p) };
+    let a3 = json("docs/benchmarks/results-recall-pilot/amendment-3-values.json");
+    let pilot = json("docs/benchmarks/results-recall-pilot/pilot-values.json");
+    assert_eq!(
+        doc["study"]["status"].as_str(),
+        Some("locked-pre-confirmatory")
+    );
+
+    let rule = &a3["rules"]["test-side-or-mixed"];
+    let de = doc["power_and_bounds"]["design_effect"]
+        .as_float()
+        .expect("design_effect is a number once locked");
+    let computed = rule["design_effect"]["value"].as_f64().unwrap();
+    assert!((de - computed).abs() < 5e-4, "{de} vs {computed}");
+    let before = doc["power_and_bounds"]["required_n_before_design_effect"]
+        .as_integer()
+        .unwrap();
+    assert_eq!(
+        (before as f64 * de).ceil() as i64,
+        rule["required_n"].as_i64().unwrap()
+    );
+
+    let locked = &doc["arms"]["sampling"]["family-1"];
+    let s = &pilot["sampling"];
+    let args: Vec<&str> = s["temperature_top_p_top_k_max_tokens"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    let arg = |flag: &str| args[args.iter().position(|a| *a == flag).unwrap() + 1];
+    let top_k: Value = serde_json::from_str(arg("--extra-body")).unwrap();
+    assert_eq!(
+        locked["temperature"].as_float(),
+        arg("--temperature").parse().ok()
+    );
+    assert_eq!(locked["top_p"].as_float(), arg("--top-p").parse().ok());
+    assert_eq!(locked["top_k"].as_integer(), top_k["top_k"].as_i64());
+    assert_eq!(
+        locked["max_tokens"].as_integer(),
+        arg("--max-tokens").parse().ok()
+    );
+    assert_eq!(
+        locked["message_limit"].as_integer(),
+        s["message_limit"].as_i64()
+    );
+    assert_eq!(
+        locked["max_attempts"].as_integer(),
+        s["max_attempts"].as_i64()
+    );
+}
