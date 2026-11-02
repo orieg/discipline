@@ -2505,13 +2505,14 @@ mod count_memo_tests {
     }
 
     /// A sum of more terms than the tree depth limit is one flat token tree in a macro's
-    /// arguments, and a chain of that depth once the call count reads the argument again
-    /// as an expression. That part has no tree, so the file has no facts: the tests-only
-    /// extraction must say so too, which it does only while it keeps the call count.
+    /// arguments, and a chain of that depth once it is read again as an expression. An
+    /// assertion inside another macro's tokens is read again only by the call count, so
+    /// that part has no tree there and the file has no facts: the tests-only extraction
+    /// must say so too, which it does only while it keeps the call count.
     #[test]
     fn a_macro_argument_with_no_tree_leaves_the_file_unread_in_both_extractions() {
         let terms = vec!["1"; crate::ast::source_text::TREE_DEPTH_LIMIT + 8].join(" + ");
-        let src = format!("#[test]\nfn deep() {{\n    assert!(f({terms}) > 0);\n}}\n");
+        let src = format!("#[test]\nfn deep() {{\n    wrap! {{ assert!(f({terms}) > 0) }}\n}}\n");
         let pack = crate::ast::rust::RustPack;
         let vocab = crate::ast::AssertVocabulary::default();
         use crate::ast::LanguagePack;
