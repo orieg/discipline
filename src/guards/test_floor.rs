@@ -2504,11 +2504,32 @@ mod count_memo_tests {
         compared
     }
 
+    /// A sum of more terms than the tree depth limit is one flat token tree in a macro's
+    /// arguments, and a chain of that depth once the call count reads the argument again
+    /// as an expression. That part has no tree, so the file has no facts: the tests-only
+    /// extraction must say so too, which it does only while it keeps the call count.
+    #[test]
+    fn a_macro_argument_with_no_tree_leaves_the_file_unread_in_both_extractions() {
+        let terms = vec!["1"; crate::ast::source_text::TREE_DEPTH_LIMIT + 8].join(" + ");
+        let src = format!("#[test]\nfn deep() {{\n    assert!(f({terms}) > 0);\n}}\n");
+        let pack = crate::ast::rust::RustPack;
+        let vocab = crate::ast::AssertVocabulary::default();
+        use crate::ast::LanguagePack;
+        let full = pack.extract("tests/deep.rs", &src, &vocab);
+        let tests_only = pack.extract_test_counts("tests/deep.rs", &src, &vocab);
+        assert!(full.is_err(), "the fixture must reach the unread part");
+        assert_eq!(
+            tests_only.map_err(|e| e.to_string()),
+            full.map(|f| crate::ast::TestCounts::of(&f))
+                .map_err(|e| e.to_string())
+        );
+    }
+
     #[test]
     fn tests_only_counts_match_the_full_extraction() {
         // The corpus and the smaller files of the repository; the ignored test below
         // takes every file.
-        assert!(check_tests_only_matches_extract(40_000) > 300);
+        assert!(check_tests_only_matches_extract(20_000) > 300);
     }
 
     #[test]
