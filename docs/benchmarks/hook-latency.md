@@ -35,7 +35,7 @@ The binary exposes no per-gate timing (`READ`: the only `Instant` timers in `src
 2. **Per suite:** the `suite-*` cells. A suite's cost is its cell minus the shared start-up (configuration, opening the repository, the diff), which the smallest suite cell bounds from above.
 3. **A profiler**, for the suites that dominate: `sample <pid> 5 -file out.txt` on macOS, or `perf record -g -- <command>` on Linux, on the `check-one-file` command. The frames name the parsing (`tree-sitter`), git (`libgit2`) and per-gate functions.
 
-A per-gate timer in the JSON report would replace source 3; it is not part of this change.
+`check --timings` (`#995` step 1) now reports wall time and counters per gate and per shared phase, which replaces source 3 for a breakdown inside a suite (section 4.3).
 
 ## 3. Host requirement
 
@@ -147,6 +147,43 @@ The 60–120 s wall time reported for `check` and `diff` in the `#966` review wa
 - **`agent-guard` drops too** (10.83 to 7.22 s here). It builds both sides' runner rules, and the module scans of an unchanged Rust file are now shared between them.
 - **Against the pre-registered threshold:** 19.60 s and 6.35 s are still above the 2 s median, and both maxima (19.66 s, 6.37 s) are above 5 s. The engine changes shorten Stop, pre-commit and CI. They do not bring the edit hook under the threshold. As `#994` projected, that depends on `#995`'s event-scoped gate selection, which reports the change-set gates as not evaluated on Edit.
 - **A change that adds, removes or renames a Rust test target** changes the runner rules, so the two vocabularies differ and both sides are counted in full, as before (`a_change_to_the_runner_rules_counts_both_sides_in_full`). The one-line changes timed here keep the rules equal. Sharing across vocabularies that differ only in rules the count does not read is not done.
+
+### 4.3 Re-measurement after event-scoped selection (`#995` step 2)
+
+**Change measured:** the check an agent's edit hook runs evaluates the `file` and `change set` gates. It evaluates a `repository` or `provenance` gate only when the change touches one of the gate's trigger paths, and reports the rest as not evaluated (`docs/GATES.md`, "Scope on an Agent Edit"). On these one-line changes, the edit leaves 13 gates out, `test-floor` and `test-budget` among them. Stop, pre-commit and CI still run every gate. The detached observe-mode check (`#995` step 3) is not in either binary measured here: `hook-post-edit` below is the time the agent waits for the check, as in sections 4 and 4.2.
+
+**Host (RUN, 2026-11-03):** two AWS `c7g.2xlarge` instances, one per binary (Graviton3, 8 vCPU arm64, 16 GB, Amazon Linux 2023, kernel 6.18), driven over SSM only, set to terminate on shutdown, and verified `terminated` after each run. Each built its binary with `cargo build --release --locked` (rustc 1.99.1, `discipline 0.29.0`):
+
+- `0d66c054` (`#1001`): step 2 alone, without `#994`'s engine change.
+- `1de13bc9`: `main` with both `#994` (`#1002`) and step 2.
+
+`load1` was 1.12 and 1.11 at the preflights, with no process above 1% CPU. It was between 1.00 and 1.34 before every timed run, and 1.04 and 1.00 after the last. The method is section 1's: `scripts/measure_hook_latency.py`, one warm-up and 7 timed runs per cell, `DISCIPLINE_NO_NETWORK=1`. The script changes the largest tracked source file under 300 KB, so the edited file on `orieg/discipline` is `src/ast/runner_collection.rs` at `0d66c054` and `src/hook.rs` at `1de13bc9` (1,367 and 1,376 files); on `ripgrep`, it is `crates/core/flags/defs.rs`. Values are seconds of wall time, median with minimum and maximum, all (measured). Raw samples: [`edit-scoped-hook-latency.json`](results-hook-latency/edit-scoped-hook-latency.json) (`0d66c054`) and [`edit-scoped-main-hook-latency.json`](results-hook-latency/edit-scoped-main-hook-latency.json) (`1de13bc9`). Host snapshots: `edit-scoped-preflight.txt`, `edit-scoped-postflight.txt` and the `edit-scoped-main-` pair.
+
+| Cell | `orieg/discipline`, step 2 | `orieg/discipline`, `#994` + step 2 | `ripgrep`, step 2 | `ripgrep`, `#994` + step 2 |
+|---|---|---|---|---|
+| **`hook-post-edit`** | **12.72** (12.71–12.76) | **8.44** (8.42–8.47) | **4.84** (4.84–4.85) | **4.35** (4.34–4.35) |
+| `check-one-file` (every gate) | 48.46 (48.40–48.51) | 19.73 (19.69–19.76) | 9.44 (9.42–9.46) | 6.35 (6.34–6.37) |
+| `suite-integrity` | 41.23 (41.16–41.24) | 14.54 (14.50–14.57) | 6.08 (6.08–6.10) | 3.12 (3.11–3.13) |
+| `suite-agent-guard` | 11.54 (11.52–11.55) | 7.29 (7.26–7.32) | 4.69 (4.68–4.70) | 4.20 (4.19–4.23) |
+| `hook-pre-tool` | 0.005 | 0.005 | 0.004 | 0.004 |
+
+**Against the pre-registered threshold (section 5): not met on either repository.** On `orieg/discipline`, the median 8.44 s is above 2 s and the maximum 8.47 s is above 5 s. On `ripgrep`, the median 4.35 s is above 2 s, while the maximum 4.35 s is under 5 s. Event scoping removes `test-floor` from the edit: 47.31 s became 12.72 s here, and 9.34 s became 4.84 s on `ripgrep`. With `#994` as well, the edit costs 8.44 s and 4.35 s, against 19.60 s and 6.35 s for `#994` alone (section 4.2).
+
+**Where the edit's time goes (`--timings`, `#995` step 1):** one `check --timings` per event, at each commit, on its own one-line change. The changed files are `src/ast/runner_collection.rs` and `crates/core/flags/defs.rs`, with the hook's own `--policy-from base`. This is one run each, so the wall times are indicative; the counters are deterministic. Reports: `edit-scoped-timings-<repo>-<event>.json` and `edit-scoped-main-timings-<repo>-<event>.json` (the `timings` object, the counts, and the gates not evaluated). At `1de13bc9` (measured):
+
+| Scope | `orieg/discipline`, edit | `orieg/discipline`, stop | `ripgrep`, edit | `ripgrep`, stop |
+|---|---|---|---|---|
+| total | 9.12 | 20.42 | 4.36 | 6.37 |
+| `test-floor` (gate) | not evaluated | 10.53 (414 extractions) | not evaluated | 1.32 (97 extractions) |
+| `vocabulary` (runner rules, both sides) | 2.58 | 2.55 | 0.37 | 0.38 |
+| `agent-diff` (shared by five gates) | 1.88 | 1.88 | 0.72 | 0.73 |
+| `review-routing` | 0.79 | 0.80 | 0.73 | 0.73 |
+| full extractions, whole run | 15 | 431 | 11 | 110 |
+
+- **The edit's remaining cost is the changed file, parsed over and over.** On `ripgrep`, the edit makes 11 full extractions of `defs.rs` (both sides of a one-file change, about 0.35 s each). These are `agent-diff` and `review-routing`, plus `stub-bodies`, `error-swallowing`, `suppression-delta` and `instruction-smuggling`, each of which extracts the file again. `pii` does the same on `orieg/discipline`. On `orieg/discipline`, the same pattern adds the `vocabulary` phase (2.58 s): both sides' runner rules, rebuilt on every run.
+- **What would close the gap** (not done here): one extraction per file and side, shared by every gate of the run, and runner rules that are not rebuilt for a change that cannot alter them. These are engine changes, separate from `#995`'s scope, and they keep the not-across-runs constraint of section 5.
+
+The `#995` detached check (step 3) changes what the agent waits for in observe mode, but not the check's own cost. The hook answers once it has written the `started` line, and the check's time is in the `finished` line's `duration_ms`. Enforcing mode still waits for the check, so the figures above are the cost of an enforcing edit hook.
 
 ## 5. Decision it feeds
 
