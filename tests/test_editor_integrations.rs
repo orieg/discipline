@@ -176,15 +176,23 @@ fn the_renovate_preset_moves_only_a_bootstrap_that_trusts_the_release_sums() {
     assert!(file.is_match(discipline::hook::CLAUDE_BOOTSTRAP));
     assert!(!file.is_match(".claude/settings.json"));
 
-    // The bootstrap `hook install` writes without `--pin-sums`: its version is found.
+    // The bootstrap `hook install` writes without `--pin-sums`: its version is found. A
+    // release candidate's is not: candidates are draft releases, which the
+    // `github-releases` datasource never offers, so the pattern takes stable versions only.
     let release = discipline::hook::claude_bootstrap_script();
     let found: Vec<String> = pattern
         .captures_iter(&release)
         .map(|c| c["currentValue"].to_string())
         .collect();
-    assert_eq!(
-        found,
-        [format!("v{}", env!("CARGO_PKG_VERSION"))],
+    let version = env!("CARGO_PKG_VERSION");
+    let expected: Vec<String> = if version.contains('-') {
+        Vec::new()
+    } else {
+        vec![format!("v{version}")]
+    };
+    assert_eq!(found, expected, "{release}");
+    assert!(
+        release.contains(&format!("version=\"v{version}\"")),
         "{release}"
     );
 
