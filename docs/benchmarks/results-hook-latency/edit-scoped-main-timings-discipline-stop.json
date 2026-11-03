@@ -1,0 +1,502 @@
+{
+  "base": "HEAD~1 (merge base 1de13bc9dc)",
+  "errors": 1,
+  "warnings": 1,
+  "hook": {
+    "agent": "claude-code",
+    "event": "stop",
+    "mode": "observe",
+    "binary_version": "0.29.0",
+    "decision": "observed"
+  },
+  "timings": {
+    "stability": "UNSTABLE until 1.0. Wall time is not deterministic: it is never compared by replay, kept in a baseline or fingerprinted. The counters are deterministic for one tree and configuration.",
+    "total_ms": 20415.932,
+    "phases": [
+      {
+        "name": "repository",
+        "calls": 1,
+        "duration_ms": 0.446,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "configuration",
+        "calls": 2,
+        "duration_ms": 0.551,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "directives",
+        "calls": 2,
+        "duration_ms": 0.26,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "configured-values",
+        "calls": 1,
+        "duration_ms": 2.127,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "vocabulary",
+        "calls": 4,
+        "duration_ms": 2553.584,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 1
+        }
+      },
+      {
+        "name": "agent-diff",
+        "calls": 1,
+        "duration_ms": 1875.416,
+        "counters": {
+          "extract_calls": 4,
+          "extract_bytes": 1201822,
+          "changed_files_calls": 2,
+          "tracked_files_calls": 1
+        }
+      },
+      {
+        "name": "fingerprints",
+        "calls": 1,
+        "duration_ms": 0.077,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "policy-floor",
+        "calls": 1,
+        "duration_ms": 1.935,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "review-routing",
+        "calls": 1,
+        "duration_ms": 795.589,
+        "counters": {
+          "extract_calls": 2,
+          "extract_bytes": 600911,
+          "changed_files_calls": 1,
+          "tracked_files_calls": 0
+        }
+      }
+    ],
+    "gates": [
+      {
+        "name": "agents-md",
+        "calls": 1,
+        "duration_ms": 0.068,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "assertion-reduction",
+        "calls": 1,
+        "duration_ms": 0.001,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "vacuous-tests",
+        "calls": 1,
+        "duration_ms": 0.0,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "ignored-tests",
+        "calls": 1,
+        "duration_ms": 0.0,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "unsafe-safety-comment",
+        "calls": 1,
+        "duration_ms": 0.0,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "deletion-rationale",
+        "calls": 1,
+        "duration_ms": 0.0,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "time-estimates",
+        "calls": 1,
+        "duration_ms": 171.848,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 1
+        }
+      },
+      {
+        "name": "pii",
+        "calls": 1,
+        "duration_ms": 877.143,
+        "counters": {
+          "extract_calls": 2,
+          "extract_bytes": 29554,
+          "changed_files_calls": 1,
+          "tracked_files_calls": 1
+        }
+      },
+      {
+        "name": "agent-scratch",
+        "calls": 1,
+        "duration_ms": 2.874,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 1
+        }
+      },
+      {
+        "name": "shell-secrets",
+        "calls": 1,
+        "duration_ms": 27.592,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 1
+        }
+      },
+      {
+        "name": "issue-link",
+        "calls": 1,
+        "duration_ms": 4.316,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "review-threads",
+        "calls": 1,
+        "duration_ms": 0.012,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "ratified-paths",
+        "calls": 1,
+        "duration_ms": 12.541,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 1,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "citation-metadata",
+        "calls": 1,
+        "duration_ms": 13.113,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 1,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "commit-provenance",
+        "calls": 1,
+        "duration_ms": 0.159,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "config-integrity",
+        "calls": 1,
+        "duration_ms": 0.542,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "stub-bodies",
+        "calls": 1,
+        "duration_ms": 724.419,
+        "counters": {
+          "extract_calls": 2,
+          "extract_bytes": 600911,
+          "changed_files_calls": 1,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "harness-tampering",
+        "calls": 1,
+        "duration_ms": 104.252,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 1,
+          "tracked_files_calls": 1
+        }
+      },
+      {
+        "name": "error-swallowing",
+        "calls": 1,
+        "duration_ms": 726.443,
+        "counters": {
+          "extract_calls": 2,
+          "extract_bytes": 600911,
+          "changed_files_calls": 1,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "instruction-smuggling",
+        "calls": 1,
+        "duration_ms": 384.896,
+        "counters": {
+          "extract_calls": 1,
+          "extract_bytes": 300475,
+          "changed_files_calls": 2,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "build-hooks",
+        "calls": 1,
+        "duration_ms": 12.344,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 1,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "toolchain-config",
+        "calls": 1,
+        "duration_ms": 12.101,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 1,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "sandbox-config",
+        "calls": 1,
+        "duration_ms": 12.045,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 1,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "suppression-delta",
+        "calls": 1,
+        "duration_ms": 723.538,
+        "counters": {
+          "extract_calls": 2,
+          "extract_bytes": 600911,
+          "changed_files_calls": 1,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "provenance-tags",
+        "calls": 1,
+        "duration_ms": 12.713,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 1,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "ci-integrity",
+        "calls": 1,
+        "duration_ms": 25.578,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 2,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "ci-skip-set",
+        "calls": 1,
+        "duration_ms": 0.005,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "test-floor",
+        "calls": 1,
+        "duration_ms": 10531.121,
+        "counters": {
+          "extract_calls": 414,
+          "extract_bytes": 14169062,
+          "changed_files_calls": 1,
+          "tracked_files_calls": 2
+        }
+      },
+      {
+        "name": "golden-output",
+        "calls": 1,
+        "duration_ms": 12.823,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 1,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "dependency-delta",
+        "calls": 1,
+        "duration_ms": 20.774,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 1,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "test-budget",
+        "calls": 1,
+        "duration_ms": 729.858,
+        "counters": {
+          "extract_calls": 2,
+          "extract_bytes": 600911,
+          "changed_files_calls": 1,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "command",
+        "calls": 1,
+        "duration_ms": 0.291,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "bench-regression",
+        "calls": 1,
+        "duration_ms": 12.801,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 1,
+          "tracked_files_calls": 0
+        }
+      },
+      {
+        "name": "version-lockstep",
+        "calls": 1,
+        "duration_ms": 1.593,
+        "counters": {
+          "extract_calls": 0,
+          "extract_bytes": 0,
+          "changed_files_calls": 0,
+          "tracked_files_calls": 0
+        }
+      }
+    ],
+    "counters": {
+      "extract_calls": 431,
+      "extract_bytes": 18705468,
+      "changed_files_calls": 24,
+      "tracked_files_calls": 10
+    }
+  },
+  "not_evaluated": [
+    "ci-skip-set"
+  ]
+}
