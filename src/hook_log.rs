@@ -218,6 +218,14 @@ pub struct Entry {
     pub codes: Vec<String>,
     /// Gates the check did not evaluate (an edit leaves some to the end of the turn).
     pub not_evaluated: Vec<String>,
+    /// `started` or `finished` for a detached edit check in observe mode; absent from a
+    /// check the hook ran itself.
+    pub phase: Option<String>,
+    /// The detached check's id, shared by its `started` and `finished` lines.
+    pub run_id: Option<String>,
+    /// A `started` line with no `finished` line for its run: the check was killed, timed
+    /// out or is still running. Set by [`read`].
+    pub unfinished: bool,
 }
 
 impl Entry {
@@ -256,6 +264,9 @@ impl Entry {
             verdict,
             codes: strings("codes"),
             not_evaluated: strings("not_evaluated"),
+            phase: s("phase"),
+            run_id: s("run_id"),
+            unfinished: false,
         })
     }
 
@@ -275,6 +286,15 @@ impl Entry {
             num(self.errors),
             num(self.warnings),
         );
+        if let Some(p) = &self.phase {
+            line.push_str(&format!(" phase={p}"));
+            if let Some(id) = &self.run_id {
+                line.push_str(&format!(" run={id}"));
+            }
+        }
+        if self.unfinished {
+            line.push_str(" (no finished line: killed, timed out or still running)");
+        }
         if let Some(ms) = self.duration_ms {
             line.push_str(&format!(" duration={ms}ms"));
         }
@@ -313,7 +333,7 @@ pub fn read(dir: &Path) -> Result<Option<(Vec<Entry>, usize)>> {
         Err(e) => return Err(e).with_context(|| format!("cannot read {}", path.display())),
     };
     let mut unread = 0;
-    let entries = text
+    let mut entries: Vec<Entry> = text
         .lines()
         .filter(|l| !l.trim().is_empty())
         .filter_map(|l| {
@@ -322,7 +342,21 @@ pub fn read(dir: &Path) -> Result<Option<(Vec<Entry>, usize)>> {
             e
         })
         .collect();
+    mark_unfinished(&mut entries);
     Ok(Some((entries, unread)))
+}
+
+/// Marks each `started` line whose run has no `finished` line.
+pub fn mark_unfinished(entries: &mut [Entry]) {
+    let finished: std::collections::HashSet<String> = entries
+        .iter()
+        .filter(|e| e.phase.as_deref() == Some("finished"))
+        .filter_map(|e| e.run_id.clone())
+        .collect();
+    for e in entries.iter_mut() {
+        e.unfinished = e.phase.as_deref() == Some("started")
+            && e.run_id.as_ref().is_some_and(|id| !finished.contains(id));
+    }
 }
 
 #[cfg(test)]
@@ -390,6 +424,30 @@ mod tests {
         assert!(!new.render().contains("duration="), "{}", new.render());
         assert_eq!(Entry::parse("not json"), None);
         assert_eq!(Entry::parse("[1]"), None);
+    }
+
+    #[test]
+    fn a_started_run_with_no_finished_line_reads_as_unfinished() {
+        let line = |phase: &str, id: &str| {
+            Entry::parse(&format!(
+                r#"{{"record":1,"time":0,"agent":"codex","event":"edit","mode":"observe","decision":"allowed","exit_code":0,"phase":"{phase}","run_id":"{id}"}}"#
+            ))
+            .unwrap()
+        };
+        let mut entries = vec![
+            line("started", "aaaaaaaaaaaaaaaa"),
+            line("started", "bbbbbbbbbbbbbbbb"),
+            line("finished", "aaaaaaaaaaaaaaaa"),
+        ];
+        mark_unfinished(&mut entries);
+        assert_eq!(
+            entries.iter().map(|e| e.unfinished).collect::<Vec<_>>(),
+            [false, true, false]
+        );
+        assert!(entries[1]
+            .render()
+            .contains("killed, timed out or still running"));
+        assert!(!entries[0].render().contains("killed"));
     }
 
     #[test]
