@@ -83,7 +83,61 @@ pub struct GateInfo {
     /// change: every file is "added", so such a gate would record every dependency, every
     /// ignored test and every instruction file as debt, and is not evaluated there.
     pub delta_only: bool,
+    /// What the gate's rule is about, which decides whether an agent's edit hook runs it
+    /// ([`Scope::runs_on_edit`]). Separate from `delta_only`, which says whether a
+    /// whole-tree run has anything for the rule to judge: `vacuous-tests` and
+    /// `assertion-reduction` are both `File` gates and differ there.
+    pub scope: Scope,
+    /// Paths (globs) whose change makes the edit hook run a gate its scope leaves to the
+    /// end of the turn: the gate's own inputs, such as a workflow file for `ci-integrity`.
+    pub triggers: &'static [&'static str],
 }
+
+/// What a gate's rule is about. The agent edit hook runs `File` and `ChangeSet` gates,
+/// and a `Repository` or `Provenance` gate only when the change touches one of its
+/// [`GateInfo::triggers`]; every other run (the end of a turn, pre-commit, CI) runs them
+/// all. A gate the edit hook leaves out is reported as not evaluated, never as a pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// Judges each changed file's content.
+    File,
+    /// Judges the change as a whole (what it deletes, where it lands). Still scoped by
+    /// the whole change set on an edit, never by the one edited file.
+    ChangeSet,
+    /// Reads the whole repository or describes the finished change (a test count, a
+    /// version across files, a tool run).
+    Repository,
+    /// Reads the pull request or its commits, which an edit hook does not pass.
+    Provenance,
+}
+
+impl Scope {
+    /// Whether an agent's edit hook runs a gate of this scope whatever the change touches.
+    pub fn runs_on_edit(self) -> bool {
+        matches!(self, Scope::File | Scope::ChangeSet)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Scope::File => "file",
+            Scope::ChangeSet => "change set",
+            Scope::Repository => "repository",
+            Scope::Provenance => "provenance",
+        }
+    }
+}
+
+/// The CI definition files `ci-integrity` and `ci-skip-set` read: a change to one runs
+/// them on an edit.
+const WORKFLOW_TRIGGERS: &[&str] = &[
+    ".github/workflows/**",
+    ".gitea/workflows/**",
+    ".forgejo/workflows/**",
+    ".gitlab-ci.yml",
+    ".gitlab-ci.yaml",
+    "**/action.yml",
+    "**/action.yaml",
+];
 
 impl GateInfo {
     /// The published coverage: the hand-written text, or the packs that supply the fact
@@ -112,6 +166,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
+        scope: Scope::Repository,
+        triggers: &["AGENTS.md", "CLAUDE.md", "GEMINI.md"],
     },
     GateInfo {
         id: "assertion-reduction",
@@ -120,6 +176,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::packs(crate::ast::Fact::Tests),
         available: true,
         delta_only: true,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "vacuous-tests",
@@ -128,6 +186,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::packs(crate::ast::Fact::Tests),
         available: true,
         delta_only: false,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "ignored-tests",
@@ -136,6 +196,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::packs(crate::ast::Fact::Tests),
         available: true,
         delta_only: true,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "unsafe-safety-comment",
@@ -144,6 +206,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::packs(crate::ast::Fact::UnsafeSites),
         available: true,
         delta_only: false,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "deletion-rationale",
@@ -152,6 +216,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
+        scope: Scope::ChangeSet,
+        triggers: &[],
     },
     GateInfo {
         id: "time-estimates",
@@ -160,6 +226,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "pii",
@@ -168,6 +236,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "agent-scratch",
@@ -176,6 +246,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "shell-secrets",
@@ -184,6 +256,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("shell, docker, workflows"),
         available: true,
         delta_only: false,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "issue-link",
@@ -192,6 +266,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
+        scope: Scope::Provenance,
+        triggers: &[],
     },
     GateInfo {
         id: "review-threads",
@@ -200,6 +276,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
+        scope: Scope::Provenance,
+        triggers: &[],
     },
     GateInfo {
         id: "ratified-paths",
@@ -208,6 +286,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
+        scope: Scope::ChangeSet,
+        triggers: &[],
     },
     GateInfo {
         id: "citation-metadata",
@@ -216,6 +296,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "commit-provenance",
@@ -224,6 +306,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
+        scope: Scope::Provenance,
+        triggers: &[],
     },
     GateInfo {
         id: "config-integrity",
@@ -232,6 +316,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "stub-bodies",
@@ -240,6 +326,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::packs(crate::ast::Fact::Functions),
         available: true,
         delta_only: true,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "harness-tampering",
@@ -248,6 +336,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("Go, Python, JS/TS, Rust"),
         available: true,
         delta_only: true,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "error-swallowing",
@@ -256,6 +346,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::packs(crate::ast::Fact::Handlers),
         available: true,
         delta_only: true,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "instruction-smuggling",
@@ -268,6 +360,8 @@ pub const GATES: &[GateInfo] = &[
         },
         available: true,
         delta_only: false,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "build-hooks",
@@ -276,6 +370,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("package.json, build.rs, setup.py, .npmrc, .pypirc, pip.conf, .cargo/config.toml, .env*"),
         available: true,
         delta_only: true,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "toolchain-config",
@@ -284,6 +380,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("tsconfig, ruff, mypy, pytest (addopts flags and -k / -m selection), coverage, flake8, Cargo lints, rustflags, nextest, eslintrc, golangci, jest and vitest (JSON or a literal object), package.json test scripts, codecov, phpstan, phpunit, and compiler warning flags in Makefile, CMake, setup.py and build.rs"),
         available: true,
         delta_only: true,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "sandbox-config",
@@ -292,6 +390,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor and Copilot CLI settings, MCP server lists, devcontainer.json, Docker Compose, CI job and service containers"),
         available: true,
         delta_only: false,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "scope-confinement",
@@ -300,6 +400,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
+        scope: Scope::ChangeSet,
+        triggers: &[],
     },
     GateInfo {
         id: "suppression-delta",
@@ -308,6 +410,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("per pack"),
         available: true,
         delta_only: true,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "provenance-tags",
@@ -316,6 +420,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "ci-integrity",
@@ -324,6 +430,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
+        scope: Scope::Repository,
+        triggers: WORKFLOW_TRIGGERS,
     },
     GateInfo {
         id: "ci-skip-set",
@@ -332,6 +440,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
+        scope: Scope::Repository,
+        triggers: WORKFLOW_TRIGGERS,
     },
     GateInfo {
         id: "test-floor",
@@ -340,6 +450,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
+        scope: Scope::Repository,
+        triggers: &[],
     },
     GateInfo {
         id: "golden-output",
@@ -349,6 +461,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
+        scope: Scope::Repository,
+        triggers: &[],
     },
     GateInfo {
         id: "dependency-delta",
@@ -357,6 +471,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: true,
+        scope: Scope::Repository,
+        triggers: &[],
     },
     GateInfo {
         id: "test-budget",
@@ -369,6 +485,8 @@ pub const GATES: &[GateInfo] = &[
         },
         available: true,
         delta_only: true,
+        scope: Scope::Repository,
+        triggers: &[],
     },
     GateInfo {
         id: "pr-checklist",
@@ -377,6 +495,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
+        scope: Scope::Provenance,
+        triggers: &[],
     },
     GateInfo {
         id: "command",
@@ -385,6 +505,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
+        scope: Scope::Repository,
+        triggers: &[],
     },
     GateInfo {
         id: "sanitizers",
@@ -393,6 +515,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("Rust, C/C++"),
         available: true,
         delta_only: false,
+        scope: Scope::Repository,
+        triggers: &[],
     },
     GateInfo {
         id: "msrv",
@@ -401,6 +525,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("Rust"),
         available: true,
         delta_only: false,
+        scope: Scope::Repository,
+        triggers: &[],
     },
     GateInfo {
         id: "miri",
@@ -409,6 +535,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("Rust"),
         available: true,
         delta_only: false,
+        scope: Scope::Repository,
+        triggers: &[],
     },
     GateInfo {
         id: "unsafe-budget",
@@ -417,6 +545,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("Rust"),
         available: true,
         delta_only: false,
+        scope: Scope::Repository,
+        triggers: &[],
     },
     GateInfo {
         id: "bench-regression",
@@ -425,6 +555,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("Rust, Go, Python, C/C++"),
         available: true,
         delta_only: true,
+        scope: Scope::Repository,
+        triggers: &[],
     },
     GateInfo {
         id: "archive-contents",
@@ -433,6 +565,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
+        scope: Scope::Repository,
+        triggers: &[],
     },
     GateInfo {
         id: "manifest-sync",
@@ -441,6 +575,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
+        scope: Scope::Repository,
+        triggers: &[],
     },
     GateInfo {
         id: "version-lockstep",
@@ -449,6 +585,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("any"),
         available: true,
         delta_only: false,
+        scope: Scope::Repository,
+        triggers: &[],
     },
     GateInfo {
         id: "gate-command-lint",
@@ -457,6 +595,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("markdown, shell"),
         available: true,
         delta_only: false,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "mechanism-sections",
@@ -465,6 +605,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("markdown"),
         available: true,
         delta_only: false,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "citation-anchors",
@@ -473,6 +615,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("markdown, any"),
         available: true,
         delta_only: false,
+        scope: Scope::File,
+        triggers: &[],
     },
     GateInfo {
         id: "claim-labels",
@@ -481,6 +625,8 @@ pub const GATES: &[GateInfo] = &[
         coverage: Coverage::Stated("markdown, any"),
         available: true,
         delta_only: false,
+        scope: Scope::ChangeSet,
+        triggers: &[],
     },
 ];
 

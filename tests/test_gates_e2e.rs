@@ -24474,3 +24474,129 @@ fn test_floor_ratchets_each_files_assertions_from_the_baseline() {
         run.outcome("test-floor")["notes"]
     );
 }
+
+// ---- event-scoped gate selection (#995) -------------------------------------
+
+/// The variable an agent's edit hook gives the check it runs.
+const EDIT_HOOK: (&str, &str) = (
+    "DISCIPLINE_HOOK_RUN",
+    "agent=claude-code event=edit mode=observe",
+);
+
+/// An agent's edit hook leaves a gate about the finished change to the end of the turn.
+/// The gate is reported as not evaluated, in its notes and in the agent prompt, never as
+/// a pass. The end of the turn and a run in CI check it.
+#[test]
+fn an_edit_hook_reports_a_repository_gate_as_not_evaluated_and_the_stop_checks_it() {
+    let repo = Repo::new();
+    repo.commit_base(
+        "Cargo.toml",
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1.0.0\"\n",
+        "base: init cargo",
+    );
+    repo.write(
+        "Cargo.toml",
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"*\"\n",
+    );
+    let args = ["check", "--format", "json", "--base", "main"];
+
+    let edit = repo.run(&args, &[EDIT_HOOK]);
+    assert_eq!(edit.code, 0, "{}{}", edit.stdout, edit.stderr);
+    let dep = edit.outcome("dependency-delta");
+    assert_eq!(dep["examined"], 0, "{dep:#}");
+    assert!(edit.violations("dependency-delta").is_empty(), "{dep:#}");
+    let notes = notes_of(&edit, "dependency-delta");
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.starts_with("not evaluated on an edit")
+                && n.contains("checked at the end of the turn and in CI")),
+        "{notes:?}"
+    );
+    // The file and change-set gates still ran on the edit.
+    for gate in [
+        "deletion-rationale",
+        "assertion-reduction",
+        "config-integrity",
+    ] {
+        assert!(
+            notes_of(&edit, gate)
+                .iter()
+                .all(|n| !n.starts_with("not evaluated on an edit")),
+            "{gate}: {}",
+            edit.stdout
+        );
+    }
+    // The agent reads which gates were left out, so a clean edit is not a pass on them.
+    let prompt = repo.run(
+        &["check", "--format", "agent-prompt", "--base", "main"],
+        &[EDIT_HOOK],
+    );
+    assert_eq!(prompt.code, 0, "{}", prompt.stdout);
+    let line = prompt
+        .stdout
+        .lines()
+        .find(|l| l.starts_with("Not checked on this edit"))
+        .unwrap_or_else(|| panic!("{}", prompt.stdout));
+    assert!(line.contains("dependency-delta"), "{line}");
+    assert!(!line.contains("deletion-rationale"), "{line}");
+
+    // The end of the turn runs every gate.
+    let stop = repo.run(
+        &args,
+        &[(
+            "DISCIPLINE_HOOK_RUN",
+            "agent=claude-code event=stop mode=observe",
+        )],
+    );
+    assert_eq!(stop.code, 1, "{}", stop.stdout);
+    assert!(stop
+        .titles("dependency-delta")
+        .contains(&"Wildcard Dependency Version".to_string()));
+    // A run in CI is never an edit, whatever the variable says.
+    let ci = repo.run(&args, &[EDIT_HOOK, ("CI", "true")]);
+    assert_eq!(ci.code, 1, "{}", ci.stdout);
+    assert!(notes_of(&ci, "dependency-delta")
+        .iter()
+        .all(|n| !n.starts_with("not evaluated")));
+}
+
+/// A repository-scope gate runs on an edit when the change touches one of its inputs,
+/// judged over the whole change set, not the file last edited.
+#[test]
+fn an_edit_hook_runs_a_repository_gate_when_the_change_touches_its_trigger() {
+    let repo = Repo::new();
+    repo.write("src/lib.rs", "pub fn one() -> u32 {\n    1\n}\n");
+    repo.commit("feat: one");
+    let args = ["check", "--format", "json", "--base", "main"];
+    let skipped = repo.run(&args, &[EDIT_HOOK]);
+    assert!(
+        notes_of(&skipped, "ci-integrity")
+            .iter()
+            .any(|n| n.starts_with("not evaluated on an edit")),
+        "{}",
+        skipped.stdout
+    );
+
+    repo.write(
+        ".github/workflows/ci.yml",
+        "name: ci\non: [push]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: cargo test\n",
+    );
+    repo.commit("ci: add a workflow");
+    // The last commit touches only src/, but the change set has the workflow too.
+    repo.write("src/lib.rs", "pub fn one() -> u32 {\n    2 - 1\n}\n");
+    repo.commit("refactor: one");
+    let ran = repo.run(&args, &[EDIT_HOOK]);
+    let notes = notes_of(&ran, "ci-integrity");
+    assert!(
+        notes
+            .iter()
+            .all(|n| !n.starts_with("not evaluated on an edit")),
+        "{notes:?}"
+    );
+    assert!(
+        ran.outcome("ci-integrity")["examined"].as_u64().unwrap() > 0,
+        "{}",
+        ran.stdout
+    );
+}

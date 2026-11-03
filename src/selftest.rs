@@ -28,6 +28,18 @@ fn find_test<'a>(f: &'a crate::ast::ParsedFileFacts, name: &str) -> Option<&'a c
 
 const CASES: &[Case] = &[
     (
+        "edit scope: an edit leaves test-floor out, runs ci-integrity only when a workflow changes, and always runs a file gate",
+        || {
+            let info = |id| crate::config::gate_info(id).expect("registered");
+            let src = vec!["src/a.rs".to_string()];
+            let wf = vec!["src/a.rs".to_string(), ".github/workflows/ci.yml".to_string()];
+            Ok(!crate::guards::runs_on_edit(info("test-floor"), &wf)?
+                && !crate::guards::runs_on_edit(info("ci-integrity"), &src)?
+                && crate::guards::runs_on_edit(info("ci-integrity"), &wf)?
+                && crate::guards::runs_on_edit(info("assertion-reduction"), &src)?)
+        },
+    ),
+    (
         "timings: an extraction is counted against the innermost scope, and nothing is recorded unasked",
         || {
             let reg = crate::ast::default_registry();

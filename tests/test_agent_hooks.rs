@@ -1066,6 +1066,16 @@ fn observe_mode_reports_and_logs_without_blocking() {
     );
     // The per-edit latency the agent waited for (#995).
     assert!(first["duration_ms"].as_u64().is_some(), "{first}");
+    // An edit leaves the gates about the finished change to the end of the turn, and the
+    // line names them.
+    let left_out: Vec<&str> = first["not_evaluated"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{first}"))
+        .iter()
+        .map(|g| g.as_str().unwrap())
+        .collect();
+    assert!(left_out.contains(&"test-floor"), "{first}");
+    assert!(!left_out.contains(&"assertion-reduction"), "{first}");
 
     weakened(&repo);
     let edit = hook(
@@ -1119,6 +1129,16 @@ fn observe_mode_reports_and_logs_without_blocking() {
     assert_eq!(
         (lines[1]["agent"].as_str(), lines[1]["event"].as_str()),
         (Some("copilot"), Some("stop"))
+    );
+    // The end of the turn runs every gate it is configured to.
+    let stop_left_out = lines[1]["not_evaluated"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !stop_left_out.iter().any(|g| g == "test-floor"),
+        "{}",
+        lines[1]
     );
 }
 
