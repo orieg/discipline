@@ -687,8 +687,10 @@ fn start_detached_edit(agent: Agent, dir: &Path, side: &CheckSide) -> Result<Hoo
                 "detached".into(),
                 format!("not started, checked in the hook: {err:#}").into(),
             );
-            crate::hook_log::append(dir, &serde_json::Value::Object(m)).ok();
-            return run_detached_edit(agent, dir, side, &run_id);
+            let unlogged = unlogged_note(dir, &serde_json::Value::Object(m));
+            let mut out = run_detached_edit(agent, dir, side, &run_id)?;
+            out.stderr.push_str(&unlogged);
+            return Ok(out);
         }
     };
     let mut m = crate::hook_log::record(
@@ -702,8 +704,21 @@ fn start_detached_edit(agent: Agent, dir: &Path, side: &CheckSide) -> Result<Hoo
     m.insert("run_id".into(), run_id.into());
     m.insert("tree_digest".into(), digest.into());
     m.insert("check_pid".into(), pid.into());
-    crate::hook_log::append(dir, &serde_json::Value::Object(m)).ok();
-    Ok(pass)
+    let mut out = pass;
+    out.stderr
+        .push_str(&unlogged_note(dir, &serde_json::Value::Object(m)));
+    Ok(out)
+}
+
+/// Appends `entry` to the hook log. A line that cannot be written is said on stderr, and
+/// the hook still never blocks in observe mode: empty when the line was written.
+fn unlogged_note(dir: &Path, entry: &serde_json::Value) -> String {
+    match crate::hook_log::append(dir, entry) {
+        Ok(_) => String::new(),
+        Err(e) => format!(
+            "discipline (observe mode, not enforced): this edit's check is not recorded: {e:#}\n"
+        ),
+    }
 }
 
 /// Starts `hook run --observe` for the edit as a child that outlives this process: its
@@ -776,7 +791,9 @@ fn run_detached_edit(
                 .unwrap_or(u64::MAX)
                 .into(),
         );
-        crate::hook_log::append(dir, &serde_json::Value::Object(m)).ok();
+        // No one reads this process's output: a line it cannot write ends it with the
+        // error, and the run reads as unfinished.
+        crate::hook_log::append(dir, &serde_json::Value::Object(m))?;
         Ok(translate_event(agent, Event::Edit, 0, "", ""))
     };
     let lock_path = state.join(EDIT_LOCK_NAME);
@@ -838,7 +855,7 @@ fn run_detached_edit(
         m.insert("run_id".into(), run_id.into());
         m.insert("tree_digest".into(), digest.into());
     }
-    crate::hook_log::append(dir, &record).ok();
+    crate::hook_log::append(dir, &record)?;
     // The lock is released as the file closes; an OS lock dies with a killed process too.
     drop(lock);
     Ok(pass)
