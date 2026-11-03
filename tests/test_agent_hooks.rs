@@ -1041,11 +1041,13 @@ fn claude_code_install_writes_the_cloud_bootstrap() {
     );
 }
 
-/// The log lines of `log`, parsed.
+/// The log lines of `log`, parsed. A detached check may be writing while this reads, so a
+/// last line with no newline yet is not read; every line that has one must parse.
 fn log_lines(log: &std::path::Path) -> Vec<serde_json::Value> {
     std::fs::read_to_string(log)
         .unwrap_or_default()
-        .lines()
+        .split_inclusive('\n')
+        .filter(|l| l.ends_with('\n'))
         .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
         .collect()
 }
