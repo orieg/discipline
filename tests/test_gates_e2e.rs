@@ -7278,6 +7278,45 @@ fn an_emoji_variation_sequence_in_the_description_is_not_invisible_text() {
     );
 }
 
+/// Dependabot quotes upstream release notes verbatim, and a joined emoji such as `🧔‍♂️`
+/// (U+1F9D4 U+200D U+2642 U+FE0F) carries a U+200D: a joiner inside an emoji ZWJ
+/// sequence, in the description and the commit message alike, is not an invisible
+/// character (#1009). A joiner between letters is still reported.
+#[test]
+fn an_emoji_zwj_sequence_in_the_description_is_not_invisible_text() {
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("src/lib.rs", "pub fn f() -> u8 {\n    1\n}\n");
+    repo.commit("feat: base");
+    repo.git(&["checkout", "-q", "-B", "work"]);
+    repo.write("src/lib.rs", "pub fn f() -> u8 {\n    2\n}\n");
+    let notes =
+        "Bump f\n\n<p><strong>\u{1F9D4}\u{200D}\u{2642}\u{FE0F} Release Manager:</strong> f</p>\n";
+    repo.commit(notes);
+    let invisible = |run: &Run| {
+        run.titles("instruction-smuggling")
+            .iter()
+            .filter(|t| t.starts_with("Invisible"))
+            .count()
+    };
+    let run = repo.check_with_pr(&[], notes);
+    assert_eq!(
+        invisible(&run),
+        0,
+        "{:?}",
+        run.violations("instruction-smuggling")
+    );
+
+    // Control: the same joiner between letters carries nothing a reviewer sees.
+    let run = repo.check_with_pr(&[], "Bump f a\u{200D}b\n");
+    assert_eq!(
+        run.titles("instruction-smuggling"),
+        vec!["Invisible Characters In Change Description".to_string()],
+        "{:?}",
+        run.violations("instruction-smuggling")
+    );
+}
+
 #[test]
 fn a_declared_test_entry_point_is_test_scope_for_every_gate() {
     // A script's `self_test()` holds fixture strings, an expect-to-raise handler and
