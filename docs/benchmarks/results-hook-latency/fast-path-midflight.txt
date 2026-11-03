@@ -1,0 +1,28 @@
+2026-11-02T23:24:20Z
+ 23:24:20 up 35 min,  0 users,  load average: 1.02, 1.03, 1.00
+8
+               total        used        free      shared  buff/cache   available
+Mem:           15671         286       13049           0        2335       15159
+Swap:              0           0           0
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1   60G  4.0G   56G   7% /
+top - 23:24:20 up 35 min,  0 users,  load average: 1.02, 1.03, 1.00
+Tasks: 176 total,   1 running, 175 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  0.0 us,  0.0 sy,  0.0 ni,100.0 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st
+MiB Mem :  15671.4 total,  13065.1 free,    271.3 used,   2335.0 buff/cache
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  15175.5 avail Mem
+
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+      1 root      20   0  176152  16492  10748 S   0.0   0.1   0:00.66 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.00 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_wo+
+      4 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker+
+      5 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker+
+      6 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker+
+      7 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker+
+      8 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker+
+     10 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker+
+     11 root      20   0       0      0      0 I   0.0   0.0   0:00.08 kworker+
+     12 root      20   0       0      0      0 I   0.0   0.0   0:00.05 kworker+
+     13 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker+
+     14 root      20   0       0      0      0 S   0.0   0.0   0:00.02 ksoftir+

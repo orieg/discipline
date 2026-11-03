@@ -118,11 +118,52 @@ pub trait LanguagePack: Send + Sync {
     /// Extract language-neutral facts from source text.
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts>;
 
+    /// What a static test count reads of `src` ([`TestCounts`]). The default projects
+    /// [`Self::extract`]; a pack that overrides it to skip analyses the count never
+    /// reads returns the same projection, error included.
+    fn extract_test_counts(
+        &self,
+        path: &str,
+        src: &str,
+        vocab: &AssertVocabulary,
+    ) -> Result<TestCounts> {
+        self.extract(path, src, vocab)
+            .map(|facts| TestCounts::of(&facts))
+    }
+
     /// The calls of `src` that reach a capability sink (`Fact::CapabilitySinks`): a
     /// non-exhaustive inventory for reviewers, never a finding. Empty for a pack that
     /// does not supply the fact.
     fn capability_sinks(&self, _path: &str, _src: &str) -> Result<Vec<capability_sinks::SinkSite>> {
         Ok(Vec::new())
+    }
+}
+
+/// The part of a file's facts a static test count reads (`test-floor`): whether the
+/// file parses with errors, its notes, and how many of its tests run and how many are
+/// ignored outright. A conditional skip (`skipif`, `cfg_attr(..., ignore)`) still runs
+/// somewhere, so it counts as running.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestCounts {
+    pub has_parse_errors: bool,
+    pub notes: Vec<String>,
+    pub running: usize,
+    pub ignored: usize,
+}
+
+impl TestCounts {
+    pub fn of(facts: &ParsedFileFacts) -> Self {
+        let ignored = facts
+            .tests
+            .iter()
+            .filter(|t| t.ignored && t.conditional_ignore.is_none())
+            .count();
+        Self {
+            has_parse_errors: facts.has_parse_errors,
+            notes: facts.notes.clone(),
+            running: facts.tests.len() - ignored,
+            ignored,
+        }
     }
 }
 
@@ -151,6 +192,17 @@ impl LanguagePack for Counted {
     fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
         crate::timings::count(crate::timings::Counter::Extract { bytes: src.len() });
         self.0.extract(path, src, vocab)
+    }
+    // A tests-only extraction parses the whole file too, so it counts as one; forwarded,
+    // so the pack's own (narrower) extraction runs rather than the default projection.
+    fn extract_test_counts(
+        &self,
+        path: &str,
+        src: &str,
+        vocab: &AssertVocabulary,
+    ) -> Result<TestCounts> {
+        crate::timings::count(crate::timings::Counter::Extract { bytes: src.len() });
+        self.0.extract_test_counts(path, src, vocab)
     }
     fn capability_sinks(&self, path: &str, src: &str) -> Result<Vec<capability_sinks::SinkSite>> {
         self.0.capability_sinks(path, src)
@@ -2233,10 +2285,24 @@ impl PackSpec {
         facts: &mut ParsedFileFacts,
     ) {
         helper_loops::count(root, anc, src, facts, self.helper_loops);
+        self.count_calls(root, src, vocab, &mut facts.tests);
+    }
+
+    /// The mock, sleep and trivial-assertion counts of `tests` ([`calls::count`]). A
+    /// pack whose call vocabulary judges a node by text parsed again (a Rust macro's
+    /// arguments) may record a part with no tree here
+    /// ([`source_text::parse_part`]), which leaves the file without facts.
+    pub(crate) fn count_calls(
+        &self,
+        root: tree_sitter::Node,
+        src: &str,
+        vocab: &AssertVocabulary,
+        tests: &mut [TestFn],
+    ) {
         calls::count(
             root,
             src,
-            &mut facts.tests,
+            tests,
             &calls::Counted {
                 spec: self.calls,
                 mock_setup: &vocab.mock_setup_fns,
@@ -2550,7 +2616,7 @@ pub fn collect_error_nodes_info(root: tree_sitter::Node) -> (bool, Option<usize>
 #[cfg(test)]
 pub type RustFacts = ParsedFileFacts;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AssertVocabulary {
     pub extra_macros: Vec<String>,
     pub helper_fns: Vec<String>,
@@ -2627,6 +2693,48 @@ pub(crate) const TRANSITIVE_WRAPPER_COUNTS: [(usize, usize); 5] =
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A registered pack runs its own tests-only extraction: the counting wrapper the
+    /// registry puts around each pack forwards it, rather than falling back to the
+    /// projection of the full extraction.
+    #[test]
+    fn a_registered_pack_runs_its_own_tests_only_extraction() {
+        struct Own;
+        impl LanguagePack for Own {
+            fn id(&self) -> &'static str {
+                "own"
+            }
+            fn name(&self) -> &'static str {
+                "Own"
+            }
+            fn matches(&self, path: &str) -> bool {
+                path.ends_with(".own")
+            }
+            fn extract(&self, _: &str, _: &str, _: &AssertVocabulary) -> Result<ParsedFileFacts> {
+                anyhow::bail!("the full extraction ran")
+            }
+            fn extract_test_counts(
+                &self,
+                _: &str,
+                _: &str,
+                _: &AssertVocabulary,
+            ) -> Result<TestCounts> {
+                Ok(TestCounts {
+                    has_parse_errors: false,
+                    notes: Vec::new(),
+                    running: 7,
+                    ignored: 0,
+                })
+            }
+        }
+        let mut registry = LanguageRegistry::new();
+        registry.register(Box::new(Own));
+        let pack = registry.find_pack("a.own").unwrap();
+        let counts = pack
+            .extract_test_counts("a.own", "", &AssertVocabulary::default())
+            .unwrap();
+        assert_eq!(counts.running, 7);
+    }
 
     /// The table of lines answers as `innermost_test` does, for every line: tests one
     /// inside another, two of one span, a test whose end is not tracked, one that ends

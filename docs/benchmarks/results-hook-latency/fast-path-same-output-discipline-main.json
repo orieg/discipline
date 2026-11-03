@@ -1,0 +1,204 @@
+{
+  "schema_version": 1,
+  "base": "f2fc9cfb5adbc6e6443ca3d842462a621386ed77 (merge base f2fc9cfb5a)",
+  "errors": 0,
+  "warnings": 0,
+  "notes": 0,
+  "overrides": 0,
+  "baselined": 0,
+  "outcomes": [
+    {
+      "gate": "config-integrity",
+      "suite": "integrity",
+      "enabled": true,
+      "examined": 46,
+      "inline_exemptions": 0,
+      "baselined": 0,
+      "notes": [],
+      "violations": [],
+      "overrides": []
+    },
+    {
+      "gate": "build-hooks",
+      "suite": "integrity",
+      "enabled": true,
+      "examined": 0,
+      "inline_exemptions": 0,
+      "baselined": 0,
+      "notes": [
+        "no build hooks or package-manager configuration modified in this diff"
+      ],
+      "violations": [],
+      "overrides": []
+    },
+    {
+      "gate": "toolchain-config",
+      "suite": "integrity",
+      "enabled": true,
+      "examined": 0,
+      "inline_exemptions": 0,
+      "baselined": 0,
+      "notes": [
+        "no toolchain configuration files modified in this diff"
+      ],
+      "violations": [],
+      "overrides": []
+    },
+    {
+      "gate": "sandbox-config",
+      "suite": "integrity",
+      "enabled": true,
+      "examined": 0,
+      "inline_exemptions": 0,
+      "baselined": 0,
+      "notes": [
+        "no agent settings or container definitions modified in this diff"
+      ],
+      "violations": [],
+      "overrides": []
+    },
+    {
+      "gate": "ci-integrity",
+      "suite": "integrity",
+      "enabled": true,
+      "examined": 0,
+      "inline_exemptions": 0,
+      "baselined": 0,
+      "notes": [
+        "no workflow files modified in this diff"
+      ],
+      "violations": [],
+      "overrides": []
+    },
+    {
+      "gate": "ci-skip-set",
+      "suite": "integrity",
+      "enabled": true,
+      "examined": 0,
+      "inline_exemptions": 0,
+      "baselined": 0,
+      "notes": [
+        "not evaluated: DISCIPLINE_CI_CONTEXT is not set. This rule checks a rollup job's runtime `needs` context and runs only when the rollup supplies it; a diff check has no skip set to verify"
+      ],
+      "violations": [],
+      "overrides": []
+    },
+    {
+      "gate": "test-floor",
+      "suite": "integrity",
+      "enabled": true,
+      "examined": 4309,
+      "inline_exemptions": 0,
+      "baselined": 0,
+      "notes": [
+        "head: runner collection unknown (no pytest configuration found): every test the language packs found in 8 file(s) is counted",
+        "head: runner collection unknown (no runner model for this language): every test the language packs found in 18 file(s) is counted",
+        "head: no JavaScript package manifest or runner configuration in the repository (a suite that runs without one, such as `node --test`, counts when `[tests] paths` names it): the tests the language packs found in 7 file(s) are not counted",
+        "head: 14 ignored / skipped test(s) are not counted toward the floor",
+        "head: 7 file(s) could not be read, or parse with errors, so their tests may be uncounted: tests/fixtures/c_cpp/syntax_error.cpp, tests/fixtures/csharp/syntax_error.cs, tests/fixtures/golden/syntax_error.phpt, tests/fixtures/java/syntax_error.java, tests/fixtures/php/syntax_error.php, ...",
+        "base: runner collection unknown (no pytest configuration found): every test the language packs found in 8 file(s) is counted",
+        "base: runner collection unknown (no runner model for this language): every test the language packs found in 18 file(s) is counted",
+        "base: no JavaScript package manifest or runner configuration in the repository (a suite that runs without one, such as `node --test`, counts when `[tests] paths` names it): the tests the language packs found in 7 file(s) are not counted",
+        "base: 14 ignored / skipped test(s) are not counted toward the floor",
+        "base: 7 file(s) could not be read, or parse with errors, so their tests may be uncounted: tests/fixtures/c_cpp/syntax_error.cpp, tests/fixtures/csharp/syntax_error.cs, tests/fixtures/golden/syntax_error.phpt, tests/fixtures/java/syntax_error.java, tests/fixtures/php/syntax_error.php, ..."
+      ],
+      "violations": [],
+      "overrides": []
+    },
+    {
+      "gate": "golden-output",
+      "suite": "integrity",
+      "enabled": true,
+      "examined": 0,
+      "inline_exemptions": 0,
+      "baselined": 0,
+      "notes": [],
+      "violations": [],
+      "overrides": []
+    },
+    {
+      "gate": "dependency-delta",
+      "suite": "integrity",
+      "enabled": true,
+      "examined": 0,
+      "inline_exemptions": 0,
+      "baselined": 0,
+      "notes": [
+        "no dependency manifests or lockfiles modified in this diff"
+      ],
+      "violations": [],
+      "overrides": []
+    },
+    {
+      "gate": "test-budget",
+      "suite": "integrity",
+      "enabled": true,
+      "examined": 1,
+      "inline_exemptions": 0,
+      "baselined": 0,
+      "notes": [],
+      "violations": [],
+      "overrides": []
+    },
+    {
+      "gate": "archive-contents",
+      "suite": "integrity",
+      "enabled": false,
+      "examined": 0,
+      "inline_exemptions": 0,
+      "baselined": 0,
+      "notes": [],
+      "violations": [],
+      "overrides": []
+    },
+    {
+      "gate": "manifest-sync",
+      "suite": "integrity",
+      "enabled": false,
+      "examined": 0,
+      "inline_exemptions": 0,
+      "baselined": 0,
+      "notes": [],
+      "violations": [],
+      "overrides": []
+    },
+    {
+      "gate": "version-lockstep",
+      "suite": "integrity",
+      "enabled": true,
+      "examined": 20,
+      "inline_exemptions": 0,
+      "baselined": 0,
+      "notes": [],
+      "violations": [],
+      "overrides": []
+    }
+  ],
+  "planned_gates": [],
+  "review_routing": {
+    "stability": "unstable until 1.0: names and shape may change in any release; an inventory, not a verdict",
+    "deterministic": {
+      "directives": 0,
+      "directive_kinds": [],
+      "inline_markers_added": 0,
+      "inline_markers_removed": 0,
+      "authority_files": []
+    },
+    "heuristic": {
+      "capability_sites": [],
+      "tests_added": 0,
+      "tests_removed": 0
+    },
+    "coverage": {
+      "changed_files": 1,
+      "inventoried_files": 1,
+      "unparsed_files": 0,
+      "languages": [
+        "Rust",
+        "Python",
+        "JS/TS",
+        "Go"
+      ]
+    }
+  }
+}
