@@ -92,6 +92,7 @@ complete -c discipline -n "__fish_discipline_using_subcommand check" -l advisory
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l comment -d 'Post the report as one pull-request comment, edited on every run (needs a token that can write comments; off by default)'
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l trust-workspace -d 'Trust the workspace and disable libgit2 repository owner validation (off by default, or set DISCIPLINE_TRUST_WORKSPACE=1)'
 complete -c discipline -n "__fish_discipline_using_subcommand check" -s q -l quiet -d 'Suppress output on success (only print output when violations are found)'
+complete -c discipline -n "__fish_discipline_using_subcommand check" -l timings -d 'Add a `timings` object to the JSON report: wall time per gate and per shared phase, and counts of the work behind it (or set DISCIPLINE_TIMINGS=1). Never part of a verdict, a baseline or a replay comparison'
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l allow-cross-host-bench -d 'Allow benchmark comparison across mismatched host/runner provenance tags'
 complete -c discipline -n "__fish_discipline_using_subcommand check" -l no-baseline -d 'Ignore grandfathering baseline even if present'
 complete -c discipline -n "__fish_discipline_using_subcommand check" -s h -l help -d 'Print help (see more with \'--help\')'

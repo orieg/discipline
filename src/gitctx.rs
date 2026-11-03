@@ -1008,6 +1008,7 @@ impl GitCtx {
     }
 
     fn changed_files_with(&self, include_symlinks: bool) -> Result<Vec<ChangedFile>> {
+        crate::timings::count(crate::timings::Counter::ChangedFiles);
         let tree = self.base_tree()?;
         let mut opts = DiffOptions::new();
         opts.context_lines(0);
@@ -1274,6 +1275,7 @@ impl GitCtx {
     /// Tracked regular files. Symlinks are skipped so `CLAUDE.md -> AGENTS.md`
     /// is not scanned (and reported) twice.
     pub fn tracked_files(&self) -> Result<Vec<String>> {
+        crate::timings::count(crate::timings::Counter::TrackedFiles);
         const MODE_SYMLINK: u32 = 0o120000;
         const MODE_GITLINK: u32 = 0o160000;
         let index = self.repo.index()?;

@@ -27,6 +27,35 @@ fn find_test<'a>(f: &'a crate::ast::ParsedFileFacts, name: &str) -> Option<&'a c
 }
 
 const CASES: &[Case] = &[
+    (
+        "timings: an extraction is counted against the innermost scope, and nothing is recorded unasked",
+        || {
+            let reg = crate::ast::default_registry();
+            let Some(pack) = reg.find_pack("src/a.rs") else {
+                return Ok(true);
+            };
+            let src = "#[test] fn t() { assert_eq!(f(), 1); }";
+            crate::timings::clear();
+            pack.extract("src/a.rs", src, &AssertVocabulary::default())?;
+            let unasked = crate::timings::finish().is_none();
+            crate::timings::start();
+            crate::timings::gate("g", || {
+                crate::timings::phase("p", || {
+                    pack.extract("src/a.rs", src, &AssertVocabulary::default())
+                })
+            })?;
+            let Some(t) = crate::timings::finish() else {
+                bail!("a started record was not kept");
+            };
+            crate::timings::clear();
+            let (g, p) = (&t.gates[0].counters, &t.phases[0].counters);
+            Ok(unasked
+                && g.extract_calls == 0
+                && p.extract_calls == 1
+                && p.extract_bytes == src.len() as u64
+                && t.counters.extract_calls == 1)
+        },
+    ),
     ("ast: weakened assertion lowers the strong count", || {
         let v = AssertVocabulary::default();
         let base = analyze("#[test] fn t() { assert_eq!(f(), Some(3)); }", &v)?;

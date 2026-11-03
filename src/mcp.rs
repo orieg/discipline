@@ -363,6 +363,7 @@ mod tests {
                 json: (self.0 == 2).then(|| {
                     json!({ "could_not_check": { "reason": "configuration", "gate": null, "detail": "config does not parse" } })
                 }),
+                duration_ms: 0,
             })
         }
         fn gates(&self) -> Result<String> {

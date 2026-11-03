@@ -167,6 +167,48 @@ impl TestCounts {
     }
 }
 
+/// A registered pack: the pack itself, its extractions counted.
+struct Counted(Box<dyn LanguagePack>);
+
+impl LanguagePack for Counted {
+    fn id(&self) -> &'static str {
+        self.0.id()
+    }
+    fn supplies(&self, fact: Fact) -> bool {
+        self.0.supplies(fact)
+    }
+    fn name(&self) -> &'static str {
+        self.0.name()
+    }
+    fn label(&self) -> &'static str {
+        self.0.label()
+    }
+    fn matches(&self, path: &str) -> bool {
+        self.0.matches(path)
+    }
+    fn is_test_path(&self, path: &str) -> bool {
+        self.0.is_test_path(path)
+    }
+    fn extract(&self, path: &str, src: &str, vocab: &AssertVocabulary) -> Result<ParsedFileFacts> {
+        crate::timings::count(crate::timings::Counter::Extract { bytes: src.len() });
+        self.0.extract(path, src, vocab)
+    }
+    // A tests-only extraction parses the whole file too, so it counts as one; forwarded,
+    // so the pack's own (narrower) extraction runs rather than the default projection.
+    fn extract_test_counts(
+        &self,
+        path: &str,
+        src: &str,
+        vocab: &AssertVocabulary,
+    ) -> Result<TestCounts> {
+        crate::timings::count(crate::timings::Counter::Extract { bytes: src.len() });
+        self.0.extract_test_counts(path, src, vocab)
+    }
+    fn capability_sinks(&self, path: &str, src: &str) -> Result<Vec<capability_sinks::SinkSite>> {
+        self.0.capability_sinks(path, src)
+    }
+}
+
 /// A kind of fact a pack may or may not extract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fact {
@@ -194,8 +236,10 @@ impl LanguageRegistry {
         Self { packs: Vec::new() }
     }
 
+    /// Adds `pack`. Its extractions are counted for `check --timings`
+    /// ([`crate::timings::Counter::Extract`]).
     pub fn register(&mut self, pack: Box<dyn LanguagePack>) {
-        self.packs.push(pack);
+        self.packs.push(Box::new(Counted(pack)));
     }
 
     pub fn find_pack(&self, path: &str) -> Option<&dyn LanguagePack> {
@@ -2649,6 +2693,48 @@ pub(crate) const TRANSITIVE_WRAPPER_COUNTS: [(usize, usize); 5] =
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A registered pack runs its own tests-only extraction: the counting wrapper the
+    /// registry puts around each pack forwards it, rather than falling back to the
+    /// projection of the full extraction.
+    #[test]
+    fn a_registered_pack_runs_its_own_tests_only_extraction() {
+        struct Own;
+        impl LanguagePack for Own {
+            fn id(&self) -> &'static str {
+                "own"
+            }
+            fn name(&self) -> &'static str {
+                "Own"
+            }
+            fn matches(&self, path: &str) -> bool {
+                path.ends_with(".own")
+            }
+            fn extract(&self, _: &str, _: &str, _: &AssertVocabulary) -> Result<ParsedFileFacts> {
+                anyhow::bail!("the full extraction ran")
+            }
+            fn extract_test_counts(
+                &self,
+                _: &str,
+                _: &str,
+                _: &AssertVocabulary,
+            ) -> Result<TestCounts> {
+                Ok(TestCounts {
+                    has_parse_errors: false,
+                    notes: Vec::new(),
+                    running: 7,
+                    ignored: 0,
+                })
+            }
+        }
+        let mut registry = LanguageRegistry::new();
+        registry.register(Box::new(Own));
+        let pack = registry.find_pack("a.own").unwrap();
+        let counts = pack
+            .extract_test_counts("a.own", "", &AssertVocabulary::default())
+            .unwrap();
+        assert_eq!(counts.running, 7);
+    }
 
     /// The table of lines answers as `innermost_test` does, for every line: tests one
     /// inside another, two of one span, a test whose end is not tracked, one that ends

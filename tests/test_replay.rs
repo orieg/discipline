@@ -575,6 +575,10 @@ fn a_second_replay_of_the_same_changes_reads_cached_verdicts() {
     assert_eq!(second["cached"], 2);
     assert_eq!(verdicts(&second), verdicts(&first));
     assert_eq!(second["errors_by_gate"], first["errors_by_gate"]);
+    // Asking for timings changes no verdict, so it is not part of a cached verdict's key
+    // (#995).
+    let timed = replay(&repo, &[], &[("DISCIPLINE_TIMINGS", "1")]);
+    assert_eq!(cached(&timed), [true, true]);
     let text = repo.run(&["replay", "--last", "2", "--ref", "main"], &[]);
     assert!(
         text.stdout

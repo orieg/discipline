@@ -114,6 +114,34 @@ const REPORT_FIELDS: &[&str] = &[
     "review_routing.stability: string",
     "schema_version: const(1)",
     "stale_baseline_entries?: integer",
+    "timings?: object",
+    "timings.counters: object",
+    "timings.counters.changed_files_calls: integer",
+    "timings.counters.extract_bytes: integer",
+    "timings.counters.extract_calls: integer",
+    "timings.counters.tracked_files_calls: integer",
+    "timings.gates: array",
+    "timings.gates[]: object",
+    "timings.gates[].calls: integer",
+    "timings.gates[].counters: object",
+    "timings.gates[].counters.changed_files_calls: integer",
+    "timings.gates[].counters.extract_bytes: integer",
+    "timings.gates[].counters.extract_calls: integer",
+    "timings.gates[].counters.tracked_files_calls: integer",
+    "timings.gates[].duration_ms: number",
+    "timings.gates[].name: string",
+    "timings.phases: array",
+    "timings.phases[]: object",
+    "timings.phases[].calls: integer",
+    "timings.phases[].counters: object",
+    "timings.phases[].counters.changed_files_calls: integer",
+    "timings.phases[].counters.extract_bytes: integer",
+    "timings.phases[].counters.extract_calls: integer",
+    "timings.phases[].counters.tracked_files_calls: integer",
+    "timings.phases[].duration_ms: number",
+    "timings.phases[].name: string",
+    "timings.stability: string",
+    "timings.total_ms: number",
     "unused_directives?: array",
     "unused_directives[]: object",
     "unused_directives[].directive: string",
@@ -949,6 +977,93 @@ fn noisy_repo() -> Repo {
     );
     repo.commit("feat: several findings");
     repo
+}
+
+/// `--timings` (or `DISCIPLINE_TIMINGS=1`) adds a `timings` object and changes nothing
+/// else in the report: wall time is never part of a verdict (#995). Its counters are
+/// deterministic, the same on every run of one tree.
+#[test]
+fn timings_are_reported_only_on_request_and_apart_from_the_verdict() {
+    let repo = noisy_repo();
+    let run = |args: &[&str], env: &[(&str, &str)]| -> Value {
+        let mut all = vec!["check", "--format", "json", "--base", "main"];
+        all.extend_from_slice(args);
+        let out = repo.run(&all, env);
+        assert_eq!(out.code, 1, "{}", out.stderr);
+        serde_json::from_str(&out.stdout).unwrap()
+    };
+    let plain = run(&[], &[]);
+    assert_eq!(plain.get("timings"), None, "{plain:#}");
+    assert_eq!(
+        run(&[], &[("DISCIPLINE_TIMINGS", "0")]).get("timings"),
+        None
+    );
+
+    let flagged = run(&["--timings"], &[]);
+    let by_env = run(&[], &[("DISCIPLINE_TIMINGS", "1")]);
+    for timed in [&flagged, &by_env] {
+        assert_valid(&report_schema(), timed);
+        let mut rest = timed.clone();
+        rest.as_object_mut().unwrap().remove("timings");
+        assert_eq!(rest, plain, "the verdict moved with the timings");
+    }
+    let t = &flagged["timings"];
+    let names = |list: &str| -> Vec<String> {
+        t[list]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    // Every gate that ran has an entry, in the order the report lists them.
+    let ran: Vec<String> = plain["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|o| o["enabled"] != false)
+        .map(|o| o["gate"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(names("gates"), ran);
+    let phases = names("phases");
+    for phase in ["repository", "configuration", "agent-diff", "vocabulary"] {
+        assert!(phases.iter().any(|p| p == phase), "{phase}: {phases:?}");
+    }
+    // The diff extraction five gates share is charged to its phase, not to the first
+    // of them.
+    let entry = |list: &str, name: &str| -> Value {
+        t[list]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["name"] == name)
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(entry("phases", "agent-diff")["calls"], 1);
+    assert!(
+        entry("phases", "agent-diff")["counters"]["extract_calls"]
+            .as_u64()
+            .unwrap()
+            > 0,
+        "{t:#}"
+    );
+    assert_eq!(
+        entry("gates", "assertion-reduction")["counters"]["extract_calls"],
+        0,
+        "{t:#}"
+    );
+    // The counters are the same on every run of the tree; the times are not compared.
+    let counters = |v: &Value| -> Vec<Value> {
+        let t = &v["timings"];
+        ["phases", "gates"]
+            .iter()
+            .flat_map(|l| t[*l].as_array().unwrap().iter())
+            .map(|e| serde_json::json!([e["name"], e["calls"], e["counters"]]))
+            .chain(std::iter::once(t["counters"].clone()))
+            .collect()
+    };
+    assert_eq!(counters(&flagged), counters(&by_env));
 }
 
 #[test]

@@ -20,10 +20,14 @@ pub fn json_report(summary: &CheckSummary, passed: bool) -> serde_json::Result<S
         summary: &'a CheckSummary,
         #[serde(skip_serializing_if = "Option::is_none")]
         hook: Option<crate::hook_log::HookContext>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timings: Option<crate::timings::Timings>,
     }
     serde_json::to_string_pretty(&Report {
         summary,
         hook: crate::hook_log::HookContext::from_env(passed),
+        // Only a run that asked for timings has a record ([`crate::timings`]).
+        timings: crate::timings::finished(),
     })
 }
 

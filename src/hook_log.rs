@@ -211,6 +211,9 @@ pub struct Entry {
     pub exit_code: Option<i64>,
     pub errors: Option<u64>,
     pub warnings: Option<u64>,
+    /// Wall time of the change check, in milliseconds; absent from a line an earlier
+    /// release wrote and from a pre-tool line.
+    pub duration_ms: Option<u64>,
     pub verdict: Option<String>,
     pub codes: Vec<String>,
 }
@@ -239,6 +242,7 @@ impl Entry {
             exit_code: o.get("exit_code").and_then(Value::as_i64),
             errors: o.get("errors").and_then(Value::as_u64),
             warnings: o.get("warnings").and_then(Value::as_u64),
+            duration_ms: o.get("duration_ms").and_then(Value::as_u64),
             verdict,
             codes: o
                 .get("codes")
@@ -266,6 +270,9 @@ impl Entry {
             num(self.errors),
             num(self.warnings),
         );
+        if let Some(ms) = self.duration_ms {
+            line.push_str(&format!(" duration={ms}ms"));
+        }
         if let Some(v) = &self.verdict {
             line.push_str(&format!(" verdict={v}"));
         }
@@ -361,6 +368,18 @@ mod tests {
         assert_eq!(new.mode.as_deref(), Some("enforce"));
         assert_eq!(new.decision.as_deref(), Some("allowed"));
         assert_eq!(new.warnings, Some(2));
+        assert_eq!(new.duration_ms, None);
+        let timed = Entry::parse(
+            r#"{"record":1,"time":0,"agent":"codex","event":"edit","mode":"observe","decision":"allowed","exit_code":0,"duration_ms":1234,"codes":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(timed.duration_ms, Some(1234));
+        assert!(
+            timed.render().contains(" duration=1234ms"),
+            "{}",
+            timed.render()
+        );
+        assert!(!new.render().contains("duration="), "{}", new.render());
         assert_eq!(Entry::parse("not json"), None);
         assert_eq!(Entry::parse("[1]"), None);
     }

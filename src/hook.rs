@@ -607,6 +607,8 @@ fn check_record(
             .map_or(serde_json::Value::Null, Into::into)
     };
     m.insert("check_exit".into(), run.code.into());
+    // The per-edit latency an agent waited for (#995).
+    m.insert("duration_ms".into(), run.duration_ms.into());
     m.insert("errors".into(), count("errors"));
     m.insert("warnings".into(), count("warnings"));
     m.insert(
@@ -2074,6 +2076,7 @@ pub fn run_check(dir: &Path, side: &CheckSide) -> Result<CheckRun> {
 /// [`run_check`] for a hook: `hook` is the [`HOOK_RUN_ENV`] value naming the agent, the
 /// event and the mode, which the check writes into its report's `hook` object.
 pub fn run_check_under(dir: &Path, side: &CheckSide, hook: Option<String>) -> Result<CheckRun> {
+    let started = std::time::Instant::now();
     let exe = match std::env::current_exe()
         .context("cannot locate the discipline binary")
         .and_then(|exe| verify_hook_binary(&exe, dir))
@@ -2085,6 +2088,7 @@ pub fn run_check_under(dir: &Path, side: &CheckSide, hook: Option<String>) -> Re
                 report: String::new(),
                 stderr: format!("{err:#}\n"),
                 json: None,
+                duration_ms: elapsed_ms(started),
             });
         }
     };
@@ -2121,7 +2125,13 @@ pub fn run_check_under(dir: &Path, side: &CheckSide, hook: Option<String>) -> Re
         json: std::fs::read_to_string(&json_out)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok()),
+        duration_ms: elapsed_ms(started),
     })
+}
+
+/// Whole milliseconds since `started`.
+fn elapsed_ms(started: std::time::Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 /// One check run by [`run_check`].
@@ -2134,6 +2144,8 @@ pub struct CheckRun {
     pub stderr: String,
     /// The JSON report (`--json-out`), when the child wrote one.
     pub json: Option<serde_json::Value>,
+    /// Wall time of the check, as the hook waited for it, in milliseconds.
+    pub duration_ms: u64,
 }
 
 impl CheckRun {
