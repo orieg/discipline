@@ -1928,6 +1928,14 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "instruction-smuggling: a joiner inside an emoji ZWJ sequence is not classified, one between letters is (#1009)",
+        || {
+            use crate::guards::instruction_smuggling::invisible_classes;
+            Ok(invisible_classes("\u{1F9D4}\u{200D}\u{2642}\u{FE0F} Release Manager", false).is_empty()
+                && invisible_classes("a\u{200D}b", false) == vec!["zero-width"])
+        },
+    ),
+    (
         "instruction-smuggling: look-alike, encoded and mixed-script text is classified, a digest and Cyrillic prose are not",
         || {
             use crate::guards::instruction_smuggling::text_classes;

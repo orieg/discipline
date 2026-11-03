@@ -79,7 +79,8 @@ pub(crate) fn invisible_class(c: char) -> Option<&'static str> {
 
 /// Classes of invisible characters on a line, deduplicated. A BOM at the very start of
 /// the file is ordinary and is not reported, nor is a variation selector that completes a
-/// standardized emoji variation sequence (`⬆️`, [`completes_emoji_sequence`]).
+/// standardized emoji variation sequence (`⬆️`, [`completes_emoji_sequence`]), nor a
+/// zero-width joiner inside an emoji ZWJ sequence (`🧔‍♂️`, [`joins_emoji`]).
 pub fn invisible_classes(line: &str, first_line: bool) -> Vec<&'static str> {
     let chars: Vec<char> = line.chars().collect();
     let mut out: Vec<&'static str> = Vec::new();
@@ -87,7 +88,7 @@ pub fn invisible_classes(line: &str, first_line: bool) -> Vec<&'static str> {
         if first_line && i == 0 && c == '\u{FEFF}' {
             continue;
         }
-        if completes_emoji_sequence(&chars, i) {
+        if completes_emoji_sequence(&chars, i) || joins_emoji(&chars, i) {
             continue;
         }
         if let Some(class) = invisible_class(c) {
@@ -115,7 +116,12 @@ fn completes_emoji_sequence(chars: &[char], i: usize) -> bool {
     if base.is_ascii() {
         return matches!(base, '#' | '*' | '0'..='9') && chars.get(i + 1) == Some(&'\u{20E3}');
     }
-    let b = base as u32;
+    is_variation_base(base)
+}
+
+/// Whether `c` is one of [`EMOJI_VARIATION_BASES`].
+fn is_variation_base(c: char) -> bool {
+    let b = c as u32;
     EMOJI_VARIATION_BASES
         .binary_search_by(|&(lo, hi)| {
             if hi < b {
@@ -127,6 +133,36 @@ fn completes_emoji_sequence(chars: &[char], i: usize) -> bool {
             }
         })
         .is_ok()
+}
+
+/// Whether `chars[i]` is the U+200D (zero-width joiner) of an emoji ZWJ sequence
+/// (`🧔‍♂️`, `👨‍👩‍👧`): the character before it is an emoji base, an emoji base followed by
+/// U+FE0F, or a skin-tone modifier (U+1F3FB-U+1F3FF), and the character after it is an
+/// emoji base ([`is_emoji_base`]). Dependabot quotes upstream release notes that carry
+/// them (#1009). Any other joiner is reported: between letters, at the start or end of a
+/// line, a second one in a row, and one after a letter before an emoji.
+fn joins_emoji(chars: &[char], i: usize) -> bool {
+    if chars[i] != '\u{200D}' {
+        return false;
+    }
+    let Some(&next) = chars.get(i + 1) else {
+        return false;
+    };
+    let before = match i.checked_sub(1).map(|p| (p, chars[p])) {
+        Some((p, '\u{FE0F}')) => p.checked_sub(1).map(|q| chars[q]),
+        Some((_, c)) => Some(c),
+        None => None,
+    };
+    before.is_some_and(|c| is_emoji_base(c) || matches!(c, '\u{1F3FB}'..='\u{1F3FF}'))
+        && is_emoji_base(next)
+}
+
+/// Whether `c` can be an element of an emoji ZWJ sequence: a non-ASCII base of
+/// [`EMOJI_VARIATION_BASES`], or a code point of the pictographic blocks ZWJ sequences
+/// are built from, U+2600-U+27BF (Miscellaneous Symbols, Dingbats) and U+1F300-U+1FAFF
+/// (Miscellaneous Symbols and Pictographs through Symbols and Pictographs Extended-A).
+fn is_emoji_base(c: char) -> bool {
+    matches!(c, '\u{2600}'..='\u{27BF}' | '\u{1F300}'..='\u{1FAFF}') || is_variation_base(c)
 }
 
 /// The non-ASCII bases of Unicode's emoji variation sequences, as sorted, inclusive
@@ -1513,6 +1549,49 @@ mod tests {
             assert_eq!(
                 invisible_classes(reported, false),
                 vec!["variation-selector"],
+                "{reported:?}"
+            );
+        }
+    }
+
+    /// A U+200D that joins two emoji is not reported (#1009): the orieg/expanse#1619
+    /// Dependabot line `🧔‍♂️` (U+1F9D4 U+200D U+2642 U+FE0F), the family `👨‍👩‍👧`, a joiner
+    /// after U+FE0F (`🏳️‍🌈`) and one after a skin-tone modifier (`👩🏽‍💻`). The negative
+    /// controls are each still reported: a joiner between letters, at the start or end of
+    /// a line, two in a row, after a letter before an emoji, and before a letter.
+    #[test]
+    fn a_joiner_inside_an_emoji_zwj_sequence_is_not_reported() {
+        let none: Vec<&str> = Vec::new();
+        assert_eq!(
+            invisible_classes(
+                "<p><strong>\u{1F9D4}\u{200D}\u{2642}\u{FE0F} Release Manager:</strong>",
+                false
+            ),
+            none
+        );
+        assert_eq!(
+            invisible_classes("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}", false),
+            none
+        );
+        assert_eq!(
+            invisible_classes("\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}", false),
+            none
+        );
+        assert_eq!(
+            invisible_classes("\u{1F469}\u{1F3FD}\u{200D}\u{1F4BB}", false),
+            none
+        );
+        for reported in [
+            "a\u{200D}b",
+            "\u{200D}\u{1F9D4}",
+            "\u{1F9D4}\u{200D}",
+            "\u{1F9D4}\u{200D}\u{200D}\u{2642}",
+            "a\u{200D}\u{1F9D4}",
+            "\u{1F9D4}\u{200D}a",
+        ] {
+            assert_eq!(
+                invisible_classes(reported, false),
+                vec!["zero-width"],
                 "{reported:?}"
             );
         }
