@@ -625,12 +625,47 @@ fn check_record(
         could_not_check_reason(run).map_or(serde_json::Value::Null, Into::into),
     );
     m.insert("codes".into(), blocking_codes(run).into());
+    // The gates this check did not evaluate (an edit leaves the repository and provenance
+    // gates to the end of the turn): absent when there are none (#995).
+    let not_evaluated = not_evaluated_gates(run);
+    if !not_evaluated.is_empty() {
+        m.insert("not_evaluated".into(), not_evaluated.into());
+    }
     // The review-routing counts (#944), deterministic and heuristic apart; absent when the
     // report carries no section.
     if let Some(routing) = routing_of(run) {
         m.insert("routing".into(), routing.log_counts());
     }
     serde_json::Value::Object(m)
+}
+
+/// The gates of `run`'s JSON report that are enabled and not evaluated: they examined
+/// nothing, found nothing and say why in a "not evaluated" note
+/// ([`crate::guards::GateOutcome::is_not_evaluated`]).
+fn not_evaluated_gates(run: &CheckRun) -> Vec<String> {
+    let Some(outcomes) = run
+        .json
+        .as_ref()
+        .and_then(|j| j.get("outcomes"))
+        .and_then(|o| o.as_array())
+    else {
+        return Vec::new();
+    };
+    outcomes
+        .iter()
+        .filter(|o| {
+            o.get("enabled") != Some(&serde_json::Value::Bool(false))
+                && o.get("examined").and_then(|n| n.as_u64()).unwrap_or(0) == 0
+                && o.get("violations")
+                    .and_then(|v| v.as_array())
+                    .is_none_or(|v| v.is_empty())
+                && o.get("notes").and_then(|n| n.as_array()).is_some_and(|n| {
+                    n.iter()
+                        .any(|n| n.as_str().is_some_and(|n| n.starts_with("not evaluated")))
+                })
+        })
+        .filter_map(|o| o.get("gate").and_then(|g| g.as_str()).map(str::to_string))
+        .collect()
 }
 
 /// The review-routing section of `run`'s JSON report, when it has one.

@@ -66,6 +66,61 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`claim-labels`](#claim-labels) | hygiene | **shipped** | markdown, any | require RUN or READ labels on verification claims in PR bodies, commits, and Markdown |
 <!-- /generated -->
 
+### Scope on an Agent Edit
+
+An agent's edit hook (`discipline hook run` after an edit) runs the gates about the changed files (`file`) and the change as a whole (`change set`). A gate about the whole repository or the finished change (`repository`), or about the pull request and its commits (`provenance`), runs on an edit only when the change touches one of its inputs. Otherwise it is reported as not evaluated, with the note `not evaluated on an edit`, and counts neither as passed nor as failed. The agent prompt names those gates, and the hook log lists them as `not_evaluated`. The end of the turn, pre-commit and CI run every gate. A run in CI is never treated as an edit, even when the hook's variable is set. The scope is the whole change set, never the one file the agent edited: `deletion-rationale`, `scope-confinement` and `ratified-paths` judge the whole diff. The trigger paths are the default locations of a gate's inputs. A gate configured to read files elsewhere (`ci-integrity` `workflows`) is still checked at the end of the turn. `instruction-smuggling` keeps its own hook branch: an unchanged generated hook file is a note in any hook's check, edit or stop alike, because no hook passes the pull-request body that records it.
+
+<!-- generated:gate-scopes -->
+| Gate id | Scope | On an agent edit |
+|---|---|---|
+| [`agent-scratch`](#agent-scratch) | file | runs |
+| [`agents-md`](#agents-md) | repository | runs when the change touches `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`; otherwise end of turn and CI |
+| [`archive-contents`](#archive-contents) | repository | not evaluated; end of turn and CI |
+| [`assertion-reduction`](#assertion-reduction) | file | runs |
+| [`bench-regression`](#bench-regression) | repository | not evaluated; end of turn and CI |
+| [`build-hooks`](#build-hooks) | file | runs |
+| [`ci-integrity`](#ci-integrity) | repository | runs when the change touches `.github/workflows/**`, `.gitea/workflows/**`, `.forgejo/workflows/**`, `.gitlab-ci.yml`, `.gitlab-ci.yaml`, `**/action.yml`, `**/action.yaml`; otherwise end of turn and CI |
+| [`ci-skip-set`](#ci-skip-set) | repository | runs when the change touches `.github/workflows/**`, `.gitea/workflows/**`, `.forgejo/workflows/**`, `.gitlab-ci.yml`, `.gitlab-ci.yaml`, `**/action.yml`, `**/action.yaml`; otherwise end of turn and CI |
+| [`citation-anchors`](#citation-anchors) | file | runs |
+| [`citation-metadata`](#citation-metadata) | file | runs |
+| [`claim-labels`](#claim-labels) | change set | runs |
+| [`command`](#command) | repository | not evaluated; end of turn and CI |
+| [`commit-provenance`](#commit-provenance) | provenance | not evaluated; end of turn and CI |
+| [`config-integrity`](#config-integrity) | file | runs |
+| [`deletion-rationale`](#deletion-rationale) | change set | runs |
+| [`dependency-delta`](#dependency-delta) | repository | not evaluated; end of turn and CI |
+| [`error-swallowing`](#error-swallowing) | file | runs |
+| [`gate-command-lint`](#gate-command-lint) | file | runs |
+| [`golden-output`](#golden-output) | repository | not evaluated; end of turn and CI |
+| [`harness-tampering`](#harness-tampering) | file | runs |
+| [`ignored-tests`](#ignored-tests) | file | runs |
+| [`instruction-smuggling`](#instruction-smuggling) | file | runs |
+| [`issue-link`](#issue-link) | provenance | not evaluated; end of turn and CI |
+| [`manifest-sync`](#manifest-sync) | repository | not evaluated; end of turn and CI |
+| [`mechanism-sections`](#mechanism-sections) | file | runs |
+| [`miri`](#miri) | repository | not evaluated; end of turn and CI |
+| [`msrv`](#msrv) | repository | not evaluated; end of turn and CI |
+| [`pii`](#pii) | file | runs |
+| [`pr-checklist`](#pr-checklist) | provenance | not evaluated; end of turn and CI |
+| [`provenance-tags`](#provenance-tags) | file | runs |
+| [`ratified-paths`](#ratified-paths) | change set | runs |
+| [`review-threads`](#review-threads) | provenance | not evaluated; end of turn and CI |
+| [`sandbox-config`](#sandbox-config) | file | runs |
+| [`sanitizers`](#sanitizers) | repository | not evaluated; end of turn and CI |
+| [`scope-confinement`](#scope-confinement) | change set | runs |
+| [`shell-secrets`](#shell-secrets) | file | runs |
+| [`stub-bodies`](#stub-bodies) | file | runs |
+| [`suppression-delta`](#suppression-delta) | file | runs |
+| [`test-budget`](#test-budget) | repository | not evaluated; end of turn and CI |
+| [`test-floor`](#test-floor) | repository | not evaluated; end of turn and CI |
+| [`time-estimates`](#time-estimates) | file | runs |
+| [`toolchain-config`](#toolchain-config) | file | runs |
+| [`unsafe-budget`](#unsafe-budget) | repository | not evaluated; end of turn and CI |
+| [`unsafe-safety-comment`](#unsafe-safety-comment) | file | runs |
+| [`vacuous-tests`](#vacuous-tests) | file | runs |
+| [`version-lockstep`](#version-lockstep) | repository | not evaluated; end of turn and CI |
+<!-- /generated -->
+
 ### Finding Codes
 
 Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacuous-tests/vacuous-test-added`): the `code` field of the JSON report and the `[gate/code]` heading of the `agent-prompt` report that hooks and `discipline mcp` hand to agents. `discipline explain <gate>` lists a gate's codes. The code names what the finding protects, not how it is detected: a gate that learns to catch more cases of the same problem keeps the code. Codes are registered in `src/findings.rs`; the title beside a code is display text. A rule id that starts with `policy/` in a SARIF, JUnit or GitLab report is not a finding code: it is a policy refusal (an override budget, a required approval, a hidden directive that was not read), which no gate reports and no directive lifts (`docs/CONFIGURATION.md`, "Policy Refusals").

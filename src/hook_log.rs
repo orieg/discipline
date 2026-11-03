@@ -216,6 +216,8 @@ pub struct Entry {
     pub duration_ms: Option<u64>,
     pub verdict: Option<String>,
     pub codes: Vec<String>,
+    /// Gates the check did not evaluate (an edit leaves some to the end of the turn).
+    pub not_evaluated: Vec<String>,
 }
 
 impl Entry {
@@ -224,6 +226,14 @@ impl Entry {
         let v: Value = serde_json::from_str(line).ok()?;
         let o = v.as_object()?;
         let s = |k: &str| o.get(k).and_then(Value::as_str).map(str::to_string);
+        let strings = |k: &str| -> Vec<String> {
+            o.get(k)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|c| c.as_str().map(str::to_string))
+                .collect()
+        };
         let legacy = o.get("record").is_none();
         let verdict = s("verdict");
         Some(Self {
@@ -244,13 +254,8 @@ impl Entry {
             warnings: o.get("warnings").and_then(Value::as_u64),
             duration_ms: o.get("duration_ms").and_then(Value::as_u64),
             verdict,
-            codes: o
-                .get("codes")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|c| c.as_str().map(str::to_string))
-                .collect(),
+            codes: strings("codes"),
+            not_evaluated: strings("not_evaluated"),
         })
     }
 
@@ -278,6 +283,9 @@ impl Entry {
         }
         if !self.codes.is_empty() {
             line.push_str(&format!(" codes={}", self.codes.join(",")));
+        }
+        if !self.not_evaluated.is_empty() {
+            line.push_str(&format!(" not_evaluated={}", self.not_evaluated.len()));
         }
         crate::report::text::terminal_line(&line)
     }

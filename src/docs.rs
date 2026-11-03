@@ -251,6 +251,38 @@ pub fn render_gates_catalog_markdown(
     out
 }
 
+/// Render each shipped gate's scope and what an agent's edit hook does with it
+/// (`config::Scope`), for GATES.md.
+pub fn render_gate_scopes_markdown(gates: &[GateInfo]) -> String {
+    let mut out = String::from("| Gate id | Scope | On an agent edit |\n|---|---|---|\n");
+    let mut shipped: Vec<&GateInfo> = gates.iter().filter(|g| g.available).collect();
+    shipped.sort_by_key(|g| g.id);
+    for g in shipped {
+        let on_edit = if g.scope.runs_on_edit() {
+            "runs".to_string()
+        } else if g.triggers.is_empty() {
+            "not evaluated; end of turn and CI".to_string()
+        } else {
+            format!(
+                "runs when the change touches {}; otherwise end of turn and CI",
+                g.triggers
+                    .iter()
+                    .map(|t| format!("`{t}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        out.push_str(&format!(
+            "| [`{}`](#{}) | {} | {} |\n",
+            g.id,
+            g.id,
+            g.scope.label(),
+            on_edit
+        ));
+    }
+    out
+}
+
 /// Render gates HTML table rows for `docs/index.html`.
 pub fn render_gates_html(gates: &[GateInfo]) -> String {
     let defaults = crate::config::DisciplineConfig::default_for_repo("");
@@ -854,6 +886,7 @@ pub fn update_generated_regions(
                         render_action_outputs_markdown(spec)
                     }
                 }
+                "gate-scopes" => render_gate_scopes_markdown(gates),
                 "gate-search" => render_gate_search_html(gates),
                 "gate-count" => render_gate_count(gates),
                 "config-schema" | "schema" => render_config_schema_markdown(),
@@ -1416,6 +1449,8 @@ mod tests {
             coverage: crate::config::Coverage::Stated("any"),
             available: true,
             delta_only: false,
+            scope: crate::config::Scope::File,
+            triggers: &[],
         };
         let gates = [gate("alpha"), gate("beta")];
         let out =

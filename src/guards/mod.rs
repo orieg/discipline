@@ -56,7 +56,7 @@ pub mod version_lockstep;
 
 use crate::cli::SuiteChoice;
 pub use crate::config::Severity;
-use crate::config::{gate_info, DisciplineConfig, GateSettings, Suite, GATES};
+use crate::config::{gate_info, DisciplineConfig, GateInfo, GateSettings, Suite, GATES};
 use crate::gitctx::GitCtx;
 use anyhow::{anyhow, bail, Context as _, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -843,15 +843,7 @@ impl Context<'_> {
     /// event, a missing pull request is a configuration error (exit 2), never a pass.
     pub fn pull_request_for(&self, gate: &str) -> Result<Option<&ForgeAccess<'_>>> {
         let Some(access) = self.forge.as_ref().filter(|f| f.pull.is_some()) else {
-            let in_ci = [
-                "CI",
-                "GITHUB_ACTIONS",
-                "GITLAB_CI",
-                "GITEA_ACTIONS",
-                "FORGEJO_ACTIONS",
-            ]
-            .iter()
-            .any(|k| std::env::var(k).is_ok_and(|v| !v.trim().is_empty() && v != "false"));
+            let in_ci = in_ci();
             // A replayed change is judged the same in a CI job as on a laptop.
             let replayed =
                 std::env::var_os(REPLAY_CASE_ENV).is_some() && self.git.base_is_replay_base();
@@ -964,6 +956,55 @@ impl Context<'_> {
     }
 }
 
+/// Whether the run is in a CI job, by the variables the forges' runners set.
+pub fn in_ci() -> bool {
+    [
+        "CI",
+        "GITHUB_ACTIONS",
+        "GITLAB_CI",
+        "GITEA_ACTIONS",
+        "FORGEJO_ACTIONS",
+    ]
+    .iter()
+    .any(|k| std::env::var(k).is_ok_and(|v| !v.trim().is_empty() && v != "false"))
+}
+
+/// The note on a gate an agent's edit hook leaves to the end of the turn. It starts with
+/// "not evaluated", so the gate counts neither as passed nor as failed.
+pub const NOT_EVALUATED_ON_EDIT: &str = "not evaluated on an edit";
+
+fn edit_skip_note(scope: crate::config::Scope) -> String {
+    let about = match scope {
+        crate::config::Scope::Provenance => {
+            "the pull request and its commits, which an edit does not pass"
+        }
+        _ => "the whole repository or the finished change",
+    };
+    format!("{NOT_EVALUATED_ON_EDIT}: this gate judges {about}; it is checked at the end of the turn and in CI")
+}
+
+/// Whether this run is an agent's edit hook: the hook names the event in
+/// [`crate::hook::HOOK_RUN_ENV`]. A run in CI is never one, whatever the variable says, so
+/// a variable left in a CI job's environment cannot narrow the gates CI runs.
+pub fn is_edit_hook_run() -> bool {
+    crate::hook_log::HookContext::from_env(true).is_some_and(|h| h.event == "edit") && !in_ci()
+}
+
+/// Whether an edit hook runs `gate` on a change touching `changed`: always for a `File`
+/// or `ChangeSet` gate, otherwise only when a changed path matches one of its triggers.
+/// The scoping unit is the whole change set, never the one edited file.
+pub fn runs_on_edit(gate: &GateInfo, changed: &[String]) -> Result<bool> {
+    if gate.scope.runs_on_edit() {
+        return Ok(true);
+    }
+    if gate.triggers.is_empty() {
+        return Ok(false);
+    }
+    let globs: Vec<String> = gate.triggers.iter().map(|t| t.to_string()).collect();
+    let filter = PathFilter::new(&globs)?;
+    Ok(changed.iter().any(|p| filter.matches(p)))
+}
+
 /// The suites a `--suite` choice runs.
 fn wanted_suites(suite: SuiteChoice) -> Vec<Suite> {
     match suite {
@@ -1033,6 +1074,20 @@ pub fn run_checks(
     })?;
 
     let whole_tree = ctx.git.is_whole_tree();
+    // An agent's edit hook runs the gates about the files and the change, and leaves the
+    // ones about the repository or the pull request to the end of the turn (#995). The
+    // paths are the whole change's, both sides of a rename.
+    let edit_paths: Option<Vec<String>> = if is_edit_hook_run() && !whole_tree {
+        Some(
+            ctx.git
+                .changed_files_including_symlinks()?
+                .into_iter()
+                .flat_map(|f| [f.old_path, f.path])
+                .collect(),
+        )
+    } else {
+        None
+    };
 
     // Misses recorded by an earlier run on this thread are not this run's.
     crate::tokens::forget_subject_misses();
@@ -1061,6 +1116,14 @@ pub fn run_checks(
             );
             outcomes.push(o);
             continue;
+        }
+        if let Some(paths) = &edit_paths {
+            if !runs_on_edit(gate, paths)? {
+                let mut o = GateOutcome::new(gate.id);
+                o.notes.push(edit_skip_note(gate.scope));
+                outcomes.push(o);
+                continue;
+            }
         }
         let outcome = crate::timings::gate(gate.id, || match gate.id {
             "agents-md" => hygiene::agents_md(ctx),
@@ -2125,6 +2188,65 @@ mod tests {
         assert!(noted.contains(&"deletion-rationale"), "{noted:?}");
         assert!(noted.contains(&"claim-labels"), "{noted:?}");
         assert!(!noted.contains(&"shell-secrets"), "{noted:?}");
+    }
+
+    /// The gates an agent's edit hook leaves to the end of the turn, by `GateInfo::scope`:
+    /// written out so that a scope changed in `config::GATES` fails this test (#995).
+    #[test]
+    fn the_gates_an_edit_leaves_out_are_the_repository_and_provenance_ones() {
+        let mut left_out: Vec<&str> = GATES
+            .iter()
+            .filter(|g| g.available && !g.scope.runs_on_edit())
+            .map(|g| g.id)
+            .collect();
+        let mut expected = vec![
+            "agents-md",
+            "archive-contents",
+            "bench-regression",
+            "ci-integrity",
+            "ci-skip-set",
+            "command",
+            "commit-provenance",
+            "dependency-delta",
+            "golden-output",
+            "issue-link",
+            "manifest-sync",
+            "miri",
+            "msrv",
+            "pr-checklist",
+            "review-threads",
+            "sanitizers",
+            "test-budget",
+            "test-floor",
+            "unsafe-budget",
+            "version-lockstep",
+        ];
+        left_out.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(left_out, expected);
+        // A gate the edit always runs needs no trigger.
+        for g in GATES.iter().filter(|g| g.scope.runs_on_edit()) {
+            assert!(g.triggers.is_empty(), "{}", g.id);
+        }
+    }
+
+    #[test]
+    fn an_edit_runs_a_left_out_gate_only_when_the_change_touches_its_trigger() {
+        let info = |id| gate_info(id).unwrap();
+        let paths = |ps: &[&str]| ps.iter().map(|p| p.to_string()).collect::<Vec<_>>();
+        // File and change-set gates run whatever the change touches.
+        assert!(runs_on_edit(info("assertion-reduction"), &[]).unwrap());
+        assert!(runs_on_edit(info("scope-confinement"), &paths(&["README.md"])).unwrap());
+        // A repository gate with no trigger never runs on an edit.
+        assert!(!runs_on_edit(info("test-floor"), &paths(&["tests/a.rs"])).unwrap());
+        assert!(!runs_on_edit(info("issue-link"), &paths(&["src/a.rs"])).unwrap());
+        // A triggered one runs when any changed path, anywhere in the change, matches.
+        let ci = info("ci-integrity");
+        assert!(!runs_on_edit(ci, &paths(&["src/a.rs"])).unwrap());
+        assert!(runs_on_edit(ci, &paths(&["src/a.rs", ".github/workflows/ci.yml"])).unwrap());
+        assert!(runs_on_edit(ci, &paths(&["tools/setup/action.yml"])).unwrap());
+        assert!(runs_on_edit(info("agents-md"), &paths(&["CLAUDE.md"])).unwrap());
+        assert!(!runs_on_edit(info("agents-md"), &paths(&["docs/AGENTS.txt"])).unwrap());
     }
 
     /// The gates a whole-tree run does not evaluate, by `GateInfo::delta_only`: the set is
