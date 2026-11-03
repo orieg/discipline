@@ -118,9 +118,35 @@ The rows under `extract` overlap, so they do not sum. On `ripgrep` (1K samples),
 - `reparsed_expression`, `tracked_files` and `changed_files` each fall below the 1.5% cut-off.
 - `agent-guard` (11.3 s in section 4) is not profiled here.
 
-The design that follows from this attribution is on `#994`; its engine changes are not part of this document.
+The design that follows from this attribution is on `#994`; section 4.2 measures its engine changes.
 
 The 60–120 s wall time reported for `check` and `diff` in the `#966` review was taken at a load around 60–70 and is not used here. An earlier attempt on the development host (Apple M1, 2026-11-01) was refused by the script at `load1` 29.54 (RUN, exit 3) and timed nothing.
+
+### 4.2 Re-measurement after the engine fast path (`#994`)
+
+**Change measured:** `test-floor`'s static counts key each file's contribution by path, git blob id and assertion vocabulary for one evaluation of the gate, so a file the change leaves alone, under the same vocabulary on both sides, is extracted once rather than once per side. The Rust module scans that build both sides' runner rules are kept for the run by the blob id of the source. The count reads a tests-only extraction (`LanguagePack::extract_test_counts`), and the Rust pack skips the analyses it never reads. Nothing is skipped or answered from a stale result: when the vocabularies differ, both sides are counted in full, and nothing is stored between runs.
+
+**Host (RUN, 2026-11-02):** one AWS `c7g.2xlarge` (Graviton3, 8 vCPU arm64, 16 GB, Amazon Linux 2023, kernel 6.18), terminated after the run. Both binaries were built on it with `cargo build --release --locked` (rustc 1.99.1): `main` at `f45fa68f`, and the change at `f2fc9cfb`. The commits after `f2fc9cfb` on the branch add tests and a merge of `main` that brings in `#1000`'s `--timings` counters, which no timed command here turns on. `load1` was 1.09 at the preflight, with no process above 100% CPU. It was between 1.00 and 1.20 before every timed run, and 1.00 after the last. The timed process itself is about one core. Each repository is the script's scratch clone with its one-line change, as in section 4: `orieg/discipline` at `f2fc9cfb` (1,366 files, change to `src/hook.rs`), and `BurntSushi/ripgrep` at `91f5d22e` (change to `crates/core/flags/defs.rs`). The change was timed with 7 runs per cell and `main` with 3, after one warm-up each. Values are seconds of wall time, median with minimum and maximum, all (measured). Raw samples: [`fast-path-hook-latency.json`](results-hook-latency/fast-path-hook-latency.json) and [`fast-path-hook-latency-main.json`](results-hook-latency/fast-path-hook-latency-main.json). Host snapshots: `fast-path-preflight.txt`, `-midflight.txt` and `-postflight.txt`.
+
+| Cell | `orieg/discipline`, `main` | `orieg/discipline`, change | `ripgrep`, `main` | `ripgrep`, change |
+|---|---|---|---|---|
+| **`hook-post-edit`** | 47.58 (47.48–47.61) | **19.60** (19.52–19.66) | 9.40 (9.38–9.47) | **6.35** (6.32–6.37) |
+| `check-one-file` | 47.52 (47.49–47.55) | 19.62 (19.51–19.66) | 9.38 (9.38–9.47) | 6.35 (6.33–6.37) |
+| `suite-integrity` | 40.88 (40.87–40.96) | 14.43 (14.42–14.51) | 6.07 (6.04–6.11) | 3.12 (3.11–3.13) |
+| `suite-agent-guard` | 10.83 (10.79–10.92) | 7.22 (7.19–7.25) | 4.66 (4.66–4.69) | 4.19 (4.18–4.24) |
+| `check-large` | 50.68 (50.66–50.69), exit 2 | 50.42 (50.37–50.47), exit 2 | 29.45 (29.33–29.45) | 27.53 (27.46–27.69) |
+| `suite-hygiene` / `-quality` / `-verification` / `-bench` | 1.83 / 0.72 / 0.72 / 0.74 | 1.83 / 0.73 / 0.72 / 0.73 | 0.86 / 0.73 / 0.73 / 0.74 | 0.87 / 0.73 / 0.74 / 0.74 |
+| `hook-pre-tool` | 0.005 | 0.005 | 0.004 | 0.004 |
+
+`check-large` on `orieg/discipline` exits 2 for the reason given in section 4, on both binaries.
+
+**Same output (RUN):** on the same host, each binary ran `check --base <base> --suite integrity --format json` with `DISCIPLINE_NO_NETWORK=1` on a one-line change to each repository's largest Rust file. The two reports are byte-identical on both repositories: findings, notes and every gate's `examined` (`test-floor` examined 4,309 tests on `orieg/discipline` and 496 on `ripgrep`). The reports are `fast-path-same-output-<repo>.json` and `-main.json`. The unit tests that compare the gate with and without the memo, and the tests-only extraction with the full one, are in `src/guards/test_floor.rs` (`count_memo_tests`).
+
+**What it shows:**
+- **`integrity` drops by 65% here** (40.88 to 14.43 s) and by 49% on `ripgrep` (6.07 to 3.12 s). `hook-post-edit` drops by 59% and 32%.
+- **`agent-guard` drops too** (10.83 to 7.22 s here). It builds both sides' runner rules, and the module scans of an unchanged Rust file are now shared between them.
+- **Against the pre-registered threshold:** 19.60 s and 6.35 s are still above the 2 s median, and both maxima (19.66 s, 6.37 s) are above 5 s. The engine changes shorten Stop, pre-commit and CI. They do not bring the edit hook under the threshold. As `#994` projected, that depends on `#995`'s event-scoped gate selection, which reports the change-set gates as not evaluated on Edit.
+- **A change that adds, removes or renames a Rust test target** changes the runner rules, so the two vocabularies differ and both sides are counted in full, as before (`a_change_to_the_runner_rules_counts_both_sides_in_full`). The one-line changes timed here keep the rules equal. Sharing across vocabularies that differ only in rules the count does not read is not done.
 
 ## 5. Decision it feeds
 
@@ -129,4 +155,5 @@ Pre-registered before any figure exists:
 - A `--paths`-scoped fast path or a cache for the edit hook is written **only if** the `hook-post-edit` median on either repository is above 2 s (target), or its maximum is above 5 s (target). Below both, the per-edit cost is not the problem and no fast path is written.
 - If it is written, the `suite-*` and profiler breakdown names what it skips or caches; a fast path that skips a gate the full check runs is reported by the edit hook as not checked, never as a pass.
 - **Decision (applied as written):** the `hook-post-edit` median is 47.31 s on `orieg/discipline` and 9.34 s on `ripgrep` (measured), both above 2 s, and both maxima (47.35 s, 9.35 s) are above 5 s. **A fast path or cache for the edit hook is written.** The breakdown points it at the `integrity` suite first, after a profile names the gate or gates inside it.
+- **After the engine fast path (`#994`, section 4.2):** `hook-post-edit` is 19.60 s here and 6.35 s on `ripgrep` (median, measured). Both medians are still above 2 s and both maxima above 5 s, so the threshold is not met. What remains is `#995`'s event scoping.
 - Promoting `pretool --enforce` is not decided by latency: it is gated on refusal precision from the observe logs. `#838` supplies recall per gate.

@@ -75,6 +75,7 @@ fn head_runner_rules(
 ) -> Result<crate::ast::runner_collection::RunnerCollectionRules> {
     let run = ctx.git.run_id().to_string();
     rules_for_key(&HEAD_RUNNER_RULES, Some(&run), || {
+        crate::ast::runner_collection::keep_module_scans_for_run(ctx.git.run_id());
         let tracked = ctx.git.tracked_files()?;
         let reads = crate::gitctx::ReadRecorder::new();
         let head = reads.head(ctx.git);
@@ -161,6 +162,8 @@ fn base_runner_rules(
 ) -> Result<crate::ast::runner_collection::RunnerCollectionRules> {
     let tree = ctx.git.base_tree_id()?;
     rules_for_tree(tree.as_deref(), || {
+        // A file both sides hold is scanned for its `mod` declarations once in the run.
+        crate::ast::runner_collection::keep_module_scans_for_run(ctx.git.run_id());
         let tracked = ctx.git.base_tracked_files()?;
         let reads = crate::gitctx::ReadRecorder::new();
         let rules = crate::ast::runner_collection::RunnerCollectionRules::from_tree(
@@ -325,5 +328,58 @@ mod head_rules_cache_tests {
         let rebuilt = assert_vocabulary_for_head(&ctx).unwrap();
         assert!(!rebuilt.runner_rules.js.node_test_script);
         assert_eq!(reads_of("test/a.test.js"), 2);
+    }
+}
+
+#[cfg(test)]
+mod module_scan_tests {
+    use super::{assert_vocabulary_for_base, assert_vocabulary_for_head};
+    use crate::ast::runner_collection::module_scans_parsed;
+    use crate::gitctx::GitCtx;
+    use crate::guards::test_support::context;
+
+    /// The head and base sides' rules of one run scan each Rust file for its `mod`
+    /// declarations once when the change leaves it alone, and each side's own version of
+    /// a file it edits: after the head side's rules, the base side's scan only the base
+    /// version of the one file the change edits.
+    #[test]
+    fn both_sides_scan_an_unchanged_rust_file_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let files = [
+            (
+                "Cargo.toml",
+                "[package]\nname = \"m\"\nversion = \"0.1.0\"\n",
+            ),
+            ("src/lib.rs", "mod a;\n"),
+            ("src/a.rs", "mod b;\n"),
+            ("src/b.rs", "mod inner {}\n"),
+        ];
+        let mut index = repo.index().unwrap();
+        for (path, content) in files {
+            let full = dir.path().join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, content).unwrap();
+            index.add_path(std::path::Path::new(path)).unwrap();
+        }
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.invalid").unwrap();
+        let commit = repo
+            .commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+            .unwrap();
+        drop(tree);
+        std::fs::write(dir.path().join("src/a.rs"), "// edited\nmod b;\n").unwrap();
+        let git = GitCtx::for_test(repo, Some(commit));
+        let config = crate::config::DisciplineConfig::default_for_repo("scan-test");
+        let ctx = context(&config, &git);
+
+        let head = assert_vocabulary_for_head(&ctx).unwrap();
+        let head_scans = module_scans_parsed();
+        assert!(head_scans >= 2, "{head_scans}");
+        let base = assert_vocabulary_for_base(&ctx).unwrap();
+        assert_eq!(module_scans_parsed(), head_scans + 1);
+        // The rules are the ones each side's own scans give.
+        assert_eq!(head.runner_rules, base.runner_rules);
     }
 }
