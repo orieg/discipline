@@ -623,17 +623,18 @@ fn edit_tree_digest(dir: &Path, side: &CheckSide) -> String {
     match crate::session::tree_digest(dir, side_base_name(side), &["**".to_string()]) {
         Ok(Some(d)) => d,
         Ok(None) => "clean".to_string(),
-        Err(_) => format!("unknown-{}", new_run_id("")),
+        Err(_) => format!("unknown-{}", new_run_id()),
     }
 }
 
-fn new_run_id(salt: &str) -> String {
+/// An id for one detached run, unique on the host: the process id over the clock. Not a
+/// secret and not a digest, so nothing is hashed.
+fn new_run_id() -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
+        .map(|d| d.as_nanos() as u64)
         .unwrap_or(0);
-    let seed = format!("{}:{nanos}:{salt}", std::process::id());
-    crate::report::gitlab::sha256_hex(seed.as_bytes())[..16].to_string()
+    format!("{:016x}", nanos ^ (u64::from(std::process::id()) << 40))
 }
 
 /// `<git dir>/discipline/` of the repository holding `dir`.
@@ -664,7 +665,7 @@ fn start_detached_edit(agent: Agent, dir: &Path, side: &CheckSide) -> Result<Hoo
     let pass = translate_event(agent, Event::Edit, 0, "", "");
     let state = hook_state_dir(dir)?;
     let digest = edit_tree_digest(dir, side);
-    let run_id = new_run_id(&digest);
+    let run_id = new_run_id();
     std::fs::write(state.join(EDIT_LATEST_NAME), format!("{run_id} {digest}\n"))
         .with_context(|| format!("cannot write {}", state.join(EDIT_LATEST_NAME).display()))?;
     let child = std::env::current_exe()
