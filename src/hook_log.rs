@@ -159,19 +159,29 @@ pub fn path(dir: &Path) -> Result<PathBuf> {
 
 /// Appends `entry` as one line to the log of the repository holding `dir`.
 pub fn append(dir: &Path, entry: &Value) -> Result<PathBuf> {
-    use std::io::Write as _;
     let path = path(dir)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("cannot create {}", parent.display()))?;
     }
+    append_line(&path, entry)?;
+    Ok(path)
+}
+
+/// Appends `entry` and its newline to `path`, opened for append. A hook and the detached
+/// check it started can write at once, so the line is written as one buffer: written
+/// piece by piece it can interleave with the other writer's and leave neither readable.
+fn append_line(path: &Path, entry: &Value) -> Result<()> {
+    use std::io::Write as _;
+    let mut line = serde_json::to_vec(entry)?;
+    line.push(b'\n');
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&path)
+        .open(path)
         .with_context(|| format!("cannot open {}", path.display()))?;
-    writeln!(f, "{entry}").with_context(|| format!("cannot write {}", path.display()))?;
-    Ok(path)
+    f.write_all(&line)
+        .with_context(|| format!("cannot write {}", path.display()))
 }
 
 /// The fields every record this release writes carries, beside the event's own.
@@ -448,6 +458,38 @@ mod tests {
             .render()
             .contains("killed, timed out or still running"));
         assert!(!entries[0].render().contains("killed"));
+    }
+
+    #[test]
+    fn lines_appended_at_once_by_several_writers_each_read_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(LOG_NAME);
+        let (writers, lines) = (8, 50);
+        // Long enough, and with enough strings, that a line written piece by piece takes
+        // many writes.
+        let fields: serde_json::Map<String, Value> = (0..200)
+            .map(|i| (format!("field_{i}"), Value::from("x".repeat(20))))
+            .collect();
+        std::thread::scope(|s| {
+            for w in 0..writers {
+                let (path, fields) = (&path, &fields);
+                s.spawn(move || {
+                    for n in 0..lines {
+                        let mut m = fields.clone();
+                        m.insert("writer".into(), w.into());
+                        m.insert("n".into(), n.into());
+                        append_line(path, &Value::Object(m)).unwrap();
+                    }
+                });
+            }
+        });
+        let text = std::fs::read_to_string(&path).unwrap();
+        let parsed: Vec<Value> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{e}: {l:.120}")))
+            .collect();
+        assert_eq!(parsed.len(), writers * lines);
+        assert!(parsed.iter().all(|v| v["field_199"] == "x".repeat(20)));
     }
 
     #[test]
