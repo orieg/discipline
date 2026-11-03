@@ -548,6 +548,15 @@ fn run_payload(
         Event::Edit => "edit",
         Event::Stop => "stop",
     };
+    // Observe mode never blocks an edit, so the agent need not wait for its check: it
+    // runs detached and logs its own verdict (#995). The end of the turn stays
+    // synchronous and complete, and never reads a detached run's result.
+    if event == Event::Edit && observe {
+        return match std::env::var("DISCIPLINE_HOOK_DETACHED") {
+            Ok(id) if is_run_id(&id) => run_detached_edit(agent, &dir, &base, &id),
+            _ => start_detached_edit(agent, &dir, &base),
+        };
+    }
     let run = run_check_under(
         &dir,
         &base,
@@ -586,6 +595,271 @@ fn run_payload(
         }
     }
     Ok(out)
+}
+
+/// The variable a detached edit check is started with: its run id. Internal, never set
+/// by hand: the hook process that starts the check writes it.
+pub const HOOK_DETACHED_ENV: &str = "DISCIPLINE_HOOK_DETACHED";
+
+/// Under `<git dir>/discipline/`: the lock a detached edit check holds while it runs, so
+/// checks never overlap.
+pub const EDIT_LOCK_NAME: &str = "hook-check.lock";
+
+/// Under `<git dir>/discipline/`: the run id and tree digest of the latest edit, which a
+/// waiting older run compares to its own to know it was superseded.
+pub const EDIT_LATEST_NAME: &str = "hook-edit-latest";
+
+/// A run id this release writes: 16 lower-case hex digits.
+fn is_run_id(s: &str) -> bool {
+    s.len() == 16
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// The digest of the working tree against the check's base: every changed or untracked
+/// path and its content. `clean` when nothing differs; `unknown` when it cannot be read
+/// (two unknowns never count as the same tree).
+fn edit_tree_digest(dir: &Path, side: &CheckSide) -> String {
+    match crate::session::tree_digest(dir, side_base_name(side), &["**".to_string()]) {
+        Ok(Some(d)) => d,
+        Ok(None) => "clean".to_string(),
+        Err(_) => format!("unknown-{}", new_run_id()),
+    }
+}
+
+/// An id for one detached run, unique on the host: the process id over the clock. Not a
+/// secret and not a digest, so nothing is hashed.
+fn new_run_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    format!("{:016x}", nanos ^ (u64::from(std::process::id()) << 40))
+}
+
+/// `<git dir>/discipline/` of the repository holding `dir`.
+fn hook_state_dir(dir: &Path) -> Result<PathBuf> {
+    let log = crate::hook_log::path(dir)?;
+    let state = log
+        .parent()
+        .map(Path::to_path_buf)
+        .context("the hook log has no directory")?;
+    std::fs::create_dir_all(&state)
+        .with_context(|| format!("cannot create {}", state.display()))?;
+    Ok(state)
+}
+
+/// The latest edit's run id and tree digest, as [`start_detached_edit`] wrote them.
+fn latest_edit(state: &Path) -> Option<(String, String)> {
+    let text = std::fs::read_to_string(state.join(EDIT_LATEST_NAME)).ok()?;
+    let (id, digest) = text.trim().split_once(' ')?;
+    Some((id.to_string(), digest.to_string()))
+}
+
+/// An edit in observe mode: log a `started` line keyed by the tree digest, start the check
+/// as a detached child that logs its own `finished` line, and answer the agent at once. A
+/// harness that kills the hook or the check leaves `started` without `finished`, which
+/// `hook log` reads as killed, timed out or still running, never as a hook that did not
+/// run (#937). If the child cannot be started, the check runs here, as before.
+fn start_detached_edit(agent: Agent, dir: &Path, side: &CheckSide) -> Result<HookOutput> {
+    let pass = translate_event(agent, Event::Edit, 0, "", "");
+    let state = hook_state_dir(dir)?;
+    let digest = edit_tree_digest(dir, side);
+    let run_id = new_run_id();
+    std::fs::write(state.join(EDIT_LATEST_NAME), format!("{run_id} {digest}\n"))
+        .with_context(|| format!("cannot write {}", state.join(EDIT_LATEST_NAME).display()))?;
+    let child = std::env::current_exe()
+        .context("cannot locate the discipline binary")
+        .and_then(|exe| spawn_detached_edit(&exe, agent, dir, side, &run_id));
+    let pid = match child {
+        Ok(pid) => pid,
+        Err(err) => {
+            let mut m = crate::hook_log::record(
+                agent.id(),
+                "edit",
+                crate::hook_log::Mode::Observe,
+                crate::hook_log::Decision::Allowed,
+                0,
+            );
+            m.insert("phase".into(), "started".into());
+            m.insert("run_id".into(), run_id.clone().into());
+            m.insert("tree_digest".into(), digest.into());
+            m.insert(
+                "detached".into(),
+                format!("not started, checked in the hook: {err:#}").into(),
+            );
+            let unlogged = unlogged_note(dir, &serde_json::Value::Object(m));
+            let mut out = run_detached_edit(agent, dir, side, &run_id)?;
+            out.stderr.push_str(&unlogged);
+            return Ok(out);
+        }
+    };
+    let mut m = crate::hook_log::record(
+        agent.id(),
+        "edit",
+        crate::hook_log::Mode::Observe,
+        crate::hook_log::Decision::Allowed,
+        0,
+    );
+    m.insert("phase".into(), "started".into());
+    m.insert("run_id".into(), run_id.into());
+    m.insert("tree_digest".into(), digest.into());
+    m.insert("check_pid".into(), pid.into());
+    let mut out = pass;
+    out.stderr
+        .push_str(&unlogged_note(dir, &serde_json::Value::Object(m)));
+    Ok(out)
+}
+
+/// Appends `entry` to the hook log. A line that cannot be written is said on stderr, and
+/// the hook still never blocks in observe mode: empty when the line was written.
+fn unlogged_note(dir: &Path, entry: &serde_json::Value) -> String {
+    match crate::hook_log::append(dir, entry) {
+        Ok(_) => String::new(),
+        Err(e) => format!(
+            "discipline (observe mode, not enforced): this edit's check is not recorded: {e:#}\n"
+        ),
+    }
+}
+
+/// Starts `hook run --observe` for the edit as a child that outlives this process: its
+/// own process group (a harness that kills the hook's group leaves it running), no
+/// terminal output, and a payload naming only the directory. Returns its pid.
+fn spawn_detached_edit(
+    exe: &Path,
+    agent: Agent,
+    dir: &Path,
+    side: &CheckSide,
+    run_id: &str,
+) -> Result<u32> {
+    use std::io::Write as _;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.current_dir(dir)
+        .args(["hook", "run", "--agent", agent.id(), "--observe"])
+        .env(HOOK_DETACHED_ENV, run_id)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    if let CheckSide::Base(b) = side {
+        cmd.args(["--base", b]);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        cmd.process_group(0);
+    }
+    let mut child = cmd.spawn().context("cannot start the detached check")?;
+    let payload = serde_json::json!({ "cwd": dir.to_string_lossy() }).to_string();
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(payload.as_bytes())
+            .context("cannot hand the detached check its payload")?;
+    }
+    Ok(child.id())
+}
+
+/// The detached edit check. It waits for the lock, giving up as `superseded` when a newer
+/// edit started meanwhile; it runs the check, and drops the verdict as `superseded` when
+/// the tree changed while it ran. Otherwise its `finished` line is the change check's
+/// record. Nothing is said to the agent: no one reads this process's output.
+fn run_detached_edit(
+    agent: Agent,
+    dir: &Path,
+    side: &CheckSide,
+    run_id: &str,
+) -> Result<HookOutput> {
+    let pass = translate_event(agent, Event::Edit, 0, "", "");
+    let state = hook_state_dir(dir)?;
+    let started = std::time::Instant::now();
+    let superseded = |why: &str, digest: Option<String>| {
+        let mut m = crate::hook_log::record(
+            agent.id(),
+            "edit",
+            crate::hook_log::Mode::Observe,
+            crate::hook_log::Decision::Allowed,
+            0,
+        );
+        m.insert("phase".into(), "finished".into());
+        m.insert("run_id".into(), run_id.into());
+        if let Some(d) = digest {
+            m.insert("tree_digest".into(), d.into());
+        }
+        m.insert("verdict".into(), "superseded".into());
+        m.insert("reason".into(), why.into());
+        m.insert(
+            "duration_ms".into(),
+            u64::try_from(started.elapsed().as_millis())
+                .unwrap_or(u64::MAX)
+                .into(),
+        );
+        // No one reads this process's output: a line it cannot write ends it with the
+        // error, and the run reads as unfinished.
+        crate::hook_log::append(dir, &serde_json::Value::Object(m))?;
+        Ok(translate_event(agent, Event::Edit, 0, "", ""))
+    };
+    let lock_path = state.join(EDIT_LOCK_NAME);
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("cannot open {}", lock_path.display()))?;
+    let mine = |latest: Option<(String, String)>| {
+        latest
+            .filter(|(id, _)| id == run_id)
+            .map(|(_, digest)| digest)
+    };
+    // The latest edit's check is the one worth running; an older one waiting for the lock
+    // gives way to it.
+    let digest = loop {
+        let Some(digest) = mine(latest_edit(&state)) else {
+            return superseded("a newer edit started before this check ran", None);
+        };
+        match lock.try_lock() {
+            Ok(()) => break digest,
+            Err(std::fs::TryLockError::WouldBlock) => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(std::fs::TryLockError::Error(e)) => {
+                return Err(e).with_context(|| format!("cannot lock {}", lock_path.display()))
+            }
+        }
+    };
+    if mine(latest_edit(&state)).is_none() {
+        return superseded("a newer edit started before this check ran", Some(digest));
+    }
+    let run = run_check_under(
+        dir,
+        side,
+        Some(crate::hook_log::HookContext::env_value(
+            agent.id(),
+            "edit",
+            crate::hook_log::Mode::Observe,
+        )),
+    )?;
+    // The verdict is about the tree the check read: dropped when the tree changed since.
+    if edit_tree_digest(dir, side) != digest {
+        return superseded("the tree changed while the check ran", Some(digest));
+    }
+    let decision =
+        crate::hook_log::Decision::of_check(crate::hook_log::Mode::Observe, run.code == 0);
+    let mut record = check_record(
+        agent,
+        "edit",
+        crate::hook_log::Mode::Observe,
+        decision,
+        &run,
+        &pass,
+    );
+    if let Some(m) = record.as_object_mut() {
+        m.insert("phase".into(), "finished".into());
+        m.insert("run_id".into(), run_id.into());
+        m.insert("tree_digest".into(), digest.into());
+    }
+    crate::hook_log::append(dir, &record)?;
+    // The lock is released as the file closes; an OS lock dies with a killed process too.
+    drop(lock);
+    Ok(pass)
 }
 
 /// The log line of one change check: the record's fields, the report's counts, the

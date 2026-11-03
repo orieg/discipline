@@ -28,6 +28,26 @@ fn find_test<'a>(f: &'a crate::ast::ParsedFileFacts, name: &str) -> Option<&'a c
 
 const CASES: &[Case] = &[
     (
+        "hook log: a detached edit check with started and no finished reads as unfinished; a finished one does not",
+        || {
+            let line = |phase: &str, id: &str| {
+                crate::hook_log::Entry::parse(&format!(
+                    r#"{{"record":1,"time":0,"agent":"codex","event":"edit","mode":"observe","decision":"allowed","exit_code":0,"phase":"{phase}","run_id":"{id}"}}"#
+                ))
+            };
+            let (Some(a), Some(b), Some(a_done)) = (
+                line("started", "aaaaaaaaaaaaaaaa"),
+                line("started", "bbbbbbbbbbbbbbbb"),
+                line("finished", "aaaaaaaaaaaaaaaa"),
+            ) else {
+                bail!("a log line did not parse");
+            };
+            let mut entries = vec![a, b, a_done];
+            crate::hook_log::mark_unfinished(&mut entries);
+            Ok(!entries[0].unfinished && entries[1].unfinished && !entries[2].unfinished)
+        },
+    ),
+    (
         "edit scope: an edit leaves test-floor out, runs ci-integrity only when a workflow changes, and always runs a file gate",
         || {
             let info = |id| crate::config::gate_info(id).expect("registered");

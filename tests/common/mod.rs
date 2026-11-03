@@ -220,6 +220,7 @@ pub fn git_command() -> Command {
 
 pub const ISOLATED_ENV_VARS: &[&str] = &[
     "DISCIPLINE_HOOK_RUN",
+    "DISCIPLINE_HOOK_DETACHED",
     "DISCIPLINE_EXPECTED_EXE_SHA256",
     "PR_BODY",
     "DISCIPLINE_PR_BODY_FILE",

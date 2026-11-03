@@ -1041,9 +1041,43 @@ fn claude_code_install_writes_the_cloud_bootstrap() {
     );
 }
 
+/// The log lines of `log`, parsed.
+fn log_lines(log: &std::path::Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .collect()
+}
+
+/// The run id of the last `started` line of `log`.
+fn last_started(log: &std::path::Path) -> serde_json::Value {
+    log_lines(log)
+        .into_iter()
+        .rev()
+        .find(|l| l["phase"] == "started")
+        .unwrap_or_else(|| panic!("no started line in {}", log.display()))
+}
+
+/// The `finished` line of the detached check `run_id`, waiting for it.
+fn wait_finished(log: &std::path::Path, run_id: &serde_json::Value) -> serde_json::Value {
+    for _ in 0..1200 {
+        if let Some(l) = log_lines(log)
+            .into_iter()
+            .find(|l| l["phase"] == "finished" && &l["run_id"] == run_id)
+        {
+            return l;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    panic!("no finished line for {run_id} in {:?}", log_lines(log));
+}
+
 /// Observe mode: the check runs, the agent is never blocked, and what would have blocked
-/// is said on stderr and logged under the git directory; a clean change is logged as
-/// allowed and says nothing (#937: a run with no line is a run that did not happen).
+/// is logged under the git directory; a clean change is logged as allowed (#937: a run
+/// with no line is a run that did not happen). After an edit the check runs detached: the
+/// hook answers at once and logs `started`, and the check logs `finished` (#995). The
+/// end of the turn runs synchronously and says what would have blocked on stderr.
 #[test]
 fn observe_mode_reports_and_logs_without_blocking() {
     let repo = Repo::new();
@@ -1057,14 +1091,21 @@ fn observe_mode_reports_and_logs_without_blocking() {
         (clean.code, clean.stdout.as_str(), clean.stderr.as_str()),
         (0, "", "")
     );
-    let first = std::fs::read_to_string(&log).expect("a clean change is logged");
-    let first: serde_json::Value = serde_json::from_str(first.trim()).unwrap();
+    let started = last_started(&log);
+    assert_eq!(
+        (&started["mode"], &started["decision"], &started["event"]),
+        (&"observe".into(), &"allowed".into(), &"edit".into()),
+        "{started}"
+    );
+    assert!(started["check_pid"].as_u64().is_some(), "{started}");
+    let first = wait_finished(&log, &started["run_id"]);
     assert_eq!(
         (&first["mode"], &first["decision"], &first["verdict"]),
         (&"observe".into(), &"allowed".into(), &"pass".into()),
         "{first}"
     );
-    // The per-edit latency the agent waited for (#995).
+    assert_eq!(first["tree_digest"], started["tree_digest"], "{first}");
+    // The per-edit latency the check took (#995).
     assert!(first["duration_ms"].as_u64().is_some(), "{first}");
     // An edit leaves the gates about the finished change to the end of the turn, and the
     // line names them.
@@ -1084,20 +1125,20 @@ fn observe_mode_reports_and_logs_without_blocking() {
         POST_EDIT,
     );
     assert_eq!(
-        (edit.code, edit.stdout.as_str()),
-        (0, ""),
-        "{}",
-        edit.stderr
+        (edit.code, edit.stdout.as_str(), edit.stderr.as_str()),
+        (0, "", ""),
+        "the agent does not wait for the check"
     );
-    assert!(
-        edit.stderr.contains("observe mode, not enforced")
-            && edit
-                .stderr
-                .contains("assertion-reduction/assertions-reduced"),
-        "{}",
-        edit.stderr
-    );
-    // Copilot's end of turn is let through too: no `block` decision.
+    let found = wait_finished(&log, &last_started(&log)["run_id"]);
+    assert_eq!(found["verdict"], "findings", "{found}");
+    assert_eq!(found["decision"], "observed", "{found}");
+    assert!(found["codes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c == "assertion-reduction/assertions-reduced"));
+    // Copilot's end of turn is let through too, and runs in the hook: no `block` decision,
+    // what would have blocked on stderr.
     let stop = hook(
         &repo,
         &["hook", "run", "--agent", "copilot", "--observe"],
@@ -1109,37 +1150,140 @@ fn observe_mode_reports_and_logs_without_blocking() {
         "{}",
         stop.stdout
     );
-    // The clean run's `allowed` line aside, what would have blocked.
-    let lines: Vec<serde_json::Value> = std::fs::read_to_string(&log)
-        .unwrap()
-        .lines()
-        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
-        .filter(|l| l["decision"] != "allowed")
-        .collect();
-    assert_eq!(lines.len(), 2, "{lines:?}");
-    assert_eq!(lines[0]["agent"], "claude-code");
-    assert_eq!(lines[0]["event"], "edit");
-    assert_eq!(lines[0]["verdict"], "findings");
-    assert_eq!(lines[0]["decision"], "observed");
-    assert!(lines[0]["codes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|c| c == "assertion-reduction/assertions-reduced"));
+    assert!(
+        stop.stderr.contains("observe mode, not enforced")
+            && stop
+                .stderr
+                .contains("assertion-reduction/assertions-reduced"),
+        "{}",
+        stop.stderr
+    );
+    let stop_line = log_lines(&log).pop().unwrap();
     assert_eq!(
-        (lines[1]["agent"].as_str(), lines[1]["event"].as_str()),
+        (stop_line["agent"].as_str(), stop_line["event"].as_str()),
         (Some("copilot"), Some("stop"))
     );
+    assert_eq!(stop_line.get("phase"), None, "{stop_line}");
+    assert_eq!(stop_line["verdict"], "findings", "{stop_line}");
     // The end of the turn runs every gate it is configured to.
-    let stop_left_out = lines[1]["not_evaluated"]
+    let stop_left_out = stop_line["not_evaluated"]
         .as_array()
         .cloned()
         .unwrap_or_default();
     assert!(
         !stop_left_out.iter().any(|g| g == "test-floor"),
-        "{}",
-        lines[1]
+        "{stop_line}"
     );
+}
+
+/// Holds the detached checks' lock, as a running check would.
+fn hold_check_lock(repo: &Repo) -> std::fs::File {
+    let dir = repo.path().join(".git/discipline");
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("hook-check.lock"))
+        .unwrap();
+    f.lock().unwrap();
+    f
+}
+
+/// A detached check that is killed leaves its `started` line and no `finished` line, and
+/// `hook log` reads it as killed, timed out or still running: not as a hook that never
+/// ran (#937), and not as a pass.
+#[cfg(unix)]
+#[test]
+fn a_killed_detached_check_leaves_started_without_finished() {
+    let repo = Repo::new();
+    let log = repo.path().join(".git/discipline/hook-observe.log");
+    // The check waits for the lock, so it is still running when it is killed.
+    let held = hold_check_lock(&repo);
+    let edit = hook(
+        &repo,
+        &["hook", "run", "--agent", "claude-code", "--observe"],
+        POST_EDIT,
+    );
+    assert_eq!(
+        (edit.code, edit.stdout.as_str()),
+        (0, ""),
+        "{}",
+        edit.stderr
+    );
+    let started = last_started(&log);
+    let pid = started["check_pid"].as_u64().unwrap().to_string();
+    let killed = Command::new("kill").args(["-9", &pid]).status().unwrap();
+    assert!(killed.success());
+    // Gone once `kill -0` fails; it was the hook's child, and is reaped by init.
+    for _ in 0..100 {
+        if !Command::new("kill")
+            .args(["-0", &pid])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    drop(held);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let lines = log_lines(&log);
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l["phase"] == "finished" && l["run_id"] == started["run_id"]),
+        "{lines:?}"
+    );
+    let text = repo.run(&["hook", "log"], &[]);
+    assert_eq!(text.code, 0, "{}", text.stderr);
+    let line = text
+        .stdout
+        .lines()
+        .find(|l| l.contains("phase=started"))
+        .unwrap_or_else(|| panic!("{}", text.stdout));
+    assert!(
+        line.contains("killed, timed out or still running"),
+        "{line}"
+    );
+}
+
+/// A newer edit supersedes an older check still waiting: the older one logs `superseded`
+/// and runs nothing, the newer one runs. The lock keeps the two from overlapping.
+#[test]
+fn a_newer_edit_supersedes_a_waiting_detached_check() {
+    let repo = Repo::new();
+    let log = repo.path().join(".git/discipline/hook-observe.log");
+    let held = hold_check_lock(&repo);
+    let run = || {
+        hook(
+            &repo,
+            &["hook", "run", "--agent", "claude-code", "--observe"],
+            POST_EDIT,
+        )
+    };
+    assert_eq!(run().code, 0);
+    let older = last_started(&log);
+    // While another check holds the lock, this one waits: nothing finishes.
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    assert!(
+        !log_lines(&log).iter().any(|l| l["phase"] == "finished"),
+        "a check ran while the lock was held: {:?}",
+        log_lines(&log)
+    );
+    weakened(&repo);
+    assert_eq!(run().code, 0);
+    let newer = last_started(&log);
+    assert_ne!(older["run_id"], newer["run_id"]);
+    assert_ne!(older["tree_digest"], newer["tree_digest"]);
+    drop(held);
+    let dropped = wait_finished(&log, &older["run_id"]);
+    assert_eq!(dropped["verdict"], "superseded", "{dropped}");
+    assert_eq!(dropped.get("codes"), None, "{dropped}");
+    let checked = wait_finished(&log, &newer["run_id"]);
+    assert_eq!(checked["verdict"], "findings", "{checked}");
 }
 
 /// An enforcing hook records every change check it runs, and `hook log` prints the records
@@ -1227,10 +1371,12 @@ fn a_check_that_cannot_run_names_its_reason_to_the_agent() {
         "{}",
         run.stderr
     );
+    // Observe mode says it at the end of the turn; after an edit the detached check
+    // writes the reason to the log (#995).
     let observed = hook(
         &repo,
         &["hook", "run", "--agent", "claude-code", "--observe"],
-        POST_EDIT,
+        r#"{"hook_event_name":"Stop","stop_hook_active":false}"#,
     );
     assert_eq!(observed.code, 0, "{}", observed.stderr);
     assert!(
@@ -1239,6 +1385,19 @@ fn a_check_that_cannot_run_names_its_reason_to_the_agent() {
             .contains("the check could not run (configuration)"),
         "{}",
         observed.stderr
+    );
+    let log = repo.path().join(".git/discipline/hook-observe.log");
+    let edit = hook(
+        &repo,
+        &["hook", "run", "--agent", "claude-code", "--observe"],
+        POST_EDIT,
+    );
+    assert_eq!((edit.code, edit.stderr.as_str()), (0, ""));
+    let finished = wait_finished(&log, &last_started(&log)["run_id"]);
+    assert_eq!(
+        (&finished["verdict"], &finished["reason"]),
+        (&"could_not_check".into(), &"configuration".into()),
+        "{finished}"
     );
 }
 
