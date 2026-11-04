@@ -561,6 +561,52 @@
       },
       "type": "object"
     },
+    "CompanionEditGate": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this gate is active",
+          "type": "boolean"
+        },
+        "exempt_paths": {
+          "$ref": "#/$defs/StringListOrReset"
+        },
+        "rules": {
+          "description": "Independent rules: a change to a trigger path must also change a required path",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "reason": {
+                "description": "Why the two path sets change together, quoted in the finding",
+                "type": "string"
+              },
+              "require_all": {
+                "description": "Whether every require_edits_to glob must match a changed path, rather than any one",
+                "type": "boolean"
+              },
+              "require_edits_to": {
+                "$ref": "#/$defs/StringListOrReset",
+                "description": "Globs; a fired rule needs a changed path matching one of them (every one with require_all), the firing path aside"
+              },
+              "trigger_paths": {
+                "$ref": "#/$defs/StringListOrReset",
+                "description": "Globs; a changed path matching any of them fires the rule"
+              }
+            },
+            "required": [
+              "trigger_paths",
+              "require_edits_to"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "type": "object"
+    },
     "ConfigIntegrityGate": {
       "additionalProperties": false,
       "properties": {
@@ -1813,6 +1859,14 @@
             }
           ],
           "description": "commits carry the required trailers; an agent-produced commit carries a review by someone else"
+        },
+        "companion-edit": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/CompanionEditGate"
+            }
+          ],
+          "description": "a change to one path set must also change its companion path set"
         },
         "config-integrity": {
           "allOf": [

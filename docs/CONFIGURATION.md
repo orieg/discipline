@@ -187,6 +187,14 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.commit-provenance.required_trailers` | list | `[]` | Trailer keys every commit in the change must carry |
 | `gates.commit-provenance.review_trailer` | string | `"Reviewed-by"` | Trailer an agent-produced commit must carry, naming someone other than its author (default: Reviewed-by). An empty name is the deprecated spelling of require_agent_review = false |
 | `gates.commit-provenance.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
+| `gates.companion-edit.enabled` | boolean | `false` | Whether this gate is active |
+| `gates.companion-edit.exempt_paths` | list | `[]` | File path globs exempted from this gate |
+| `gates.companion-edit.rules` | array of tables | `[]` | Independent rules: a change to a trigger path must also change a required path |
+| `gates.companion-edit.rules[].reason` | string | *(per entry)* | Why the two path sets change together, quoted in the finding |
+| `gates.companion-edit.rules[].require_all` | boolean | *(per entry)* | Whether every require_edits_to glob must match a changed path, rather than any one |
+| `gates.companion-edit.rules[].require_edits_to` | list | *(required)* | Globs; a fired rule needs a changed path matching one of them (every one with require_all), the firing path aside |
+| `gates.companion-edit.rules[].trigger_paths` | list | *(required)* | Globs; a changed path matching any of them fires the rule |
+| `gates.companion-edit.severity` | string | `"error"` | Violation severity: error (blocking, exit 1), warning (non-blocking), or note (informational). |
 | `gates.config-integrity.compare_effective` | boolean | `false` | Whether command-line --enable and --disable switches are included when diffing base and head configuration (default false: only committed or staged repository configuration changes are compared) |
 | `gates.config-integrity.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.config-integrity.exempt_paths` | list | `[]` | File path globs exempted from this gate |
@@ -860,6 +868,7 @@ Where a gate's subject is a keyword (`allow-unsafe`, `allow-msrv`, `allow-miri`,
 | `allow-sanitizers:` / `discipline:allow(sanitizers)` / `allow(sanitizers)` | `sanitizers` | Test or binary name with memory check rationale |
 | `allow-vacuous-test:` / `discipline:allow(vacuous-tests)` / `allow(vacuous-tests)` | `vacuous-tests` | Name of the new test the vacuous-tests finding is on |
 | `allow-claim-label:` / `discipline:allow(claim-labels)` / `allow(claim-labels)` | `claim-labels` | Source identifier (`pr-body`, `commit:<sha>`, or Markdown file path) |
+| `allow-companion-edit:` / `discipline:allow(companion-edit)` / `allow(companion-edit)` | `companion-edit` | The rule's first `require_edits_to` entry |
 
 ### Inline Line Exemptions
 
@@ -2073,6 +2082,28 @@ jobs:
 ```
 
 Pin `orieg/discipline` by commit SHA as in [GitHub Actions](#github-actions). The list is configuration, never fetched: a new entry takes effect on the next run that reads it.
+
+### Specification and Mirror Covenants (`companion-edit`)
+
+When a change to one set of paths must come with a change to another (a mechanism and the document that specifies it, or files kept as a mirror set), write each covenant as its own rule. Rules are independent; within a rule, `trigger_paths` are alternatives, and `require_edits_to` asks for any one of its paths unless `require_all = true` asks for every one.
+
+```toml
+[gates.companion-edit]
+enabled = true
+
+[[gates.companion-edit.rules]]
+trigger_paths = ["argo/**"]
+require_edits_to = ["docs/security-threat-model.md"]
+reason = "workflow-template changes are threat-surface changes"
+
+[[gates.companion-edit.rules]]
+trigger_paths = ["CLAUDE.md", "AGENTS.md", ".github/copilot-instructions.md"]
+require_edits_to = ["CLAUDE.md", "AGENTS.md", ".github/copilot-instructions.md"]
+require_all = true
+reason = "instruction files are a mirror set"
+```
+
+A deleted path fires a rule but never meets one, and without `require_all` a path is not its own companion: the firing file alone does not meet a rule whose two sets overlap. A justified exception names the rule's first `require_edits_to` entry, `allow-companion-edit: docs/security-threat-model.md <reason>`, and counts against `max_overrides`. The gate reads only the list of changed paths, so it needs no network and no pull-request payload. Full semantics: [`companion-edit`](GATES.md#companion-edit).
 
 ### Polyglot Monorepo: Rust Core + TypeScript Frontend + Python Tooling
 

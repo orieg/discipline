@@ -24,6 +24,7 @@ fn dogfood_config_loads_with_every_available_gate_on() {
             || gate.id == "citation-anchors"
             || gate.id == "mechanism-sections"
             || gate.id == "claim-labels"
+            || gate.id == "companion-edit"
         {
             continue;
         }
@@ -320,6 +321,7 @@ name = "my-test-proj"
             || g.id == "citation-anchors"
             || g.id == "mechanism-sections"
             || g.id == "claim-labels"
+            || g.id == "companion-edit"
         {
             assert!(
                 !cfg.gates.settings(g.id).unwrap().enabled(),
@@ -711,6 +713,7 @@ const DEFAULTS_SNAPSHOT: &[(&str, bool, Severity)] = &[
     ("citation-anchors", false, Severity::Error),
     ("mechanism-sections", false, Severity::Error),
     ("claim-labels", false, Severity::Warning),
+    ("companion-edit", false, Severity::Error),
 ];
 
 #[test]

@@ -15,6 +15,7 @@ pub mod claim_labels;
 pub mod claim_registry;
 pub mod command;
 pub mod commit_provenance;
+pub mod companion_edit;
 pub mod config_delta;
 pub mod confusables;
 #[cfg(test)]
@@ -1167,6 +1168,7 @@ pub fn run_checks(
             "mechanism-sections" => mechanism_sections::evaluate_mechanism_sections(ctx),
             "citation-anchors" => citation_anchors::evaluate_citation_anchors(ctx),
             "claim-labels" => claim_labels::evaluate_claim_labels(ctx),
+            "companion-edit" => companion_edit::evaluate_companion_edit(ctx),
             "assertion-reduction"
             | "vacuous-tests"
             | "ignored-tests"
@@ -1372,6 +1374,8 @@ const GLOB_LIST_KEYS: &[&str] = &[
     "constant_fallback_paths",
     "plan_paths",
     "verify_paths",
+    "trigger_paths",
+    "require_edits_to",
 ];
 
 /// One step of the way to a configured value: a table key or an array index.
@@ -2207,6 +2211,7 @@ mod tests {
             "ci-skip-set",
             "command",
             "commit-provenance",
+            "companion-edit",
             "dependency-delta",
             "golden-output",
             "issue-link",
@@ -2280,6 +2285,7 @@ mod tests {
             "review-threads",
             "commit-provenance",
             "bench-regression",
+            "companion-edit",
         ];
         let mut found = delta_only.clone();
         expected.sort_unstable();

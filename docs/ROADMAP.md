@@ -95,6 +95,7 @@ Phases 3, 4, and 5 depend upon Phase 2 and proceed in parallel. Phase 8 Tier 0 a
 | [`mechanism-sections`](GATES.md#mechanism-sections) | hygiene | markdown | require (inferred) or (verified: <target>) evidence tags in root cause sections |
 | [`citation-anchors`](GATES.md#citation-anchors) | hygiene | markdown, any | verify path:line@sha citations against quoted text and git history, and relative Markdown links against the tree |
 | [`claim-labels`](GATES.md#claim-labels) | hygiene | markdown, any | require RUN or READ labels on verification claims in PR bodies, commits, and Markdown |
+| [`companion-edit`](GATES.md#companion-edit) | integrity | any | a change to one path set must also change its companion path set |
 <!-- /generated -->
 
 ---
@@ -558,6 +559,7 @@ Default enablement and severity are part of the compatibility contract (`docs/AR
 
 | Release | Gate | Old default | New default | Direction | Reason | Restore previous behaviour |
 |---|---|---|---|---|---|---|
+| unreleased | `companion-edit` | (new gate) | off, `error` | none (off) | A change to `trigger_paths` must also edit `require_edits_to` (any one, or every one with `require_all`), one covenant per `[[gates.companion-edit.rules]]` entry (#1018). Off because which path sets move together is repository-specific. | n/a |
 | v0.26.0 | `harness-tampering` | off, `error` | on, `error` for the three exact forms; `harness-exits-zero` at `warning` at most | stricter | A harness file that makes a failing run pass is seen by no test-facing gate (#833). The agent-PR precision study v3 ran with the gate enabled and it blocked none of 232 agent pull requests: false blocks are bounded at about 0.016 per pull request (Wilson 95% upper bound), a bound, not a precision estimate. Only forms a change adds are reported, so an existing tree does not fail on upgrade. Two idioms are reported by design: `session.exitstatus = 0` on exit status 5 in `pytest_sessionfinish`, and an environment-gated item filter in `pytest_collection_modifyitems` (rewrites in `docs/GATES.md`). A repository run with `--fail-on-warnings` now also blocks on `harness-exits-zero`. | `[gates.harness-tampering]` `enabled = false` (`config-integrity` reports that edit once as a weakening: it needs `allow-gate-weakening:` or a ratified change); for `harness-exits-zero` under `--fail-on-warnings` alone, `exempt_paths` or `allow-harness-tampering: <path> <reason>` |
 | v0.22.0 | `stub-bodies` | `equality-made-constant` on a changed production method at `warning` at most (exit 0) | at the gate's severity (`error` by default, exit 1) | stricter | Restores v0.19.0 blocking for a substantive equality body made constant | `allow-stub: <Type> <reason>`, or `[gates.stub-bodies] severity = "warning"` (whole gate) |
 | v0.22.0 | `citation-anchors` | no minimum quote length | `min_quote_chars = 8` | stricter | A one-character quote is contained in almost any line and verified anything | `min_quote_chars = 0` |

@@ -314,6 +314,9 @@ verify path:line@sha citations against quoted text and git history, and relative
 .TP
 .B [gates.claim-labels]
 require RUN or READ labels on verification claims in PR bodies, commits, and Markdown (hygiene; default: off; languages: markdown, any)
+.TP
+.B [gates.companion-edit]
+a change to one path set must also change its companion path set (integrity; default: off; languages: any)
 .\" /generated
 
 .SH OVERRIDE DIRECTIVES

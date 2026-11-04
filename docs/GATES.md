@@ -64,6 +64,7 @@ This document establishes the normative enforcement rules, detection capabilitie
 | [`mechanism-sections`](#mechanism-sections) | hygiene | **shipped** | markdown | require (inferred) or (verified: <target>) evidence tags in root cause sections |
 | [`citation-anchors`](#citation-anchors) | hygiene | **shipped** | markdown, any | verify path:line@sha citations against quoted text and git history, and relative Markdown links against the tree |
 | [`claim-labels`](#claim-labels) | hygiene | **shipped** | markdown, any | require RUN or READ labels on verification claims in PR bodies, commits, and Markdown |
+| [`companion-edit`](#companion-edit) | integrity | **shipped** | any | a change to one path set must also change its companion path set |
 <!-- /generated -->
 
 ### Scope on an Agent Edit
@@ -86,6 +87,7 @@ An agent's edit hook (`discipline hook run` after an edit) runs the gates about 
 | [`claim-labels`](#claim-labels) | change set | runs |
 | [`command`](#command) | repository | not evaluated; end of turn and CI |
 | [`commit-provenance`](#commit-provenance) | provenance | not evaluated; end of turn and CI |
+| [`companion-edit`](#companion-edit) | repository | not evaluated; end of turn and CI |
 | [`config-integrity`](#config-integrity) | file | runs |
 | [`deletion-rationale`](#deletion-rationale) | change set | runs |
 | [`dependency-delta`](#dependency-delta) | repository | not evaluated; end of turn and CI |
@@ -415,6 +417,7 @@ Every finding carries a code, `gate/code` (`ci-integrity/unpinned-action`, `vacu
 | `claim-labels/claim-without-label` | Verification Claim Without Label |
 | `claim-labels/label-placeholder` | Verification Label Placeholder |
 | `claim-labels/read-label-unresolvable` | Unresolvable Read Label |
+| `companion-edit/companion-not-edited` | Companion Path Not Edited |
 | `engine/could-not-run` | Check Could Not Run |
 <!-- /generated -->
 
@@ -502,7 +505,7 @@ A default is chosen from two inputs: **detection confidence** (how often a findi
 | `citation-metadata` | on, `error` | High: both files are parsed and their shape is checked against the Citation File Format 1.2.0 and Zenodo's deposit vocabulary; ORCID check digits are computed. The concept-DOI rule relies on how `identifiers` describes each DOI. | False block: none known; a CFF 1.2.0 feature outside the checked subset is ignored, not rejected. Miss: a DOI that is well formed but does not resolve, or names another work. | A repository with neither file examines nothing, and only a change that edits one is judged, so enabling it costs nothing elsewhere. |
 | `agents-md` | on, `warning` | High, but the finding is documentation hygiene, not a code defect. | False block: a repository without an agent guide fails every change. | Missing or forked guidance does not make a change unsafe. |
 
-**Default-off gates** (`issue-link`, `review-threads`, `ratified-paths`, `commit-provenance`, `provenance-tags`, `pr-checklist`, `scope-confinement`, `archive-contents`, `manifest-sync`, `version-lockstep`, `sanitizers`, `miri`, `unsafe-budget`, `msrv`) need repository-specific input (a tracker convention, a forge token, protected paths and their owners, archive path, manifest rules, version sources, toolchain) or encode a policy most repositories do not hold. They default to `error` so that enabling one is a single `enabled = true` line that blocks.
+**Default-off gates** (`issue-link`, `review-threads`, `ratified-paths`, `commit-provenance`, `provenance-tags`, `pr-checklist`, `scope-confinement`, `archive-contents`, `manifest-sync`, `companion-edit`, `version-lockstep`, `sanitizers`, `miri`, `unsafe-budget`, `msrv`) need repository-specific input (a tracker convention, a forge token, protected paths and their owners, archive path, manifest rules, companion path sets, version sources, toolchain) or encode a policy most repositories do not hold. They default to `error` so that enabling one is a single `enabled = true` line that blocks.
 
 ### Finding-Level Severity Overrides
 
@@ -2119,6 +2122,35 @@ One rule holds for the count and one for the finding, and neither changes the ot
 - **Lifting directive:** `allow-manifest-drift: <manifest-path> <reason>` in PR description or commit message.
 - **Baseline:** the finding has no line and is located at the manifest. The first rule that names a manifest is identified by its code and that path; a later rule naming the same manifest is anchored on a hash of what it extracts and watches (`rule:<sha256>` over `extract_regex`, `watched_paths` and `exclude_paths`), so an entry for one rule does not match another rule of the same manifest.
 - **Config keys:** `enabled`, `severity`, `exempt_paths`, `rules` (`manifest`, `extract_regex`, `watched_paths`, `exclude_paths`).
+
+#### `companion-edit`
+- **Rule:** Each `[[gates.companion-edit.rules]]` entry is one covenant: a change that touches a path matching any of its `trigger_paths` globs must also edit a path matching one of its `require_edits_to` globs, or every one of them with `require_all = true`. Rules are independent: a change that fires two rules must meet both, and meeting one never excuses the other. Typical uses: a change to a mechanism (`argo/**`) must update its specification (`docs/security-threat-model.md`); a mirror set of agent-instruction files must move together.
+- **Languages:** Any (paths only; file contents are not read).
+- **What counts as a change:**
+  - A rule fires on either side of the change: an added, modified or deleted path, and both the old and the new path of a rename. Deleting a mechanism file changes it.
+  - A requirement is met only by a path the head still has: added, modified, or the new side of a rename. Deleting the companion is not editing it.
+  - Without `require_all`, a path is never its own companion. A rule fired by one path alone is not met by that same path, even when it also matches `require_edits_to`: editing only `CLAUDE.md` under a mirror rule listing `CLAUDE.md`, `AGENTS.md` and `GEMINI.md` on both sides is reported, and editing it with `AGENTS.md` passes. Counting the firing path would make every overlapping rule pass on the change it exists to catch. A specification inside its own trigger set (`argo/**` requiring `argo/README.md`) is therefore reported when only the specification changes; keep it out of `trigger_paths` if editing it alone should pass.
+  - With `require_all`, every `require_edits_to` glob must match a changed path, and the firing path counts toward that.
+  - `exempt_paths` drops a path from the change before any rule reads it: it neither fires a rule nor meets one.
+- **What it catches:**
+  - A fired rule with no changed companion (`companion-not-edited`). The finding names the paths that fired the rule, the rule's position, its `trigger_paths`, the `require_edits_to` entries missing (all of them, or with `require_all` the ones no changed path matched) and the rule's `reason`.
+  - A configuration that could never fire or never be met, which stops the run (exit 2): no `rules` while the gate is enabled, an empty `trigger_paths` or `require_edits_to`, a blank entry in either, or a glob that does not compile (named by its key, `gates.companion-edit.rules[<n>].<field>`).
+- **Failing diff example (rejected):** with `trigger_paths = ["argo/**"]` and `require_edits_to = ["docs/security-threat-model.md"]`, a change that edits `argo/workflow-templates/build.yaml` and nothing under `docs/`.
+- **Passing PR description (accepted):**
+  ```text
+  allow-companion-edit: docs/security-threat-model.md the template change only renames a parameter
+  ```
+- **What it does NOT catch:**
+  - A companion edit that says nothing about the trigger change: any edit to the required path meets the rule, a whitespace fix included. The gate checks that both sides moved, not that the specification describes the mechanism.
+  - A pure rename of a required path into a matching location: the new side of a rename counts as edited.
+  - A rule whose globs do not match what the repository calls its mechanism or specification: a path outside `trigger_paths` never fires it.
+  - A whole-tree run (`baseline --whole-tree`): there is no change to judge, so the gate is not evaluated there. An agent's edit hook leaves it to the end of the turn, since the companion is often written after the mechanism.
+- **No change:** when the change touches no path outside `exempt_paths`, or no changed path matches any rule, the gate passes with a note and `examined` is 0. `examined` counts the rules a changed path fired.
+- **Weakening the rules:** removing or editing a rule is a weakening [`config-integrity`](#config-integrity) reports (`allow-gate-weakening:`); a rule has no identity across base and head, so any edit is a lost entry. Adding a rule is not reported.
+- **Lifting directive:** `allow-companion-edit: <first require_edits_to entry> <reason>` in PR description or commit message lifts the rules whose first `require_edits_to` entry the subject names, and counts against `max_overrides`.
+- **Baseline:** the finding has no line and is located at the rule's first `require_edits_to` entry. The first rule with that entry is identified by its code and that path; a later rule with the same first entry is anchored on a hash of its globs (`rule:<sha256>` over `trigger_paths`, `require_edits_to` and `require_all`).
+- **Default:** off, severity `error`.
+- **Config keys:** `enabled`, `severity`, `exempt_paths`, `rules` (`trigger_paths`, `require_edits_to`, `require_all`, `reason`).
 
 #### `version-lockstep`
 - **Rule:** Version declarations across multiple files (C header `#define`, packaging manifest `<release><version>`, `Cargo.toml`, `pyproject.toml`, documentation, etc.) must remain in lockstep.

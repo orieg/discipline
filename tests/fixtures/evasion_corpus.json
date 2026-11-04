@@ -34,6 +34,7 @@
       "citation-metadata": "Hygiene rule over text and metadata, not over the strength of a test or of the run; no evasion shape filed yet.",
       "claim-labels": "Hygiene rule over text and metadata, not over the strength of a test or of the run; no evasion shape filed yet.",
       "commit-provenance": "Off by default and judges commit trailers and reviews, which every corpus case writes the same way; no evasion shape filed yet.",
+      "companion-edit": "Off by default and needs the path-set rules a repository declares; it requires two path sets to change together, not the strength of a test or of the run; no evasion shape filed yet.",
       "gate-command-lint": "Reads verification commands in plan files; no evasion shape filed yet.",
       "issue-link": "Off by default; checks that the pull request links a tracking issue, a hygiene rule rather than a way to weaken a test or the run; no evasion shape filed yet.",
       "manifest-sync": "Off by default and needs packaging manifest rules that the repository declares; no evasion shape filed yet.",
