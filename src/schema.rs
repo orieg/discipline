@@ -85,6 +85,7 @@ pub fn generate_schema() -> Value {
             "mechanism-sections" => "#/$defs/MechanismSectionsGate",
             "citation-anchors" => "#/$defs/CitationAnchorsGate",
             "claim-labels" => "#/$defs/ClaimLabelsGate",
+            "companion-edit" => "#/$defs/CompanionEditGate",
             _ => "#/$defs/BasicGate",
         };
         let desc = gate_info(g.id).map(|info| info.summary).unwrap_or("");
@@ -694,6 +695,23 @@ pub fn generate_schema() -> Value {
                 "diff_only": { "type": "boolean", "description": "Whether to inspect changed lines only rather than the whole file" },
                 "extra_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Additional regex patterns treated as verification claims" },
                 "allow_patterns": { "$ref": "#/$defs/StringListOrReset", "description": "Regex patterns that exempt a matching line from verification claim inspection" }
+            })),
+            "CompanionEditGate": gate_table(json!({
+                "rules": {
+                    "type": "array",
+                    "description": "Independent rules: a change to a trigger path must also change a required path",
+                    "items": {
+                        "type": "object",
+                        "required": ["trigger_paths", "require_edits_to"],
+                        "additionalProperties": false,
+                        "properties": {
+                            "trigger_paths": { "$ref": "#/$defs/StringListOrReset", "description": "Globs; a changed path matching any of them fires the rule" },
+                            "require_edits_to": { "$ref": "#/$defs/StringListOrReset", "description": "Globs; a fired rule needs a changed path matching one of them (every one with require_all), the firing path aside" },
+                            "require_all": { "type": "boolean", "description": "Whether every require_edits_to glob must match a changed path, rather than any one" },
+                            "reason": { "type": "string", "description": "Why the two path sets change together, quoted in the finding" }
+                        }
+                    }
+                }
             }))
         }
     })

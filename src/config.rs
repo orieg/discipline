@@ -628,6 +628,18 @@ pub const GATES: &[GateInfo] = &[
         scope: Scope::ChangeSet,
         triggers: &[],
     },
+    GateInfo {
+        id: "companion-edit",
+        suite: Suite::Integrity,
+        summary: "a change to one path set must also change its companion path set",
+        coverage: Coverage::Stated("any"),
+        available: true,
+        delta_only: true,
+        // An edit hook fires before the agent has written the companion: the rule is
+        // about the finished change.
+        scope: Scope::Repository,
+        triggers: &[],
+    },
 ];
 
 pub fn gate_info(id: &str) -> Option<&'static GateInfo> {
@@ -1091,6 +1103,7 @@ pub struct Gates {
     pub mechanism_sections: MechanismSectionsGate,
     pub citation_anchors: CitationAnchorsGate,
     pub claim_labels: ClaimLabelsGate,
+    pub companion_edit: CompanionEditGate,
 }
 
 /// `error-swallowing`: the shared keys plus the paths where a numeric fallback in an
@@ -1200,7 +1213,8 @@ impl_gate_settings!(
     GateCommandLintGate,
     MechanismSectionsGate,
     CitationAnchorsGate,
-    ClaimLabelsGate
+    ClaimLabelsGate,
+    CompanionEditGate
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2860,6 +2874,43 @@ impl Default for ClaimLabelsGate {
     }
 }
 
+/// `companion-edit`: independent rules, each "a change to `trigger_paths` must also
+/// change `require_edits_to`".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CompanionEditGate {
+    pub enabled: bool,
+    pub severity: Severity,
+    pub exempt_paths: Vec<String>,
+    pub rules: Vec<CompanionEditRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompanionEditRule {
+    /// Globs; a changed path matching any of them fires the rule.
+    pub trigger_paths: Vec<String>,
+    /// Globs; one of them must be matched by a changed path, or every one with
+    /// `require_all`.
+    pub require_edits_to: Vec<String>,
+    #[serde(default)]
+    pub require_all: bool,
+    /// Why the two sets move together, quoted in the finding.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+impl Default for CompanionEditGate {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            severity: Severity::Error,
+            exempt_paths: Vec::new(),
+            rules: Vec::new(),
+        }
+    }
+}
+
 impl Gates {
     pub fn settings(&self, id: &str) -> Option<&dyn GateSettings> {
         Some(match id {
@@ -2909,6 +2960,7 @@ impl Gates {
             "mechanism-sections" => &self.mechanism_sections,
             "citation-anchors" => &self.citation_anchors,
             "claim-labels" => &self.claim_labels,
+            "companion-edit" => &self.companion_edit,
             _ => return None,
         })
     }

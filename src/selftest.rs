@@ -9730,6 +9730,42 @@ smoke_cost::set_contains
         },
     ),
     (
+        "companion-edit: a trigger needs its companion, and a path is not its own companion",
+        || {
+            use crate::config::CompanionEditRule;
+            use crate::guards::companion_edit::{CompiledRule, Verdict};
+            let set = |paths: &[&str]| -> std::collections::BTreeSet<String> {
+                paths.iter().map(|p| p.to_string()).collect()
+            };
+            let rule = |trigger: &[&str], required: &[&str], require_all: bool| {
+                CompiledRule::new(
+                    &CompanionEditRule {
+                        trigger_paths: trigger.iter().map(|p| p.to_string()).collect(),
+                        require_edits_to: required.iter().map(|p| p.to_string()).collect(),
+                        require_all,
+                        reason: None,
+                    },
+                    0,
+                )
+            };
+            let spec = rule(&["argo/**"], &["docs/threat.md"], false)?;
+            let alone = matches!(
+                spec.judge(&set(&["argo/wf.yaml"]), &set(&["argo/wf.yaml"])),
+                Verdict::NoneEdited { .. }
+            );
+            let both = ["argo/wf.yaml", "docs/threat.md"];
+            let met = spec.judge(&set(&both), &set(&both)) == Verdict::Met;
+            let mirror = ["CLAUDE.md", "AGENTS.md"];
+            let itself = matches!(
+                rule(&mirror, &mirror, false)?
+                    .judge(&set(&["CLAUDE.md"]), &set(&["CLAUDE.md"])),
+                Verdict::OnlyItself { .. }
+            );
+            let refused = rule(&["argo/**"], &[], false).is_err();
+            Ok(alone && met && itself && refused)
+        },
+    ),
+    (
         "version-lockstep: verifies multi-source equality and detects mismatch",
         || {
             let header = "#define EXAMPLE_EXT_VERSION \"2.6.0\"\n";

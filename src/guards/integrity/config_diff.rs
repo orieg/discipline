@@ -1311,6 +1311,27 @@ mod tests {
     }
 
     #[test]
+    fn a_companion_edit_rule_removed_or_edited_is_lost_and_one_added_is_not() {
+        let rule = |trigger: &str, required: &str| {
+            format!(
+                "[[gates.companion-edit.rules]]\ntrigger_paths = [\"{trigger}\"]\n\
+                 require_edits_to = [\"{required}\"]\n"
+            )
+        };
+        let base = cfg(&rule("argo/**", "docs/threat.md"));
+        let count = |head: &str| diff_configs(&base, &cfg(head)).unwrap().len();
+        let added = format!(
+            "{}{}",
+            rule("argo/**", "docs/threat.md"),
+            rule("test/**", "docs/testing.md")
+        );
+        assert_eq!(count(&added), 0);
+        assert_eq!(count(&rule("argo/**", "docs/other.md")), 1);
+        assert_eq!(count(&rule("argo/x/**", "docs/threat.md")), 1);
+        assert_eq!(count(&rule("test/**", "docs/testing.md")), 1);
+    }
+
+    #[test]
     fn manifest_sync_rules_and_command_entries_follow_the_same_identity_rule() {
         let rules = |watched: &str, exclude: &str, regex: &str| {
             cfg(&format!(

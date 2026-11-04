@@ -10259,7 +10259,7 @@ fn override_record_audit_trail_and_step_outputs() {
     ));
     assert!(
         run.stdout.contains(
-            "gates:  26 passed, 0 failed, 19 disabled, 1 not evaluated (66 items examined)"
+            "gates:  26 passed, 0 failed, 20 disabled, 1 not evaluated (67 items examined)"
         ),
         "{}",
         run.stdout
@@ -10275,13 +10275,13 @@ fn override_record_audit_trail_and_step_outputs() {
     );
     assert!(step_output.contains("status=pass"), "{step_output}");
     assert!(step_output.contains("passed_gates=26"), "{step_output}");
-    assert!(step_output.contains("examined_items=66"), "{step_output}");
+    assert!(step_output.contains("examined_items=67"), "{step_output}");
 
     // Check GITHUB_STEP_SUMMARY contents
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
         step_summary.contains(
-            "**Summary:** 26 passed, 0 failed, 19 disabled, 1 not evaluated (66 items examined)"
+            "**Summary:** 26 passed, 0 failed, 20 disabled, 1 not evaluated (67 items examined)"
         ),
         "{step_summary}"
     );
@@ -24638,4 +24638,181 @@ fn an_edit_hook_runs_a_repository_gate_when_the_change_touches_its_trigger() {
         "{}",
         ran.stdout
     );
+}
+
+#[test]
+fn companion_edit_e2e_requires_the_companion_and_honours_one_rules_waiver() {
+    let config = |directives: &str| {
+        format!(
+            r#"[meta]
+version = 1
+name = "test-repo"
+{directives}
+[gates.companion-edit]
+enabled = true
+
+[[gates.companion-edit.rules]]
+trigger_paths = ["argo/**"]
+require_edits_to = ["docs/threat.md"]
+reason = "workflow templates are the threat surface"
+
+[[gates.companion-edit.rules]]
+trigger_paths = ["CLAUDE.md", "AGENTS.md", "GEMINI.md"]
+require_edits_to = ["CLAUDE.md", "AGENTS.md", "GEMINI.md"]
+require_all = true
+"#
+        )
+    };
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", &config("")),
+            ("argo/wf.yaml", "kind: WorkflowTemplate\n"),
+            ("docs/threat.md", "# Threat model\n"),
+            ("CLAUDE.md", "# Agent guide\n"),
+            ("GEMINI.md", "# Agent guide\n"),
+        ],
+        "base: enable companion-edit",
+    );
+    let codes = |run: &Run| -> Vec<(String, String)> {
+        run.violations("companion-edit")
+            .iter()
+            .map(|v| {
+                (
+                    v["code"].as_str().unwrap_or("").to_string(),
+                    v["file"].as_str().unwrap_or("").to_string(),
+                )
+            })
+            .collect()
+    };
+    let reset = || repo.git(&["checkout", "-q", "-B", "work", "main"]);
+
+    // No change: nothing fires.
+    let quiet = repo.check(&[]);
+    assert_eq!(quiet.code, 0, "{}\n{}", quiet.stdout, quiet.stderr);
+    assert_eq!(quiet.outcome("companion-edit")["examined"], 0);
+
+    // 1. Negative control: the mechanism changes alone.
+    repo.write("argo/wf.yaml", "kind: WorkflowTemplate\nspec: {}\n");
+    repo.commit("feat: change the template");
+    let alone = repo.check(&[]);
+    assert_eq!(alone.code, 1, "{}\n{}", alone.stdout, alone.stderr);
+    assert_eq!(
+        codes(&alone),
+        [(
+            "companion-edit/companion-not-edited".to_string(),
+            "docs/threat.md".to_string()
+        )]
+    );
+    let message = alone.violations("companion-edit")[0]["message"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        message.contains("`argo/wf.yaml`")
+            && message.contains("`docs/threat.md`")
+            && message.contains("workflow templates are the threat surface"),
+        "{message}"
+    );
+
+    // 2. Positive control: the companion changes too.
+    repo.write(
+        "docs/threat.md",
+        "# Threat model\n\nTemplates gained a spec.\n",
+    );
+    repo.commit("docs: threat model");
+    let both = repo.check(&[]);
+    assert_eq!(both.code, 0, "{}\n{}", both.stdout, both.stderr);
+    assert_eq!(both.outcome("companion-edit")["examined"], 1);
+
+    // 3. A deleted companion does not meet the rule.
+    reset();
+    repo.write("argo/wf.yaml", "kind: WorkflowTemplate\nspec: {}\n");
+    repo.remove("docs/threat.md");
+    repo.commit("feat: change the template, drop the threat model");
+    assert_eq!(
+        codes(&repo.check(&[])),
+        [(
+            "companion-edit/companion-not-edited".to_string(),
+            "docs/threat.md".to_string()
+        )]
+    );
+
+    // 4. `require_all`: two of three mirror files change; the third is named.
+    reset();
+    repo.write("CLAUDE.md", "# Agent guide\n\nNew rule.\n");
+    repo.write("AGENTS.md", "# Agent guide\n\nNew rule.\n");
+    repo.commit("docs: two of three mirrors");
+    let mirror = repo.check(&[]);
+    assert_eq!(mirror.code, 1, "{}\n{}", mirror.stdout, mirror.stderr);
+    let mirror_violations = mirror.violations("companion-edit");
+    assert_eq!(mirror_violations.len(), 1, "{mirror_violations:?}");
+    assert_eq!(mirror_violations[0]["file"], "CLAUDE.md");
+    let mirror_message = mirror_violations[0]["message"].as_str().unwrap();
+    assert!(
+        mirror_message.contains("does not edit `GEMINI.md`"),
+        "{mirror_message}"
+    );
+
+    // 5. A waiver names one covenant: the mirror rule's, not the threat model's.
+    repo.write("argo/wf.yaml", "kind: WorkflowTemplate\nspec: {}\n");
+    repo.commit("feat: change the template too");
+    let waived = repo.check_with_pr(
+        &[],
+        "allow-companion-edit: CLAUDE.md GEMINI.md is generated from AGENTS.md in a follow-up\n",
+    );
+    assert_eq!(
+        codes(&waived),
+        [(
+            "companion-edit/companion-not-edited".to_string(),
+            "docs/threat.md".to_string()
+        )],
+        "{}",
+        waived.stdout
+    );
+    let overrides = waived.outcome("companion-edit")["overrides"].clone();
+    assert_eq!(overrides.as_array().unwrap().len(), 1, "{overrides}");
+    assert_eq!(overrides[0]["subject"], "CLAUDE.md");
+
+    // 6. The waiver counts against `max_overrides`.
+    let capped = Repo::new();
+    capped.commit_base_files(
+        &[
+            (
+                "discipline.toml",
+                &config("\n[directives]\nmax_overrides = 0\n"),
+            ),
+            ("argo/wf.yaml", "kind: WorkflowTemplate\n"),
+            ("docs/threat.md", "# Threat model\n"),
+        ],
+        "base: enable companion-edit with no override budget",
+    );
+    capped.write("argo/wf.yaml", "kind: WorkflowTemplate\nspec: {}\n");
+    capped.commit("feat: change the template");
+    let refused = capped.check_with_pr(
+        &[],
+        "allow-companion-edit: docs/threat.md the parameter rename changes no surface\n",
+    );
+    assert_eq!(refused.code, 1, "{}\n{}", refused.stdout, refused.stderr);
+    let json = refused.json();
+    assert_eq!(json["errors"], 0, "the waiver lifted the finding");
+    assert_eq!(json["policy_failures"].as_array().unwrap().len(), 1);
+
+    // 7. Fail closed: a rule that could never be met stops the run.
+    let broken = Repo::new();
+    broken.commit_base_files(
+        &[(
+            "discipline.toml",
+            "[meta]\nversion = 1\nname = \"t\"\n[gates.companion-edit]\nenabled = true\n\
+             [[gates.companion-edit.rules]]\ntrigger_paths = [\"argo/**\"]\nrequire_edits_to = []\n",
+        )],
+        "base: a rule with nothing required",
+    );
+    broken.write("argo/wf.yaml", "kind: WorkflowTemplate\n");
+    broken.commit("feat: template");
+    let stopped = broken.check(&[]);
+    assert_eq!(stopped.code, 2, "{}\n{}", stopped.stdout, stopped.stderr);
+    let (reason, gate) = stopped.could_not_check();
+    assert_eq!(reason, "configuration");
+    assert_eq!(gate.as_deref(), Some("companion-edit"));
 }
