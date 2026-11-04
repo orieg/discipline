@@ -108,7 +108,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # merge base must be reachable
-      - uses: orieg/discipline@c0268485a1c9a1c773cd00a8a659fe7979d93bcb # v0.30.0
+      - uses: orieg/discipline@394a472f4d601360610eade3e0eef2fbc757bfb7 # v0.30.1
 ```
 
 The action is pinned by commit SHA because the default `ci-integrity` gate reports any tag ref (`@v0`, `@v0.30.1`) newly added to a workflow as an unpinned action, so a tag would fail the pull request that adds it. A SHA ref runs the binary of the release that commit's `Cargo.toml` names; `version:` under `with:` picks another release, and [Renovate](docs/CONFIGURATION.md#keeping-pins-current-with-renovate) or [Dependabot](docs/CONFIGURATION.md#keeping-pins-current-with-dependabot) move the pin. A repository that turns `ci-integrity` off can use the floating `@v0` ref, which tracks the latest `v0.x.y` release and moves only after that release has passed its smoke tests. Pin `@v0.30.1` or a commit SHA when a verdict must be reproducible from the workflow file alone. Before 1.0, a minor release can change gate behaviour; each one lists those changes under "Upgrading" in its release notes and in the [compatibility ledger](docs/ROADMAP.md#default-changes-compatibility-ledger).
@@ -140,7 +140,7 @@ jobs:
         with:
           fetch-depth: 0 # merge base must be reachable
           persist-credentials: false # the job's token can write: keep it out of .git/config
-      - uses: https://github.com/orieg/discipline@c0268485a1c9a1c773cd00a8a659fe7979d93bcb # v0.30.0
+      - uses: https://github.com/orieg/discipline@394a472f4d601360610eade3e0eef2fbc757bfb7 # v0.30.1
 ```
 
 The commit SHA and `fail_on_warnings` work as in the GitHub example above.
