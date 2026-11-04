@@ -1147,7 +1147,7 @@
           <span class="code-prop">fetch-depth:</span> 0   <span class="code-comment"># Ensure git merge-base is reachable</span>
 
       - <span class="code-prop">name:</span> Run Discipline Sentinel
-        <span class="code-prop">uses:</span> orieg/discipline@c0268485a1c9a1c773cd00a8a659fe7979d93bcb <span class="code-comment"># v0.30.0</span></div>
+        <span class="code-prop">uses:</span> orieg/discipline@394a472f4d601360610eade3e0eef2fbc757bfb7 <span class="code-comment"># v0.30.1</span></div>
         <p style="margin-top: 1rem; color: var(--text-muted); font-size: 0.9rem;">
           The action is pinned by commit SHA because the default <code>ci-integrity</code> gate rejects a newly added action that is not, <code>@v0</code> included. A SHA ref runs the binary of the release that commit names. The step fails on errors only; add <code>fail_on_warnings: true</code> under <code>with:</code> once the warnings are fixed or baselined.
         </p>
@@ -1214,7 +1214,7 @@
           <span class="code-prop">persist-credentials:</span> false   <span class="code-comment"># the job's token can write</span>
 
       - <span class="code-prop">name:</span> Run Discipline
-        <span class="code-prop">uses:</span> https://github.com/orieg/discipline@c0268485a1c9a1c773cd00a8a659fe7979d93bcb <span class="code-comment"># v0.30.0</span>
+        <span class="code-prop">uses:</span> https://github.com/orieg/discipline@394a472f4d601360610eade3e0eef2fbc757bfb7 <span class="code-comment"># v0.30.1</span>
         <span class="code-comment"># Runner without internet access: with: { binary_path: /opt/discipline/discipline }</span></div>
       </div>
 
@@ -1240,7 +1240,7 @@
           <span class="code-prop">persist-credentials:</span> false   <span class="code-comment"># the job's token can write</span>
 
       - <span class="code-prop">name:</span> Run Discipline
-        <span class="code-prop">uses:</span> https://github.com/orieg/discipline@c0268485a1c9a1c773cd00a8a659fe7979d93bcb <span class="code-comment"># v0.30.0</span>
+        <span class="code-prop">uses:</span> https://github.com/orieg/discipline@394a472f4d601360610eade3e0eef2fbc757bfb7 <span class="code-comment"># v0.30.1</span>
         <span class="code-comment"># Runner without internet access: with: { binary_path: /opt/discipline/discipline }</span></div>
       </div>
 
@@ -2156,7 +2156,7 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
             <h4>GitHub Action</h4>
             <p>Composite action with automatic binary bootstrap. Pinned by commit SHA, which the default <code>ci-integrity</code> gate requires.</p>
           </div>
-          <div class="install-snippet">uses: orieg/discipline@c0268485a1c9a1c773cd00a8a659fe7979d93bcb # v0.30.0</div>
+          <div class="install-snippet">uses: orieg/discipline@394a472f4d601360610eade3e0eef2fbc757bfb7 # v0.30.1</div>
         </div>
         <div class="install-row">
           <div class="install-meta">
@@ -2171,14 +2171,14 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
             <h4>Forgejo Action</h4>
             <p>Compatible with Forgejo Actions and forgejo-runner.</p>
           </div>
-          <div class="install-snippet">uses: https://github.com/orieg/discipline@c0268485a1c9a1c773cd00a8a659fe7979d93bcb # v0.30.0</div>
+          <div class="install-snippet">uses: https://github.com/orieg/discipline@394a472f4d601360610eade3e0eef2fbc757bfb7 # v0.30.1</div>
         </div>
         <div class="install-row">
           <div class="install-meta">
             <h4>Gitea Action</h4>
             <p>Compatible with self-hosted Gitea and act_runner.</p>
           </div>
-          <div class="install-snippet">uses: https://github.com/orieg/discipline@c0268485a1c9a1c773cd00a8a659fe7979d93bcb # v0.30.0</div>
+          <div class="install-snippet">uses: https://github.com/orieg/discipline@394a472f4d601360610eade3e0eef2fbc757bfb7 # v0.30.1</div>
         </div>
         <div class="install-row">
           <div class="install-meta">
