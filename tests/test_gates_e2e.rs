@@ -10259,7 +10259,7 @@ fn override_record_audit_trail_and_step_outputs() {
     ));
     assert!(
         run.stdout.contains(
-            "gates:  26 passed, 0 failed, 19 disabled, 1 not evaluated (66 items examined)"
+            "gates:  26 passed, 0 failed, 20 disabled, 1 not evaluated (67 items examined)"
         ),
         "{}",
         run.stdout
@@ -10275,13 +10275,13 @@ fn override_record_audit_trail_and_step_outputs() {
     );
     assert!(step_output.contains("status=pass"), "{step_output}");
     assert!(step_output.contains("passed_gates=26"), "{step_output}");
-    assert!(step_output.contains("examined_items=66"), "{step_output}");
+    assert!(step_output.contains("examined_items=67"), "{step_output}");
 
     // Check GITHUB_STEP_SUMMARY contents
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
         step_summary.contains(
-            "**Summary:** 26 passed, 0 failed, 19 disabled, 1 not evaluated (66 items examined)"
+            "**Summary:** 26 passed, 0 failed, 20 disabled, 1 not evaluated (67 items examined)"
         ),
         "{step_summary}"
     );
