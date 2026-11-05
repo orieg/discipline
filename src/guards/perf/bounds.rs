@@ -1055,6 +1055,158 @@ pub fn kappa_sample_size(
     Ok((n.ceil() as usize).max(1))
 }
 
+/// Newcombe's hybrid score interval for the difference of two independent proportions,
+/// `k1 / n1 - k2 / n2`.
+///
+/// Method 10 of Newcombe (1998): with `(l_i, u_i)` the Wilson score interval of `k_i / n_i`
+/// at the same confidence level,
+/// ```text
+/// lower = (p1 - p2) - sqrt((p1 - l1)^2 + (u2 - p2)^2)
+/// upper = (p1 - p2) + sqrt((u1 - p1)^2 + (p2 - l2)^2)
+/// ```
+/// It needs no continuity correction, stays inside `[-1, 1]`, and is defined at zero counts.
+///
+/// Errors as [`wilson_score_interval`] does for either arm.
+///
+/// Reference: Newcombe, R. G. (1998). "Interval estimation for the difference between
+/// independent proportions: comparison of eleven methods". Statistics in Medicine, 17(8),
+/// 873-890 (Table II gives the worked examples pinned in the tests).
+pub fn newcombe_difference_interval(
+    k1: usize,
+    n1: usize,
+    k2: usize,
+    n2: usize,
+    confidence_level: f64,
+) -> Result<(f64, f64)> {
+    let (l1, u1) = wilson_score_interval(k1, n1, confidence_level)?;
+    let (l2, u2) = wilson_score_interval(k2, n2, confidence_level)?;
+    let (p1, p2) = (k1 as f64 / n1 as f64, k2 as f64 / n2 as f64);
+    let d = p1 - p2;
+    Ok((
+        (d - ((p1 - l1).powi(2) + (u2 - p2).powi(2)).sqrt()).max(-1.0),
+        (d + ((u1 - p1).powi(2) + (p2 - l2).powi(2)).sqrt()).min(1.0),
+    ))
+}
+
+fn check_difference_floor(floor: f64) -> Result<()> {
+    if !floor.is_finite() || !(0.0..1.0).contains(&floor) {
+        bail!("floor must be in [0, 1), got {floor}");
+    }
+    Ok(())
+}
+
+/// Exact probability that the Newcombe lower bound of `k1 / n1 - k2 / n2` clears `floor`,
+/// when `k1 ~ Binomial(n1, p1)` and `k2 ~ Binomial(n2, p2)` are independent.
+///
+/// "Clears" is `lower >= floor`. For each `k2` the lower bound is increasing in `k1` (checked
+/// on a grid in the tests), so the event is `k1 >= k1_min(k2)`, found by bisection, and the
+/// probability is `sum over k2 of P(k2) * P(k1 >= k1_min(k2))`. `floor` is in `[0, 1)`: a
+/// difference claim asks at least that the first rate is the higher one.
+///
+/// Errors when `n1` or `n2` is 0, a proportion or the confidence level is outside `(0, 1)`,
+/// or `floor` is outside `[0, 1)`.
+///
+/// Reference: Newcombe (1998), the interval [`newcombe_difference_interval`] implements; the
+/// sum is over the exact binomial laws.
+pub fn difference_pass_probability(
+    n1: usize,
+    p1: f64,
+    n2: usize,
+    p2: f64,
+    floor: f64,
+    confidence_level: f64,
+) -> Result<f64> {
+    if n1 == 0 || n2 == 0 {
+        bail!("sample sizes must be greater than 0, got n1 = {n1}, n2 = {n2}");
+    }
+    check_unit_interval("p1", p1)?;
+    check_unit_interval("p2", p2)?;
+    check_unit_interval("confidence level", confidence_level)?;
+    check_difference_floor(floor)?;
+    let ln_fact = ln_factorial_table(n1.max(n2));
+    let ln_pmf = |k: usize, n: usize, p: f64| {
+        (ln_fact[n] - ln_fact[k] - ln_fact[n - k]
+            + k as f64 * p.ln()
+            + (n - k) as f64 * (-p).ln_1p())
+        .exp()
+    };
+    // tail1[k] = P(k1 >= k).
+    let mut tail1 = vec![0.0_f64; n1 + 2];
+    for k in (0..=n1).rev() {
+        tail1[k] = tail1[k + 1] + ln_pmf(k, n1, p1);
+    }
+    let mut total = 0.0_f64;
+    for k2 in 0..=n2 {
+        if newcombe_difference_interval(n1, n1, k2, n2, confidence_level)?.0 < floor {
+            continue; // no k1 clears at this k2
+        }
+        let (mut lo, mut hi) = (0usize, n1);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if newcombe_difference_interval(mid, n1, k2, n2, confidence_level)?.0 >= floor {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        total += ln_pmf(k2, n2, p2) * tail1[lo];
+    }
+    Ok(total.min(1.0))
+}
+
+/// Smallest number of cases `n` such that every `n'` in `[n, n_max]`, with
+/// `controls_per_case * n'` controls, has
+/// `difference_pass_probability(n', p1, controls_per_case * n', p2, floor, confidence_level)
+/// >= power`.
+///
+/// The pass probability is a sawtooth in `n` for the same reason as in
+/// [`sample_size_for_wilson_lower_bound_power`], so the answer is the start of the last
+/// unbroken run of sizes meeting `power` that ends at `n_max`.
+///
+/// Errors when an input is out of range, when `p1 - p2 <= floor`, or when `n_max` itself
+/// falls short of `power`.
+///
+/// Reference: Newcombe (1998); see [`difference_pass_probability`].
+pub fn sample_size_for_difference_lower_bound_power(
+    p1: f64,
+    p2: f64,
+    floor: f64,
+    controls_per_case: usize,
+    confidence_level: f64,
+    power: f64,
+    n_max: usize,
+) -> Result<usize> {
+    check_unit_interval("p1", p1)?;
+    check_unit_interval("p2", p2)?;
+    check_unit_interval("power", power)?;
+    check_unit_interval("confidence level", confidence_level)?;
+    check_difference_floor(floor)?;
+    if controls_per_case == 0 || n_max == 0 {
+        bail!("controls per case and n_max must be positive integers");
+    }
+    if p1 - p2 <= floor {
+        bail!("the planning difference ({p1} - {p2}) must exceed the floor ({floor})");
+    }
+    last_unbroken_run_start(
+        n_max,
+        |m| {
+            Ok(difference_pass_probability(
+                m,
+                p1,
+                controls_per_case * m,
+                p2,
+                floor,
+                confidence_level,
+            )? >= power)
+        },
+        || {
+            format!(
+                "n_max ({n_max}) has pass probability below {power} at ({p1}, {p2}), floor {floor}"
+            )
+        },
+    )
+}
+
 // ---- Paired within-run ratio bounds --------------------------------------------
 //
 // The `paired-ratio` evaluation mode compares a ratio of two arms measured in the same
@@ -1948,5 +2100,122 @@ mod tests {
         assert!(minimum_detectable_difference(100, 100, 1.0, 0.95, 0.80).is_err());
         assert!(minimum_detectable_difference(100, 100, 0.60, 0.0, 0.80).is_err());
         assert!(minimum_detectable_difference(100, 100, 0.60, 0.95, 0.0).is_err());
+    }
+
+    #[test]
+    fn newcombe_difference_interval_matches_newcombe_1998_table_ii() {
+        // Newcombe (1998) Table II, method 10, examples (a) to (d); the same values come from
+        // statsmodels 0.13.5 `confint_proportions_2indep(method="newcomb")`.
+        for (k1, n1, k2, n2, lower, upper) in [
+            (56, 70, 48, 80, 0.052_431_472_402_365, 0.333_872_654_036_906),
+            (9, 10, 3, 10, 0.170_522_723_934_503, 0.809_017_973_535_488),
+            (6, 7, 2, 7, 0.058_227_927_482_312, 0.806_249_637_524_228),
+            (5, 56, 0, 29, -0.038_137_147_903_537, 0.192_560_013_855_112),
+        ] {
+            let (l, u) = newcombe_difference_interval(k1, n1, k2, n2, 0.95).unwrap();
+            assert!((l - lower).abs() < 1e-9, "{k1}/{n1} - {k2}/{n2}: lower {l}");
+            assert!((u - upper).abs() < 1e-9, "{k1}/{n1} - {k2}/{n2}: upper {u}");
+        }
+        // Zero counts in both arms, and a difference at the edge of the range.
+        let (l, u) = newcombe_difference_interval(0, 10, 0, 20, 0.95).unwrap();
+        assert!(
+            (l + 0.161_125_158_052_819).abs() < 1e-9 && (u - 0.277_532_799_862_889).abs() < 1e-9
+        );
+        let (l, u) = newcombe_difference_interval(10, 10, 0, 20, 0.95).unwrap();
+        assert!((l - 0.679_086_037_141_915).abs() < 1e-9 && u == 1.0);
+    }
+
+    #[test]
+    fn newcombe_lower_bound_is_increasing_in_the_first_count() {
+        // difference_pass_probability bisects on k1; this is the property it relies on.
+        for (n1, n2) in [(10, 20), (30, 60), (57, 114)] {
+            for k2 in 0..=n2 {
+                let mut previous = f64::NEG_INFINITY;
+                for k1 in 0..=n1 {
+                    let l = newcombe_difference_interval(k1, n1, k2, n2, 0.95)
+                        .unwrap()
+                        .0;
+                    assert!(l >= previous, "n1 {n1} n2 {n2} k2 {k2} k1 {k1}");
+                    previous = l;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn difference_pass_probability_matches_the_exact_double_sum() {
+        // Pinned from an independent double sum over every (k1, k2) with the statsmodels
+        // interval: 0.6667170232364987, 0.3470912792267747, 0.8023798232139236.
+        for (n1, p1, n2, p2, floor, want) in [
+            (20, 0.5, 40, 0.2, 0.0, 0.666_717_023_236_498_7),
+            (30, 0.6, 30, 0.3, 0.1, 0.347_091_279_226_774_7),
+            (51, 0.5, 102, 0.177, 0.10, 0.802_379_823_213_923_6),
+        ] {
+            let got = difference_pass_probability(n1, p1, n2, p2, floor, 0.95).unwrap();
+            assert!(
+                (got - want).abs() < 1e-9,
+                "({n1}, {p1}, {n2}, {p2}, {floor}): {got}"
+            );
+        }
+        // The same double sum written out here, on a small case.
+        let (n1, p1, n2, p2) = (12usize, 0.55, 18usize, 0.25);
+        let pmf = |k: usize, n: usize, p: f64| {
+            let c = (0..k).fold(1.0_f64, |acc, i| acc * (n - i) as f64 / (i + 1) as f64);
+            c * p.powi(k as i32) * (1.0 - p).powi((n - k) as i32)
+        };
+        let mut brute = 0.0;
+        for k1 in 0..=n1 {
+            for k2 in 0..=n2 {
+                if newcombe_difference_interval(k1, n1, k2, n2, 0.95)
+                    .unwrap()
+                    .0
+                    >= 0.05
+                {
+                    brute += pmf(k1, n1, p1) * pmf(k2, n2, p2);
+                }
+            }
+        }
+        let got = difference_pass_probability(n1, p1, n2, p2, 0.05, 0.95).unwrap();
+        assert!((got - brute).abs() < 1e-12, "{got} vs {brute}");
+    }
+
+    #[test]
+    fn difference_sample_size_is_the_last_unbroken_run() {
+        assert_eq!(
+            sample_size_for_difference_lower_bound_power(0.5, 0.177, 0.10, 2, 0.95, 0.80, 400)
+                .unwrap(),
+            51
+        );
+        assert_eq!(
+            sample_size_for_difference_lower_bound_power(0.30, 0.177, 0.0, 2, 0.95, 0.80, 600)
+                .unwrap(),
+            135
+        );
+        // 135 meets the power, 134 does not.
+        assert!(difference_pass_probability(135, 0.30, 270, 0.177, 0.0, 0.95).unwrap() >= 0.80);
+        assert!(difference_pass_probability(134, 0.30, 268, 0.177, 0.0, 0.95).unwrap() < 0.80);
+    }
+
+    #[test]
+    fn difference_bounds_reject_invalid_inputs() {
+        assert!(newcombe_difference_interval(1, 0, 0, 10, 0.95).is_err());
+        assert!(newcombe_difference_interval(11, 10, 0, 10, 0.95).is_err());
+        assert!(difference_pass_probability(0, 0.5, 10, 0.2, 0.0, 0.95).is_err());
+        assert!(difference_pass_probability(10, 1.0, 10, 0.2, 0.0, 0.95).is_err());
+        assert!(difference_pass_probability(10, 0.5, 10, 0.2, -0.1, 0.95).is_err());
+        assert!(difference_pass_probability(10, 0.5, 10, 0.2, 1.0, 0.95).is_err());
+        assert!(
+            sample_size_for_difference_lower_bound_power(0.3, 0.25, 0.10, 2, 0.95, 0.80, 400)
+                .is_err()
+        );
+        assert!(
+            sample_size_for_difference_lower_bound_power(0.5, 0.2, 0.0, 0, 0.95, 0.80, 400)
+                .is_err()
+        );
+        // n_max short of the requirement.
+        assert!(
+            sample_size_for_difference_lower_bound_power(0.30, 0.177, 0.0, 2, 0.95, 0.80, 100)
+                .is_err()
+        );
     }
 }
