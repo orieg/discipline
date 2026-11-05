@@ -1,0 +1,12 @@
+{
+  "families": {
+    "family-1": {
+      "engine": "llama.cpp llama-server",
+      "generation_flags": "--reasoning on --reasoning-budget 4096 --spec-type draft-mtp --spec-draft-n-max 2 -c 262144 --parallel 4 --cache-type-k q8_0 --cache-type-v q8_0",
+      "gguf_sha256": "df27a780435b7b45c2597536112ea3cb091f8544c3d0c3318d9f4258b31f7adf",
+      "identifier": "<the model name your server exposes>"
+    }
+  },
+  "harness_applied_diff_sha256": "a50fdd525ddf5a2639865ff1975ca002a26b1750f3fc9852fc2332e22a28799d",
+  "note": "copy to manifest-local.json in the run directory; the provider's model identifier stays in that uncommitted copy"
+}

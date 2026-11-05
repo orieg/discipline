@@ -433,6 +433,7 @@ gh attestation verify discipline-x86_64-unknown-linux-musl.tar.gz \
 - **Reference:** man pages — `man discipline`, `man discipline.toml` (in `man/`, installed by the packages)
 - **Explanation:** [Engine Architecture](docs/ARCHITECTURE.md) — fail-closed contracts (F1–F12), AST diff engine, CI pipelines
 - **Explanation:** [Roadmap & Compatibility Ledger](docs/ROADMAP.md) — delivery phases and every behaviour change per release
+- **How-to:** [Reproducing the Benchmarks](docs/benchmarks/REPRODUCING.md) — re-run the precision, recall and latency studies, and what each one measures
 
 ## Development
 
