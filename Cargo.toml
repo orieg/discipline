@@ -113,6 +113,12 @@ tempfile = "3.10"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# Debug and test builds keep file and line numbers for panics and backtraces
+# but drop variable and type debug info, which takes a large share of the
+# build directory across the many test executables.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
