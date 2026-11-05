@@ -269,7 +269,7 @@ def run_cell(c: dict, model: str, log_root: Path) -> dict:
 def ensure_endpoint(fp0: dict) -> None:
     try:
         fp = props_fingerprint()
-    except Exception as e:  # noqa: BLE001 - any failure to reach the server halts the run
+    except Exception as e:  # noqa: BLE001 - any failure to reach the server halts the run  # discipline:allow(suppression-delta): noqa a handler that halts the whole run on any failure
         raise Halt(f"model endpoint unreachable: {e}") from e
     if fp != fp0:
         raise Halt(f"model server changed: {json.dumps(fp, sort_keys=True)}")
@@ -367,7 +367,7 @@ def on_signal(signum, _frame) -> None:
         for p in list(CHILDREN):
             try:
                 os.killpg(p.pid, signal.SIGTERM)
-            except ProcessLookupError:
+            except ProcessLookupError:  # discipline:allow(error-swallowing): the child process group already exited
                 pass
 
 
@@ -413,7 +413,7 @@ def main() -> None:
                 halted = halted or f"{futs[f]}: {h}"
                 on_signal(None, None)
                 ex.shutdown(wait=True, cancel_futures=True)
-            except Exception as e:  # noqa: BLE001 - surface at once, stop the rest
+            except Exception as e:  # noqa: BLE001 - surface at once, stop the rest  # discipline:allow(suppression-delta): noqa a handler that halts the whole run on any failure
                 halted = halted or f"{futs[f]}: {type(e).__name__}: {e}"
                 on_signal(None, None)
                 ex.shutdown(wait=True, cancel_futures=True)

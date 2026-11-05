@@ -133,10 +133,20 @@ append-only JSONL file (`pilot-state.jsonl`, `confirmatory-state.jsonl`), and an
 run resumes from it. `RECALL_LAB_LOCK` names an optional `flock` file shared with other
 benchmark jobs on the host.
 
-`run_pilot.py` and `run_confirmatory.py` are byte-identical to the files that ran (sha256
-`2ddaf2a4…359d` and `6d8af59d…66ac`; each was last modified before its run's first start
-record), so their docstrings still describe them as uncommitted. `start.sh` is the executed
-launcher with the lab's lock path, endpoint and key lookup replaced by environment variables.
+`run_pilot.py` and `run_confirmatory.py` are the files that ran, plus one trailing
+`discipline:allow` marker on each of the six lines discipline's own gates flag (an empty
+`except ProcessLookupError` and two `noqa: BLE001` handlers per file). Stripping the markers
+gives the executed files back byte for byte:
+
+```bash
+sed -E 's/  # discipline:allow\((error-swallowing|suppression-delta)\): .*$//' scripts/recall_lab/run_pilot.py | sha256sum
+# 2ddaf2a494a3126fa5d7bdd1115e28a6febe0142cb3d32199736c7228770359d (run_pilot.py)
+# 6d8af59d7108530f72722ff3c09ec96d76dce4532e512c0880c8c1cb6da866ac (run_confirmatory.py)
+```
+
+Each was last modified before its run's first start record, so their docstrings still
+describe them as uncommitted. `start.sh` is the executed launcher with the lab's lock path,
+endpoint and key lookup replaced by environment variables.
 
 ### 4.4 Stages 2 and 3: pairs, labels, scores
 
