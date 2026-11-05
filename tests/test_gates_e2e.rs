@@ -24816,3 +24816,109 @@ require_all = true
     assert_eq!(reason, "configuration");
     assert_eq!(gate.as_deref(), Some("companion-edit"));
 }
+
+#[test]
+fn companion_edit_e2e_reports_a_lone_spec_tells_shared_subjects_apart_and_needs_rules() {
+    let config = r#"[meta]
+version = 1
+name = "test-repo"
+
+[gates.companion-edit]
+enabled = true
+
+[[gates.companion-edit.rules]]
+trigger_paths = ["src/**", "docs/spec.md"]
+require_edits_to = ["docs/spec.md"]
+
+[[gates.companion-edit.rules]]
+trigger_paths = ["api/**"]
+require_edits_to = ["docs/spec.md", "docs/api.md"]
+"#;
+    let repo = Repo::new();
+    repo.commit_base_files(
+        &[
+            ("discipline.toml", config),
+            ("src/lib.rs", "pub fn f() {}\n"),
+            ("api/routes.yaml", "routes: []\n"),
+            ("docs/spec.md", "# Spec\n"),
+            ("docs/api.md", "# API\n"),
+            ("README.md", "# Readme\n"),
+        ],
+        "base: enable companion-edit",
+    );
+    let reset = || repo.git(&["checkout", "-q", "-B", "work", "main"]);
+
+    // 1. A change no rule's `trigger_paths` matches: nothing examined, and a note says why.
+    repo.write("README.md", "# Readme\n\nMore.\n");
+    repo.commit("docs: readme");
+    let unmatched = repo.check(&[]);
+    assert_eq!(
+        unmatched.code, 0,
+        "{}\n{}",
+        unmatched.stdout, unmatched.stderr
+    );
+    let outcome = unmatched.outcome("companion-edit");
+    assert_eq!(outcome["examined"], 0);
+    assert!(
+        outcome["notes"]
+            .to_string()
+            .contains("no changed path matches any rule's `trigger_paths`"),
+        "{outcome}"
+    );
+
+    // 2. The spec, inside its own trigger set, changes alone: not its own companion.
+    reset();
+    repo.write("docs/spec.md", "# Spec\n\nReworded.\n");
+    repo.commit("docs: spec");
+    let lone = repo.check(&[]);
+    assert_eq!(lone.code, 1, "{}\n{}", lone.stdout, lone.stderr);
+    let lone_violations = lone.violations("companion-edit");
+    assert_eq!(lone_violations.len(), 1, "{lone_violations:?}");
+    assert_eq!(lone_violations[0]["file"], "docs/spec.md");
+    let lone_message = lone_violations[0]["message"].as_str().unwrap();
+    assert!(
+        lone_message.contains("a path is not its own companion"),
+        "{lone_message}"
+    );
+
+    // 3. Two rules whose finding lands on the same path give two findings, told apart.
+    reset();
+    repo.write("src/lib.rs", "pub fn f() {}\npub fn g() {}\n");
+    repo.write("api/routes.yaml", "routes: [g]\n");
+    repo.commit("feat: g");
+    let shared = repo.check(&[]);
+    assert_eq!(shared.code, 1, "{}\n{}", shared.stdout, shared.stderr);
+    let shared_violations = shared.violations("companion-edit");
+    assert_eq!(shared_violations.len(), 2, "{shared_violations:?}");
+    assert!(shared_violations
+        .iter()
+        .all(|v| v["file"] == "docs/spec.md"));
+    assert_ne!(
+        shared_violations[0]["fingerprint"], shared_violations[1]["fingerprint"],
+        "{shared_violations:?}"
+    );
+
+    // 4. Fail closed: the gate enabled with no rules stops the run.
+    let empty = Repo::new();
+    empty.commit_base_files(
+        &[(
+            "discipline.toml",
+            "[meta]\nversion = 1\nname = \"t\"\n[gates.companion-edit]\nenabled = true\n",
+        )],
+        "base: companion-edit with no rules",
+    );
+    empty.write("src/lib.rs", "pub fn f() {}\n");
+    empty.commit("feat: lib");
+    let stopped = empty.check(&[]);
+    assert_eq!(stopped.code, 2, "{}\n{}", stopped.stdout, stopped.stderr);
+    let (reason, gate) = stopped.could_not_check();
+    assert_eq!(reason, "configuration");
+    assert_eq!(gate.as_deref(), Some("companion-edit"));
+    assert!(
+        stopped.stderr.contains("no rules are configured")
+            || stopped.stdout.contains("no rules are configured"),
+        "{}\n{}",
+        stopped.stdout,
+        stopped.stderr
+    );
+}
