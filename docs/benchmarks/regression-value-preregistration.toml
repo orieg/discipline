@@ -1,0 +1,506 @@
+# Pre-registration for `regression-value-v1`: how many real regressions discipline would have
+# blocked, measured on merged coding-agent pull requests that were later reverted or fixed,
+# beside matched pull requests from the same repositories that were not.
+#
+# Status `draft`: nothing below has been run. The pilot values marked `PILOT` are estimated
+# on the pilot repositories (`[pilot]`) and written here in one commit that also changes the
+# status to `locked-pre-data`; that commit is made before any candidate of a confirmatory
+# repository is labelled and before discipline or the twin is run on any candidate or
+# control. Any later change to a floor, the population, the positive or control rules, the
+# scope classes, the labels, the binary or the verdict rules relabels every affected verdict
+# `INTERMEDIATE_amended_threshold_redesign`.
+#
+# Every sample size below is returned by a function in `src/guards/perf/bounds.rs` and is
+# checked against it by `tests/test_benchmark_power_bounds_regression.rs`; the new bound
+# functions are mirrored in `scripts/benchmark_power_audit.py` (`--regression-bounds-json`)
+# and the two are compared there. None is hand-computed.
+#
+# Why this study: the precision studies (`precision-preregistration*.toml`) measure noise on
+# real changes, and `impossible-recall-v1` (#838) measures recall on synthetic test gaming.
+# Neither counts regressions that real changes shipped and discipline would have stopped.
+# A precision true positive on a merged pull request is a defect a reviewer let through, not
+# a regression known to have hurt anyone.
+#
+# Design source: written by one coding agent from the existing pre-registrations; no review
+# panel, synthetic or human, has read it yet.
+
+[study]
+id = "regression-value-v1"
+status = "draft"
+novelty_tier_claimed = "Characterisation"
+tier_justification = """
+Measures, with 95% Wilson and Newcombe intervals and a repository-clustered bootstrap, the
+share of known regressions shipped by merged coding-agent pull requests that discipline
+0.30.1 blocks at the pull request, and whether its blocks fall more often on those pull
+requests than on matched ones that were not reverted or fixed, against a naive
+sensitive-path twin. A measured property of shipped detectors on a defined population, not a
+causal claim about prevented incidents.
+"""
+recall_claimed = true
+claim = """
+V1 (value): among valid regressions whose mechanism is in a targeted class (`[scope]`),
+discipline blocks a share R_attr of the regression-introducing pull requests with a finding
+in a file the regression implicates (`[attribution]`).
+V2 (discrimination): discipline's block rate on all valid regression-introducing pull
+requests exceeds its block rate on matched non-regressing pull requests of the same
+repositories by D.
+R_attr is never reported without P (the in-scope share of valid regressions), A (the
+attributed block rate over all valid regressions, any mechanism) and F (the block rate on
+the matched controls, the noise on the same population).
+"""
+scope_note = """
+What discipline targets is a set of change shapes (weakened or deleted tests, CI and runner
+tampering, swallowed errors, stubs, dependency and configuration changes), not logic bugs.
+Most regressions are logic bugs, so A is expected to be low whatever discipline does; it is
+reported, never dropped, and no floor is set on it. V1 is the value claim for the targeted
+classes; V2 asks whether a block carries any signal about regressions at all.
+"""
+issue = 1024
+corpus_prior_inspection = """
+No reverted or fix-linked pull request was looked up while designing this study, and no
+repository of the frame was cloned. The frame is v7's AIDev frame (`[population]`), whose
+prior inspection is recorded in `precision-preregistration-v7.toml` `[study]`.
+"""
+
+[binary]
+version = "0.30.1"
+binary = """
+`discipline-x86_64-unknown-linux-musl.tar.gz` (or `aarch64-unknown-linux-musl`, or
+`aarch64-apple-darwin` on a macOS replay host) from the v0.30.1 GitHub release of
+`orieg/discipline` (published 2026-11-04T04:47:33Z, before this draft), verified against that
+release's `SHA256SUMS` before the replay starts; it must report `discipline 0.30.1`. The tag
+`v0.30.1` is the tag object `09a49231194b211a29e31a9a2cdf9f5ee9c321c9` on commit
+`394a472f4d601360610eade3e0eef2fbc757bfb7`. If the asset cannot be downloaded or does not
+verify, the binary is `cargo build --release --locked` at that commit. A later release is
+taken only by amending this file before any replay output exists.
+"""
+configuration_mode = "default-with-test-entrypoints"
+configuration_rule = """
+v7's `default-with-test-entrypoints` configuration text (v6's, unchanged), so F is comparable
+with v7's block rate. Only `error`-severity violations are findings.
+"""
+
+[population]
+visibility = "public-only"
+frame = """
+v7's frame (`precision-preregistration-v7.toml` `[population] frame_rule`, rules 1 to 4),
+the same AIDev v5 tables at the same revision and hashes (`[dataset]` there): merged
+coding-agent pull requests in non-fork repositories with an SPDX licence, dependency bots
+excluded, discipline's own repositories excluded. Rule 4's exclusion of v6's 232 pull
+requests applies. A pull request v7 also samples stays in this frame; the overlap is
+recorded, and no label is shared between the studies.
+"""
+repository_rank = """
+Repositories with at least one frame row are ranked by `sha256("<sample_seed>:<full_name>")`
+(lowercase hex) and scanned in ascending rank. A pull request belongs to the pilot or the
+confirmatory split by its repository (`[pilot]`), so no repository contributes to both.
+"""
+sample_seed = 70801
+per_repository_case_cap = 2
+per_repository_case_cap_rationale = """
+v7's cap: one repository's conventions must not fill a class. When a repository yields more
+than two valid cases, the two with the smallest `sha256("<sample_seed>:<full_name>#<number>")`
+are kept and the rest recorded and never replayed. The repository-clustered bootstrap
+absorbs what remains.
+"""
+clone_mode = "git clone --filter=blob:none (blob-less partial clone), outside the repository"
+marker_cutoff = "2026-10-31"
+marker_cutoff_rule = """
+A revert or fix commit counts as a marker only when its committer date is on or before
+`marker_cutoff` and it is reachable from the default branch at the scan. Every frame row was
+merged on or before 2026-04-07 (v7 `[dataset] release_cutoff`), so every row had at least the
+span from 2026-04-07 to the cutoff to be reverted; rows merged earlier had more, which the
+control matching on merge time (`[controls]`) balances.
+"""
+
+[positives]
+# Candidate regression-introducing pull requests (cases). Found mechanically, from commit
+# messages and pull-request metadata, never from discipline's output.
+methods = ["revert", "fix-link"]
+revert_rule = """
+A frame pull request X is a `revert` candidate when, on the default branch, a commit after
+X's merge commit and on or before `marker_cutoff`:
+1. has a message containing `This reverts commit <sha>` (git's default revert message) where
+   `<sha>` (full, or a prefix of at least 7 hex characters) is X's `merge_commit_sha` or a
+   commit of X's head; or
+2. is the merge of a pull request whose title starts `Revert "` and whose body contains
+   `Reverts <owner>/<repo>#<X.number>` (GitHub's revert button), or whose body or message
+   names X's merge commit as in 1.
+A partial revert counts. A revert of a revert (a re-land) removes the earlier revert as a
+marker: X is a candidate only if a revert of X stands at the cutoff.
+"""
+fix_link_rule = """
+A frame pull request X is a `fix-link` candidate when a commit on the default branch after
+X's merge and on or before `marker_cutoff` has a message (subject or body) that matches the
+case-insensitive regular expression
+`\\b(regress(ion|ed|es)?|broke|breaks|broken|introduced (in|by)|caused by)\\b`
+and references X: `#<X.number>` (as a whole token), X's pull-request URL, or a prefix of at
+least 7 hex characters of X's `merge_commit_sha`. The regular expression selects a sampling
+frame; it is not a detector, and every candidate is labelled (`[labels]`).
+"""
+excluded_candidates = """
+Excluded, counted by reason, never replaced by another row of the same repository: X is
+itself a revert (its title starts `Revert "` or its head commit message contains `This
+reverts commit`); X's base or head commit cannot be fetched; the GitHub REST API does not
+report X merged; X's diff is empty after submodule entries are dropped.
+"""
+szz_rule = """
+SZZ-style blame from fix commits (Sliwerski, Zimmermann and Zeller, "When do changes induce
+fixes?", MSR 2005) is not a positive method in v1. Blame assigns a fix's deleted lines to the
+commits that last touched them, which need not be the commits that introduced the bug, and
+the method's precision varies by project and variant; a v1 positive must be named by the
+project itself (a revert or a fix message pointing at it). An SZZ stratum needs its own
+amendment, with its own validity label, before it is run.
+"""
+commit_sha_recovery = """
+As in v7: `base_sha`, `head_sha` and `merge_commit_sha` come from
+`GET /repos/{owner}/{repo}/pulls/{number}` once, when the manifest is built, and are frozen in
+the committed manifest. The marker commit's SHA, message and, for a fix-link, its diff are
+frozen with it. Issue or pull-request text that a marker references (`Fixes #N`, `Reverts`)
+is fetched once and frozen in the rater packet.
+"""
+
+[controls]
+controls_per_case = 2
+matching_rule = """
+For each case X, two controls from the same repository: frame pull requests that are not a
+candidate under either method and that no marker of either method names at all (before or
+after the cutoff, at the scan), that are not reverts themselves, and whose changed-line
+count (added plus deleted, from `git diff --numstat base_sha head_sha`) is within a factor
+of two of X's. Among those, the two whose `merged_at` is nearest X's (ties broken by the
+smaller `sha256("<control_seed>:<full_name>#<number>")`), each used once across all cases. A
+case with fewer than two eligible controls keeps what it has; the count of short cases is
+reported, and V2 uses every control drawn.
+"""
+control_seed = 70802
+control_contamination = """
+A control can be a regression nobody reverted or linked. That makes the controls' block rate
+an upper estimate of the clean block rate, which biases D toward zero: a V2 PASS is
+conservative on this account, and a V2 REJECTED may be partly this bias. The results say so.
+"""
+size_matching_rationale = """
+Larger changes draw more findings and more regressions, so an unmatched comparison would
+credit discipline for finding big pull requests. The size band removes most of that; the
+results report D within changed-line terciles as a check.
+"""
+
+[pilot]
+split_rule = """
+A repository is `pilot` when int(sha256(pilot_salt + full_name), 16) < pilot_fraction *
+2^256, the salt taken as its ASCII hex text; otherwise `confirmatory`. Repositories are
+assigned before any is scanned.
+"""
+pilot_salt = "69e039752196b4cfe2b4c03e2f5362c5"   # `secrets.token_hex(16)`, committed with this draft
+pilot_fraction = 0.20
+pilot_scope = """
+The pilot scans pilot repositories in rank order and labels their candidates (`[labels]`)
+to estimate the yield rates below and the label reliability. It does not run discipline or
+the twin on anything, so no detection rate informs a planning value. Pilot cases never enter
+a verdict. The pilot stops at `pilot_candidate_target` labelled candidates or when the pilot
+repositories are exhausted.
+"""
+pilot_candidate_target = 150
+# PILOT: estimated on the pilot, then written here at the lock.
+valid_share = "PILOT"            # share of candidates labelled `regression`
+in_scope_share = "PILOT"         # share of valid regressions with an in-scope mechanism (P)
+replayable_share = "PILOT"       # share of candidates whose base and head both fetch and replay
+candidates_per_repository = "PILOT"   # candidates per scanned repository
+cases_per_repository = "PILOT"   # mean valid cases per repository holding any, after the cap
+eligible_control_share = "PILOT" # share of cases with two eligible controls
+
+[scope]
+# The targeted classes, fixed before any data. A valid regression is in scope when the
+# rater's mechanism label includes at least one of them; `other` alone is out of scope.
+classes = [
+  "test-erosion",
+  "ci-or-runner",
+  "error-swallowing",
+  "stub-or-placeholder",
+  "dependency-or-config",
+]
+out_of_scope_class = "other"
+class_definitions = """
+- test-erosion: the regression went unnoticed or shipped because the introducing change
+  removed, skipped, weakened or rewrote a test or assertion, or edited an expected output
+  (snapshot, golden file) to match new behaviour.
+- ci-or-runner: the introducing change altered a CI workflow, test-runner or harness
+  configuration (`conftest.py`, `jest.config.*`, `pytest.ini`, a `[test]` profile, a skipped
+  job, a removed check) so that the failure was not run or not reported.
+- error-swallowing: the introducing change caught, ignored or discarded an error (an empty
+  `catch`, `except: pass`, `let _ =`, `.ok()`, `|| true`, a broadened `except`) and the
+  regression is the hidden failure.
+- stub-or-placeholder: the introducing change left or added a stub, placeholder or
+  unimplemented body (`todo!()`, `NotImplementedError`, `pass`, a hard-coded return) that
+  shipped as the behaviour.
+- dependency-or-config: the introducing change added, removed, bumped or unpinned a
+  dependency, or changed a build, lint, toolchain or project configuration file, and the
+  regression is a consequence of that change.
+- other: any other mechanism, including a logic error in source code with no change of the
+  shapes above. Out of scope.
+"""
+scope_independence = """
+The classes are named from discipline's mandate (`docs/GATES.md`), but the label is a
+judgement about the regression's mechanism read from the marker, the referenced issue text
+and the introducing diff, made before and without any discipline or twin output. A change
+that merely contains a test edit is not `test-erosion` unless the evidence ties the
+regression to it.
+"""
+
+[labels]
+# Labelled per candidate, before any replay, by raters who see no discipline or twin output.
+questions = ["validity", "mechanism"]
+
+[[labels.validity]]
+id = "regression"
+definition = """
+The marker (revert or fix) undid or repaired the candidate because it broke something: a
+behaviour, the build, a test, performance, security, compatibility or documentation users
+rely on. Stated or clearly implied by the marker message, the referenced issue or pull
+request text, or the fix diff.
+"""
+[[labels.validity]]
+id = "not-regression"
+definition = """
+The candidate was reverted or referenced for another reason: an accidental merge, a change
+of plan, a duplicate, a merge-order problem, a move to another branch, a re-land under a new
+pull request with nothing reported broken, or a fix message whose keyword refers to
+something else.
+"""
+[[labels.validity]]
+id = "cannot-tell"
+definition = """
+The frozen evidence does not say why. Counted as not valid: a candidate enters the case set
+only on `regression`.
+"""
+
+[[labels.mechanism]]
+id = "multi-select"
+definition = """
+For a `regression`, one or more of the `[scope] classes` and `other`, each with a one-line
+quote from the evidence that supports it, and the files of the introducing change the
+evidence implicates (`implicated_files`). A class without a supporting quote is dropped
+before adjudication. `implicated_files` empty is allowed (the evidence names no file).
+"""
+
+[attribution]
+rule = """
+A discipline (or twin) block on case X is attributed when at least one of its error findings
+is in a file of X's implicated set. The implicated set is the union of:
+1. the raters' final `implicated_files`;
+2. for a `fix-link` case, the files of X's diff that the fix commit also modifies;
+3. for a `revert` case, the files the revert commit restores to their state before X.
+Rule 3 makes every file X touched implicated for a full revert, so for revert cases the
+results also report attribution under rules 1 and 2 only. Attribution is file level; the
+share of attributed findings whose line falls inside a hunk of X that the marker changes is
+reported beside it.
+"""
+
+[adjudication]
+blind_to_discipline_output = true
+blind_to_twin_output = true
+blind_to_control_status = true
+labels_before_replay = """
+The labelled packet, every label and the adjudicated final labels are committed, with the
+sha256 of the packet and of the labels, before discipline or the twin is run on any case or
+control of the same split. The replay records that commit's SHA, and the replay script
+refuses to run when the label files differ from it.
+"""
+committed_rater_packet = "docs/benchmarks/results-regression-value/rater-packet.json"
+packet_fields = """
+Per candidate: repository, pull-request number, title and body (AIDev `body`), introducing
+diff excerpt, marker kind, marker commit message, marker diff excerpt (fix-link) or the list
+of restored files (revert), and the frozen referenced issue or pull-request text. Contributor
+identities are hashed as in v7. No control is in the packet, so a rater cannot learn which
+changes are cases by contrast.
+"""
+llm_raters = { rater_1 = "opus", rater_2 = "sonnet", tie_breaker = "opus" }
+llm_rater_procedure = """
+v7's procedure (`precision-preregistration-v7.toml` `[adjudication] llm_rater_procedure`),
+with batches of at most 20 candidates and the two questions here. A disagreement on validity
+or on in-scope versus out of scope goes to the tie-breaker; a candidate the tie-breaker
+cannot resolve is `cannot-tell` (not valid). The rater and tie-breaker prompts are written
+into this file before the lock, from the label definitions above, and are not changed after
+the first pilot batch.
+"""
+synthetic_rater_disclosure = """
+The LLM raters are subagents (`rater_kind = "llm-subagent"` in adjudication.json). Their
+agreement measures rubric consistency, not external review, and is never presented as human
+review. An LLM label is final only where `[reliability]` holds.
+"""
+
+[adjudication.human]
+raters = 2
+subset_rule = """
+Two human raters label a stratified random subset of `human_subset_n` confirmatory
+candidates (or every one, if fewer), both questions, with the packet fields and the label
+definitions, blind to each other, to the LLM labels and to all replay output. Strata: method
+(`revert`, `fix-link`) by the LLM final validity label, allocated in proportion by largest
+remainder, at least one per non-empty stratum, drawn with `human_subset_seed`. A human
+disagreement is final as `cannot-tell` on the subset. The project author may be one of the
+two, never both; v7's `project_author_rule` applies.
+"""
+human_subset_seed = 70803
+# kappa_sample_size(0.80, 0.80, 0.10, 0.95), as in v7: items for a 95% half-width of 0.10 on
+# Cohen's kappa at planning kappa 0.80 and a majority label on 80% of items.
+human_subset_n = 225
+planning_kappa = 0.80
+planning_majority_share = 0.80
+kappa_target_half_width = 0.10
+
+[reliability]
+min_acceptable_kappa = 0.75
+checks = """
+Cohen's kappa, with its 95% interval, on validity and on the in-scope / out-of-scope split of
+the mechanism label, for (a) LLM rater 1 against LLM rater 2 on every candidate, (b) the two
+humans on the subset, (c) the human final label against the LLM final label on the subset.
+"""
+verdict_rule = """
+v7's rule: if any of (a), (b), (c) has a point kappa below the bar, every V1 and V2 verdict
+that would otherwise be PASS, `INTERMEDIATE_floor_within_ci` or REJECTED becomes
+`INTERMEDIATE_unreliable_labels`, and the verdict the labels would have given is reported
+beside it; without two human raters the qualifier is `no-human-labels`.
+"""
+unreliable_labels_verdict = "INTERMEDIATE_unreliable_labels"
+
+[twin_baseline]
+id = "naive-sensitive-path-filter"
+rule = """
+v7's twin rule, unchanged (`precision-preregistration-v7.toml` `[twin_baseline] rule`): block
+any pull request that modifies an existing test file, a CI workflow file, or a project
+manifest, linter or test-runner configuration file. Run on every case and control; its flags
+are attributed by the same `[attribution]` rule, with a flagged file standing for a finding.
+"""
+winning_regime = """
+Recall. Three of the five scope classes (test-erosion, ci-or-runner, dependency-or-config)
+are path-shaped, so the twin blocks almost every in-scope case of those classes and can
+exceed discipline on R_attr; it can also beat discipline on V2 when regressions concentrate
+in pull requests that touch tests, CI or manifests. Its weakness is F, since it blocks every
+control that touches those paths. Both are reported for both arms, and no claim that
+discipline beats the twin is made from a statistic on which the twin wins by construction.
+"""
+comparison_rule = """
+Discipline and the twin are compared on V2 (D for each arm) and on F, as figures with their
+intervals; the paired difference in R_attr on the same cases is reported with the counts of
+discordant pairs (cases one arm attributes and the other does not). No verdict is attached to a comparison: the floors
+below are for discipline alone.
+"""
+
+[power_and_bounds]
+confidence_level = 0.95
+statistical_power = 0.80
+wilson_n_max = 2000
+difference_n_max = 600
+bootstrap_seed = 20261105
+bootstrap_resamples = 20000
+insufficient_n_verdict = "insufficient-n"
+amendment_verdict = "INTERMEDIATE_amended_threshold_redesign"
+
+# V1, value: Wilson lower bound of R_attr on confirmatory in-scope cases.
+v1_assumed_rate = 0.50
+v1_floor = 0.30
+# sample_size_for_wilson_lower_bound(0.50, 0.30, 0.95, 2000)
+v1_point_estimate_n = 21
+# sample_size_for_wilson_lower_bound_power(0.50, 0.30, 0.95, 0.80, 2000)
+v1_required_n = 45
+# zero_event_upper_bound(45, 0.95): if discipline attributes no block among 45 in-scope cases,
+# its true R_attr is below this at 95% confidence.
+v1_zero_event_upper_bound = 0.06440428880778348
+v1_floor_rationale = """
+A gate set that stopped three in ten regressions of the kinds it is built for, at the pull
+request, before merge, is worth adopting; one that stopped fewer than that is not evidence of
+value whatever its precision. The assumed 0.50 has no data behind it: no study has replayed
+discipline on known regressions. It sets power, not the verdict.
+"""
+
+# V2, discrimination: Newcombe lower bound of D = block rate on all confirmatory valid cases
+# minus block rate on their controls.
+v2_case_rate = 0.30
+v2_control_rate = 0.177
+v2_control_rate_source = """
+v6's block rate on 232 merged pull requests, 41 of which had at least one finding
+(`docs/benchmarks/results-v6/summary.json`). v6 included dependency bots, which the frame
+excludes; v7's Stage 1 will measure the frame's own block rate.
+"""
+v2_floor = 0.0
+v2_controls_per_case = 2
+# sample_size_for_difference_lower_bound_power(0.30, 0.177, 0.0, 2, 0.95, 0.80, 600)
+v2_required_cases = 135
+v2_floor_rationale = """
+The floor asks only that a block is more likely on a pull request that turned out to ship a
+regression than on a matched one that did not: the lower bound of D must be at least 0. A
+positive floor would need a planning lift no data supports; the realised D and its interval
+are reported, and the risk ratio beside it.
+"""
+# sample_size_for_difference_lower_bound_power(case_rate, control_rate, 0.0, 2, 0.95, 0.80,
+# 600) on a grid; `beyond-n-max` where n_max = 600 falls short of the power.
+v2_sensitivity = [
+  { case_rate = 0.30, control_rate = 0.10, required_cases = 43 },
+  { case_rate = 0.30, control_rate = 0.177, required_cases = 135 },
+  { case_rate = 0.30, control_rate = 0.25, required_cases = "beyond-n-max" },
+  { case_rate = 0.35, control_rate = 0.10, required_cases = 30 },
+  { case_rate = 0.35, control_rate = 0.177, required_cases = 73 },
+  { case_rate = 0.35, control_rate = 0.25, required_cases = 243 },
+  { case_rate = 0.40, control_rate = 0.10, required_cases = 22 },
+  { case_rate = 0.40, control_rate = 0.177, required_cases = 45 },
+  { case_rate = 0.40, control_rate = 0.25, required_cases = 111 },
+]
+v2_sensitivity_rule = """
+The required cases rise steeply as the two planning rates approach each other: at a case rate
+of 0.30 and a control rate of 0.25 no affordable study powers V2. If the pilot-free planning
+values are wrong in that direction, the expected V2 verdict is `insufficient-n` or a wide
+`INTERMEDIATE_floor_within_ci`, and that is stated here in advance. The planning rates are
+not revised from the pilot: the pilot runs no detector.
+"""
+
+required_cases_rule = """
+At the lock, with the PILOT values written:
+- design effect: `design_effect_inflated_n(n, cases_per_repository, 1.0)` applied to
+  `v1_required_n` and `v2_required_cases` (worst-case intra-repository correlation, as v7);
+- candidates to label: the larger of
+  `trajectories_required(v1_required_n_inflated, valid_share, in_scope_share, replayable_share)`
+  and `trajectories_required(v2_required_cases_inflated, valid_share, 1.0, replayable_share)`;
+- repositories to scan: `pull_requests_for_yield(candidates, candidates_per_repository, 0.80)`
+  (the function counts clusters; here a cluster is a repository and a unit a candidate).
+Each value is written here with its function call, and checked by the test file.
+"""
+max_repositories = "PILOT"
+max_repositories_rule = """
+Set at the lock to the repository count above, rounded up to the next hundred. The scan stops
+at the first confirmatory repository count at which both requirements are met, or at
+`max_repositories`. The stopping rule reads only counts of valid and in-scope labels, never a
+replay output, so it cannot select for discipline's performance.
+"""
+expected_verdict_if_infeasible = """
+If the repository count exceeds the frame's confirmatory repositories, the claim whose
+requirement cannot be met is declared `insufficient-n` at the lock, before any replay, and
+the other is run alone.
+"""
+
+verdict_rule = """
+V1 (discipline, confirmatory in-scope cases): PASS iff n >= the inflated `v1_required_n`, the
+Wilson 95% lower bound of R_attr >= `v1_floor`, the repository-clustered bootstrap 95% lower
+bound >= `v1_floor`, and `[reliability]` holds. n below the requirement is `insufficient-n`
+whatever the interval; otherwise `INTERMEDIATE_floor_within_ci` when the point estimate
+clears the floor and REJECTED when it does not.
+V2 (discipline, all confirmatory valid cases and their controls): PASS iff the case count >=
+the inflated `v2_required_cases`, the Newcombe 95% lower bound of D >= `v2_floor`, the
+repository-clustered bootstrap 95% lower bound of D (resampling repositories with their cases
+and controls) >= `v2_floor`, and `[reliability]` holds; the same three other verdicts as V1.
+Reported with every verdict: P, A and F with their Wilson intervals; per scope class R_attr as
+a figure; D within changed-line terciles; per method (`revert`, `fix-link`) R_attr and D; and
+the twin's R_attr, A, F and D.
+"""
+
+[outputs]
+results_dir = "docs/benchmarks/results-regression-value/"
+files = """
+manifest.json (every repository scanned, in rank order, with its split; every candidate with
+its method, marker SHA and skip reason; every control with its case), rater-packet.json,
+adjudication.json, findings.json (discipline and twin, cases and controls), summary.json
+(verdicts, intervals, the label commit the replay checked). Written by scripts that are
+committed after the lock and before the first replay; a rule they cannot implement as
+written is amended here first.
+"""
+attribution_rule = """
+CC-BY-4.0 attribution for AIDev as in v7 `[dataset] attribution_rule`.
+"""

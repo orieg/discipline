@@ -8,9 +8,14 @@ Implements the math-first derivations for Phase B2 of the erosion benchmark (Ref
   4. Recall study Step 0 (#838, `docs/benchmarks/recall-preregistration.toml`): the exact probability
      that a Wilson lower bound clears a floor, the sample sizes at which it clears at the expected
      proportion and with a given power, and the agent runs needed to reach them.
+  5. Regression-value study Step 0 (`docs/benchmarks/regression-value-preregistration.toml`):
+     Newcombe's hybrid score interval for a difference of two proportions, the exact probability
+     that its lower bound clears a floor, and the number of cases (with a fixed number of
+     controls per case) at which it does so with a given power.
 
 When run with `--test` (or `--self-check`), executes self-contained unit tests pinning known reference values.
 With `--recall-bounds-json`, prints the recall study's Step-0 values as JSON.
+With `--regression-bounds-json`, prints the regression-value study's Step-0 values as JSON.
 When run without either, computes and prints the audit table for the erosion benchmark and the recall study.
 
 References:
@@ -19,6 +24,8 @@ References:
   - Acklam, P. J. (2003). "An algorithm for computing the inverse normal cumulative distribution function".
   - Fleiss, J. L., Levin, B., & Paik, M. C. (2003). "Statistical Methods for Rates and Proportions". 3rd ed.
   - Chow, S. C., Shao, J., & Wang, H. (2008). "Sample Size Calculations in Clinical Research". 2nd ed.
+  - Newcombe, R. G. (1998). "Interval estimation for the difference between independent proportions:
+    comparison of eleven methods". Statistics in Medicine, 17(8), 873-890.
 """
 
 import json
@@ -273,6 +280,110 @@ def trajectories_required(n_pos: int, pass_rate: float, in_scope_share: float, v
     return math.ceil(x)
 
 
+def newcombe_difference_interval(
+    k1: int, n1: int, k2: int, n2: int, confidence_level: float = 0.95
+) -> tuple[float, float]:
+    """Newcombe's hybrid score interval for the difference of two independent proportions k1/n1 - k2/n2.
+
+    Method 10 of Newcombe (1998): with (l_i, u_i) the Wilson score interval of k_i / n_i at the
+    same confidence level,
+      lower = (p1 - p2) - sqrt((p1 - l1)^2 + (u2 - p2)^2)
+      upper = (p1 - p2) + sqrt((u1 - p1)^2 + (p2 - l2)^2)
+    It needs no continuity correction, stays inside [-1, 1], and is defined at zero counts.
+
+    Reference: Newcombe, R. G. (1998). "Interval estimation for the difference between
+    independent proportions: comparison of eleven methods". Statistics in Medicine, 17(8),
+    873-890 (Table II gives the worked examples pinned in the tests).
+    """
+    l1, u1 = wilson_score_interval(k1, n1, confidence_level)
+    l2, u2 = wilson_score_interval(k2, n2, confidence_level)
+    p1, p2 = k1 / n1, k2 / n2
+    d = p1 - p2
+    return (
+        max(-1.0, d - math.sqrt((p1 - l1) ** 2 + (u2 - p2) ** 2)),
+        min(1.0, d + math.sqrt((u1 - p1) ** 2 + (p2 - l2) ** 2)),
+    )
+
+
+def _validate_positive_int(name: str, value: int) -> None:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {value}")
+
+
+def difference_pass_probability(
+    n1: int, p1: float, n2: int, p2: float, floor: float, confidence_level: float = 0.95
+) -> float:
+    """Exact probability that the Newcombe lower bound of k1/n1 - k2/n2 clears `floor`.
+
+    k1 ~ Binomial(n1, p1) and k2 ~ Binomial(n2, p2), independent; "clears" is
+    `lower >= floor`. For each k2 the lower bound is increasing in k1 (pinned on a grid in
+    the tests), so the event is k1 >= k1_min(k2), found by bisection, and the probability is
+    sum over k2 of P(k2) * P(k1 >= k1_min(k2)). `floor` is in [0, 1): a difference claim
+    needs at least "the first rate is higher".
+
+    Reference: Newcombe (1998), the interval `newcombe_difference_interval` implements; the
+    sum is over the exact binomial laws.
+    """
+    _validate_positive_int("n1", n1)
+    _validate_positive_int("n2", n2)
+    _validate_unit_interval("p1", p1)
+    _validate_unit_interval("p2", p2)
+    _validate_unit_interval("confidence level", confidence_level)
+    if not isinstance(floor, (int, float)) or math.isnan(floor) or floor < 0.0 or floor >= 1.0:
+        raise ValueError(f"floor must be in [0, 1), got {floor}")
+    pmf1 = [_binomial_pmf(k, n1, p1) for k in range(n1 + 1)]
+    tail1 = [0.0] * (n1 + 2)
+    for k in range(n1, -1, -1):
+        tail1[k] = tail1[k + 1] + pmf1[k]
+    total = 0.0
+    for k2 in range(n2 + 1):
+        if newcombe_difference_interval(n1, n1, k2, n2, confidence_level)[0] < floor:
+            continue  # no k1 clears at this k2
+        lo, hi = 0, n1
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if newcombe_difference_interval(mid, n1, k2, n2, confidence_level)[0] >= floor:
+                hi = mid
+            else:
+                lo = mid + 1
+        total += _binomial_pmf(k2, n2, p2) * tail1[lo]
+    return min(1.0, total)
+
+
+def sample_size_for_difference_lower_bound_power(
+    p1: float, p2: float, floor: float, controls_per_case: int, confidence_level: float, power: float, n_max: int
+) -> int:
+    """Smallest number of cases n such that every n' in [n, n_max], with `controls_per_case * n'`
+    controls, has `difference_pass_probability(n', p1, controls_per_case * n', p2, floor) >= power`.
+
+    The pass probability is a sawtooth in n for the same reason as the one-sample case, so the
+    answer is the start of the last unbroken run of sizes meeting `power` that ends at n_max.
+    Raises ValueError when an input is out of range, when `p1 - p2 <= floor`, or when n_max
+    itself falls short.
+
+    Reference: Newcombe (1998); see `difference_pass_probability`.
+    """
+    _validate_unit_interval("p1", p1)
+    _validate_unit_interval("p2", p2)
+    _validate_unit_interval("power", power)
+    _validate_positive_int("controls_per_case", controls_per_case)
+    _validate_positive_int("n_max", n_max)
+    if not isinstance(floor, (int, float)) or math.isnan(floor) or floor < 0.0 or floor >= 1.0:
+        raise ValueError(f"floor must be in [0, 1), got {floor}")
+    if p1 - p2 <= floor:
+        raise ValueError(f"the planning difference ({p1} - {p2}) must exceed the floor ({floor})")
+
+    def meets(m: int) -> bool:
+        return difference_pass_probability(m, p1, controls_per_case * m, p2, floor, confidence_level) >= power
+
+    if not meets(n_max):
+        raise ValueError(f"n_max ({n_max}) has pass probability below {power} at ({p1}, {p2}), floor {floor}")
+    n = n_max
+    while n > 1 and meets(n - 1):
+        n -= 1
+    return n
+
+
 def sample_size_for_interval(
     assumed_precision: float,
     target_half_width: float,
@@ -467,6 +578,45 @@ class TestStatisticalBounds(unittest.TestCase):
             trajectories_required(10, 0.5, 1.5, 0.5)
 
 
+    def test_newcombe_difference_interval_pinned_reference_values(self):
+        # Newcombe (1998) Table II, method 10, examples (a) to (d); statsmodels 0.13.5
+        # `confint_proportions_2indep(method="newcomb")` gives the same values.
+        for k1, n1, k2, n2, lower, upper in [
+            (56, 70, 48, 80, 0.052431472402365, 0.333872654036906),
+            (9, 10, 3, 10, 0.170522723934503, 0.809017973535488),
+            (6, 7, 2, 7, 0.058227927482312, 0.806249637524228),
+            (5, 56, 0, 29, -0.038137147903537, 0.192560013855112),
+            (0, 10, 0, 20, -0.161125158052819, 0.277532799862889),
+        ]:
+            got = newcombe_difference_interval(k1, n1, k2, n2, 0.95)
+            self.assertAlmostEqual(got[0], lower, places=9)
+            self.assertAlmostEqual(got[1], upper, places=9)
+        self.assertEqual(newcombe_difference_interval(10, 10, 0, 20, 0.95)[1], 1.0)
+
+    def test_difference_pass_probability_pinned_reference_values(self):
+        # An independent double sum over every (k1, k2) with the statsmodels interval.
+        self.assertAlmostEqual(difference_pass_probability(20, 0.5, 40, 0.2, 0.0), 0.6667170232364987, places=9)
+        self.assertAlmostEqual(difference_pass_probability(30, 0.6, 30, 0.3, 0.1), 0.3470912792267747, places=9)
+        self.assertAlmostEqual(difference_pass_probability(51, 0.5, 102, 0.177, 0.10), 0.8023798232139236, places=9)
+
+    def test_sample_size_for_difference_lower_bound_power_pinned_reference_values(self):
+        self.assertEqual(sample_size_for_difference_lower_bound_power(0.5, 0.177, 0.10, 2, 0.95, 0.80, 200), 51)
+        self.assertGreaterEqual(difference_pass_probability(135, 0.30, 270, 0.177, 0.0), 0.80)
+        self.assertLess(difference_pass_probability(134, 0.30, 268, 0.177, 0.0), 0.80)
+
+    def test_difference_bounds_invalid_inputs_fail_closed(self):
+        with self.assertRaises(ValueError):
+            newcombe_difference_interval(1, 0, 0, 10)
+        with self.assertRaises(ValueError):
+            difference_pass_probability(10, 0.5, 10, 0.2, -0.1)
+        with self.assertRaises(ValueError):
+            difference_pass_probability(10, 0.5, 0, 0.2, 0.0)
+        with self.assertRaises(ValueError):
+            sample_size_for_difference_lower_bound_power(0.3, 0.25, 0.10, 2, 0.95, 0.80, 200)
+        with self.assertRaises(ValueError):
+            sample_size_for_difference_lower_bound_power(0.30, 0.177, 0.0, 2, 0.95, 0.80, 100)
+
+
 def generate_power_audit() -> str:
     """Generate the pre-registration power & sample size audit table for the erosion benchmark."""
     gates = [
@@ -506,6 +656,8 @@ def generate_power_audit() -> str:
     lines.append("- Wilson 95% intervals computed per Rule 1.1; claim PASS iff CI lower bound >= floor.")
     lines.append("")
     lines.extend(generate_recall_audit_lines())
+    lines.append("")
+    lines.extend(generate_regression_audit_lines())
     return "\n".join(lines)
 
 
@@ -560,11 +712,71 @@ def generate_recall_audit_lines() -> list[str]:
     return lines
 
 
+# Regression-value study (`docs/benchmarks/regression-value-preregistration.toml`): the value
+# claim V1 is a one-sample Wilson floor on the attributed block rate of in-scope regressions;
+# the discrimination claim V2 is a Newcombe floor on the block-rate difference between all
+# valid regressions and their matched controls. Confidence 0.95, power 0.80.
+REGRESSION_CONFIDENCE = 0.95
+REGRESSION_POWER = 0.80
+REGRESSION_V1 = {"assumed_rate": 0.50, "floor": 0.30, "n_max": 2000}
+REGRESSION_V2 = {"case_rate": 0.30, "control_rate": 0.177, "floor": 0.0, "controls_per_case": 2, "n_max": 600}
+
+
+def regression_bound_values() -> dict[str, dict[str, float | int]]:
+    """The regression-value study's Step-0 values, as the pre-registration records them."""
+    v1, v2 = REGRESSION_V1, REGRESSION_V2
+    return {
+        "v1_value": {
+            **v1,
+            "required_n_point": sample_size_for_wilson_lower_bound(
+                v1["assumed_rate"], v1["floor"], REGRESSION_CONFIDENCE, v1["n_max"]
+            ),
+            "required_n_power": sample_size_for_wilson_lower_bound_power(
+                v1["assumed_rate"], v1["floor"], REGRESSION_CONFIDENCE, REGRESSION_POWER, v1["n_max"]
+            ),
+        },
+        "v2_discrimination": {
+            **v2,
+            "required_cases_power": sample_size_for_difference_lower_bound_power(
+                v2["case_rate"],
+                v2["control_rate"],
+                v2["floor"],
+                v2["controls_per_case"],
+                REGRESSION_CONFIDENCE,
+                REGRESSION_POWER,
+                v2["n_max"],
+            ),
+        },
+    }
+
+
+def generate_regression_audit_lines() -> list[str]:
+    values = regression_bound_values()
+    v1, v2 = values["v1_value"], values["v2_discrimination"]
+    return [
+        "## Regression-value study (`regression-value-v1`)",
+        "",
+        "| Claim | Planning rates | Floor | Required n (point estimate clears) | Required n (pass probability >= 0.80) |",
+        "|---|---|---|---|---|",
+        f"| V1 attributed block rate, in-scope regressions | {v1['assumed_rate']:.2f} | {v1['floor']:.2f} (Wilson lower bound) "
+        f"| {v1['required_n_point']} | {v1['required_n_power']} |",
+        f"| V2 block-rate difference, regressions minus controls ({v2['controls_per_case']} per case) "
+        f"| {v2['case_rate']:.3f} vs {v2['control_rate']:.3f} | {v2['floor']:.2f} (Newcombe lower bound) | - "
+        f"| {v2['required_cases_power']} cases |",
+        "",
+        "- Both requirements are the start of the last unbroken run of qualifying sizes up to n_max;"
+        " the pre-registration inflates them by the pilot's repository design effect and turns them into"
+        " candidate and repository counts with `trajectories_required` and `pull_requests_for_yield`.",
+    ]
+
+
 if __name__ == "__main__":
     if "--test" in sys.argv or "--self-check" in sys.argv:
         sys.argv = [a for a in sys.argv if a not in ("--test", "--self-check")]
         unittest.main()
     elif "--recall-bounds-json" in sys.argv:
         print(json.dumps(recall_bound_values(), indent=2))
+    elif "--regression-bounds-json" in sys.argv:
+        print(json.dumps(regression_bound_values(), indent=2))
     else:
         print(generate_power_audit())
