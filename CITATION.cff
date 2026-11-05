@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: "If you use Discipline, please cite it using the metadata in this file."
 title: "Discipline: universal CI/CD gatekeeper and AI coding agent diff sentinel"
 type: software
-version: 0.30.1
-date-released: 2026-11-03
+version: 0.31.0
+date-released: 2026-11-05
 doi: "10.5281/zenodo.23046102"
 identifiers:
   - type: doi
