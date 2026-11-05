@@ -1344,7 +1344,8 @@
       "source": "docs/GATES.md:companion-edit",
       "code": "src/guards/companion_edit.rs:evaluate_companion_edit",
       "pinning_tests": [
-        "tests/test_gates_e2e.rs::companion_edit_e2e_requires_the_companion_and_honours_one_rules_waiver"
+        "tests/test_gates_e2e.rs::companion_edit_e2e_requires_the_companion_and_honours_one_rules_waiver",
+        "tests/test_gates_e2e.rs::companion_edit_e2e_reports_a_lone_spec_tells_shared_subjects_apart_and_needs_rules"
       ],
       "verdict": "holds"
     },
