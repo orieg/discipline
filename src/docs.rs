@@ -549,6 +549,25 @@ pub fn render_cli_markdown() -> String {
     out
 }
 
+/// Render the visible subcommands from clap as an HTML table for the documentation site.
+pub fn render_cli_html() -> String {
+    let cmd = crate::cli::Cli::command();
+    let mut out = String::from("<table class=\"gate-table\">\n  <thead>\n    <tr>\n      <th>Command</th>\n      <th>Description</th>\n    </tr>\n  </thead>\n  <tbody>\n");
+    for sub in cmd.get_subcommands() {
+        if sub.is_hide_set() {
+            continue;
+        }
+        let about = sub.get_about().map(|s| s.to_string()).unwrap_or_default();
+        out.push_str(&format!(
+            "    <tr>\n      <td class=\"gate-id\">discipline {}</td>\n      <td>{}</td>\n    </tr>\n",
+            html_content(sub.get_name()),
+            html_content(&about)
+        ));
+    }
+    out.push_str("  </tbody>\n</table>");
+    out
+}
+
 /// Render the options of every visible subcommand (and nested subcommand) from clap:
 /// one table per command with the flag, its environment variable, default and help.
 pub fn render_cli_options_markdown() -> String {
@@ -890,7 +909,13 @@ pub fn update_generated_regions(
                 "gate-search" => render_gate_search_html(gates),
                 "gate-count" => render_gate_count(gates),
                 "config-schema" | "schema" => render_config_schema_markdown(),
-                "cli" => render_cli_markdown(),
+                "cli" => {
+                    if is_html {
+                        render_cli_html()
+                    } else {
+                        render_cli_markdown()
+                    }
+                }
                 "cli-options" => render_cli_options_markdown(),
                 "finding-codes" => render_finding_codes_markdown(),
                 "non-goals" => {
@@ -1313,6 +1338,19 @@ mod tests {
         assert!(!md.contains("**`discipline help`**"));
         // `<sha>`-style help text is escaped so a Markdown table shows it.
         assert!(!md.contains("<sha>") && md.contains("&lt;sha&gt;"));
+    }
+
+    #[test]
+    fn the_site_command_table_lists_every_visible_subcommand() {
+        let html = render_cli_html();
+        let cmd = crate::cli::Cli::command();
+        for sub in cmd.get_subcommands().filter(|s| !s.is_hide_set()) {
+            let cell = format!("<td class=\"gate-id\">discipline {}</td>", sub.get_name());
+            assert!(html.contains(&cell), "missing {}", sub.get_name());
+        }
+        assert!(html.contains("discipline lease") && !html.contains("discipline help"));
+        // `<command>`-style help text is escaped so the browser shows it.
+        assert!(!html.contains("<command>"));
     }
 
     #[test]
