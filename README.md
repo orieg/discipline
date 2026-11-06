@@ -314,7 +314,7 @@ discipline audit --last 200 --format html -o audit.html
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/img/audit-overview-dark.png">
-  <img alt="discipline audit report: a ranked Needs a decision list led by a loosening of ratified-paths in #270, and a strip of checks marked found, checked or not checked" src="docs/assets/img/audit-overview-light.png" width="100%">
+  <img alt="discipline audit report of this repository's last 200 merged changes: the headline, a strip of checks marked found, checked or not checked, and a ranked Needs a decision list" src="docs/assets/img/audit-overview-light.png" width="100%">
 </picture>
 
 ## Installation
