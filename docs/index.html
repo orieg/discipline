@@ -1729,6 +1729,96 @@ allow-build-hook: prepare husky installs the commit hooks
 allow-gate-weakening: ci-integrity the discipline step runs on pull_request only; merged-pr-body covers pushes</div>
     </div>
 
+    <!-- Command reference -->
+    <div style="margin-top: 2.5rem;">
+      <h3 style="font-size: 1.15rem; color: var(--heading); margin-bottom: 0.5rem;">Commands</h3>
+      <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+        Every subcommand of the binary. <code>discipline &lt;command&gt; --help</code> and <code>man discipline</code> list each one's options; <a href="https://github.com/orieg/discipline/blob/main/docs/CONFIGURATION.md#cli-reference">CONFIGURATION.md</a> has them as tables.
+      </p>
+      <div class="gate-table-wrapper">
+<!-- generated:cli -->
+<table class="gate-table">
+  <thead>
+    <tr>
+      <th>Command</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="gate-id">discipline check</td>
+      <td>Run the configured gates. Exit 0 = pass, 1 = violations, 2 = could not check</td>
+    </tr>
+    <tr>
+      <td class="gate-id">discipline diff</td>
+      <td>Shorthand for checking uncommitted or working tree changes against HEAD</td>
+    </tr>
+    <tr>
+      <td class="gate-id">discipline baseline</td>
+      <td>Record or manage grandfathered finding baselines</td>
+    </tr>
+    <tr>
+      <td class="gate-id">discipline init</td>
+      <td>Write a minimal discipline.toml: gates run at their built-in defaults; commented examples show what to change</td>
+    </tr>
+    <tr>
+      <td class="gate-id">discipline gates</td>
+      <td>List every gate: id, suite, availability, and effective state</td>
+    </tr>
+    <tr>
+      <td class="gate-id">discipline schema</td>
+      <td>Print the JSON Schema for discipline.toml</td>
+    </tr>
+    <tr>
+      <td class="gate-id">discipline self-test</td>
+      <td>Run the embedded negative / positive controls against this binary</td>
+    </tr>
+    <tr>
+      <td class="gate-id">discipline completions</td>
+      <td>Generate shell completion script to stdout (bash, zsh, fish, powershell, elvish)</td>
+    </tr>
+    <tr>
+      <td class="gate-id">discipline install-hooks</td>
+      <td>Install pre-commit hook in the local git repository</td>
+    </tr>
+    <tr>
+      <td class="gate-id">discipline hook</td>
+      <td>Run the gates inside a coding agent's edit loop (Claude Code, Codex, Cursor, Aider, Copilot CLI, agy, Qwen Code, OpenCode)</td>
+    </tr>
+    <tr>
+      <td class="gate-id">discipline explain</td>
+      <td>Explain a gate: what it checks, its state here, and the directive that lifts a finding</td>
+    </tr>
+    <tr>
+      <td class="gate-id">discipline replay</td>
+      <td>Replay the last N merged changes through a configuration: what it would have blocked</td>
+    </tr>
+    <tr>
+      <td class="gate-id">discipline audit</td>
+      <td>List the escape hatches the last N merged changes carried: directives, configuration loosenings, baseline growth, inline markers</td>
+    </tr>
+    <tr>
+      <td class="gate-id">discipline mcp</td>
+      <td>Serve the gates to an MCP client over stdio (read-only tools: check_diff, list_gates, explain_finding)</td>
+    </tr>
+    <tr>
+      <td class="gate-id">discipline bench</td>
+      <td>Benchmark tooling for the bench-regression gate</td>
+    </tr>
+    <tr>
+      <td class="gate-id">discipline doctor</td>
+      <td>Check that the repository and its platform enforce discipline: workflows, CODEOWNERS, branch protection, and the local agent settings. Exit 0 = healthy, 1 = a failing check, 2 = could not check</td>
+    </tr>
+    <tr>
+      <td class="gate-id">discipline lease</td>
+      <td>Claim this worktree's branches for one agent session, so other worktrees' sessions do not move them (kept in the common git directory, never committed)</td>
+    </tr>
+  </tbody>
+</table>
+<!-- /generated -->
+      </div>
+    </div>
+
     <!-- Action inputs & outputs reference -->
     <div style="margin-top: 2.5rem;">
       <h3 style="font-size: 1.15rem; color: var(--heading); margin-bottom: 0.5rem;">Composite Action Inputs</h3>
