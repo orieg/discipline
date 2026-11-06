@@ -1577,7 +1577,7 @@ pub fn render(s: &Summary) -> String {
   </section>
 
   <section class="view" id="protected">
-    <div class="viewhead"><h2>Protected paths</h2><p>Changes that edited a path the parent configuration protects under <code>ratified-paths</code>. Whether each was ratified, and by whom, lives on the forge and is not checked here.</p></div>
+    <div class="viewhead"><h2>Protected paths</h2><p>Changes that edited a path the parent configuration protects under <code>ratified-paths</code>. {protected_where}</p></div>
     <div class="panel">{protected_view}<p><b>Next:</b> open each change and confirm its ratification came from someone other than the change's author.</p></div>
   </section>
 
@@ -1638,6 +1638,11 @@ pub fn render(s: &Summary) -> String {
         reference = esc(&s.reference),
         tip = own(&s.tip[..s.tip.len().min(10)]),
         prot_n = s.protected_edits.len(),
+        protected_where = if s.forge.is_some() {
+            "Whether each was ratified, and by whom, is what the forge recorded."
+        } else {
+            "Whether each was ratified, and by whom, lives on the forge and is not checked here."
+        },
         change_n = order.len(),
         rec_n = s.records.len(),
         rate = rate_chart(s),
