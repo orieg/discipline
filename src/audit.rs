@@ -587,14 +587,23 @@ impl WaiverDensity {
     }
 }
 
+/// The run of rises ending at the newest change, in words: none is not a run.
+fn density_run(rising: usize) -> String {
+    match rising {
+        0 => "the newest change did not raise the density".to_string(),
+        1 => "the density rose in the newest change".to_string(),
+        n => format!("the density rose in each of the last {n} changes"),
+    }
+}
+
 /// The `waiver-density-rise` check.
 pub fn waiver_density_check(checks: &mut Vec<Check>, d: &WaiverDensity) {
     let (state, detail) = if d.tripwire == 0 {
         (
             "not-checked",
             format!(
-                "the tripwire is off (`[audit] waiver_density_rise`); the density rose in the last {} change(s) in a row",
-                d.rising
+                "the tripwire is off (`[audit] waiver_density_rise`); {}",
+                density_run(d.rising)
             ),
         )
     } else if let Some(f) = d.failure() {
@@ -603,8 +612,9 @@ pub fn waiver_density_check(checks: &mut Vec<Check>, d: &WaiverDensity) {
         (
             "clean",
             format!(
-                "the density rose in the last {} change(s) in a row, below the tripwire of {}",
-                d.rising, d.tripwire
+                "{}, below the tripwire of {}",
+                density_run(d.rising),
+                d.tripwire
             ),
         )
     };
@@ -914,10 +924,10 @@ impl Summary {
                 .map(|c| c.per_mille.to_string())
                 .collect();
             out.push_str(&format!(
-                "\nWaiver density (waivers per 1000 changed files, oldest to newest, last {}): {}; rose {} time(s) in a row{}\n",
+                "\nWaiver density (waivers per 1000 changed files, oldest to newest, last {}): {}; {}{}\n",
                 recent.len(),
                 recent.join(" "),
-                w.rising,
+                density_run(w.rising),
                 if w.tripwire == 0 {
                     " (tripwire off)".to_string()
                 } else {
@@ -3531,6 +3541,82 @@ mod tests {
         s.forge = Some(ForgeRead::default());
         assert!(crate::audit_html::render(&s)
             .contains("from git; ratification under Owner ratification"));
+    }
+
+    #[test]
+    fn the_protected_figure_counts_the_ratifications_the_forge_read() {
+        let a = at(0, Some(10));
+        let edit = |state: &'static str| {
+            let mut r = Record::new(&a.to_owned(), "protected-edit", "protected");
+            r.file = Some("AGENTS.md".into());
+            r.ratification = Some(RatificationFact {
+                state,
+                issue_repo: None,
+                issue: None,
+                comment_id: None,
+                created: None,
+                why: Some("the forge could not be reached".into()),
+            });
+            r
+        };
+        let figure = |s: &Summary| {
+            let page = crate::audit_html::render(s);
+            let at = page
+                .find("<span>protected-path edits</span><small>")
+                .unwrap();
+            let rest = &page[at + "<span>protected-path edits</span><small>".len()..];
+            rest[..rest.find("</small>").unwrap()].to_string()
+        };
+        let mut s = Summary::from_records("main".into(), 1, vec![], vec![]);
+        s.protected_edits = vec![edit("self-ratified"), edit("self-ratified")];
+        s.protected_edits[0].ratification = None;
+        assert_eq!(figure(&s), "ratification not checked", "without --forge");
+        s.forge = Some(ForgeRead::default());
+        s.protected_edits = vec![
+            edit("unratified"),
+            edit("self-ratified"),
+            edit("self-ratified"),
+            edit("ratified"),
+        ];
+        assert_eq!(figure(&s), "1 unratified, 2 self-ratified");
+        s.protected_edits = vec![edit("ratified"), edit("not-required")];
+        assert_eq!(figure(&s), "all ratified or not required");
+        s.protected_edits = vec![edit("ratified"), edit("not-checked")];
+        assert_eq!(figure(&s), "1 could not be judged");
+        s.protected_edits[0].ratification = None;
+        assert_eq!(
+            figure(&s),
+            "2 could not be judged",
+            "no fact is no judgement"
+        );
+    }
+
+    #[test]
+    fn the_density_run_never_reads_as_a_run_of_zero() {
+        let d = |rising: usize, tripwire: u32| {
+            let mut checks = vec![];
+            waiver_density_check(
+                &mut checks,
+                &WaiverDensity {
+                    changes: vec![],
+                    rising,
+                    tripwire,
+                },
+            );
+            checks.remove(0).detail
+        };
+        assert_eq!(
+            d(0, 0),
+            "the tripwire is off (`[audit] waiver_density_rise`); the newest change did not raise the density"
+        );
+        assert_eq!(
+            d(1, 0),
+            "the tripwire is off (`[audit] waiver_density_rise`); the density rose in the newest change"
+        );
+        assert_eq!(
+            d(3, 5),
+            "the density rose in each of the last 3 changes, below the tripwire of 5"
+        );
     }
 
     #[test]

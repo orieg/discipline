@@ -925,6 +925,40 @@ fn decisions_list(s: &Summary) -> String {
     decisions
 }
 
+/// The caption of the protected-path figure: the ratification facts once `--forge`
+/// judged the edits, the same counts the Owner ratification check states.
+fn ratification_caption(s: &Summary) -> String {
+    if s.forge.is_none() {
+        return "ratification not checked".to_string();
+    }
+    let count = |state: &str| {
+        s.protected_edits
+            .iter()
+            .filter(|r| r.ratification.as_ref().is_some_and(|f| f.state == state))
+            .count()
+    };
+    // An edit the forge left no fact on was not judged either.
+    let unfacted = s
+        .protected_edits
+        .iter()
+        .filter(|r| r.ratification.is_none())
+        .count();
+    let (unratified, own, unjudged) = (
+        count("unratified"),
+        count("self-ratified"),
+        count("not-checked") + unfacted,
+    );
+    if unjudged > 0 {
+        format!("{unjudged} could not be judged")
+    } else if unratified + own > 0 {
+        format!("{unratified} unratified, {own} self-ratified")
+    } else if s.protected_edits.is_empty() {
+        "nothing to ratify".to_string()
+    } else {
+        "all ratified or not required".to_string()
+    }
+}
+
 /// The four figures of the overview.
 fn figures(s: &Summary, loosenings: &[&Record], nonroutine: usize) -> String {
     let n = s.changes;
@@ -947,7 +981,7 @@ fn figures(s: &Summary, loosenings: &[&Record], nonroutine: usize) -> String {
         (
             s.protected_edits.len().to_string(),
             "protected-path edits",
-            "ratification not checked".to_string(),
+            ratification_caption(s),
         ),
         (
             not_checked.to_string(),
