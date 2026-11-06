@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use crate::config::{GateInfo, Suite, GATES};
-use crate::escape::{docs_markdown_cell, html_content};
+use crate::escape::{docs_html_cell, docs_markdown_cell, html_content};
 use crate::schema::generate_schema;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,11 +124,14 @@ pub fn parse_action_yml(content: &str) -> Result<ActionSpec> {
     Ok(spec)
 }
 
+/// A YAML scalar as its text: the quotes around it removed, and in a single-quoted
+/// scalar the doubled quote that stands for one read back as one.
 fn unquote(s: &str) -> String {
     let t = s.trim();
-    if t.len() >= 2
-        && ((t.starts_with('\'') && t.ends_with('\'')) || (t.starts_with('"') && t.ends_with('"')))
-    {
+    if t.len() >= 2 && t.starts_with('\'') && t.ends_with('\'') {
+        return t[1..t.len() - 1].replace("''", "'");
+    }
+    if t.len() >= 2 && t.starts_with('"') && t.ends_with('"') {
         return t[1..t.len() - 1].to_string();
     }
     t.to_string()
@@ -173,7 +176,7 @@ pub fn render_action_inputs_html(spec: &ActionSpec) -> String {
             "    <tr>\n      <td class=\"gate-id\">{}</td>\n      <td>{}</td>\n      <td>{}</td>\n    </tr>\n",
             html_content(&inp.name),
             def,
-            html_content(&inp.description)
+            docs_html_cell(&inp.description)
         ));
     }
     out.push_str("  </tbody>\n</table>");
@@ -187,7 +190,7 @@ pub fn render_action_outputs_html(spec: &ActionSpec) -> String {
         out.push_str(&format!(
             "    <tr>\n      <td class=\"gate-id\">{}</td>\n      <td>{}</td>\n    </tr>\n",
             html_content(&outp.name),
-            html_content(&outp.description)
+            docs_html_cell(&outp.description)
         ));
     }
     out.push_str("  </tbody>\n</table>");
@@ -323,7 +326,7 @@ pub fn render_gates_html(gates: &[GateInfo]) -> String {
             suite_name,
             badge,
             lang_badge,
-            html_content(g.summary)
+            docs_html_cell(g.summary)
         ));
     }
     out.trim_end().to_string()
@@ -561,7 +564,7 @@ pub fn render_cli_html() -> String {
         out.push_str(&format!(
             "    <tr>\n      <td class=\"gate-id\">discipline {}</td>\n      <td>{}</td>\n    </tr>\n",
             html_content(sub.get_name()),
-            html_content(&about)
+            docs_html_cell(&about)
         ));
     }
     out.push_str("  </tbody>\n</table>");
@@ -1338,6 +1341,14 @@ mod tests {
         assert!(!md.contains("**`discipline help`**"));
         // `<sha>`-style help text is escaped so a Markdown table shows it.
         assert!(!md.contains("<sha>") && md.contains("&lt;sha&gt;"));
+    }
+
+    #[test]
+    fn a_single_quoted_yaml_scalar_reads_a_doubled_quote_as_one() {
+        assert_eq!(unquote("'the action''s own'"), "the action's own");
+        assert_eq!(unquote("''"), "");
+        assert_eq!(unquote("\"it's\""), "it's");
+        assert_eq!(unquote(" plain "), "plain");
     }
 
     #[test]

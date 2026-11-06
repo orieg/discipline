@@ -404,7 +404,8 @@
     /* Card Grids */
     .card-grid-2 {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
+      /* Never more than two columns: a column is at least half the row. */
+      grid-template-columns: repeat(auto-fit, minmax(min(max(320px, calc((100% - 1.5rem) / 2)), 100%), 1fr));
       gap: 1.5rem;
     }
     .card-grid-3 {
@@ -611,6 +612,9 @@
     .badge-warn { background: rgba(245, 158, 11, 0.12); color: var(--badge-warn-text); border: 1px solid rgba(245, 158, 11, 0.4); }
     .badge-lang { background: var(--card-inner); color: var(--text-muted); border: 1px solid var(--border); }
     td:nth-child(4) > .badge-lang { text-transform: none; letter-spacing: 0; font-weight: 500; }
+    /* The rule is the column people read; the language list wraps instead. */
+    #gate-table th:last-child { width: 36%; }
+    #gate-table td:nth-child(4) { max-width: 15rem; }
 
     /* Gate Search Bar */
     .gate-search-wrapper {
@@ -817,8 +821,8 @@
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       font-size: 0.8rem;
       color: #e2e8f0;
-      overflow-x: auto;
-      white-space: pre;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
 
     .copy-wrap {
@@ -1571,7 +1575,7 @@ Test `adds`: effective assertions dropped from 2 to 0.
             <td>Integrity</td>
             <td><span class="gate-badge badge-error">Error</span></td>
             <td><span class="gate-badge badge-lang">Any</span></td>
-            <td>rollup skip set matches each job's `if:` under the observed filter outputs</td>
+            <td>rollup skip set matches each job's <code>if:</code> under the observed filter outputs</td>
           </tr>
           <tr>
             <td class="gate-id">test-floor</td>
@@ -1854,7 +1858,7 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
     <tr>
       <td class="gate-id">enable</td>
       <td><em>(none)</em></td>
-      <td>Gate ids to force on (comma or newline separated). See `discipline gates`.</td>
+      <td>Gate ids to force on (comma or newline separated). See <code>discipline gates</code>.</td>
     </tr>
     <tr>
       <td class="gate-id">disable</td>
@@ -1889,12 +1893,12 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
     <tr>
       <td class="gate-id">comment</td>
       <td><code>false</code></td>
-      <td>Post the report as one pull-request comment, edited on every run. Needs `pull-requests: write` (GitHub) or a token that can comment; a fork's read-only token is reported, not failed.</td>
+      <td>Post the report as one pull-request comment, edited on every run. Needs <code>pull-requests: write</code> (GitHub) or a token that can comment; a fork's read-only token is reported, not failed.</td>
     </tr>
     <tr>
       <td class="gate-id">token</td>
       <td><code>${{ github.token }}</code></td>
-      <td>Forge token handed to discipline: read by the gates that ask the forge (issue-link verify_references, ratified-paths, review-threads, require_approval; GitHub GraphQL needs a token), and used to post the comment when `comment` is true.</td>
+      <td>Forge token handed to discipline: read by the gates that ask the forge (issue-link verify_references, ratified-paths, review-threads, require_approval; GitHub GraphQL needs a token), and used to post the comment when <code>comment</code> is true.</td>
     </tr>
     <tr>
       <td class="gate-id">policy_from</td>
@@ -1929,7 +1933,7 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
     <tr>
       <td class="gate-id">version</td>
       <td><em>(none)</em></td>
-      <td>Release to download (e.g. v0.1.0). Default: the tag this action was referenced by (`@vX.Y.Z`); for a major tag, a commit SHA or a branch, the release in the action''s own Cargo.toml; the latest release only when neither is available.</td>
+      <td>Release to download (e.g. v0.1.0). Default: the tag this action was referenced by (<code>@vX.Y.Z</code>); for a major tag, a commit SHA or a branch, the release in the action's own Cargo.toml; the latest release only when neither is available.</td>
     </tr>
     <tr>
       <td class="gate-id">binary_path</td>
@@ -1954,7 +1958,7 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
     <tr>
       <td class="gate-id">install_only</td>
       <td><code>false</code></td>
-      <td>Install discipline and put it on PATH for the steps that follow, without running a check. For `.github/workflows/copilot-setup-steps.yml`, so the hooks of Copilot cloud agent find the binary.</td>
+      <td>Install discipline and put it on PATH for the steps that follow, without running a check. For <code>.github/workflows/copilot-setup-steps.yml</code>, so the hooks of Copilot cloud agent find the binary.</td>
     </tr>
     <tr>
       <td class="gate-id">baseline_file</td>
@@ -1969,7 +1973,7 @@ allow-gate-weakening: ci-integrity the discipline step runs on pull_request only
     <tr>
       <td class="gate-id">ci_context</td>
       <td><em>(none)</em></td>
-      <td>Rollup job only: `toJson(needs)` of the rollup job (inline JSON, or a path to a file holding it) for the ci-skip-set gate. Empty: the gate reports &quot;not evaluated&quot;.</td>
+      <td>Rollup job only: <code>toJson(needs)</code> of the rollup job (inline JSON, or a path to a file holding it) for the ci-skip-set gate. Empty: the gate reports &quot;not evaluated&quot;.</td>
     </tr>
     <tr>
       <td class="gate-id">test_report</td>

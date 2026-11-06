@@ -478,7 +478,7 @@ The action runs on `pull_request`, `merge_group` and `push` events (the base is 
 | `pr_body` | `${{ github.event.pull_request.body }}` | PR description: carries override directives and is itself scanned by hygiene gates. |
 | `pr_title` | `${{ github.event.pull_request.title }}` | PR title: checked by hygiene gates (e.g. issue-link). |
 | `working_directory` | `.` | Directory of the repository to check. |
-| `version` | *(none)* | Release to download (e.g. v0.1.0). Default: the tag this action was referenced by (`@vX.Y.Z`); for a major tag, a commit SHA or a branch, the release in the action''s own Cargo.toml; the latest release only when neither is available. |
+| `version` | *(none)* | Release to download (e.g. v0.1.0). Default: the tag this action was referenced by (`@vX.Y.Z`); for a major tag, a commit SHA or a branch, the release in the action's own Cargo.toml; the latest release only when neither is available. |
 | `binary_path` | *(none)* | Use this discipline binary instead of downloading one (air-gapped Gitea/Forgejo runners, self-tests). |
 | `download_url` | `https://github.com/orieg/discipline/releases` | Base URL of the release store, for mirrors: https://, file://, or http:// to a loopback address. Set DISCIPLINE_INSTALL_ALLOW_INSECURE_HTTP=1 in the environment to accept another cleartext mirror. |
 | `require_provenance` | `false` | Fail the install, before the binary runs, when its build provenance cannot be verified (provenance output unverified). A binary_path binary is accepted. Set it on a mirror install once the mirror serves discipline.intoto.jsonl and the runner has gh. |
