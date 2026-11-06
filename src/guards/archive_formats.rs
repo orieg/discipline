@@ -415,9 +415,13 @@ fn walk_zip(file: File, budget: &mut ArchiveBudget, visit: &mut Visit<'_>) -> Re
     let mut declared_total = 0u64;
     for i in 0..zip.len() {
         budget.record_entry()?;
-        let (name, size) = {
+        let (name, size, method) = {
             let raw = zip.by_index_raw(i)?;
-            (raw.name()?.replace('\\', "/"), raw.size())
+            (
+                raw.name()?.replace('\\', "/"),
+                raw.size(),
+                raw.compression(),
+            )
         };
         validate_entry_name(&name)?;
         declared_total = declared_total.saturating_add(size);
@@ -428,6 +432,20 @@ fn walk_zip(file: File, budget: &mut ArchiveBudget, visit: &mut Visit<'_>) -> Re
             );
         }
         let is_dir = name.ends_with('/');
+        // Only the methods this build decodes. Since zip 9.3 `by_index` opens any
+        // method and the error surfaces on the first read, which would fail the archive.
+        if !matches!(
+            method,
+            zip::CompressionMethod::Stored | zip::CompressionMethod::Deflated
+        ) {
+            visit(Entry {
+                name,
+                size,
+                is_dir,
+                data: EntryData::Undecodable(format!("compression method not supported: {method}")),
+            })?;
+            continue;
+        }
         match zip.by_index(i) {
             Ok(f) => {
                 let mut bounded = budget.wrap(f);
