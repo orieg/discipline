@@ -5,6 +5,7 @@
 //! | HTML content and attribute values, the tool's own words (the audit page) | [`html`] | `&`, `<`, `>`, `"` and `'` become entities |
 //! | HTML content and attribute values, text from outside the binary (the audit page) | [`html_author_text`] | [`html`], and a control, bidirectional or invisible character becomes U+FFFD |
 //! | HTML content (the generated reference tables) | [`html_content`] | `&`, `<`, `>` and `"` become entities |
+//! | An HTML table cell of the generated reference on the site | [`docs_html_cell`] | [`html_content`], and a code span the caller wrote becomes `<code>` |
 //! | XML 1.0 content and attribute values (JUnit) | [`xml`] | the five entities; forbidden characters are dropped |
 //! | A Markdown table cell of generated documentation | [`docs_markdown_cell`] | a pipe, `<`, `>` and a line break; Markdown stays live |
 //! | A Markdown table cell of the report | [`markdown_cell`] | see [`crate::report::text`] |
@@ -73,6 +74,28 @@ pub(crate) fn html_content(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+/// Text of the tool's own documentation as an HTML table cell of the site: escaped as
+/// [`html_content`] escapes it, then each pair of backticks becomes a `<code>` element,
+/// as a Markdown renderer shows the same cell. An unpaired backtick stays as written.
+pub(crate) fn docs_html_cell(s: &str) -> String {
+    let escaped = html_content(s);
+    let parts: Vec<&str> = escaped.split('`').collect();
+    let mut out = String::with_capacity(escaped.len() + 16);
+    for (i, part) in parts.iter().enumerate() {
+        if i % 2 == 0 {
+            out.push_str(part);
+        } else if i + 1 < parts.len() {
+            out.push_str("<code>");
+            out.push_str(part);
+            out.push_str("</code>");
+        } else {
+            out.push('`');
+            out.push_str(part);
+        }
+    }
+    out
 }
 
 /// Escape text for XML 1.0 content and attribute values. Differs from [`html`]: `'`
@@ -172,6 +195,21 @@ mod tests {
             html_author_text(CONTROLS),
             "a\u{fffd}b\u{fffd}c\rd\u{fffd}e\u{fffe}f\u{ffff}g"
         );
+    }
+
+    #[test]
+    fn a_docs_html_cell_shows_each_code_span_as_code_and_escapes_the_rest() {
+        assert_eq!(
+            docs_html_cell("each job's `if:` under `a<b>` & more"),
+            "each job's <code>if:</code> under <code>a&lt;b&gt;</code> &amp; more"
+        );
+        // An unpaired backtick is text, as a Markdown renderer shows it.
+        assert_eq!(
+            docs_html_cell("`a` and ` alone"),
+            "<code>a</code> and ` alone"
+        );
+        assert_eq!(docs_html_cell("no span"), "no span");
+        assert_eq!(docs_html_cell(""), "");
     }
 
     #[test]
