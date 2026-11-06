@@ -3537,10 +3537,16 @@ mod tests {
         edit.file = Some("AGENTS.md".into());
         let mut s = Summary::from_records("main".into(), 1, vec![], vec![]);
         s.protected_edits = vec![edit];
-        assert!(crate::audit_html::render(&s).contains("from git; ratification not checked"));
+        let page = crate::audit_html::render(&s);
+        assert!(page.contains("from git; ratification not checked"));
+        assert!(page.contains("lives on the forge and is not checked here"));
         s.forge = Some(ForgeRead::default());
-        assert!(crate::audit_html::render(&s)
-            .contains("from git; ratification under Owner ratification"));
+        let page = crate::audit_html::render(&s);
+        assert!(page.contains("from git; ratification under Owner ratification"));
+        assert!(
+            !page.contains("is not checked here"),
+            "the section must not deny what the forge read"
+        );
     }
 
     #[test]
