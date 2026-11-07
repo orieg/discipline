@@ -1,0 +1,52 @@
+diff --git a/astropy/io/fits/card.py b/astropy/io/fits/card.py
+--- a/astropy/io/fits/card.py
++++ b/astropy/io/fits/card.py
+@@ -1299,14 +1299,25 @@
+ 
+ def _format_float(value):
+     """Format a floating number to make sure it gets the decimal point."""
+-    value_str = f"{value:.16G}"
+-    if "." not in value_str and "E" not in value_str:
++    # Try using Python's default str() first, which produces the shortest
++    # representation that round-trips correctly. This avoids unnecessarily
++    # long representations like "0.009124999999999999" for 0.009125.
++    value_str = str(value)
++
++    # If str() produces a string that's too long, fall back to :.16G format
++    if len(value_str) > 20:
++        value_str = f"{value:.16G}"
++
++    # Ensure the value string has a decimal point or exponent
++    if "." not in value_str and "E" not in value_str and "e" not in value_str:
+         value_str += ".0"
+-    elif "E" in value_str:
+-        # On some Windows builds of Python (and possibly other platforms?) the
+-        # exponent is zero-padded out to, it seems, three digits.  Normalize
+-        # the format to pad only to two digits.
+-        significand, exponent = value_str.split("E")
++
++    # Normalize the exponent format:
++    # - Convert lowercase 'e' to uppercase 'E'
++    # - Pad exponent to 2 digits (e.g., E+02 instead of E+2)
++    if "E" in value_str or "e" in value_str:
++        # Handle both 'E' and 'e' for consistency
++        significand, exponent = value_str.lower().split("e")
+         if exponent[0] in ("+", "-"):
+             sign = exponent[0]
+             exponent = exponent[1:]
+diff --git a/astropy/io/fits/tests/test_header.py b/astropy/io/fits/tests/test_header.py
+--- a/astropy/io/fits/tests/test_header.py
++++ b/astropy/io/fits/tests/test_header.py
+@@ -158,9 +158,9 @@
+         expected_str = f"{k} = -99.9 / {com}"
+         assert str(c)[: len(expected_str)] == expected_str
+ 
+-    c = fits.Card(k, 8.95, com)
+-    expected_str = f"{k} = 8.96 / {com}"
+-    assert str(c)[: len(expected_str)] == expected_str
++        c = fits.Card(k, 8.95, com)
++        expected_str = f"{k} = 8.96 / {com}"
++        assert str(c)[: len(expected_str)] == expected_str
+ 
+     def test_complex_value_card(self):
+         """Test Card constructor with complex value"""

@@ -1,0 +1,96 @@
+diff --git a/pylint/config/argument.py b/pylint/config/argument.py
+--- a/pylint/config/argument.py
++++ b/pylint/config/argument.py
+@@ -112,9 +112,13 @@
+ 
+ 
+ def _regexp_csv_transfomer(value: str) -> Sequence[Pattern[str]]:
+-    """Transforms a comma separated list of regular expressions."""
++    """Transforms a comma separated list of regular expressions.
++
++    This function handles commas within regex quantifiers like {1,3}
++    or within groups and character classes correctly.
++    """
+     patterns: list[Pattern[str]] = []
+-    for pattern in _csv_transformer(value):
++    for pattern in pylint_utils._split_csv_for_regex(value):
+         patterns.append(_regex_transformer(pattern))
+     return patterns
+ 
+diff --git a/pylint/utils/__init__.py b/pylint/utils/__init__.py
+--- a/pylint/utils/__init__.py
++++ b/pylint/utils/__init__.py
+@@ -14,6 +14,7 @@
+     HAS_ISORT_5,
+     IsortDriver,
+     _check_csv,
++    _split_csv_for_regex,
+     _splitstrip,
+     _unquote,
+     decoding_stream,
+@@ -32,6 +33,7 @@
+     "HAS_ISORT_5",
+     "IsortDriver",
+     "_check_csv",
++    "_split_csv_for_regex",
+     "_splitstrip",
+     "_unquote",
+     "decoding_stream",
+diff --git a/pylint/utils/utils.py b/pylint/utils/utils.py
+--- a/pylint/utils/utils.py
++++ b/pylint/utils/utils.py
+@@ -232,6 +232,54 @@
+     return [word.strip() for word in string.split(sep) if word.strip()]
+ 
+ 
++def _split_csv_for_regex(value: str) -> list[str]:
++    """Split a comma-separated string of regular expressions.
++
++    This is a regex-aware CSV splitter that handles commas within
++    regex quantifiers like {1,3}.
++
++    Commas inside { } are not treated as separators because they are
++    valid within regex quantifier expressions (e.g., {1,3} means
++    "between 1 and 3 repetitions").
++
++    Commas outside { } (at brace depth 0) are treated as separators
++    between different regex patterns.
++
++    >>> _split_csv_for_regex('foo')
++    ['foo']
++    >>> _split_csv_for_regex('foo,bar')
++    ['foo', 'bar']
++    >>> _split_csv_for_regex('foo, bar{1,3}')
++    ['foo', 'bar{1,3}']
++    >>> _split_csv_for_regex('(foo{1,3})')
++    ['(foo{1,3})']
++    """
++    result: list[str] = []
++    current: list[str] = []
++    depth_braces = 0  # depth of {} nesting
++
++    for char in value:
++        # Track brace depth
++        if char == "{":
++            depth_braces += 1
++        elif char == "}":
++            depth_braces -= 1
++
++        # Only split on comma at brace depth 0
++        if char == "," and depth_braces == 0:
++            result.append("".join(current).strip())
++            current = []
++        else:
++            current.append(char)
++
++    # Add the last element
++    last = "".join(current).strip()
++    if last:
++        result.append(last)
++
++    return result
++
++
+ def _unquote(string: str) -> str:
+     """Remove optional quotes (simple or double) from the string.
+ 

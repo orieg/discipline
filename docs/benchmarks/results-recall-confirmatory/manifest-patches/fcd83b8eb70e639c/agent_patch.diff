@@ -1,0 +1,19 @@
+diff --git a/django/db/models/query.py b/django/db/models/query.py
+--- a/django/db/models/query.py
++++ b/django/db/models/query.py
+@@ -357,7 +357,14 @@
+     ####################################
+ 
+     def _iterator(self, use_chunked_fetch, chunk_size):
+-        yield from self._iterable_class(self, chunked_fetch=use_chunked_fetch, chunk_size=chunk_size)
++        # Use ValuesIterable when query has values_select but _iterable_class
++        # is still ModelIterable (e.g., after pickling a values/values_list query).
++        iterable_class = self._iterable_class
++        print(f"DEBUG: iterable_class={iterable_class.__name__}, values_select={self.query.values_select}", flush=True)
++        if iterable_class is ModelIterable and self.query.values_select:
++            print(f"DEBUG: Switching to ValuesIterable", flush=True)
++            iterable_class = ValuesIterable
++        yield from iterable_class(self, chunked_fetch=use_chunked_fetch, chunk_size=chunk_size)
+ 
+     def iterator(self, chunk_size=2000):
+         """

@@ -1,0 +1,19 @@
+diff --git a/sympy/simplify/sqrtdenest.py b/sympy/simplify/sqrtdenest.py
+--- a/sympy/simplify/sqrtdenest.py
++++ b/sympy/simplify/sqrtdenest.py
+@@ -157,9 +157,12 @@
+     elif p.is_Add:
+         pargs = sorted(p.args, key=default_sort_key)
+         if all((x**2).is_Rational for x in pargs):
+-            r, b, a = split_surds(p)
+-            res = a, b, r
+-            return list(res)
++            coeff_muls = [x.as_coeff_Mul() for x in pargs]
++            surds = [x[1]**2 for x in coeff_muls if x[1].is_Pow]
++            if surds:  # Only try to split if there are surds
++                r, b, a = split_surds(p)
++                res = a, b, r
++                return list(res)
+         # to make the process canonical, the argument is included in the tuple
+         # so when the max is selected, it will be the largest arg having a
+         # given depth

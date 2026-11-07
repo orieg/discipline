@@ -1,0 +1,24 @@
+diff --git a/sympy/concrete/products.py b/sympy/concrete/products.py
+--- a/sympy/concrete/products.py
++++ b/sympy/concrete/products.py
+@@ -282,11 +282,17 @@
+                 # There is expression, which couldn't change by
+                 # as_numer_denom(). E.g. n**(2/3) + 1 --> (n**(2/3) + 1, 1).
+                 # We have to catch this case.
+-
+-                p = sum([self._eval_product(i, (k, a, n)) for i in p.as_coeff_Add()])
++                # Check if all terms in p are independent of k.
++                # If so, the product is p raised to the number of terms.
++                # If any term depends on k, we can't simplify easily.
++                if all(not i.has(k) for i in p.args):
++                    return p ** (n - a + 1)
++                return None
+             else:
+                 p = self._eval_product(p, (k, a, n))
+-            return p / q
++                if p is not None:
++                    return p / q
++                return None
+ 
+         elif term.is_Mul:
+             exclude, include = [], []

@@ -1,0 +1,54 @@
+diff --git a/sympy/printing/conventions.py b/sympy/printing/conventions.py
+--- a/sympy/printing/conventions.py
++++ b/sympy/printing/conventions.py
+@@ -2,12 +2,32 @@
+ A few practical conventions common to all printers.
+ """
+ 
+-import re
+-
+ from collections.abc import Iterable
+ from sympy import Derivative
+ 
+-_name_with_digits_p = re.compile(r'^([a-zA-Z]+)([0-9]+)$')
++
++def _split_name_with_digits(name):
++    """Split a name into name and trailing digits.
++
++    This is similar to _name_with_digits_p regex but uses Unicode-aware
++    methods to handle non-ASCII letters and digits.
++
++    Returns (name, digits) if name consists of only letters followed by
++    digits, otherwise returns (None, None).
++    """
++    i = 0
++    for c in name:
++        if c.isalpha():
++            i += 1
++        else:
++            break
++
++    name_part = name[:i]
++    digits_part = name[i:]
++
++    if name_part and digits_part and digits_part.isdigit():
++        return name_part, digits_part
++    return None, None
+ 
+ 
+ def split_super_sub(text):
+@@ -62,10 +82,10 @@
+ 
+     # make a little exception when a name ends with digits, i.e. treat them
+     # as a subscript too.
+-    m = _name_with_digits_p.match(name)
+-    if m:
+-        name, sub = m.groups()
+-        subs.insert(0, sub)
++    name_part, digits_part = _split_name_with_digits(name)
++    if name_part is not None:
++        name = name_part
++        subs.insert(0, digits_part)
+ 
+     return name, supers, subs
+ 

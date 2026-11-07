@@ -1,0 +1,16 @@
+diff --git a/xarray/core/computation.py b/xarray/core/computation.py
+--- a/xarray/core/computation.py
++++ b/xarray/core/computation.py
+@@ -307,8 +307,11 @@
+     else:
+         first_obj = _first_of_type(args, DataArray)
+         name = first_obj.name
++    # For coordinate merging, always use "override" to take the first coordinate's attrs.
++    # This ensures that coordinate attrs are preserved and not overwritten by data variable attrs.
++    # The keep_attrs setting only affects data variable attrs.
+     result_coords, result_indexes = build_output_coords_and_indexes(
+-        args, signature, exclude_dims, combine_attrs=keep_attrs
++        args, signature, exclude_dims, combine_attrs="override"
+     )
+ 
+     data_vars = [getattr(a, "variable", a) for a in args]

@@ -1,0 +1,64 @@
+diff --git a/sklearn/utils/_set_output.py b/sklearn/utils/_set_output.py
+--- a/sklearn/utils/_set_output.py
++++ b/sklearn/utils/_set_output.py
+@@ -12,6 +12,7 @@
+     *,
+     columns,
+     index=None,
++    preserve_columns_dtype=None,
+ ):
+     """Create a Pandas DataFrame.
+ 
+@@ -36,6 +37,11 @@
+     index : array-like, default=None
+         Index for data.
+ 
++    preserve_columns_dtype : dict or None, default=None
++        A dictionary with column names as keys and dtypes as values. If not None,
++        the output DataFrame columns will be cast to the specified dtypes. Only
++        columns that exist in the output DataFrame will be cast.
++
+     Returns
+     -------
+     dataframe : DataFrame
+@@ -59,7 +65,20 @@
+             data_to_wrap.index = index
+         return data_to_wrap
+ 
+-    return pd.DataFrame(data_to_wrap, index=index, columns=columns)
++    dataframe = pd.DataFrame(data_to_wrap, index=index, columns=columns)
++
++    if preserve_columns_dtype is not None:
++        # Only keep dtypes for columns that exist in the output DataFrame
++        columns_set = set(dataframe.columns)
++        preserve_columns_dtype = {
++            col: dtype
++            for col, dtype in preserve_columns_dtype.items()
++            if col in columns_set
++        }
++        if preserve_columns_dtype:
++            dataframe = dataframe.astype(preserve_columns_dtype)
++
++    return dataframe
+ 
+ 
+ def _get_output_config(method, estimator=None):
+@@ -127,10 +146,18 @@
+         return data_to_wrap
+ 
+     # dense_config == "pandas"
++    # Extract dtypes from the original input if it's a DataFrame
++    preserve_columns_dtype = None
++    if hasattr(original_input, "dtypes"):
++        # Original input is a DataFrame, extract the dtypes for columns that
++        # are in the output
++        preserve_columns_dtype = dict(original_input.dtypes)
++
+     return _wrap_in_pandas_container(
+         data_to_wrap=data_to_wrap,
+         index=getattr(original_input, "index", None),
+         columns=estimator.get_feature_names_out,
++        preserve_columns_dtype=preserve_columns_dtype,
+     )
+ 
+ 

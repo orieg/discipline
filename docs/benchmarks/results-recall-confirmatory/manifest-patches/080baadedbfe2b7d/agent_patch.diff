@@ -1,0 +1,36 @@
+diff --git a/django/db/models/fields/__init__.py b/django/db/models/fields/__init__.py
+--- a/django/db/models/fields/__init__.py
++++ b/django/db/models/fields/__init__.py
+@@ -516,17 +516,29 @@
+     def __eq__(self, other):
+         # Needed for @total_ordering
+         if isinstance(other, Field):
+-            return self.creation_counter == other.creation_counter
++            # Comparison of fields from different models should always be
++            # False since the same field in different models is a different
++            # field even if they have the same creation_counter.
++            return (
++                self.creation_counter == other.creation_counter and
++                getattr(self, 'model', None) == getattr(other, 'model', None)
++            )
+         return NotImplemented
+ 
+     def __lt__(self, other):
+         # This is needed because bisect does not take a comparison function.
+         if isinstance(other, Field):
+-            return self.creation_counter < other.creation_counter
++            # Order first by creation_counter to maintain existing order for
++            # fields with different creation_counters. Then order by model id
++            # to provide a stable order for fields with the same creation_counter
++            # (e.g., inherited fields from abstract models).
++            if self.creation_counter != other.creation_counter:
++                return self.creation_counter < other.creation_counter
++            return id(getattr(self, 'model', None)) < id(getattr(other, 'model', None))
+         return NotImplemented
+ 
+     def __hash__(self):
+-        return hash(self.creation_counter)
++        return hash((self.creation_counter, getattr(self, 'model', None)))
+ 
+     def __deepcopy__(self, memodict):
+         # We don't have to deepcopy very much here, since most things are not

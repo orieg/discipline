@@ -1,0 +1,19 @@
+diff --git a/lib/matplotlib/dates.py b/lib/matplotlib/dates.py
+--- a/lib/matplotlib/dates.py
++++ b/lib/matplotlib/dates.py
+@@ -797,8 +797,14 @@
+         # 3: hours, 4: minutes, 5: seconds, 6: microseconds
+         for level in range(5, -1, -1):
+             if len(np.unique(tickdate[:, level])) > 1:
+-                if level < 2:
++                if level == 0:
++                    # Years differ, so no offset needed (years are shown on ticks)
+                     show_offset = False
++                elif level == 1:
++                    # Months differ. If the first tick is January,
++                    # the year is redundant (can be inferred from ticks).
++                    # Otherwise, show the year in the offset.
++                    show_offset = tickdate[0, 1] != 1
+                 break
+             elif level == 0:
+                 # all tickdate are the same, so only micros might be different

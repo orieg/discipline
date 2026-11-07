@@ -1,0 +1,63 @@
+diff --git a/django/db/models/fields/json.py b/django/db/models/fields/json.py
+--- a/django/db/models/fields/json.py
++++ b/django/db/models/fields/json.py
+@@ -455,6 +455,51 @@
+     pass
+ 
+ 
++class KeyTransformIn(lookups.In):
++    def process_rhs(self, compiler, connection):
++        if isinstance(self.lhs, KeyTransform):
++            # Get the RHS SQL and params from the parent class
++            db_rhs = getattr(self.rhs, '_db', None)
++            if db_rhs is not None and db_rhs != connection.alias:
++                raise ValueError(
++                    "Subqueries aren't allowed across different databases. Force "
++                    "the inner query to be evaluated using `list(inner_query)`."
++                )
++
++            if self.rhs_is_direct_value():
++                # Remove None from the list as NULL is never equal to anything.
++                try:
++                    rhs = lookups.OrderedSet(self.rhs)
++                    rhs.discard(None)
++                except TypeError:  # Unhashable items in self.rhs
++                    rhs = [r for r in self.rhs if r is not None]
++
++                if not rhs:
++                    raise exceptions.EmptyResultSet
++
++                # rhs should be an iterable; use batch_process_rhs() to
++                # prepare/transform those values.
++                sqls, sqls_params = self.batch_process_rhs(compiler, connection, rhs)
++
++                # For SQLite, MySQL, and Oracle, wrap each value with a JSON
++                # function for proper JSON comparison.
++                if connection.vendor == 'sqlite':
++                    sqls = ["JSON_EXTRACT(%s, '$')"] * len(sqls)
++                elif connection.vendor == 'mysql':
++                    sqls = ["JSON_EXTRACT(%s, '$')"] * len(sqls)
++                elif connection.vendor == 'oracle':
++                    sqls = ["JSON_VALUE(%s, '$')"] * len(sqls)
++
++                placeholder = '(' + ', '.join(sqls) + ')'
++                return (placeholder, sqls_params)
++            else:
++                if not getattr(self.rhs, 'has_select_fields', True):
++                    self.rhs.clear_select_clause()
++                    self.rhs.add_fields(['pk'])
++                return super().process_rhs(compiler, connection)
++        return super().process_rhs(compiler, connection)
++
++
+ class KeyTransformNumericLookupMixin:
+     def process_rhs(self, compiler, connection):
+         rhs, rhs_params = super().process_rhs(compiler, connection)
+@@ -482,6 +527,7 @@
+ KeyTransform.register_lookup(KeyTransformExact)
+ KeyTransform.register_lookup(KeyTransformIExact)
+ KeyTransform.register_lookup(KeyTransformIsNull)
++KeyTransform.register_lookup(KeyTransformIn)
+ KeyTransform.register_lookup(KeyTransformIContains)
+ KeyTransform.register_lookup(KeyTransformStartsWith)
+ KeyTransform.register_lookup(KeyTransformIStartsWith)

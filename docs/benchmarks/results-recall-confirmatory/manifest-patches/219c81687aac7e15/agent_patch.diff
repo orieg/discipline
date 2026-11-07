@@ -1,0 +1,69 @@
+diff --git a/sympy/tensor/array/dense_ndim_array.py b/sympy/tensor/array/dense_ndim_array.py
+--- a/sympy/tensor/array/dense_ndim_array.py
++++ b/sympy/tensor/array/dense_ndim_array.py
+@@ -69,7 +69,7 @@
+ 
+     @classmethod
+     def zeros(cls, *shape):
+-        list_length = functools.reduce(lambda x, y: x*y, shape)
++        list_length = functools.reduce(lambda x, y: x*y, shape, 1)
+         return cls._new(([0]*list_length,), shape)
+ 
+     def tomatrix(self):
+@@ -121,7 +121,7 @@
+         [[1, 2], [3, 4], [5, 6]]
+ 
+         """
+-        new_total_size = functools.reduce(lambda x,y: x*y, newshape)
++        new_total_size = functools.reduce(lambda x,y: x*y, newshape, 1)
+         if new_total_size != self._loop_size:
+             raise ValueError("Invalid reshape parameters " + newshape)
+ 
+@@ -149,7 +149,7 @@
+         self._shape = shape
+         self._array = list(flat_list)
+         self._rank = len(shape)
+-        self._loop_size = functools.reduce(lambda x,y: x*y, shape) if shape else 0
++        self._loop_size = functools.reduce(lambda x,y: x*y, shape, 1)
+         return self
+ 
+     def __setitem__(self, index, value):
+@@ -174,7 +174,7 @@
+         self._shape = shape
+         self._array = list(flat_list)
+         self._rank = len(shape)
+-        self._loop_size = functools.reduce(lambda x,y: x*y, shape) if shape else 0
++        self._loop_size = functools.reduce(lambda x,y: x*y, shape, 1)
+         return self
+ 
+     def __setitem__(self, index, value):
+diff --git a/sympy/tensor/array/sparse_ndim_array.py b/sympy/tensor/array/sparse_ndim_array.py
+--- a/sympy/tensor/array/sparse_ndim_array.py
++++ b/sympy/tensor/array/sparse_ndim_array.py
+@@ -116,7 +116,7 @@
+         return iterator()
+ 
+     def reshape(self, *newshape):
+-        new_total_size = functools.reduce(lambda x,y: x*y, newshape)
++        new_total_size = functools.reduce(lambda x,y: x*y, newshape, 1)
+         if new_total_size != self._loop_size:
+             raise ValueError("Invalid reshape parameters " + newshape)
+ 
+@@ -130,7 +130,7 @@
+ 
+         shape, flat_list = cls._handle_ndarray_creation_inputs(iterable, shape, **kwargs)
+         shape = Tuple(*map(_sympify, shape))
+-        loop_size = functools.reduce(lambda x,y: x*y, shape) if shape else 0
++        loop_size = functools.reduce(lambda x,y: x*y, shape, 1)
+ 
+         # Sparse array:
+         if isinstance(flat_list, (dict, Dict)):
+@@ -167,7 +167,7 @@
+         self = object.__new__(cls)
+         self._shape = shape
+         self._rank = len(shape)
+-        self._loop_size = functools.reduce(lambda x,y: x*y, shape) if shape else 0
++        self._loop_size = functools.reduce(lambda x,y: x*y, shape, 1)
+ 
+         # Sparse array:
+         if isinstance(flat_list, (dict, Dict)):

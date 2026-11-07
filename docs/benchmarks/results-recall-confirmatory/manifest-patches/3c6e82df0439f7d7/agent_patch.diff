@@ -1,0 +1,12 @@
+diff --git a/tests/migrations/test_autodetector.py b/tests/migrations/test_autodetector.py
+--- a/tests/migrations/test_autodetector.py
++++ b/tests/migrations/test_autodetector.py
+@@ -3627,7 +3627,7 @@
+         self.assertOperationTypes(changes, "authors", 0, ["CreateModel"])
+         self.assertOperationTypes(changes, "authors", 1, ["AddField"])
+         self.assertOperationAttributes(changes, "authors", 0, 0, name="Author")
+-    self.assertOperationAttributes(changes, "testapp", 0, 0, name="DifferentPublisher")
++        self.assertOperationAttributes(changes, "testapp", 0, 0, name="DifferentPublisher")
+         self.assertOperationAttributes(
+             changes, "authors", 1, 0, model_name="author", name="publishers"
+         )

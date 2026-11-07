@@ -1,0 +1,24 @@
+diff --git a/sympy/functions/elementary/miscellaneous.py b/sympy/functions/elementary/miscellaneous.py
+--- a/sympy/functions/elementary/miscellaneous.py
++++ b/sympy/functions/elementary/miscellaneous.py
+@@ -340,7 +340,7 @@
+ class MinMaxBase(Expr, LatticeOp):
+     def __new__(cls, *args, **assumptions):
+         if not args:
+-            raise ValueError("The Max/Min functions must have arguments.")
++            return cls.identity
+ 
+         args = (sympify(arg) for arg in args)
+ 
+diff --git a/sympy/functions/elementary/tests/test_miscellaneous.py b/sympy/functions/elementary/tests/test_miscellaneous.py
+--- a/sympy/functions/elementary/tests/test_miscellaneous.py
++++ b/sympy/functions/elementary/tests/test_miscellaneous.py
+@@ -28,7 +28,7 @@
+     np_ = Symbol('np_', nonpositive=True)
+     r = Symbol('r', real=True)
+ 
+-    assert Min(5, 4) == 5
++    assert Min(5, 4) == 4
+     assert Min(-oo, -oo) == -oo
+     assert Min(-oo, n) == -oo
+     assert Min(n, -oo) == -oo

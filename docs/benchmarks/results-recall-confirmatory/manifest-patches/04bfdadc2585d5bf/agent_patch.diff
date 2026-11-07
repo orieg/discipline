@@ -1,0 +1,202 @@
+diff --git a/sphinx/directives/other.py b/sphinx/directives/other.py
+--- a/sphinx/directives/other.py
++++ b/sphinx/directives/other.py
+@@ -3,7 +3,7 @@
+ import re
+ from typing import TYPE_CHECKING, Any, cast
+ 
+-from docutils import nodes
++from docutils import nodes, statemachine
+ from docutils.parsers.rst import directives
+ from docutils.parsers.rst.directives.admonitions import BaseAdmonition
+ from docutils.parsers.rst.directives.misc import Class
+@@ -373,10 +373,165 @@
+            self.arguments[0].endswith('>'):
+             # docutils "standard" includes, do not do path processing
+             return super().run()
++        
++        from pathlib import Path
++        from docutils import io, utils
++        from docutils.parsers.rst.directives.body import CodeBlock, NumberLines
++
+         rel_filename, filename = self.env.relfn2path(self.arguments[0])
+         self.arguments[0] = filename
+         self.env.note_included(filename)
+-        return super().run()
++
++        # Get docname for the included file
++        docname = self.env.path2doc(filename)
++        
++        # Read the include file
++        path = self.arguments[0]
++        current_source = self.state.document.current_source
++        _base = Path(current_source).parent
++        path = utils.relative_path(None, _base/path)
++        encoding = self.options.get(
++            'encoding', self.state.document.settings.input_encoding)
++        e_handler = self.state.document.settings.input_encoding_error_handler
++        tab_width = self.options.get(
++            'tab-width', self.state.document.settings.tab_width)
++        try:
++            include_file = io.FileInput(source_path=path,
++                                        encoding=encoding,
++                                        error_handler=e_handler)
++        except UnicodeEncodeError:
++            raise self.severe(f'Problems with "{self.name}" directive path:\n'
++                              f'Cannot encode input file path "{path}" '
++                              '(wrong locale?).')
++        except OSError as error:
++            raise self.severe(f'Problems with "{self.name}" directive '
++                              f'path:\n{io.error_string(error)}.')
++        else:
++            self.state.document.settings.record_dependencies.add(path)
++
++        # Get to-be-included content
++        startline = self.options.get('start-line', None)
++        endline = self.options.get('end-line', None)
++        try:
++            if startline or (endline is not None):
++                lines = include_file.readlines()
++                rawtext = ''.join(lines[startline:endline])
++            else:
++                rawtext = include_file.read()
++        except UnicodeError as error:
++            raise self.severe(f'Problem with "{self.name}" directive:\n'
++                              + io.error_string(error))
++        
++        # Apply start-after/end-before
++        after_text = self.options.get('start-after', None)
++        if after_text:
++            after_index = rawtext.find(after_text)
++            if after_index < 0:
++                raise self.severe('Problem with "start-after" option of "%s" '
++                                  'directive:\nText not found.' % self.name)
++            rawtext = rawtext[after_index + len(after_text):]
++        before_text = self.options.get('end-before', None)
++        if before_text:
++            before_index = rawtext.find(before_text)
++            if before_index < 0:
++                raise self.severe('Problem with "end-before" option of "%s" '
++                                  'directive:\nText not found.' % self.name)
++            rawtext = rawtext[:before_index]
++
++        # Emit source-read event for included files
++        # This allows extensions to modify the source before parsing
++        if docname is not None:
++            source = [rawtext]
++            self.env.events.emit('source-read', docname, source)
++            rawtext = source[0]
++
++        # Convert to lines
++        include_lines = statemachine.string2lines(rawtext, tab_width,
++                                                  convert_whitespace=True)
++        for i, line in enumerate(include_lines):
++            if len(line) > self.state.document.settings.line_length_limit:
++                raise self.warning('"%s": line %d exceeds the'
++                                   ' line-length-limit.' % (path, i+1))
++
++        if 'literal' in self.options:
++            # Don't convert tabs to spaces, if `tab_width` is negative.
++            if tab_width >= 0:
++                text = rawtext.expandtabs(tab_width)
++            else:
++                text = rawtext
++            literal_block = nodes.literal_block(
++                                rawtext, source=path,
++                                classes=self.options.get('class', []))
++            literal_block.line = 1
++            self.add_name(literal_block)
++            if 'number-lines' in self.options:
++                try:
++                    startline = int(self.options['number-lines'] or 1)
++                except ValueError:
++                    raise self.error(':number-lines: with non-integer '
++                                     'start value')
++                endline = startline + len(include_lines)
++                if text.endswith('\n'):
++                    text = text[:-1]
++                tokens = NumberLines([([], text)], startline, endline)
++                for classes, value in tokens:
++                    if classes:
++                        literal_block += nodes.inline(value, value,
++                                                      classes=classes)
++                    else:
++                        literal_block += nodes.Text(value)
++            else:
++                literal_block += nodes.Text(text)
++            return [literal_block]
++
++        if 'code' in self.options:
++            self.options['source'] = path
++            # Don't convert tabs to spaces, if `tab_width` is negative:
++            if tab_width < 0:
++                include_lines = rawtext.splitlines()
++            codeblock = CodeBlock(self.name,
++                                  [self.options.pop('code')],  # arguments
++                                  self.options,
++                                  include_lines,  # content
++                                  self.lineno,
++                                  self.content_offset,
++                                  self.block_text,
++                                  self.state,
++                                  self.state_machine)
++            return codeblock.run()
++
++        # Prevent circular inclusion:
++        clip_options = (startline, endline, before_text, after_text)
++        include_log = self.state.document.include_log
++        # log entries are tuples (<source>, <clip-options>)
++        if not include_log:  # new document, initialize with document source
++            include_log.append((utils.relative_path(None, current_source),
++                                (None, None, None, None)))
++        if (path, clip_options) in include_log:
++            master_paths = (pth for (pth, opt) in reversed(include_log))
++            inclusion_chain = '\n> '.join((path, *master_paths))
++            raise self.warning('circular inclusion in "%s" directive:\n%s'
++                               % (self.name, inclusion_chain))
++
++        if 'parser' in self.options:
++            # parse into a dummy document and return created nodes
++            document = utils.new_document(path, self.state.document.settings)
++            document.include_log = include_log + [(path, clip_options)]
++            parser = self.options['parser']()
++            parser.parse('\n'.join(include_lines), document)
++            # clean up doctree and complete parsing
++            document.transformer.populate_from_components((parser,))
++            document.transformer.apply_transforms()
++            return document.children
++
++        # Include as rST source:
++        #
++        # mark end (cf. parsers.rst.states.Body.comment())
++        include_lines += ['', '.. end of inclusion from "%s"' % path]
++        self.state_machine.insert_input(include_lines, path)
++        # update include-log
++        include_log.append((path, clip_options))
++        return []
+ 
+ 
+ def setup(app: Sphinx) -> dict[str, Any]:
+diff --git a/tests/roots/test-directive-include/baz/baz.rst b/tests/roots/test-directive-include/baz/baz.rst
+new file mode 100644
+--- /dev/null
++++ b/tests/roots/test-directive-include/baz/baz.rst
+@@ -0,0 +1,6 @@
++line1
++line2
++line3
++
++Baz was here.
++The #magical foo.
+diff --git a/tests/roots/test-directive-include/conf.py b/tests/roots/test-directive-include/conf.py
+new file mode 100644
+--- /dev/null
++++ b/tests/roots/test-directive-include/conf.py
+@@ -0,0 +1,1 @@
++extensions = []
+diff --git a/tests/roots/test-directive-include/text.txt b/tests/roots/test-directive-include/text.txt
+new file mode 100644
+--- /dev/null
++++ b/tests/roots/test-directive-include/text.txt
+@@ -0,0 +1,1 @@
++This is literal text

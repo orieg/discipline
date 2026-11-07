@@ -1,0 +1,41 @@
+diff --git a/django/db/models/sql/compiler.py b/django/db/models/sql/compiler.py
+--- a/django/db/models/sql/compiler.py
++++ b/django/db/models/sql/compiler.py
+@@ -425,12 +425,34 @@
+                 # If the columns list is limited, then all combined queries
+                 # must have the same columns list. Set the selects defined on
+                 # the query on all combined queries, if not already set.
+-                if not compiler.query.values_select and self.query.values_select:
+-                    compiler.query.set_values((
++                if self.query.values_select:
++                    parent_values = (
+                         *self.query.extra_select,
+                         *self.query.values_select,
+                         *self.query.annotation_select,
+-                    ))
++                    )
++                    # Check if all children have the same values_select
++                    child_values = {c.query.values_select for c in compilers}
++                    # If all children have the same values_select, they either
++                    # all lack values or share the same query object. In either
++                    # case, propagate the parent's values.
++                    if len(child_values) <= 1:
++                        compiler.query.set_values(parent_values)
++                    # If children have different values_select, check if any
++                    # child matches the parent's values (inherited from a
++                    # previous union). Only propagate to non-matching children
++                    # that don't have their own values.
++                    else:
++                        # Check if parent's values match any child's values
++                        parent_matches_any = any(
++                            c.query.values_select == self.query.values_select
++                            for c in compilers
++                        )
++                        if not parent_matches_any:
++                            # Parent's values came from an explicit call,
++                            # propagate to children that don't have values
++                            if not compiler.query.values_select:
++                                compiler.query.set_values(parent_values)
+                 part_sql, part_args = compiler.as_sql()
+                 if compiler.query.combinator:
+                     # Wrap in a subquery if wrapping in parentheses isn't

@@ -1,0 +1,17 @@
+diff --git a/django/template/defaultfilters.py b/django/template/defaultfilters.py
+--- a/django/template/defaultfilters.py
++++ b/django/template/defaultfilters.py
+@@ -155,7 +155,12 @@
+         d = Decimal(input_val)
+     except InvalidOperation:
+         try:
+-            d = Decimal(str(float(text)))
++            # If text is a Decimal, repr() returns "Decimal(...)" which can't be
++            # parsed. In that case, use the Decimal value directly.
++            if isinstance(text, Decimal):
++                d = text
++            else:
++                d = Decimal(str(float(text)))
+         except (ValueError, InvalidOperation, TypeError):
+             return ""
+     try:

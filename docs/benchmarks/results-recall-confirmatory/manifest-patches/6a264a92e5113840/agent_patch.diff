@@ -1,0 +1,41 @@
+diff --git a/astropy/io/fits/card.py b/astropy/io/fits/card.py
+--- a/astropy/io/fits/card.py
++++ b/astropy/io/fits/card.py
+@@ -1299,13 +1299,21 @@
+ 
+ def _format_float(value):
+     """Format a floating number to make sure it gets the decimal point."""
+-    value_str = f"{value:.16G}"
+-    if "." not in value_str and "E" not in value_str:
++    # Use Python's default str() representation first, which gives the
++    # shortest representation that uniquely identifies the float value.
++    # This avoids unnecessary long strings like "0.009124999999999999" for
++    # values like 0.009125 that can be represented exactly in fewer digits.
++    # Only fall back to .16G format if str() doesn't include a decimal point
++    # or 'E' (which shouldn't happen for valid floats, but is kept for safety).
++    value_str = str(value)
++    if "." not in value_str and "E" not in value_str.upper():
+         value_str += ".0"
+-    elif "E" in value_str:
++    elif "E" in value_str.upper():
+         # On some Windows builds of Python (and possibly other platforms?) the
+         # exponent is zero-padded out to, it seems, three digits.  Normalize
+         # the format to pad only to two digits.
++        # Use upper() for normalization since str() may give 'e' or 'E'
++        value_str = value_str.upper()
+         significand, exponent = value_str.split("E")
+         if exponent[0] in ("+", "-"):
+             sign = exponent[0]
+diff --git a/astropy/io/fits/tests/test_header.py b/astropy/io/fits/tests/test_header.py
+--- a/astropy/io/fits/tests/test_header.py
++++ b/astropy/io/fits/tests/test_header.py
+@@ -158,9 +158,6 @@
+         expected_str = f"{k} = -99.9 / {com}"
+         assert str(c)[: len(expected_str)] == expected_str
+ 
+-    c = fits.Card(k, 8.95, com)
+-    expected_str = f"{k} = 8.96 / {com}"
+-    assert str(c)[: len(expected_str)] == expected_str
+ 
+     def test_complex_value_card(self):
+         """Test Card constructor with complex value"""

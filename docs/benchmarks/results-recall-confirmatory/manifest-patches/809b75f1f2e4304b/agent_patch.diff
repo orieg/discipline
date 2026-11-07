@@ -1,0 +1,54 @@
+diff --git a/sympy/printing/conventions.py b/sympy/printing/conventions.py
+--- a/sympy/printing/conventions.py
++++ b/sympy/printing/conventions.py
+@@ -2,12 +2,34 @@
+ A few practical conventions common to all printers.
+ """
+ 
+-import re
+-
+ from collections.abc import Iterable
+ from sympy import Derivative
+ 
+-_name_with_digits_p = re.compile(r'^([a-zA-Z]+)([0-9]+)$')
++
++def _split_name_with_digits(name):
++    """Split a name that ends with digits into name and digits parts.
++
++    Returns (name, digits) if the name ends with digits, else None.
++    This is Unicode-aware, handling both ASCII and Unicode letters and digits.
++    """
++    if not name:
++        return None
++
++    # Find the index where letters end
++    i = 0
++    while i < len(name) and name[i].isalpha():
++        i += 1
++
++    # If we haven't found any letters or reached the end, no split
++    if i == 0 or i == len(name):
++        return None
++
++    # Check if the rest is all digits
++    rest = name[i:]
++    if all(c.isdigit() for c in rest):
++        return (name[:i], rest)
++
++    return None
+ 
+ 
+ def split_super_sub(text):
+@@ -62,9 +84,9 @@
+ 
+     # make a little exception when a name ends with digits, i.e. treat them
+     # as a subscript too.
+-    m = _name_with_digits_p.match(name)
+-    if m:
+-        name, sub = m.groups()
++    result = _split_name_with_digits(name)
++    if result:
++        name, sub = result
+         subs.insert(0, sub)
+ 
+     return name, supers, subs

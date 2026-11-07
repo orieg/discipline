@@ -1,0 +1,96 @@
+diff --git a/django/forms/models.py b/django/forms/models.py
+--- a/django/forms/models.py
++++ b/django/forms/models.py
+@@ -573,9 +573,13 @@
+     unique_fields = set()
+ 
+     def __init__(self, data=None, files=None, auto_id='id_%s', prefix=None,
+-                 queryset=None, *, initial=None, **kwargs):
++                 queryset=None, *, initial=None, edit_only=None, **kwargs):
+         self.queryset = queryset
+         self.initial_extra = initial
++        # Use the class attribute if edit_only is not explicitly specified
++        self.edit_only = edit_only if edit_only is not None else getattr(
++            self.__class__, 'edit_only', False
++        )
+         super().__init__(**{'data': data, 'files': files, 'auto_id': auto_id, 'prefix': prefix, **kwargs})
+ 
+     def initial_form_count(self):
+@@ -627,6 +631,27 @@
+                 kwargs['initial'] = self.initial_extra[i - self.initial_form_count()]
+             except IndexError:
+                 pass
++        elif self.is_bound and self.edit_only:
++            # For edit_only mode, check if the extra form has a pk of an
++            # existing object (even if it's outside the queryset).
++            pk_key = '%s-%s' % (self.add_prefix(i), self.model._meta.pk.name)
++            if pk_key in self.data:
++                try:
++                    pk = self.data[pk_key]
++                except (KeyError, TypeError):
++                    pass
++                else:
++                    to_python = self._get_to_python(self.model._meta.pk)
++                    try:
++                        pk = to_python(pk)
++                    except ValidationError:
++                        pass
++                    else:
++                        # Check if the pk exists in the database.
++                        try:
++                            kwargs['instance'] = self.model._default_manager.get(pk=pk)
++                        except self.model.DoesNotExist:
++                            pass
+         form = super()._construct_form(i, **kwargs)
+         if pk_required:
+             form.fields[self.model._meta.pk.name].required = True
+@@ -820,6 +845,13 @@
+             # object.
+             if self.can_delete and self._should_delete_form(form):
+                 continue
++            # If edit_only is True, don't create new objects, only edit existing.
++            if self.edit_only and form.instance.pk is None:
++                continue
++            # If edit_only is True and the instance exists, treat it as an
++            # existing object rather than a new one.
++            if self.edit_only and not form.instance._state.adding:
++                continue
+             self.new_objects.append(self.save_new(form, commit=commit))
+             if not commit:
+                 self.saved_forms.append(form)
+@@ -875,7 +907,8 @@
+                          widgets=None, validate_max=False, localized_fields=None,
+                          labels=None, help_texts=None, error_messages=None,
+                          min_num=None, validate_min=False, field_classes=None,
+-                         absolute_max=None, can_delete_extra=True, renderer=None):
++                         absolute_max=None, can_delete_extra=True, renderer=None,
++                         edit_only=False):
+     """Return a FormSet class for the given Django model class."""
+     meta = getattr(form, 'Meta', None)
+     if (getattr(meta, 'fields', fields) is None and
+@@ -896,6 +929,7 @@
+                               absolute_max=absolute_max, can_delete_extra=can_delete_extra,
+                               renderer=renderer)
+     FormSet.model = model
++    FormSet.edit_only = edit_only
+     return FormSet
+ 
+ 
+@@ -1076,7 +1110,8 @@
+                           widgets=None, validate_max=False, localized_fields=None,
+                           labels=None, help_texts=None, error_messages=None,
+                           min_num=None, validate_min=False, field_classes=None,
+-                          absolute_max=None, can_delete_extra=True, renderer=None):
++                          absolute_max=None, can_delete_extra=True, renderer=None,
++                          edit_only=False):
+     """
+     Return an ``InlineFormSet`` for the given kwargs.
+ 
+@@ -1109,6 +1144,7 @@
+         'absolute_max': absolute_max,
+         'can_delete_extra': can_delete_extra,
+         'renderer': renderer,
++        'edit_only': edit_only,
+     }
+     FormSet = modelformset_factory(model, **kwargs)
+     FormSet.fk = fk

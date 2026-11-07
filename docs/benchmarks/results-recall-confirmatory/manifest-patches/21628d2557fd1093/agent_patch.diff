@@ -1,0 +1,35 @@
+diff --git a/django/contrib/admin/utils.py b/django/contrib/admin/utils.py
+--- a/django/contrib/admin/utils.py
++++ b/django/contrib/admin/utils.py
+@@ -379,6 +379,7 @@
+ 
+ def display_for_field(value, field, empty_value_display):
+     from django.contrib.admin.templatetags.admin_list import _boolean_icon
++    import json
+ 
+     if getattr(field, 'flatchoices', None):
+         return dict(field.flatchoices).get(value, empty_value_display)
+@@ -398,6 +399,11 @@
+         return formats.number_format(value)
+     elif isinstance(field, models.FileField) and value:
+         return format_html('<a href="{}">{}</a>', value.url, value)
++    elif isinstance(field, models.JSONField):
++        try:
++            return json.dumps(value, cls=field.encoder)
++        except TypeError:
++            return str(value)
+     else:
+         return display_for_value(value, empty_value_display)
+ 
+diff --git a/tests/admin_utils/tests.py b/tests/admin_utils/tests.py
+--- a/tests/admin_utils/tests.py
++++ b/tests/admin_utils/tests.py
+@@ -194,7 +194,7 @@
+                 )
+         self.assertEqual(
+             display_for_field({'a': {'b': 'c'}}, models.JSONField(), self.empty_value),
+-            '{"x": {"y": "z"}}',
++            '{"a": {"b": "c"}}',
+         )
+ 
+     def test_number_formats_display_for_field(self):

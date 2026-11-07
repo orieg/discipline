@@ -1,0 +1,36 @@
+diff --git a/sphinx/ext/autodoc/typehints.py b/sphinx/ext/autodoc/typehints.py
+--- a/sphinx/ext/autodoc/typehints.py
++++ b/sphinx/ext/autodoc/typehints.py
+@@ -52,6 +52,14 @@
+ 
+     annotations = app.env.temp_data.get('annotations', {})
+     if annotations.get(fullname, {}):
++        # For classes, don't add return type (from __init__) to class documentation
++        # since classes don't have a meaningful return type in the autodoc context
++        if objtype == 'class':
++            annotations = {k: v for k, v in annotations[fullname].items()
++                           if k != 'return'}
++        else:
++            annotations = annotations[fullname]
++
+         field_lists = [n for n in contentnode if isinstance(n, nodes.field_list)]
+         if field_lists == []:
+             field_list = insert_field_list(contentnode)
+@@ -59,14 +67,14 @@
+ 
+         for field_list in field_lists:
+             if app.config.autodoc_typehints_description_target == "all":
+-                modify_field_list(field_list, annotations[fullname])
++                modify_field_list(field_list, annotations)
+             elif app.config.autodoc_typehints_description_target == "documented_params":
+                 augment_descriptions_with_types(
+-                    field_list, annotations[fullname], force_rtype=True
++                    field_list, annotations, force_rtype=True
+                 )
+             else:
+                 augment_descriptions_with_types(
+-                    field_list, annotations[fullname], force_rtype=False
++                    field_list, annotations, force_rtype=False
+                 )
+ 
+ 

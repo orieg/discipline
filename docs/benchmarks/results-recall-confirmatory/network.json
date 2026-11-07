@@ -1,0 +1,683 @@
+{
+  "attempts": [
+    {
+      "client": "pip download",
+      "instance_id": "django__django-11066",
+      "log_file": "2026-11-05T08-39-15-00-00_swebench-conflicting-tools_3F487YrraktEWevfDNEVj2.json",
+      "run_id": "2oCFr4fJvR2wSk85zJGA3H",
+      "transfer_completed": false
+    },
+    {
+      "client": "apt-get install",
+      "instance_id": "django__django-11477",
+      "log_file": "2026-11-06T09-05-43-00-00_swebench-oneoff-tools_gigEQRWMNHLcE73Bjt3ikD.json",
+      "run_id": "XDgLH8jk7rSvfk6UsSGXur",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "django__django-11477",
+      "log_file": "2026-11-06T09-05-43-00-00_swebench-oneoff-tools_gigEQRWMNHLcE73Bjt3ikD.json",
+      "run_id": "XDgLH8jk7rSvfk6UsSGXur",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "django__django-14792",
+      "log_file": "2026-11-06T07-27-46-00-00_swebench-conflicting-tools_jwmsSzXscGEuEjr9PoJnVg.json",
+      "run_id": "cqJ4wmfGfV246hUzfwmQiM",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "django__django-14792",
+      "log_file": "2026-11-06T07-09-30-00-00_swebench-oneoff-tools_bEQDCzWr2aJT2tCfAKNsEg.json",
+      "run_id": "eYXCzDSdsy4ePGYZPFuswo",
+      "transfer_completed": false
+    },
+    {
+      "client": "curl",
+      "instance_id": "django__django-15569",
+      "log_file": "2026-11-05T12-44-16-00-00_swebench-conflicting-tools_o2mwXRNan26A3YdcbBhSHL.json",
+      "run_id": "oYopD6U3u8CHnv27cFtnbg",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "django__django-15569",
+      "log_file": "2026-11-05T12-46-27-00-00_swebench-conflicting-tools_fF24Y8aq2DCYriphy8evr9.json",
+      "run_id": "9dfErempUHLeFKZC38NJgd",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "django__django-16662",
+      "log_file": "2026-11-05T06-57-06-00-00_swebench-conflicting-tools_foSkgKcFaK3UvyoANbfpKd.json",
+      "run_id": "dRA8E4bXLcHT22QcA9XZjp",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "django__django-16662",
+      "log_file": "2026-11-05T06-47-59-00-00_swebench-oneoff-reset-tools_aCgH24Rm2YycA6wEwG4uNc.json",
+      "run_id": "VBsVASKvvPXk9jcGVxVe67",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "django__django-7530",
+      "log_file": "2026-11-06T09-31-35-00-00_swebench-oneoff-tools_TzoKnQhirukVpQE3tEr5kn.json",
+      "run_id": "aG2CA9UpXQXXFai3CVXaXi",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "django__django-7530",
+      "log_file": "2026-11-06T09-34-40-00-00_swebench-oneoff-reset-tools_jbj7ui7bLB49CRfk2MgdQU.json",
+      "run_id": "MpQi2LzeTPirLMsuU3CyAG",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "matplotlib__matplotlib-25122",
+      "log_file": "2026-11-04T04-43-56-00-00_swebench-conflicting-tools_d5tDpTipqtsFazLgWLV9db.json",
+      "run_id": "XQjEKAKWyuWLwWMMAQd9DX",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "matplotlib__matplotlib-25122",
+      "log_file": "2026-11-04T04-54-14-00-00_swebench-conflicting-reset-tools_Ho23fbkEpqaGh7SSvPHwS3.json",
+      "run_id": "KH6gsmMQVyzwbuLV8kmGK7",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "matplotlib__matplotlib-25122",
+      "log_file": "2026-11-04T04-54-14-00-00_swebench-conflicting-reset-tools_Ho23fbkEpqaGh7SSvPHwS3.json",
+      "run_id": "KH6gsmMQVyzwbuLV8kmGK7",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "matplotlib__matplotlib-25122",
+      "log_file": "2026-11-04T04-22-31-00-00_swebench-oneoff-tools_F9XopKm4o4bvhtu2rifRwC.json",
+      "run_id": "Mapoa2QQigrbEsDbpUjzCB",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "matplotlib__matplotlib-25122",
+      "log_file": "2026-11-04T04-31-23-00-00_swebench-oneoff-tools_VL4qkefiNGLjYeXQq922cf.json",
+      "run_id": "8xdChWwoxsX7eDoXEQC5YU",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "matplotlib__matplotlib-25122",
+      "log_file": "2026-11-04T04-35-34-00-00_swebench-oneoff-reset-tools_BmVmAGMtPRxoWfMC54Kkq5.json",
+      "run_id": "HKoKJ7m3B68DV72uL9Wj3o",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "matplotlib__matplotlib-25122",
+      "log_file": "2026-11-04T04-59-43-00-00_swebench-original-tools_PDXPeu8CVfXZREKtVCkoBa.json",
+      "run_id": "YLjGQTkhTNyy8FNqkqoySb",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "matplotlib__matplotlib-25122",
+      "log_file": "2026-11-04T05-03-16-00-00_swebench-original-tools_SJFxptqYA7DYC4ifk5WgQi.json",
+      "run_id": "gAv3PvXq45A8MesGLM3vrN",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "matplotlib__matplotlib-25122",
+      "log_file": "2026-11-04T05-07-24-00-00_swebench-original-reset-tools_RvGUezrjwF5iCZKbBT9fQh.json",
+      "run_id": "PfAHydF4n5ijLpwx4DZEJd",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-10081",
+      "log_file": "2026-11-06T08-46-13-00-00_swebench-conflicting-reset-tools_ZTEyqcv7GXKFR2wFgwr5gW.json",
+      "run_id": "EmyKDS8EtbPvVyHJfNcpdP",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-10081",
+      "log_file": "2026-11-06T08-49-52-00-00_swebench-original-tools_5UEeuHWbz7BJFmLvu6ZvNX.json",
+      "run_id": "5Yw4rXRPWapujfiNVfeLCs",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-5631",
+      "log_file": "2026-11-03T05-38-02-00-00_swebench-conflicting-reset-tools_QjkGwuUjEQzKgNTBGk6VCu.json",
+      "run_id": "4w7pnKe3TEDe9SXk9Z2YCN",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-5631",
+      "log_file": "2026-11-03T05-17-34-00-00_swebench-oneoff-tools_ertY4dxn5gwPCLvmNi5gdm.json",
+      "run_id": "4sCWqiBu42xPqW9QSWjfD7",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-5631",
+      "log_file": "2026-11-03T05-44-04-00-00_swebench-original-tools_cAjvXjTAkbqC4gRdnetmLw.json",
+      "run_id": "dqXAaUdXtqf2yQ5xDTRYVp",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-5631",
+      "log_file": "2026-11-03T05-47-01-00-00_swebench-original-reset-tools_DFs34ccZ35CJYr5XWDpA2i.json",
+      "run_id": "VJU6Gcsc7yownMcrQRWLx9",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-5631",
+      "log_file": "2026-11-03T05-47-01-00-00_swebench-original-reset-tools_DFs34ccZ35CJYr5XWDpA2i.json",
+      "run_id": "VJU6Gcsc7yownMcrQRWLx9",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-5840",
+      "log_file": "2026-11-06T14-50-55-00-00_swebench-conflicting-reset-tools_iKauzcge3XjtELN6voCTHk.json",
+      "run_id": "jfGGM2Lc42kWThH33FXu8E",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-6197",
+      "log_file": "2026-11-06T00-42-49-00-00_swebench-original-tools_o65v6nahkpFJL3hh59BxMa.json",
+      "run_id": "GQjeP5PyszsVZqVXWEU8yX",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-7205",
+      "log_file": "2026-11-05T15-20-11-00-00_swebench-oneoff-reset-tools_KsycAhgMFSsCeq5fNyWe9w.json",
+      "run_id": "SyroFgYpf2rAc9Z8oBvQ9W",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-7236",
+      "log_file": "2026-11-06T03-05-05-00-00_swebench-conflicting-tools_JieDgpxgmZxxU6kSdjrSp7.json",
+      "run_id": "Hituabx8hTccr2QTrHaBqG",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-7236",
+      "log_file": "2026-11-06T03-00-21-00-00_swebench-oneoff-reset-tools_ZLdHE7joKUSEfYvzWkVdSp.json",
+      "run_id": "BUoquGKLMVSjQGtKRR47jo",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-7236",
+      "log_file": "2026-11-06T03-18-50-00-00_swebench-original-tools_VMhcoQCXjkWGFa8H7zAiJX.json",
+      "run_id": "KJs6Sko9X3Ut4w9jSchNLj",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-7236",
+      "log_file": "2026-11-06T03-18-50-00-00_swebench-original-tools_VMhcoQCXjkWGFa8H7zAiJX.json",
+      "run_id": "KJs6Sko9X3Ut4w9jSchNLj",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-7236",
+      "log_file": "2026-11-06T03-18-50-00-00_swebench-original-tools_VMhcoQCXjkWGFa8H7zAiJX.json",
+      "run_id": "KJs6Sko9X3Ut4w9jSchNLj",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-7236",
+      "log_file": "2026-11-06T03-28-08-00-00_swebench-original-reset-tools_UMxuzDF7adCx8m5qj3Cv87.json",
+      "run_id": "npX8RT3y4D6GdqUSV7rbDu",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-7236",
+      "log_file": "2026-11-06T03-28-08-00-00_swebench-original-reset-tools_UMxuzDF7adCx8m5qj3Cv87.json",
+      "run_id": "npX8RT3y4D6GdqUSV7rbDu",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-7490",
+      "log_file": "2026-11-05T19-20-01-00-00_swebench-oneoff-tools_3atsBwrYjtd5ZHKB5EQDQU.json",
+      "run_id": "2EVCcw6pYUDTzAsjU2dXMC",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-7490",
+      "log_file": "2026-11-05T19-20-01-00-00_swebench-oneoff-tools_3atsBwrYjtd5ZHKB5EQDQU.json",
+      "run_id": "2EVCcw6pYUDTzAsjU2dXMC",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "pytest-dev__pytest-7571",
+      "log_file": "2026-11-05T21-11-09-00-00_swebench-original-tools_jDnDmMFktMD8Dv6EYT5zkV.json",
+      "run_id": "QuPow9cYGELf7hoX2R9ayE",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "scikit-learn__scikit-learn-10844",
+      "log_file": "2026-11-04T15-14-26-00-00_swebench-oneoff-tools_JVkXtFdvpubH6kYJJeNaFf.json",
+      "run_id": "H7KYwgw9KChAwa8rg8WViR",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "scikit-learn__scikit-learn-14141",
+      "log_file": "2026-11-04T22-08-12-00-00_swebench-conflicting-reset-tools_NC3HCTKxC7ih67859t3X9W.json",
+      "run_id": "nRXAyxDEU9k6PHPwcrYeSi",
+      "transfer_completed": false
+    },
+    {
+      "client": "conda install",
+      "instance_id": "scikit-learn__scikit-learn-14141",
+      "log_file": "2026-11-04T22-08-12-00-00_swebench-conflicting-reset-tools_NC3HCTKxC7ih67859t3X9W.json",
+      "run_id": "nRXAyxDEU9k6PHPwcrYeSi",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sphinx-doc__sphinx-10466",
+      "log_file": "2026-11-06T14-31-43-00-00_swebench-conflicting-reset-tools_jDK97BHQeSWCsSNs7Kvg67.json",
+      "run_id": "eagE4AYUQwtqub7PcMPrwE",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sphinx-doc__sphinx-9258",
+      "log_file": "2026-11-04T11-38-08-00-00_swebench-original-tools_bNLKGRFAy4mpXhXK4W9bon.json",
+      "run_id": "FrytTVWiPybJ3KCpbnoT83",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sphinx-doc__sphinx-9591",
+      "log_file": "2026-11-05T04-01-36-00-00_swebench-original-reset-tools_7Cjbc273tkhSLtgXsZLtEC.json",
+      "run_id": "eqgVQdzdPfV7wcEKkJBzmw",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-16450",
+      "log_file": "2026-11-03T19-46-51-00-00_swebench-original-reset-tools_EggR5AC95SvfESCztyGhH6.json",
+      "run_id": "4xixm27gp5wqjzpq9q67Xz",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-16792",
+      "log_file": "2026-11-03T11-52-07-00-00_swebench-conflicting-tools_JqveQUarjA45VGJB4V4kDS.json",
+      "run_id": "cpQJanp6c9RNhXziPZJFvL",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip3 install",
+      "instance_id": "sympy__sympy-16792",
+      "log_file": "2026-11-03T11-52-07-00-00_swebench-conflicting-tools_JqveQUarjA45VGJB4V4kDS.json",
+      "run_id": "cpQJanp6c9RNhXziPZJFvL",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-16792",
+      "log_file": "2026-11-03T11-43-12-00-00_swebench-oneoff-tools_mB4LGMWNAySEi43m8LAeik.json",
+      "run_id": "nx9Sww7mmDNzjpwYFQPv2D",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-16792",
+      "log_file": "2026-11-03T11-46-55-00-00_swebench-oneoff-tools_6DTZCVQdSEqgQ6kwUkDkdv.json",
+      "run_id": "iz3v6Bo42XqpxH759qcHdT",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-16792",
+      "log_file": "2026-11-03T12-01-59-00-00_swebench-original-tools_LzeQ2qiq5i2cuzFhY6jPoj.json",
+      "run_id": "ZyWL5wMivGstD4iGBn9yhM",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-16792",
+      "log_file": "2026-11-03T12-01-59-00-00_swebench-original-tools_LzeQ2qiq5i2cuzFhY6jPoj.json",
+      "run_id": "ZyWL5wMivGstD4iGBn9yhM",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-16792",
+      "log_file": "2026-11-03T12-05-13-00-00_swebench-original-tools_5j8gnXWNYobHs37TTizvcz.json",
+      "run_id": "WsaqcMitvxqBkUNffbQeZU",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-17655",
+      "log_file": "2026-11-06T07-30-30-00-00_swebench-oneoff-tools_8qfAb5siXMoEhnMx3xD6mf.json",
+      "run_id": "Uuqh7UwajM2qTYmJU8LeUt",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-19954",
+      "log_file": "2026-11-03T19-55-52-00-00_swebench-oneoff-tools_GHvVzbLF7gAgi4bcUJqNPu.json",
+      "run_id": "aVtuP9S6NW6JipGPScD8Xa",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-16-05-00-00_swebench-conflicting-tools_kgjTSU9ua9w5gU96HkAMkS.json",
+      "run_id": "WfpkgDPzMGyGznaEPH3jiz",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-16-05-00-00_swebench-conflicting-tools_kgjTSU9ua9w5gU96HkAMkS.json",
+      "run_id": "WfpkgDPzMGyGznaEPH3jiz",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-22-34-00-00_swebench-conflicting-tools_6RgxoeFcdR42BKGJDFA4ai.json",
+      "run_id": "A3vdCcSoSogQfzaw2Rq2hz",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-22-34-00-00_swebench-conflicting-tools_6RgxoeFcdR42BKGJDFA4ai.json",
+      "run_id": "A3vdCcSoSogQfzaw2Rq2hz",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-26-39-00-00_swebench-conflicting-reset-tools_2u76Ek5X9hoNXMTYmyuAcf.json",
+      "run_id": "jjzhyFgSNd9EeLNKGxfypY",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-26-39-00-00_swebench-conflicting-reset-tools_2u76Ek5X9hoNXMTYmyuAcf.json",
+      "run_id": "jjzhyFgSNd9EeLNKGxfypY",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-04-34-00-00_swebench-oneoff-tools_Y6Qbuk6hNNexoJLDATdFYy.json",
+      "run_id": "PFLAsE4gpHpakPPqrK8eYK",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-08-13-00-00_swebench-oneoff-tools_BFmVNaB5RULZiEGqySwWXt.json",
+      "run_id": "UzBnGCJExvD8zbUxxMCfnK",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-08-13-00-00_swebench-oneoff-tools_BFmVNaB5RULZiEGqySwWXt.json",
+      "run_id": "UzBnGCJExvD8zbUxxMCfnK",
+      "transfer_completed": false
+    },
+    {
+      "client": "conda install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-08-13-00-00_swebench-oneoff-tools_BFmVNaB5RULZiEGqySwWXt.json",
+      "run_id": "UzBnGCJExvD8zbUxxMCfnK",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-12-16-00-00_swebench-oneoff-reset-tools_4g6AjvxxuBSzz369N32nux.json",
+      "run_id": "LdSDxRaUDMig4crJ7DbMQA",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-12-16-00-00_swebench-oneoff-reset-tools_4g6AjvxxuBSzz369N32nux.json",
+      "run_id": "LdSDxRaUDMig4crJ7DbMQA",
+      "transfer_completed": false
+    },
+    {
+      "client": "conda install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-12-16-00-00_swebench-oneoff-reset-tools_4g6AjvxxuBSzz369N32nux.json",
+      "run_id": "LdSDxRaUDMig4crJ7DbMQA",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-12-16-00-00_swebench-oneoff-reset-tools_4g6AjvxxuBSzz369N32nux.json",
+      "run_id": "LdSDxRaUDMig4crJ7DbMQA",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip download",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-12-16-00-00_swebench-oneoff-reset-tools_4g6AjvxxuBSzz369N32nux.json",
+      "run_id": "LdSDxRaUDMig4crJ7DbMQA",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-12-16-00-00_swebench-oneoff-reset-tools_4g6AjvxxuBSzz369N32nux.json",
+      "run_id": "LdSDxRaUDMig4crJ7DbMQA",
+      "transfer_completed": false
+    },
+    {
+      "client": "apt-get install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-12-16-00-00_swebench-oneoff-reset-tools_4g6AjvxxuBSzz369N32nux.json",
+      "run_id": "LdSDxRaUDMig4crJ7DbMQA",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-30-32-00-00_swebench-original-tools_d2rkTwCsX7aUAubMH3t5cx.json",
+      "run_id": "H3UrKLvek6bUn9Gd2BRd5H",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-30-32-00-00_swebench-original-tools_d2rkTwCsX7aUAubMH3t5cx.json",
+      "run_id": "H3UrKLvek6bUn9Gd2BRd5H",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-34-20-00-00_swebench-original-tools_nq6Hye3LKAm4gqSsckruGe.json",
+      "run_id": "CQpc5AezpQfMhRmadMmZwm",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip download",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-34-20-00-00_swebench-original-tools_nq6Hye3LKAm4gqSsckruGe.json",
+      "run_id": "CQpc5AezpQfMhRmadMmZwm",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-39-04-00-00_swebench-original-reset-tools_HseACqAS2GX9m4RvqkaKAs.json",
+      "run_id": "QUB7W6oU2KPBts4E2u8Rik",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-39-04-00-00_swebench-original-reset-tools_HseACqAS2GX9m4RvqkaKAs.json",
+      "run_id": "QUB7W6oU2KPBts4E2u8Rik",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-21612",
+      "log_file": "2026-11-05T10-39-04-00-00_swebench-original-reset-tools_HseACqAS2GX9m4RvqkaKAs.json",
+      "run_id": "QUB7W6oU2KPBts4E2u8Rik",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-22080",
+      "log_file": "2026-11-05T17-09-06-00-00_swebench-conflicting-tools_kvvhzd7vE2JYktptQTpjVP.json",
+      "run_id": "ABJcxSpRgCjCQ2Cmq9RDuA",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-22080",
+      "log_file": "2026-11-05T17-03-24-00-00_swebench-oneoff-reset-tools_fkGSV8ZQfhi4MS5gJoBg8t.json",
+      "run_id": "iLaZfbmD7k9xKrUEVzeYv4",
+      "transfer_completed": false
+    },
+    {
+      "client": "git clone",
+      "instance_id": "sympy__sympy-22080",
+      "log_file": "2026-11-05T17-21-40-00-00_swebench-original-tools_bV5jwwvLCgEAGGBC4w3TPj.json",
+      "run_id": "LdGBbDk3euCmozPrheeiKo",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-23413",
+      "log_file": "2026-11-03T23-37-13-00-00_swebench-conflicting-tools_378nLKEx7M4sEPNT7VFEiw.json",
+      "run_id": "g5psrCUfC8LDPq9mtwcbwo",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-23413",
+      "log_file": "2026-11-03T23-37-13-00-00_swebench-conflicting-tools_378nLKEx7M4sEPNT7VFEiw.json",
+      "run_id": "g5psrCUfC8LDPq9mtwcbwo",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-23413",
+      "log_file": "2026-11-03T23-19-29-00-00_swebench-oneoff-tools_feGJMbKjh3CHwuSaigwqYq.json",
+      "run_id": "DaCMbRkfcHANS6EYaDnd3N",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-23413",
+      "log_file": "2026-11-03T23-27-56-00-00_swebench-oneoff-tools_GyddgpEpvCKHsKrTsYVBVA.json",
+      "run_id": "W2cnM7GYbxvMNdwd8g6XaG",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip3 install",
+      "instance_id": "sympy__sympy-23413",
+      "log_file": "2026-11-03T23-27-56-00-00_swebench-oneoff-tools_GyddgpEpvCKHsKrTsYVBVA.json",
+      "run_id": "W2cnM7GYbxvMNdwd8g6XaG",
+      "transfer_completed": false
+    },
+    {
+      "client": "conda install",
+      "instance_id": "sympy__sympy-23413",
+      "log_file": "2026-11-03T23-27-56-00-00_swebench-oneoff-tools_GyddgpEpvCKHsKrTsYVBVA.json",
+      "run_id": "W2cnM7GYbxvMNdwd8g6XaG",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-23413",
+      "log_file": "2026-11-04T00-03-59-00-00_swebench-original-tools_UVjebReY3K5edTVHj4uWS9.json",
+      "run_id": "5W3C5UKUQNUvuQ8P3KxWB2",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-23413",
+      "log_file": "2026-11-04T00-03-59-00-00_swebench-original-tools_UVjebReY3K5edTVHj4uWS9.json",
+      "run_id": "5W3C5UKUQNUvuQ8P3KxWB2",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-23413",
+      "log_file": "2026-11-04T00-13-15-00-00_swebench-original-tools_dgaScNwFXYuzNjzW5Kz3Ld.json",
+      "run_id": "jNAQTVdg6TZuhb5AsDfm9P",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-23413",
+      "log_file": "2026-11-04T00-22-09-00-00_swebench-original-reset-tools_dPHd354drUQhet4KVmosyU.json",
+      "run_id": "PinL3EnCmZD2a8p3Y48v8o",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-23824",
+      "log_file": "2026-11-06T03-55-13-00-00_swebench-conflicting-reset-tools_X4ypP5kTW3sLbLiU5J9MKP.json",
+      "run_id": "ZS2keKKkuq27vyLcADpChn",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-24213",
+      "log_file": "2026-11-06T13-53-03-00-00_swebench-conflicting-reset-tools_SzZmpHejRfHz8QfPopUue6.json",
+      "run_id": "2cUJBgLAW429fp7ns5Yod6",
+      "transfer_completed": false
+    },
+    {
+      "client": "pip install",
+      "instance_id": "sympy__sympy-24213",
+      "log_file": "2026-11-06T13-33-06-00-00_swebench-oneoff-tools_Zy4meh3q3EcodkcJprRz9H.json",
+      "run_id": "UqqJLvP6GehwGp6zmhR9oQ",
+      "transfer_completed": false
+    }
+  ],
+  "compose": {
+    "network_mode_none": 3781,
+    "not_found": 0,
+    "other": 0
+  },
+  "flagged": [],
+  "samples": 3781
+}

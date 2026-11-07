@@ -1,0 +1,15 @@
+diff --git a/sympy/sets/sets.py b/sympy/sets/sets.py
+--- a/sympy/sets/sets.py
++++ b/sympy/sets/sets.py
+@@ -998,11 +998,6 @@
+             b = Interval(self.end, S.Infinity, not self.right_open, True)
+             return Union(a, b)
+ 
+-        if isinstance(other, FiniteSet):
+-            nums = [m for m in other.args if m.is_number]
+-            if nums == []:
+-                return None
+-
+         return Set._complement(self, other)
+ 
+ 

@@ -1,0 +1,17 @@
+diff --git a/sympy/printing/str.py b/sympy/printing/str.py
+--- a/sympy/printing/str.py
++++ b/sympy/printing/str.py
+@@ -333,8 +333,12 @@
+                     b.append(apow(item))
+                 else:
+                     if (len(item.args[0].args) != 1 and
+-                            isinstance(item.base, Mul)):
++                            (isinstance(item.base, Mul) or
++                             (isinstance(item.base, Pow) and
++                              item.base.exp.is_commutative and
++                              bool(item.base.exp.as_coeff_Mul()[0] < 0)))):
+                         # To avoid situations like #14160
++                        # Also handle Pow bases with negative exponents like 1/(c**2)
+                         pow_paren.append(item)
+                     b.append(item.base)
+             elif item.is_Rational and item is not S.Infinity:

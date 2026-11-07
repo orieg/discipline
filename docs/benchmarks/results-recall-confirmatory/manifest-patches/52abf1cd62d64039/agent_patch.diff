@@ -1,0 +1,14 @@
+diff --git a/django/db/models/enums.py b/django/db/models/enums.py
+--- a/django/db/models/enums.py
++++ b/django/db/models/enums.py
+@@ -31,6 +31,10 @@
+         # that is passed in as "self" as the value to use when looking up the
+         # label in the choices.
+         cls.label = property(lambda self: cls._value2label_map_.get(self.value))
++        # Only the Choices base class needs do_not_call_in_templates set,
++        # subclasses inherit it.
++        if classname == 'Choices':
++            cls.do_not_call_in_templates = True
+         return enum.unique(cls)
+ 
+     def __contains__(cls, member):

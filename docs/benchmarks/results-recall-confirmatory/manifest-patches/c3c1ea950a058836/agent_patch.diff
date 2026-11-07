@@ -1,0 +1,56 @@
+diff --git a/sklearn/utils/_set_output.py b/sklearn/utils/_set_output.py
+--- a/sklearn/utils/_set_output.py
++++ b/sklearn/utils/_set_output.py
+@@ -12,6 +12,7 @@
+     *,
+     columns,
+     index=None,
++    dtypes=None,
+ ):
+     """Create a Pandas DataFrame.
+ 
+@@ -36,6 +37,12 @@
+     index : array-like, default=None
+         Index for data.
+ 
++    dtypes : dict, default=None
++        A dictionary mapping column names to their dtypes. If provided and
++        `data_to_wrap` is not a DataFrame, the output DataFrame's columns
++        will be cast to these dtypes. This is useful for preserving the
++        original dtypes when wrapping ndarray output.
++
+     Returns
+     -------
+     dataframe : DataFrame
+@@ -59,7 +66,15 @@
+             data_to_wrap.index = index
+         return data_to_wrap
+ 
+-    return pd.DataFrame(data_to_wrap, index=index, columns=columns)
++    df = pd.DataFrame(data_to_wrap, index=index, columns=columns)
++
++    if dtypes is not None:
++        # Only cast columns that exist in both dtypes and df
++        columns_to_cast = {col: dtype for col, dtype in dtypes.items() if col in df.columns}
++        if columns_to_cast:
++            df = df.astype(columns_to_cast, copy=False)
++
++    return df
+ 
+ 
+ def _get_output_config(method, estimator=None):
+@@ -127,10 +142,14 @@
+         return data_to_wrap
+ 
+     # dense_config == "pandas"
++    # Preserve original dtypes if the original input is a DataFrame
++    original_dtypes = getattr(original_input, "dtypes", None)
++
+     return _wrap_in_pandas_container(
+         data_to_wrap=data_to_wrap,
+         index=getattr(original_input, "index", None),
+         columns=estimator.get_feature_names_out,
++        dtypes=original_dtypes,
+     )
+ 
+ 

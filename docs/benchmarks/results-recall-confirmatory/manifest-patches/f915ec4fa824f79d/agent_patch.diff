@@ -1,0 +1,43 @@
+diff --git a/django/contrib/admin/utils.py b/django/contrib/admin/utils.py
+--- a/django/contrib/admin/utils.py
++++ b/django/contrib/admin/utils.py
+@@ -398,12 +398,15 @@
+         return formats.number_format(value)
+     elif isinstance(field, models.FileField) and value:
+         return format_html('<a href="{}">{}</a>', value.url, value)
++    elif isinstance(field, models.JSONField):
++        return display_for_value(value, empty_value_display, boolean=False, field=field)
+     else:
+         return display_for_value(value, empty_value_display)
+ 
+ 
+-def display_for_value(value, empty_value_display, boolean=False):
++def display_for_value(value, empty_value_display, boolean=False, field=None):
+     from django.contrib.admin.templatetags.admin_list import _boolean_icon
++    import json
+ 
+     if boolean:
+         return _boolean_icon(value)
+@@ -417,6 +420,22 @@
+         return formats.localize(value)
+     elif isinstance(value, (int, decimal.Decimal, float)):
+         return formats.number_format(value)
++    elif isinstance(field, models.JSONField):
++        if isinstance(value, (list, tuple)):
++            return json.dumps(value)
++        elif isinstance(value, dict):
++            try:
++                return json.dumps(value)
++            except TypeError:
++                return str(value)
++        elif isinstance(value, str):
++            # For strings, return them as-is with proper quoting if needed
++            try:
++                return json.dumps(value)
++            except TypeError:
++                return value
++        else:
++            return str(value)
+     elif isinstance(value, (list, tuple)):
+         return ', '.join(str(v) for v in value)
+     else:

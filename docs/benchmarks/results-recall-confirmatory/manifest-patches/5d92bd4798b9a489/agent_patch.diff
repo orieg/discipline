@@ -1,0 +1,58 @@
+diff --git a/sympy/printing/conventions.py b/sympy/printing/conventions.py
+--- a/sympy/printing/conventions.py
++++ b/sympy/printing/conventions.py
+@@ -3,6 +3,7 @@
+ """
+ 
+ import re
++import unicodedata
+ 
+ from collections.abc import Iterable
+ from sympy import Derivative
+@@ -10,6 +11,18 @@
+ _name_with_digits_p = re.compile(r'^([a-zA-Z]+)([0-9]+)$')
+ 
+ 
++def _is_digit_like(ch):
++    """Check if a character is a digit-like character (e.g., '0'-'9' or
++    Unicode digit characters like '𝟘'-'𝟡').
++    """
++    return unicodedata.category(ch) == 'Nd'
++
++
++def _is_letter(ch):
++    """Check if a character is a letter (including Greek letters)."""
++    return unicodedata.category(ch).startswith('L')
++
++
+ def split_super_sub(text):
+     """Split a symbol name into a name, superscripts and subscripts
+ 
+@@ -61,11 +74,22 @@
+             raise RuntimeError("This should never happen.")
+ 
+     # make a little exception when a name ends with digits, i.e. treat them
+-    # as a subscript too.
+-    m = _name_with_digits_p.match(name)
+-    if m:
+-        name, sub = m.groups()
+-        subs.insert(0, sub)
++    # as a subscript too. This handles both ASCII and Unicode digits.
++    # We look for digit-like characters at the end of the name that are
++    # preceded directly by a letter (not by an underscore).
++    # First, find the first digit-like character in the name.
++    first_digit_pos = None
++    for i, ch in enumerate(name):
++        if _is_digit_like(ch):
++            first_digit_pos = i
++            break
++
++    if first_digit_pos is not None and first_digit_pos > 0:
++        # Check if the character before the first digit is a letter (not underscore)
++        if _is_letter(name[first_digit_pos - 1]):
++            sub = name[first_digit_pos:]
++            name = name[:first_digit_pos]
++            subs.insert(0, sub)
+ 
+     return name, supers, subs
+ 

@@ -1,0 +1,21 @@
+diff --git a/lib/matplotlib/offsetbox.py b/lib/matplotlib/offsetbox.py
+--- a/lib/matplotlib/offsetbox.py
++++ b/lib/matplotlib/offsetbox.py
+@@ -474,6 +474,8 @@
+         if not whd_list:
+             return 2 * pad, 2 * pad, pad, pad, []
+ 
++        whd_list = [(w, h, xd, (h - yd)) for w, h, xd, yd in whd_list]
++
+         hd_list = [(h, yd) for w, h, xd, yd in whd_list]
+         height, ydescent, yoffsets = _get_aligned_offsets(hd_list,
+                                                           self.height,
+@@ -483,6 +485,8 @@
+         width, xoffsets_ = _get_packed_offsets(pack_list, self.width,
+                                                sep, self.mode)
+ 
++        yoffsets = [y - ydescent for y in yoffsets]
++
+         xoffsets = xoffsets_ + [xd for w, h, xd, yd in whd_list]
+ 
+         xdescent = whd_list[0][2]

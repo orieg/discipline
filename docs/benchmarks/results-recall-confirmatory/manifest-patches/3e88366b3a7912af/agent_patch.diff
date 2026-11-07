@@ -1,0 +1,38 @@
+diff --git a/sphinx/ext/autodoc/mock.py b/sphinx/ext/autodoc/mock.py
+--- a/sphinx/ext/autodoc/mock.py
++++ b/sphinx/ext/autodoc/mock.py
+@@ -52,8 +52,10 @@
+     def __mro_entries__(self, bases: Tuple) -> Tuple:
+         return (self.__class__,)
+ 
+-    def __getitem__(self, key: str) -> "_MockObject":
+-        return _make_subclass(key, self.__display_name__, self.__class__)()
++    def __getitem__(self, key: Any) -> Any:
++        if isinstance(key, str):
++            return _make_subclass(key, self.__display_name__, self.__class__)()
++        return _MockGenericAlias(self, key)
+ 
+     def __getattr__(self, key: str) -> "_MockObject":
+         return _make_subclass(key, self.__display_name__, self.__class__)()
+@@ -68,6 +70,21 @@
+         return self.__display_name__
+ 
+ 
++class _MockGenericAlias:
++    """A mock generic alias for mocking generic types."""
++
++    def __init__(self, origin: Any, args: Any) -> None:
++        self.__origin__ = origin
++        self.__args__ = args if isinstance(args, tuple) else (args,)
++
++    def __mro_entries__(self, bases: Tuple) -> Tuple:
++        return (self.__origin__,)
++
++    def __repr__(self) -> str:
++        args = ', '.join(repr(arg) for arg in self.__args__)
++        return f'{self.__origin__.__display_name__}[{args}]'
++
++
+ def _make_subclass(name: str, module: str, superclass: Any = _MockObject,
+                    attributes: Any = None) -> Any:
+     attrs = {'__module__': module, '__display_name__': module + '.' + name}

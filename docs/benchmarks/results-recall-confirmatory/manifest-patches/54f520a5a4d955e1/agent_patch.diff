@@ -1,0 +1,26 @@
+diff --git a/sympy/sets/handlers/issubset.py b/sympy/sets/handlers/issubset.py
+--- a/sympy/sets/handlers/issubset.py
++++ b/sympy/sets/handlers/issubset.py
+@@ -1,7 +1,7 @@
+ from sympy import S, Symbol
+ from sympy.core.logic import fuzzy_and, fuzzy_bool, fuzzy_not, fuzzy_or
+ from sympy.core.relational import Eq
+-from sympy.sets.sets import FiniteSet, Interval, Set, Union
++from sympy.sets.sets import FiniteSet, Interval, ProductSet, Set, Union
+ from sympy.sets.fancysets import Complexes, Reals, Range, Rationals
+ from sympy.multipledispatch import dispatch
+ 
+@@ -100,6 +100,13 @@
+                 return True
+         return None
+ 
++@dispatch(ProductSet, FiniteSet)  # type: ignore # noqa:F811
++def is_subset_sets(a_prodset, b_finiteset): # noqa:F811
++    # Check if all elements of the ProductSet are in the FiniteSet
++    # This is only possible if the ProductSet is finite
++    if a_prodset.is_finite_set is True:
++        return fuzzy_and(b_finiteset.contains(e) for e in a_prodset)
++
+ @dispatch(Interval, Range)  # type: ignore # noqa:F811
+ def is_subset_sets(a_interval, b_range): # noqa:F811
+     if a_interval.measure.is_extended_nonzero:

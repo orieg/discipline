@@ -1,0 +1,38 @@
+diff --git a/sphinx/util/docfields.py b/sphinx/util/docfields.py
+--- a/sphinx/util/docfields.py
++++ b/sphinx/util/docfields.py
+@@ -22,6 +22,25 @@
+     from sphinx.directive import ObjectDescription
+ 
+ 
++def _split_arg_type(fieldarg: str) -> Tuple[str, str]:
++    """Split *fieldarg* into type and name, respecting brackets and parentheses.
++
++    For example:
++    - "Dict[str, str] params" -> ("Dict[str, str]", "params")
++    - "dict(str, str) opc_meta" -> ("dict(str, str)", "opc_meta")
++    """
++    bracket_depth = 0
++    for i, char in enumerate(fieldarg):
++        if char in '([{':
++            bracket_depth += 1
++        elif char in ')]}':
++            bracket_depth -= 1
++        elif char.isspace() and bracket_depth == 0:
++            return fieldarg[:i].strip(), fieldarg[i + 1:].strip()
++
++    raise ValueError("No valid split found")
++
++
+ def _is_single_paragraph(node: nodes.field_body) -> bool:
+     """True if the node only contains one paragraph (and system messages)."""
+     if len(node) == 0:
+@@ -298,7 +317,7 @@
+             # also support syntax like ``:param type name:``
+             if typedesc.is_typed:
+                 try:
+-                    argtype, argname = fieldarg.split(None, 1)
++                    argtype, argname = _split_arg_type(fieldarg)
+                 except ValueError:
+                     pass
+                 else:

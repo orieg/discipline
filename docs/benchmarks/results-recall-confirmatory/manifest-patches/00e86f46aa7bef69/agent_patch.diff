@@ -1,0 +1,22 @@
+diff --git a/django/forms/fields.py b/django/forms/fields.py
+--- a/django/forms/fields.py
++++ b/django/forms/fields.py
+@@ -1025,7 +1025,18 @@
+             if not value or not [v for v in value if v not in self.empty_values]:
+                 if self.required:
+                     raise ValidationError(self.error_messages['required'], code='required')
++                elif self.require_all_fields:
++                    return self.compress([])
+                 else:
++                    # When require_all_fields is False, check if any required
++                    # sub-fields are empty and collect errors accordingly.
++                    for i, field in enumerate(self.fields):
++                        field_value = value[i] if i < len(value) else None
++                        if field_value in self.empty_values and field.required:
++                            if field.error_messages['incomplete'] not in errors:
++                                errors.append(field.error_messages['incomplete'])
++                    if errors:
++                        raise ValidationError(errors)
+                     return self.compress([])
+         else:
+             raise ValidationError(self.error_messages['invalid'], code='invalid')

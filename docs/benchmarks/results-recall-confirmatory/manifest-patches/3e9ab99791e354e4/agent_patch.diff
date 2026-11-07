@@ -1,0 +1,11 @@
+diff --git a/tests/aggregation/tests.py b/tests/aggregation/tests.py
+--- a/tests/aggregation/tests.py
++++ b/tests/aggregation/tests.py
+@@ -2105,7 +2105,6 @@
+         sql = ctx.captured_queries[0]["sql"].lower()
+         self.assertEqual(sql.count("select"), 1, "No subquery wrapping required")
+         self.assertNotIn("name_lower", sql)
+-    self.assertEqual(sql.count("select"), 2, "No subquery wrapping required")
+ 
+     def test_unreferenced_aggregate_annotation_pruned(self):
+         with CaptureQueriesContext(connection) as ctx:

@@ -1,0 +1,24 @@
+diff --git a/xarray/core/merge.py b/xarray/core/merge.py
+--- a/xarray/core/merge.py
++++ b/xarray/core/merge.py
+@@ -385,6 +385,8 @@
+ 
+     out = []
+     for obj in objects:
++        if isinstance(obj, DataArray):
++            obj = obj.to_dataset()
+         if isinstance(obj, Dataset):
+             variables: "DatasetLike" = obj
+         else:
+@@ -808,6 +810,11 @@
+     # we are locked into supporting overwrite_vars for the Dataset.merge
+     # method due for backwards compatibility
+     # TODO: consider deprecating it?
++    from .dataarray import DataArray
++
++    # DataArray needs to be converted to Dataset to be used with .items()
++    if isinstance(other, DataArray):
++        other = other.to_dataset()
+ 
+     if isinstance(overwrite_vars, Iterable) and not isinstance(overwrite_vars, str):
+         overwrite_vars = set(overwrite_vars)

@@ -1,0 +1,111 @@
+diff --git a/sphinx/domains/cpp.py b/sphinx/domains/cpp.py
+--- a/sphinx/domains/cpp.py
++++ b/sphinx/domains/cpp.py
+@@ -882,6 +882,72 @@
+         signode.append(nodes.Text(txt, txt))
+ 
+ 
++class ASTUserDefinedLiteral(ASTLiteral):
++    def __init__(self, value: str, suffix: str) -> None:
++        self.value = value
++        self.suffix = suffix
++
++    def _stringify(self, transform: StringifyTransform) -> str:
++        return self.value + self.suffix
++
++    def get_id(self, version: int) -> str:
++        # User-defined literal mangling format:
++        # clL_Zli<suffix_length><suffix>E<value_mangling>E
++        # where suffix includes standard suffixes + UDL identifier
++        return "clL_Zli%d%sE%sE" % (len(self.suffix), self.suffix, self.value_id())
++
++    def value_id(self) -> str:
++        # Determine the mangling for the base value
++        # This depends on the type of literal
++        # For numeric literals, use "L<value>E"
++        # We determine the type by checking the first character
++        first_char = self.value[0] if self.value else ''
++        if first_char in '0123456789':
++            # Numeric literal
++            return "L%sE" % self.value
++        elif first_char == "'":
++            # Character literal - need to decode and get the ID
++            # The value is like "'a'" or "u8'a'"
++            # We need to extract the prefix and data and get the proper ID
++            prefix, data = self._parse_char_literal()
++            type_char = _id_char_from_prefix[prefix]
++            decoded = data.encode().decode('unicode-escape')
++            value = ord(decoded)
++            return type_char + str(value)
++        elif first_char == '"':
++            # String literal
++            # The value is like "\"abc\""
++            # ID format: LA<length>_KcE
++            # Note: len(self.value) - 2 to exclude the quotes
++            return "LA%d_KcE" % (len(self.value) - 2)
++        else:
++            # Fallback
++            return "L%sE" % self.value
++
++    def _parse_char_literal(self) -> Tuple[str, str]:
++        """Parse a character literal value and return (prefix, data)."""
++        # Format is like "'a'", "u8'a'", "L'a'"
++        # Find the first quote
++        quote_pos = self.value.find("'")
++        if quote_pos == 0:
++            prefix = ''
++            data_start = 1
++        else:
++            prefix = self.value[:quote_pos]
++            data_start = quote_pos + 1
++        
++        # Find the closing quote
++        data_end = self.value.rfind("'")
++        data = self.value[data_start:data_end]
++        
++        return prefix, data
++
++    def describe_signature(self, signode: TextElement, mode: str,
++                           env: "BuildEnvironment", symbol: "Symbol") -> None:
++        txt = str(self)
++        signode.append(nodes.Text(txt, txt))
++
++
+ class ASTThisLiteral(ASTExpression):
+     def _stringify(self, transform: StringifyTransform) -> str:
+         return "this"
+@@ -4664,16 +4730,34 @@
+             if self.match(regex):
+                 while self.current_char in 'uUlLfF':
+                     self.pos += 1
++                # Check for user-defined literal suffix
++                suffix_start = self.pos
++                self.skip_ws()
++                if self.match(identifier_re):
++                    suffix = self.definition[suffix_start:self.pos]
++                    value = self.definition[pos:suffix_start]
++                    return ASTUserDefinedLiteral(value, suffix)
+                 return ASTNumberLiteral(self.definition[pos:self.pos])
+ 
+         string = self._parse_string()
+         if string is not None:
++            # Check for user-defined literal suffix
++            self.skip_ws()
++            if self.match(identifier_re):
++                suffix = self.matched_text
++                return ASTUserDefinedLiteral(string, suffix)
+             return ASTStringLiteral(string)
+ 
+         # character-literal
+         if self.match(char_literal_re):
+             prefix = self.last_match.group(1)  # may be None when no prefix
+             data = self.last_match.group(2)
++            char_literal_str = (prefix if prefix else '') + "'" + data + "'"
++            # Check for user-defined literal suffix
++            self.skip_ws()
++            if self.match(identifier_re):
++                suffix = self.matched_text
++                return ASTUserDefinedLiteral(char_literal_str, suffix)
+             try:
+                 return ASTCharLiteral(prefix, data)
+             except UnicodeDecodeError as e:

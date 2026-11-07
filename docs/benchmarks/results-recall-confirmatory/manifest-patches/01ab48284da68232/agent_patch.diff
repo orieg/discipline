@@ -1,0 +1,62 @@
+diff --git a/pylint/config/argument.py b/pylint/config/argument.py
+--- a/pylint/config/argument.py
++++ b/pylint/config/argument.py
+@@ -111,10 +111,57 @@
+         raise argparse.ArgumentTypeError(msg) from e
+ 
+ 
++def _regexp_csv_split(value: str) -> list[str]:
++    """Split a comma-separated list of regular expressions, respecting braces.
++
++    Commas inside braces are not treated as delimiters. This allows regular
++    expressions with quantifiers like `{1,3}` to be parsed correctly.
++
++    >>> _regexp_csv_split("foo, bar{1,3}")
++    ['foo', 'bar{1,3}']
++    >>> _regexp_csv_split("(foo{1,3})")
++    ['(foo{1,3})']
++    >>> _regexp_csv_split("(foo{1,}, foo{1,3}})")
++    ['(foo{1,}', ' foo{1,3}})']
++    >>> _regexp_csv_split("foo,bar,baz")
++    ['foo', 'bar', 'baz']
++    """
++    patterns: list[str] = []
++    current: list[str] = []
++    brace_level = 0
++    in_escape = False
++
++    for char in value:
++        if in_escape:
++            current.append(char)
++            in_escape = False
++        elif char == "\\":
++            current.append(char)
++            in_escape = True
++        elif char == "{":
++            brace_level += 1
++            current.append(char)
++        elif char == "}":
++            brace_level -= 1
++            current.append(char)
++        elif char == "," and brace_level == 0:
++            patterns.append("".join(current).strip())
++            current = []
++        else:
++            current.append(char)
++
++    # Don't forget the last pattern
++    last = "".join(current).strip()
++    if last:
++        patterns.append(last)
++
++    return patterns
++
++
+ def _regexp_csv_transfomer(value: str) -> Sequence[Pattern[str]]:
+     """Transforms a comma separated list of regular expressions."""
+     patterns: list[Pattern[str]] = []
+-    for pattern in _csv_transformer(value):
++    for pattern in _regexp_csv_split(value):
+         patterns.append(_regex_transformer(pattern))
+     return patterns
+ 

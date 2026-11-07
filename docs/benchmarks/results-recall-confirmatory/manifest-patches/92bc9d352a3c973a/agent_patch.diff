@@ -1,0 +1,62 @@
+diff --git a/django/db/migrations/operations/models.py b/django/db/migrations/operations/models.py
+--- a/django/db/migrations/operations/models.py
++++ b/django/db/migrations/operations/models.py
+@@ -121,6 +121,31 @@
+                 return True
+         return False
+ 
++    @staticmethod
++    def reduce_options(options, operation):
++        """
++        Reduce AlterModelOptions and AlterTogetherOptionOperation operations
++        into CreateModel's options.
++        """
++        if isinstance(operation, AlterModelOptions):
++            # Merge operation.options into options, then remove any keys
++            # in ALTER_OPTION_KEYS that are not in operation.options
++            # This mimics the logic in AlterModelOptions.state_forwards()
++            result = {**options, **operation.options}
++            for key in AlterModelOptions.ALTER_OPTION_KEYS:
++                if key not in operation.options:
++                    result.pop(key, None)
++            return result
++        elif isinstance(operation, AlterTogetherOptionOperation):
++            # For AlterUniqueTogether and AlterIndexTogether, just set the
++            # specific option (no removal logic needed as these always set
++            # a specific value for their option_name)
++            return {**options, **{operation.option_name: operation.option_value}}
++        elif isinstance(operation, AlterOrderWithRespectTo):
++            # For AlterOrderWithRespectTo, set the order_with_respect_to option
++            return {**options, 'order_with_respect_to': operation.order_with_respect_to}
++        return options
++
+     def reduce(self, operation, app_label):
+         if (isinstance(operation, DeleteModel) and
+                 self.name_lower == operation.name_lower and
+@@ -141,7 +166,7 @@
+                 CreateModel(
+                     self.name,
+                     fields=self.fields,
+-                    options={**self.options, **operation.options},
++                    options=self.reduce_options(self.options, operation),
+                     bases=self.bases,
+                     managers=self.managers,
+                 ),
+@@ -151,7 +176,7 @@
+                 CreateModel(
+                     self.name,
+                     fields=self.fields,
+-                    options={**self.options, **{operation.option_name: operation.option_value}},
++                    options=self.reduce_options(self.options, operation),
+                     bases=self.bases,
+                     managers=self.managers,
+                 ),
+@@ -161,7 +186,7 @@
+                 CreateModel(
+                     self.name,
+                     fields=self.fields,
+-                    options={**self.options, 'order_with_respect_to': operation.order_with_respect_to},
++                    options=self.reduce_options(self.options, operation),
+                     bases=self.bases,
+                     managers=self.managers,
+                 ),

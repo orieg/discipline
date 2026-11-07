@@ -1,0 +1,40 @@
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -403,6 +403,7 @@
+         # Store annotation mask prior to temporarily adding aggregations for
+         # resolving purpose to facilitate their subsequent removal.
+         refs_subquery = False
++        refs_window = False
+         replacements = {}
+         annotation_select_mask = self.annotation_select_mask
+         for alias, aggregate_expr in aggregate_exprs.items():
+@@ -419,6 +420,10 @@
+                 getattr(self.annotations[ref], "subquery", False)
+                 for ref in aggregate.get_refs()
+             )
++            refs_window |= any(
++                getattr(self.annotations[ref], "contains_over_clause", False)
++                for ref in aggregate.get_refs()
++            )
+             aggregate = aggregate.replace_expressions(replacements)
+             self.annotations[alias] = aggregate
+             replacements[Ref(alias, aggregate)] = aggregate
+@@ -446,6 +451,9 @@
+         # those operations must be done in a subquery so that the query
+         # aggregates on the limit and/or distinct results instead of applying
+         # the distinct and limit after the aggregation.
++        #
++        # Aggregates over window functions require wrapping because window
++        # functions cannot be used as arguments to aggregate functions.
+         if (
+             isinstance(self.group_by, tuple)
+             or self.is_sliced
+@@ -454,6 +462,7 @@
+             or qualify
+             or self.distinct
+             or self.combinator
++            or refs_window
+         ):
+             from django.db.models.sql.subqueries import AggregateQuery
+ 

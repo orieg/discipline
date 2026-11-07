@@ -1,0 +1,32 @@
+diff --git a/sympy/matrices/expressions/blockmatrix.py b/sympy/matrices/expressions/blockmatrix.py
+--- a/sympy/matrices/expressions/blockmatrix.py
++++ b/sympy/matrices/expressions/blockmatrix.py
+@@ -1,6 +1,6 @@
+ from __future__ import print_function, division
+ 
+-from sympy import ask, Q
++from sympy import S, ask, Q
+ from sympy.core import Basic, Add
+ from sympy.core.compatibility import range
+ from sympy.strategies import typed, exhaust, condition, do_one, unpack
+@@ -164,7 +164,19 @@
+     def _blockmul(self, other):
+         if (isinstance(other, BlockMatrix) and
+                 self.colblocksizes == other.rowblocksizes):
+-            return BlockMatrix(self.blocks*other.blocks)
++            result = self.blocks*other.blocks
++            # Convert Zero scalars to ZeroMatrix with appropriate dimensions
++            # The result has blockshape (self.blockshape[0], other.blockshape[1])
++            new_blocks = []
++            for i in range(self.blockshape[0]):
++                row = []
++                for j in range(other.blockshape[1]):
++                    block = result[i, j]
++                    if block is S.Zero:
++                        block = ZeroMatrix(self.rowblocksizes[i], other.colblocksizes[j])
++                    row.append(block)
++                new_blocks.append(row)
++            return BlockMatrix(new_blocks)
+ 
+         return self * other
+ 

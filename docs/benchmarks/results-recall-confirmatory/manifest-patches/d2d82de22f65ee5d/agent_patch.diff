@@ -1,0 +1,16 @@
+diff --git a/src/_pytest/compat.py b/src/_pytest/compat.py
+--- a/src/_pytest/compat.py
++++ b/src/_pytest/compat.py
+@@ -67,8 +67,11 @@
+     mock_modules = [sys.modules.get("mock"), sys.modules.get("unittest.mock")]
+     if any(mock_modules):
+         sentinels = [m.DEFAULT for m in mock_modules if m is not None]
++        # NOTE: use identity (is) instead of 'in' to handle cases where
++        # p.new is an array-like object that would cause 'in' to return
++        # an array of booleans or raise ValueError (#5606)
+         return len(
+-            [p for p in patchings if not p.attribute_name and p.new in sentinels]
++            [p for p in patchings if not p.attribute_name and any(p.new is s for s in sentinels)]
+         )
+     return len(patchings)
+ 

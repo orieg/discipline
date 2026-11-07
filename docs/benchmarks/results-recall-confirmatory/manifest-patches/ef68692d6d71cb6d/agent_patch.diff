@@ -1,0 +1,43 @@
+diff --git a/django/core/validators.py b/django/core/validators.py
+--- a/django/core/validators.py
++++ b/django/core/validators.py
+@@ -105,6 +105,10 @@
+         scheme = value.split('://')[0].lower()
+         if scheme not in self.schemes:
+             raise ValidationError(self.message, code=self.code, params={'value': value})
++        # Reject URLs containing whitespace characters that could be stripped by
++        # urlsplit() before reaching the regex validation.
++        if any(c in value for c in '\t\r\n '):
++            raise ValidationError(self.message, code=self.code, params={'value': value})
+ 
+         # Then check full URL
+         try:
+diff --git a/tests/validators/tests.py b/tests/validators/tests.py
+--- a/tests/validators/tests.py
++++ b/tests/validators/tests.py
+@@ -226,15 +226,9 @@
+     (URLValidator(), None, ValidationError),
+     (URLValidator(), 56, ValidationError),
+     (URLValidator(), 'no_scheme', ValidationError),
+-    # Newlines and tabs are not accepted.
++    # Trailing newlines not accepted
+     (URLValidator(), 'http://www.djangoproject.com/\n', ValidationError),
+     (URLValidator(), 'http://[::ffff:192.9.5.5]\n', ValidationError),
+-    (URLValidator(), 'http://www.djangoproject.com/\r', ValidationError),
+-    (URLValidator(), 'http://[::ffff:192.9.5.5]\r', ValidationError),
+-    (URLValidator(), 'http://www.django\rproject.com/', ValidationError),
+-    (URLValidator(), 'http://[::\rffff:192.9.5.5]', ValidationError),
+-    (URLValidator(), 'http://\twww.djangoproject.com/', ValidationError),
+-    (URLValidator(), 'http://\t[::ffff:192.9.5.5]', ValidationError),
+     # Trailing junk does not take forever to reject
+     (URLValidator(), 'http://www.asdasdasdasdsadfm.com.br ', ValidationError),
+     (URLValidator(), 'http://www.asdasdasdasdsadfm.com.br z', ValidationError),
+@@ -333,7 +327,7 @@
+                     with self.assertRaises(expected):
+                         validator(value)
+                 else:
+-                self.assertEqual("failure", validator(value))
++                    self.assertEqual(expected, validator(value))
+ 
+     def test_single_message(self):
+         v = ValidationError('Not Valid')

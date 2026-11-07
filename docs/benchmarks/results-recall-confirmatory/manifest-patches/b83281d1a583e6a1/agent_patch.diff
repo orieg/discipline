@@ -1,0 +1,35 @@
+diff --git a/django/db/models/sql/subqueries.py b/django/db/models/sql/subqueries.py
+--- a/django/db/models/sql/subqueries.py
++++ b/django/db/models/sql/subqueries.py
+@@ -130,11 +130,30 @@
+         if not self.related_updates:
+             return []
+         result = []
++        # Get the source model (the model of the queryset performing the update).
++        source_model = self.model
+         for model, values in self.related_updates.items():
+             query = UpdateQuery(model)
+             query.values = values
+             if self.related_ids is not None:
+-                query.add_filter("pk__in", self.related_ids)
++                # Build a subquery to get the ancestor's pk values from the
++                # source model through the parent link.
++                # This handles multiple inheritance where the source model's
++                # primary key may not be the same as the ancestor model's pk.
++                # Start from the source model and join to the ancestor.
++                inner = Query(source_model)
++                # Get the link from the source model to the ancestor model.
++                link = source_model._meta.get_ancestor_link(model)
++                # Join the source model to the ancestor model.
++                # This will create a join from source to ancestor via the link.
++                inner.join_parent_model(
++                    source_model._meta, model, inner.get_initial_alias(), {}
++                )
++                # Filter by the source model's pk (which is in related_ids).
++                inner.add_filter("pk__in", self.related_ids)
++                # Select the ancestor model's pk.
++                inner.add_fields(["pk"])
++                query.add_filter("pk__in", inner)
+             result.append(query)
+         return result
+ 

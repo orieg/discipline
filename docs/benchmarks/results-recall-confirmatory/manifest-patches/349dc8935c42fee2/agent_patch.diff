@@ -1,0 +1,54 @@
+diff --git a/django/db/migrations/serializer.py b/django/db/migrations/serializer.py
+--- a/django/db/migrations/serializer.py
++++ b/django/db/migrations/serializer.py
+@@ -90,12 +90,33 @@
+ 
+     @staticmethod
+     def _serialize_path(path):
+-        module, name = path.rsplit(".", 1)
++        parts = path.rsplit(".", 1)
++        if len(parts) == 1:
++            # No dot found, just return the path
++            return path, set()
++        module, name = parts
+         if module == "django.db.models":
+             imports = {"from django.db import models"}
+             name = "models.%s" % name
+         else:
+-            imports = {"import %s" % module}
++            # Handle nested classes by finding the correct top-level module
++            # Try progressively shorter module paths until we find one that exists
++            module_parts = module.split(".")
++            actual_module = None
++            for i in range(len(module_parts), 0, -1):
++                candidate = ".".join(module_parts[:i])
++                try:
++                    from importlib import import_module
++                    import_module(candidate)
++                    actual_module = candidate
++                    break
++                except ImportError:
++                    continue
++            if actual_module:
++                imports = {"import %s" % actual_module}
++            else:
++                # If we can't find a valid module, use the full path as-is
++                imports = {"import %s" % module}
+             name = path
+         return name, imports
+ 
+@@ -268,8 +289,12 @@
+             module = self.value.__module__
+             if module == builtins.__name__:
+                 return self.value.__name__, set()
+-            else:
+-                return "%s.%s" % (module, self.value.__name__), {"import %s" % module}
++            if "<" in self.value.__qualname__:
++                raise ValueError(
++                    "Cannot serialize class %r: Nested class inside a function "
++                    "cannot be serialized." % self.value.__name__
++                )
++            return "%s.%s" % (module, self.value.__qualname__), {"import %s" % module}
+ 
+ 
+ class UUIDSerializer(BaseSerializer):

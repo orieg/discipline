@@ -1,0 +1,76 @@
+diff --git a/django/forms/models.py b/django/forms/models.py
+--- a/django/forms/models.py
++++ b/django/forms/models.py
+@@ -572,10 +572,14 @@
+     # Set of fields that must be unique among forms of this set.
+     unique_fields = set()
+ 
++    # Default value for edit_only attribute.
++    edit_only_class = False
++
+     def __init__(self, data=None, files=None, auto_id='id_%s', prefix=None,
+-                 queryset=None, *, initial=None, **kwargs):
++                 queryset=None, *, initial=None, edit_only=None, **kwargs):
+         self.queryset = queryset
+         self.initial_extra = initial
++        self.edit_only = edit_only if edit_only is not None else self.edit_only_class
+         super().__init__(**{'data': data, 'files': files, 'auto_id': auto_id, 'prefix': prefix, **kwargs})
+ 
+     def initial_form_count(self):
+@@ -801,6 +805,10 @@
+             # 2. The object was already deleted from the database.
+             if obj.pk is None:
+                 continue
++            if self.edit_only and self._existing_object(obj.pk) is None:
++                # The object is not in the queryset, so skip it when
++                # edit_only is True.
++                continue
+             if form in forms_to_delete:
+                 self.deleted_objects.append(obj)
+                 self.delete_existing(obj, commit=commit)
+@@ -820,6 +828,9 @@
+             # object.
+             if self.can_delete and self._should_delete_form(form):
+                 continue
++            if self.edit_only:
++                # Don't save new objects when edit_only is True.
++                continue
+             self.new_objects.append(self.save_new(form, commit=commit))
+             if not commit:
+                 self.saved_forms.append(form)
+@@ -875,7 +886,8 @@
+                          widgets=None, validate_max=False, localized_fields=None,
+                          labels=None, help_texts=None, error_messages=None,
+                          min_num=None, validate_min=False, field_classes=None,
+-                         absolute_max=None, can_delete_extra=True, renderer=None):
++                         absolute_max=None, can_delete_extra=True, edit_only=False,
++                         renderer=None):
+     """Return a FormSet class for the given Django model class."""
+     meta = getattr(form, 'Meta', None)
+     if (getattr(meta, 'fields', fields) is None and
+@@ -896,6 +908,7 @@
+                               absolute_max=absolute_max, can_delete_extra=can_delete_extra,
+                               renderer=renderer)
+     FormSet.model = model
++    FormSet.edit_only_class = edit_only
+     return FormSet
+ 
+ 
+@@ -1076,7 +1089,8 @@
+                           widgets=None, validate_max=False, localized_fields=None,
+                           labels=None, help_texts=None, error_messages=None,
+                           min_num=None, validate_min=False, field_classes=None,
+-                          absolute_max=None, can_delete_extra=True, renderer=None):
++                          absolute_max=None, can_delete_extra=True, edit_only=False,
++                          renderer=None):
+     """
+     Return an ``InlineFormSet`` for the given kwargs.
+ 
+@@ -1108,6 +1122,7 @@
+         'field_classes': field_classes,
+         'absolute_max': absolute_max,
+         'can_delete_extra': can_delete_extra,
++        'edit_only': edit_only,
+         'renderer': renderer,
+     }
+     FormSet = modelformset_factory(model, **kwargs)

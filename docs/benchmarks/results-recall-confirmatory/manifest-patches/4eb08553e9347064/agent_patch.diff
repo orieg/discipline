@@ -1,0 +1,15 @@
+diff --git a/django/core/management/base.py b/django/core/management/base.py
+--- a/django/core/management/base.py
++++ b/django/core/management/base.py
+@@ -286,6 +286,11 @@
+             '--force-color', action='store_true',
+             help='Force colorization of the command output.',
+         )
++        parser.add_argument(
++            '--skip-checks',
++            help="Disable system checks.",
++            action='store_true',
++        )
+         self.add_arguments(parser)
+         return parser
+ 

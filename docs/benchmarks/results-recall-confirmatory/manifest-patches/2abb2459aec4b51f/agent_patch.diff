@@ -1,0 +1,37 @@
+diff --git a/django/forms/fields.py b/django/forms/fields.py
+--- a/django/forms/fields.py
++++ b/django/forms/fields.py
+@@ -999,6 +999,15 @@
+                 # by those individual fields.
+                 f.required = False
+         self.fields = fields
++        # Set the widget's is_required attribute based on the individual
++        # fields' required attribute. This is needed for MultiWidget to
++        # render subwidgets with the correct required attribute.
++        if hasattr(self.widget, 'widgets'):
++            for i, field in enumerate(self.fields):
++                try:
++                    self.widget.widgets[i].is_required = field.required
++                except IndexError:
++                    pass
+ 
+     def __deepcopy__(self, memo):
+         result = super().__deepcopy__(memo)
+@@ -1025,8 +1034,15 @@
+             if not value or not [v for v in value if v not in self.empty_values]:
+                 if self.required:
+                     raise ValidationError(self.error_messages['required'], code='required')
+-                else:
+-                    return self.compress([])
++                # Check if any required sub-fields are empty even when
++                # the MultiValueField itself is not required
++                for field in self.fields:
++                    if field.required:
++                        if field.error_messages['incomplete'] not in errors:
++                            errors.append(field.error_messages['incomplete'])
++                if errors:
++                    raise ValidationError(errors)
++                return self.compress([])
+         else:
+             raise ValidationError(self.error_messages['invalid'], code='invalid')
+         for i, field in enumerate(self.fields):

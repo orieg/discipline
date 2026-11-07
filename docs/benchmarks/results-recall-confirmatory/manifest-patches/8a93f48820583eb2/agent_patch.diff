@@ -1,0 +1,79 @@
+diff --git a/django/db/models/sql/compiler.py b/django/db/models/sql/compiler.py
+--- a/django/db/models/sql/compiler.py
++++ b/django/db/models/sql/compiler.py
+@@ -127,8 +127,9 @@
+                 expressions.append(col)
+         for expr, (sql, params, is_ref) in order_by:
+             # Skip References to the select clause, as all expressions in the
+-            # select clause are already part of the group by.
+-            if not is_ref:
++            # select clause are already part of the group by. Also skip
++            # expressions from Meta.ordering to avoid incorrect GROUP BY.
++            if not is_ref and expr not in self._meta_ordering_exprs:
+                 expressions.extend(expr.get_group_by_cols())
+         having_group_by = self.having.get_group_by_cols() if self.having else ()
+         for expr in having_group_by:
+@@ -294,6 +295,7 @@
+             asc, desc = ORDER_DIR['DESC']
+ 
+         order_by = []
++        meta_ordering_exprs = set()
+         for field in ordering:
+             if hasattr(field, 'resolve_expression'):
+                 if isinstance(field, Value):
+@@ -305,9 +307,13 @@
+                     field = field.copy()
+                     field.reverse_ordering()
+                 order_by.append((field, False))
++                if self._meta_ordering:
++                    meta_ordering_exprs.add(field)
+                 continue
+             if field == '?':  # random
+                 order_by.append((OrderBy(Random()), False))
++                if self._meta_ordering:
++                    meta_ordering_exprs.add(OrderBy(Random()))
+                 continue
+ 
+             col, order = get_order_dir(field, asc)
+@@ -348,8 +354,12 @@
+             if not self.query.extra or col not in self.query.extra:
+                 # 'col' is of the form 'field' or 'field1__field2' or
+                 # '-field1__field2__field', etc.
+-                order_by.extend(self.find_ordering_name(
+-                    field, self.query.get_meta(), default_order=asc))
++                for order_expr, is_ref in self.find_ordering_name(
++                    field, self.query.get_meta(), default_order=asc
++                ):
++                    order_by.append((order_expr, is_ref))
++                    if self._meta_ordering:
++                        meta_ordering_exprs.add(order_expr)
+             else:
+                 if col not in self.query.extra_select:
+                     order_by.append((
+@@ -361,6 +371,8 @@
+                         True))
+         result = []
+         seen = set()
++        # Track resolved expressions from Meta.ordering to exclude from GROUP BY.
++        resolved_meta_ordering_exprs = set()
+ 
+         for expr, is_ref in order_by:
+             resolved = expr.resolve_expression(self.query, allow_joins=True, reuse=None)
+@@ -391,6 +403,9 @@
+                         q.add_annotation(expr_src, col_name)
+                     self.query.add_select_col(resolved, col_name)
+                     resolved.set_source_expressions([RawSQL(f'{order_by_idx}', ())])
++            # Track resolved expressions from Meta.ordering.
++            if self._meta_ordering and expr in meta_ordering_exprs:
++                resolved_meta_ordering_exprs.add(resolved)
+             sql, params = self.compile(resolved)
+             # Don't add the same column twice, but the order direction is
+             # not taken into account so we strip it. When this entire method
+@@ -402,6 +417,7 @@
+                 continue
+             seen.add((without_ordering, params_hash))
+             result.append((resolved, (sql, params, is_ref)))
++        self._meta_ordering_exprs = resolved_meta_ordering_exprs
+         return result
+ 
+     def get_extra_select(self, order_by, select):

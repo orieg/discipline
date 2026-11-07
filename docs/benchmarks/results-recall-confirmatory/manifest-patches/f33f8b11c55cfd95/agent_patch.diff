@@ -1,0 +1,17 @@
+diff --git a/django/db/migrations/optimizer.py b/django/db/migrations/optimizer.py
+--- a/django/db/migrations/optimizer.py
++++ b/django/db/migrations/optimizer.py
+@@ -56,9 +56,10 @@
+                         new_operations.extend(result)
+                         new_operations.extend(in_between)
+                     else:
+-                        # Otherwise keep trying.
+-                        new_operations.append(operation)
+-                        break
++                        # Otherwise perform the right reduction anyway and
++                        # keep in_between operations.
++                        new_operations.extend(in_between)
++                        new_operations.extend(result)
+                     new_operations.extend(operations[i + j + 2:])
+                     return new_operations
+                 elif not result:

@@ -1,0 +1,14 @@
+diff --git a/django/db/models/enums.py b/django/db/models/enums.py
+--- a/django/db/models/enums.py
++++ b/django/db/models/enums.py
+@@ -33,6 +33,10 @@
+         cls.label = property(lambda self: cls._value2label_map_.get(self.value))
+         return enum.unique(cls)
+ 
++    def __init__(cls, classname, bases, classdict):
++        super().__init__(classname, bases, classdict)
++        cls.do_not_call_in_templates = True
++
+     def __contains__(cls, member):
+         if not isinstance(member, enum.Enum):
+             # Allow non-enums to match against member values.

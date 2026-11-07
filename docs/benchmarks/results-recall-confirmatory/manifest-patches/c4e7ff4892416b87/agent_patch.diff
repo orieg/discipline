@@ -1,0 +1,23 @@
+diff --git a/django/views/generic/base.py b/django/views/generic/base.py
+--- a/django/views/generic/base.py
++++ b/django/views/generic/base.py
+@@ -160,7 +160,18 @@
+         # RemovedInDjango40Warning: when the deprecation ends, replace with:
+         #   context = self.get_context_data()
+         context_kwargs = _wrap_url_kwargs_with_deprecation_warning(kwargs)
+-        context = self.get_context_data(**context_kwargs)
++        # Unwrap SimpleLazyObject values to allow them to be used in
++        # database queries. This also triggers the deprecation warning.
++        unwrapped_kwargs = {}
++        for key, value in context_kwargs.items():
++            if isinstance(value, SimpleLazyObject):
++                # Force evaluation to trigger the deprecation warning
++                # and unwrap the value.
++                str(value)
++                unwrapped_kwargs[key] = value._wrapped
++            else:
++                unwrapped_kwargs[key] = value
++        context = self.get_context_data(**unwrapped_kwargs)
+         return self.render_to_response(context)
+ 
+ 

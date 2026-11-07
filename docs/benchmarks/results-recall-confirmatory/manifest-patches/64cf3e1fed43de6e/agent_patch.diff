@@ -1,0 +1,27 @@
+diff --git a/django/db/models/expressions.py b/django/db/models/expressions.py
+--- a/django/db/models/expressions.py
++++ b/django/db/models/expressions.py
+@@ -442,6 +442,23 @@
+     def set_source_expressions(self, exprs):
+         self.lhs, self.rhs = exprs
+ 
++    def _resolve_output_field(self):
++        # Handle temporal subtraction - when subtracting two temporal fields
++        # (Date, DateTime, Time), the result is a DurationField.
++        if self.connector == self.SUB:
++            try:
++                lhs_type = self.lhs.output_field.get_internal_type()
++            except FieldError:
++                lhs_type = None
++            try:
++                rhs_type = self.rhs.output_field.get_internal_type()
++            except FieldError:
++                rhs_type = None
++            datetime_fields = {'DateField', 'DateTimeField', 'TimeField'}
++            if lhs_type in datetime_fields and lhs_type == rhs_type:
++                return fields.DurationField()
++        return super()._resolve_output_field()
++
+     def as_sql(self, compiler, connection):
+         try:
+             lhs_type = self.lhs.output_field.get_internal_type()

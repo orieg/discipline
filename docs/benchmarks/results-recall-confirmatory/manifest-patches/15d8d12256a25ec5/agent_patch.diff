@@ -1,0 +1,37 @@
+diff --git a/lib/matplotlib/figure.py b/lib/matplotlib/figure.py
+--- a/lib/matplotlib/figure.py
++++ b/lib/matplotlib/figure.py
+@@ -2272,14 +2272,25 @@
+             self.bbox_relative.p0 = bbox.p0
+             self.bbox_relative.p1 = bbox.p1
+             return
+-        # need to figure out *where* this subplotspec is.
+-        gs = self._subplotspec.get_gridspec()
+-        wr = np.asarray(gs.get_width_ratios())
+-        hr = np.asarray(gs.get_height_ratios())
+-        dx = wr[self._subplotspec.colspan].sum() / wr.sum()
+-        dy = hr[self._subplotspec.rowspan].sum() / hr.sum()
+-        x0 = wr[:self._subplotspec.colspan.start].sum() / wr.sum()
+-        y0 = 1 - hr[:self._subplotspec.rowspan.stop].sum() / hr.sum()
++        # Get the position from the subplotspec in figure coordinates.
++        # This correctly accounts for wspace/hspace.
++        pos = self._subplotspec.get_position(self.figure)
++
++        # If the parent is a SubFigure, convert from figure coordinates to
++        # parent-relative coordinates.
++        if hasattr(self._parent, '_subplotspec'):
++            # Parent is a SubFigure, so convert to parent-relative coords.
++            parent_pos = self._parent._subplotspec.get_position(self.figure)
++            parent_left, parent_bottom, parent_right, parent_top = parent_pos
++            # Convert to parent-relative (0-1) coordinates
++            x0 = (pos.x0 - parent_left) / (parent_right - parent_left)
++            y0 = (pos.y0 - parent_bottom) / (parent_top - parent_bottom)
++            dx = (pos.x1 - pos.x0) / (parent_right - parent_left)
++            dy = (pos.y1 - pos.y0) / (parent_top - parent_bottom)
++        else:
++            # Parent is a Figure, position is already in correct space.
++            x0, y0, dx, dy = pos.bounds
++
+         if self.bbox_relative is None:
+             self.bbox_relative = Bbox.from_bounds(x0, y0, dx, dy)
+         else:

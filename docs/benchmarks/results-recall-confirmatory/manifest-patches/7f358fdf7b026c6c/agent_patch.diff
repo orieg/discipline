@@ -1,0 +1,25 @@
+diff --git a/django/core/validators.py b/django/core/validators.py
+--- a/django/core/validators.py
++++ b/django/core/validators.py
+@@ -101,6 +101,9 @@
+     def __call__(self, value):
+         if not isinstance(value, str):
+             raise ValidationError(self.message, code=self.code, params={'value': value})
++        # Newlines and tabs are not accepted.
++        if '\n' in value or '\r' in value or '\t' in value:
++            raise ValidationError(self.message, code=self.code, params={'value': value})
+         # Check if the scheme is valid.
+         scheme = value.split('://')[0].lower()
+         if scheme not in self.schemes:
+diff --git a/tests/validators/tests.py b/tests/validators/tests.py
+--- a/tests/validators/tests.py
++++ b/tests/validators/tests.py
+@@ -333,7 +333,7 @@
+                     with self.assertRaises(expected):
+                         validator(value)
+                 else:
+-                self.assertEqual("failure", validator(value))
++                    self.assertEqual(expected, validator(value))
+ 
+     def test_single_message(self):
+         v = ValidationError('Not Valid')

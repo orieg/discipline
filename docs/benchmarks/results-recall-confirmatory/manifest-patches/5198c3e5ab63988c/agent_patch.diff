@@ -1,0 +1,24 @@
+diff --git a/astropy/utils/misc.py b/astropy/utils/misc.py
+--- a/astropy/utils/misc.py
++++ b/astropy/utils/misc.py
+@@ -536,6 +536,20 @@
+                     if super_method is not None:
+                         val.__doc__ = super_method.__doc__
+                         break
++            elif isinstance(val, property) and is_public_member(key):
++                if val.fget is not None and val.__doc__ is None:
++                    for base in cls.__mro__[1:]:
++                        super_method = getattr(base, key, None)
++                        if super_method is not None:
++                            if isinstance(super_method, property):
++                                inherited_doc = (super_method.__doc__
++                                                 if super_method.__doc__ is not None
++                                                 else None)
++                            else:
++                                inherited_doc = super_method.__doc__
++                            if inherited_doc is not None:
++                                val.__doc__ = inherited_doc
++                                break
+ 
+         super().__init__(name, bases, dct)
+ 

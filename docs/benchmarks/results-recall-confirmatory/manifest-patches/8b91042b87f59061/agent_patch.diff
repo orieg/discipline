@@ -1,0 +1,86 @@
+diff --git a/pylint/config/callback_actions.py b/pylint/config/callback_actions.py
+--- a/pylint/config/callback_actions.py
++++ b/pylint/config/callback_actions.py
+@@ -45,6 +45,32 @@
+     without erroring when they are then processed again by argparse.
+     """
+ 
++    def __init__(
++        self,
++        option_strings: Sequence[str],
++        dest: str,
++        nargs: None = None,
++        const: None = None,
++        default: None = None,
++        type: None = None,
++        choices: None = None,
++        required: bool = False,
++        help: str = "",
++        metavar: str = "",
++    ) -> None:
++        super().__init__(
++            option_strings,
++            dest,
++            0,
++            const,
++            default,
++            type,
++            choices,
++            required,
++            help,
++            metavar,
++        )
++
+     def __call__(
+         self,
+         parser: argparse.ArgumentParser,
+diff --git a/pylint/config/config_file_parser.py b/pylint/config/config_file_parser.py
+--- a/pylint/config/config_file_parser.py
++++ b/pylint/config/config_file_parser.py
+@@ -92,7 +92,7 @@
+             raise OSError(f"The config file {file_path} doesn't exist!")
+ 
+         if self.verbose_mode:
+-            print(f"Using config file {file_path}", file=sys.stderr)
++            print(f"Using configuration file {file_path}", file=sys.stderr)
+ 
+         try:
+             if file_path.suffix == ".toml":
+diff --git a/pylint/config/utils.py b/pylint/config/utils.py
+--- a/pylint/config/utils.py
++++ b/pylint/config/utils.py
+@@ -210,6 +210,11 @@
+     "--enable-all-extensions": (False, _enable_all_extensions),
+ }
+ 
++# Mapping of short options to their long form equivalents
++_SHORT_OPTIONS_MAP: dict[str, str] = {
++    "-v": "--verbose",
++}
++
+ 
+ def _preprocess_options(run: Run, args: Sequence[str]) -> list[str]:
+     """Preprocess options before full config parsing has started."""
+@@ -218,6 +223,22 @@
+     i = 0
+     while i < len(args):
+         argument = args[i]
++        # Handle short options
++        if argument.startswith("-") and not argument.startswith("--"):
++            # Check if this short option has a preprocessor
++            if argument in _SHORT_OPTIONS_MAP:
++                long_option = _SHORT_OPTIONS_MAP[argument]
++                takearg, cb = PREPROCESSABLE_OPTIONS[long_option]
++                if takearg:
++                    raise ArgumentPreprocessingError(
++                        f"Option {argument} expects a value"
++                    )
++                cb(run, None)
++                i += 1
++                continue
++            processed_args.append(argument)
++            i += 1
++            continue
+         if not argument.startswith("--"):
+             processed_args.append(argument)
+             i += 1

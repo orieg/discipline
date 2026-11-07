@@ -1,0 +1,25 @@
+diff --git a/sympy/printing/latex.py b/sympy/printing/latex.py
+--- a/sympy/printing/latex.py
++++ b/sympy/printing/latex.py
+@@ -634,8 +634,7 @@
+             base = self.parenthesize(expr.base, PRECEDENCE['Pow'])
+             p, q = expr.exp.p, expr.exp.q
+             # issue #12886: add parentheses for superscripts raised to powers
+-            if expr.base.is_Symbol:
+-                base = self.parenthesize_super(base)
++            base = self.parenthesize_super(base)
+             if expr.base.is_Function:
+                 return self._print(expr.base, exp="%s/%s" % (p, q))
+             return r"%s^{%s/%s}" % (base, p, q)
+@@ -665,9 +664,8 @@
+         # issue #12886: add parentheses around superscripts raised
+         # to powers
+         base = self.parenthesize(expr.base, PRECEDENCE['Pow'])
+-        if expr.base.is_Symbol:
+-            base = self.parenthesize_super(base)
+-        elif (isinstance(expr.base, Derivative)
++        base = self.parenthesize_super(base)
++        if (isinstance(expr.base, Derivative)
+             and base.startswith(r'\left(')
+             and re.match(r'\\left\(\\d?d?dot', base)
+             and base.endswith(r'\right)')):

@@ -1,0 +1,28 @@
+diff --git a/django/utils/timezone.py b/django/utils/timezone.py
+--- a/django/utils/timezone.py
++++ b/django/utils/timezone.py
+@@ -71,9 +71,22 @@
+     return _get_timezone_name(get_current_timezone())
+ 
+ 
+-def _get_timezone_name(timezone):
++def _get_timezone_name(tz):
+     """Return the name of ``timezone``."""
+-    return str(timezone)
++    tzname = str(tz)
++    # For Etc/GMT timezones from pytz/zoneinfo, return the actual UTC offset
++    # instead of the timezone name, because Etc/GMT has a reversed sign convention.
++    # datetime.timezone with explicit Etc/GMT name should preserve the name.
++    if (not isinstance(tz, datetime.timezone) and
++            tzname.startswith('Etc/GMT')):
++        # Get the actual UTC offset
++        offset = tz.utcoffset(datetime.now(datetime.timezone.utc))
++        # Format as +/-HH
++        total_seconds = int(offset.total_seconds())
++        hours = total_seconds // 3600
++        sign = '+' if hours >= 0 else '-'
++        return f'{sign}{abs(hours)}'
++    return tzname
+ 
+ # Timezone selection functions.
+ 

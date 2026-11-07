@@ -1,0 +1,30 @@
+diff --git a/sphinx/pycode/ast.py b/sphinx/pycode/ast.py
+--- a/sphinx/pycode/ast.py
++++ b/sphinx/pycode/ast.py
+@@ -166,14 +166,24 @@
+         return "{" + ", ".join(self.visit(e) for e in node.elts) + "}"
+ 
+     def visit_Subscript(self, node: ast.Subscript) -> str:
+-        return "%s[%s]" % (self.visit(node.value), self.visit(node.slice))
++        if isinstance(node.slice, ast.Tuple) and node.slice.elts and \
++                not any(isinstance(elt, ast.Starred) for elt in node.slice.elts):
++            # Parentheses can be safely omitted for simple tuples in subscripts
++            self._parenthesize_tuple = False
++        try:
++            return "%s[%s]" % (self.visit(node.value), self.visit(node.slice))
++        finally:
++            self._parenthesize_tuple = True
+ 
+     def visit_UnaryOp(self, node: ast.UnaryOp) -> str:
+         return "%s %s" % (self.visit(node.op), self.visit(node.operand))
+ 
+     def visit_Tuple(self, node: ast.Tuple) -> str:
+         if node.elts:
+-            return ", ".join(self.visit(e) for e in node.elts)
++            if getattr(self, '_parenthesize_tuple', True):
++                return "(" + ", ".join(self.visit(e) for e in node.elts) + ")"
++            else:
++                return ", ".join(self.visit(e) for e in node.elts)
+         else:
+             return "()"
+ 

@@ -1,0 +1,41 @@
+diff --git a/django/forms/formsets.py b/django/forms/formsets.py
+--- a/django/forms/formsets.py
++++ b/django/forms/formsets.py
+@@ -333,7 +333,7 @@
+         self._non_form_errors.
+         """
+         self._errors = []
+-        self._non_form_errors = self.error_class()
++        self._non_form_errors = self.error_class(error_class='nonform')
+         empty_forms_count = 0
+ 
+         if not self.is_bound:  # Stop further processing.
+@@ -380,7 +380,7 @@
+             # Give self.clean() a chance to do cross-form validation.
+             self.clean()
+         except ValidationError as e:
+-            self._non_form_errors = self.error_class(e.error_list)
++            self._non_form_errors = self.error_class(e.error_list, error_class='nonform')
+ 
+     def clean(self):
+         """
+diff --git a/docs/topics/forms/formsets.txt b/docs/topics/forms/formsets.txt
+--- a/docs/topics/forms/formsets.txt
++++ b/docs/topics/forms/formsets.txt
+@@ -365,6 +365,16 @@
+ have been called. The errors will be found using the ``non_form_errors()``
+ method on the formset.
+ 
++Non-form errors will be rendered with an additional class of ``nonform`` to
++help distinguish them from field-specific errors. For example,
++``{{ formset.non_form_errors }}`` would look like:
++
++.. code-block:: html+django
++
++    <ul class="errorlist nonform">
++        <li>Generic validation error</li>
++    </ul>
++
+ Validating the number of forms in a formset
+ ===========================================
+ 

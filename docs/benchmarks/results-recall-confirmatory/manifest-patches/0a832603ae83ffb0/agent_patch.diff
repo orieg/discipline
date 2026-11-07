@@ -1,0 +1,34 @@
+diff --git a/tests/roots/test-directive-include/baz/baz.rst b/tests/roots/test-directive-include/baz/baz.rst
+new file mode 100644
+--- /dev/null
++++ b/tests/roots/test-directive-include/baz/baz.rst
+@@ -0,0 +1,3 @@
++The #magical foo.
++
++Baz was not here.
+diff --git a/tests/roots/test-directive-include/conf.py b/tests/roots/test-directive-include/conf.py
+new file mode 100644
+--- /dev/null
++++ b/tests/roots/test-directive-include/conf.py
+@@ -0,0 +1,2 @@
++# dummy conf.py
++extensions = []
+diff --git a/tests/roots/test-directive-include/index.rst b/tests/roots/test-directive-include/index.rst
+new file mode 100644
+--- /dev/null
++++ b/tests/roots/test-directive-include/index.rst
+@@ -0,0 +1,8 @@
++Test
++====
++
++.. include:: baz/baz.rst
++   :start-line: 4
++
++.. include:: text.txt
++   :literal:    
+diff --git a/tests/roots/test-directive-include/text.txt b/tests/roots/test-directive-include/text.txt
+new file mode 100644
+--- /dev/null
++++ b/tests/roots/test-directive-include/text.txt
+@@ -0,0 +1,1 @@
++Some literal text.

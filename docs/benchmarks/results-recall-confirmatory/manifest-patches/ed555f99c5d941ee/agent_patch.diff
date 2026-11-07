@@ -1,0 +1,40 @@
+diff --git a/django/core/management/base.py b/django/core/management/base.py
+--- a/django/core/management/base.py
++++ b/django/core/management/base.py
+@@ -150,6 +150,10 @@
+         style_func = style_func or self.style_func
+         self._out.write(style_func(msg))
+ 
++    def flush(self):
++        if hasattr(self._out, 'flush'):
++            self._out.flush()
++
+ 
+ class BaseCommand:
+     """
+diff --git a/tests/user_commands/management/commands/outputwrapper.py b/tests/user_commands/management/commands/outputwrapper.py
+new file mode 100644
+--- /dev/null
++++ b/tests/user_commands/management/commands/outputwrapper.py
+@@ -0,0 +1,9 @@
++from django.core.management.base import BaseCommand
++
++
++class Command(BaseCommand):
++    help = "Test command for OutputWrapper.flush()."
++
++    def handle(self, *args, **options):
++        self.stdout.write('Finished...')
++        self.stdout.flush()
+diff --git a/tests/user_commands/tests.py b/tests/user_commands/tests.py
+--- a/tests/user_commands/tests.py
++++ b/tests/user_commands/tests.py
+@@ -345,7 +345,7 @@
+         out = StringIO()
+         with mock.patch.object(out, 'flush') as mocked_flush:
+             management.call_command('outputwrapper', stdout=out)
+-    self.assertIn('Finished...', out.getvalue())
++        self.assertIn('Finished...', out.getvalue())
+         self.assertIs(mocked_flush.called, True)
+ 
+ 

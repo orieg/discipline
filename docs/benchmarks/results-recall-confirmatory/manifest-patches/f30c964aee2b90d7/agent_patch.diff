@@ -1,0 +1,39 @@
+diff --git a/django/core/management/base.py b/django/core/management/base.py
+--- a/django/core/management/base.py
++++ b/django/core/management/base.py
+@@ -95,7 +95,7 @@
+     """
+     show_last = {
+         '--version', '--verbosity', '--traceback', '--settings', '--pythonpath',
+-        '--no-color', '--force-color',
++        '--no-color', '--force-color', '--skip-checks',
+     }
+ 
+     def _reordered_actions(self, actions):
+@@ -286,6 +286,14 @@
+             '--force-color', action='store_true',
+             help='Force colorization of the command output.',
+         )
++        parser.add_argument(
++            '--skip-checks', action='store_true',
++            help=(
++                'Disable system checks. The system check framework examines '
++                'your Django project for common problems and displays them on '
++                'stdout.'
++            ),
++        )
+         self.add_arguments(parser)
+         return parser
+ 
+diff --git a/tests/user_commands/tests.py b/tests/user_commands/tests.py
+--- a/tests/user_commands/tests.py
++++ b/tests/user_commands/tests.py
+@@ -261,7 +261,7 @@
+         })
+         out, err = self.run_manage(['set_option', '--skip-checks', '--set', 'foo'])
+         self.assertNoOutput(err)
+-    self.assertEqual(out.strip(), 'Set bar')
++        self.assertEqual(out.strip(), 'Set foo')
+ 
+ 
+ class UtilsTests(SimpleTestCase):

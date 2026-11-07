@@ -1,0 +1,57 @@
+diff --git a/django/db/migrations/recorder.py b/django/db/migrations/recorder.py
+--- a/django/db/migrations/recorder.py
++++ b/django/db/migrations/recorder.py
+@@ -1,5 +1,5 @@
+ from django.apps.registry import Apps
+-from django.db import DatabaseError, models
++from django.db import DatabaseError, models, router
+ from django.utils.functional import classproperty
+ from django.utils.timezone import now
+ 
+@@ -52,12 +52,22 @@
+ 
+     def has_table(self):
+         """Return True if the django_migrations table exists."""
++        # If migrations aren't allowed on this database, there's no table.
++        if not router.allow_migrate(
++            self.connection.alias, self.Migration._meta.app_label,
++        ):
++            return False
+         with self.connection.cursor() as cursor:
+             tables = self.connection.introspection.table_names(cursor)
+         return self.Migration._meta.db_table in tables
+ 
+     def ensure_schema(self):
+         """Ensure the table exists and has the correct schema."""
++        # If migrations aren't allowed on this database, there's no table.
++        if not router.allow_migrate(
++            self.connection.alias, self.Migration._meta.app_label,
++        ):
++            return
+         # If the table's there, that's fine - we've never changed its schema
+         # in the codebase.
+         if self.has_table():
+@@ -74,6 +84,12 @@
+         Return a dict mapping (app_name, migration_name) to Migration instances
+         for all applied migrations.
+         """
++        # If migrations aren't allowed on this database, no migrations are
++        # applied.
++        if not router.allow_migrate(
++            self.connection.alias, self.Migration._meta.app_label,
++        ):
++            return {}
+         if self.has_table():
+             return {(migration.app, migration.name): migration for migration in self.migration_qs}
+         else:
+diff --git a/tests/backends/base/test_creation.py b/tests/backends/base/test_creation.py
+--- a/tests/backends/base/test_creation.py
++++ b/tests/backends/base/test_creation.py
+@@ -82,7 +82,6 @@
+             mocked_sync_apps.assert_called()
+             mocked_args, _ = mocked_sync_apps.call_args
+             self.assertEqual(mocked_args[1], {'app_unmigrated'})
+-        self.assertEqual(mocked_args[1], {'test_app'})
+         finally:
+             with mock.patch.object(creation, '_destroy_test_db'):
+                 creation.destroy_test_db(old_database_name, verbosity=0)

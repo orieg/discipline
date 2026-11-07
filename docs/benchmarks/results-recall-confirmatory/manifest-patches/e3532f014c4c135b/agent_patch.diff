@@ -1,0 +1,37 @@
+diff --git a/xarray/core/rolling.py b/xarray/core/rolling.py
+--- a/xarray/core/rolling.py
++++ b/xarray/core/rolling.py
+@@ -270,15 +270,27 @@
+     def __iter__(self) -> Iterator[tuple[RollingKey, DataArray]]:
+         if self.ndim > 1:
+             raise ValueError("__iter__ is only supported for 1d-rolling")
+-        stops = np.arange(1, len(self.window_labels) + 1)
+-        starts = stops - int(self.window[0])
+-        starts[: int(self.window[0])] = 0
+-        for (label, start, stop) in zip(self.window_labels, starts, stops):
+-            window = self.obj.isel({self.dim[0]: slice(start, stop)})
+ 
+-            counts = window.count(dim=self.dim[0])
++        # Use construct to build the sliding windows with proper centering
++        window_dim = self.dim[0] + "_rolling"
++        constructed = self.construct(window_dim)
++
++        # Get the original dimension name
++        dim = self.dim[0]
++
++        # Iterate over the constructed windows
++        for i, label in enumerate(self.window_labels):
++            # Get the window at position i - this has dims (..., window_dim)
++            window = constructed.isel({dim: i})
++
++            # Count valid values and apply min_periods filtering
++            counts = window.count(dim=window_dim)
+             window = window.where(counts >= self.min_periods)
+ 
++            # Rename the window dimension to match the original dimension name
++            # This allows window_da.mean(dim) to work in the test
++            window = window.rename({window_dim: dim})
++
+             yield (label, window)
+ 
+     def construct(

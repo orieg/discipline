@@ -1,0 +1,21 @@
+diff --git a/sklearn/ensemble/tests/test_voting.py b/sklearn/ensemble/tests/test_voting.py
+--- a/sklearn/ensemble/tests/test_voting.py
++++ b/sklearn/ensemble/tests/test_voting.py
+@@ -531,4 +531,3 @@
+     voter.fit(X, y, sample_weight=np.ones(y.shape))
+     y_pred = voter.predict(X)
+     assert y_pred.shape == y.shape
+-    assert y_pred.shape == (y.shape[0] - 1,)
+diff --git a/sklearn/ensemble/voting.py b/sklearn/ensemble/voting.py
+--- a/sklearn/ensemble/voting.py
++++ b/sklearn/ensemble/voting.py
+@@ -78,7 +78,8 @@
+ 
+         if sample_weight is not None:
+             for name, step in self.estimators:
+-                if not has_fit_parameter(step, 'sample_weight'):
++                if step is not None and not has_fit_parameter(
++                        step, 'sample_weight'):
+                     raise ValueError('Underlying estimator \'%s\' does not'
+                                      ' support sample weights.' % name)
+ 

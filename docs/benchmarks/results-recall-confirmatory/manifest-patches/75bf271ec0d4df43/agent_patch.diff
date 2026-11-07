@@ -1,0 +1,37 @@
+diff --git a/sympy/matrices/expressions/blockmatrix.py b/sympy/matrices/expressions/blockmatrix.py
+--- a/sympy/matrices/expressions/blockmatrix.py
++++ b/sympy/matrices/expressions/blockmatrix.py
+@@ -9,6 +9,7 @@
+ from sympy.utilities.misc import filldedent
+ 
+ from sympy.matrices.expressions.matexpr import MatrixExpr, ZeroMatrix, Identity
++from sympy.core.numbers import Zero
+ from sympy.matrices.expressions.matmul import MatMul
+ from sympy.matrices.expressions.matadd import MatAdd
+ from sympy.matrices.expressions.matpow import MatPow
+@@ -164,7 +165,24 @@
+     def _blockmul(self, other):
+         if (isinstance(other, BlockMatrix) and
+                 self.colblocksizes == other.rowblocksizes):
+-            return BlockMatrix(self.blocks*other.blocks)
++            result = self.blocks*other.blocks
++            # Block matrix multiplication may result in scalar zeros
++            # instead of ZeroMatrix. We need to convert them back to
++            # ZeroMatrix with the appropriate dimensions.
++            from sympy.matrices import Matrix
++            new_blocks = []
++            for i in range(result.rows):
++                row = []
++                for j in range(result.cols):
++                    block = result[i, j]
++                    if isinstance(block, Zero):
++                        # Convert scalar zero to ZeroMatrix with proper shape
++                        row.append(ZeroMatrix(self.rowblocksizes[i],
++                                               other.colblocksizes[j]))
++                    else:
++                        row.append(block)
++                new_blocks.append(row)
++            return BlockMatrix(Matrix(new_blocks))
+ 
+         return self * other
+ 

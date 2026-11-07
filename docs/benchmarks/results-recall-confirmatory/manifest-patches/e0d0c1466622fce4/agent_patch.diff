@@ -1,0 +1,20 @@
+diff --git a/sympy/sets/sets.py b/sympy/sets/sets.py
+--- a/sympy/sets/sets.py
++++ b/sympy/sets/sets.py
+@@ -999,9 +999,13 @@
+             return Union(a, b)
+ 
+         if isinstance(other, FiniteSet):
+-            nums = [m for m in other.args if m.is_number]
+-            if nums == []:
+-                return None
++            # Filter out numbers that are in this interval
++            remaining = [m for m in other.args if self.contains(m) is not S.true]
++            if remaining == []:
++                return S.EmptySet
++            # Return an unevaluated Complement for the remaining elements
++            # since we cannot determine if they are in this interval or not
++            return Complement(FiniteSet(*remaining), self, evaluate=False)
+ 
+         return Set._complement(self, other)
+ 

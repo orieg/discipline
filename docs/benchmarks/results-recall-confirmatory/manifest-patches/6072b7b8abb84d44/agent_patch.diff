@@ -1,0 +1,12 @@
+diff --git a/sympy/utilities/lambdify.py b/sympy/utilities/lambdify.py
+--- a/sympy/utilities/lambdify.py
++++ b/sympy/utilities/lambdify.py
+@@ -961,6 +961,8 @@
+             left, right = "()"
+         else:
+             raise NotImplementedError("unhandled type: %s, %s" % (type(arg), arg))
++        if len(arg) == 1:
++            return left + _recursive_to_string(doprint, arg[0]) + ',)'
+         return left +', '.join(_recursive_to_string(doprint, e) for e in arg) + right
+     elif isinstance(arg, str):
+         return arg

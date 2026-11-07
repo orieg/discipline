@@ -1,0 +1,42 @@
+diff --git a/django/db/models/base.py b/django/db/models/base.py
+--- a/django/db/models/base.py
++++ b/django/db/models/base.py
+@@ -204,7 +204,14 @@
+             for field in base._meta.local_fields:
+                 if isinstance(field, OneToOneField):
+                     related = resolve_relation(new_class, field.remote_field.model)
+-                    parent_links[make_model_tuple(related)] = field
++                    related_key = make_model_tuple(related)
++                    # If a parent_link=True field is already set for this parent,
++                    # don't overwrite it with a field that doesn't have parent_link=True
++                    if (related_key in parent_links and
++                            parent_links[related_key].remote_field.parent_link and
++                            not field.remote_field.parent_link):
++                        continue
++                    parent_links[related_key] = field
+ 
+         # Track fields inherited from base models.
+         inherited_attributes = set()
+@@ -238,7 +245,12 @@
+                 base_key = make_model_tuple(base)
+                 if base_key in parent_links:
+                     field = parent_links[base_key]
+-                elif not is_proxy:
++                    if not field.remote_field.parent_link and not is_proxy:
++                        # A local field pointing to the parent was found but it's
++                        # not marked as parent_link. Use the auto-generated
++                        # parent link instead.
++                        field = None
++                if field is None and not is_proxy:
+                     attr_name = '%s_ptr' % base._meta.model_name
+                     field = OneToOneField(
+                         base,
+@@ -263,8 +275,6 @@
+                     # e.g. migrations will already have it specified
+                     if not hasattr(new_class, attr_name):
+                         new_class.add_to_class(attr_name, field)
+-                else:
+-                    field = None
+                 new_class._meta.parents[base] = field
+             else:
+                 base_parents = base._meta.parents.copy()

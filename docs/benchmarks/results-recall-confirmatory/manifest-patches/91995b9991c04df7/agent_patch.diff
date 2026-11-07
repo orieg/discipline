@@ -1,0 +1,79 @@
+diff --git a/pylint/config/callback_actions.py b/pylint/config/callback_actions.py
+--- a/pylint/config/callback_actions.py
++++ b/pylint/config/callback_actions.py
+@@ -45,6 +45,32 @@
+     without erroring when they are then processed again by argparse.
+     """
+ 
++    def __init__(
++        self,
++        option_strings,
++        dest,
++        nargs=0,
++        const=None,
++        default=None,
++        type=None,
++        choices=None,
++        required=False,
++        help=None,
++        metavar=None,
++    ) -> None:
++        super().__init__(
++            option_strings,
++            dest,
++            nargs,
++            const,
++            default,
++            type,
++            choices,
++            required,
++            help,
++            metavar,
++        )
++
+     def __call__(
+         self,
+         parser: argparse.ArgumentParser,
+diff --git a/pylint/config/utils.py b/pylint/config/utils.py
+--- a/pylint/config/utils.py
++++ b/pylint/config/utils.py
+@@ -210,6 +210,11 @@
+     "--enable-all-extensions": (False, _enable_all_extensions),
+ }
+ 
++# Short option names mapped to their long option names
++_PREPROCESSABLE_SHORT_OPTIONS: dict[str, str] = {
++    "-v": "--verbose",
++}
++
+ 
+ def _preprocess_options(run: Run, args: Sequence[str]) -> list[str]:
+     """Preprocess options before full config parsing has started."""
+@@ -218,7 +223,26 @@
+     i = 0
+     while i < len(args):
+         argument = args[i]
+-        if not argument.startswith("--"):
++        if not argument.startswith("-"):
++            processed_args.append(argument)
++            i += 1
++            continue
++
++        # Handle short options
++        if argument.startswith("-") and not argument.startswith("--"):
++            # Single short option (e.g., -v)
++            if argument in _PREPROCESSABLE_SHORT_OPTIONS:
++                option = _PREPROCESSABLE_SHORT_OPTIONS[argument]
++                takearg, cb = PREPROCESSABLE_OPTIONS[option]
++                if takearg:
++                    raise ArgumentPreprocessingError(
++                        f"Option {option} expects a value"
++                    )
++                cb(run, None)
++                i += 1
++                continue
++            # Multiple short options combined (e.g., -abc)
++            # For simplicity, don't preprocess combined short options
+             processed_args.append(argument)
+             i += 1
+             continue

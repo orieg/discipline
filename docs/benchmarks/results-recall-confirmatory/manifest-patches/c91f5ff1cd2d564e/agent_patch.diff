@@ -1,0 +1,46 @@
+diff --git a/sphinx/domains/python.py b/sphinx/domains/python.py
+--- a/sphinx/domains/python.py
++++ b/sphinx/domains/python.py
+@@ -349,6 +349,42 @@
+ 
+         return super().make_xref(rolename, domain, target, innernode, contnode, env)
+ 
++    def make_xrefs(self, rolename: str, domain: str, target: str,
++                   innernode: Type[TextlikeNode] = addnodes.literal_emphasis,
++                   contnode: Node = None, env: BuildEnvironment = None) -> List[Node]:
++        if rolename == 'class' and target == 'None':
++            # None is not a type, so use obj role instead.
++            rolename = 'obj'
++
++        # Only apply union type parsing for type annotations (literal_emphasis innernode)
++        if innernode is addnodes.literal_emphasis and env and target:
++            try:
++                # Parse the type annotation to support union types like 'int | str'
++                nodes_list = _parse_annotation(target, env)
++                result: List[Node] = []
++                for node in nodes_list:
++                    if isinstance(node, addnodes.pending_xref):
++                        # Wrap each pending_xref's content with innernode
++                        new_node = addnodes.pending_xref('', refdomain=node.get('refdomain'),
++                                                         reftype=node.get('reftype'),
++                                                         reftarget=node.get('reftarget'),
++                                                         refexplicit=node.get('refexplicit', False))
++                        new_node += innernode('', *node.children)
++                        result.append(new_node)
++                    elif isinstance(node, nodes.Text) and '|' in str(node):
++                        # Handle the pipe character that might be split across nodes
++                        result.append(innernode('', node))
++                    else:
++                        # For non-pending_xref nodes (like the '|' separator),
++                        # wrap with innernode
++                        result.append(innernode('', node))
++                return result
++            except Exception:
++                pass
++
++        # Fallback to default behavior for simple types
++        return [self.make_xref(rolename, domain, target, innernode, contnode, env)]
++
+ 
+ class PyObject(ObjectDescription[Tuple[str, str]]):
+     """

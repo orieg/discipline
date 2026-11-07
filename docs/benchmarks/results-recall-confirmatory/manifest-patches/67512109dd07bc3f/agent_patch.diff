@@ -1,0 +1,29 @@
+diff --git a/sympy/sets/conditionset.py b/sympy/sets/conditionset.py
+--- a/sympy/sets/conditionset.py
++++ b/sympy/sets/conditionset.py
+@@ -236,14 +236,21 @@
+                     assumptions or one having a single assumption
+                     having the same commutativity.
+                 '''))
+-            # don't target cond: it is there to tell how
+-            # the base set should be filtered and if new is not in
+-            # the base set then this substitution is ignored
++            # don't change the dummy symbol, but do evaluate
++            # the condition with new to see if the condition
++            # can be simplified to True or False
++            cond = cond.subs(old, new)
++            if cond is S.true:
++                return base
++            if cond is S.false:
++                return S.EmptySet
+             return self.func(sym, cond, base)
+         cond = self.condition.subs(old, new)
+         base = self.base_set.subs(old, new)
+         if cond is S.true:
+-            return ConditionSet(new, Contains(new, base), base)
++            return base
++        if cond is S.false:
++            return S.EmptySet
+         return self.func(self.sym, cond, base)
+ 
+     def dummy_eq(self, other, symbol=None):

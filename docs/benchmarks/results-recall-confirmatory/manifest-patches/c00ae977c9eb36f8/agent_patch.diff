@@ -1,0 +1,139 @@
+diff --git a/classes.dot b/classes.dot
+new file mode 100644
+--- /dev/null
++++ b/classes.dot
+@@ -0,0 +1,4 @@
++digraph "classes" {
++charset="utf-8"
++rankdir=BT
++}
+diff --git a/pylint/pyreverse/utils.py b/pylint/pyreverse/utils.py
+--- a/pylint/pyreverse/utils.py
++++ b/pylint/pyreverse/utils.py
+@@ -46,11 +46,126 @@
+ 
+ 
+ # astroid utilities ###########################################################
++import astroid
++
++from astroid import NodeNG, Uninferable
++
+ SPECIAL = re.compile(r"^__([^\W_]_*)+__$")
+ PRIVATE = re.compile(r"^__(_*[^\W_])+_?$")
+ PROTECTED = re.compile(r"^_\w*$")
+ 
+ 
++def get_annotation(node):
++    """Get the annotation from a node.
++
++    For AnnAssign nodes, returns the type annotation, handling Optional
++    when the default value is None.
++
++    For AssignAttr nodes (e.g., self.x = x in __init__), looks up the
++    corresponding parameter annotation.
++
++    Returns an object with a .name attribute containing the type string,
++    or None if no annotation could be determined.
++    """
++    from astroid import AnnAssign, AssignAttr, Const
++
++    # Handle AnnAssign value nodes (e.g., the value in 'a: str = None')
++    if isinstance(node, Const) and hasattr(node, "parent"):
++        parent = node.parent
++        if isinstance(parent, AnnAssign):
++            annotation = parent.annotation
++            # Check if the value is None
++            is_none = node.value is None
++            if annotation is not None:
++                # Get the annotation string
++                annotation_name = _get_annotation_name(annotation)
++                # If value is None and annotation is not already Optional,
++                # wrap it in Optional
++                if is_none and not annotation_name.startswith("Optional["):
++                    return _AnnotationWrapper(f"Optional[{annotation_name}]")
++                return _AnnotationWrapper(annotation_name)
++            return None
++
++    # Handle AssignAttr nodes (e.g., self.x = x in __init__)
++    if isinstance(node, AssignAttr):
++        # Navigate up to find the containing function
++        func = node.parent
++        while func is not None and not isinstance(func, astroid.FunctionDef):
++            func = func.parent
++            if func is None:
++                break
++
++        if func is not None and hasattr(func, "args"):
++            # Find the corresponding argument
++            arg_name = node.attrname
++            arg_index = None
++            for i, arg in enumerate(func.args.args):
++                if arg.name == arg_name:
++                    arg_index = i
++                    break
++
++            if arg_index is not None and arg_index < len(func.args.annotations):
++                annotation = func.args.annotations[arg_index]
++                # Check if the default value is None
++                num_defaults = len(func.args.defaults)
++                num_args = len(func.args.args)
++                # Defaults are indexed from the end
++                default_index = arg_index - (num_args - num_defaults)
++                is_none = False
++                if default_index >= 0 and default_index < num_defaults:
++                    default = func.args.defaults[default_index]
++                    if isinstance(default, Const) and default.value is None:
++                        is_none = True
++
++                if annotation is not None:
++                    annotation_name = _get_annotation_name(annotation)
++                    if is_none and not annotation_name.startswith("Optional["):
++                        return _AnnotationWrapper(f"Optional[{annotation_name}]")
++                    return _AnnotationWrapper(annotation_name)
++                return None
++
++    return None
++
++
++def _get_annotation_name(annotation):
++    """Get the name of an annotation node.
++
++    For Name nodes, returns the name.
++    For Subscript nodes (e.g., Optional[str]), returns as_string().
++    """
++    if hasattr(annotation, "name"):
++        return annotation.name
++    return annotation.as_string()
++
++
++class _AnnotationWrapper:
++    """Wrapper class to provide a .name attribute for annotations."""
++
++    def __init__(self, name):
++        self.name = name
++
++
++def infer_node(node):
++    """Infer the type of a node.
++
++    First tries to get an annotation. If no annotation is found,
++    attempts to infer the type by calling infer() on the node.
++
++    Returns a set of inferred types, or an empty set if inference fails
++    or no annotation could be determined.
++    """
++    from astroid.exceptions import InferenceError
++
++    annotation = get_annotation(node)
++    if annotation is not None:
++        return {annotation}
++
++    try:
++        return set(node.infer())
++    except InferenceError:
++        return set()
++
++
+ def get_visibility(name):
+     """return the visibility from a name: public, protected, private or special"""
+     if SPECIAL.match(name):

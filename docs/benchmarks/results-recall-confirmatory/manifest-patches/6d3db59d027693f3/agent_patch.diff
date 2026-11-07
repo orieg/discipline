@@ -1,0 +1,31 @@
+diff --git a/sympy/physics/quantum/dagger.py b/sympy/physics/quantum/dagger.py
+--- a/sympy/physics/quantum/dagger.py
++++ b/sympy/physics/quantum/dagger.py
+@@ -77,6 +77,9 @@
+     """
+ 
+     def __new__(cls, arg):
++        from sympy.physics.quantum.operator import IdentityOperator
++        if isinstance(arg, IdentityOperator):
++            return arg
+         if hasattr(arg, 'adjoint'):
+             obj = arg.adjoint()
+         elif hasattr(arg, 'conjugate') and hasattr(arg, 'transpose'):
+@@ -85,5 +88,17 @@
+             return obj
+         return Expr.__new__(cls, arg)
+ 
++    def __mul__(self, other):
++        from sympy.physics.quantum.operator import IdentityOperator
++        if isinstance(other, IdentityOperator):
++            return self
++        return super().__mul__(other)
++
++    def __rmul__(self, other):
++        from sympy.physics.quantum.operator import IdentityOperator
++        if isinstance(other, IdentityOperator):
++            return self
++        return super().__rmul__(other)
++
+ adjoint.__name__ = "Dagger"
+ adjoint._sympyrepr = lambda a, b: "Dagger(%s)" % b._print(a.args[0])

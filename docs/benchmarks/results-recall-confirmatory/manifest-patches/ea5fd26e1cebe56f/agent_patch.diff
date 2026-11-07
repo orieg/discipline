@@ -1,0 +1,20 @@
+diff --git a/sphinx/util/rst.py b/sphinx/util/rst.py
+--- a/sphinx/util/rst.py
++++ b/sphinx/util/rst.py
+@@ -79,8 +79,15 @@
+     """Prepend a string to content body as prolog."""
+     if prolog:
+         pos = 0
+-        for line in content:
++        for i, line in enumerate(content):
+             if docinfo_re.match(line):
++                # Check if the next line is a section underline (e.g., "----------")
++                # If so, this is a section title with a role, not docinfo
++                if i + 1 < len(content):
++                    next_line = content[i + 1]
++                    # A section underline must be at least 2 characters long
++                    if len(next_line) >= 2 and all(c in SECTIONING_CHARS for c in next_line):
++                        break
+                 pos += 1
+             else:
+                 break

@@ -1,0 +1,24 @@
+diff --git a/astropy/io/fits/diff.py b/astropy/io/fits/diff.py
+--- a/astropy/io/fits/diff.py
++++ b/astropy/io/fits/diff.py
+@@ -1449,7 +1449,7 @@
+                 arrb.dtype, np.floating
+             ):
+                 diffs = where_not_allclose(arra, arrb, rtol=self.rtol, atol=self.atol)
+-            elif "P" in col.format:
++            elif arra.dtype.kind == "O" or arrb.dtype.kind == "O":
+                 diffs = (
+                     [
+                         idx
+diff --git a/astropy/io/fits/tests/test_diff.py b/astropy/io/fits/tests/test_diff.py
+--- a/astropy/io/fits/tests/test_diff.py
++++ b/astropy/io/fits/tests/test_diff.py
+@@ -416,7 +416,7 @@
+         diff = TableDataDiff(ta.data, tb.data)
+         assert diff.identical
+         assert len(diff.common_columns) == 11
+-    assert diff.common_column_names == set("abcdefghij")
++        assert diff.common_column_names == set("abcdefghij")
+         assert diff.diff_ratio == 0
+         assert diff.diff_total == 0
+ 

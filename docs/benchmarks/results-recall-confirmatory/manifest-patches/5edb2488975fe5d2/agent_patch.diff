@@ -1,0 +1,19 @@
+diff --git a/xarray/core/computation.py b/xarray/core/computation.py
+--- a/xarray/core/computation.py
++++ b/xarray/core/computation.py
+@@ -1934,10 +1934,14 @@
+ 
+     def to_floatable(x: DataArray) -> DataArray:
+         if x.dtype.kind in "mM":
++            if x.dtype.kind == "M":
++                offset = np.datetime64("1970-01-01")
++            else:  # "m" for timedelta64
++                offset = np.timedelta64(0)
+             return x.copy(
+                 data=datetime_to_numeric(
+                     x.data,
+-                    offset=np.datetime64("1970-01-01"),
++                    offset=offset,
+                     datetime_unit="ns",
+                 ),
+             )

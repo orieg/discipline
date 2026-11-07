@@ -1,0 +1,48 @@
+diff --git a/sphinx/pycode/ast.py b/sphinx/pycode/ast.py
+--- a/sphinx/pycode/ast.py
++++ b/sphinx/pycode/ast.py
+@@ -70,6 +70,9 @@
+ # a greatly cut-down version of `ast._Unparser`
+ class _UnparseVisitor(ast.NodeVisitor):
+ 
++    def __init__(self):
++        self._in_subscript = False
++
+     def _visit_op(self, node: ast.AST) -> str:
+         return OPERATORS[node.__class__]
+     for _op in OPERATORS:
+@@ -166,16 +169,30 @@
+         return "{" + ", ".join(self.visit(e) for e in node.elts) + "}"
+ 
+     def visit_Subscript(self, node: ast.Subscript) -> str:
+-        return "%s[%s]" % (self.visit(node.value), self.visit(node.slice))
++        old_in_subscript = self._in_subscript
++        self._in_subscript = True
++        try:
++            result = "%s[%s]" % (self.visit(node.value), self.visit(node.slice))
++        finally:
++            self._in_subscript = old_in_subscript
++        return result
+ 
+     def visit_UnaryOp(self, node: ast.UnaryOp) -> str:
+         return "%s %s" % (self.visit(node.op), self.visit(node.operand))
+ 
+     def visit_Tuple(self, node: ast.Tuple) -> str:
+-        if node.elts:
+-            return ", ".join(self.visit(e) for e in node.elts)
++        if self._in_subscript:
++            # Don't add parentheses when inside a subscript
++            if node.elts:
++                return ", ".join(self.visit(e) for e in node.elts)
++            else:
++                return "()"
+         else:
+-            return "()"
++            # Add parentheses for standalone tuples
++            if node.elts:
++                return "(" + ", ".join(self.visit(e) for e in node.elts) + ")"
++            else:
++                return "()"
+ 
+     if sys.version_info >= (3, 6):
+         def visit_Constant(self, node: ast.Constant) -> str:

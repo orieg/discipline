@@ -1,0 +1,16 @@
+diff --git a/django/views/generic/base.py b/django/views/generic/base.py
+--- a/django/views/generic/base.py
++++ b/django/views/generic/base.py
+@@ -160,6 +160,12 @@
+         # RemovedInDjango40Warning: when the deprecation ends, replace with:
+         #   context = self.get_context_data()
+         context_kwargs = _wrap_url_kwargs_with_deprecation_warning(kwargs)
++        # Force evaluation of SimpleLazyObject instances in kwargs before
++        # passing to get_context_data() to avoid issues with database queries.
++        context_kwargs = {
++            key: value._wrapped if isinstance(value, SimpleLazyObject) else value
++            for key, value in context_kwargs.items()
++        }
+         context = self.get_context_data(**context_kwargs)
+         return self.render_to_response(context)
+ 

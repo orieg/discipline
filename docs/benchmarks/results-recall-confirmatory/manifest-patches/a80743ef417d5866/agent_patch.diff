@@ -1,0 +1,82 @@
+diff --git a/sphinx/domains/cpp.py b/sphinx/domains/cpp.py
+--- a/sphinx/domains/cpp.py
++++ b/sphinx/domains/cpp.py
+@@ -35,7 +35,7 @@
+     BaseParser, DefinitionError, UnsupportedMultiCharacterCharLiteral,
+     identifier_re, anon_identifier_re, integer_literal_re, octal_literal_re,
+     hex_literal_re, binary_literal_re, float_literal_re,
+-    char_literal_re
++    char_literal_re, udl_suffix_re
+ )
+ from sphinx.util.docfields import Field, GroupedField
+ from sphinx.util.docutils import SphinxDirective
+@@ -882,6 +882,23 @@
+         signode.append(nodes.Text(txt, txt))
+ 
+ 
++class ASTUDLiteral(ASTLiteral):
++    def __init__(self, data: str, suffix: str) -> None:
++        self.data = data
++        self.suffix = suffix
++
++    def _stringify(self, transform: StringifyTransform) -> str:
++        return self.data + self.suffix
++
++    def get_id(self, version: int) -> str:
++        return "clL_Zli%d%sEL%sEE" % (len(self.suffix), self.suffix, self.data)
++
++    def describe_signature(self, signode: TextElement, mode: str,
++                           env: "BuildEnvironment", symbol: "Symbol") -> None:
++        txt = str(self)
++        signode.append(nodes.Text(txt, txt))
++
++
+ class ASTThisLiteral(ASTExpression):
+     def _stringify(self, transform: StringifyTransform) -> str:
+         return "this"
+@@ -4664,16 +4681,33 @@
+             if self.match(regex):
+                 while self.current_char in 'uUlLfF':
+                     self.pos += 1
+-                return ASTNumberLiteral(self.definition[pos:self.pos])
++                data = self.definition[pos:self.pos]
++                if self.match(udl_suffix_re):
++                    suffix = self.matched_text
++                    return ASTUDLiteral(data, suffix)
++                return ASTNumberLiteral(data)
+ 
+         string = self._parse_string()
+         if string is not None:
++            if self.match(udl_suffix_re):
++                suffix = self.matched_text
++                return ASTUDLiteral(string, suffix)
+             return ASTStringLiteral(string)
+ 
+         # character-literal
+         if self.match(char_literal_re):
+             prefix = self.last_match.group(1)  # may be None when no prefix
+             data = self.last_match.group(2)
++            literal = self.last_match.group(0)
++            if self.match(udl_suffix_re):
++                suffix = self.matched_text
++                try:
++                    return ASTUDLiteral(prefix + "'" + data + "'", suffix)
++                except UnicodeDecodeError as e:
++                    self.fail("Can not handle character literal. Internal error was: %s" % e)
++                except UnsupportedMultiCharacterCharLiteral:
++                    self.fail("Can not handle character literal"
++                              " resulting in multiple decoded characters.")
+             try:
+                 return ASTCharLiteral(prefix, data)
+             except UnicodeDecodeError as e:
+diff --git a/sphinx/util/cfamily.py b/sphinx/util/cfamily.py
+--- a/sphinx/util/cfamily.py
++++ b/sphinx/util/cfamily.py
+@@ -66,6 +66,7 @@
+       ))
+     )'
+ ''')
++udl_suffix_re = re.compile(r'[_a-zA-Z][a-zA-Z0-9_]*')
+ 
+ 
+ def verify_description_mode(mode: str) -> None:

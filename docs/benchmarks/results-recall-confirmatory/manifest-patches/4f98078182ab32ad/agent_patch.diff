@@ -1,0 +1,19 @@
+diff --git a/django/db/models/expressions.py b/django/db/models/expressions.py
+--- a/django/db/models/expressions.py
++++ b/django/db/models/expressions.py
+@@ -703,6 +703,15 @@
+         copy.extra = self.extra.copy()
+         return copy
+ 
++    def get_group_by_cols(self, alias=None):
++        # A function with no arguments doesn't contribute to GROUP BY.
++        if not self.source_expressions:
++            return []
++        cols = []
++        for source in self.source_expressions:
++            cols.extend(source.get_group_by_cols())
++        return cols
++
+ 
+ class Value(Expression):
+     """Represent a wrapped value as a node within an expression."""

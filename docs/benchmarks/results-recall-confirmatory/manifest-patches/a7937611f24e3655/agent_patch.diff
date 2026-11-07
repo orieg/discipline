@@ -1,0 +1,57 @@
+diff --git a/astropy/units/quantity.py b/astropy/units/quantity.py
+--- a/astropy/units/quantity.py
++++ b/astropy/units/quantity.py
+@@ -636,13 +636,38 @@
+         result : `~astropy.units.Quantity`
+             Results of the ufunc, with the unit set properly.
+         """
++        # Before processing, check if any input or output has a custom
++        # __array_ufunc__ that is not the standard ndarray one.
++        # If so, return NotImplemented to let that type handle the operation.
++        for input_ in inputs:
++            if hasattr(input_, "__array_ufunc__"):
++                input_array_ufunc = getattr(input_, "__array_ufunc__")
++                if (
++                    input_array_ufunc is not np.ndarray.__array_ufunc__
++                    and input_array_ufunc is not None
++                ):
++                    return NotImplemented
++
++        out = kwargs.get("out", None)
++        if out is not None:
++            if function.nout == 1:
++                out = out[0]
++            if isinstance(out, (tuple, list)):
++                out = out[0]
++            if hasattr(out, "__array_ufunc__"):
++                out_array_ufunc = getattr(out, "__array_ufunc__")
++                if (
++                    out_array_ufunc is not np.ndarray.__array_ufunc__
++                    and out_array_ufunc is not None
++                ):
++                    return NotImplemented
++
+         # Determine required conversion functions -- to bring the unit of the
+         # input to that expected (e.g., radian for np.sin), or to get
+         # consistent units between two inputs (e.g., in np.add) --
+         # and the unit of the result (or tuple of units for nout > 1).
+         converters, unit = converters_and_unit(function, method, *inputs)
+ 
+-        out = kwargs.get("out", None)
+         # Avoid loop back by turning any Quantity output into array views.
+         if out is not None:
+             # If pre-allocated output is used, check it is suitable.
+@@ -667,7 +692,12 @@
+         arrays = []
+         for input_, converter in zip(inputs, converters):
+             input_ = getattr(input_, "value", input_)
+-            arrays.append(converter(input_) if converter else input_)
++            if converter is not None:
++                try:
++                    input_ = converter(input_)
++                except (ValueError, TypeError):
++                    return NotImplemented
++            arrays.append(input_)
+ 
+         # Call our superclass's __array_ufunc__
+         result = super().__array_ufunc__(function, method, *arrays, **kwargs)

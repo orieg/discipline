@@ -1,0 +1,33 @@
+diff --git a/sphinx/domains/python.py b/sphinx/domains/python.py
+--- a/sphinx/domains/python.py
++++ b/sphinx/domains/python.py
+@@ -349,6 +349,29 @@
+ 
+         return super().make_xref(rolename, domain, target, innernode, contnode, env)
+ 
++    def make_xrefs(self, rolename: str, domain: str, target: str,
++                   innernode: Type[TextlikeNode] = addnodes.literal_emphasis,
++                   contnode: Node = None, env: BuildEnvironment = None) -> List[Node]:
++        if env:
++            # Check if the target contains a union type (e.g., "int | str")
++            # We need to split by "|" at the top level
++            parts = _split_annotation_by_pipe(target)
++            if len(parts) > 1:
++                # Create cross-references for each part
++                result = []
++                for i, part in enumerate(parts):
++                    part = part.strip()
++                    if part:
++                        if rolename == 'class' and part == 'None':
++                            rolename = 'obj'
++                        result.extend(super().make_xrefs(rolename, domain, part, innernode, contnode, env))
++                        if i < len(parts) - 1:
++                            # Add " | " between types
++                            result.append(addnodes.literal_emphasis('', ' | '))
++                return result
++
++        return super().make_xrefs(rolename, domain, target, innernode, contnode, env)
++
+ 
+ class PyObject(ObjectDescription[Tuple[str, str]]):
+     """

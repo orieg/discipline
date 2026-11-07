@@ -1,0 +1,30 @@
+diff --git a/sphinx/pycode/ast.py b/sphinx/pycode/ast.py
+--- a/sphinx/pycode/ast.py
++++ b/sphinx/pycode/ast.py
+@@ -166,14 +166,24 @@
+         return "{" + ", ".join(self.visit(e) for e in node.elts) + "}"
+ 
+     def visit_Subscript(self, node: ast.Subscript) -> str:
+-        return "%s[%s]" % (self.visit(node.value), self.visit(node.slice))
++        if isinstance(node.slice, ast.Tuple):
++            # For Tuple inside Subscript, don't add parentheses
++            # e.g., Tuple[int, int] not Tuple[(int, int)]
++            elts = ", ".join(self.visit(e) for e in node.slice.elts)
++            return "%s[%s]" % (self.visit(node.value), elts)
++        else:
++            return "%s[%s]" % (self.visit(node.value), self.visit(node.slice))
+ 
+     def visit_UnaryOp(self, node: ast.UnaryOp) -> str:
+         return "%s %s" % (self.visit(node.op), self.visit(node.operand))
+ 
+     def visit_Tuple(self, node: ast.Tuple) -> str:
+         if node.elts:
+-            return ", ".join(self.visit(e) for e in node.elts)
++            elts_str = ", ".join(self.visit(e) for e in node.elts)
++            # Add trailing comma for single-element tuple
++            if len(node.elts) == 1:
++                elts_str += ","
++            return "(" + elts_str + ")"
+         else:
+             return "()"
+ 

@@ -1,0 +1,20 @@
+diff --git a/sympy/geometry/point.py b/sympy/geometry/point.py
+--- a/sympy/geometry/point.py
++++ b/sympy/geometry/point.py
+@@ -27,7 +27,6 @@
+ from sympy.simplify import nsimplify, simplify
+ from sympy.geometry.exceptions import GeometryError
+ from sympy.functions.elementary.miscellaneous import sqrt
+-from sympy.functions.elementary.complexes import im
+ from sympy.functions.elementary.trigonometric import cos, sin
+ from sympy.matrices import Matrix
+ from sympy.matrices.expressions import Transpose
+@@ -152,7 +151,7 @@
+                         'warn' or 'ignore'.'''))
+         if any(coords[dim:]):
+             raise ValueError('Nonzero coordinates cannot be removed.')
+-        if any(a.is_number and im(a) for a in coords):
++        if any(a.is_number and a.is_real is False for a in coords):
+             raise ValueError('Imaginary coordinates are not permitted.')
+         if not all(isinstance(a, Expr) for a in coords):
+             raise TypeError('Coordinates must be valid SymPy expressions.')

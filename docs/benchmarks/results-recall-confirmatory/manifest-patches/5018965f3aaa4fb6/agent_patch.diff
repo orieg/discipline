@@ -1,0 +1,31 @@
+diff --git a/seaborn/_core/scales.py b/seaborn/_core/scales.py
+--- a/seaborn/_core/scales.py
++++ b/seaborn/_core/scales.py
+@@ -378,7 +378,8 @@
+             axis.set_view_interval(vmin, vmax)
+             locs = axis.major.locator()
+             locs = locs[(vmin <= locs) & (locs <= vmax)]
+-            labels = axis.major.formatter.format_ticks(locs)
++            formatter = axis.major.formatter
++            labels = [formatter.format_data(x) for x in locs]
+             new._legend = list(locs), list(labels)
+ 
+         return new
+diff --git a/seaborn/utils.py b/seaborn/utils.py
+--- a/seaborn/utils.py
++++ b/seaborn/utils.py
+@@ -701,11 +701,10 @@
+         formatter = mpl.ticker.ScalarFormatter()
+     formatter.axis = dummy_axis()
+ 
+-    # TODO: The following two lines should be replaced
+-    # once pinned matplotlib>=3.1.0 with:
+-    # formatted_levels = formatter.format_ticks(raw_levels)
++    # Use format_data() instead of __call__() to get full values
++    # rather than offset-adjusted values
+     formatter.set_locs(raw_levels)
+-    formatted_levels = [formatter(x) for x in raw_levels]
++    formatted_levels = [formatter.format_data(x) for x in raw_levels]
+ 
+     return raw_levels, formatted_levels
+ 

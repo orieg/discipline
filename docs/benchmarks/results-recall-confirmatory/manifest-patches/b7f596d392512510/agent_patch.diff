@@ -1,0 +1,49 @@
+diff --git a/django/db/migrations/serializer.py b/django/db/migrations/serializer.py
+--- a/django/db/migrations/serializer.py
++++ b/django/db/migrations/serializer.py
+@@ -269,7 +269,7 @@
+             if module == builtins.__name__:
+                 return self.value.__name__, set()
+             else:
+-                return "%s.%s" % (module, self.value.__name__), {"import %s" % module}
++                return "%s.%s" % (module, self.value.__qualname__), {"import %s" % module}
+ 
+ 
+ class UUIDSerializer(BaseSerializer):
+diff --git a/django/utils/deconstruct.py b/django/utils/deconstruct.py
+--- a/django/utils/deconstruct.py
++++ b/django/utils/deconstruct.py
+@@ -27,18 +27,23 @@
+                 module_name, _, name = path.rpartition('.')
+             else:
+                 module_name = obj.__module__
+-                name = obj.__class__.__name__
++                name = obj.__class__.__qualname__
+             # Make sure it's actually there and not an inner class
+             module = import_module(module_name)
+-            if not hasattr(module, name):
+-                raise ValueError(
+-                    "Could not find object %s in %s.\n"
+-                    "Please note that you cannot serialize things like inner "
+-                    "classes. Please move the object into the main module "
+-                    "body to use migrations.\n"
+-                    "For more information, see "
+-                    "https://docs.djangoproject.com/en/%s/topics/migrations/#serializing-values"
+-                    % (name, module_name, get_docs_version()))
++            # Handle nested classes by checking the qualified name path
++            names = name.split('.')
++            obj_in_module = module
++            for nested_name in names:
++                if not hasattr(obj_in_module, nested_name):
++                    raise ValueError(
++                        "Could not find object %s in %s.\n"
++                        "Please note that you cannot serialize things like inner "
++                        "classes. Please move the object into the main module "
++                        "body to use migrations.\n"
++                        "For more information, see "
++                        "https://docs.djangoproject.com/en/%s/topics/migrations/#serializing-values"
++                        % (name, module_name, get_docs_version()))
++                obj_in_module = getattr(obj_in_module, nested_name)
+             return (
+                 path or '%s.%s' % (obj.__class__.__module__, name),
+                 obj._constructor_args[0],

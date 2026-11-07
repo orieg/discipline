@@ -1,0 +1,51 @@
+diff --git a/django/db/backends/base/client.py b/django/db/backends/base/client.py
+--- a/django/db/backends/base/client.py
++++ b/django/db/backends/base/client.py
+@@ -21,6 +21,8 @@
+ 
+     def runshell(self, parameters):
+         args, env = self.settings_to_cmd_args_env(self.connection.settings_dict, parameters)
+-        if env:
++        if env is None:
++            env = {}
++        elif env:
+             env = {**os.environ, **env}
+         subprocess.run(args, env=env, check=True)
+diff --git a/django/db/backends/postgresql/client.py b/django/db/backends/postgresql/client.py
+--- a/django/db/backends/postgresql/client.py
++++ b/django/db/backends/postgresql/client.py
+@@ -36,20 +36,32 @@
+             args += [dbname]
+         args.extend(parameters)
+ 
+-        env = {}
++        env = None
+         if passwd:
+-            env['PGPASSWORD'] = str(passwd)
++            env = {'PGPASSWORD': str(passwd)}
+         if service:
++            if env is None:
++                env = {}
+             env['PGSERVICE'] = str(service)
+         if sslmode:
++            if env is None:
++                env = {}
+             env['PGSSLMODE'] = str(sslmode)
+         if sslrootcert:
++            if env is None:
++                env = {}
+             env['PGSSLROOTCERT'] = str(sslrootcert)
+         if sslcert:
++            if env is None:
++                env = {}
+             env['PGSSLCERT'] = str(sslcert)
+         if sslkey:
++            if env is None:
++                env = {}
+             env['PGSSLKEY'] = str(sslkey)
+         if passfile:
++            if env is None:
++                env = {}
+             env['PGPASSFILE'] = str(passfile)
+         return args, env
+ 

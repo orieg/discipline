@@ -1,0 +1,26 @@
+diff --git a/sklearn/ensemble/_iforest.py b/sklearn/ensemble/_iforest.py
+--- a/sklearn/ensemble/_iforest.py
++++ b/sklearn/ensemble/_iforest.py
+@@ -288,6 +288,8 @@
+             Fitted estimator.
+         """
+         self._validate_params()
++        # Store original X to pass to score_samples with feature names preserved
++        self._raw_data = X
+         X = self._validate_data(X, accept_sparse=["csc"], dtype=tree_dtype)
+         if issparse(X):
+             # Pre-sort indices to avoid that each individual tree of the
+@@ -345,7 +347,12 @@
+             return self
+ 
+         # else, define offset_ wrt contamination parameter
+-        self.offset_ = np.percentile(self.score_samples(X), 100.0 * self.contamination)
++        # Use `self._raw_data` to preserve feature names for consistent validation
++        # in `score_samples`. This is necessary because `X` has been converted
++        # to ndarray and no longer has feature names.
++        self.offset_ = np.percentile(
++            self.score_samples(self._raw_data), 100.0 * self.contamination
++        )
+ 
+         return self
+ 

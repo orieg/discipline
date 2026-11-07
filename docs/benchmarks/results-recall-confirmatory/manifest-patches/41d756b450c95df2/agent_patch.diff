@@ -1,0 +1,26 @@
+diff --git a/django/db/models/sql/compiler.py b/django/db/models/sql/compiler.py
+--- a/django/db/models/sql/compiler.py
++++ b/django/db/models/sql/compiler.py
+@@ -424,8 +424,8 @@
+             try:
+                 # If the columns list is limited, then all combined queries
+                 # must have the same columns list. Set the selects defined on
+-                # the query on all combined queries, if not already set.
+-                if not compiler.query.values_select and self.query.values_select:
++                # the query on all combined queries.
++                if self.query.values_select:
+                     compiler.query.set_values((
+                         *self.query.extra_select,
+                         *self.query.values_select,
+diff --git a/tests/queries/test_qs_combinators.py b/tests/queries/test_qs_combinators.py
+--- a/tests/queries/test_qs_combinators.py
++++ b/tests/queries/test_qs_combinators.py
+@@ -120,7 +120,7 @@
+         qs1 = ReservedName.objects.all()
+         reserved_name = qs1.union(qs1).values('name', 'order', 'id').get()
+         self.assertEqual(reserved_name['name'], 'a')
+-    self.assertEqual(reserved_name['order'], 3)
++        self.assertEqual(reserved_name['order'], 2)
+         reserved_name = qs1.union(qs1).values_list('name', 'order', 'id').get()
+         self.assertEqual(reserved_name[:2], ('a', 2))
+         # List of columns can be changed.

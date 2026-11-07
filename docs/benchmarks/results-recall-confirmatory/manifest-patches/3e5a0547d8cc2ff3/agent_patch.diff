@@ -1,0 +1,28 @@
+diff --git a/django/urls/base.py b/django/urls/base.py
+--- a/django/urls/base.py
++++ b/django/urls/base.py
+@@ -172,7 +172,11 @@
+         to_be_reversed = "%s:%s" % (match.namespace, match.url_name) if match.namespace else match.url_name
+         with override(lang_code):
+             try:
+-                url = reverse(to_be_reversed, args=match.args, kwargs=match.kwargs)
++                # Filter out None values from kwargs to handle optional URL parameters.
++                # When a regex URL pattern has optional groups, missing values are
++                # captured as None, which should not be included in the reversed URL.
++                kwargs = {k: v for k, v in match.kwargs.items() if v is not None}
++                url = reverse(to_be_reversed, args=match.args, kwargs=kwargs)
+             except NoReverseMatch:
+                 pass
+             else:
+diff --git a/django/urls/resolvers.py b/django/urls/resolvers.py
+--- a/django/urls/resolvers.py
++++ b/django/urls/resolvers.py
+@@ -153,7 +153,7 @@
+             # If there are any named groups, use those as kwargs, ignoring
+             # non-named groups. Otherwise, pass all non-named arguments as
+             # positional arguments.
+-            kwargs = match.groupdict()
++            kwargs = {k: v for k, v in match.groupdict().items() if v is not None}
+             args = () if kwargs else match.groups()
+             return path[match.end():], args, kwargs
+         return None

@@ -1,0 +1,71 @@
+diff --git a/django/contrib/auth/__init__.py b/django/contrib/auth/__init__.py
+--- a/django/contrib/auth/__init__.py
++++ b/django/contrib/auth/__init__.py
+@@ -199,8 +199,8 @@
+             # Verify the session
+             if hasattr(user, "get_session_auth_hash"):
+                 session_hash = request.session.get(HASH_SESSION_KEY)
+-                session_hash_verified = session_hash and constant_time_compare(
+-                    session_hash, user.get_session_auth_hash()
++                session_hash_verified = session_hash and _verify_session_hash(
++                    user, session_hash, request
+                 )
+                 if not session_hash_verified:
+                     request.session.flush()
+@@ -209,6 +209,36 @@
+     return user or AnonymousUser()
+ 
+ 
++def _verify_session_hash(user, session_hash, request):
++    """
++    Verify the session hash against the current secret and fallback secrets.
++
++    Returns True if the session hash is valid.
++    If verified with a fallback secret, updates the session hash with the
++    current secret and cycles the session key.
++    """
++    from django.conf import settings
++
++    # First, try with the current secret (default)
++    if constant_time_compare(session_hash, user.get_session_auth_hash()):
++        return True
++
++    # Try with fallback secrets
++    if hasattr(settings, "SECRET_KEY_FALLBACKS"):
++        for fallback_secret in settings.SECRET_KEY_FALLBACKS:
++            if constant_time_compare(
++                session_hash, user.get_session_auth_hash(secret=fallback_secret)
++            ):
++                # Update the session hash and cycle the session key.
++                # Cycling the session key is important for security when a
++                # fallback secret is used - it invalidates the old session.
++                request.session.cycle_key()
++                request.session[HASH_SESSION_KEY] = user.get_session_auth_hash()
++                return True
++
++    return False
++
++
+ def get_permission_codename(action, opts):
+     """
+     Return the codename of the permission for the specified action.
+diff --git a/django/contrib/auth/base_user.py b/django/contrib/auth/base_user.py
+--- a/django/contrib/auth/base_user.py
++++ b/django/contrib/auth/base_user.py
+@@ -131,7 +131,7 @@
+         """
+         return is_password_usable(self.password)
+ 
+-    def get_session_auth_hash(self):
++    def get_session_auth_hash(self, secret=None):
+         """
+         Return an HMAC of the password field.
+         """
+@@ -139,6 +139,7 @@
+         return salted_hmac(
+             key_salt,
+             self.password,
++            secret=secret,
+             algorithm="sha256",
+         ).hexdigest()
+ 

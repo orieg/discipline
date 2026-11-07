@@ -1,0 +1,15 @@
+diff --git a/xarray/core/combine.py b/xarray/core/combine.py
+--- a/xarray/core/combine.py
++++ b/xarray/core/combine.py
+@@ -501,7 +501,10 @@
+                                    fill_value=fill_value)
+ 
+         # Check the overall coordinates are monotonically increasing
+-        for dim in concatenated.dims:
++        # Only dimensions used for concatenation need to be monotonic;
++        # bystander dimensions (those that are identical across all
++        # input datasets) are skipped.
++        for dim in concat_dims:
+             if dim in concatenated:
+                 indexes = concatenated.indexes.get(dim)
+                 if not (indexes.is_monotonic_increasing

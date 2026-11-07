@@ -1,0 +1,24 @@
+diff --git a/django/db/models/sql/compiler.py b/django/db/models/sql/compiler.py
+--- a/django/db/models/sql/compiler.py
++++ b/django/db/models/sql/compiler.py
+@@ -130,6 +130,20 @@
+             # select clause are already part of the group by.
+             if not is_ref:
+                 expressions.extend(expr.get_group_by_cols())
++        # Meta.ordering fields must not affect GROUP BY clause.
++        if self._meta_ordering:
++            # If ordering comes from Meta.ordering, remove added columns from
++            # GROUP BY since Meta.ordering shouldn't affect aggregation.
++            expressions = [
++                expr for expr in expressions
++                if expr not in (
++                    # Use get_group_by_cols() to compare columns from Meta.ordering.
++                    col
++                    for ordering_expr in self._meta_ordering
++                    for col in ordering_expr.get_group_by_cols()
++                    if hasattr(ordering_expr, 'get_group_by_cols')
++                )
++            ]
+         having_group_by = self.having.get_group_by_cols() if self.having else ()
+         for expr in having_group_by:
+             expressions.append(expr)

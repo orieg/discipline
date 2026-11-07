@@ -1,0 +1,35 @@
+diff --git a/astropy/units/quantity.py b/astropy/units/quantity.py
+--- a/astropy/units/quantity.py
++++ b/astropy/units/quantity.py
+@@ -642,6 +642,19 @@
+         # and the unit of the result (or tuple of units for nout > 1).
+         converters, unit = converters_and_unit(function, method, *inputs)
+ 
++        # Before processing outputs and inputs, check if any input that needs
++        # conversion has its own __array_ufunc__ (but is not a Quantity). If so,
++        # return NotImplemented to allow it to handle the operation. This is
++        # necessary because check_output and the converter may fail for duck
++        # types that have __array_ufunc__ but are not actual Quantity subclasses.
++        for input_, converter in zip(inputs, converters):
++            if (
++                converter is not None
++                and hasattr(input_, "__array_ufunc__")
++                and not isinstance(input_, Quantity)
++            ):
++                return NotImplemented
++
+         out = kwargs.get("out", None)
+         # Avoid loop back by turning any Quantity output into array views.
+         if out is not None:
+@@ -667,7 +680,10 @@
+         arrays = []
+         for input_, converter in zip(inputs, converters):
+             input_ = getattr(input_, "value", input_)
+-            arrays.append(converter(input_) if converter else input_)
++            if converter is not None:
++                arrays.append(converter(input_))
++            else:
++                arrays.append(input_)
+ 
+         # Call our superclass's __array_ufunc__
+         result = super().__array_ufunc__(function, method, *arrays, **kwargs)

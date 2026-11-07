@@ -1,0 +1,15 @@
+diff --git a/src/_pytest/skipping.py b/src/_pytest/skipping.py
+--- a/src/_pytest/skipping.py
++++ b/src/_pytest/skipping.py
+@@ -262,6 +262,11 @@
+     outcome = yield
+     rep = outcome.get_result()
+     xfailed = item._store.get(xfailed_key, None)
++    # Refresh the xfail evaluation to handle dynamically added xfail markers
++    # (e.g. via request.node.add_marker() during the test).
++    if xfailed is None and call.when == "call":
++        xfailed = evaluate_xfail_marks(item)
++        item._store[xfailed_key] = xfailed
+     # unittest special case, see setting of unexpectedsuccess_key
+     if unexpectedsuccess_key in item._store and rep.when == "call":
+         reason = item._store[unexpectedsuccess_key]

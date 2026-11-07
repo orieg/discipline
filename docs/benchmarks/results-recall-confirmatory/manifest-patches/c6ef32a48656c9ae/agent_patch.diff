@@ -1,0 +1,97 @@
+diff --git a/lib/matplotlib/figure.py b/lib/matplotlib/figure.py
+--- a/lib/matplotlib/figure.py
++++ b/lib/matplotlib/figure.py
+@@ -2274,17 +2274,85 @@
+             return
+         # need to figure out *where* this subplotspec is.
+         gs = self._subplotspec.get_gridspec()
+-        wr = np.asarray(gs.get_width_ratios())
+-        hr = np.asarray(gs.get_height_ratios())
+-        dx = wr[self._subplotspec.colspan].sum() / wr.sum()
+-        dy = hr[self._subplotspec.rowspan].sum() / hr.sum()
+-        x0 = wr[:self._subplotspec.colspan.start].sum() / wr.sum()
+-        y0 = 1 - hr[:self._subplotspec.rowspan.stop].sum() / hr.sum()
++        wr = np.asarray(gs.get_width_ratios(), dtype=float)
++        hr = np.asarray(gs.get_height_ratios(), dtype=float)
++        nrows, ncols = gs.get_geometry()
++
++        # Get wspace and hspace from the gridspec
++        # GridSpec stores these as attributes, but GridSpecFromSubplotSpec
++        # stores them as _wspace and _hspace
++        if hasattr(gs, 'wspace'):
++            wspace = gs.wspace
++        elif hasattr(gs, '_wspace'):
++            wspace = gs._wspace
++        else:
++            wspace = 0
++        if hasattr(gs, 'hspace'):
++            hspace = gs.hspace
++        elif hasattr(gs, '_hspace'):
++            hspace = gs._hspace
++        else:
++            hspace = 0
++
++        # If wspace/hspace are None, treat as 0
++        if wspace is None:
++            wspace = 0
++        if hspace is None:
++            hspace = 0
++
++        # Calculate cell dimensions accounting for wspace and hspace
++        # cell_w = total_width / (ncols + wspace * (ncols - 1))
++        # In normalized coordinates (total_width = 1):
++        cell_w = 1.0 / (ncols + wspace * (ncols - 1))
++        sep_w = wspace * cell_w
++        cell_h = 1.0 / (nrows + hspace * (nrows - 1))
++        sep_h = hspace * cell_h
++
++        # Calculate actual cell widths/heights based on ratios
++        norm_w = sum(wr) if sum(wr) > 0 else 1.0
++        norm_h = sum(hr) if sum(hr) > 0 else 1.0
++        cell_widths = wr / norm_w * (ncols * cell_w)
++        cell_heights = hr / norm_h * (nrows * cell_h)
++
++        # Compute cumulative positions for columns
++        # cell_ws[2*c] = left edge of column c, cell_ws[2*c+1] = right edge
++        cell_ws = np.zeros(2 * ncols + 1)
++        for c in range(ncols):
++            cell_ws[2 * c + 1] = cell_ws[2 * c] + cell_widths[c]
++            if c < ncols - 1:
++                cell_ws[2 * c + 2] = cell_ws[2 * c + 1] + sep_w
++
++        # Compute cumulative positions for rows
++        # cell_hs[2*r] = bottom edge of row r (from bottom),
++        # cell_hs[2*r+1] = top edge of row r (from bottom)
++        cell_hs = np.zeros(2 * nrows + 1)
++        for r in range(nrows):
++            cell_hs[2 * r + 1] = cell_hs[2 * r] + cell_heights[r]
++            if r < nrows - 1:
++                cell_hs[2 * r + 2] = cell_hs[2 * r + 1] + sep_h
++
++        # Get the subfigure's position in the grid
++        start_c = self._subplotspec.colspan.start
++        end_c = self._subplotspec.colspan.stop - 1  # inclusive
++        start_r = self._subplotspec.rowspan.start
++        end_r = self._subplotspec.rowspan.stop - 1  # inclusive
++
++        # Compute x0, x1 (left, right)
++        x0 = cell_ws[2 * start_c]
++        x1 = cell_ws[2 * end_c + 1]
++
++        # Compute y0, y1 (bottom, top)
++        # For the y-axis, we need to invert since the grid goes from top to bottom
++        # y0 = 1 - (topmost cumulative position of bottom edges)
++        # y1 = 1 - (bottommost cumulative position of top edges)
++        y0 = 1.0 - max(cell_hs[2 * r + 1] for r in range(start_r, end_r + 1))
++        y1 = 1.0 - min(cell_hs[2 * r] for r in range(start_r, end_r + 1))
++
+         if self.bbox_relative is None:
+-            self.bbox_relative = Bbox.from_bounds(x0, y0, dx, dy)
++            self.bbox_relative = Bbox.from_bounds(x0, y0, x1 - x0, y1 - y0)
+         else:
+             self.bbox_relative.p0 = (x0, y0)
+-            self.bbox_relative.p1 = (x0 + dx, y0 + dy)
++            self.bbox_relative.p1 = (x1, y1)
+ 
+     def get_constrained_layout(self):
+         """

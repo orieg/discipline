@@ -1,0 +1,85 @@
+diff --git a/sphinx/domains/cpp.py b/sphinx/domains/cpp.py
+--- a/sphinx/domains/cpp.py
++++ b/sphinx/domains/cpp.py
+@@ -882,6 +882,24 @@
+         signode.append(nodes.Text(txt, txt))
+ 
+ 
++class ASTUserDefinedLiteral(ASTLiteral):
++    def __init__(self, base: ASTLiteral, suffix: str) -> None:
++        self.base = base
++        self.suffix = suffix
++
++    def _stringify(self, transform: StringifyTransform) -> str:
++        return str(self.base) + self.suffix
++
++    def get_id(self, version: int) -> str:
++        # Format: li{suffix_length}{suffix}E{base.get_id()}
++        return 'li%d%sE%s' % (len(self.suffix), self.suffix, self.base.get_id(version))
++
++    def describe_signature(self, signode: TextElement, mode: str,
++                           env: "BuildEnvironment", symbol: "Symbol") -> None:
++        txt = str(self)
++        signode.append(nodes.Text(txt, txt))
++
++
+ class ASTThisLiteral(ASTExpression):
+     def _stringify(self, transform: StringifyTransform) -> str:
+         return "this"
+@@ -4664,10 +4682,17 @@
+             if self.match(regex):
+                 while self.current_char in 'uUlLfF':
+                     self.pos += 1
+-                return ASTNumberLiteral(self.definition[pos:self.pos])
++                literal = ASTNumberLiteral(self.definition[pos:self.pos])
++                suffix = self._get_udl_suffix()
++                if suffix is not None:
++                    return ASTUserDefinedLiteral(literal, suffix)
++                return literal
+ 
+         string = self._parse_string()
+         if string is not None:
++            suffix = self._get_udl_suffix()
++            if suffix is not None:
++                return ASTUserDefinedLiteral(ASTStringLiteral(string), suffix)
+             return ASTStringLiteral(string)
+ 
+         # character-literal
+@@ -4675,16 +4700,36 @@
+             prefix = self.last_match.group(1)  # may be None when no prefix
+             data = self.last_match.group(2)
+             try:
+-                return ASTCharLiteral(prefix, data)
++                literal = ASTCharLiteral(prefix, data)
+             except UnicodeDecodeError as e:
+                 self.fail("Can not handle character literal. Internal error was: %s" % e)
+             except UnsupportedMultiCharacterCharLiteral:
+                 self.fail("Can not handle character literal"
+                           " resulting in multiple decoded characters.")
++            suffix = self._get_udl_suffix()
++            if suffix is not None:
++                return ASTUserDefinedLiteral(literal, suffix)
++            return literal
+ 
+         # TODO: user-defined lit
+         return None
+ 
++    def _get_udl_suffix(self) -> Optional[str]:
++        """Get user-defined literal suffix if present.
++
++        A UDL suffix is an identifier-like sequence that is NOT purely
++        type modifiers (u, U, l, L, f, F).
++        """
++        # Match identifier-like characters
++        if not self.match(identifier_re):
++            return None
++        suffix = self.matched_text
++        # Check if it's purely type modifiers (not a valid UDL suffix)
++        type_modifiers = set('uUlLfF')
++        if all(c in type_modifiers for c in suffix):
++            return None
++        return suffix
++
+     def _parse_fold_or_paren_expression(self) -> ASTExpression:
+         # "(" expression ")"
+         # fold-expression

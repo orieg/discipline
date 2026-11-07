@@ -1,0 +1,27 @@
+diff --git a/django/core/mail/utils.py b/django/core/mail/utils.py
+--- a/django/core/mail/utils.py
++++ b/django/core/mail/utils.py
+@@ -8,12 +8,21 @@
+ # Cache the hostname, but do it lazily: socket.getfqdn() can take a couple of
+ # seconds, which slows down the restart of the server.
+ class CachedDnsName:
++    def __init__(self):
++        self._fqdn = None
++
+     def __str__(self):
+         return self.get_fqdn()
+ 
+     def get_fqdn(self):
+-        if not hasattr(self, '_fqdn'):
+-            self._fqdn = socket.getfqdn()
++        if not hasattr(self, '_fqdn') or self._fqdn is None:
++            fqdn = socket.getfqdn()
++            # Convert non-ASCII hostnames to ASCII using IDNA encoding.
++            try:
++                fqdn.encode('ascii')
++            except UnicodeEncodeError:
++                fqdn = fqdn.encode('idna').decode('ascii')
++            self._fqdn = fqdn
+         return self._fqdn
+ 
+ 

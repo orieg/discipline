@@ -1,0 +1,70 @@
+diff --git a/django/conf/global_settings.py b/django/conf/global_settings.py
+--- a/django/conf/global_settings.py
++++ b/django/conf/global_settings.py
+@@ -637,6 +637,6 @@
+ SECURE_HSTS_PRELOAD = False
+ SECURE_HSTS_SECONDS = 0
+ SECURE_REDIRECT_EXEMPT = []
+-SECURE_REFERRER_POLICY = None
++SECURE_REFERRER_POLICY = 'strict-origin'
+ SECURE_SSL_HOST = None
+ SECURE_SSL_REDIRECT = False
+diff --git a/docs/ref/settings.txt b/docs/ref/settings.txt
+--- a/docs/ref/settings.txt
++++ b/docs/ref/settings.txt
+@@ -2395,11 +2395,51 @@
+ 
+ .. versionadded:: 3.0
+ 
+-Default: ``None``
++Default: ``'strict-origin'``
++
++If set to ``None``, the :class:`~django.middleware.security.SecurityMiddleware`
++will not set the :ref:`referrer-policy` header.
++
++.. _referrer-policy:
++
++The ``Referrer-Policy`` HTTP header lets a site specify a Referrer-Policy
++that applies to all navigations within the site's context. The policy can
++be one of the following values:
++
++``no-referrer``
++    The browser will never send the ``Referer`` header to any origin.
++
++``no-referrer-when-downgrade``
++    Full URL is sent as ``Referer`` header when performing a same-origin
++    request, but only the origin of the URL is sent when performing a
++    cross-origin request (e.g. when navigating from ``https://example.org/``
++    to ``https://example.com/``).
++
++``origin``
++    Only the origin of the URL is sent when performing a same-origin request
++    or a cross-origin request.
++
++``origin-when-cross-origin``
++    Full URL is sent when performing a same-origin request, but only the
++    origin is sent for cross-origin requests.
++
++``same-origin``
++    Full URL is sent only when performing a same-origin request. For
++    cross-origin requests, the header is not sent.
++
++``strict-origin``
++    Only the origin is sent when performing a same-origin request. For
++    cross-origin requests, the header is not sent.
++
++``strict-origin-when-cross-origin``
++    Full URL is sent when performing a same-origin request, but only the
++    origin is sent for cross-origin requests. For cross-origin requests
++    that are HTTP requests (as opposed to HTTPS), the header is not sent.
+ 
+-If configured, the :class:`~django.middleware.security.SecurityMiddleware` sets
+-the :ref:`referrer-policy` header on all responses that do not already have it
+-to the value provided.
++``unsafe-url``
++    The ``Referer`` header will be sent for all requests, including
++    cross-origin requests. Note that this policy leaks the full URL
++    to third parties.
+ 
+ .. setting:: SECURE_SSL_HOST
+ 

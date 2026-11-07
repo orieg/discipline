@@ -1,0 +1,30 @@
+diff --git a/django/core/mail/utils.py b/django/core/mail/utils.py
+--- a/django/core/mail/utils.py
++++ b/django/core/mail/utils.py
+@@ -14,6 +14,11 @@
+     def get_fqdn(self):
+         if not hasattr(self, '_fqdn'):
+             self._fqdn = socket.getfqdn()
++        # Ensure the domain is ASCII-compatible (punycode for IDN).
++        try:
++            self._fqdn.encode('ascii')
++        except UnicodeEncodeError:
++            self._fqdn = self._fqdn.encode('idna').decode('ascii')
+         return self._fqdn
+ 
+ 
+diff --git a/test_encoding.py b/test_encoding.py
+new file mode 100644
+--- /dev/null
++++ b/test_encoding.py
+@@ -0,0 +1,10 @@
++#!/usr/bin/env python
++# -*- coding: utf-8 -*-
++
++domain = "漢字"
++print("Original domain:", repr(domain))
++try:
++    result = domain.encode("idna")
++    print("IDNA encoded:", result)
++except Exception as e:
++    print("IDNA error:", e)

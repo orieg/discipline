@@ -1,0 +1,30 @@
+diff --git a/django/core/serializers/base.py b/django/core/serializers/base.py
+--- a/django/core/serializers/base.py
++++ b/django/core/serializers/base.py
+@@ -336,7 +336,25 @@
+         and hasattr(default_manager, "get_by_natural_key")
+         and hasattr(Model, "natural_key")
+     ):
+-        natural_key = Model(**data).natural_key()
++        # Build instance and pre-populate FK/O2O fields with related objects
++        # to avoid database lookups on the wrong database when calling
++        # natural_key().
++        instance = Model(**data)
++        for field in Model._meta.get_fields():
++            if (
++                isinstance(field, models.ForeignKey)
++                and data.get(field.attname) is not None
++            ):
++                related_model = field.related_model
++                try:
++                    related_obj = related_model._default_manager.db_manager(
++                        db
++                    ).get(pk=data[field.attname])
++                except related_model.DoesNotExist:
++                    pass
++                else:
++                    setattr(instance, field.name, related_obj)
++        natural_key = instance.natural_key()
+         try:
+             data[Model._meta.pk.attname] = Model._meta.pk.to_python(
+                 default_manager.db_manager(db).get_by_natural_key(*natural_key).pk

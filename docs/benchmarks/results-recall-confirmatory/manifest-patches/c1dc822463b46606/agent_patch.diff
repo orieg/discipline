@@ -1,0 +1,35 @@
+diff --git a/django/db/migrations/operations/models.py b/django/db/migrations/operations/models.py
+--- a/django/db/migrations/operations/models.py
++++ b/django/db/migrations/operations/models.py
+@@ -910,7 +910,7 @@
+         if self.old_name:
+             kwargs["old_name"] = self.old_name
+         if self.old_fields:
+-            kwargs["old_fields"] = self.old_fields
++            kwargs["old_fields"] = tuple(sorted(self.old_fields))
+         return (self.__class__.__qualname__, [], kwargs)
+ 
+     def state_forwards(self, app_label, state):
+@@ -957,12 +957,20 @@
+                 fields=self.old_fields,
+                 name=matching_index_name[0],
+             )
++            # Construct new_index from known fields and new_name.
++            new_index = models.Index(
++                fields=self.old_fields,
++                name=self.new_name,
++            )
+         else:
+             from_model_state = from_state.models[app_label, self.model_name_lower]
+             old_index = from_model_state.get_index_by_name(self.old_name)
+ 
+-        to_model_state = to_state.models[app_label, self.model_name_lower]
+-        new_index = to_model_state.get_index_by_name(self.new_name)
++            to_model_state = to_state.models[app_label, self.model_name_lower]
++            new_index = to_model_state.get_index_by_name(self.new_name)
++
++        if old_index.name == new_index.name:
++            return
+         schema_editor.rename_index(model, old_index, new_index)
+ 
+     def database_backwards(self, app_label, schema_editor, from_state, to_state):

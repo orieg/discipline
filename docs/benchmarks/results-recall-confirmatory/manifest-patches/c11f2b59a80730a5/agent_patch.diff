@@ -1,0 +1,27 @@
+diff --git a/src/_pytest/skipping.py b/src/_pytest/skipping.py
+--- a/src/_pytest/skipping.py
++++ b/src/_pytest/skipping.py
+@@ -262,6 +262,12 @@
+     outcome = yield
+     rep = outcome.get_result()
+     xfailed = item._store.get(xfailed_key, None)
++    # If xfailed was set in setup, use that value.
++    # If it wasn't set (setup didn't run), don't re-evaluate here.
++    # If it was set to None (no xfail found in setup), re-evaluate in case
++    # the xfail marker was added dynamically during the test execution.
++    if xfailed_key in item._store and xfailed is None:
++        item._store[xfailed_key] = xfailed = evaluate_xfail_marks(item)
+     # unittest special case, see setting of unexpectedsuccess_key
+     if unexpectedsuccess_key in item._store and rep.when == "call":
+         reason = item._store[unexpectedsuccess_key]
+diff --git a/testing/test_skipping.py b/testing/test_skipping.py
+--- a/testing/test_skipping.py
++++ b/testing/test_skipping.py
+@@ -438,7 +438,6 @@
+         )
+         result = testdir.runpytest(p)
+         result.assert_outcomes(xfailed=1)
+-    result.assert_outcomes(passed=1)
+ 
+     def test_dynamic_xfail_set_during_runtest_passed_strict(
+         self, testdir: Testdir

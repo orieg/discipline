@@ -1,0 +1,26 @@
+diff --git a/astropy/wcs/wcsapi/wrappers/sliced_wcs.py b/astropy/wcs/wcsapi/wrappers/sliced_wcs.py
+--- a/astropy/wcs/wcsapi/wrappers/sliced_wcs.py
++++ b/astropy/wcs/wcsapi/wrappers/sliced_wcs.py
+@@ -246,12 +246,21 @@
+         world_arrays = tuple(map(np.asanyarray, world_arrays))
+         world_arrays_new = []
+         iworld_curr = -1
++
++        # Get the world coordinates for dropped dimensions
++        # These are needed when there are coupled axes between world dimensions
++        dropped_info = self.dropped_world_dimensions
++        # Build a mapping from world dimension index to the dropped coordinate value
++        # dropped_info['value'] is ordered by the original world dimension indices
++        dropped_world_indices = [i for i in range(self._wcs.world_n_dim) if i not in self._world_keep]
++        dropped_coords = {idx: coord for idx, coord in zip(dropped_world_indices, dropped_info.get('value', []))}
++
+         for iworld in range(self._wcs.world_n_dim):
+             if iworld in self._world_keep:
+                 iworld_curr += 1
+                 world_arrays_new.append(world_arrays[iworld_curr])
+             else:
+-                world_arrays_new.append(1.)
++                world_arrays_new.append(dropped_coords[iworld])
+ 
+         world_arrays_new = np.broadcast_arrays(*world_arrays_new)
+         pixel_arrays = list(self._wcs.world_to_pixel_values(*world_arrays_new))

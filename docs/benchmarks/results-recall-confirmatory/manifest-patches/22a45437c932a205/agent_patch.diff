@@ -1,0 +1,53 @@
+diff --git a/django/contrib/auth/__init__.py b/django/contrib/auth/__init__.py
+--- a/django/contrib/auth/__init__.py
++++ b/django/contrib/auth/__init__.py
+@@ -199,12 +199,26 @@
+             # Verify the session
+             if hasattr(user, "get_session_auth_hash"):
+                 session_hash = request.session.get(HASH_SESSION_KEY)
+-                session_hash_verified = session_hash and constant_time_compare(
+-                    session_hash, user.get_session_auth_hash()
+-                )
++                session_hash_verified = False
++                if session_hash:
++                    # Check against all secrets (current + fallbacks)
++                    secrets_to_check = [settings.SECRET_KEY]
++                    if fallbacks := getattr(settings, "SECRET_KEY_FALLBACKS", None):
++                        secrets_to_check.extend(fallbacks)
++                    for secret in secrets_to_check:
++                        if constant_time_compare(
++                            session_hash, user.get_session_auth_hash(secret)
++                        ):
++                            session_hash_verified = True
++                            break
+                 if not session_hash_verified:
+                     request.session.flush()
+                     user = None
++                elif session_hash != user.get_session_auth_hash():
++                    # Session hash was verified using a fallback secret.
++                    # Update the session hash using the current secret.
++                    request.session[HASH_SESSION_KEY] = user.get_session_auth_hash()
++                    request.session.cycle_key()
+ 
+     return user or AnonymousUser()
+ 
+diff --git a/django/contrib/auth/base_user.py b/django/contrib/auth/base_user.py
+--- a/django/contrib/auth/base_user.py
++++ b/django/contrib/auth/base_user.py
+@@ -131,7 +131,7 @@
+         """
+         return is_password_usable(self.password)
+ 
+-    def get_session_auth_hash(self):
++    def get_session_auth_hash(self, secret=None):
+         """
+         Return an HMAC of the password field.
+         """
+@@ -139,6 +139,7 @@
+         return salted_hmac(
+             key_salt,
+             self.password,
++            secret,
+             algorithm="sha256",
+         ).hexdigest()
+ 

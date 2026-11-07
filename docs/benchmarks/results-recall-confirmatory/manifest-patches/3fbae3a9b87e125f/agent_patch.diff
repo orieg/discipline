@@ -1,0 +1,29 @@
+diff --git a/django/views/debug.py b/django/views/debug.py
+--- a/django/views/debug.py
++++ b/django/views/debug.py
+@@ -423,7 +423,9 @@
+ 
+         # In case there's just one exception, take the traceback from self.tb
+         exc_value = exceptions.pop()
+-        tb = self.tb if not exceptions else exc_value.__traceback__
++        tb = (
++            exc_value.__traceback__ if isinstance(exc_value, BaseException) else self.tb
++        ) or self.tb
+ 
+         while tb is not None:
+             # Support for __traceback_hide__ which is used by a few libraries
+@@ -464,7 +466,13 @@
+             # other exception.
+             if not tb.tb_next and exceptions:
+                 exc_value = exceptions.pop()
+-                tb = exc_value.__traceback__
++                new_tb = exc_value.__traceback__ if isinstance(exc_value, BaseException) else None
++                # Avoid re-processing the same traceback (can happen when an
++                # inner exception has no traceback and we fell back to self.tb).
++                if new_tb is not tb:
++                    tb = new_tb
++                else:
++                    tb = None
+             else:
+                 tb = tb.tb_next
+ 

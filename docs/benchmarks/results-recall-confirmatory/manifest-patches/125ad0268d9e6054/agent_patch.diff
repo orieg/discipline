@@ -1,0 +1,52 @@
+diff --git a/sympy/geometry/point.py b/sympy/geometry/point.py
+--- a/sympy/geometry/point.py
++++ b/sympy/geometry/point.py
+@@ -32,6 +32,7 @@
+ from sympy.core.numbers import Float
+ from sympy.core.evaluate import global_evaluate
+ from sympy.core.add import Add
++from sympy.core.mul import Mul
+ from sympy.utilities.iterables import uniq
+ from sympy.utilities.misc import filldedent, func_name, Undecidable
+ 
+@@ -213,6 +214,18 @@
+         sympy.geometry.point.Point.translate
+ 
+         """
++        if isinstance(other, Mul):
++            from sympy.core.numbers import One
++            # handle Mul expressions like scalar*Point or Point*scalar
++            point = None
++            factor = S.One
++            for arg in other.args:
++                if isinstance(arg, Point):
++                    point = arg
++                else:
++                    factor = factor * arg
++            if point is not None:
++                return self + factor * point
+         try:
+             s, o = Point._normalize_dimension(self, Point(other, evaluate=False))
+         except TypeError:
+@@ -221,6 +234,10 @@
+         coords = [simplify(a + b) for a, b in zip(s, o)]
+         return Point(coords, evaluate=False)
+ 
++    def __radd__(self, other):
++        """Add self to other."""
++        return self + other
++
+     def __contains__(self, item):
+         return item in self.args
+ 
+@@ -278,6 +295,10 @@
+         coords = [simplify(x*factor) for x in self.args]
+         return Point(coords, evaluate=False)
+ 
++    def __rmul__(self, factor):
++        """Multiply point's coordinates by a factor."""
++        return self.__mul__(factor)
++
+     def __neg__(self):
+         """Negate the point."""
+         coords = [-x for x in self.args]

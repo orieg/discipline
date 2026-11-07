@@ -1,0 +1,39 @@
+diff --git a/xarray/core/duck_array_ops.py b/xarray/core/duck_array_ops.py
+--- a/xarray/core/duck_array_ops.py
++++ b/xarray/core/duck_array_ops.py
+@@ -324,8 +324,9 @@
+         if coerce_strings and values.dtype.kind in "SU":
+             values = values.astype(object)
+ 
+-        func = None
+-        if skipna or (skipna is None and values.dtype.kind in "cfO"):
++        # When min_count is specified, use nanops path to handle it properly
++        # even if skipna=False, because min_count requires checking NaN counts
++        if skipna or (skipna is None and values.dtype.kind in "cfO") or "min_count" in kwargs:
+             nanname = "nan" + name
+             func = getattr(nanops, nanname)
+         else:
+diff --git a/xarray/core/nanops.py b/xarray/core/nanops.py
+--- a/xarray/core/nanops.py
++++ b/xarray/core/nanops.py
+@@ -26,13 +26,14 @@
+     """
+     xarray version of pandas.core.nanops._maybe_null_out
+     """
+-    if hasattr(axis, "__len__"):  # if tuple or list
+-        raise ValueError(
+-            "min_count is not available for reduction with more than one dimensions."
+-        )
+-
+     if axis is not None and getattr(result, "ndim", False):
+-        null_mask = (mask.shape[axis] - mask.sum(axis) - min_count) < 0
++        if hasattr(axis, "__len__"):  # if tuple or list
++            # Multiple dimensions: use product of shape values along reduced axes
++            null_mask = (
++                np.take(mask.shape, axis).prod() - mask.sum(axis) - min_count
++            ) < 0
++        else:
++            null_mask = (mask.shape[axis] - mask.sum(axis) - min_count) < 0
+         if null_mask.any():
+             dtype, fill_value = dtypes.maybe_promote(result.dtype)
+             result = result.astype(dtype)

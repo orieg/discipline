@@ -1,0 +1,12 @@
+diff --git a/django/forms/fields.py b/django/forms/fields.py
+--- a/django/forms/fields.py
++++ b/django/forms/fields.py
+@@ -1025,8 +1025,6 @@
+             if not value or not [v for v in value if v not in self.empty_values]:
+                 if self.required:
+                     raise ValidationError(self.error_messages['required'], code='required')
+-                else:
+-                    return self.compress([])
+         else:
+             raise ValidationError(self.error_messages['invalid'], code='invalid')
+         for i, field in enumerate(self.fields):

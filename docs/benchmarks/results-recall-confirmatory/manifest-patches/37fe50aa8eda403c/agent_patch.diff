@@ -1,0 +1,23 @@
+diff --git a/django/db/migrations/operations/models.py b/django/db/migrations/operations/models.py
+--- a/django/db/migrations/operations/models.py
++++ b/django/db/migrations/operations/models.py
+@@ -480,6 +480,19 @@
+     def option_value(self):
+         return getattr(self, self.option_name)
+ 
++    def reduce(self, operation, app_label):
++        if (
++            isinstance(operation, AlterTogetherOptionOperation) and
++            self.name_lower == operation.name_lower
++        ):
++            if self.option_name == operation.option_name:
++                # Same type - replace with later operation
++                return [operation]
++            # Different types on the same model - can optimize through each other
++            # since they affect different constraint options
++            return True
++        return super().reduce(operation, app_label)
++
+     def deconstruct(self):
+         kwargs = {
+             'name': self.name,

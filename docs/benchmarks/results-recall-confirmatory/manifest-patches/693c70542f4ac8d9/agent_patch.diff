@@ -1,0 +1,83 @@
+diff --git a/sphinx/directives/other.py b/sphinx/directives/other.py
+--- a/sphinx/directives/other.py
++++ b/sphinx/directives/other.py
+@@ -376,6 +376,79 @@
+         rel_filename, filename = self.env.relfn2path(self.arguments[0])
+         self.arguments[0] = filename
+         self.env.note_included(filename)
++
++        # Emit source-read event for included files
++        docname = self.env.path2doc(rel_filename)
++        if docname is not None:
++            # Read the content and apply clipping to get the raw text
++            from docutils import statemachine
++            from docutils.parsers.rst import directives as rst_directives
++            from pathlib import Path
++            from docutils import io as docutils_io
++            from docutils import utils
++
++            current_source = self.state.document.current_source
++            path = rst_directives.path(self.arguments[0])
++            if path.startswith('<') and path.endswith('>'):
++                _base = Path(self.state.document.current_source).parent
++                path = path[1:-1]
++            else:
++                _base = Path(current_source).parent
++            path = utils.relative_path(None, _base / path)
++
++            encoding = self.options.get(
++                'encoding', self.state.document.settings.input_encoding)
++            e_handler = self.state.document.settings.input_encoding_error_handler
++            tab_width = self.options.get(
++                'tab-width', self.state.document.settings.tab_width)
++
++            try:
++                include_file = docutils_io.FileInput(source_path=path,
++                                                      encoding=encoding,
++                                                      error_handler=e_handler)
++            except UnicodeEncodeError:
++                raise self.severe(f'Problems with "{self.name}" directive path:\n'
++                                  f'Cannot encode input file path "{path}" '
++                                  '(wrong locale?).')
++            except OSError as error:
++                raise self.severe(f'Problems with "{self.name}" directive '
++                                  f'path:\n{docutils_io.error_string(error)}.')
++            else:
++                self.state.document.settings.record_dependencies.add(path)
++
++            # Get to-be-included content with clipping
++            startline = self.options.get('start-line', None)
++            endline = self.options.get('end-line', None)
++            try:
++                if startline or (endline is not None):
++                    lines = include_file.readlines()
++                    rawtext = ''.join(lines[startline:endline])
++                else:
++                    rawtext = include_file.read()
++            except UnicodeError as error:
++                raise self.severe(f'Problem with "{self.name}" directive:\n'
++                                  + docutils_io.error_string(error))
++            # start-after/end-before clipping
++            after_text = self.options.get('start-after', None)
++            if after_text:
++                after_index = rawtext.find(after_text)
++                if after_index < 0:
++                    raise self.severe('Problem with "start-after" option of "%s" '
++                                      'directive:\nText not found.' % self.name)
++                rawtext = rawtext[after_index + len(after_text):]
++            before_text = self.options.get('end-before', None)
++            if before_text:
++                before_index = rawtext.find(before_text)
++                if before_index < 0:
++                    raise self.severe('Problem with "end-before" option of "%s" '
++                                      'directive:\nText not found.' % self.name)
++                rawtext = rawtext[:before_index]
++
++            # Emit source-read event
++            source = [rawtext]
++            self.env.app.emit('source-read', docname, source)
++            rawtext = source[0]
++
+         return super().run()
+ 
+ 

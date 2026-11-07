@@ -1,0 +1,11 @@
+diff --git a/tests/migrations/test_autodetector.py b/tests/migrations/test_autodetector.py
+--- a/tests/migrations/test_autodetector.py
++++ b/tests/migrations/test_autodetector.py
+@@ -2476,6 +2476,6 @@
+         ]
+         changes = self.get_changes(before, after)
+         self.assertNumberMigrations(changes, 'app', 1)
+-    self.assertOperationTypes(changes, 'app', 0, ['AddField', 'CreateModel'])
++        self.assertOperationTypes(changes, 'app', 0, ['RemoveField', 'CreateModel'])
+         self.assertOperationAttributes(changes, 'app', 0, 0, name='title', model_name='readable')
+         self.assertOperationAttributes(changes, 'app', 0, 1, name='book')

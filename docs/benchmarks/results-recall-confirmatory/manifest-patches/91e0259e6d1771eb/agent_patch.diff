@@ -1,0 +1,30 @@
+diff --git a/django/db/backends/ddl_references.py b/django/db/backends/ddl_references.py
+--- a/django/db/backends/ddl_references.py
++++ b/django/db/backends/ddl_references.py
+@@ -84,9 +84,10 @@
+     def __str__(self):
+         def col_str(column, idx):
+             try:
+-                return self.quote_name(column) + self.col_suffixes[idx]
++                col_suffix = self.col_suffixes[idx]
+             except IndexError:
+-                return self.quote_name(column)
++                col_suffix = ''
++            return self.quote_name(column) + (' ' + col_suffix if col_suffix else '')
+ 
+         return ', '.join(col_str(column, idx) for idx, column in enumerate(self.columns))
+ 
+@@ -114,9 +115,11 @@
+             # length as self.columns.
+             col = '{} {}'.format(self.quote_name(column), self.opclasses[idx])
+             try:
+-                col = '{} {}'.format(col, self.col_suffixes[idx])
++                col_suffix = self.col_suffixes[idx]
+             except IndexError:
+-                pass
++                col_suffix = ''
++            if col_suffix:
++                col = '{} {}'.format(col, col_suffix)
+             return col
+ 
+         return ', '.join(col_str(column, idx) for idx, column in enumerate(self.columns))

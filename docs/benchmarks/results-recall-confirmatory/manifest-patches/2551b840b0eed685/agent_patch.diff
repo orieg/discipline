@@ -1,0 +1,21 @@
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -1077,10 +1077,15 @@
+         elif isinstance(value, (list, tuple)):
+             # The items of the iterable may be expressions and therefore need
+             # to be resolved independently.
+-            return type(value)(
++            resolved = [
+                 self.resolve_lookup_value(sub_value, can_reuse, allow_joins)
+                 for sub_value in value
+-            )
++            ]
++            # Named tuples require using _make() instead of the regular constructor
++            # when passed an iterable, since their constructor doesn't accept iterables.
++            if hasattr(type(value), '_make'):
++                return type(value)._make(resolved)
++            return type(value)(resolved)
+         return value
+ 
+     def solve_lookup_type(self, lookup):

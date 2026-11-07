@@ -1,0 +1,37 @@
+diff --git a/django/utils/timezone.py b/django/utils/timezone.py
+--- a/django/utils/timezone.py
++++ b/django/utils/timezone.py
+@@ -71,9 +71,31 @@
+     return _get_timezone_name(get_current_timezone())
+ 
+ 
+-def _get_timezone_name(timezone):
++def _get_timezone_name(tzinfo):
+     """Return the name of ``timezone``."""
+-    return str(timezone)
++    # Use the timezone's standard representation.
++    # For fixed offset timezones, we want the offset string for use in database queries.
++    # This handles Etc/GMT timezones correctly, where the sign is inverted.
++    # E.g., Etc/GMT-10 is UTC+10, so we need to return '+10' not 'Etc/GMT-10'.
++    if hasattr(tzinfo, 'zone'):
++        # pytz timezone
++        if tzinfo.zone.startswith('Etc/GMT'):
++            # Etc/GMT timezones have an inverted sign convention.
++            # Return the offset string instead of the name.
++            offset = tzinfo.utcoffset(None)
++            sign = '+' if offset.total_seconds() >= 0 else '-'
++            hours = int(offset.total_seconds() // 3600)
++            return '%+d' % hours
++        return str(tzinfo)
++    elif isinstance(tzinfo, timezone):
++        # Python's datetime.timezone
++        # If it has a custom name, use it; otherwise, return the offset.
++        if tzinfo._name is not None:
++            return tzinfo._name
++        return str(tzinfo)
++    else:
++        # Other timezones (e.g., zoneinfo.ZoneInfo)
++        return str(tzinfo)
+ 
+ # Timezone selection functions.
+ 

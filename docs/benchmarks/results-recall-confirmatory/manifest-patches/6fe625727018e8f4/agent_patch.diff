@@ -1,0 +1,28 @@
+diff --git a/src/_pytest/compat.py b/src/_pytest/compat.py
+--- a/src/_pytest/compat.py
++++ b/src/_pytest/compat.py
+@@ -68,11 +68,23 @@
+     if any(mock_modules):
+         sentinels = [m.DEFAULT for m in mock_modules if m is not None]
+         return len(
+-            [p for p in patchings if not p.attribute_name and p.new in sentinels]
++            [p for p in patchings if not p.attribute_name and _is_mock_default(p.new, sentinels)]
+         )
+     return len(patchings)
+ 
+ 
++def _is_mock_default(new, sentinels):
++    """Check if 'new' is a mock DEFAULT sentinel using identity comparison.
++
++    This avoids issues with objects that raise exceptions when compared for equality,
++    such as numpy arrays (#5606).
++    """
++    for sentinel in sentinels:
++        if new is sentinel:
++            return True
++    return False
++
++
+ def getfuncargnames(function, is_method=False, cls=None):
+     """Returns the names of a function's mandatory arguments.
+ 

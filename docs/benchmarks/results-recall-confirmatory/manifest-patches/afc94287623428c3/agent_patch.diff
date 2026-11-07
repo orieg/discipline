@@ -1,0 +1,39 @@
+diff --git a/sphinx/directives/other.py b/sphinx/directives/other.py
+--- a/sphinx/directives/other.py
++++ b/sphinx/directives/other.py
+@@ -24,6 +24,10 @@
+ glob_re = re.compile(r'.*[*?\[].*')
+ logger = logging.getLogger(__name__)
+ 
++# special pages that can be referenced in toctree
++# these are generated during the build process and are not regular documents
++special_toctree_pages = ('genindex', 'modindex', 'search')
++
+ 
+ def int_or_nothing(argument: str) -> int:
+     if not argument:
+@@ -118,6 +122,10 @@
+                 docname = docname_join(self.env.docname, docname)
+                 if url_re.match(ref) or ref == 'self':
+                     toctree['entries'].append((title, ref))
++                elif docname in special_toctree_pages:
++                    # special pages (genindex, modindex, search) are valid even
++                    # though they don't exist as regular documents
++                    toctree['entries'].append((title, docname))
+                 elif docname not in self.env.found_docs:
+                     if excluded(self.env.doc2path(docname, False)):
+                         message = __('toctree contains reference to excluded document %r')
+diff --git a/sphinx/environment/adapters/toctree.py b/sphinx/environment/adapters/toctree.py
+--- a/sphinx/environment/adapters/toctree.py
++++ b/sphinx/environment/adapters/toctree.py
+@@ -11,6 +11,10 @@
+ from sphinx.util.matching import Matcher
+ from sphinx.util.nodes import clean_astext, process_only_nodes
+ 
++# special pages that can be referenced in toctree
++# these are generated during the build process and are not regular documents
++special_toctree_pages = ('genindex', 'modindex', 'search')
++
+ if TYPE_CHECKING:
+     from sphinx.builders import Builder
+     from sphinx.environment import BuildEnvironment

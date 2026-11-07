@@ -1,0 +1,25 @@
+diff --git a/django/conf/global_settings.py b/django/conf/global_settings.py
+--- a/django/conf/global_settings.py
++++ b/django/conf/global_settings.py
+@@ -637,6 +637,6 @@
+ SECURE_HSTS_PRELOAD = False
+ SECURE_HSTS_SECONDS = 0
+ SECURE_REDIRECT_EXEMPT = []
+-SECURE_REFERRER_POLICY = None
++SECURE_REFERRER_POLICY = 'strict-origin'
+ SECURE_SSL_HOST = None
+ SECURE_SSL_REDIRECT = False
+diff --git a/docs/ref/settings.txt b/docs/ref/settings.txt
+--- a/docs/ref/settings.txt
++++ b/docs/ref/settings.txt
+@@ -2393,9 +2393,7 @@
+ ``SECURE_REFERRER_POLICY``
+ --------------------------
+ 
+-.. versionadded:: 3.0
+-
+-Default: ``None``
++Default: ``'strict-origin'``
+ 
+ If configured, the :class:`~django.middleware.security.SecurityMiddleware` sets
+ the :ref:`referrer-policy` header on all responses that do not already have it

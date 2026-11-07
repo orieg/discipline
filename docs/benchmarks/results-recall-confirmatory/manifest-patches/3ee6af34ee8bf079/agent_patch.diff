@@ -1,0 +1,14 @@
+diff --git a/django/db/models/query.py b/django/db/models/query.py
+--- a/django/db/models/query.py
++++ b/django/db/models/query.py
+@@ -670,7 +670,9 @@
+                 when_statements = []
+                 for obj in batch_objs:
+                     attr = getattr(obj, field.attname)
+-                    if not isinstance(attr, Expression):
++                    print(f"DEBUG: attr={attr}, type={type(attr)}, hasattr_resolve={hasattr(attr, 'resolve_expression')}")
++                    if not hasattr(attr, 'resolve_expression'):
++                        print("DEBUG: Wrapping in Value")
+                         attr = Value(attr, output_field=field)
+                     when_statements.append(When(pk=obj.pk, then=attr))
+                 case_statement = Case(*when_statements, output_field=field)

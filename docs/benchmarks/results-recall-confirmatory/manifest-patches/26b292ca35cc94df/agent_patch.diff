@@ -1,0 +1,21 @@
+diff --git a/sympy/printing/codeprinter.py b/sympy/printing/codeprinter.py
+--- a/sympy/printing/codeprinter.py
++++ b/sympy/printing/codeprinter.py
+@@ -495,6 +495,17 @@
+             if item.base in b:
+                 b_str[b.index(item.base)] = "(%s)" % b_str[b.index(item.base)]
+ 
++        # Parenthesize any Mod expressions since % in Python has different precedence
++        # than in SymPy. In Python, unary minus has higher precedence than %,
++        # so -x % y means (-x) % y, not -(x % y).
++        from sympy.core.mod import Mod
++        for i, item in enumerate(a):
++            if item.has(Mod):
++                a_str[i] = "(%s)" % a_str[i]
++        for i, item in enumerate(b):
++            if item.has(Mod):
++                b_str[i] = "(%s)" % b_str[i]
++
+         if not b:
+             return sign + '*'.join(a_str)
+         elif len(b) == 1:

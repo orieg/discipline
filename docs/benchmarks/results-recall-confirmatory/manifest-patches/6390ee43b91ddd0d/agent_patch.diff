@@ -1,0 +1,44 @@
+diff --git a/django/utils/dateparse.py b/django/utils/dateparse.py
+--- a/django/utils/dateparse.py
++++ b/django/utils/dateparse.py
+@@ -29,7 +29,7 @@
+ standard_duration_re = re.compile(
+     r'^'
+     r'(?:(?P<days>-?\d+) (days?, )?)?'
+-    r'((?:(?P<hours>-?\d+):)(?=\d+:\d+))?'
++    r'((?:(?P<hours>-?\d+):)(?=-?\d+:-?\d+))?'
+     r'(?:(?P<minutes>-?\d+):)?'
+     r'(?P<seconds>-?\d+)'
+     r'(?:\.(?P<microseconds>\d{1,6})\d{0,6})?'
+@@ -142,5 +142,31 @@
+             kw['microseconds'] = kw['microseconds'].ljust(6, '0')
+         if kw.get('seconds') and kw.get('microseconds') and kw['seconds'].startswith('-'):
+             kw['microseconds'] = '-' + kw['microseconds']
++        # Handle standard duration format: when a negative duration starts with '-',
++        # only the first time component should carry the negative sign in the raw match.
++        # All subsequent components should be positive. We then apply the sign to all.
++        if standard_duration_re.match(value):
++            if value.startswith('-'):
++                # Track whether we've seen the first time component
++                found_first = False
++                for key in ('hours', 'minutes', 'seconds', 'microseconds'):
++                    if kw.get(key) is not None:
++                        if not found_first:
++                            # This is the first time component
++                            found_first = True
++                            if not kw[key].startswith('-'):
++                                # First component is positive - invalid format
++                                return None
++                        else:
++                            # This is NOT the first time component
++                            if kw[key].startswith('-'):
++                                # A subsequent component is negative - invalid format
++                                return None
++                # If we got here, the format is valid. Make all components negative
++                # by applying the sign to each one.
++                sign = -1
++                for key in ('hours', 'minutes', 'seconds', 'microseconds'):
++                    if kw.get(key) is not None and not kw[key].startswith('-'):
++                        kw[key] = '-' + kw[key]
+         kw = {k: float(v) for k, v in kw.items() if v is not None}
+         return days + sign * datetime.timedelta(**kw)

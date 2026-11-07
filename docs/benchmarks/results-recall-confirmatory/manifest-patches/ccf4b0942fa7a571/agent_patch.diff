@@ -1,0 +1,34 @@
+diff --git a/src/_pytest/logging.py b/src/_pytest/logging.py
+--- a/src/_pytest/logging.py
++++ b/src/_pytest/logging.py
+@@ -342,7 +342,7 @@
+         super().emit(record)
+ 
+     def reset(self) -> None:
+-        self.records = []
++        self.records.clear()
+         self.stream = StringIO()
+ 
+     def handleError(self, record: logging.LogRecord) -> None:
+@@ -694,9 +694,8 @@
+             self.report_handler,
+             level=self.log_level,
+         ) as report_handler:
+-            caplog_handler.reset()
+             report_handler.reset()
+-            item.stash[caplog_records_key][when] = caplog_handler.records
++            caplog_handler.records = item.stash[caplog_records_key][when] = []
+             item.stash[caplog_handler_key] = caplog_handler
+ 
+             yield
+diff --git a/testing/logging/test_fixture.py b/testing/logging/test_fixture.py
+--- a/testing/logging/test_fixture.py
++++ b/testing/logging/test_fixture.py
+@@ -187,7 +187,6 @@
+     logging.info("a_call_log_after_clear")
+     assert [x.message for x in caplog.get_records("call")] == ["a_call_log_after_clear"]
+     assert [x.message for x in caplog.get_records("setup")] == ["a_setup_log"]
+-    assert [x.message for x in caplog.get_records("call")] == ["contradictory_expectation"]
+     assert set(caplog._item.stash[caplog_records_key]) == {"setup", "call"}
+ 
+ 

@@ -1,0 +1,64 @@
+diff --git a/lib/matplotlib/figure.py b/lib/matplotlib/figure.py
+--- a/lib/matplotlib/figure.py
++++ b/lib/matplotlib/figure.py
+@@ -2274,12 +2274,56 @@
+             return
+         # need to figure out *where* this subplotspec is.
+         gs = self._subplotspec.get_gridspec()
++        nrows, ncols = gs.get_geometry()
+         wr = np.asarray(gs.get_width_ratios())
+         hr = np.asarray(gs.get_height_ratios())
+-        dx = wr[self._subplotspec.colspan].sum() / wr.sum()
+-        dy = hr[self._subplotspec.rowspan].sum() / hr.sum()
+-        x0 = wr[:self._subplotspec.colspan.start].sum() / wr.sum()
+-        y0 = 1 - hr[:self._subplotspec.rowspan.stop].sum() / hr.sum()
++
++        # Get wspace and hspace from the gridspec
++        wspace = gs.wspace
++        hspace = gs.hspace
++
++        # If wspace/hspace are None, use defaults
++        if wspace is None:
++            wspace = 0.
++        if hspace is None:
++            hspace = 0.
++
++        # Calculate cell sizes with spacing (same logic as gridspec.get_grid_positions
++        # but without subplot margins, i.e., using raw=True behavior)
++        # tot_width and tot_height are 1 (full figure)
++        tot_width = 1.
++        tot_height = 1.
++
++        # calculate accumulated heights of rows
++        cell_h = tot_height / (nrows + hspace*(nrows-1))
++        sep_h = hspace * cell_h
++        norm_h = cell_h * nrows / hr.sum()
++        cell_heights = [r * norm_h for r in hr]
++        sep_heights = [0] + ([sep_h] * (nrows-1))
++        cell_hs = np.cumsum(np.column_stack([sep_heights, cell_heights]).flat)
++
++        # calculate accumulated widths of columns
++        cell_w = tot_width / (ncols + wspace*(ncols-1))
++        sep_w = wspace * cell_w
++        norm_w = cell_w * ncols / wr.sum()
++        cell_widths = [r * norm_w for r in wr]
++        sep_widths = [0] + ([sep_w] * (ncols-1))
++        cell_ws = np.cumsum(np.column_stack([sep_widths, cell_widths]).flat)
++
++        # Get the row and column indices
++        rows = list(self._subplotspec.rowspan)
++        cols = list(self._subplotspec.colspan)
++
++        # Calculate position from the accumulated cell positions
++        # The positions are at the boundaries, so we need to pick the right ones
++        x0 = cell_ws[cols[0] * 2]  # left edge of first column
++        x1 = cell_ws[(cols[-1] + 1) * 2 - 1]  # right edge of last column
++        y0 = 1 - cell_hs[(rows[-1] + 1) * 2 - 1]  # bottom of last row
++        y1 = 1 - cell_hs[rows[0] * 2]  # top of first row
++
++        dx = x1 - x0
++        dy = y1 - y0
++
+         if self.bbox_relative is None:
+             self.bbox_relative = Bbox.from_bounds(x0, y0, dx, dy)
+         else:

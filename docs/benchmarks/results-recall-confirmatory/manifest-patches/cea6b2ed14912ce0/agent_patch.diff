@@ -1,0 +1,21 @@
+diff --git a/django/core/handlers/base.py b/django/core/handlers/base.py
+--- a/django/core/handlers/base.py
++++ b/django/core/handlers/base.py
+@@ -49,6 +49,9 @@
+                 middleware_is_async = False
+             else:
+                 middleware_is_async = middleware_can_async
++            # Save the handler before potential adaptation in case
++            # MiddlewareNotUsed is raised.
++            handler_without_middleware = handler
+             try:
+                 # Adapt handler, if needed.
+                 handler = self.adapt_method_mode(
+@@ -62,6 +65,7 @@
+                         logger.debug('MiddlewareNotUsed(%r): %s', middleware_path, exc)
+                     else:
+                         logger.debug('MiddlewareNotUsed: %r', middleware_path)
++                handler = handler_without_middleware
+                 continue
+ 
+             if mw_instance is None:

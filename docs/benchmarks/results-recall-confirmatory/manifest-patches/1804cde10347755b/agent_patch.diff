@@ -1,0 +1,21 @@
+diff --git a/django/core/servers/basehttp.py b/django/core/servers/basehttp.py
+--- a/django/core/servers/basehttp.py
++++ b/django/core/servers/basehttp.py
+@@ -128,6 +128,17 @@
+             LimitedStream(stdin, content_length), stdout, stderr, environ, **kwargs
+         )
+ 
++    def finish_response(self):
++        """
++        If the request is a HEAD request, don't write the body but still
++        send headers.
++        """
++        if self.request_handler.command == "HEAD":
++            self.headers_sent = True
++            self.close()
++            return
++        return super().finish_response()
++
+     def cleanup_headers(self):
+         super().cleanup_headers()
+         # HTTP/1.1 requires support for persistent connections. Send 'close' if

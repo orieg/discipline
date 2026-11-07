@@ -1,0 +1,14 @@
+diff --git a/xarray/core/dataarray.py b/xarray/core/dataarray.py
+--- a/xarray/core/dataarray.py
++++ b/xarray/core/dataarray.py
+@@ -468,7 +468,9 @@
+             for k in variables:
+                 variables[k] = variables[k].copy(deep=False)
+         coord_names = set(self._coords)
+-        dataset = Dataset._from_vars_and_coord_names(variables, coord_names)
++        dataset = Dataset._from_vars_and_coord_names(
++            variables, coord_names, attrs=self.attrs
++        )
+         return dataset
+ 
+     def to_dataset(self, dim: Hashable = None, *, name: Hashable = None) -> Dataset:

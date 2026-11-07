@@ -1,0 +1,38 @@
+diff --git a/django/utils/dateparse.py b/django/utils/dateparse.py
+--- a/django/utils/dateparse.py
++++ b/django/utils/dateparse.py
+@@ -29,7 +29,7 @@
+ standard_duration_re = re.compile(
+     r'^'
+     r'(?:(?P<days>-?\d+) (days?, )?)?'
+-    r'((?:(?P<hours>-?\d+):)(?=\d+:\d+))?'
++    r'((?:(?P<hours>-?\d+):)(?=-?\d+:-?\d+))?'
+     r'(?:(?P<minutes>-?\d+):)?'
+     r'(?P<seconds>-?\d+)'
+     r'(?:\.(?P<microseconds>\d{1,6})\d{0,6})?'
+@@ -138,6 +138,25 @@
+         kw = match.groupdict()
+         days = datetime.timedelta(float(kw.pop('days', 0) or 0))
+         sign = -1 if kw.pop('sign', '+') == '-' else 1
++        # For standard duration format (no sign group), handle negative durations.
++        # If only one component is negative (the leading one), negate the rest.
++        # If more than one component is negative, the input is invalid.
++        if 'sign' not in kw or kw['sign'] is None:
++            negative_count = sum(
++                1 for key in ['hours', 'minutes', 'seconds', 'microseconds']
++                if kw.get(key) is not None and kw[key].startswith('-')
++            )
++            if negative_count > 1:
++                return None
++            elif negative_count == 1:
++                if kw.get('hours') is not None and kw['hours'].startswith('-'):
++                    for key in ['minutes', 'seconds', 'microseconds']:
++                        if kw.get(key) is not None and not kw[key].startswith('-'):
++                            kw[key] = '-' + kw[key]
++                elif kw.get('minutes') is not None and kw['minutes'].startswith('-') and kw.get('hours') is None:
++                    for key in ['seconds', 'microseconds']:
++                        if kw.get(key) is not None and not kw[key].startswith('-'):
++                            kw[key] = '-' + kw[key]
+         if kw.get('microseconds'):
+             kw['microseconds'] = kw['microseconds'].ljust(6, '0')
+         if kw.get('seconds') and kw.get('microseconds') and kw['seconds'].startswith('-'):

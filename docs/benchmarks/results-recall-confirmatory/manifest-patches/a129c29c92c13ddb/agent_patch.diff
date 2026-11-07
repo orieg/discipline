@@ -1,0 +1,41 @@
+diff --git a/django/views/debug.py b/django/views/debug.py
+--- a/django/views/debug.py
++++ b/django/views/debug.py
+@@ -421,9 +421,35 @@
+         if not exceptions:
+             return frames
+ 
+-        # In case there's just one exception, take the traceback from self.tb
++        # In case there's just one exception, take the traceback from self.tb.
++        # When there are multiple exceptions, find the exception with a
++        # traceback since inner exceptions may not have one.
+         exc_value = exceptions.pop()
+-        tb = self.tb if not exceptions else exc_value.__traceback__
++        if not exceptions:
++            tb = self.tb
++        else:
++            # Find the first exception in the chain that has a valid traceback.
++            # This handles cases where inner exceptions don't have tracebacks.
++            for i, exc in enumerate(exceptions):
++                if exc.__traceback__:
++                    # Found an exception with a traceback, use it as the
++                    # starting exception
++                    exc_value, exceptions[i] = exceptions[i], exc_value
++                    tb = exc.__traceback__
++                    # The popped exception (now at position i) needs to be
++                    # added to exceptions for later processing if it has a
++                    # traceback, and it should be at the end since we're
++                    # processing from outermost to innermost.
++                    if exceptions[i].__traceback__:
++                        exceptions.append(exceptions.pop(i))
++                    break
++            else:
++                # No exception has a traceback, use self.tb as fallback
++                tb = self.tb
++                # The popped exception needs to be added to exceptions for
++                # later processing if it has a traceback
++                if exc_value.__traceback__:
++                    exceptions.append(exc_value)
+ 
+         while tb is not None:
+             # Support for __traceback_hide__ which is used by a few libraries

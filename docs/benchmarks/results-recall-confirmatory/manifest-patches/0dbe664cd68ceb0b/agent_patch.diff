@@ -1,0 +1,38 @@
+diff --git a/sympy/physics/quantum/dagger.py b/sympy/physics/quantum/dagger.py
+--- a/sympy/physics/quantum/dagger.py
++++ b/sympy/physics/quantum/dagger.py
+@@ -85,5 +85,11 @@
+             return obj
+         return Expr.__new__(cls, arg)
+ 
++    def __mul__(self, other):
++        from sympy.physics.quantum.operator import IdentityOperator
++        if isinstance(other, IdentityOperator):
++            return self
++        return Expr.__mul__(self, other)
++
+ adjoint.__name__ = "Dagger"
+ adjoint._sympyrepr = lambda a, b: "Dagger(%s)" % b._print(a.args[0])
+diff --git a/sympy/physics/quantum/operator.py b/sympy/physics/quantum/operator.py
+--- a/sympy/physics/quantum/operator.py
++++ b/sympy/physics/quantum/operator.py
+@@ -181,6 +181,9 @@
+         if isinstance(other, IdentityOperator):
+             return self
+ 
++        if isinstance(other, Dagger):
++            return Mul(other, self)
++
+         return Mul(self, other)
+ 
+ 
+@@ -310,6 +313,9 @@
+         if isinstance(other, Operator):
+             return other
+ 
++        if isinstance(other, Dagger):
++            return other
++
+         return Mul(self, other)
+ 
+     def _represent_default_basis(self, **options):

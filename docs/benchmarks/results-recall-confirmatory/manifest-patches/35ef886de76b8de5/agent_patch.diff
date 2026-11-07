@@ -1,0 +1,24 @@
+diff --git a/sympy/concrete/products.py b/sympy/concrete/products.py
+--- a/sympy/concrete/products.py
++++ b/sympy/concrete/products.py
+@@ -283,9 +283,19 @@
+                 # as_numer_denom(). E.g. n**(2/3) + 1 --> (n**(2/3) + 1, 1).
+                 # We have to catch this case.
+ 
+-                p = sum([self._eval_product(i, (k, a, n)) for i in p.as_coeff_Add()])
++                # We cannot split Product(A+B) into Product(A)+Product(B),
++                # so we must try to evaluate p directly. If p is an Add,
++                # it will be handled by this same branch recursively.
++                # To avoid infinite recursion, we check if p is actually an Add.
++                if p.is_Add:
++                    return None
++                p = self._eval_product(p, (k, a, n))
+             else:
+                 p = self._eval_product(p, (k, a, n))
++                if p is None:
++                    return None
++            if p is None:
++                return None
+             return p / q
+ 
+         elif term.is_Mul:

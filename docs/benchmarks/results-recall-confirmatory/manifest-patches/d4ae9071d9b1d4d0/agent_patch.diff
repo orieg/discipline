@@ -1,0 +1,24 @@
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -436,6 +436,12 @@
+             )
+             or having
+         )
++        # Aggregation over window functions requires a subquery because
++        # aggregate function calls cannot contain window function calls.
++        has_window = any(
++            getattr(annotation, "contains_over_clause", False)
++            for annotation in self.annotations.values()
++        )
+         # Decide if we need to use a subquery.
+         #
+         # Existing aggregations would cause incorrect results as
+@@ -454,6 +460,7 @@
+             or qualify
+             or self.distinct
+             or self.combinator
++            or has_window
+         ):
+             from django.db.models.sql.subqueries import AggregateQuery
+ 

@@ -1,0 +1,35 @@
+diff --git a/sklearn/model_selection/_validation.py b/sklearn/model_selection/_validation.py
+--- a/sklearn/model_selection/_validation.py
++++ b/sklearn/model_selection/_validation.py
+@@ -855,8 +855,17 @@
+     predictions = func(X_test)
+     if method in ['decision_function', 'predict_proba', 'predict_log_proba']:
+         if isinstance(predictions, list):
++            # Multi-output problem: predictions is a list of arrays
++            # (one for each output)
++            # Get classes from each estimator for multi-output classifiers
++            if hasattr(estimator, 'estimators_'):
++                classes = [estimator.estimators_[i].classes_
++                           for i in range(len(predictions))]
++            else:
++                classes = [estimator.classes_[i]
++                           for i in range(len(predictions))]
+             predictions = [_enforce_prediction_order(
+-                estimator.classes_[i_label], predictions[i_label],
++                classes[i_label], predictions[i_label],
+                 n_classes=len(set(y[:, i_label])), method=method)
+                 for i_label in range(len(predictions))]
+         else:
+diff --git a/sklearn/multioutput.py b/sklearn/multioutput.py
+--- a/sklearn/multioutput.py
++++ b/sklearn/multioutput.py
+@@ -168,6 +168,9 @@
+             delayed(_fit_estimator)(
+                 self.estimator, X, y[:, i], sample_weight)
+             for i in range(y.shape[1]))
++        if is_classifier(self):
++            self.classes_ = [estimator.classes_ for estimator
++                             in self.estimators_]
+         return self
+ 
+     def predict(self, X):

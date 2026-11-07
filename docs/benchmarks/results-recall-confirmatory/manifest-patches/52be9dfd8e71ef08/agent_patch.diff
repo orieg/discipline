@@ -1,0 +1,40 @@
+diff --git a/django/template/autoreload.py b/django/template/autoreload.py
+--- a/django/template/autoreload.py
++++ b/django/template/autoreload.py
+@@ -17,16 +17,30 @@
+         if not isinstance(backend, DjangoTemplates):
+             continue
+ 
+-        items.update(cwd / to_path(dir) for dir in backend.engine.dirs)
++        for dir in backend.engine.dirs:
++            if not dir:
++                items.add(Path("."))
++            else:
++                dir_path = to_path(dir)
++                if dir_path.is_absolute():
++                    items.add(dir_path)
++                else:
++                    items.add(cwd / dir_path)
+ 
+         for loader in backend.engine.template_loaders:
+             if not hasattr(loader, "get_dirs"):
+                 continue
+-            items.update(
+-                cwd / to_path(directory)
+-                for directory in loader.get_dirs()
+-                if not is_django_path(directory)
+-            )
++            for directory in loader.get_dirs():
++                if is_django_path(directory):
++                    continue
++                if not directory:
++                    items.add(Path("."))
++                else:
++                    dir_path = to_path(directory)
++                    if dir_path.is_absolute():
++                        items.add(dir_path)
++                    else:
++                        items.add(cwd / dir_path)
+     return items
+ 
+ 

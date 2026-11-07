@@ -1,0 +1,38 @@
+diff --git a/sphinx/pycode/ast.py b/sphinx/pycode/ast.py
+--- a/sphinx/pycode/ast.py
++++ b/sphinx/pycode/ast.py
+@@ -166,16 +166,30 @@
+         return "{" + ", ".join(self.visit(e) for e in node.elts) + "}"
+ 
+     def visit_Subscript(self, node: ast.Subscript) -> str:
+-        return "%s[%s]" % (self.visit(node.value), self.visit(node.slice))
++        def is_simple_tuple(slice_value: ast.AST) -> bool:
++            """Check if the slice is a simple tuple that doesn't need parentheses."""
++            return (isinstance(slice_value, ast.Tuple)
++                    and slice_value.elts
++                    and not any(isinstance(elt, ast.Starred) for elt in slice_value.elts))
++
++        if is_simple_tuple(node.slice):
++            # For simple tuples in subscript, don't add parentheses around the elements
++            slice_str = ", ".join(self.visit(elt) for elt in node.slice.elts)
++        else:
++            slice_str = self.visit(node.slice)
++        return "%s[%s]" % (self.visit(node.value), slice_str)
+ 
+     def visit_UnaryOp(self, node: ast.UnaryOp) -> str:
+         return "%s %s" % (self.visit(node.op), self.visit(node.operand))
+ 
+     def visit_Tuple(self, node: ast.Tuple) -> str:
+-        if node.elts:
+-            return ", ".join(self.visit(e) for e in node.elts)
+-        else:
++        if not node.elts:
+             return "()"
++        elif len(node.elts) == 1:
++            # Single-element tuple needs a trailing comma to be distinguished from a parenthesized expression
++            return "(%s,)" % self.visit(node.elts[0])
++        else:
++            return "(" + ", ".join(self.visit(e) for e in node.elts) + ")"
+ 
+     if sys.version_info >= (3, 6):
+         def visit_Constant(self, node: ast.Constant) -> str:

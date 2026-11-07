@@ -1,0 +1,52 @@
+diff --git a/tests/queries/test_qs_combinators.py b/tests/queries/test_qs_combinators.py
+--- a/tests/queries/test_qs_combinators.py
++++ b/tests/queries/test_qs_combinators.py
+@@ -1,5 +1,5 @@
+ from django.db import connection
+-from django.db.models import Exists, F, IntegerField, OuterRef, Value
++from django.db.models import Exists, F, IntegerField, OuterRef, Q, Value
+ from django.db.utils import DatabaseError, NotSupportedError
+ from django.test import TestCase, skipIfDBFeature, skipUnlessDBFeature
+ 
+@@ -285,3 +285,41 @@
+                         msg % (operation, combinator),
+                     ):
+                         getattr(getattr(qs, combinator)(qs), operation)()
++
++    def test_exists_exclude(self):
++        from .models import Author, ExtraInfo, Item, Note, Tag, NamedCategory
++        # Setup test data
++        extra_info = ExtraInfo.objects.create(info='test', value=1)
++        named_category = NamedCategory.objects.create(name='test')
++        tag = Tag.objects.create(name='tag1', category=named_category)
++        author = Author.objects.create(name='test', num=2, extra=extra_info)
++        note = Note.objects.create(note='test', misc='test', tag=tag)
++        item = Item.objects.create(
++            name='item1',
++            created='2023-01-01 00:00:00',
++            creator=author,
++            note=note,
++        )
++        item.tags.add(tag)
++
++        # filter() - works
++        qs = Number.objects.annotate(
++            foo=Exists(
++                Item.objects.filter(tags__category_id=OuterRef('pk'))
++            )
++        ).filter(foo=True)
++        # Exclude() and filter(~Q()) - should work the same as filter()
++        qs_exclude = Number.objects.annotate(
++            foo=Exists(
++                Item.objects.exclude(tags__category_id=OuterRef('pk'))
++            )
++        ).filter(foo=True)
++        qs_not_q = Number.objects.annotate(
++            foo=Exists(
++                Item.objects.filter(~Q(tags__category_id=OuterRef('pk')))
++            )
++        ).filter(foo=True)
++
++        # All should produce valid SQL
++        self.assertEqual(str(qs.query), str(qs_exclude.query))
++        self.assertEqual(str(qs.query), str(qs_not_q.query))

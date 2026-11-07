@@ -1,0 +1,29 @@
+diff --git a/django/db/backends/postgresql/client.py b/django/db/backends/postgresql/client.py
+--- a/django/db/backends/postgresql/client.py
++++ b/django/db/backends/postgresql/client.py
+@@ -30,6 +30,13 @@
+         subprocess_env = os.environ.copy()
+         if passwd:
+             subprocess_env['PGPASSWORD'] = str(passwd)
++        # Pass SSL parameters as environment variables.
++        for param in (
++            'sslmode', 'sslrootcert', 'sslcert', 'sslkey',
++        ):
++            value = conn_params.get(param)
++            if value:
++                subprocess_env['PG' + param.upper()] = str(value)
+         try:
+             # Allow SIGINT to pass to psql to abort queries.
+             signal.signal(signal.SIGINT, signal.SIG_IGN)
+diff --git a/tests/dbshell/test_postgresql.py b/tests/dbshell/test_postgresql.py
+--- a/tests/dbshell/test_postgresql.py
++++ b/tests/dbshell/test_postgresql.py
+@@ -79,7 +79,7 @@
+                 'user': 'someuser',
+                 'host': 'somehost',
+                 'port': '444',
+-                'sslmode': 'verify-ca',
++                'sslmode': 'require',
+                 'sslrootcert': 'root.crt',
+                 'sslcert': 'client.crt',
+                 'sslkey': 'client.key',

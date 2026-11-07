@@ -1,0 +1,24 @@
+diff --git a/django/db/migrations/writer.py b/django/db/migrations/writer.py
+--- a/django/db/migrations/writer.py
++++ b/django/db/migrations/writer.py
+@@ -175,8 +175,18 @@
+ 
+         # Sort imports by the package / module to be imported (the part after
+         # "from" in "from ... import ..." or after "import" in "import ...").
+-        sorted_imports = sorted(imports, key=lambda i: i.split()[1])
+-        items["imports"] = "\n".join(sorted_imports) + "\n" if imports else ""
++        # Place all import statements before from statements to follow Django's
++        # coding style and isort defaults.
++        regular_imports = sorted(
++            (i for i in imports if i.startswith("import")),
++            key=lambda i: i.split()[1],
++        )
++        from_imports = sorted(
++            (i for i in imports if i.startswith("from")),
++            key=lambda i: i.split()[1],
++        )
++        sorted_imports = regular_imports + from_imports
++        items["imports"] = "\n".join(sorted_imports) + "\n" if sorted_imports else ""
+         if migration_imports:
+             items["imports"] += (
+                 "\n\n# Functions from the following migrations need manual "

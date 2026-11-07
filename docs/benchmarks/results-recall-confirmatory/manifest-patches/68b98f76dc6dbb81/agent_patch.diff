@@ -1,0 +1,26 @@
+diff --git a/astropy/utils/misc.py b/astropy/utils/misc.py
+--- a/astropy/utils/misc.py
++++ b/astropy/utils/misc.py
+@@ -528,7 +528,7 @@
+                 not key.startswith('_'))
+ 
+         for key, val in dct.items():
+-            if (inspect.isfunction(val) and
++            if ((inspect.isfunction(val) or isinstance(val, property)) and
+                 is_public_member(key) and
+                 val.__doc__ is None):
+                 for base in cls.__mro__[1:]:
+diff --git a/astropy/utils/tests/test_misc.py b/astropy/utils/tests/test_misc.py
+--- a/astropy/utils/tests/test_misc.py
++++ b/astropy/utils/tests/test_misc.py
+@@ -100,8 +100,8 @@
+     if Base.bar.__doc__ is not None:
+         assert Subclass.bar.__doc__ == "BAR"
+ 
+-    if Base.__call__.__doc__ is not None:
+-        assert Subclass.__call__.__doc__ == "BAZ"
++    if Base.bar.__doc__ is not None:
++        assert Subclass.bar.__doc__ == "BAR"
+ 
+ 
+ def test_set_locale():

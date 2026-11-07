@@ -1,0 +1,30 @@
+diff --git a/sphinx/util/docfields.py b/sphinx/util/docfields.py
+--- a/sphinx/util/docfields.py
++++ b/sphinx/util/docfields.py
+@@ -297,11 +297,21 @@
+ 
+             # also support syntax like ``:param type name:``
+             if typedesc.is_typed:
+-                try:
+-                    argtype, argname = fieldarg.split(None, 1)
+-                except ValueError:
+-                    pass
+-                else:
++                # find the first whitespace that's not inside brackets
++                depth = 0
++                argname = None
++                argtype = None
++                for i, c in enumerate(fieldarg):
++                    if c in '([':
++                        depth += 1
++                    elif c in ')]':
++                        depth -= 1
++                    elif c == ' ' and depth == 0:
++                        argtype = fieldarg[:i].strip()
++                        argname = fieldarg[i + 1:].strip()
++                        break
++
++                if argtype and argname:
+                     types.setdefault(typename, {})[argname] = \
+                         [nodes.Text(argtype)]
+                     fieldarg = argname

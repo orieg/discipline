@@ -1,0 +1,29 @@
+diff --git a/astropy/io/ascii/rst.py b/astropy/io/ascii/rst.py
+--- a/astropy/io/ascii/rst.py
++++ b/astropy/io/ascii/rst.py
+@@ -57,10 +57,22 @@
+     data_class = SimpleRSTData
+     header_class = SimpleRSTHeader
+ 
+-    def __init__(self):
+-        super().__init__(delimiter_pad=None, bookend=False)
++    def __init__(self, delimiter_pad=None, bookend=False, header_rows=None):
++        if header_rows is None:
++            header_rows = ["name"]
++        super().__init__(
++            delimiter_pad=delimiter_pad,
++            bookend=bookend,
++            header_rows=header_rows,
++        )
++        # The position line (===) is always at index 0
++        self.header.position_line = 0
++        # Data starts after position line, all header rows, and the second position line
++        self.data.start_line = len(self.header.header_rows) + 2
+ 
+     def write(self, lines):
+         lines = super().write(lines)
+-        lines = [lines[1]] + lines + [lines[1]]
++        # The position line is always at index len(header_rows)
++        n_header_rows = len(self.header.header_rows)
++        lines = [lines[n_header_rows]] + lines + [lines[n_header_rows]]
+         return lines

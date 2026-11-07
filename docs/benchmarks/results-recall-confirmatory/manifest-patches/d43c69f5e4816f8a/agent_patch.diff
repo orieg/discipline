@@ -1,0 +1,51 @@
+diff --git a/src/_pytest/logging.py b/src/_pytest/logging.py
+--- a/src/_pytest/logging.py
++++ b/src/_pytest/logging.py
+@@ -46,6 +46,7 @@
+ _ANSI_ESCAPE_SEQ = re.compile(r"\x1b\[[\d;]+m")
+ caplog_handler_key = StashKey["LogCaptureHandler"]()
+ caplog_records_key = StashKey[Dict[str, List[logging.LogRecord]]]()
++caplog_current_phase_key = StashKey[str]()
+ 
+ 
+ def _remove_ansi_escape_sequences(text: str) -> str:
+@@ -342,7 +343,6 @@
+         super().emit(record)
+ 
+     def reset(self) -> None:
+-        self.records = []
+         self.stream = StringIO()
+ 
+     def handleError(self, record: logging.LogRecord) -> None:
+@@ -440,6 +440,12 @@
+ 
+     def clear(self) -> None:
+         """Reset the list of log records and the captured log text."""
++        # Get the current phase and clear its records from the stash
++        current_phase = self._item.stash.get(caplog_current_phase_key, None)
++        if current_phase is not None:
++            records_list = self._item.stash[caplog_records_key].get(current_phase)
++            if records_list is not None:
++                records_list.clear()
+         self.handler.reset()
+ 
+     def set_level(self, level: Union[int, str], logger: Optional[str] = None) -> None:
+@@ -694,10 +700,16 @@
+             self.report_handler,
+             level=self.log_level,
+         ) as report_handler:
+-            caplog_handler.reset()
+-            report_handler.reset()
++            # Create a new list for this phase's records so that they are
++            # independent from other phases. The handler's records list is
++            # redirected to this new list.
++            caplog_handler.records = []
+             item.stash[caplog_records_key][when] = caplog_handler.records
+             item.stash[caplog_handler_key] = caplog_handler
++            item.stash[caplog_current_phase_key] = when
++
++            caplog_handler.reset()
++            report_handler.reset()
+ 
+             yield
+ 

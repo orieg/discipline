@@ -1,0 +1,8 @@
+diff --git a/tests/utils_tests/test_module/main_module.py b/tests/utils_tests/test_module/main_module.py
+new file mode 100644
+--- /dev/null
++++ b/tests/utils_tests/test_module/main_module.py
+@@ -0,0 +1,3 @@
++# This module simulates a non-package module run with python -m
++# Used for testing autoreload with dotted module names
++pass

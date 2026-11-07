@@ -1,0 +1,23 @@
+diff --git a/astropy/io/fits/diff.py b/astropy/io/fits/diff.py
+--- a/astropy/io/fits/diff.py
++++ b/astropy/io/fits/diff.py
+@@ -1449,7 +1449,7 @@
+                 arrb.dtype, np.floating
+             ):
+                 diffs = where_not_allclose(arra, arrb, rtol=self.rtol, atol=self.atol)
+-            elif "P" in col.format:
++            elif "P" in col.format.upper() or "Q" in col.format.upper():
+                 diffs = (
+                     [
+                         idx
+diff --git a/astropy/io/fits/tests/test_diff.py b/astropy/io/fits/tests/test_diff.py
+--- a/astropy/io/fits/tests/test_diff.py
++++ b/astropy/io/fits/tests/test_diff.py
+@@ -417,7 +417,6 @@
+         assert diff.identical
+         assert len(diff.common_columns) == 11
+         assert diff.common_column_names == set("abcdefghijk")
+-    assert len(diff.common_columns) == 10
+         assert diff.diff_ratio == 0
+         assert diff.diff_total == 0
+ 

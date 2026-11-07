@@ -1,0 +1,28 @@
+diff --git a/astropy/io/ascii/core.py b/astropy/io/ascii/core.py
+--- a/astropy/io/ascii/core.py
++++ b/astropy/io/ascii/core.py
+@@ -931,9 +931,11 @@
+         for vals in zip(*col_str_iters):
+             lines.append(self.splitter.join(vals))
+ 
+-    def _set_col_formats(self):
++    def _set_col_formats(self, cols=None):
+         """WRITE: set column formats."""
+-        for col in self.cols:
++        if cols is None:
++            cols = self.cols
++        for col in cols:
+             if col.info.name in self.formats:
+                 col.info.format = self.formats[col.info.name]
+ 
+diff --git a/astropy/io/ascii/html.py b/astropy/io/ascii/html.py
+--- a/astropy/io/ascii/html.py
++++ b/astropy/io/ascii/html.py
+@@ -354,6 +354,7 @@
+             self.data.fill_values = [self.data.fill_values]
+ 
+         self.data._set_fill_values(cols)
++        self.data._set_col_formats(cols)
+ 
+         lines = []
+ 

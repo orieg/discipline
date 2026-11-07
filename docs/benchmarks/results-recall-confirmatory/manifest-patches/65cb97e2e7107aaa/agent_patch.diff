@@ -1,0 +1,18 @@
+diff --git a/sympy/core/relational.py b/sympy/core/relational.py
+--- a/sympy/core/relational.py
++++ b/sympy/core/relational.py
+@@ -589,6 +589,14 @@
+     def _eval_relation(cls, lhs, rhs):
+         return _sympify(lhs == rhs)
+ 
++    def _eval_as_set(self):
++        from sympy.solvers.solveset import solveset_real
++        free = self.free_symbols
++        if len(free) == 1:
++            x = free.pop()
++            return solveset_real(self, x)
++        raise ValueError("The equation has more than one free symbol.")
++
+     def _eval_rewrite_as_Add(self, *args, **kwargs):
+         """return Eq(L, R) as L - R. To control the evaluation of
+         the result set pass `evaluate=True` to give L - R;

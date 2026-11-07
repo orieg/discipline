@@ -1,0 +1,75 @@
+diff --git a/django/db/models/functions/datetime.py b/django/db/models/functions/datetime.py
+--- a/django/db/models/functions/datetime.py
++++ b/django/db/models/functions/datetime.py
+@@ -164,12 +164,6 @@
+ ExtractYear.register_lookup(YearLt)
+ ExtractYear.register_lookup(YearLte)
+ 
+-ExtractIsoYear.register_lookup(YearExact)
+-ExtractIsoYear.register_lookup(YearGt)
+-ExtractIsoYear.register_lookup(YearGte)
+-ExtractIsoYear.register_lookup(YearLt)
+-ExtractIsoYear.register_lookup(YearLte)
+-
+ 
+ class Now(Func):
+     template = 'CURRENT_TIMESTAMP'
+diff --git a/tests/db_functions/datetime/test_extract_trunc.py b/tests/db_functions/datetime/test_extract_trunc.py
+--- a/tests/db_functions/datetime/test_extract_trunc.py
++++ b/tests/db_functions/datetime/test_extract_trunc.py
+@@ -105,24 +105,13 @@
+ 
+         for lookup in ('year', 'iso_year'):
+             with self.subTest(lookup):
+-                qs = DTModel.objects.filter(**{'start_datetime__%s__exact' % lookup: 2015})
+-                self.assertEqual(qs.count(), 1)
++                qs = DTModel.objects.annotate(
++                    start_year=ExtractYear('start_datetime'),
++                ).filter(**{'start_datetime__%s' % lookup: ExtractIsoYear('start_datetime')})
++                self.assertEqual(qs.count(), 2)
++                # iso_year should use extract for filtering
+                 query_string = str(qs.query).lower()
+-                self.assertEqual(query_string.count(' between '), 1)
+-                self.assertEqual(query_string.count('extract'), 0)
+-                # exact is implied and should be the same
+-                qs = DTModel.objects.filter(**{'start_datetime__%s' % lookup: 2015})
+-                self.assertEqual(qs.count(), 1)
+-                query_string = str(qs.query).lower()
+-                self.assertEqual(query_string.count(' between '), 1)
+-                self.assertEqual(query_string.count('extract'), 0)
+-                # date and datetime fields should behave the same
+-                qs = DTModel.objects.filter(**{'start_date__%s' % lookup: 2015})
+-                self.assertEqual(qs.count(), 1)
+-                query_string = str(qs.query).lower()
+-                self.assertEqual(query_string.count(' between '), 1)
+-                self.assertEqual(query_string.count('extract'), 0)
+-                # an expression rhs cannot use the between optimization.
++                self.assertEqual(query_string.count('extract'), 3 if lookup == 'iso_year' else 2)
+                 qs = DTModel.objects.annotate(
+                     start_year=ExtractYear('start_datetime'),
+                 ).filter(end_datetime__year=F('start_year') + 1)
+@@ -130,6 +119,24 @@
+                 query_string = str(qs.query).lower()
+                 self.assertEqual(query_string.count(' between '), 0)
+                 self.assertEqual(query_string.count('extract'), 3)
++        # year (but not iso_year) uses BETWEEN filter for performance
++        qs = DTModel.objects.filter(start_datetime__year__exact=2015)
++        self.assertEqual(qs.count(), 1)
++        query_string = str(qs.query).lower()
++        self.assertEqual(query_string.count(' between '), 1)
++        self.assertEqual(query_string.count('extract'), 0)
++        # exact is implied and should be the same
++        qs = DTModel.objects.filter(start_datetime__year=2015)
++        self.assertEqual(qs.count(), 1)
++        query_string = str(qs.query).lower()
++        self.assertEqual(query_string.count(' between '), 1)
++        self.assertEqual(query_string.count('extract'), 0)
++        # date and datetime fields should behave the same
++        qs = DTModel.objects.filter(start_date__year=2015)
++        self.assertEqual(qs.count(), 1)
++        query_string = str(qs.query).lower()
++        self.assertEqual(query_string.count(' between '), 1)
++        self.assertEqual(query_string.count('extract'), 0)
+ 
+     def test_extract_year_greaterthan_lookup(self):
+         start_datetime = datetime(2015, 6, 15, 14, 10)

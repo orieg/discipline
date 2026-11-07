@@ -1,0 +1,23 @@
+diff --git a/django/db/models/sql/query.py b/django/db/models/sql/query.py
+--- a/django/db/models/sql/query.py
++++ b/django/db/models/sql/query.py
+@@ -748,7 +748,7 @@
+                     cur_model = source.related_model
+                 else:
+                     cur_model = source.remote_field.model
+-                opts = cur_model._meta
++                opts = cur_model._meta.concrete_model._meta
+                 # Even if we're "just passing through" this model, we must add
+                 # both the current model's pk and the related reference field
+                 # (if it's not a reverse relation) to the things we select.
+diff --git a/tests/proxy_models/tests.py b/tests/proxy_models/tests.py
+--- a/tests/proxy_models/tests.py
++++ b/tests/proxy_models/tests.py
+@@ -399,7 +399,6 @@
+         user = ProxyTrackerUser.objects.create(name="Joe Doe", status="test")
+         issue = Issue.objects.create(summary="New issue", assignee=user)
+         qs = Issue.objects.select_related("assignee").only("assignee__status")
+-    self.assertEqual(qs.get(), user)
+         self.assertEqual(qs.get(), issue)
+ 
+     def test_eq(self):

@@ -1,0 +1,13 @@
+diff --git a/django/views/debug.py b/django/views/debug.py
+--- a/django/views/debug.py
++++ b/django/views/debug.py
+@@ -422,6 +422,9 @@
+             return frames
+ 
+         # In case there's just one exception, take the traceback from self.tb
++        # Reverse the list so that the outermost exception (first to be added)
++        # is popped last, allowing inner exceptions to be processed first.
++        exceptions.reverse()
+         exc_value = exceptions.pop()
+         tb = self.tb if not exceptions else exc_value.__traceback__
+ 

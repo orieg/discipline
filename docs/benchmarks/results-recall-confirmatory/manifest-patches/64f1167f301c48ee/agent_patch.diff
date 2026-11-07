@@ -1,0 +1,25 @@
+diff --git a/django/views/debug.py b/django/views/debug.py
+--- a/django/views/debug.py
++++ b/django/views/debug.py
+@@ -422,8 +422,10 @@
+             return frames
+ 
+         # In case there's just one exception, take the traceback from self.tb
+-        exc_value = exceptions.pop()
+-        tb = self.tb if not exceptions else exc_value.__traceback__
++        # Otherwise use the innermost exception's traceback (which might be None
++        # if the exception was created but not raised, in which case use self.tb)
++        exc_value = exceptions.pop(0)
++        tb = self.tb if not exceptions else exc_value.__traceback__ or self.tb
+ 
+         while tb is not None:
+             # Support for __traceback_hide__ which is used by a few libraries
+@@ -446,7 +448,7 @@
+                 post_context = []
+             frames.append({
+                 'exc_cause': explicit_or_implicit_cause(exc_value),
+-                'exc_cause_explicit': getattr(exc_value, '__cause__', True),
++                'exc_cause_explicit': getattr(exc_value, '__cause__', None),
+                 'tb': tb,
+                 'type': 'django' if module_name.startswith('django.') else 'user',
+                 'filename': filename,

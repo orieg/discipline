@@ -1,0 +1,25 @@
+diff --git a/sklearn/compose/_column_transformer.py b/sklearn/compose/_column_transformer.py
+--- a/sklearn/compose/_column_transformer.py
++++ b/sklearn/compose/_column_transformer.py
+@@ -303,6 +303,9 @@
+         for trans in transformers:
+             _safe_set_output(trans, transform=transform)
+ 
++        if self.remainder not in ("passthrough", "drop"):
++            _safe_set_output(self.remainder, transform=transform)
++
+         return self
+ 
+     def get_params(self, deep=True):
+diff --git a/sklearn/compose/tests/test_column_transformer.py b/sklearn/compose/tests/test_column_transformer.py
+--- a/sklearn/compose/tests/test_column_transformer.py
++++ b/sklearn/compose/tests/test_column_transformer.py
+@@ -2205,7 +2205,7 @@
+     ct.set_output(transform="pandas")
+ 
+     out = ct.fit_transform(df)
+-    pd.testing.assert_frame_equal(out, pd.DataFrame({"a": [True, False, False], "b": [1, 2, 3]}))
++    pd.testing.assert_frame_equal(out, pd.DataFrame({"a": [True, False, True], "b": [1, 2, 3]}))
+ 
+     ct.set_output(transform="default")
+     out = ct.fit_transform(df)

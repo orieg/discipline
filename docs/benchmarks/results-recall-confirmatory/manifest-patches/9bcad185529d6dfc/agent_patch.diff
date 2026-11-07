@@ -1,0 +1,24 @@
+diff --git a/sympy/printing/conventions.py b/sympy/printing/conventions.py
+--- a/sympy/printing/conventions.py
++++ b/sympy/printing/conventions.py
+@@ -7,7 +7,7 @@
+ from collections.abc import Iterable
+ from sympy import Derivative
+ 
+-_name_with_digits_p = re.compile(r'^([a-zA-Z]+)([0-9]+)$')
++_name_with_digits_p = re.compile(r'^([^\W\d_]+)(\d+)$')
+ 
+ 
+ def split_super_sub(text):
+diff --git a/sympy/printing/tests/test_conventions.py b/sympy/printing/tests/test_conventions.py
+--- a/sympy/printing/tests/test_conventions.py
++++ b/sympy/printing/tests/test_conventions.py
+@@ -10,7 +10,7 @@
+ def test_super_sub():
+     assert split_super_sub("beta_13_2") == ("beta", [], ["13", "2"])
+     assert split_super_sub("beta_132_20") == ("beta", [], ["132", "20"])
+-    assert split_super_sub("beta_13") == ("beta", [], ["14"])
++    assert split_super_sub("beta_13") == ("beta", [], ["13"])
+     assert split_super_sub("x_a_b") == ("x", [], ["a", "b"])
+     assert split_super_sub("x_1_2_3") == ("x", [], ["1", "2", "3"])
+     assert split_super_sub("x_a_b1") == ("x", [], ["a", "b1"])

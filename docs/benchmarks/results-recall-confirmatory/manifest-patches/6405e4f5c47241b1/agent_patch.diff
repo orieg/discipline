@@ -1,0 +1,58 @@
+diff --git a/sphinx/util/docfields.py b/sphinx/util/docfields.py
+--- a/sphinx/util/docfields.py
++++ b/sphinx/util/docfields.py
+@@ -9,6 +9,7 @@
+     :license: BSD, see LICENSE for details.
+ """
+ 
++import re
+ from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Type, Union, cast
+ 
+ from docutils import nodes
+@@ -18,6 +19,37 @@
+ from sphinx.environment import BuildEnvironment
+ from sphinx.util.typing import TextlikeNode
+ 
++
++def _split_fieldarg(fieldarg: str) -> Tuple[str, str]:
++    """Split fieldarg into type and name, respecting parentheses and brackets.
++    
++    This is needed for parsing docstring fields like:
++        :param dict(str, str) opc_meta: description
++    
++    where the type contains commas inside parentheses.
++    """
++    # Find the last closing paren or bracket
++    paren_pos = fieldarg.rfind(')')
++    bracket_pos = fieldarg.rfind(']')
++    
++    # Find the closing delimiter (paren or bracket)
++    close_delim_pos = max(paren_pos, bracket_pos)
++    
++    if close_delim_pos > 0:
++        # Find the first space after the closing delimiter
++        rest = fieldarg[close_delim_pos + 1:]
++        rest_match = re.match(r'\s+(\S.*)', rest)
++        if rest_match:
++            argtype = fieldarg[:close_delim_pos + 1]
++            argname = rest_match.group(1)
++            return argtype, argname
++    
++    # Otherwise, just split on first space (original behavior)
++    parts = fieldarg.split(None, 1)
++    if len(parts) == 2:
++        return parts[0], parts[1]
++    raise ValueError('Cannot split')
++
+ if TYPE_CHECKING:
+     from sphinx.directive import ObjectDescription
+ 
+@@ -298,7 +330,7 @@
+             # also support syntax like ``:param type name:``
+             if typedesc.is_typed:
+                 try:
+-                    argtype, argname = fieldarg.split(None, 1)
++                    argtype, argname = _split_fieldarg(fieldarg)
+                 except ValueError:
+                     pass
+                 else:

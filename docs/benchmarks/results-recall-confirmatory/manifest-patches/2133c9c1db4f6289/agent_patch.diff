@@ -1,0 +1,26 @@
+diff --git a/xarray/core/dataset.py b/xarray/core/dataset.py
+--- a/xarray/core/dataset.py
++++ b/xarray/core/dataset.py
+@@ -365,7 +365,9 @@
+         )
+ 
+     def __len__(self) -> int:
+-        return len(self._dataset._variables) - len(self._dataset._coord_names)
++        return len(
++            [key for key in self._dataset._variables if key not in self._dataset._coord_names]
++        )
+ 
+     def __contains__(self, key: Hashable) -> bool:
+         return key in self._dataset._variables and key not in self._dataset._coord_names
+diff --git a/xarray/tests/test_dataarray.py b/xarray/tests/test_dataarray.py
+--- a/xarray/tests/test_dataarray.py
++++ b/xarray/tests/test_dataarray.py
+@@ -2028,7 +2028,7 @@
+         assert_identical(obj, expected, check_default_indexes=False)
+         assert list(obj.xindexes) == ["x"]
+         assert type(obj.xindexes["x"]) is PandasIndex
+-    assert list(obj.xindexes) == []
++        assert list(obj.xindexes) == []
+ 
+         expected = DataArray(self.mda.values, dims="x")
+         obj = self.mda.reset_index("x", drop=True)

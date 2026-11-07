@@ -1,0 +1,26 @@
+diff --git a/classes_No_Name.dot b/classes_No_Name.dot
+new file mode 100644
+--- /dev/null
++++ b/classes_No_Name.dot
+@@ -0,0 +1,9 @@
++digraph "classes_No_Name" {
++charset="utf-8"
++rankdir=BT
++"0" [label="{Ancestor|attr : str\lcls_member\l|get_value()\lset_value(value)\l}", shape="record"];
++"1" [label="{DoNothing|\l|}", shape="record"];
++"2" [label="{Interface|\l|get_value()\lset_value(value)\l}", shape="record"];
++"3" [label="{Specialization|TYPE : str\lrelation\ltop : str\l|}", shape="record"];
++"3" -> "0" [arrowhead="empty", arrowtail="none"];
++}
+diff --git a/packages_No_Name.dot b/packages_No_Name.dot
+new file mode 100644
+--- /dev/null
++++ b/packages_No_Name.dot
+@@ -0,0 +1,7 @@
++digraph "packages_No_Name" {
++charset="utf-8"
++rankdir=BT
++"0" [label="/testbed/tests/data/__init__.py", shape="box"];
++"1" [label="/testbed/tests/data/clientmodule_test.py", shape="box"];
++"2" [label="/testbed/tests/data/suppliermodule_test.py", shape="box"];
++}

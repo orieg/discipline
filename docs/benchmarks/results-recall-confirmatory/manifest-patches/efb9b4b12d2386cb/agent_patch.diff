@@ -1,0 +1,24 @@
+diff --git a/tests/fixtures_regress/fixtures/nk_with_foreign_key.json b/tests/fixtures_regress/fixtures/nk_with_foreign_key.json
+new file mode 100644
+--- /dev/null
++++ b/tests/fixtures_regress/fixtures/nk_with_foreign_key.json
+@@ -0,0 +1,19 @@
++[
++    {
++        "model": "fixtures_regress.person",
++        "pk": 1,
++        "fields": {
++            "name": "J.R.R. Tolkien"
++        }
++    },
++    {
++        "model": "fixtures_regress.naturalkeywithfkdependency",
++        "pk": 1,
++        "fields": {
++            "name": "The Lord of the Rings",
++            "author": [
++                "J.R.R. Tolkien"
++            ]
++        }
++    }
++]

@@ -1,0 +1,44 @@
+diff --git a/src/_pytest/logging.py b/src/_pytest/logging.py
+--- a/src/_pytest/logging.py
++++ b/src/_pytest/logging.py
+@@ -335,6 +335,10 @@
+         """Create a new log handler."""
+         super().__init__(StringIO())
+         self.records: List[logging.LogRecord] = []
++        # Reference to the stash dict and key name for updating get_records()
++        # when reset() is called.
++        self._caplog_records_key: Optional[Dict[str, List[logging.LogRecord]]] = None
++        self._caplog_records_key_name: Optional[str] = None
+ 
+     def emit(self, record: logging.LogRecord) -> None:
+         """Keep the log records in a list in addition to the log text."""
+@@ -342,8 +346,13 @@
+         super().emit(record)
+ 
+     def reset(self) -> None:
++        old_records = self.records
+         self.records = []
+         self.stream = StringIO()
++        # If we have a reference to the stash dict, update the reference there
++        # to point to the new records list, keeping get_records() in sync.
++        if self._caplog_records_key is not None:
++            self._caplog_records_key[self._caplog_records_key_name] = self.records
+ 
+     def handleError(self, record: logging.LogRecord) -> None:
+         if logging.raiseExceptions:
+@@ -696,7 +705,14 @@
+         ) as report_handler:
+             caplog_handler.reset()
+             report_handler.reset()
+-            item.stash[caplog_records_key][when] = caplog_handler.records
++            # Store references for get_records() to work correctly with clear().
++            # The handler will update these when reset() is called externally.
++            caplog_records: Dict[str, List[logging.LogRecord]] = item.stash[
++                caplog_records_key
++            ]
++            caplog_records[when] = caplog_handler.records
++            caplog_handler._caplog_records_key = caplog_records
++            caplog_handler._caplog_records_key_name = when
+             item.stash[caplog_handler_key] = caplog_handler
+ 
+             yield

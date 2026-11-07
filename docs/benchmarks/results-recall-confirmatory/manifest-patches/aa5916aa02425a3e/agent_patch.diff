@@ -1,0 +1,16 @@
+diff --git a/sympy/physics/quantum/dagger.py b/sympy/physics/quantum/dagger.py
+--- a/sympy/physics/quantum/dagger.py
++++ b/sympy/physics/quantum/dagger.py
+@@ -76,6 +76,12 @@
+     .. [2] https://en.wikipedia.org/wiki/Hermitian_transpose
+     """
+ 
++    def _eval_mul(self, other):
++        from sympy.physics.quantum.operator import IdentityOperator
++        if isinstance(other, IdentityOperator):
++            return self
++        return None
++
+     def __new__(cls, arg):
+         if hasattr(arg, 'adjoint'):
+             obj = arg.adjoint()

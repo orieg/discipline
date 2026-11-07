@@ -1,0 +1,24 @@
+diff --git a/sphinx/pycode/ast.py b/sphinx/pycode/ast.py
+--- a/sphinx/pycode/ast.py
++++ b/sphinx/pycode/ast.py
+@@ -166,6 +166,11 @@
+         return "{" + ", ".join(self.visit(e) for e in node.elts) + "}"
+ 
+     def visit_Subscript(self, node: ast.Subscript) -> str:
++        if isinstance(node.slice, ast.Tuple):
++            # Handle tuple slices in subscripts (e.g., Tuple[int, int])
++            # to avoid adding parentheses around them
++            elts = ", ".join(self.visit(e) for e in node.slice.elts)
++            return "%s[%s]" % (self.visit(node.value), elts)
+         return "%s[%s]" % (self.visit(node.value), self.visit(node.slice))
+ 
+     def visit_UnaryOp(self, node: ast.UnaryOp) -> str:
+@@ -173,7 +178,7 @@
+ 
+     def visit_Tuple(self, node: ast.Tuple) -> str:
+         if node.elts:
+-            return ", ".join(self.visit(e) for e in node.elts)
++            return "(" + ", ".join(self.visit(e) for e in node.elts) + ")"
+         else:
+             return "()"
+ 

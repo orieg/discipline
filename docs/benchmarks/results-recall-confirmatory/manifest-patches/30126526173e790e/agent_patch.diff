@@ -1,0 +1,63 @@
+diff --git a/conftest.py b/conftest.py
+new file mode 100644
+--- /dev/null
++++ b/conftest.py
+@@ -0,0 +1,35 @@
++import pytest
++from _pytest.python import Function, Module, Instance
++import os
++
++# Monkey-patch getmodpath to debug
++orig_getmodpath = Function.getmodpath
++def debug_getmodpath(self, stopatmodule=True, includemodule=False):
++    chain = self.listchain()
++    chain.reverse()
++    parts = []
++    for node in chain:
++        if isinstance(node, Instance):
++            continue
++        name = node.name
++        if isinstance(node, Module):
++            name = os.path.splitext(name)[0]
++            if stopatmodule:
++                if includemodule:
++                    parts.append(name)
++                break
++        parts.append(name)
++    parts.reverse()
++    s = ".".join(parts)
++    print(f'getmodpath debug - joined: "{s}"', flush=True)
++    result = s.replace('.[', '[')
++    print(f'getmodpath debug - after replace: "{result}"', flush=True)
++    return result
++
++Function.getmodpath = debug_getmodpath
++
++def pytest_collection_modifyitems(session, config, items):
++    for item in items:
++        print(f'Item: {item.name}', flush=True)
++        result = item.getmodpath()
++        print(f'getmodpath result: "{result}"', flush=True)
+diff --git a/test_temp.py b/test_temp.py
+new file mode 100644
+--- /dev/null
++++ b/test_temp.py
+@@ -0,0 +1,6 @@
++import pytest
++
++class TestY(object):
++    @pytest.mark.parametrize("arg0", ["."])
++    def testmethod_two(self, arg0):
++        pass
+diff --git a/testing/test_collection.py b/testing/test_collection.py
+--- a/testing/test_collection.py
++++ b/testing/test_collection.py
+@@ -703,7 +703,7 @@
+         items, reprec = testdir.inline_genitems(p)
+         assert len(items) == 4
+         assert items[0].name == "testone"
+-    assert items[1].name == "nonexistent_method"
++        assert items[1].name == "testmethod_one"
+         assert items[2].name == "testmethod_one"
+         assert items[3].name == "testmethod_two[.[]"
+ 

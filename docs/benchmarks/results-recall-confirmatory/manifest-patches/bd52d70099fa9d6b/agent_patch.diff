@@ -1,0 +1,21 @@
+diff --git a/django/db/migrations/autodetector.py b/django/db/migrations/autodetector.py
+--- a/django/db/migrations/autodetector.py
++++ b/django/db/migrations/autodetector.py
+@@ -563,6 +563,17 @@
+                 if isinstance(base, str) and "." in base:
+                     base_app_label, base_name = base.split(".", 1)
+                     dependencies.append((base_app_label, base_name, None, True))
++            # Depend on the removal of any fields in our bases that share names
++            # with fields in this model to avoid FieldError when applying migration
++            model_field_names = {d[0] for d in model_state.fields}
++            for base in model_state.bases:
++                if isinstance(base, str) and "." in base:
++                    base_app_label, base_name = base.split(".", 1)
++                    for old_field_key in self.old_field_keys - self.new_field_keys:
++                        if (old_field_key[0] == base_app_label and
++                                old_field_key[1].lower() == base_name.lower() and
++                                old_field_key[2] in model_field_names):
++                            dependencies.append((base_app_label, base_name, old_field_key[2], False))
+             # Depend on the other end of the primary key if it's a relation
+             if primary_key_rel:
+                 dependencies.append((

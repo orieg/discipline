@@ -1,0 +1,16 @@
+diff --git a/django/utils/autoreload.py b/django/utils/autoreload.py
+--- a/django/utils/autoreload.py
++++ b/django/utils/autoreload.py
+@@ -220,6 +220,12 @@
+     py_script = Path(sys.argv[0])
+ 
+     args = [sys.executable] + ['-W%s' % o for o in sys.warnoptions]
++    # Add -X options from sys._xoptions to the child process.
++    for k, v in sys._xoptions.items():
++        if v is True:
++            args += ['-X%s' % k]
++        elif isinstance(v, str):
++            args += ['-X%s=%s' % (k, v)]
+     # __spec__ is set when the server was started with the `-m` option,
+     # see https://docs.python.org/3/reference/import.html#main-spec
+     # __spec__ may not exist, e.g. when running in a Conda env.

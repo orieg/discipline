@@ -1,0 +1,50 @@
+diff --git a/django/db/migrations/autodetector.py b/django/db/migrations/autodetector.py
+--- a/django/db/migrations/autodetector.py
++++ b/django/db/migrations/autodetector.py
+@@ -963,6 +963,13 @@
+                             preserve_default = False
+                     else:
+                         field = new_field
++                    dependencies = []
++                    if (hasattr(field, "remote_field") and
++                            getattr(field.remote_field, "model", None) and
++                            (not hasattr(old_field, "remote_field") or
++                             not getattr(old_field.remote_field, "model", None) or
++                             not self._FK_models_are_equal(old_field.remote_field, field.remote_field))):
++                        dependencies.extend(self._get_dependencies_for_foreign_key(field))
+                     self.add_operation(
+                         app_label,
+                         operations.AlterField(
+@@ -970,7 +977,8 @@
+                             name=field_name,
+                             field=field,
+                             preserve_default=preserve_default,
+-                        )
++                        ),
++                        dependencies=dependencies,
+                     )
+                 else:
+                     # We cannot alter between m2m and concrete fields
+@@ -1057,6 +1065,22 @@
+                     )
+                 )
+ 
++    def _FK_models_are_equal(self, old_remote_field, new_remote_field):
++        """
++        Compare two remote fields to see if they point to the same model.
++        Handles the case where one or both models are strings or SettingsReference.
++        """
++        old_model = old_remote_field.model
++        new_model = new_remote_field.model
++        # If both are model classes, compare their app_label and model_name
++        if not isinstance(old_model, str) and not isinstance(new_model, str):
++            return (
++                old_model._meta.app_label == new_model._meta.app_label and
++                old_model._meta.model_name == new_model._meta.model_name
++            )
++        # If either is a string (including SettingsReference), compare as strings
++        return str(old_model) == str(new_model)
++
+     def _get_dependencies_for_foreign_key(self, field):
+         # Account for FKs to swappable models
+         swappable_setting = getattr(field, 'swappable_setting', None)

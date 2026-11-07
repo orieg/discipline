@@ -1,0 +1,18 @@
+diff --git a/django/db/models/fields/related.py b/django/db/models/fields/related.py
+--- a/django/db/models/fields/related.py
++++ b/django/db/models/fields/related.py
+@@ -1180,7 +1180,13 @@
+         return self.target_field.rel_db_type(connection=connection)
+ 
+     def db_parameters(self, connection):
+-        return {"type": self.db_type(connection), "check": self.db_check(connection)}
++        db_params = {
++            "type": self.db_type(connection),
++            "check": self.db_check(connection),
++        }
++        if self.db_collation:
++            db_params["collation"] = self.db_collation
++        return db_params
+ 
+     def convert_empty_strings(self, value, expression, connection):
+         if (not value) and isinstance(value, str):

@@ -1,0 +1,32 @@
+diff --git a/sympy/concrete/products.py b/sympy/concrete/products.py
+--- a/sympy/concrete/products.py
++++ b/sympy/concrete/products.py
+@@ -283,9 +283,14 @@
+                 # as_numer_denom(). E.g. n**(2/3) + 1 --> (n**(2/3) + 1, 1).
+                 # We have to catch this case.
+ 
+-                p = sum([self._eval_product(i, (k, a, n)) for i in p.as_coeff_Add()])
++                if p.is_polynomial(k):
++                    p = self._eval_product(p, (k, a, n))
++                else:
++                    return None
+             else:
+                 p = self._eval_product(p, (k, a, n))
++                if p is None:
++                    return None
+             return p / q
+ 
+         elif term.is_Mul:
+diff --git a/sympy/concrete/tests/test_products.py b/sympy/concrete/tests/test_products.py
+--- a/sympy/concrete/tests/test_products.py
++++ b/sympy/concrete/tests/test_products.py
+@@ -359,8 +359,8 @@
+     n = Symbol('n')
+     k = Symbol('k')
+     p = Product(n + 1 / 2**k, (k, 0, n-1)).doit()
++    # For n=2: (2 + 1) * (2 + 1/2) = 3 * 2.5 = 15/2
+     assert p.subs(n, 2).doit() == S(15)/2
+-    assert p.subs(n, 2).doit() == S(5)
+ 
+ 
+ def test_rewrite_Sum():

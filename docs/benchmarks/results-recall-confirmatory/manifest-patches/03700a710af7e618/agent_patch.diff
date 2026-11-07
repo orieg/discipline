@@ -1,0 +1,34 @@
+diff --git a/sympy/sets/sets.py b/sympy/sets/sets.py
+--- a/sympy/sets/sets.py
++++ b/sympy/sets/sets.py
+@@ -1003,6 +1003,30 @@
+             if nums == []:
+                 return None
+ 
++            # Filter out elements that are definitely in self (the interval)
++            filtered = FiniteSet(*[el for el in other if self.contains(el) is not S.true])
++
++            if filtered == other:
++                # No elements were removed (all elements are outside the interval)
++                # Fall through to Set._complement which returns FiniteSet
++                pass
++            elif filtered == S.EmptySet:
++                # All elements were removed
++                return S.EmptySet
++            else:
++                # Some elements were removed
++                # Check if any symbols remain
++                has_symbol = any(not el.is_number for el in filtered)
++                if has_symbol:
++                    # Symbols remain, return Complement to preserve uncertainty
++                    return Complement(filtered, self, evaluate=False)
++                else:
++                    # Only numbers remain, return as FiniteSet
++                    return filtered
++
++            # Fall through to Set._complement
++            pass
++
+         return Set._complement(self, other)
+ 
+ 

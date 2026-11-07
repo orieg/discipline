@@ -1,0 +1,27 @@
+diff --git a/lib/matplotlib/colorbar.py b/lib/matplotlib/colorbar.py
+--- a/lib/matplotlib/colorbar.py
++++ b/lib/matplotlib/colorbar.py
+@@ -651,8 +651,21 @@
+             if not self.drawedges:
+                 if len(self._y) >= self.n_rasterize:
+                     self.solids.set_rasterized(True)
+-        self.dividers.set_segments(
+-            np.dstack([X, Y])[1:-1] if self.drawedges else [])
++        if self.drawedges:
++            # Determine the slice for the dividers based on the extension type
++            # The dividers should be at the boundaries between color regions
++            if self._extend_lower():
++                start = 0
++            else:
++                start = 1
++            if self._extend_upper():
++                end = None  # Include the last element
++            else:
++                end = -1
++            dividers = np.dstack([X, Y])[start:end]
++        else:
++            dividers = []
++        self.dividers.set_segments(dividers)
+ 
+     def _add_solids_patches(self, X, Y, C, mappable):
+         hatches = mappable.hatches * len(C)  # Have enough hatches.

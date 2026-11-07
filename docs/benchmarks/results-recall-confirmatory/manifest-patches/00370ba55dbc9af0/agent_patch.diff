@@ -1,0 +1,25 @@
+diff --git a/django/core/management/commands/makemigrations.py b/django/core/management/commands/makemigrations.py
+--- a/django/core/management/commands/makemigrations.py
++++ b/django/core/management/commands/makemigrations.py
+@@ -111,6 +111,8 @@
+             raise CommandError("The migration name must be a valid Python identifier.")
+         self.include_header = options["include_header"]
+         check_changes = options["check_changes"]
++        if check_changes:
++            self.dry_run = True
+         self.scriptable = options["scriptable"]
+         self.update = options["update"]
+         # If logs and prompts are diverted to stderr, remove the ERROR style.
+diff --git a/tests/migrations/test_commands.py b/tests/migrations/test_commands.py
+--- a/tests/migrations/test_commands.py
++++ b/tests/migrations/test_commands.py
+@@ -2392,7 +2392,8 @@
+         there are changes to an app requiring migrations.
+         """
+         with self.temporary_migration_module() as tmpdir:
+-        call_command("makemigrations", "--check", "migrations", verbosity=0)
++            with self.assertRaises(SystemExit):
++                call_command("makemigrations", "--check", "migrations", verbosity=0)
+             self.assertFalse(os.path.exists(tmpdir))
+ 
+         with self.temporary_migration_module(

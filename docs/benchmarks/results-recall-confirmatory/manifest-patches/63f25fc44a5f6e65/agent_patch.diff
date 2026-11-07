@@ -1,0 +1,88 @@
+diff --git a/django/db/models/expressions.py b/django/db/models/expressions.py
+--- a/django/db/models/expressions.py
++++ b/django/db/models/expressions.py
+@@ -731,6 +731,7 @@
+         return copy
+ 
+ 
++@deconstructible(path='django.db.models.Value')
+ class Value(SQLiteNumericMixin, Expression):
+     """Represent a wrapped value as a node within an expression."""
+     # Provide a default value for `for_save` in order to allow unresolved
+@@ -752,59 +753,27 @@
+     def __repr__(self):
+         return f'{self.__class__.__name__}({self.value!r})'
+ 
+-    def as_sql(self, compiler, connection):
+-        connection.ops.check_expression_support(self)
+-        val = self.value
+-        output_field = self._output_field_or_none
+-        if output_field is not None:
+-            if self.for_save:
+-                val = output_field.get_db_prep_save(val, connection=connection)
+-            else:
+-                val = output_field.get_db_prep_value(val, connection=connection)
+-            if hasattr(output_field, 'get_placeholder'):
+-                return output_field.get_placeholder(val, compiler, connection), [val]
+-        if val is None:
+-            # cx_Oracle does not always convert None to the appropriate
+-            # NULL type (like in case expressions using numbers), so we
+-            # use a literal SQL NULL
+-            return 'NULL', []
+-        return '%s', [val]
++    def __eq__(self, other):
++        return (
++            isinstance(other, Value) and
++            self.value == other.value and
++            self.output_field == other.output_field
++        )
+ 
+-    def resolve_expression(self, query=None, allow_joins=True, reuse=None, summarize=False, for_save=False):
+-        c = super().resolve_expression(query, allow_joins, reuse, summarize, for_save)
+-        c.for_save = for_save
+-        return c
++    def __hash__(self):
++        return hash((self.__class__, self.value, self.output_field))
+ 
+-    def get_group_by_cols(self, alias=None):
+-        return []
+ 
+-    def _resolve_output_field(self):
+-        if isinstance(self.value, str):
+-            return fields.CharField()
+-        if isinstance(self.value, bool):
+-            return fields.BooleanField()
+-        if isinstance(self.value, int):
+-            return fields.IntegerField()
+-        if isinstance(self.value, float):
+-            return fields.FloatField()
+-        if isinstance(self.value, datetime.datetime):
+-            return fields.DateTimeField()
+-        if isinstance(self.value, datetime.date):
+-            return fields.DateField()
+-        if isinstance(self.value, datetime.time):
+-            return fields.TimeField()
+-        if isinstance(self.value, datetime.timedelta):
+-            return fields.DurationField()
+-        if isinstance(self.value, Decimal):
+-            return fields.DecimalField()
+-        if isinstance(self.value, bytes):
+-            return fields.BinaryField()
+-        if isinstance(self.value, UUID):
+-            return fields.UUIDField()
++@deconstructible(path='django.db.models.ValueExpression')
++class ValueExpression(Value):
++    """
++    A simplified Value class for migrations when output_field is not specified.
++    """
++    def __init__(self, value):
++        super().__init__(value, output_field=None)
+ 
+-    @property
+-    def empty_result_set_value(self):
+-        return self.value
++    def __repr__(self):
++        return f'Value({self.value!r})'
+ 
+ 
+ class RawSQL(Expression):

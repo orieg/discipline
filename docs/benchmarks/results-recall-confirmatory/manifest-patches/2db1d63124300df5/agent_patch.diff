@@ -1,0 +1,43 @@
+diff --git a/django/forms/models.py b/django/forms/models.py
+--- a/django/forms/models.py
++++ b/django/forms/models.py
+@@ -263,6 +263,11 @@
+                 base_formfield_callback = b.Meta.formfield_callback
+                 break
+ 
++        # Check if formfield_callback is defined in the Meta class.
++        meta = attrs.get("Meta")
++        if meta is not None and hasattr(meta, "formfield_callback"):
++            base_formfield_callback = getattr(meta, "formfield_callback")
++
+         formfield_callback = attrs.pop("formfield_callback", base_formfield_callback)
+ 
+         new_class = super().__new__(mcs, name, bases, attrs)
+@@ -636,7 +641,9 @@
+     class_name = model.__name__ + "Form"
+ 
+     # Class attributes for the new form class.
+-    form_class_attrs = {"Meta": Meta, "formfield_callback": formfield_callback}
++    form_class_attrs = {"Meta": Meta}
++    if formfield_callback is not None:
++        form_class_attrs["formfield_callback"] = formfield_callback
+ 
+     if getattr(Meta, "fields", None) is None and getattr(Meta, "exclude", None) is None:
+         raise ImproperlyConfigured(
+diff --git a/tests/model_forms/tests.py b/tests/model_forms/tests.py
+--- a/tests/model_forms/tests.py
++++ b/tests/model_forms/tests.py
+@@ -3526,10 +3526,9 @@
+ 
+         for name, field in NewForm.base_fields.items():
+             self.assertEqual(type(field.widget), forms.Textarea)
+-            self.assertEqual(
+-            type(field.widget), forms.TextInput
+-                type(InheritedForm.base_fields[name].widget),
+-            )
++
++        for name, field in InheritedForm.base_fields.items():
++            self.assertEqual(type(field.widget), forms.Textarea)
+ 
+ 
+ class LocalizedModelFormTest(TestCase):

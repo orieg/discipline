@@ -1,0 +1,78 @@
+diff --git a/sphinx/domains/python.py b/sphinx/domains/python.py
+--- a/sphinx/domains/python.py
++++ b/sphinx/domains/python.py
+@@ -96,13 +96,17 @@
+         elif isinstance(node, ast.Index):
+             return unparse(node.value)
+         elif isinstance(node, ast.List):
+-            result = [addnodes.desc_sig_punctuation('', '[')]  # type: List[Node]
+-            for elem in node.elts:
+-                result.extend(unparse(elem))
+-                result.append(addnodes.desc_sig_punctuation('', ', '))
+-            result.pop()
+-            result.append(addnodes.desc_sig_punctuation('', ']'))
+-            return result
++            if node.elts:
++                result = [addnodes.desc_sig_punctuation('', '[')]  # type: List[Node]
++                for elem in node.elts:
++                    result.extend(unparse(elem))
++                    result.append(addnodes.desc_sig_punctuation('', ', '))
++                result.pop()
++                result.append(addnodes.desc_sig_punctuation('', ']'))
++                return result
++            else:
++                return [addnodes.desc_sig_punctuation('', '['),
++                        addnodes.desc_sig_punctuation('', ']')]
+         elif isinstance(node, ast.Module):
+             return sum((unparse(e) for e in node.body), [])
+         elif isinstance(node, ast.Name):
+@@ -114,12 +118,16 @@
+             result.append(addnodes.desc_sig_punctuation('', ']'))
+             return result
+         elif isinstance(node, ast.Tuple):
+-            result = []
+-            for elem in node.elts:
+-                result.extend(unparse(elem))
+-                result.append(addnodes.desc_sig_punctuation('', ', '))
+-            result.pop()
+-            return result
++            if node.elts:
++                result = []
++                for elem in node.elts:
++                    result.extend(unparse(elem))
++                    result.append(addnodes.desc_sig_punctuation('', ', '))
++                result.pop()
++                return result
++            else:
++                return [addnodes.desc_sig_punctuation('', '('),
++                        addnodes.desc_sig_punctuation('', ')')]
+         else:
+             raise SyntaxError  # unsupported syntax
+ 
+diff --git a/sphinx/pycode/ast.py b/sphinx/pycode/ast.py
+--- a/sphinx/pycode/ast.py
++++ b/sphinx/pycode/ast.py
+@@ -98,7 +98,10 @@
+     elif isinstance(node, ast.Lambda):
+         return "lambda %s: ..." % unparse(node.args)
+     elif isinstance(node, ast.List):
+-        return "[" + ", ".join(unparse(e) for e in node.elts) + "]"
++        if node.elts:
++            return "[" + ", ".join(unparse(e) for e in node.elts) + "]"
++        else:
++            return "[]"
+     elif isinstance(node, ast.Name):
+         return node.id
+     elif isinstance(node, ast.NameConstant):
+@@ -114,7 +117,10 @@
+     elif isinstance(node, ast.UnaryOp):
+         return "%s %s" % (unparse(node.op), unparse(node.operand))
+     elif isinstance(node, ast.Tuple):
+-        return ", ".join(unparse(e) for e in node.elts)
++        if node.elts:
++            return ", ".join(unparse(e) for e in node.elts)
++        else:
++            return "()"
+     elif sys.version_info > (3, 6) and isinstance(node, ast.Constant):
+         # this branch should be placed at last
+         return repr(node.value)

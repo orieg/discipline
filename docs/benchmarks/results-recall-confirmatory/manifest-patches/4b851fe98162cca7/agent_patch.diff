@@ -1,0 +1,21 @@
+diff --git a/sympy/simplify/simplify.py b/sympy/simplify/simplify.py
+--- a/sympy/simplify/simplify.py
++++ b/sympy/simplify/simplify.py
+@@ -251,8 +251,15 @@
+             eq[i] = e.subs(reps)
+         return f(eq), {r: s for s, r in reps.items()}
+ 
+-    reps = {s: Dummy(s.name, positive=True)
+-                 for s in eq.free_symbols if s.is_positive is None}
++    reps = {}
++    for s in eq.free_symbols:
++        if s.is_positive is None:
++            # Preserve assumptions from the original symbol
++            kwargs = {'positive': True}
++            # Preserve finite assumption if it's known
++            if s.is_finite is not None:
++                kwargs['finite'] = s.is_finite
++            reps[s] = Dummy(s.name, **kwargs)
+     eq = eq.subs(reps)
+     return eq, {r: s for s, r in reps.items()}
+ 

@@ -1,0 +1,22 @@
+diff --git a/django/db/migrations/writer.py b/django/db/migrations/writer.py
+--- a/django/db/migrations/writer.py
++++ b/django/db/migrations/writer.py
+@@ -175,7 +175,17 @@
+ 
+         # Sort imports by the package / module to be imported (the part after
+         # "from" in "from ... import ..." or after "import" in "import ...").
+-        sorted_imports = sorted(imports, key=lambda i: i.split()[1])
++        # Place all "import module" statements before "from module import ..."
++        # statements.
++        def sort_key(import_str):
++            if import_str.startswith("import "):
++                # Regular import: import module
++                return (0, import_str.split()[1])
++            else:
++                # From import: from module import ...
++                return (1, import_str.split()[1])
++
++        sorted_imports = sorted(imports, key=sort_key)
+         items["imports"] = "\n".join(sorted_imports) + "\n" if imports else ""
+         if migration_imports:
+             items["imports"] += (

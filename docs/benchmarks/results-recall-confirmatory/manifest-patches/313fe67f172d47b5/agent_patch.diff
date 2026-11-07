@@ -1,0 +1,46 @@
+diff --git a/django/db/backends/base/client.py b/django/db/backends/base/client.py
+--- a/django/db/backends/base/client.py
++++ b/django/db/backends/base/client.py
+@@ -21,6 +21,8 @@
+ 
+     def runshell(self, parameters):
+         args, env = self.settings_to_cmd_args_env(self.connection.settings_dict, parameters)
+-        if env:
++        if env is None:
++            env = {}
++        elif env:
+             env = {**os.environ, **env}
+         subprocess.run(args, env=env, check=True)
+diff --git a/django/db/backends/postgresql/client.py b/django/db/backends/postgresql/client.py
+--- a/django/db/backends/postgresql/client.py
++++ b/django/db/backends/postgresql/client.py
+@@ -36,21 +36,21 @@
+             args += [dbname]
+         args.extend(parameters)
+ 
+-        env = {}
++        env = None
+         if passwd:
+-            env['PGPASSWORD'] = str(passwd)
++            env = {'PGPASSWORD': str(passwd)}
+         if service:
+-            env['PGSERVICE'] = str(service)
++            env = {'PGSERVICE': str(service)} if env is None else {**env, 'PGSERVICE': str(service)}
+         if sslmode:
+-            env['PGSSLMODE'] = str(sslmode)
++            env = {'PGSSLMODE': str(sslmode)} if env is None else {**env, 'PGSSLMODE': str(sslmode)}
+         if sslrootcert:
+-            env['PGSSLROOTCERT'] = str(sslrootcert)
++            env = {'PGSSLROOTCERT': str(sslrootcert)} if env is None else {**env, 'PGSSLROOTCERT': str(sslrootcert)}
+         if sslcert:
+-            env['PGSSLCERT'] = str(sslcert)
++            env = {'PGSSLCERT': str(sslcert)} if env is None else {**env, 'PGSSLCERT': str(sslcert)}
+         if sslkey:
+-            env['PGSSLKEY'] = str(sslkey)
++            env = {'PGSSLKEY': str(sslkey)} if env is None else {**env, 'PGSSLKEY': str(sslkey)}
+         if passfile:
+-            env['PGPASSFILE'] = str(passfile)
++            env = {'PGPASSFILE': str(passfile)} if env is None else {**env, 'PGPASSFILE': str(passfile)}
+         return args, env
+ 
+     def runshell(self, parameters):

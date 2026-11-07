@@ -1,0 +1,130 @@
+diff --git a/sphinx/domains/cpp.py b/sphinx/domains/cpp.py
+--- a/sphinx/domains/cpp.py
++++ b/sphinx/domains/cpp.py
+@@ -35,7 +35,7 @@
+     BaseParser, DefinitionError, UnsupportedMultiCharacterCharLiteral,
+     identifier_re, anon_identifier_re, integer_literal_re, octal_literal_re,
+     hex_literal_re, binary_literal_re, float_literal_re,
+-    char_literal_re
++    char_literal_re, udl_suffix_re
+ )
+ from sphinx.util.docfields import Field, GroupedField
+ from sphinx.util.docutils import SphinxDirective
+@@ -882,6 +882,27 @@
+         signode.append(nodes.Text(txt, txt))
+ 
+ 
++class ASTUserDefinedLiteral(ASTLiteral):
++    def __init__(self, literal: ASTLiteral, suffix: str) -> None:
++        self.literal = literal
++        self.suffix = suffix
++
++    def _stringify(self, transform: StringifyTransform) -> str:
++        return str(self.literal) + self.suffix
++
++    def get_id(self, version: int) -> str:
++        # user-defined literal mangling: clL_ Zli <length-prefixed-suffix> E <literal_id> E
++        suffix_len = len(self.suffix)
++        suffix_mangled = "Zli%d%sE" % (suffix_len, self.suffix)
++        literal_id = self.literal.get_id(version)
++        return "clL_%s%sE" % (suffix_mangled, literal_id)
++
++    def describe_signature(self, signode: TextElement, mode: str,
++                           env: "BuildEnvironment", symbol: "Symbol") -> None:
++        txt = str(self)
++        signode.append(nodes.Text(txt, txt))
++
++
+ class ASTThisLiteral(ASTExpression):
+     def _stringify(self, transform: StringifyTransform) -> str:
+         return "this"
+@@ -4662,25 +4683,67 @@
+                       integer_literal_re, octal_literal_re]:
+             pos = self.pos
+             if self.match(regex):
+-                while self.current_char in 'uUlLfF':
+-                    self.pos += 1
++                # Save position after number (before any suffixes)
++                after_number_pos = self.pos
++                # Check if there's a user-defined literal suffix (identifier)
++                # An identifier can start with any letter or underscore, including
++                # standard suffix characters like 'u', 'l', 'f'
++                self.skip_ws()
++                if self.match(udl_suffix_re):
++                    suffix = self.matched_text
++                    # Found user-defined suffix, check if it starts with standard suffix chars
++                    # and has more characters after
++                    standard_suffix_chars = 'uUlLfF'
++                    # Count how many standard suffix chars are at the start
++                    std_suffix_len = 0
++                    while std_suffix_len < len(standard_suffix_chars):
++                        # Check if there's a matching standard suffix at the current position
++                        found = False
++                        for c in standard_suffix_chars:
++                            if self.definition[after_number_pos + std_suffix_len:after_number_pos + std_suffix_len + 1] == c:
++                                std_suffix_len += 1
++                                found = True
++                                break
++                        if not found:
++                            break
++                    # If the suffix has more characters after standard suffix chars,
++                    # it's a user-defined suffix
++                    if std_suffix_len > 0 and std_suffix_len < len(suffix):
++                        # UDL with combined suffix: standard_suffix + identifier
++                        suffix = suffix  # full suffix including standard suffix chars
++                        return ASTUserDefinedLiteral(
++                            ASTNumberLiteral(self.definition[pos:after_number_pos]), suffix)
++                    elif std_suffix_len == 0 and after_number_pos < self.pos:
++                        # Suffix starts with identifier (letter or underscore)
++                        return ASTUserDefinedLiteral(
++                            ASTNumberLiteral(self.definition[pos:after_number_pos]), suffix)
++                    # else: suffix is just standard suffix chars, not a UDL
++                else:
++                    # No user-defined suffix, consume standard suffix characters
++                    while self.current_char in 'uUlLfF':
++                        self.pos += 1
+                 return ASTNumberLiteral(self.definition[pos:self.pos])
+ 
+         string = self._parse_string()
+         if string is not None:
++            # check for user-defined literal suffix
++            self.skip_ws()
++            if self.match(udl_suffix_re):
++                suffix = self.matched_text
++                return ASTUserDefinedLiteral(ASTStringLiteral(string), suffix)
+             return ASTStringLiteral(string)
+ 
+         # character-literal
+         if self.match(char_literal_re):
+             prefix = self.last_match.group(1)  # may be None when no prefix
+             data = self.last_match.group(2)
+-            try:
+-                return ASTCharLiteral(prefix, data)
+-            except UnicodeDecodeError as e:
+-                self.fail("Can not handle character literal. Internal error was: %s" % e)
+-            except UnsupportedMultiCharacterCharLiteral:
+-                self.fail("Can not handle character literal"
+-                          " resulting in multiple decoded characters.")
++            char_literal = ASTCharLiteral(prefix, data)
++            # check for user-defined literal suffix
++            self.skip_ws()
++            if self.match(udl_suffix_re):
++                suffix = self.matched_text
++                return ASTUserDefinedLiteral(char_literal, suffix)
++            return char_literal
+ 
+         # TODO: user-defined lit
+         return None
+diff --git a/sphinx/util/cfamily.py b/sphinx/util/cfamily.py
+--- a/sphinx/util/cfamily.py
++++ b/sphinx/util/cfamily.py
+@@ -66,6 +66,9 @@
+       ))
+     )'
+ ''')
++# User-defined literal suffix (identifier, must start with underscore per C++ standard,
++# but we accept any identifier for flexibility)
++udl_suffix_re = re.compile(r'[a-zA-Z_][a-zA-Z0-9_]*')
+ 
+ 
+ def verify_description_mode(mode: str) -> None:

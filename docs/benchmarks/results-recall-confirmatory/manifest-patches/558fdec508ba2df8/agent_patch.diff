@@ -1,0 +1,30 @@
+diff --git a/lib/matplotlib/figure.py b/lib/matplotlib/figure.py
+--- a/lib/matplotlib/figure.py
++++ b/lib/matplotlib/figure.py
+@@ -3041,11 +3041,26 @@
+                 f"This figure was saved with matplotlib version {version} and "
+                 f"is unlikely to function correctly.")
+ 
++        # Save the correct _original_dpi before FigureCanvasBase overwrites it
++        # Also need to restore _dpi from the original dpi when device_pixel_ratio
++        # was involved (see issue #21596).
++        original_dpi = state.get('_original_dpi')
++
+         self.__dict__ = state
+ 
+         # re-initialise some of the unstored state information
+         FigureCanvasBase(self)  # Set self.canvas.
+ 
++        # Restore the correct _original_dpi from the pickled state.
++        # FigureCanvasBase.__init__ sets figure._original_dpi = figure.dpi,
++        # but figure.dpi may have been scaled by device_pixel_ratio, so we
++        # need to restore the original value from the pickled state.
++        if original_dpi is not None:
++            self._original_dpi = original_dpi
++            # Also reset _dpi to _original_dpi so that dpi is not scaled
++            # from a previous device_pixel_ratio setting.
++            self._dpi = original_dpi
++
+         if restore_to_pylab:
+             # lazy import to avoid circularity
+             import matplotlib.pyplot as plt

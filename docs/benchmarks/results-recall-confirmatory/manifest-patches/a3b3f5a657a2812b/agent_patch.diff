@@ -1,0 +1,60 @@
+diff --git a/sphinx/util/docfields.py b/sphinx/util/docfields.py
+--- a/sphinx/util/docfields.py
++++ b/sphinx/util/docfields.py
+@@ -22,6 +22,47 @@
+     from sphinx.directive import ObjectDescription
+ 
+ 
++def _split_argtype_and_name(fieldarg: str) -> Tuple[str, str]:
++    """Split a field argument into type and name.
++
++    Splits on whitespace, but respects parentheses and brackets
++    so that types like ``dict(str, str) opc_meta`` are correctly parsed.
++    Returns (argtype, argname) or raises ValueError if not splittable.
++    """
++    depth_paren = 0
++    depth_bracket = 0
++    parts: List[str] = []
++    current: List[str] = []
++
++    for char in fieldarg:
++        if char == '(':
++            depth_paren += 1
++            current.append(char)
++        elif char == ')':
++            depth_paren -= 1
++            current.append(char)
++        elif char == '[':
++            depth_bracket += 1
++            current.append(char)
++        elif char == ']':
++            depth_bracket -= 1
++            current.append(char)
++        elif char == ' ' and depth_paren == 0 and depth_bracket == 0:
++            if current:
++                parts.append(''.join(current))
++                current = []
++        else:
++            current.append(char)
++
++    if current:
++        parts.append(''.join(current))
++
++    if len(parts) != 2:
++        raise ValueError(f"Cannot split into exactly two parts: {fieldarg!r}")
++
++    return parts[0], parts[1]
++
++
+ def _is_single_paragraph(node: nodes.field_body) -> bool:
+     """True if the node only contains one paragraph (and system messages)."""
+     if len(node) == 0:
+@@ -298,7 +339,7 @@
+             # also support syntax like ``:param type name:``
+             if typedesc.is_typed:
+                 try:
+-                    argtype, argname = fieldarg.split(None, 1)
++                    argtype, argname = _split_argtype_and_name(fieldarg)
+                 except ValueError:
+                     pass
+                 else:

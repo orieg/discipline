@@ -1,0 +1,18 @@
+diff --git a/src/_pytest/logging.py b/src/_pytest/logging.py
+--- a/src/_pytest/logging.py
++++ b/src/_pytest/logging.py
+@@ -440,7 +440,14 @@
+ 
+     def clear(self) -> None:
+         """Reset the list of log records and the captured log text."""
++        # Get the current records list before reset so we can update the stash
++        old_records = self.handler.records
+         self.handler.reset()
++        # Update the stash entry to point to the new records list.
++        # This ensures get_records() stays in sync with the handler.
++        for when, when_records in self._item.stash[caplog_records_key].items():
++            if when_records is old_records:
++                self._item.stash[caplog_records_key][when] = self.handler.records
+ 
+     def set_level(self, level: Union[int, str], logger: Optional[str] = None) -> None:
+         """Set the level of a logger for the duration of a test.

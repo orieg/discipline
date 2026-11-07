@@ -1,0 +1,19 @@
+diff --git a/sklearn/compose/_column_transformer.py b/sklearn/compose/_column_transformer.py
+--- a/sklearn/compose/_column_transformer.py
++++ b/sklearn/compose/_column_transformer.py
+@@ -303,6 +303,15 @@
+         for trans in transformers:
+             _safe_set_output(trans, transform=transform)
+ 
++        # Set output for remainder if it's an estimator
++        remainder = self.remainder
++        if remainder not in ("passthrough", "drop"):
++            _safe_set_output(remainder, transform=transform)
++        if hasattr(self, "_remainder"):
++            remainder = self._remainder[1]
++            if remainder not in ("passthrough", "drop"):
++                _safe_set_output(remainder, transform=transform)
++
+         return self
+ 
+     def get_params(self, deep=True):

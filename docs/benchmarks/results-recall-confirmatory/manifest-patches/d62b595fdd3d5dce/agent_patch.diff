@@ -1,0 +1,50 @@
+diff --git a/sympy/concrete/products.py b/sympy/concrete/products.py
+--- a/sympy/concrete/products.py
++++ b/sympy/concrete/products.py
+@@ -277,16 +277,39 @@
+         elif term.is_Add:
+             p, q = term.as_numer_denom()
+             q = self._eval_product(q, (k, a, n))
+-            if q.is_Number:
+-
+-                # There is expression, which couldn't change by
+-                # as_numer_denom(). E.g. n**(2/3) + 1 --> (n**(2/3) + 1, 1).
+-                # We have to catch this case.
+ 
+-                p = sum([self._eval_product(i, (k, a, n)) for i in p.as_coeff_Add()])
++            if q.is_Number:
++                # The denominator is a Number (like 1), so we need to
++                # compute the product of the numerator.
++                # Check if p is a polynomial in k, and if so, use
++                # the polynomial product logic.
++                if p.is_polynomial(k):
++                    # Compute the product of polynomial p directly
++                    # without recursing into the Add branch again
++                    poly = p.as_poly(k)
++
++                    A = B = Q = S.One
++
++                    all_roots = roots(poly)
++
++                    M = 0
++                    for r, m in all_roots.items():
++                        M += m
++                        A *= RisingFactorial(a - r, n - a + 1)**m
++                        Q *= (n - r)**m
++
++                    if M < poly.degree():
++                        arg = quo(poly, Q.as_poly(k))
++                        B = self.func(arg, (k, a, n)).doit()
++
++                    return poly.LC()**(n - a + 1) * A * B
++                else:
++                    return None
+             else:
+                 p = self._eval_product(p, (k, a, n))
+-            return p / q
++                if p is None:
++                    return None
++                return p / q
+ 
+         elif term.is_Mul:
+             exclude, include = [], []
