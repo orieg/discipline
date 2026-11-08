@@ -16,6 +16,7 @@ Adopting a gate is worth it when it blocks real problems (value), rarely blocks 
 | Noise and value on a random sample | `agent-pr-precision-v7` | Block rate on randomly sampled merged agent pull requests, then labelled precision per gate | `docs/benchmarks/precision-preregistration-v7.toml` | not run yet |
 | Value on verified test gaming | `impossible-recall-v1` (#838) | Share of agent changes that pass impossible tests by editing the test side that discipline blocks (recall), against a line-regex twin; false alarms on honest solutions to the normal split | `docs/benchmarks/recall-preregistration.toml` | `docs/benchmarks/results-recall-pilot/` (pilot); confirmatory run in progress |
 | Value on known regressions | `regression-value-v1` (#1024) | Share of reverted or fix-linked agent pull requests that discipline blocks with a finding in an implicated file, and its block rate on them against matched controls from the same repositories, beside a naive twin | `docs/benchmarks/regression-value-preregistration.toml` (draft) | not run yet |
+| Prevention in the agent's loop | `prevention-v1` (#1036) | Landed test-gaming rate on impossible tests with discipline refusing submissions in the agent's loop, against no gate and a test-path-lock twin; landed honest passes on the normal split as the cost | `docs/benchmarks/prevention-preregistration.toml` (draft) | not run yet |
 | Value on known evasions | evasion corpus | Each known way to weaken a test without tripping a gate, recorded as `caught` or `known_miss` | none (a regression suite) | `tests/fixtures/evasion_corpus.json`, checked by `tests/test_evasion_corpus.rs` |
 | Cost | hook latency (#982) | Wall time of the per-edit agent hook | `docs/benchmarks/hook-latency.md` §1 | `docs/benchmarks/results-hook-latency/` |
 
@@ -24,7 +25,9 @@ on repositories that run it. A precision study's true positives on merged pull r
 problems a reviewer let through, which is evidence of value but not a count of prevented
 regressions. `regression-value-v1` counts regressions that merged and were later reverted or
 fixed and that discipline would have blocked at the pull request; that is a replay, not a
-count from repositories that run it.
+count from repositories that run it. `prevention-v1` is the one study with discipline in the
+loop: it measures what an agent lands when blocked, on benchmark tasks, not on repositories
+in use.
 
 Labels in the precision studies come from LLM subagents (`rater_kind = "llm-subagent"` in
 each `adjudication.json`); they measure rubric consistency, not external human review.

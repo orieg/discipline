@@ -12,10 +12,14 @@ Implements the math-first derivations for Phase B2 of the erosion benchmark (Ref
      Newcombe's hybrid score interval for a difference of two proportions, the exact probability
      that its lower bound clears a floor, and the number of cases (with a fixed number of
      controls per case) at which it does so with a given power.
+  6. Prevention study Step 0 (`docs/benchmarks/prevention-preregistration.toml`, #1036): the exact
+     probability that a Newcombe upper bound stays within a non-inferiority margin, and the runs
+     per arm at which it does so with a given power.
 
 When run with `--test` (or `--self-check`), executes self-contained unit tests pinning known reference values.
 With `--recall-bounds-json`, prints the recall study's Step-0 values as JSON.
 With `--regression-bounds-json`, prints the regression-value study's Step-0 values as JSON.
+With `--prevention-bounds-json`, prints the prevention study's Step-0 values as JSON.
 When run without either, computes and prints the audit table for the erosion benchmark and the recall study.
 
 References:
@@ -384,6 +388,78 @@ def sample_size_for_difference_lower_bound_power(
     return n
 
 
+def noninferiority_pass_probability(
+    n1: int, p1: float, n2: int, p2: float, margin: float, confidence_level: float = 0.95
+) -> float:
+    """Exact probability that the Newcombe upper bound of k1/n1 - k2/n2 is at most `margin`.
+
+    k1 ~ Binomial(n1, p1) and k2 ~ Binomial(n2, p2), independent. The non-inferiority
+    counterpart of `difference_pass_probability`: for each k2 the upper bound is increasing in
+    k1 (pinned on a grid in the Rust tests), so the event is k1 <= k1_max(k2), found by
+    bisection, and the probability is sum over k2 of P(k2) * P(k1 <= k1_max(k2)).
+
+    Reference: Newcombe (1998), the interval `newcombe_difference_interval` implements;
+    non-inferiority shown by the upper confidence bound of the difference: Blackwelder, W. C.
+    (1982). "'Proving the null hypothesis' in clinical trials". Controlled Clinical Trials,
+    3(4), 345-353.
+    """
+    _validate_positive_int("n1", n1)
+    _validate_positive_int("n2", n2)
+    _validate_unit_interval("p1", p1)
+    _validate_unit_interval("p2", p2)
+    _validate_unit_interval("margin", margin)
+    _validate_unit_interval("confidence level", confidence_level)
+    cdf1 = []
+    acc = 0.0
+    for k in range(n1 + 1):
+        acc += _binomial_pmf(k, n1, p1)
+        cdf1.append(acc)
+    total = 0.0
+    for k2 in range(n2 + 1):
+        if newcombe_difference_interval(0, n1, k2, n2, confidence_level)[1] > margin:
+            continue  # no k1 is within the margin at this k2
+        lo, hi = 0, n1
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if newcombe_difference_interval(mid, n1, k2, n2, confidence_level)[1] <= margin:
+                lo = mid
+            else:
+                hi = mid - 1
+        total += _binomial_pmf(k2, n2, p2) * cdf1[lo]
+    return min(1.0, total)
+
+
+def sample_size_for_noninferiority_power(
+    p1: float, p2: float, margin: float, confidence_level: float, power: float, n_max: int
+) -> int:
+    """Smallest n per arm such that every n' in [n, n_max] has
+    `noninferiority_pass_probability(n', p1, n', p2, margin) >= power`.
+
+    The start of the last unbroken run of sizes meeting `power` that ends at n_max. Raises
+    ValueError when an input is out of range, when `p1 - p2 >= margin`, or when n_max itself
+    falls short.
+
+    Reference: see `noninferiority_pass_probability`.
+    """
+    _validate_unit_interval("p1", p1)
+    _validate_unit_interval("p2", p2)
+    _validate_unit_interval("margin", margin)
+    _validate_unit_interval("power", power)
+    _validate_positive_int("n_max", n_max)
+    if p1 - p2 >= margin:
+        raise ValueError(f"the planning difference ({p1} - {p2}) must be below the margin ({margin})")
+
+    def meets(m: int) -> bool:
+        return noninferiority_pass_probability(m, p1, m, p2, margin, confidence_level) >= power
+
+    if not meets(n_max):
+        raise ValueError(f"n_max ({n_max}) has non-inferiority power below {power} at ({p1}, {p2}), margin {margin}")
+    n = n_max
+    while n > 1 and meets(n - 1):
+        n -= 1
+    return n
+
+
 def sample_size_for_interval(
     assumed_precision: float,
     target_half_width: float,
@@ -616,6 +692,24 @@ class TestStatisticalBounds(unittest.TestCase):
         with self.assertRaises(ValueError):
             sample_size_for_difference_lower_bound_power(0.30, 0.177, 0.0, 2, 0.95, 0.80, 100)
 
+    def test_noninferiority_pass_probability_pinned_reference_values(self):
+        # The Rust function's value, which its tests check against a double sum over every (k1, k2).
+        self.assertAlmostEqual(noninferiority_pass_probability(14, 0.7, 16, 0.75, 0.2), 0.3774306961675468, places=12)
+
+    def test_sample_size_for_noninferiority_power_pinned_reference_values(self):
+        self.assertGreaterEqual(noninferiority_pass_probability(246, 0.806, 246, 0.806, 0.10), 0.80)
+        self.assertLess(noninferiority_pass_probability(245, 0.806, 245, 0.806, 0.10), 0.80)
+
+    def test_noninferiority_bounds_invalid_inputs_fail_closed(self):
+        with self.assertRaises(ValueError):
+            noninferiority_pass_probability(10, 0.5, 10, 0.5, 0.0)
+        with self.assertRaises(ValueError):
+            noninferiority_pass_probability(0, 0.5, 10, 0.5, 0.1)
+        with self.assertRaises(ValueError):
+            sample_size_for_noninferiority_power(0.8, 0.7, 0.10, 0.95, 0.80, 700)
+        with self.assertRaises(ValueError):
+            sample_size_for_noninferiority_power(0.806, 0.806, 0.10, 0.95, 0.80, 100)
+
 
 def generate_power_audit() -> str:
     """Generate the pre-registration power & sample size audit table for the erosion benchmark."""
@@ -658,6 +752,8 @@ def generate_power_audit() -> str:
     lines.extend(generate_recall_audit_lines())
     lines.append("")
     lines.extend(generate_regression_audit_lines())
+    lines.append("")
+    lines.extend(generate_prevention_audit_lines())
     return "\n".join(lines)
 
 
@@ -770,6 +866,52 @@ def generate_regression_audit_lines() -> list[str]:
     ]
 
 
+# Prevention study (`docs/benchmarks/prevention-preregistration.toml`, #1036): H1 is a Newcombe
+# floor of 0 on the landed test-gaming rate without minus with discipline in the loop; H2 is a
+# Newcombe non-inferiority margin on the landed honest pass rate. Confidence 0.95, power 0.80.
+PREVENTION_CONFIDENCE = 0.95
+PREVENTION_POWER = 0.80
+PREVENTION_H1 = {"off_rate": 0.198, "on_rate": 0.10, "floor": 0.0, "n_max": 700}
+PREVENTION_H2 = {"rate": 0.806, "margin": 0.10, "n_max": 700}
+
+
+def prevention_bound_values() -> dict[str, dict[str, float | int]]:
+    """The prevention study's Step-0 values, as the pre-registration records them."""
+    h1, h2 = PREVENTION_H1, PREVENTION_H2
+    return {
+        "h1_prevention": {
+            **h1,
+            "required_runs_per_arm": sample_size_for_difference_lower_bound_power(
+                h1["off_rate"], h1["on_rate"], h1["floor"], 1, PREVENTION_CONFIDENCE, PREVENTION_POWER, h1["n_max"]
+            ),
+        },
+        "h2_cost": {
+            **h2,
+            "required_runs_per_arm": sample_size_for_noninferiority_power(
+                h2["rate"], h2["rate"], h2["margin"], PREVENTION_CONFIDENCE, PREVENTION_POWER, h2["n_max"]
+            ),
+        },
+    }
+
+
+def generate_prevention_audit_lines() -> list[str]:
+    values = prevention_bound_values()
+    h1, h2 = values["h1_prevention"], values["h2_cost"]
+    return [
+        "## Prevention study (`prevention-v1`, #1036)",
+        "",
+        "| Claim | Planning rates | Bound | Required runs per arm (power >= 0.80) |",
+        "|---|---|---|---|",
+        f"| H1 landed gaming, off minus on | {h1['off_rate']:.3f} vs {h1['on_rate']:.3f} "
+        f"| Newcombe lower bound >= {h1['floor']:.2f} | {h1['required_runs_per_arm']} |",
+        f"| H2 landed honest passes, off minus on | {h2['rate']:.3f} both "
+        f"| Newcombe upper bound <= {h2['margin']:.2f} | {h2['required_runs_per_arm']} |",
+        "",
+        "- Both are the start of the last unbroken run of qualifying sizes up to n_max; the pre-registration"
+        " inflates H1 by the worst-case design effect of two impossible runs per instance.",
+    ]
+
+
 if __name__ == "__main__":
     if "--test" in sys.argv or "--self-check" in sys.argv:
         sys.argv = [a for a in sys.argv if a not in ("--test", "--self-check")]
@@ -778,5 +920,7 @@ if __name__ == "__main__":
         print(json.dumps(recall_bound_values(), indent=2))
     elif "--regression-bounds-json" in sys.argv:
         print(json.dumps(regression_bound_values(), indent=2))
+    elif "--prevention-bounds-json" in sys.argv:
+        print(json.dumps(prevention_bound_values(), indent=2))
     else:
         print(generate_power_audit())

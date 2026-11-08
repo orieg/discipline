@@ -1207,6 +1207,112 @@ pub fn sample_size_for_difference_lower_bound_power(
     )
 }
 
+/// Exact probability that the Newcombe upper bound of `k1 / n1 - k2 / n2` is at most
+/// `margin`, when `k1 ~ Binomial(n1, p1)` and `k2 ~ Binomial(n2, p2)` are independent.
+///
+/// The non-inferiority counterpart of [`difference_pass_probability`]: a study shows that the
+/// second rate is not lower than the first by more than `margin` when the upper bound of
+/// `p1 - p2` is `<= margin`. For each `k2` the upper bound is increasing in `k1` (checked on a
+/// grid in the tests), so the event is `k1 <= k1_max(k2)`, found by bisection, and the
+/// probability is `sum over k2 of P(k2) * P(k1 <= k1_max(k2))`.
+///
+/// Errors when `n1` or `n2` is 0, or a proportion, `margin` or the confidence level is outside
+/// `(0, 1)`.
+///
+/// Reference: Newcombe (1998), the interval [`newcombe_difference_interval`] implements;
+/// non-inferiority shown by the upper confidence bound of the difference: Blackwelder, W. C.
+/// (1982). "'Proving the null hypothesis' in clinical trials". Controlled Clinical Trials,
+/// 3(4), 345-353.
+pub fn noninferiority_pass_probability(
+    n1: usize,
+    p1: f64,
+    n2: usize,
+    p2: f64,
+    margin: f64,
+    confidence_level: f64,
+) -> Result<f64> {
+    if n1 == 0 || n2 == 0 {
+        bail!("sample sizes must be greater than 0, got n1 = {n1}, n2 = {n2}");
+    }
+    check_unit_interval("p1", p1)?;
+    check_unit_interval("p2", p2)?;
+    check_unit_interval("margin", margin)?;
+    check_unit_interval("confidence level", confidence_level)?;
+    let ln_fact = ln_factorial_table(n1.max(n2));
+    let ln_pmf = |k: usize, n: usize, p: f64| {
+        (ln_fact[n] - ln_fact[k] - ln_fact[n - k]
+            + k as f64 * p.ln()
+            + (n - k) as f64 * (-p).ln_1p())
+        .exp()
+    };
+    // cdf1[k] = P(k1 <= k).
+    let mut cdf1 = vec![0.0_f64; n1 + 1];
+    let mut acc = 0.0_f64;
+    for (k, c) in cdf1.iter_mut().enumerate() {
+        acc += ln_pmf(k, n1, p1);
+        *c = acc;
+    }
+    let mut total = 0.0_f64;
+    for k2 in 0..=n2 {
+        if newcombe_difference_interval(0, n1, k2, n2, confidence_level)?.1 > margin {
+            continue; // no k1 is within the margin at this k2
+        }
+        // Largest k1 whose upper bound is within the margin.
+        let (mut lo, mut hi) = (0usize, n1);
+        while lo < hi {
+            let mid = (lo + hi).div_ceil(2);
+            if newcombe_difference_interval(mid, n1, k2, n2, confidence_level)?.1 <= margin {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        total += ln_pmf(k2, n2, p2) * cdf1[lo];
+    }
+    Ok(total.min(1.0))
+}
+
+/// Smallest number `n` per arm such that every `n'` in `[n, n_max]` has
+/// `noninferiority_pass_probability(n', p1, n', p2, margin, confidence_level) >= power`.
+///
+/// The pass probability is a sawtooth in `n`, as in
+/// [`sample_size_for_difference_lower_bound_power`], so the answer is the start of the last
+/// unbroken run of sizes meeting `power` that ends at `n_max`.
+///
+/// Errors when an input is out of range, when `p1 - p2 >= margin` (the planning difference
+/// already reaches the margin), or when `n_max` itself falls short of `power`.
+///
+/// Reference: see [`noninferiority_pass_probability`].
+pub fn sample_size_for_noninferiority_power(
+    p1: f64,
+    p2: f64,
+    margin: f64,
+    confidence_level: f64,
+    power: f64,
+    n_max: usize,
+) -> Result<usize> {
+    check_unit_interval("p1", p1)?;
+    check_unit_interval("p2", p2)?;
+    check_unit_interval("margin", margin)?;
+    check_unit_interval("power", power)?;
+    check_unit_interval("confidence level", confidence_level)?;
+    if n_max == 0 {
+        bail!("n_max must be a positive integer");
+    }
+    if p1 - p2 >= margin {
+        bail!("the planning difference ({p1} - {p2}) must be below the margin ({margin})");
+    }
+    last_unbroken_run_start(
+        n_max,
+        |m| Ok(noninferiority_pass_probability(m, p1, m, p2, margin, confidence_level)? >= power),
+        || {
+            format!(
+                "n_max ({n_max}) has non-inferiority power below {power} at ({p1}, {p2}), margin {margin}"
+            )
+        },
+    )
+}
+
 // ---- Paired within-run ratio bounds --------------------------------------------
 //
 // The `paired-ratio` evaluation mode compares a ratio of two arms measured in the same
@@ -2194,6 +2300,86 @@ mod tests {
         // 135 meets the power, 134 does not.
         assert!(difference_pass_probability(135, 0.30, 270, 0.177, 0.0, 0.95).unwrap() >= 0.80);
         assert!(difference_pass_probability(134, 0.30, 268, 0.177, 0.0, 0.95).unwrap() < 0.80);
+    }
+
+    #[test]
+    fn newcombe_upper_bound_is_increasing_in_the_first_count() {
+        // noninferiority_pass_probability bisects on k1; this is the property it relies on.
+        for (n1, n2) in [(10, 20), (30, 30), (57, 114)] {
+            for k2 in 0..=n2 {
+                let mut previous = f64::NEG_INFINITY;
+                for k1 in 0..=n1 {
+                    let u = newcombe_difference_interval(k1, n1, k2, n2, 0.95)
+                        .unwrap()
+                        .1;
+                    assert!(u >= previous, "n1 {n1} n2 {n2} k2 {k2} k1 {k1}");
+                    previous = u;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn noninferiority_pass_probability_matches_the_exact_double_sum() {
+        // Pinned from the double sum below at the same inputs.
+        let got = noninferiority_pass_probability(14, 0.7, 16, 0.75, 0.2, 0.95).unwrap();
+        assert!((got - 0.377_430_696_167_546_8).abs() < 1e-12, "{got}");
+        // The double sum over every (k1, k2), written out here.
+        let pmf = |k: usize, n: usize, p: f64| {
+            let c = (0..k).fold(1.0_f64, |acc, i| acc * (n - i) as f64 / (i + 1) as f64);
+            c * p.powi(k as i32) * (1.0 - p).powi((n - k) as i32)
+        };
+        for (n1, p1, n2, p2, margin) in [
+            (14usize, 0.7, 16usize, 0.75, 0.2),
+            (20, 0.8, 20, 0.8, 0.15),
+            (9, 0.3, 25, 0.5, 0.05),
+        ] {
+            let mut brute = 0.0;
+            for k1 in 0..=n1 {
+                for k2 in 0..=n2 {
+                    if newcombe_difference_interval(k1, n1, k2, n2, 0.95)
+                        .unwrap()
+                        .1
+                        <= margin
+                    {
+                        brute += pmf(k1, n1, p1) * pmf(k2, n2, p2);
+                    }
+                }
+            }
+            let got = noninferiority_pass_probability(n1, p1, n2, p2, margin, 0.95).unwrap();
+            assert!(
+                (got - brute).abs() < 1e-12,
+                "({n1}, {p1}, {n2}, {p2}, {margin}): {got} vs {brute}"
+            );
+        }
+    }
+
+    #[test]
+    fn noninferiority_sample_size_is_the_last_unbroken_run() {
+        assert_eq!(
+            sample_size_for_noninferiority_power(0.806, 0.806, 0.10, 0.95, 0.80, 700).unwrap(),
+            246
+        );
+        // 246 meets the power, 245 does not.
+        assert!(
+            noninferiority_pass_probability(246, 0.806, 246, 0.806, 0.10, 0.95).unwrap() >= 0.80
+        );
+        assert!(
+            noninferiority_pass_probability(245, 0.806, 245, 0.806, 0.10, 0.95).unwrap() < 0.80
+        );
+    }
+
+    #[test]
+    fn noninferiority_bounds_reject_invalid_inputs() {
+        assert!(noninferiority_pass_probability(0, 0.5, 10, 0.5, 0.1, 0.95).is_err());
+        assert!(noninferiority_pass_probability(10, 1.0, 10, 0.5, 0.1, 0.95).is_err());
+        assert!(noninferiority_pass_probability(10, 0.5, 10, 0.5, 0.0, 0.95).is_err());
+        assert!(noninferiority_pass_probability(10, 0.5, 10, 0.5, 1.0, 0.95).is_err());
+        // The planning difference already reaches the margin.
+        assert!(sample_size_for_noninferiority_power(0.8, 0.7, 0.10, 0.95, 0.80, 700).is_err());
+        assert!(sample_size_for_noninferiority_power(0.8, 0.8, 0.10, 0.95, 0.80, 0).is_err());
+        // n_max short of the requirement.
+        assert!(sample_size_for_noninferiority_power(0.806, 0.806, 0.10, 0.95, 0.80, 100).is_err());
     }
 
     #[test]
