@@ -2840,6 +2840,66 @@
       }
     },
     {
+      "name": "python-numpy-assert-fn-deleted",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f(x):\n    return x\n",
+        "tests/test_m.py": "from numpy.testing import assert_allclose\n\nfrom pkg.m import f\n\n\ndef test_f():\n    assert_allclose(f(3), 3)\n    assert_allclose(f(1), 1)\n"
+      },
+      "head": {
+        "tests/test_m.py": "from numpy.testing import assert_allclose\n\nfrom pkg.m import f\n\n\ndef test_f():\n    assert_allclose(f(1), 1)\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": {
+        "known_miss": "#1038"
+      }
+    },
+    {
+      "name": "python-numpy-assert-fn-expected-value-changed",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f(x):\n    return x\n",
+        "tests/test_m.py": "from numpy.testing import assert_allclose\n\nfrom pkg.m import f\n\n\ndef test_f():\n    assert_allclose(f(3), 3)\n    assert_allclose(f(1), 1)\n"
+      },
+      "head": {
+        "tests/test_m.py": "from numpy.testing import assert_allclose\n\nfrom pkg.m import f\n\n\ndef test_f():\n    assert_allclose(f(3), 4)\n    assert_allclose(f(1), 1)\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": {
+        "known_miss": "#1038"
+      }
+    },
+    {
+      "name": "python-context-manager-assert-argument-changed",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f(x):\n    return x\n",
+        "tests/test_m.py": "import unittest\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        with self.assertNumQueries(1):\n            f(1)\n"
+      },
+      "head": {
+        "tests/test_m.py": "import unittest\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        with self.assertNumQueries(0):\n            f(1)\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": {
+        "known_miss": "#1039"
+      }
+    },
+    {
+      "name": "python-expected-value-in-local-literal-changed",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f(x):\n    return x\n",
+        "tests/test_m.py": "from pkg.m import f\n\n\ndef test_f():\n    expected = 3\n    assert f(3) == expected\n"
+      },
+      "head": {
+        "tests/test_m.py": "from pkg.m import f\n\n\ndef test_f():\n    expected = 4\n    assert f(3) == expected\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": {
+        "known_miss": "#1039"
+      }
+    },
+    {
       "name": "out-of-lane-dataflow-to-external-sinks",
       "base": {
         "app/core.py": "def total(xs):\n    return sum(xs)\n"
