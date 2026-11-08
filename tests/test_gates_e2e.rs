@@ -1241,6 +1241,84 @@ fn python_mock_assertion_calls_count_toward_assertion_reduction() {
     );
 }
 
+/// A numpy / pandas / xarray testing assertion function the file imports is a check
+/// (#1038): deleting one from an existing test is a reduction, and changing its expected
+/// argument is a changed expected value. A helper of the file's own of that name is not
+/// one, and the import forms are read alike.
+#[test]
+fn python_testing_library_assertions_count_toward_assertion_reduction() {
+    const NUMPY: &str = "from numpy.testing import assert_allclose\n";
+    const LOCAL: &str = "def assert_allclose(a, b):\n    return a\n";
+    let file =
+        |head: &str, body: &str| format!("{head}\nfrom pkg.m import f\n\n\ndef test_f():\n{body}");
+    let base_body = "    assert_allclose(f(3), 3)\n    assert_allclose(f(1), 1)\n";
+    let codes = |base: &str, head: &str| -> (i32, Vec<String>) {
+        let repo = Repo::new();
+        repo.write("pkg/__init__.py", "");
+        repo.write("pkg/m.py", "def f(x):\n    return x\n");
+        repo.commit_base("tests/test_m.py", base, "test: m");
+        repo.write("tests/test_m.py", head);
+        repo.commit("test: change");
+        let run = repo.check(&[]);
+        let codes = run
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        (run.code, codes)
+    };
+    let deleted = "    assert_allclose(f(1), 1)\n";
+    let changed = "    assert_allclose(f(3), 4)\n    assert_allclose(f(1), 1)\n";
+    assert_eq!(
+        codes(&file(NUMPY, base_body), &file(NUMPY, deleted)),
+        (
+            1,
+            vec!["assertion-reduction/assertions-reduced".to_string()]
+        )
+    );
+    assert_eq!(
+        codes(&file(NUMPY, base_body), &file(NUMPY, changed)),
+        (
+            1,
+            vec!["assertion-reduction/expected-value-changed".to_string()]
+        )
+    );
+    // Through a module alias and through the package.
+    let npt = file(
+        "import numpy.testing as npt\n",
+        &base_body.replace("assert_allclose", "npt.assert_allclose"),
+    );
+    assert_eq!(
+        codes(&npt, &npt.replace("    npt.assert_allclose(f(3), 3)\n", "")),
+        (
+            1,
+            vec!["assertion-reduction/assertions-reduced".to_string()]
+        )
+    );
+    let np = file(
+        "import numpy as np\n",
+        &base_body.replace("assert_allclose", "np.testing.assert_allclose"),
+    );
+    assert_eq!(
+        codes(&np, &np.replace("(f(3), 3)", "(f(3), 4)")),
+        (
+            1,
+            vec!["assertion-reduction/expected-value-changed".to_string()]
+        )
+    );
+    // Controls: the same edits to a helper of the file's own of that name, and a
+    // change that keeps every check through another import form.
+    assert_eq!(
+        codes(&file(LOCAL, base_body), &file(LOCAL, deleted)),
+        (0, vec![])
+    );
+    assert_eq!(
+        codes(&file(LOCAL, base_body), &file(LOCAL, changed)),
+        (0, vec![])
+    );
+    assert_eq!(codes(&file(NUMPY, base_body), &np), (0, vec![]));
+}
+
 /// A new test whose checks are a mock interaction and a property nearly any value has
 /// (#865) checks nothing about what the code produces: `asserts-only-on-mocks`, in
 /// Python and in JavaScript. An equality on the result beside the mock check is a check.

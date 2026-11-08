@@ -309,10 +309,18 @@ const PY_EQ_CALLS: &[&str] = &[
 ];
 
 /// Python: `assert a == <literal>` / `!=` / `is` / `is not` (one comparison), the first two
-/// positional arguments of `assertEqual`-family calls, `snapshot("...")` operands, the
-/// literal arguments of a context-manager assertion ([`py_with_item`]), and a literal
-/// bound to a local name that one of these assertions reads ([`py_local_literals`]).
-pub fn python<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [TestFn]) {
+/// positional arguments of `assertEqual`-family calls and of the comparing testing-library
+/// functions the file imports (`assert_allclose(f(3), 3)`, `super::testing_asserts`),
+/// `snapshot("...")` operands, the literal arguments of a context-manager assertion
+/// ([`py_with_item`]), and a literal bound to a local name that one of these assertions
+/// reads ([`py_local_literals`]).
+pub fn python<'t>(
+    root: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    tests: &mut [TestFn],
+    testing: &super::testing_asserts::TestingAsserts,
+) {
     if tests.is_empty() {
         return;
     }
@@ -320,7 +328,7 @@ pub fn python<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [Te
     let reader = &mut Reader::new(tests, src);
     walk(root, &mut |node| match node.kind() {
         "function_definition" => {
-            py_local_literals(node, anc, src, reader);
+            py_local_literals(node, anc, src, testing, reader);
             true
         }
         "with_item" => {
@@ -328,7 +336,7 @@ pub fn python<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [Te
             true
         }
         "assert_statement" => {
-            for side in py_equality(node, src).unwrap_or_default() {
+            for side in py_equality(node, src, testing).unwrap_or_default() {
                 if let Some(lit) = py_operand(unparenthesized(side), src) {
                     reader.record(node, lit, src);
                 }
@@ -336,7 +344,7 @@ pub fn python<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [Te
             false
         }
         "expression_statement" => {
-            let Some(args) = py_equality(node, src) else {
+            let Some(args) = py_equality(node, src, testing) else {
                 return true;
             };
             for a in args.into_iter().map(unparenthesized) {
@@ -352,8 +360,13 @@ pub fn python<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [Te
 
 /// The parts of a Python equality assertion its expected values are read from: an
 /// `assert` of one `==` / `!=` / `is` / `is not` comparison and its two operands, or an
-/// `assertEqual`-family call statement and its first two positional arguments.
-fn py_equality<'t>(node: Node<'t>, src: &str) -> Option<Vec<Node<'t>>> {
+/// `assertEqual`-family call statement, or one of a comparing testing-library function the
+/// file imports, and its first two positional arguments.
+fn py_equality<'t>(
+    node: Node<'t>,
+    src: &str,
+    testing: &super::testing_asserts::TestingAsserts,
+) -> Option<Vec<Node<'t>>> {
     match node.kind() {
         "assert_statement" => {
             let cmp = node
@@ -378,7 +391,11 @@ fn py_equality<'t>(node: Node<'t>, src: &str) -> Option<Vec<Node<'t>>> {
                 .rsplit('.')
                 .next()
                 .unwrap_or("");
-            if !PY_EQ_CALLS.contains(&leaf) {
+            let library = call
+                .child_by_field_name("function")
+                .and_then(|f| testing.function(f, src.as_bytes()))
+                .is_some_and(super::testing_asserts::compares);
+            if !PY_EQ_CALLS.contains(&leaf) && !library {
                 return None;
             }
             let args = call.child_by_field_name("arguments")?;
@@ -479,7 +496,13 @@ fn py_with_item(
 /// `global`, `del`) means the name is not read. The innermost function of the operand is
 /// `func`. The skeleton is the assignment's text with the literal masked, then the
 /// assertion's text, so a name renamed, or an assertion rewritten, is not paired.
-fn py_local_literals<'t>(func: Node<'t>, anc: &Ancestry<'t>, src: &str, reader: &mut Reader) {
+fn py_local_literals<'t>(
+    func: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    testing: &super::testing_asserts::TestingAsserts,
+    reader: &mut Reader,
+) {
     let Some(body) = func.child_by_field_name("body") else {
         return;
     };
@@ -508,7 +531,7 @@ fn py_local_literals<'t>(func: Node<'t>, anc: &Ancestry<'t>, src: &str, reader: 
         let Some((assign, lit)) = py_literal_binding(*target, anc) else {
             continue;
         };
-        let Some(assertion) = py_expected_operand(*operand, anc, src) else {
+        let Some(assertion) = py_expected_operand(*operand, anc, src, testing) else {
             continue;
         };
         let statement = anc.parent(assign).unwrap_or(assign);
@@ -556,7 +579,12 @@ fn py_literal_binding<'t>(target: Node<'t>, anc: &Ancestry<'t>) -> Option<(Node<
 
 /// The equality assertion that reads `name` as one of its whole operands
 /// ([`py_equality`]), parentheses around it removed.
-fn py_expected_operand<'t>(name: Node<'t>, anc: &Ancestry<'t>, src: &str) -> Option<Node<'t>> {
+fn py_expected_operand<'t>(
+    name: Node<'t>,
+    anc: &Ancestry<'t>,
+    src: &str,
+    testing: &super::testing_asserts::TestingAsserts,
+) -> Option<Node<'t>> {
     let wrapped = |n: Node<'t>| {
         let mut out = n;
         while let Some(p) = anc
@@ -580,7 +608,7 @@ fn py_expected_operand<'t>(name: Node<'t>, anc: &Ancestry<'t>, src: &str) -> Opt
         }
         _ => return None,
     };
-    py_equality(assertion, src)?
+    py_equality(assertion, src, testing)?
         .into_iter()
         .any(|side| side == operand)
         .then_some(assertion)
