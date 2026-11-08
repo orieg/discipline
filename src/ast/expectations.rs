@@ -12,7 +12,7 @@
 //! and a value built from a variable or a constant is not read. The assertion message
 //! (`assert_eq!(a, 4, "msg")`) is not an operand.
 
-use super::ancestry::count;
+use super::ancestry::{count, Ancestry};
 use super::bounds::{
     rs_conditions, rs_inside, rs_unparenthesized, skeleton, text, walk, GoFailures, Record, Records,
 };
@@ -309,42 +309,69 @@ const PY_EQ_CALLS: &[&str] = &[
 ];
 
 /// Python: `assert a == <literal>` / `!=` / `is` / `is not` (one comparison), the first two
-/// positional arguments of `assertEqual`-family calls, and `snapshot("...")` operands.
-pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
+/// positional arguments of `assertEqual`-family calls, `snapshot("...")` operands, the
+/// literal arguments of a context-manager assertion ([`py_with_item`]), and a literal
+/// bound to a local name that one of these assertions reads ([`py_local_literals`]).
+pub fn python<'t>(root: Node<'t>, anc: &Ancestry<'t>, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
     }
+    let bare = super::expected_exceptions::python_pytest_bare(root, src);
     let reader = &mut Reader::new(tests, src);
     walk(root, &mut |node| match node.kind() {
+        "function_definition" => {
+            py_local_literals(node, anc, src, reader);
+            true
+        }
+        "with_item" => {
+            py_with_item(node, src, &bare, reader);
+            true
+        }
         "assert_statement" => {
-            let Some(cmp) = node
+            for side in py_equality(node, src).unwrap_or_default() {
+                if let Some(lit) = py_operand(unparenthesized(side), src) {
+                    reader.record(node, lit, src);
+                }
+            }
+            false
+        }
+        "expression_statement" => {
+            let Some(args) = py_equality(node, src) else {
+                return true;
+            };
+            for a in args.into_iter().map(unparenthesized) {
+                if py_lit(a) {
+                    reader.record(node, a, src);
+                }
+            }
+            false
+        }
+        _ => true,
+    });
+}
+
+/// The parts of a Python equality assertion its expected values are read from: an
+/// `assert` of one `==` / `!=` / `is` / `is not` comparison and its two operands, or an
+/// `assertEqual`-family call statement and its first two positional arguments.
+fn py_equality<'t>(node: Node<'t>, src: &str) -> Option<Vec<Node<'t>>> {
+    match node.kind() {
+        "assert_statement" => {
+            let cmp = node
                 .named_child(0)
                 .map(unparenthesized)
-                .filter(|c| c.kind() == "comparison_operator")
-            else {
-                return false;
-            };
-            let mut cursor = cmp.walk();
-            let named: Vec<Node> = cmp.named_children(&mut cursor).collect();
+                .filter(|c| c.kind() == "comparison_operator")?;
+            let named: Vec<Node> = cmp.named_children(&mut cmp.walk()).collect();
             let op: String = cmp
                 .children(&mut cmp.walk())
                 .filter(|c| !c.is_named())
                 .map(|c| text(c, src))
                 .collect::<Vec<_>>()
                 .join(" ");
-            if named.len() == 2 && matches!(op.as_str(), "==" | "!=" | "is" | "is not") {
-                for side in named {
-                    if let Some(lit) = py_operand(unparenthesized(side), src) {
-                        reader.record(node, lit, src);
-                    }
-                }
-            }
-            false
+            (named.len() == 2 && matches!(op.as_str(), "==" | "!=" | "is" | "is not"))
+                .then_some(named)
         }
         "expression_statement" => {
-            let Some(call) = node.named_child(0).filter(|c| c.kind() == "call") else {
-                return true;
-            };
+            let call = node.named_child(0).filter(|c| c.kind() == "call")?;
             let leaf = call
                 .child_by_field_name("function")
                 .map_or("", |f| text(f, src))
@@ -352,24 +379,211 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
                 .next()
                 .unwrap_or("");
             if !PY_EQ_CALLS.contains(&leaf) {
-                return true;
+                return None;
             }
-            if let Some(args) = call.child_by_field_name("arguments") {
-                let mut c = args.walk();
-                let pos: Vec<Node> = args
-                    .named_children(&mut c)
-                    .filter(|x| x.kind() != "keyword_argument")
-                    .collect();
-                for a in pos.into_iter().take(2).map(unparenthesized) {
-                    if py_lit(a) {
-                        reader.record(node, a, src);
-                    }
-                }
-            }
-            false
+            let args = call.child_by_field_name("arguments")?;
+            let mut c = args.walk();
+            let pos: Vec<Node> = args
+                .named_children(&mut c)
+                .filter(|x| x.kind() != "keyword_argument")
+                .take(2)
+                .collect();
+            Some(pos)
         }
-        _ => true,
+        _ => None,
+    }
+}
+
+/// Python: the literal arguments of a context-manager assertion (#1039). In a `with` item
+/// whose call is a `self.assert*(..)` method (`assertNumQueries(1)`,
+/// `assertRaisesMessage(E, "text")`), every literal argument but the `msg=` message; in
+/// `pytest.raises(..)` / `pytest.warns(..)`, the literal `match=` pattern. A `with` item of
+/// any other call (`open(path)`, `mock.patch(..)`, `self.subTest(i=1)`) holds no
+/// expectation. The skeleton is the call's text with the literal masked; the record is
+/// placed on the call's first line, the line an expected failure of the same call is
+/// placed on.
+fn py_with_item(
+    item: Node,
+    src: &str,
+    bare: &super::expected_exceptions::PytestBare,
+    reader: &mut Reader,
+) {
+    let Some(call) = item
+        .child_by_field_name("value")
+        .map(|v| {
+            if v.kind() == "as_pattern" {
+                v.named_child(0).unwrap_or(v)
+            } else {
+                v
+            }
+        })
+        .map(unparenthesized)
+        .filter(|c| c.kind() == "call")
+    else {
+        return;
+    };
+    let (Some(func), Some(args)) = (
+        call.child_by_field_name("function"),
+        call.child_by_field_name("arguments"),
+    ) else {
+        return;
+    };
+    let pytest = super::expected_exceptions::is_pytest_raises_or_warns(func, src, bare);
+    let assertion = func.kind() == "attribute"
+        && func
+            .child_by_field_name("attribute")
+            .is_some_and(|a| text(a, src).starts_with("assert"));
+    if !pytest && !assertion {
+        return;
+    }
+    let mut c = args.walk();
+    for arg in args.named_children(&mut c) {
+        let lit = if arg.kind() == "keyword_argument" {
+            let name = arg.child_by_field_name("name").map_or("", |n| text(n, src));
+            let keep = if pytest {
+                name == "match"
+            } else {
+                name != "msg"
+            };
+            match arg.child_by_field_name("value") {
+                Some(v) if keep => unparenthesized(v),
+                _ => continue,
+            }
+        } else if pytest {
+            continue;
+        } else {
+            unparenthesized(arg)
+        };
+        if py_lit(lit) {
+            let calls = reader.calls_of(call, src);
+            reader.records.add(Expectation {
+                line: call.start_position().row + 1,
+                skeleton: format!("with {}", skeleton(call, lit, src)),
+                literal: text(lit, src).to_string(),
+                calls,
+            });
+        }
+    }
+}
+
+/// Python: a literal bound to a local name that an equality assertion then reads as a whole
+/// operand, as an inline literal is read (#1039): `expected = 3` then
+/// `assert f(3) == expected` or `self.assertEqual(f(3), expected)`.
+///
+/// The name occurs exactly twice in the function, nested functions, lambdas and
+/// comprehensions included: once as the whole target of a plain assignment
+/// (`name = <literal>`, also `name: T = <literal>`) that is a statement of a block holding
+/// the assertion and stands before it, and once as that operand. Any other occurrence (a
+/// parameter, a second binding, an augmented assignment, a read as an input such as
+/// `f(expected)`, a read in a message, an attribute or keyword of the same spelling,
+/// `global`, `del`) means the name is not read. The innermost function of the operand is
+/// `func`. The skeleton is the assignment's text with the literal masked, then the
+/// assertion's text, so a name renamed, or an assertion rewritten, is not paired.
+fn py_local_literals<'t>(func: Node<'t>, anc: &Ancestry<'t>, src: &str, reader: &mut Reader) {
+    let Some(body) = func.child_by_field_name("body") else {
+        return;
+    };
+    let mut seen: HashMap<&str, Vec<Node>> = HashMap::new();
+    walk(body, &mut |n| {
+        count(1);
+        if n.kind() == "identifier" {
+            seen.entry(text(n, src)).or_default().push(n);
+        }
+        true
     });
+    if let Some(params) = func.child_by_field_name("parameters") {
+        walk(params, &mut |n| {
+            count(1);
+            if n.kind() == "identifier" {
+                seen.entry(text(n, src)).or_default().push(n);
+            }
+            true
+        });
+    }
+    let mut found: Vec<(usize, Node, Node, Node)> = Vec::new();
+    for occurrences in seen.values() {
+        let [target, operand] = occurrences.as_slice() else {
+            continue;
+        };
+        let Some((assign, lit)) = py_literal_binding(*target, anc) else {
+            continue;
+        };
+        let Some(assertion) = py_expected_operand(*operand, anc, src) else {
+            continue;
+        };
+        let statement = anc.parent(assign).unwrap_or(assign);
+        let held = anc.parent(statement).is_some_and(|block| {
+            block.kind() == "block"
+                && block.start_byte() <= assertion.start_byte()
+                && assertion.end_byte() <= block.end_byte()
+        });
+        let inner = anc
+            .ancestors(*operand)
+            .find(|n| matches!(n.kind(), "function_definition" | "lambda"));
+        if held && statement.end_byte() <= assertion.start_byte() && inner == Some(func) {
+            found.push((lit.start_byte(), assign, lit, assertion));
+        }
+    }
+    // In the order of the source, so the records do not follow the order of a hash.
+    found.sort_by_key(|f| f.0);
+    for (_, assign, lit, assertion) in found {
+        let calls = reader.calls_of(assertion, src);
+        let written = text(assertion, src)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        reader.records.add(Expectation {
+            line: lit.start_position().row + 1,
+            skeleton: format!("{} => {}", skeleton(assign, lit, src), written),
+            literal: text(lit, src).to_string(),
+            calls,
+        });
+    }
+}
+
+/// The assignment and its literal when `target` is the whole left side of a plain
+/// assignment statement whose right side is one literal.
+fn py_literal_binding<'t>(target: Node<'t>, anc: &Ancestry<'t>) -> Option<(Node<'t>, Node<'t>)> {
+    let assign = anc.parent(target).filter(|a| a.kind() == "assignment")?;
+    if assign.child_by_field_name("left") != Some(target)
+        || anc.parent(assign).map(|s| s.kind()) != Some("expression_statement")
+    {
+        return None;
+    }
+    let lit = assign.child_by_field_name("right").map(unparenthesized)?;
+    py_lit(lit).then_some((assign, lit))
+}
+
+/// The equality assertion that reads `name` as one of its whole operands
+/// ([`py_equality`]), parentheses around it removed.
+fn py_expected_operand<'t>(name: Node<'t>, anc: &Ancestry<'t>, src: &str) -> Option<Node<'t>> {
+    let wrapped = |n: Node<'t>| {
+        let mut out = n;
+        while let Some(p) = anc
+            .parent(out)
+            .filter(|p| p.kind() == "parenthesized_expression")
+        {
+            out = p;
+        }
+        out
+    };
+    let operand = wrapped(name);
+    let holder = anc.parent(operand)?;
+    let assertion = match holder.kind() {
+        "comparison_operator" => anc
+            .parent(wrapped(holder))
+            .filter(|a| a.kind() == "assert_statement")?,
+        "argument_list" => {
+            let call = anc.parent(holder).filter(|c| c.kind() == "call")?;
+            anc.parent(call)
+                .filter(|s| s.kind() == "expression_statement")?
+        }
+        _ => return None,
+    };
+    py_equality(assertion, src)?
+        .into_iter()
+        .any(|side| side == operand)
+        .then_some(assertion)
 }
 
 fn js_lit(n: Node, src: &str) -> bool {
@@ -661,6 +875,104 @@ mod tests {
         assert_eq!(read(wrapped), read(plain));
         // A tuple is not a comparison.
         assert!(read("def test_p(self):\n    assert (parse(\"1\") == 1, 'msg')\n").is_empty());
+    }
+
+    fn py_changed(base: &str, head: &str) -> Vec<usize> {
+        let at = |src: &str| {
+            crate::ast::python::PythonPack
+                .extract("tests/test_p.py", src, &AssertVocabulary::default())
+                .unwrap()
+                .tests
+                .remove(0)
+                .expectations
+        };
+        changed(&at(base), &at(head))
+    }
+
+    /// #1039: the literal arguments of a `self.assert*` context manager, and the `match=`
+    /// of `pytest.raises` / `pytest.warns`, are expected values; a `with` item of any
+    /// other call, the class of `pytest.raises` and an assertion's `msg=` are not.
+    #[test]
+    fn python_reads_context_manager_assertion_arguments() {
+        let src = "def test_p(self):\n    with self.assertNumQueries(1):\n        f()\n    with self.assertRaisesMessage(ValueError, 'bad'), open('a.txt') as fh:\n        f()\n    with pytest.raises(ValueError, match=r'neg') as e:\n        f()\n    with pytest.warns(UserWarning, match='w'):\n        f()\n    with self.assertLogs('app', level='INFO', msg='m'):\n        f()\n    with mock.patch('m.f', return_value=3), self.subTest(i=1):\n        f()\n    with pytest.raises(ValueError, 'x'):\n        f()\n    with assertNumQueries(2):\n        f()\n";
+        assert_eq!(
+            literals(&crate::ast::python::PythonPack, "tests/test_p.py", src),
+            vec!["1", "'bad'", "r'neg'", "'w'", "'app'", "'INFO'"]
+        );
+        let base = "def test_p(self):\n    with self.assertNumQueries(1):\n        f()\n";
+        let head = "def test_p(self):\n    with self.assertNumQueries(0):\n        f()\n";
+        assert_eq!(py_changed(base, head), vec![2]);
+        assert!(py_changed(base, base).is_empty());
+        // The argument of `open` is an input, not an expectation.
+        let base =
+            "def test_p():\n    with open('a.txt') as fh:\n        assert fh.read() == 'x'\n";
+        let head =
+            "def test_p():\n    with open('b.txt') as fh:\n        assert fh.read() == 'x'\n";
+        assert!(py_changed(base, head).is_empty());
+    }
+
+    /// #1039: a literal bound once to a local name that one equality assertion reads as a
+    /// whole operand is paired as an inline literal is; a name renamed, read as an input,
+    /// read twice, bound twice or a parameter is not.
+    #[test]
+    fn python_pairs_a_literal_held_in_a_local_name() {
+        let test = |body: &str| format!("def test_p(self):\n{body}");
+        let base = test("    expected = 3\n    assert f(3) == expected\n");
+        let head = test("    expected = 4\n    assert f(3) == expected\n");
+        assert_eq!(py_changed(&base, &head), vec![2]);
+        assert!(py_changed(&base, &base).is_empty());
+        let unit = |v| {
+            test(&format!(
+                "    want = {v}\n    self.assertEqual(f(3), (want))\n"
+            ))
+        };
+        assert_eq!(py_changed(&unit(3), &unit(4)), vec![2]);
+        // Bound under a type, inside a `with` block holding the assertion.
+        let typed = |v| {
+            test(&format!(
+                "    with ctx():\n        n: int = {v}\n        assert n != f(3)\n"
+            ))
+        };
+        assert_eq!(py_changed(&typed(3), &typed(4)), vec![3]);
+
+        let read = |body: &str| {
+            literals(
+                &crate::ast::python::PythonPack,
+                "tests/test_p.py",
+                &test(body),
+            )
+        };
+        // Renamed: not paired, and nothing else is read.
+        let renamed = test("    want = 3\n    assert f(3) == want\n");
+        assert!(py_changed(&base, &renamed).is_empty());
+        for not_read in [
+            // An input as well as the expected value.
+            "    n = 3\n    assert f(n) == n\n",
+            // Read twice.
+            "    e = 3\n    assert f(3) == e\n    assert g(3) == e\n",
+            // In the message.
+            "    e = 3\n    assert f(3) == e, f'{e}'\n",
+            // Bound twice, or augmented.
+            "    e = 3\n    e = 4\n    assert f(3) == e\n",
+            "    e = 3\n    e += 1\n    assert f(3) == e\n",
+            // Bound after the assertion, or in a branch that does not hold it.
+            "    assert f(3) == e\n    e = 3\n",
+            "    if ok:\n        e = 3\n    assert f(3) == e\n",
+            // Not one literal; not a whole operand; not an equality.
+            "    e = [3]\n    assert f(3) == e\n",
+            "    e = 3\n    assert f(3) == e + 0\n",
+            "    e = 3\n    assert f(3) < e\n",
+            // Read in a nested function.
+            "    e = 3\n    def g():\n        assert f(3) == e\n",
+            // A tuple or chained target.
+            "    e, x = 3, 4\n    assert f(3) == e\n",
+            "    x = e = 3\n    assert f(3) == e\n",
+        ] {
+            assert!(read(not_read).is_empty(), "{not_read}");
+        }
+        // A parameter of the same name is a fixture or a case, not the literal.
+        let param = "def test_p(e):\n    e = 3\n    assert f(3) == e\n";
+        assert!(literals(&crate::ast::python::PythonPack, "tests/test_p.py", param).is_empty());
     }
 
     #[test]
