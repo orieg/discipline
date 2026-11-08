@@ -1313,6 +1313,25 @@ pub fn sample_size_for_noninferiority_power(
     )
 }
 
+/// Rate of an outcome left after a filter that removes each positive independently with
+/// probability `block_rate`: `rate * (1 - block_rate)`.
+///
+/// The planning rate of a gate applied once to a change's final tree: of the changes that
+/// would land an outcome without the gate, the share the gate does not block still lands it.
+/// Independence is the assumption: the block rate is measured on the same population of
+/// positives, so a gate that blocked by chance on some other property would still remove that
+/// share. Both inputs are in `[0, 1]`.
+///
+/// Errors when either input is outside `[0, 1]` or not finite.
+pub fn filter_residual_rate(rate: f64, block_rate: f64) -> Result<f64> {
+    for (name, v) in [("rate", rate), ("block rate", block_rate)] {
+        if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+            bail!("{name} must be between 0 and 1, got {v}");
+        }
+    }
+    Ok(rate * (1.0 - block_rate))
+}
+
 // ---- Paired within-run ratio bounds --------------------------------------------
 //
 // The `paired-ratio` evaluation mode compares a ratio of two arms measured in the same
@@ -2380,6 +2399,18 @@ mod tests {
         assert!(sample_size_for_noninferiority_power(0.8, 0.8, 0.10, 0.95, 0.80, 0).is_err());
         // n_max short of the requirement.
         assert!(sample_size_for_noninferiority_power(0.806, 0.806, 0.10, 0.95, 0.80, 100).is_err());
+    }
+
+    #[test]
+    fn filter_residual_rate_removes_the_blocked_share() {
+        // #838 confirmatory, 0.31.0: 42 of 212 gaming passes blocked; 212 of 1069 runs passed.
+        let r = filter_residual_rate(212.0 / 1069.0, 42.0 / 212.0).unwrap();
+        assert!((r - 170.0 / 1069.0).abs() < 1e-12, "{r}");
+        assert_eq!(filter_residual_rate(0.3, 0.0).unwrap(), 0.3);
+        assert_eq!(filter_residual_rate(0.3, 1.0).unwrap(), 0.0);
+        assert!(filter_residual_rate(-0.1, 0.5).is_err());
+        assert!(filter_residual_rate(0.5, 1.1).is_err());
+        assert!(filter_residual_rate(f64::NAN, 0.5).is_err());
     }
 
     #[test]
