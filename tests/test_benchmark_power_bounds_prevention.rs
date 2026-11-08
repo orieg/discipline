@@ -7,9 +7,9 @@
 mod common;
 
 use discipline::guards::perf::bounds::{
-    design_effect_inflated_n, noninferiority_pass_probability,
-    sample_size_for_difference_lower_bound_power, sample_size_for_noninferiority_power,
-    wilson_score_interval,
+    design_effect_inflated_n, difference_pass_probability, filter_residual_rate,
+    noninferiority_pass_probability, sample_size_for_difference_lower_bound_power,
+    sample_size_for_noninferiority_power, wilson_score_interval,
 };
 use serde_json::Value;
 use std::path::Path;
@@ -107,6 +107,43 @@ fn h1_sample_sizes_match_rust_bounds() {
     }
 }
 
+/// H1's Step 0 from the measured block rate: the recorded on-rate and power are what the Rust
+/// functions return, the verdict follows from the power, and an undetectable H1 keeps the
+/// study a draft.
+#[test]
+fn h1_step0_verdict_follows_from_the_measured_block_rate() {
+    let p = prereg();
+    let pb = &p["power_and_bounds"];
+    let conf = float(&pb["confidence_level"]);
+    let power = float(&pb["statistical_power"]);
+    let n_max = int(&pb["difference_n_max"]);
+    let floor = float(&pb["h1_floor"]);
+    let off = 212.0 / 1069.0;
+    let block = int(&pb["h1_step0_block_k"]) as f64 / int(&pb["h1_step0_block_n"]) as f64;
+    let on = filter_residual_rate(off, block).unwrap();
+    assert!((float(&pb["h1_step0_on_rate"]) - on).abs() < 5e-4, "{on}");
+    let p_at_max = difference_pass_probability(n_max, off, n_max, on, floor, conf).unwrap();
+    assert!(
+        (float(&pb["h1_step0_power_at_n_max"]) - p_at_max).abs() < 5e-4,
+        "{p_at_max}"
+    );
+    let verdict = pb["h1_step0_verdict"].as_str().unwrap();
+    if p_at_max < power {
+        assert_eq!(verdict, "REJECT_UNDETECTABLE");
+        assert!(sample_size_for_difference_lower_bound_power(
+            off, on, floor, 1, conf, power, n_max
+        )
+        .is_err());
+        assert_eq!(
+            p["study"]["status"].as_str(),
+            Some("draft"),
+            "an undetectable H1 cannot be locked"
+        );
+    } else {
+        assert_eq!(verdict, "PROCEED");
+    }
+}
+
 #[test]
 fn h2_sample_sizes_match_rust_bounds() {
     let pb = &prereg()["power_and_bounds"];
@@ -158,6 +195,21 @@ fn python_prevention_bounds_json_matches_the_preregistration() {
     assert_eq!(
         h1["required_runs_per_arm"].as_u64(),
         Some(int(&pb["h1_required_runs_per_arm"]) as u64)
+    );
+    let st = &json["h1_step0"];
+    assert_eq!(
+        st["block_k"].as_u64(),
+        Some(int(&pb["h1_step0_block_k"]) as u64)
+    );
+    assert_eq!(
+        st["block_n"].as_u64(),
+        Some(int(&pb["h1_step0_block_n"]) as u64)
+    );
+    assert_eq!(st["verdict"].as_str(), pb["h1_step0_verdict"].as_str());
+    assert!((st["on_rate"].as_f64().unwrap() - float(&pb["h1_step0_on_rate"])).abs() < 5e-4);
+    assert!(
+        (st["power_at_n_max"].as_f64().unwrap() - float(&pb["h1_step0_power_at_n_max"])).abs()
+            < 5e-4
     );
     let h2 = &json["h2_cost"];
     assert_eq!(h2["rate"].as_f64(), pb["h2_rate"].as_float());

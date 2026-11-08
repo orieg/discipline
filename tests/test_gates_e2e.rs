@@ -1039,6 +1039,57 @@ fn parenthesised_expected_values_and_bounds_are_read_in_rust_go_and_js() {
     }
 }
 
+/// A Python expected value outside the assertion's own operands (#1039): a literal
+/// argument of a context-manager assertion, and a literal bound to a local name the
+/// assertion reads, changed is `expected-value-changed`. A local renamed, a local that is
+/// also an input, and the argument of `with open(..)` changed are not; a `match=` pattern
+/// loosened is reported once, as a widened expected exception.
+#[test]
+fn python_expected_values_in_context_managers_and_locals_are_compared() {
+    let codes = |base: &str, head: &str| -> Vec<String> {
+        let repo = Repo::new();
+        repo.write("src/__init__.py", "");
+        repo.write("src/calc.py", "def f(x):\n    return x\n");
+        let file = |body: &str| {
+            format!("import unittest\n\nimport pytest\n\nfrom src.calc import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n{body}")
+        };
+        repo.commit_base("tests/test_calc.py", &file(base), "test: f");
+        repo.write("tests/test_calc.py", &file(head));
+        repo.commit("test: change");
+        repo.check(&[])
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let changed = ["assertion-reduction/expected-value-changed"];
+    let queries = |n| format!("        with self.assertNumQueries({n}):\n            f(1)\n");
+    assert_eq!(codes(&queries(1), &queries(0)), changed);
+    let local = |v| format!("        expected = {v}\n        assert f(3) == expected\n");
+    assert_eq!(codes(&local(3), &local(4)), changed);
+    let message = |m| {
+        format!("        with self.assertRaisesMessage(ValueError, '{m}'):\n            f(1)\n")
+    };
+    assert_eq!(codes(&message("bad"), &message("good")), changed);
+    let raises =
+        |m| format!("        with pytest.raises(ValueError, match='{m}'):\n            f(1)\n");
+    assert_eq!(codes(&raises("bad input"), &raises("wrong input")), changed);
+    assert_eq!(
+        codes(&raises("bad input"), &raises("bad")),
+        ["assertion-reduction/expected-exception-widened"]
+    );
+
+    // Controls.
+    assert!(codes(&queries(1), &(queries(1) + "        # kept\n")).is_empty());
+    let renamed = "        want = 3\n        assert f(3) == want\n";
+    assert!(codes(&local(3), renamed).is_empty());
+    let input = |v| format!("        n = {v}\n        assert f(n) == n\n");
+    assert!(codes(&input(3), &input(4)).is_empty());
+    let opened =
+        |p| format!("        with open('{p}') as fh:\n            assert f(fh.name) == 'x'\n");
+    assert!(codes(&opened("a.txt"), &opened("b.txt")).is_empty());
+}
+
 /// A comparison operator moved the loose way inside an otherwise unchanged assertion
 /// (#934): the count, the class and the literal hold, so only the operator shows it.
 /// Each shape fails the run as `weakened-bound`; `allow-assertion-drop:` lifts it, and a

@@ -1365,6 +1365,15 @@ fn python_unittest_form(name: &str) -> Option<PythonForm> {
 
 /// Reads the callee of a call: `pytest.raises` on the module (`pytest`, `x.pytest`), a
 /// bare name the file imports from pytest (`bare`), or a unittest method on any receiver.
+/// Whether `func` is the callee of `pytest.raises(..)` or `pytest.warns(..)`, also bare
+/// when the file imports them from pytest.
+pub(super) fn is_pytest_raises_or_warns(func: Node, src: &str, bare: &PytestBare) -> bool {
+    matches!(
+        python_form(func, src, bare),
+        Some(PythonForm::Raises | PythonForm::Warns)
+    )
+}
+
 fn python_form(func: Node, src: &str, bare: &PytestBare) -> Option<PythonForm> {
     match func.kind() {
         "identifier" => {
