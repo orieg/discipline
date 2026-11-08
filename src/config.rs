@@ -1482,7 +1482,9 @@ pub struct PiiGate {
     /// A line matching any of these is not a violation.
     pub allow_patterns: Vec<String>,
     pub scan_pr_body: bool,
-    /// When true, scans only modified lines in the git diff rather than all tracked files.
+    /// When true (default), scans only the lines the change adds. `false` sweeps every
+    /// tracked file on every run, so findings already in the tree block each change;
+    /// `discipline baseline --whole-tree` lists those without changing the default.
     pub diff_only: bool,
     /// When true (default), flags references to personal agent configuration directories and playbooks.
     #[serde(default = "default_true")]
@@ -1515,7 +1517,7 @@ impl Default for PiiGate {
             extra_patterns: Vec::new(),
             allow_patterns: Vec::new(),
             scan_pr_body: true,
-            diff_only: false,
+            diff_only: true,
             agent_config_refs: true,
             agent_config_standard_paths: true,
         }
