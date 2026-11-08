@@ -2939,6 +2939,31 @@ const CASES: &[Case] = &[
         },
     ),
     (
+        "assertion-reduction: a Python context-manager assertion argument or a local literal edited is a changed expectation, a local that is also an input is not",
+        || {
+            use crate::ast::default_registry;
+            use crate::ast::expectations::changed;
+            let v = AssertVocabulary::default();
+            let reg = default_registry();
+            let pack = reg
+                .find_pack("tests/test_t.py")
+                .ok_or_else(|| anyhow::anyhow!("no python pack"))?;
+            let at = |body: String| -> anyhow::Result<Vec<crate::ast::expectations::Expectation>> {
+                let src = format!("def test_t(self):\n{body}");
+                Ok(pack.extract("tests/test_t.py", &src, &v)?.tests[0]
+                    .expectations
+                    .clone())
+            };
+            let queries = |n| at(format!("    with self.assertNumQueries({n}):\n        f()\n"));
+            let local = |n| at(format!("    expected = {n}\n    assert f(3) == expected\n"));
+            let input = |n| at(format!("    n = {n}\n    assert f(n) == n\n"));
+            Ok(changed(&queries("1")?, &queries("0")?).len() == 1
+                && changed(&local("3")?, &local("4")?).len() == 1
+                && changed(&local("3")?, &local("3")?).is_empty()
+                && input("3")?.is_empty())
+        },
+    ),
+    (
         "assertion-reduction: a Python or Rust expected failure widened to an ancestor or dropping a matcher is reported, a sibling exception is not",
         || {
             use crate::ast::default_registry;

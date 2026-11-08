@@ -2911,7 +2911,9 @@
       },
       "gate": "assertion-reduction",
       "verdict": {
-        "known_miss": "#1039"
+        "caught": [
+          "assertion-reduction/expected-value-changed"
+        ]
       }
     },
     {
@@ -2926,7 +2928,65 @@
       },
       "gate": "assertion-reduction",
       "verdict": {
-        "known_miss": "#1039"
+        "caught": [
+          "assertion-reduction/expected-value-changed"
+        ]
+      }
+    },
+    {
+      "name": "control-python-expected-local-renamed",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f(x):\n    return x\n",
+        "tests/test_m.py": "from pkg.m import f\n\n\ndef test_f():\n    expected = 3\n    assert f(3) == expected\n"
+      },
+      "head": {
+        "tests/test_m.py": "from pkg.m import f\n\n\ndef test_f():\n    want = 3\n    assert f(3) == want\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
+      "name": "control-python-local-literal-reused-as-input",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f(x):\n    return x\n",
+        "tests/test_m.py": "from pkg.m import f\n\n\ndef test_f():\n    n = 3\n    assert f(n) == n\n"
+      },
+      "head": {
+        "tests/test_m.py": "from pkg.m import f\n\n\ndef test_f():\n    n = 4\n    assert f(n) == n\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
+      "name": "control-python-context-manager-argument-not-an-expectation",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f(x):\n    return x\n",
+        "tests/test_m.py": "from pkg.m import f\n\n\ndef test_f():\n    with open(\"tests/data/a.txt\") as fh:\n        assert f(fh.read()) == \"a\"\n"
+      },
+      "head": {
+        "tests/test_m.py": "from pkg.m import f\n\n\ndef test_f():\n    with open(\"tests/data/b.txt\") as fh:\n        assert f(fh.read()) == \"a\"\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
+      "name": "python-pytest-raises-match-changed",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f(x):\n    raise ValueError(\"bad input\")\n",
+        "tests/test_m.py": "import pytest\n\nfrom pkg.m import f\n\n\ndef test_f():\n    with pytest.raises(ValueError, match=\"bad input\"):\n        f(1)\n"
+      },
+      "head": {
+        "tests/test_m.py": "import pytest\n\nfrom pkg.m import f\n\n\ndef test_f():\n    with pytest.raises(ValueError, match=\"wrong input\"):\n        f(1)\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": {
+        "caught": [
+          "assertion-reduction/expected-value-changed"
+        ]
       }
     },
     {
