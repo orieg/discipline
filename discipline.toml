@@ -112,9 +112,6 @@ require_agent_review = false
 [gates.pii]
 exempt_paths = ["tests/fixtures/**"]
 redact_lan_ips = true
-# This repository keeps the whole-tree sweep the default dropped in #1040: a leak anywhere
-# in a public tree fails every run until it is removed.
-diff_only = false
 
 # Path-filtered jobs are gated by detect-changes; ci-skip-set verifies at runtime
 # that every job in ci-gate's needs skipped if and only if its if: evaluated to false.
