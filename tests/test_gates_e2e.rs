@@ -17,7 +17,8 @@ fn clean_change_passes_and_reports_what_it_examined() {
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     let json = run.json();
     assert_eq!(json["errors"], 0);
-    assert!(run.outcome("pii")["examined"].as_u64().unwrap() >= 4);
+    // `pii` reads the files the change touches (`diff_only = true` by default, #1040).
+    assert_eq!(run.outcome("pii")["examined"].as_u64(), Some(1));
     assert!(json["planned_gates"].as_array().unwrap().is_empty());
 }
 
@@ -10388,7 +10389,7 @@ fn override_record_audit_trail_and_step_outputs() {
     ));
     assert!(
         run.stdout.contains(
-            "gates:  26 passed, 0 failed, 20 disabled, 1 not evaluated (67 items examined)"
+            "gates:  26 passed, 0 failed, 20 disabled, 1 not evaluated (63 items examined)"
         ),
         "{}",
         run.stdout
@@ -10404,13 +10405,13 @@ fn override_record_audit_trail_and_step_outputs() {
     );
     assert!(step_output.contains("status=pass"), "{step_output}");
     assert!(step_output.contains("passed_gates=26"), "{step_output}");
-    assert!(step_output.contains("examined_items=67"), "{step_output}");
+    assert!(step_output.contains("examined_items=63"), "{step_output}");
 
     // Check GITHUB_STEP_SUMMARY contents
     let step_summary = std::fs::read_to_string(&step_summary_file).unwrap();
     assert!(
         step_summary.contains(
-            "**Summary:** 26 passed, 0 failed, 20 disabled, 1 not evaluated (67 items examined)"
+            "**Summary:** 26 passed, 0 failed, 20 disabled, 1 not evaluated (63 items examined)"
         ),
         "{step_summary}"
     );
@@ -14727,11 +14728,21 @@ fn diff_only_mode_ignores_preexisting_findings_in_untouched_lines() {
     repo.write("src/new_code.rs", "pub fn answer() -> u32 { 42 }\n");
     repo.commit("feat: add answer");
 
-    // 1. In default sweep mode, both gates fail on pre-existing files
-    let sweep_run = repo.check(&["--base", "HEAD~1"]);
+    // 1. By default `pii` reads the change only (#1040); `time-estimates` sweeps the
+    //    tree and fails on the pre-existing file.
+    let default_run = repo.check(&["--base", "HEAD~1"]);
+    assert_eq!(default_run.titles("time-estimates").len(), 1);
+    assert_eq!(default_run.titles("pii").len(), 0, "{}", default_run.stdout);
+
+    // 1b. With `diff_only = false`, `pii` sweeps every tracked file and fails on it too.
+    let sweep_run = repo.check(&[
+        "--base",
+        "HEAD~1",
+        "--config-override",
+        "[gates.pii]\ndiff_only = false\n",
+    ]);
     assert_eq!(sweep_run.code, 1);
-    assert_eq!(sweep_run.titles("time-estimates").len(), 1);
-    assert_eq!(sweep_run.titles("pii").len(), 1);
+    assert_eq!(sweep_run.titles("pii").len(), 1, "{}", sweep_run.stdout);
 
     // 2. In diff_only mode, pre-existing files are not flagged
     let diff_run = repo.check(&[
@@ -15159,10 +15170,11 @@ fn pii_scans_test_functions_and_agent_config_refs() {
         ),
     );
     repo.commit("docs: reference personal agent config");
+    // Only the new reference: the escaped path committed above is outside this change.
     let run_agent_cfg = repo.check(&["--base", "HEAD~1"]);
     assert_eq!(
         run_agent_cfg.titles("pii").len(),
-        2,
+        1,
         "{}",
         run_agent_cfg.stdout
     );

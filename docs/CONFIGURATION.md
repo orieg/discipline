@@ -277,7 +277,7 @@ Discipline deserializes `discipline.toml` strictly: an unknown key, an unknown o
 | `gates.pii.agent_config_standard_paths` | boolean | `true` | With agent_config_refs: do not report a reference to an agent tool's home directory itself or to an entry the tool documents there (settings, hooks, skills, agents, commands, rules, plugins, MCP configuration, its instruction file); false reports every one |
 | `gates.pii.allow_patterns` | list | `[]` | Regex patterns exempted from rejection |
 | `gates.pii.allowed_users` | list | *(8 entries)* | Username tokens permitted inside home-directory paths |
-| `gates.pii.diff_only` | boolean | `false` | When true, scans only modified lines in the git diff rather than all tracked files |
+| `gates.pii.diff_only` | boolean | `true` | When true (default), scans only the lines the change adds; false sweeps every tracked file on every run |
 | `gates.pii.enabled` | boolean | `true` | Whether this gate is active |
 | `gates.pii.exempt_paths` | list | `[]` | File path globs exempted from this gate |
 | `gates.pii.extra_patterns` | list | `[]` | Additional regex patterns to reject |
@@ -1784,8 +1784,8 @@ discipline baseline --write --whole-tree
 
 Whole-tree mode measures against the empty tree, so every tracked file is in scope. That matters because two kinds of gate see a repository differently:
 
-- **Whole-tree gates** such as `pii` and `time-estimates` scan the tree regardless of the diff, so diff mode already reaches their pre-existing findings.
-- **Diff-scoped gates** such as `vacuous-tests`, `unsafe-safety-comment` and `provenance-tags` only look at what changed. On a clean branch the diff is empty, so diff mode records **none** of their pre-existing findings, and the gate cannot be enabled without first fixing everything it would report.
+- **Whole-tree gates** such as `time-estimates` (and `pii` with `diff_only = false`) scan the tree regardless of the diff, so diff mode already reaches their pre-existing findings.
+- **Diff-scoped gates** such as `pii` (by default, since #1040), `vacuous-tests`, `unsafe-safety-comment` and `provenance-tags` only look at what changed. On a clean branch the diff is empty, so diff mode records **none** of their pre-existing findings, and the gate cannot be enabled without first fixing everything it would report.
 
 A whole-tree baseline diffs against the empty tree, so every file is "added". Gates whose rule describes a change (`dependency-delta`, `ignored-tests`, `config-integrity`, `ci-integrity`, `build-hooks`, `error-swallowing`, `stub-bodies`, `suppression-delta`, and the other delta rules) are reported as not evaluated in that mode and record nothing: a dependency that exists is not debt. Rules describing a state (`pii`, `time-estimates`, `vacuous-tests`, `unsafe-safety-comment`, invisible characters) are recorded. A symlink is its target, enumerated once.
 

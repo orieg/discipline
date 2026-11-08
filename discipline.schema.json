@@ -1021,7 +1021,7 @@
           "description": "Username tokens permitted inside home-directory paths"
         },
         "diff_only": {
-          "description": "When true, scans only modified lines in the git diff rather than all tracked files",
+          "description": "When true (default), scans only the lines the change adds; false sweeps every tracked file on every run",
           "type": "boolean"
         },
         "enabled": {
