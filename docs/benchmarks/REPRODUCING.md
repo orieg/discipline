@@ -14,7 +14,7 @@ Adopting a gate is worth it when it blocks real problems (value), rarely blocks 
 |---|---|---|---|---|
 | Noise and value on real changes | `agent-pr-precision-v2` to `-v6` | Every blocking finding on merged coding-agent pull requests, labelled true or false positive by two blinded raters; precision per gate class, and the same for a naive twin | `docs/benchmarks/precision-preregistration*.toml` | `docs/benchmarks/results*/` |
 | Noise and value on a random sample | `agent-pr-precision-v7` | Block rate on randomly sampled merged agent pull requests, then labelled precision per gate | `docs/benchmarks/precision-preregistration-v7.toml` | not run yet |
-| Value on verified test gaming | `impossible-recall-v1` (#838) | Share of agent changes that pass impossible tests by editing the test side that discipline blocks (recall), against a line-regex twin; false alarms on honest solutions to the normal split | `docs/benchmarks/recall-preregistration.toml` | `docs/benchmarks/results-recall-pilot/` (pilot); confirmatory run in progress |
+| Value on verified test gaming | `impossible-recall-v1` (#838) | Share of agent changes that pass impossible tests by editing the test side that discipline blocks (recall), against a line-regex twin; false alarms on honest solutions to the normal split | `docs/benchmarks/recall-preregistration.toml` | `docs/benchmarks/results-recall-pilot/` (pilot); `docs/benchmarks/results-recall-confirmatory/` (verdict REJECTED with 0.26.0; a descriptive 0.31.0 replay beside it) |
 | Value on known regressions | `regression-value-v1` (#1024) | Share of reverted or fix-linked agent pull requests that discipline blocks with a finding in an implicated file, and its block rate on them against matched controls from the same repositories, beside a naive twin | `docs/benchmarks/regression-value-preregistration.toml` (draft) | not run yet |
 | Prevention in the agent's loop | `prevention-v1` (#1036) | Landed test-gaming rate on impossible tests with discipline refusing submissions in the agent's loop, against no gate and a test-path-lock twin; landed honest passes on the normal split as the cost | `docs/benchmarks/prevention-preregistration.toml` (draft) | not run yet |
 | Value on known evasions | evasion corpus | Each known way to weaken a test without tripping a gate, recorded as `caught` or `known_miss` | none (a regression suite) | `tests/fixtures/evasion_corpus.json`, checked by `tests/test_evasion_corpus.rs` |
@@ -171,7 +171,7 @@ python3 -I scripts/recall_replay.py --manifest out/manifest.json --strata out/st
 
 The counterfactual and replay commands are the ones the pilot ran. The `recall_pairs.py`
 command is assembled from its `--help`. `recall_pilot.py --check docs/benchmarks/results-recall-pilot`
-recomputes `pilot-values.json` from the committed pilot artifacts.
+recomputes `pilot-values.json` from the committed pilot artifacts. The confirmatory scoring ran the replay command with `--population confirmatory --required-n 120`: once with the frozen 0.26.0 binary (`replay.json.gz`, `replay-summary.json`, the verdict), and once with 0.31.0 and `--out out/replay-v0.31.0.json` (descriptive). Both outputs are in `docs/benchmarks/results-recall-confirmatory/`, with `replay*.json` gzipped.
 
 The confirmatory pairs are scored once, after their labels are frozen
 (`[integrity].sealed_rule`); a reproduction re-scores them, it does not rescore them with a
