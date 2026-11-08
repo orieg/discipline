@@ -4669,6 +4669,33 @@ const CASES: &[Case] = &[
     ),
     #[cfg(feature = "lang-python")]
     (
+        "assertion-reduction: an imported numpy testing assertion function is a check (#1038)",
+        || {
+            let path = "tests/test_m.py";
+            let numpy = |body: &str| {
+                format!("from numpy.testing import assert_allclose\n\n\ndef test_f():\n{body}")
+            };
+            let local = |body: &str| {
+                format!("def assert_allclose(a, b):\n    return a\n\n\ndef test_f():\n{body}")
+            };
+            let both = "    assert_allclose(f(3), 3)\n    assert_allclose(f(1), 1)\n";
+            let change = |form: &dyn Fn(&str) -> String, head: &str| {
+                helper_change(&[(path, &form(both), &form(head))], "")
+            };
+            Ok(
+                change(&numpy, "    assert_allclose(f(1), 1)\n")?
+                    == ["assertion-reduction/assertions-reduced"]
+                    && change(&numpy, "    assert_allclose(f(3), 4)\n    assert_allclose(f(1), 1)\n")?
+                        == ["assertion-reduction/expected-value-changed"]
+                    // Controls: the same edits to a helper of the file's own of that name.
+                    && change(&local, "    assert_allclose(f(1), 1)\n")?.is_empty()
+                    && change(&local, "    assert_allclose(f(3), 4)\n    assert_allclose(f(1), 1)\n")?
+                        .is_empty(),
+            )
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
         "deletion-rationale: a Python test hidden by a later def of its name is reported (#827)",
         || {
             use crate::ast::LanguagePack;

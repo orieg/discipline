@@ -309,8 +309,15 @@ const PY_EQ_CALLS: &[&str] = &[
 ];
 
 /// Python: `assert a == <literal>` / `!=` / `is` / `is not` (one comparison), the first two
-/// positional arguments of `assertEqual`-family calls, and `snapshot("...")` operands.
-pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
+/// positional arguments of `assertEqual`-family calls and of the comparing testing-library
+/// functions the file imports (`assert_allclose(f(3), 3)`, `super::testing_asserts`), and
+/// `snapshot("...")` operands.
+pub fn python(
+    root: Node,
+    src: &str,
+    tests: &mut [TestFn],
+    testing: &super::testing_asserts::TestingAsserts,
+) {
     if tests.is_empty() {
         return;
     }
@@ -351,7 +358,11 @@ pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
                 .rsplit('.')
                 .next()
                 .unwrap_or("");
-            if !PY_EQ_CALLS.contains(&leaf) {
+            let library = call
+                .child_by_field_name("function")
+                .and_then(|f| testing.function(f, src.as_bytes()))
+                .is_some_and(super::testing_asserts::compares);
+            if !PY_EQ_CALLS.contains(&leaf) && !library {
                 return true;
             }
             if let Some(args) = call.child_by_field_name("arguments") {
