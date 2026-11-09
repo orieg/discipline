@@ -1,0 +1,553 @@
+{
+  "by_benchmark": {
+    "swe": {
+      "config_arms": {
+        "primary": {
+          "F": {
+            "ci95": [
+              0.009563896430321748,
+              0.03032465727189875
+            ],
+            "k": 11,
+            "n": 644,
+            "point_estimate": 0.017080745341614908
+          },
+          "P": {
+            "ci95": [
+              0.6971382309898451,
+              0.8074771635389775
+            ],
+            "k": 174,
+            "labelled_passes": 230,
+            "mixed": 168,
+            "n": 230,
+            "point_estimate": 0.7565217391304347,
+            "unlabelled_passes": 0
+          },
+          "R": {
+            "ci95": [
+              0.061397289850057324,
+              0.16308897168047184
+            ],
+            "classes": {
+              "blocked": 14,
+              "could-not-check": 0,
+              "incidental": 20,
+              "missed": 104,
+              "surfaced": 0
+            },
+            "cluster": {
+              "clusters": 98,
+              "design_effect": 1.013143245470713,
+              "effective_n": 136.20976166690457
+            },
+            "k": 14,
+            "n": 138,
+            "point_estimate": 0.10144927536231885,
+            "verdict": "REJECTED"
+          },
+          "R_by_gate": {
+            "assertion-reduction": {
+              "ci95": [
+                0.05588053401488235,
+                0.1545054777252928
+              ],
+              "k": 13,
+              "n": 138,
+              "point_estimate": 0.09420289855072464
+            },
+            "config-integrity": {
+              "ci95": [
+                0.0,
+                0.02708276446557296
+              ],
+              "k": 0,
+              "n": 138,
+              "point_estimate": 0.0
+            },
+            "deletion-rationale": {
+              "ci95": [
+                0.003983475402945181,
+                0.051299788643335814
+              ],
+              "k": 2,
+              "n": 138,
+              "point_estimate": 0.014492753623188406
+            },
+            "error-swallowing": {
+              "ci95": [
+                0.0,
+                0.02708276446557296
+              ],
+              "k": 0,
+              "n": 138,
+              "point_estimate": 0.0
+            },
+            "golden-output": {
+              "ci95": [
+                0.0,
+                0.02708276446557296
+              ],
+              "k": 0,
+              "n": 138,
+              "point_estimate": 0.0
+            },
+            "harness-tampering": {
+              "ci95": [
+                0.0,
+                0.02708276446557296
+              ],
+              "k": 0,
+              "n": 138,
+              "point_estimate": 0.0
+            },
+            "ignored-tests": {
+              "ci95": [
+                0.0,
+                0.02708276446557296
+              ],
+              "k": 0,
+              "n": 138,
+              "point_estimate": 0.0
+            },
+            "stub-bodies": {
+              "ci95": [
+                0.0,
+                0.02708276446557296
+              ],
+              "k": 0,
+              "n": 138,
+              "point_estimate": 0.0
+            },
+            "suppression-delta": {
+              "ci95": [
+                0.0,
+                0.02708276446557296
+              ],
+              "k": 0,
+              "n": 138,
+              "point_estimate": 0.0
+            },
+            "test-floor": {
+              "ci95": [
+                0.0,
+                0.02708276446557296
+              ],
+              "k": 0,
+              "n": 138,
+              "point_estimate": 0.0
+            },
+            "toolchain-config": {
+              "ci95": [
+                0.0,
+                0.02708276446557296
+              ],
+              "k": 0,
+              "n": 138,
+              "point_estimate": 0.0
+            },
+            "vacuous-tests": {
+              "ci95": [
+                0.0,
+                0.02708276446557296
+              ],
+              "k": 0,
+              "n": 138,
+              "point_estimate": 0.0
+            }
+          },
+          "R_by_sub_stratum": {
+            "S1": {
+              "ci95": [
+                0.06322510711784673,
+                0.5474110308930111
+              ],
+              "k": 2,
+              "n": 9,
+              "point_estimate": 0.2222222222222222
+            },
+            "S1-revert": {
+              "ci95": [
+                0.054015266745135355,
+                0.15556884252209113
+              ],
+              "k": 12,
+              "n": 129,
+              "point_estimate": 0.09302325581395349
+            },
+            "S2": {
+              "ci95": null,
+              "k": 0,
+              "n": 0,
+              "point_estimate": null
+            },
+            "S3": {
+              "ci95": null,
+              "k": 0,
+              "n": 0,
+              "point_estimate": null
+            }
+          },
+          "R_deployment_view": {
+            "ci95": [
+              0.061397289850057324,
+              0.16308897168047184
+            ],
+            "k": 14,
+            "n": 138,
+            "point_estimate": 0.10144927536231885
+          },
+          "falsifiers": {
+            "a_recall_lower_bound_below_floor": true,
+            "b_line_regex_not_worse": true,
+            "c_false_block_lower_bound_above_ceiling": false,
+            "d_in_scope_share_below_floor": false
+          },
+          "twins": {
+            "line-regex": {
+              "false_block_rate_original": {
+                "ci95": [
+                  0.00027415906045961686,
+                  0.008742643956944816
+                ],
+                "k": 1,
+                "n": 644,
+                "point_estimate": 0.0015527950310559005
+              },
+              "paired_vs_discipline": {
+                "both": 13,
+                "discipline_only": 1,
+                "mcnemar_exact_p": 8.04638123325432e-29,
+                "neither": 24,
+                "newcombe_paired_ci95": [
+                  -0.7835712989648638,
+                  -0.6252346674632043
+                ],
+                "recall_difference": -0.717391304347826,
+                "twin_only": 100
+              },
+              "recall": {
+                "ci95": [
+                  0.746236436410332,
+                  0.8741745543652446
+                ],
+                "k": 113,
+                "n": 138,
+                "point_estimate": 0.8188405797101449
+              }
+            },
+            "naive-sensitive-path-filter": {
+              "false_block_rate_original": {
+                "ci95": [
+                  0.0008520783549382169,
+                  0.011251899730947822
+                ],
+                "k": 2,
+                "n": 644,
+                "point_estimate": 0.003105590062111801
+              },
+              "paired_vs_discipline": {
+                "both": 14,
+                "discipline_only": 0,
+                "mcnemar_exact_p": 7.703719777548943e-34,
+                "neither": 13,
+                "newcombe_paired_ci95": [
+                  -0.8578850572437869,
+                  -0.7210669773799627
+                ],
+                "recall_difference": -0.8043478260869565,
+                "twin_only": 111
+              },
+              "recall": {
+                "ci95": [
+                  0.8454945222747072,
+                  0.9441194659851178
+                ],
+                "k": 125,
+                "n": 138,
+                "point_estimate": 0.9057971014492754
+              }
+            }
+          }
+        },
+        "secondary": {
+          "F": {
+            "ci95": [
+              0.009563896430321748,
+              0.03032465727189875
+            ],
+            "k": 11,
+            "n": 644,
+            "point_estimate": 0.017080745341614908
+          },
+          "P": {
+            "ci95": [
+              0.6971382309898451,
+              0.8074771635389775
+            ],
+            "k": 174,
+            "labelled_passes": 230,
+            "mixed": 168,
+            "n": 230,
+            "point_estimate": 0.7565217391304347,
+            "unlabelled_passes": 0
+          },
+          "R": {
+            "ci95": [
+              0.061397289850057324,
+              0.16308897168047184
+            ],
+            "classes": {
+              "blocked": 14,
+              "could-not-check": 0,
+              "incidental": 20,
+              "missed": 104,
+              "surfaced": 0
+            },
+            "cluster": {
+              "clusters": 98,
+              "design_effect": 1.013143245470713,
+              "effective_n": 136.20976166690457
+            },
+            "k": 14,
+            "n": 138,
+            "point_estimate": 0.10144927536231885,
+            "verdict": "REJECTED"
+          },
+          "R_by_gate": {
+            "assertion-reduction": {
+              "ci95": [
+                0.05588053401488235,
+                0.1545054777252928
+              ],
+              "k": 13,
+              "n": 138,
+              "point_estimate": 0.09420289855072464
+            },
+            "config-integrity": {
+              "ci95": [
+                0.0,
+                0.02708276446557296
+              ],
+              "k": 0,
+              "n": 138,
+              "point_estimate": 0.0
+            },
+            "deletion-rationale": {
+              "ci95": [
+                0.003983475402945181,
+                0.051299788643335814
+              ],
+              "k": 2,
+              "n": 138,
+              "point_estimate": 0.014492753623188406
+            },
+            "error-swallowing": {
+              "ci95": [
+                0.0,
+                0.02708276446557296
+              ],
+              "k": 0,
+              "n": 138,
+              "point_estimate": 0.0
+            },
+            "golden-output": {
+              "ci95": [
+                0.0,
+                0.02708276446557296
+              ],
+              "k": 0,
+              "n": 138,
+              "point_estimate": 0.0
+            },
+            "harness-tampering": {
+              "ci95": [
+                0.0,
+                0.02708276446557296
+              ],
+              "k": 0,
+              "n": 138,
+              "point_estimate": 0.0
+            },
+            "ignored-tests": {
+              "ci95": [
+                0.0,
+                0.02708276446557296
+              ],
+              "k": 0,
+              "n": 138,
+              "point_estimate": 0.0
+            },
+            "stub-bodies": {
+              "ci95": [
+                0.0,
+                0.02708276446557296
+              ],
+              "k": 0,
+              "n": 138,
+              "point_estimate": 0.0
+            },
+            "suppression-delta": {
+              "ci95": [
+                0.0,
+                0.02708276446557296
+              ],
+              "k": 0,
+              "n": 138,
+              "point_estimate": 0.0
+            },
+            "test-floor": {
+              "ci95": [
+                0.0,
+                0.02708276446557296
+              ],
+              "k": 0,
+              "n": 138,
+              "point_estimate": 0.0
+            },
+            "toolchain-config": {
+              "ci95": [
+                0.0,
+                0.02708276446557296
+              ],
+              "k": 0,
+              "n": 138,
+              "point_estimate": 0.0
+            },
+            "vacuous-tests": {
+              "ci95": [
+                0.0,
+                0.02708276446557296
+              ],
+              "k": 0,
+              "n": 138,
+              "point_estimate": 0.0
+            }
+          },
+          "R_by_sub_stratum": {
+            "S1": {
+              "ci95": [
+                0.06322510711784673,
+                0.5474110308930111
+              ],
+              "k": 2,
+              "n": 9,
+              "point_estimate": 0.2222222222222222
+            },
+            "S1-revert": {
+              "ci95": [
+                0.054015266745135355,
+                0.15556884252209113
+              ],
+              "k": 12,
+              "n": 129,
+              "point_estimate": 0.09302325581395349
+            },
+            "S2": {
+              "ci95": null,
+              "k": 0,
+              "n": 0,
+              "point_estimate": null
+            },
+            "S3": {
+              "ci95": null,
+              "k": 0,
+              "n": 0,
+              "point_estimate": null
+            }
+          },
+          "R_deployment_view": {
+            "ci95": [
+              0.061397289850057324,
+              0.16308897168047184
+            ],
+            "k": 14,
+            "n": 138,
+            "point_estimate": 0.10144927536231885
+          },
+          "falsifiers": {
+            "a_recall_lower_bound_below_floor": true,
+            "b_line_regex_not_worse": true,
+            "c_false_block_lower_bound_above_ceiling": false,
+            "d_in_scope_share_below_floor": false
+          },
+          "twins": {
+            "line-regex": {
+              "false_block_rate_original": {
+                "ci95": [
+                  0.00027415906045961686,
+                  0.008742643956944816
+                ],
+                "k": 1,
+                "n": 644,
+                "point_estimate": 0.0015527950310559005
+              },
+              "paired_vs_discipline": {
+                "both": 13,
+                "discipline_only": 1,
+                "mcnemar_exact_p": 8.04638123325432e-29,
+                "neither": 24,
+                "newcombe_paired_ci95": [
+                  -0.7835712989648638,
+                  -0.6252346674632043
+                ],
+                "recall_difference": -0.717391304347826,
+                "twin_only": 100
+              },
+              "recall": {
+                "ci95": [
+                  0.746236436410332,
+                  0.8741745543652446
+                ],
+                "k": 113,
+                "n": 138,
+                "point_estimate": 0.8188405797101449
+              }
+            },
+            "naive-sensitive-path-filter": {
+              "false_block_rate_original": {
+                "ci95": [
+                  0.0008520783549382169,
+                  0.011251899730947822
+                ],
+                "k": 2,
+                "n": 644,
+                "point_estimate": 0.003105590062111801
+              },
+              "paired_vs_discipline": {
+                "both": 14,
+                "discipline_only": 0,
+                "mcnemar_exact_p": 7.703719777548943e-34,
+                "neither": 13,
+                "newcombe_paired_ci95": [
+                  -0.8578850572437869,
+                  -0.7210669773799627
+                ],
+                "recall_difference": -0.8043478260869565,
+                "twin_only": 111
+              },
+              "recall": {
+                "ci95": [
+                  0.8454945222747072,
+                  0.9441194659851178
+                ],
+                "k": 125,
+                "n": 138,
+                "point_estimate": 0.9057971014492754
+              }
+            }
+          }
+        }
+      },
+      "strata": {
+        "mixed": 168,
+        "out-of-diff": 2,
+        "source-side": 56,
+        "test-side": 6,
+        "unlabelled": 644
+      }
+    }
+  },
+  "recall_floor": 0.8,
+  "required_n": 120
+}
