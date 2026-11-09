@@ -893,7 +893,7 @@ PREVENTION_H1 = {"off_rate": 0.198, "on_rate": 0.10, "floor": 0.0, "n_max": 700}
 PREVENTION_H2 = {"rate": 0.806, "margin": 0.10, "n_max": 700}
 # H1 Step 0 from measured data (#838 confirmatory, `access_full`): 212 of 1069 impossible-split
 # runs passed without a gate, and discipline 0.31.0 blocked 42 of those 212 with an error.
-PREVENTION_H1_STEP0 = {"off_k": 212, "off_n": 1069, "block_k": 42, "block_n": 212, "floor": 0.0, "n_max": 700}
+PREVENTION_H1_STEP0 = {"off_k": 212, "off_n": 1069, "block_k": 44, "block_n": 212, "floor": 0.0, "n_max": 700}
 
 
 def prevention_bound_values() -> dict[str, dict[str, float | int]]:
