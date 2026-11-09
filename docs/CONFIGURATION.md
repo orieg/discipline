@@ -2107,6 +2107,124 @@ reason = "instruction files are a mirror set"
 
 A deleted path fires a rule but never meets one, and without `require_all` a path is not its own companion: the firing file alone does not meet a rule whose two sets overlap. A justified exception names the rule's first `require_edits_to` entry, `allow-companion-edit: docs/security-threat-model.md <reason>`, and counts against `max_overrides`. The gate reads only the list of changed paths, so it needs no network and no pull-request payload. Full semantics: [`companion-edit`](GATES.md#companion-edit).
 
+### Base Tests Against Head Code (`command`, `base-tests` preset)
+
+The diff gates read what a change does to its tests. The `base-tests` preset runs them: it puts the test files as they were before the change over the code as it is after it, runs the suite, and reports each test that fails (`command/base-test-failed`). A test that fails there pinned a behaviour the change altered. That covers edits the diff gates cannot pair, such as a test whose input or setup data was edited to agree with new code, and a source change that breaks a test the change left alone. Full semantics: [`command`](GATES.md#command).
+
+**When to turn it on.** When the existing tests are the contract a change has to keep: agent-written changes, a library's public behaviour, a service whose tests encode its API. It is opt-in and runs the suite once more for each change.
+
+**Adding it.** The command is executed, so a change cannot introduce it: a pull request whose own `discipline.toml` adds or alters `[gates.command]` is refused (`command/untrusted-command-modification`) and runs nothing. Either land the configuration on the default branch first, or authorise the one run with `DISCIPLINE_ALLOW_COMMAND_CHANGE=1` in the runner's environment, which the change under review cannot set ([`command`](GATES.md#command)).
+
+**What it costs and what it misses.**
+
+- **An intended behaviour change needs a reason.** A change that alters behaviour on purpose and updates the test fails until the commit message or PR body carries `allow-behavior-change: <test> <reason>`. The test is named by its JUnit name or id (`test_add`, `TestAdd`, `add`). If the test edit also rewrites an expected value, `assertion-reduction` reports that separately and needs `allow-assertion-drop: <test> <reason>`.
+- **It runs in a copy of the tracked files.** The copy is in a temporary directory and holds the files git tracks, so an untracked `node_modules/`, a `.venv/` inside the repository or `target/` is not there. Install dependencies outside the repository (the job's Python environment, the Go module cache), or in the command itself (the Jest example). The environment is passed through, so `CARGO_TARGET_DIR` can point a Rust run at a shared build cache.
+- **It covers the test files it can name.** These are files under a `tests/`, `test/` or `__tests__/` directory and files named as tests (`*_test.py`, `*_test.go`, `*.test.js`, `*Test.java`, ..., listed in [`command`](GATES.md#command)), plus the `[tests] paths` globs. A pytest file named `test_*.py` next to the code, or a Django app's `tests.py`, is not one of them: name it in `[tests] paths`, or its tests run at their new version and the gate only notes it. Rust `#[cfg(test)]` modules in `src/` always run at their new version.
+- **It does not protect tests the change adds.** They are removed from the copy, since there is no earlier version to hold the code to.
+- **It cannot see a source change that keeps the old tests passing.** A function that special-cases the tested inputs passes its old tests.
+- **A flaky test shows up as a failure.** It fails here as it does in any run.
+- **It needs a JUnit report.** It reads JUnit XML from the command's output, or from one `*.xml` file the command leaves at the top of its working directory. A command that reports no test case is `command/base-tests-no-cases`, and a runner that is not installed stops the run (exit 2).
+
+**Runner examples.** Each one was run against a small repository: an unchanged test passes, a change that alters the code and edits the test to agree is reported, and the directive lifts it.
+
+Rust: the default command needs no `command` key (`cargo test` with libtest's JUnit output).
+
+```toml
+[gates.command]
+enabled = true
+preset = "base-tests"
+timeout_seconds = 1800
+```
+
+Python, pytest (tests under `tests/`, or named in `[tests] paths`):
+
+```toml
+[tests]
+paths = ["**/test_*.py"] # only for test files outside a tests/ directory
+
+[gates.command]
+enabled = true
+preset = "base-tests"
+command = "python -m pytest -q -p no:cacheprovider --junitxml=junit.xml"
+timeout_seconds = 900
+```
+
+Django, with pytest-django (`DJANGO_SETTINGS_MODULE` set in `pytest.ini`):
+
+```toml
+[tests]
+paths = ["*/tests.py"]
+
+[gates.command]
+enabled = true
+preset = "base-tests"
+command = "python -m pytest -q -p no:cacheprovider --junitxml=junit.xml"
+timeout_seconds = 900
+```
+
+Django, with `manage.py test`: `unittest-xml-reporting` writes the report where the preset reads it when `settings.py` has
+
+```python
+TEST_RUNNER = "xmlrunner.extra.djangotestrunner.XMLTestRunner"
+TEST_OUTPUT_DIR = "."
+TEST_OUTPUT_FILE_NAME = "junit.xml"
+```
+
+and the command is `command = "python manage.py test"`.
+
+JavaScript or TypeScript, Jest with `jest-junit` as a dev dependency. The copy has no `node_modules/`, so the command installs from the committed lock file first:
+
+```toml
+[gates.command]
+enabled = true
+preset = "base-tests"
+command = "sh -c 'npm ci --no-audit --no-fund --silent && npx jest --ci --reporters=default --reporters=jest-junit'"
+timeout_seconds = 900
+```
+
+Go, with [gotestsum](https://github.com/gotestyourself/gotestsum) installed on the runner (v1.13.0; v1.12.0 does not build with Go 1.25):
+
+```toml
+[gates.command]
+enabled = true
+preset = "base-tests"
+command = "gotestsum --junitfile junit.xml ./..."
+timeout_seconds = 900
+```
+
+Keep the report out of the repository (`junit.xml` in `.gitignore`): a committed top-level `*.xml` file is never read as the report.
+
+**In CI.** The test dependencies have to be installed before discipline runs, on the same runner. For a pytest project on GitHub Actions:
+
+```yaml
+jobs:
+  discipline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # merge base must be reachable
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - uses: orieg/discipline@<commit-sha> # v0.31.0
+```
+
+**A reported failure** names the test and the runner's message:
+
+```text
+error [command] Base Test Failed Against Head Code
+   Base test `tests.test_calc::test_add` failed when executed against head code: assert 5 == 4
+   Remediation: Restore expected behavior or excuse intentional behavior change with `allow-behavior-change: test_add <reason>`.
+```
+
+If the behaviour change is intended, add the reason on its own line of the commit message or PR body:
+
+```text
+allow-behavior-change: test_add add now rounds up by design (#1234)
+```
+
 ### Polyglot Monorepo: Rust Core + TypeScript Frontend + Python Tooling
 
 In a repository containing multiple language stacks (e.g. `crates/` for Rust services, `apps/web/` for Next.js TypeScript frontend, and `scripts/` for Python data pipelines):
