@@ -11,6 +11,12 @@
 //! more.
 //!
 //! Read for Python `assert` statements and Go `if` conditions whose block fails the test.
+//!
+//! The polarity of a Python assertion is recorded the same way (#1049): the method of a
+//! `self.assert*` call that has a negated twin (`assertTrue` / `assertFalse`, `assertIs` /
+//! `assertIsNot`, `assertIn` / `assertNotIn`, ..) with the method name as the operator, and
+//! a bare `assert x` / `assert not x` with `assert` / `assert not` as the operator. A pair
+//! whose polarity was inverted checks the outcome the test was written to reject.
 
 use super::ancestry::count;
 use super::bounds::{numeric, text, walk, GoFailures, Record, Records};
@@ -42,6 +48,8 @@ pub struct Weakened {
     pub from: String,
     pub to: String,
     pub fails_when_true: bool,
+    /// The assertion's polarity was inverted (#1049): it now checks the other outcome.
+    pub inverted: bool,
 }
 
 impl Record for Comparison {
@@ -113,17 +121,103 @@ fn py_literal(n: Node) -> bool {
     }
 }
 
+/// The family of a Python assertion's polarity and whether it is the negated one: `None`
+/// for an operator that has no negated twin.
+fn polarity(operator: &str) -> Option<(&'static str, bool)> {
+    Some(match operator {
+        "assert" => ("assert", false),
+        "assert not" => ("assert", true),
+        "assertTrue" => ("true", false),
+        "assertFalse" => ("true", true),
+        "assertIs" => ("is", false),
+        "assertIsNot" => ("is", true),
+        "assertIsNone" => ("none", false),
+        "assertIsNotNone" => ("none", true),
+        "assertEqual" | "assertEquals" => ("equal", false),
+        "assertNotEqual" | "assertNotEquals" => ("equal", true),
+        "assertAlmostEqual" | "assertAlmostEquals" => ("almost", false),
+        "assertNotAlmostEqual" | "assertNotAlmostEquals" => ("almost", true),
+        "assertIn" => ("in", false),
+        "assertNotIn" => ("in", true),
+        "assertIsInstance" => ("instance", false),
+        "assertNotIsInstance" => ("instance", true),
+        "assertRegex" | "assertRegexpMatches" => ("regex", false),
+        "assertNotRegex" | "assertNotRegexpMatches" => ("regex", true),
+        _ => return None,
+    })
+}
+
+/// Python: the polarity of a `self.assert*(..)` call statement whose method has a
+/// negated twin, the method name masked.
+fn py_method_polarity(records: &mut Records<Comparison>, statement: Node, src: &str) {
+    let Some(method) = statement
+        .named_child(0)
+        .filter(|c| c.kind() == "call")
+        .and_then(|c| c.child_by_field_name("function"))
+        .filter(|f| f.kind() == "attribute")
+        .filter(|f| {
+            f.child_by_field_name("object")
+                .is_some_and(|o| text(o, src) == "self")
+        })
+        .and_then(|f| f.child_by_field_name("attribute"))
+    else {
+        return;
+    };
+    let name = text(method, src);
+    if polarity(name).is_none() {
+        return;
+    }
+    records.add(Comparison {
+        line: method.start_position().row + 1,
+        skeleton: skeleton(statement, &mut [(method, '@')], src),
+        operator: name.to_string(),
+        literal: None,
+        fails_when_true: false,
+    });
+}
+
+/// Python: the polarity of an `assert` statement, `assert x` or `assert not x`. The
+/// skeleton is the condition without its `not` and parentheses, then the message.
+fn py_assert_polarity(records: &mut Records<Comparison>, statement: Node, src: &str) {
+    let Some(cond) = statement.named_child(0) else {
+        return;
+    };
+    let bare = unparenthesized(cond);
+    let (operator, checked) = match bare.kind() {
+        "not_operator" => match bare.child_by_field_name("argument") {
+            Some(a) => ("assert not", unparenthesized(a)),
+            None => return,
+        },
+        _ => ("assert", bare),
+    };
+    let rest = src.get(cond.end_byte()..statement.end_byte()).unwrap_or("");
+    count(rest.len() + checked.end_byte().saturating_sub(checked.start_byte()));
+    let written = format!("assert @ {} {rest}", text(checked, src));
+    records.add(Comparison {
+        line: statement.start_position().row + 1,
+        skeleton: written.split_whitespace().collect::<Vec<_>>().join(" "),
+        operator: operator.to_string(),
+        literal: None,
+        fails_when_true: false,
+    });
+}
+
 /// Python: each comparison of an `assert` statement, a chained one (`0 < x <= 5`)
-/// read operator by operator.
+/// read operator by operator, and the polarity of each assertion ([`polarity`]).
 pub fn python(root: Node, src: &str, tests: &mut [TestFn]) {
     if tests.is_empty() {
         return;
     }
     let records = &mut Records::new(tests, src);
     walk(root, &mut |node| {
+        if node.kind() == "expression_statement" {
+            py_method_polarity(records, node, src);
+            return true;
+        }
         if node.kind() != "assert_statement" {
             return true;
         }
+        py_assert_polarity(records, node, src);
         walk(node, &mut |n| {
             if n.kind() == "comparison_operator" {
                 let mut cursor = n.walk();
@@ -304,6 +398,18 @@ pub fn weakened(base: &[Comparison], head: &[Comparison]) -> Vec<Weakened> {
             continue;
         };
         let b = &base[at];
+        if let (Some((bf, bn)), Some((hf, hn))) = (polarity(&b.operator), polarity(&h.operator)) {
+            if bf == hf && bn != hn {
+                out.push(Weakened {
+                    line: h.line,
+                    from: b.operator.clone(),
+                    to: h.operator.clone(),
+                    fails_when_true: false,
+                    inverted: true,
+                });
+            }
+            continue;
+        }
         let (Some(bp), Some(hp)) = (
             passing(&b.operator, b.fails_when_true),
             passing(&h.operator, h.fails_when_true),
@@ -316,6 +422,7 @@ pub fn weakened(base: &[Comparison], head: &[Comparison]) -> Vec<Weakened> {
                 from: b.operator.clone(),
                 to: h.operator.clone(),
                 fails_when_true: h.fails_when_true,
+                inverted: false,
             });
         }
     }
@@ -377,15 +484,103 @@ mod tests {
         assert_eq!(
             read,
             vec![
+                ("assert", None, "assert @ 0 < f(rows) <= 5"),
                 ("<", Some("0"), "assert # @ f(rows) <= 5"),
                 ("<=", Some("5"), "assert 0 < f(rows) @ #"),
             ]
         );
         let member = py("assert \"a\" not in rows");
-        assert_eq!(member.len(), 1);
-        assert_eq!(member[0].operator, "not in");
-        assert_eq!(member[0].skeleton, "assert # @ rows");
-        assert!(!member[0].fails_when_true);
+        assert_eq!(member.len(), 2);
+        assert_eq!(member[1].operator, "not in");
+        assert_eq!(member[1].skeleton, "assert # @ rows");
+        assert!(!member[1].fails_when_true);
+    }
+
+    /// #1049: an inverted `self.assert*` method or a `not` added to or taken from a bare
+    /// `assert` is reported; a method with no negated twin, a different family, another
+    /// object than `self`, and an assertion whose operands changed too are not.
+    #[test]
+    fn python_assertions_with_inverted_polarity_are_reported() {
+        let inverted = |base: &str, head: &str| {
+            weakened(&py(base), &py(head))
+                .into_iter()
+                .map(|w| (w.from, w.to, w.inverted))
+                .collect::<Vec<_>>()
+        };
+        for (base, head, from, to) in [
+            (
+                "self.assertFalse(issubclass(int, str))",
+                "self.assertTrue(issubclass(int, str))",
+                "assertFalse",
+                "assertTrue",
+            ),
+            (
+                "self.assertIs(f(rows), rows)",
+                "self.assertIsNot(f(rows), rows)",
+                "assertIs",
+                "assertIsNot",
+            ),
+            (
+                "self.assertIsNotNone(f(rows))",
+                "self.assertIsNone(f(rows))",
+                "assertIsNotNone",
+                "assertIsNone",
+            ),
+            (
+                "self.assertEquals(f(rows), 1)",
+                "self.assertNotEqual(f(rows), 1)",
+                "assertEquals",
+                "assertNotEqual",
+            ),
+            (
+                "self.assertIn(1, rows)",
+                "self.assertNotIn(1, rows)",
+                "assertIn",
+                "assertNotIn",
+            ),
+            (
+                "self.assertIsInstance(rows, list)",
+                "self.assertNotIsInstance(rows, list)",
+                "assertIsInstance",
+                "assertNotIsInstance",
+            ),
+            (
+                "assert f(rows)",
+                "assert not f(rows)",
+                "assert",
+                "assert not",
+            ),
+            (
+                "assert not (f(rows)), 'msg'",
+                "assert f(rows), 'msg'",
+                "assert not",
+                "assert",
+            ),
+        ] {
+            assert_eq!(
+                inverted(base, head),
+                vec![(from.to_string(), to.to_string(), true)],
+                "{base} -> {head}"
+            );
+            assert!(inverted(base, base).is_empty(), "{base}");
+        }
+        for (base, head) in [
+            // Another family, or a method with no negated twin.
+            ("self.assertTrue(f(rows))", "self.assertIsNotNone(f(rows))"),
+            (
+                "self.assertGreater(f(rows), 1)",
+                "self.assertLess(f(rows), 1)",
+            ),
+            // Not `self`.
+            ("other.assertTrue(f(rows))", "other.assertFalse(f(rows))"),
+            // The checked value changed as well.
+            ("self.assertTrue(f(rows))", "self.assertFalse(g(rows))"),
+            ("assert f(rows)", "assert not g(rows)"),
+            // `is` / `is not` is the operand's comparison, not the assertion's polarity.
+            ("assert f(rows) is None", "assert f(rows) is not None"),
+        ] {
+            assert!(inverted(base, head).is_empty(), "{base} -> {head}");
+        }
     }
 
     #[test]

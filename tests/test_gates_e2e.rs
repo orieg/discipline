@@ -1090,6 +1090,59 @@ fn python_expected_values_in_context_managers_and_locals_are_compared() {
     assert!(codes(&opened("a.txt"), &opened("b.txt")).is_empty());
 }
 
+/// A Python assertion whose polarity is inverted in an existing test (#1049): a
+/// `self.assert*` method swapped for its negated twin, or `not` added to or taken from a
+/// bare `assert`, fails the run. The same edit to a method of another family, or with the
+/// checked value changed as well, does not report a polarity change.
+#[test]
+fn python_assertions_with_inverted_polarity_fail_the_run() {
+    let codes = |base: &str, head: &str| -> Vec<String> {
+        let repo = Repo::new();
+        repo.write("src/__init__.py", "");
+        repo.write("src/calc.py", "def f():\n    return [1, 2, 3]\n");
+        let file = |body: &str| {
+            format!("import unittest\n\nfrom src.calc import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        {body}\n")
+        };
+        repo.commit_base("tests/test_calc.py", &file(base), "test: f");
+        repo.write("tests/test_calc.py", &file(head));
+        repo.commit("test: change");
+        repo.check(&[])
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let inverted = ["assertion-reduction/weakened-bound"];
+    for (base, head) in [
+        (
+            "self.assertFalse(issubclass(int, str))",
+            "self.assertTrue(issubclass(int, str))",
+        ),
+        ("self.assertIs(f(), f())", "self.assertIsNot(f(), f())"),
+        ("self.assertIsNotNone(f())", "self.assertIsNone(f())"),
+        ("self.assertIn(1, f())", "self.assertNotIn(1, f())"),
+        ("assert f()", "assert not f()"),
+    ] {
+        assert_eq!(codes(base, head), inverted, "{base} -> {head}");
+        assert!(
+            codes(base, &format!("{base}\n        # kept")).is_empty(),
+            "{base}"
+        );
+    }
+    for (base, head) in [
+        (
+            "self.assertGreater(len(f()), 1)",
+            "self.assertLess(len(f()), 1)",
+        ),
+        ("self.assertTrue(f())", "self.assertFalse(list(f()))"),
+    ] {
+        assert!(
+            !codes(base, head).contains(&inverted[0].to_string()),
+            "{base} -> {head}"
+        );
+    }
+}
+
 /// A comparison operator moved the loose way inside an otherwise unchanged assertion
 /// (#934): the count, the class and the literal hold, so only the operator shows it.
 /// Each shape fails the run as `weakened-bound`; `allow-assertion-drop:` lifts it, and a

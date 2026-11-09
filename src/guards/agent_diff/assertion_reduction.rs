@@ -1009,7 +1009,12 @@ fn report_weakened_bounds(
         // The line and the two operators only: operators are a closed set, the rest of
         // the assertion is the change's own text and is not echoed into a report agents
         // read.
-        let message = if w.fails_when_true {
+        let message = if w.inverted {
+            format!(
+                "{test_label}: the assertion on line {} inverted its check from `{}` to `{}`, so it passes on the results it was written to reject.",
+                w.line, w.from, w.to
+            )
+        } else if w.fails_when_true {
             format!(
                 "{test_label}: the failure condition on line {} changed its comparison from `{}` to `{}`, so the test fails on fewer results.",
                 w.line, w.from, w.to
