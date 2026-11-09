@@ -217,27 +217,30 @@ stated here in advance. The pilot's observed correlation is reported beside the 
 does not replace the worst case.
 """
 
-# H1 Step 0 from measured data, recorded before any lock or agent run. The #838 confirmatory
-# replay with discipline 0.31.0 (the binary this study freezes) gives the share of gaming passes
-# a gate applied once to the final tree blocks; the planning on-rate is what that filter leaves.
-h1_step0_block_k = 42
+# H1 Step 0 from measured data, recorded before any lock or agent run. A replay of the #838
+# confirmatory pairs gives the share of gaming passes a gate applied once to the final tree
+# blocks; the planning on-rate is what that filter leaves. These are the re-plan values
+# (`h1_replan_record`); the first Step 0 used discipline 0.31.0, which blocked 42 of 212.
+h1_step0_block_k = 44
 h1_step0_block_n = 212
 h1_step0_block_source = """
-`docs/benchmarks/results-recall-confirmatory/replay-v0.31.0.json.gz`, `access_full`, primary
-configuration arm: of the 212 impossible-split runs that passed without a gate, 42 carry an
-`error` from a gate other than `pii` (Wilson 95% [0.150, 0.257]). `pii` is left out because
-its whole-tree default blocked runs on files they did not touch (#1040, #1042). Honest
-`original` passes blocked the same way: 8 of 432.
+`docs/benchmarks/results-recall-confirmatory/replay-main-9df9b947.json.gz`, a binary built
+from `main` at 9df9b947 (after #1042, #1044 and #1045; its `--version` reads 0.31.0),
+`access_full`, primary configuration arm: of the 212 impossible-split runs that passed without
+a gate, 44 carry an `error` from any gate (Wilson 95% [0.158, 0.267]). With `pii` reading the
+change by default, no `pii` error blocks any of them, so excluding it no longer matters.
+Honest `original` passes blocked: 8 of 432 [0.009, 0.036], all by `error-swallowing`; with
+0.31.0 the whole-tree `pii` sweep blocked 415 of 432.
 """
-# filter_residual_rate(212 / 1069, 42 / 212)
-h1_step0_on_rate = 0.159
+# filter_residual_rate(212 / 1069, 44 / 212)
+h1_step0_on_rate = 0.157
 # difference_pass_probability(700, 212 / 1069, 700, h1_step0_on_rate, 0.0, 0.95): at the
 # largest run count the population allows, before any design effect.
-h1_step0_power_at_n_max = 0.483
+h1_step0_power_at_n_max = 0.522
 h1_step0_verdict = "REJECT_UNDETECTABLE"
 h1_step0_rationale = """
 At the measured block rate, discipline in the loop is expected to lower landed gaming from
-0.198 to about 0.159 if the feedback adds nothing to the filter. With power 0.483 at 700 runs
+0.198 to about 0.157 if the feedback adds nothing to the filter. With power 0.522 at 700 runs
 per arm, and about 268 instances, H1 cannot reach 0.80: it is undetectable at this population
 (`sample_size_for_difference_lower_bound_power` errors at n_max 700). Feedback inside the
 episode could prevent more than the filter, but no data supports planning on it. The study
@@ -250,6 +253,17 @@ assertion's operands) and #1042 (the `pii` default) are merged and a replay of t
 the new on-rate makes H1 powered at n_max, record PROCEED here with the new values; otherwise
 H1 stays REJECT_UNDETECTABLE and the study is redesigned (a larger population, or the derived
 one-shot filter comparison as the confirmatory claim) before any lock.
+"""
+h1_replan_record = """
+The trigger fired: #1042, #1044 (fixes #1039) and #1045 (fixes #1038) are merged, and the
+sealed pairs were replayed with `main` at 9df9b947 before a release carries them. The block
+rate moved from 42/212 to 44/212 (astropy-12907 and django-11451), and H1 stays
+REJECT_UNDETECTABLE. Of the other testing-library misses, two are malformed benchmark tests
+(a base file that does not parse; a mutated line outside any test), and the rest need forms
+the fix does not resolve: a helper re-exported by the project (`sklearn.utils.testing`), a
+module bound by `pytest.importorskip`, a non-literal expected argument. The study is
+therefore redesigned before any lock, and the binary it freezes moves to the first release
+that carries these fixes.
 """
 
 # H2: Newcombe upper bound of landed_honest(off) - landed_honest(on) on `original`, one run
