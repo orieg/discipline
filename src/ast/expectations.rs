@@ -352,6 +352,7 @@ pub fn python<'t>(
             false
         }
         "expression_statement" => {
+            py_own_assert_call(node, src, reader);
             let Some(args) = py_equality(node, src, testing) else {
                 return true;
             };
@@ -610,6 +611,101 @@ fn py_with_item(
                 calls,
             });
         }
+    }
+}
+
+/// The assertion methods of `unittest.TestCase`: their arguments are read by their own
+/// rules (`py_equality`, `super::bounds`), and a later positional argument is the message.
+const PY_UNITTEST_ASSERTS: &[&str] = &[
+    "assertEqual",
+    "assertEquals",
+    "assertNotEqual",
+    "assertNotEquals",
+    "assertTrue",
+    "assertFalse",
+    "assertIs",
+    "assertIsNot",
+    "assertIsNone",
+    "assertIsNotNone",
+    "assertIn",
+    "assertNotIn",
+    "assertIsInstance",
+    "assertNotIsInstance",
+    "assertRaises",
+    "assertRaisesRegex",
+    "assertRaisesRegexp",
+    "assertWarns",
+    "assertWarnsRegex",
+    "assertLogs",
+    "assertNoLogs",
+    "assertAlmostEqual",
+    "assertAlmostEquals",
+    "assertNotAlmostEqual",
+    "assertNotAlmostEquals",
+    "assertGreater",
+    "assertGreaterEqual",
+    "assertLess",
+    "assertLessEqual",
+    "assertRegex",
+    "assertNotRegex",
+    "assertRegexpMatches",
+    "assertNotRegexpMatches",
+    "assertCountEqual",
+    "assertItemsEqual",
+    "assertMultiLineEqual",
+    "assertSequenceEqual",
+    "assertListEqual",
+    "assertTupleEqual",
+    "assertSetEqual",
+    "assertDictEqual",
+    "assertDictContainsSubset",
+];
+
+/// Python: the literal arguments of a call statement of a test case's own assertion method
+/// (#1050): `self.assertNumberMigrations(changes, 'app', 2)`, a `self.assert*` method that
+/// is not one of `unittest.TestCase`'s ([`PY_UNITTEST_ASSERTS`]). Every literal argument,
+/// positional or keyword, but a `msg=` or `msg_prefix=` message, is an expected value, as
+/// the arguments of the same method used as a context manager are ([`py_with_item`]). The
+/// skeleton is the statement's text with the literal masked.
+fn py_own_assert_call(statement: Node, src: &str, reader: &mut Reader) {
+    let Some(call) = statement.named_child(0).filter(|c| c.kind() == "call") else {
+        return;
+    };
+    let (Some(func), Some(args)) = (
+        call.child_by_field_name("function"),
+        call.child_by_field_name("arguments"),
+    ) else {
+        return;
+    };
+    let own = func.kind() == "attribute"
+        && func
+            .child_by_field_name("object")
+            .is_some_and(|o| text(o, src) == "self")
+        && func.child_by_field_name("attribute").is_some_and(|a| {
+            let name = text(a, src);
+            name.starts_with("assert") && !PY_UNITTEST_ASSERTS.contains(&name)
+        });
+    if !own {
+        return;
+    }
+    let mut c = args.walk();
+    let lits: Vec<Node> = args
+        .named_children(&mut c)
+        .filter_map(|arg| {
+            if arg.kind() == "keyword_argument" {
+                let name = arg.child_by_field_name("name").map_or("", |n| text(n, src));
+                if matches!(name, "msg" | "msg_prefix") {
+                    return None;
+                }
+                arg.child_by_field_name("value").map(unparenthesized)
+            } else {
+                Some(unparenthesized(arg))
+            }
+        })
+        .filter(|a| py_lit(*a))
+        .collect();
+    for lit in lits {
+        reader.record(statement, lit, src);
     }
 }
 
@@ -1142,6 +1238,72 @@ mod tests {
         }
         // A computing callee is not a constructor.
         assert!(changed_at("assert f() == g([1])", "assert f() == g([2])").is_empty());
+    }
+
+    /// #1050: a literal argument of a call statement of the test case's own `self.assert*`
+    /// method is an expected value; `unittest.TestCase`'s own methods, a `msg=` or
+    /// `msg_prefix=` message, a call on another object, and a call that is not a statement
+    /// are not read this way.
+    #[test]
+    fn python_reads_the_literal_arguments_of_a_test_cases_own_assert_method() {
+        let test = |line: &str| format!("def test_p(self):\n    {line}\n");
+        let changed_at = |base: &str, head: &str| py_changed(&test(base), &test(head));
+        for (base, head) in [
+            (
+                "self.assertNumberMigrations(changes, 'app', 2)",
+                "self.assertNumberMigrations(changes, 'app', 1)",
+            ),
+            (
+                "self.assertOperationAttributes(changes, 'app', 0, 0, new_name='wrong_name')",
+                "self.assertOperationAttributes(changes, 'app', 0, 0, new_name='renamed_name')",
+            ),
+            (
+                "self.assertContains(r, 'ok', status_code=200)",
+                "self.assertContains(r, 'ok', status_code=404)",
+            ),
+            ("self.assertNumQueries(1, f)", "self.assertNumQueries(0, f)"),
+        ] {
+            assert_eq!(changed_at(base, head), vec![2], "{base} -> {head}");
+            assert!(changed_at(base, base).is_empty(), "{base}");
+        }
+        assert_eq!(
+            literals(
+                &crate::ast::python::PythonPack,
+                "tests/test_p.py",
+                &test("self.assertContains(r, 'ok', 1, msg_prefix='m', html=True)")
+            ),
+            vec!["'ok'", "1", "True"]
+        );
+        for (base, head) in [
+            // A message.
+            (
+                "self.assertNumberMigrations(c, 'app', 2, msg='a')",
+                "self.assertNumberMigrations(c, 'app', 2, msg='b')",
+            ),
+            // `unittest.TestCase`'s own methods keep their own rules: the third
+            // positional argument of `assertTrue` / `assertEqual` is the message.
+            ("self.assertTrue(f(), 'a')", "self.assertTrue(f(), 'b')"),
+            (
+                "self.assertEqual(f(), g(), 'a')",
+                "self.assertEqual(f(), g(), 'b')",
+            ),
+            // Another object, or not a statement.
+            (
+                "helper.assertNumberMigrations(c, 'app', 2)",
+                "helper.assertNumberMigrations(c, 'app', 1)",
+            ),
+            (
+                "ok = self.assertNumberMigrations(c, 'app', 2)",
+                "ok = self.assertNumberMigrations(c, 'app', 1)",
+            ),
+            // Not an assertion method.
+            (
+                "self.make_migrations(c, 'app', 2)",
+                "self.make_migrations(c, 'app', 1)",
+            ),
+        ] {
+            assert!(changed_at(base, head).is_empty(), "{base} -> {head}");
+        }
     }
 
     /// #1039: a literal bound once to a local name that one equality assertion reads as a

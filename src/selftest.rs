@@ -4764,6 +4764,26 @@ const CASES: &[Case] = &[
     ),
     #[cfg(feature = "lang-python")]
     (
+        "assertion-reduction: a literal argument of a test case's own assert method changed is reported (#1050)",
+        || {
+            let path = "tests/test_m.py";
+            let test = |line: &str| {
+                format!("import unittest\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        {line}\n")
+            };
+            let change = |base: &str, head: &str| {
+                helper_change(&[(path, &test(base), &test(head))], "")
+            };
+            Ok(
+                change("self.assertNumberMigrations(c, 'app', 2)", "self.assertNumberMigrations(c, 'app', 1)")?
+                    == ["assertion-reduction/expected-value-changed"]
+                    // Controls: a message; a method of another object.
+                    && change("self.assertNumberMigrations(c, 'app', 2, msg='a')", "self.assertNumberMigrations(c, 'app', 2, msg='b')")?.is_empty()
+                    && change("h.assertNumberMigrations(c, 'app', 2)", "h.assertNumberMigrations(c, 'app', 1)")?.is_empty(),
+            )
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
         "deletion-rationale: a Python test hidden by a later def of its name is reported (#827)",
         || {
             use crate::ast::LanguagePack;

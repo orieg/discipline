@@ -1207,6 +1207,47 @@ fn python_assertions_with_inverted_polarity_fail_the_run() {
     }
 }
 
+/// A literal argument of a test case's own assertion method changed in a call statement
+/// (#1050) is `expected-value-changed`; a message argument, `unittest.TestCase`'s own
+/// methods' message, and a method of another object are not.
+#[test]
+fn python_literal_arguments_of_a_test_cases_own_assert_method_are_compared() {
+    let codes = |base: &str, head: &str| -> Vec<String> {
+        let repo = Repo::new();
+        repo.write("src/__init__.py", "");
+        repo.write("src/calc.py", "def f():\n    return [1, 2, 3]\n");
+        let file = |body: &str| {
+            format!("import unittest\n\nfrom src.calc import f\n\n\nclass T(unittest.TestCase):\n    def assertNumberMigrations(self, got, app, n, msg=None):\n        self.assertEqual(len(got), n, msg)\n\n    def test_f(self):\n        {body}\n")
+        };
+        repo.commit_base("tests/test_calc.py", &file(base), "test: f");
+        repo.write("tests/test_calc.py", &file(head));
+        repo.commit("test: change");
+        repo.check(&[])
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let changed = ["assertion-reduction/expected-value-changed"];
+    let base = "self.assertNumberMigrations(f(), 'app', 3)";
+    assert_eq!(
+        codes(base, "self.assertNumberMigrations(f(), 'app', 2)"),
+        changed
+    );
+    assert_eq!(
+        codes(base, "self.assertNumberMigrations(f(), 'other', 3)"),
+        changed
+    );
+    // Controls.
+    assert!(codes(base, &format!("{base}\n        # kept")).is_empty());
+    assert!(codes(
+        "self.assertNumberMigrations(f(), 'app', 3, msg='a')",
+        "self.assertNumberMigrations(f(), 'app', 3, msg='b')"
+    )
+    .is_empty());
+    assert!(codes("self.assertTrue(f(), 'a')", "self.assertTrue(f(), 'b')").is_empty());
+}
+
 /// A comparison operator moved the loose way inside an otherwise unchanged assertion
 /// (#934): the count, the class and the literal hold, so only the operator shows it.
 /// Each shape fails the run as `weakened-bound`; `allow-assertion-drop:` lifts it, and a
