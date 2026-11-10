@@ -1,0 +1,169 @@
+# Pre-registration for `agent-pr-precision-v8`: the agent-PR precision benchmark re-run on
+# the code released as discipline 0.32.0, on the 232 pull requests of v2 to v6, graded with
+# v7's two-question rubric by two LLM raters from different vendors, with every disagreement
+# settled by the owner.
+#
+# Locked before any 0.32 replay output exists and before any v8 grade is given. Any change to
+# the floors, population, labels, raters, adjudication or verdict rules after a grade exists
+# relabels the affected verdicts `INTERMEDIATE_amended_threshold_redesign`, recorded in the
+# results.
+#
+# What it takes from earlier studies, unchanged:
+# - the population, replay procedure, configuration and twin of
+#   `docs/benchmarks/precision-preregistration-v6.toml` ([population], [twin_baseline]), which
+#   v6 copied from v5;
+# - the two questions, label definitions, worked examples, rater prompt, batch size and
+#   tie-breaker prompt of `docs/benchmarks/precision-preregistration-v7.toml` ([labels],
+#   [adjudication] `batch_size`, `rater_prompt`, `tie_breaker_prompt`), pinned by sha256 below,
+#   and its reliability and verdict rules ([reliability], [power_and_bounds]).
+# What differs:
+# - the code is the 0.32.0 release candidate;
+# - Rater 2 is a Gemini model run through the agy CLI, not a second Claude model, so the two
+#   rater slots come from different vendors;
+# - no LLM tie-breaker: every item the two slots answer differently on either question goes to
+#   the owner, who grades it blind to both LLM labels;
+# - v7's two-human subset is not run, so v7's `no-human-labels` rule applies to every verdict.
+
+[study]
+id = "agent-pr-precision-v8"
+previous_study_id = "agent-pr-precision-v6"
+status = "locked-pre-data"
+locked_date = "2026-11-10"
+novelty_tier_claimed = "Characterisation"
+tier_justification = """
+Measures, with 95% Wilson score and cluster-bootstrap intervals, how often the blocking
+findings of the code released as discipline 0.32.0 exhibit the defect their rule describes
+(rule fidelity) and how often a maintainer would hold the merge for them (actionability), on
+the fixed population of 232 merged agent-authored pull requests of v2 to v6, beside the same
+naive file-path twin. A measured property of shipped detectors on a bounded, already
+inspected population; not a causal claim and not an estimate for unseen pull requests.
+"""
+discipline_version = "0.32.0"
+discipline_binary = """
+`cargo build --release --locked` on the Linux replay host at commit
+`87447255f2d0f4d44644e6f801c2d49cc9e6d87c` of `orieg/discipline` (main after #1055). The
+0.32.0 release candidate is cut from main after this commit with release metadata only
+(versions, docs, man pages, templates); the results record the binary's sha256 and the
+`git diff --stat` from this commit to the `v0.32.0-rc.1` tag, which must touch no file under
+`src/`, `Cargo.lock` dependency entries excepted for discipline's own version.
+"""
+configuration_mode = "default-with-test-entrypoints"
+primary_unit_of_analysis = "blocking-finding-error-severity"
+secondary_unit_of_analysis = "per-pull-request-block-rate"
+recall_claimed = false
+corpus_prior_inspection = """
+The corpus is not fresh: v2 to v6 replayed and labelled every pull request in it, and the
+fixes released in 0.28.0 to 0.32.0 were written with those results in view. Before this lock
+the owner saw one v6 packet item (the `actions/checkout` tag bump on `tokio-rs/tokio#8229`,
+52 v6 items) in a grading page, and the session that wrote this file discussed in its own
+conversation how that item reads under the two questions. Neither rater slot sees that
+conversation. v8 characterises the 0.32 code on these 232 changes; it is not evidence about
+unseen agent pull requests (v7's sampled population is that study).
+"""
+
+[population]
+source = "previous-study-manifest"
+reharvest = false
+manifest_path = "docs/benchmarks/results-v6/manifest.json"
+manifest_sha256 = "7c6136bc212c06df4d51309126553ee0966ce8b314c43dad6c9834af97b7bf9e"
+manifest_commit = "9bfee24633c4cff2fd1ce7c3fc4c538a82750a9e"
+pull_request_count = 232
+rule = """
+Exactly the 232 `(repo, base_sha, head_sha)` entries of the manifest above, replayed by
+`python3 scripts/benchmark_precision.py --from-manifest` as v6 replayed them (v6 [population]
+`head_base_definition`, unchanged). An entry whose commits cannot be fetched is reported and
+excluded, never replaced.
+"""
+
+[twin_baseline]
+rule = "v6 [twin_baseline], unchanged: the same naive-sensitive-path-filter and the same 150 sampled flags (sample_seed 482)."
+
+[labels]
+source = "docs/benchmarks/precision-preregistration-v7.toml"
+source_sha256 = "2101be6ead11393c84d08c5fab46894a473a696d13a6706ab9f03593f223702f"
+source_commit = "52653e97486d404e2804c0e9b9b0eb427b19d30d"
+rule = """
+v7's [labels] (rule_fidelity: true-positive, false-positive, cannot-tell; actionability:
+would-block, would-not-block, cannot-tell), with their definitions and worked examples,
+unchanged. Both questions are asked of every item, independently. cannot-tell counts in the
+denominator as a non-success on both.
+"""
+
+[adjudication]
+blind_to_source_tool = true
+blind_to_gate_name = true
+blind_to_previous_labels = true
+committed_rater_packet = "docs/benchmarks/results-v8/rater-packet.json"
+packet_scope = """
+Every 0.32 blocking finding and the 150 twin flags, shuffled together with
+`packet_shuffle_seed`, with v6's packet fields only (repo, 12-character commit, subject, file,
+line, rule summary, diff excerpt, line context). An item whose (repo, commit, file, line, rule
+summary) matches a v6 packet item keeps that item's id; every other item gets a new id. No
+anchor items, as in v7.
+"""
+packet_shuffle_seed = 80804
+batch_size = 20
+rater_prompt = "v7 `rater_prompt`, unchanged."
+rater_1 = """
+Claude, through isolated subagents of the session that runs the study, one new subagent per
+batch, given `rater_prompt` with that batch's file path; it reads that one file with its
+file-read tool, uses no other tool, and returns one JSON object.
+"""
+rater_2 = """
+Gemini, through the agy CLI in print mode, one new conversation per batch, with the batch's
+items in the prompt after `rater_prompt` (its first paragraph's file instruction replaced by
+"The items follow this prompt"), a JSON-schema output constraint, and no tool use. The model
+name the CLI reports is recorded in the results.
+"""
+invalid_answer_rule = "v7's: a batch without one valid pair of labels per item id is re-asked once in a new subagent or conversation; a second invalid answer stops the study."
+owner_adjudication = """
+Every item on which the two slots differ on either question goes to the owner, who answers
+both questions in the grading page, blind to both slots' labels and to the source tool. The
+owner's answer is the final label on both questions for that item; where the slots agree on
+both, their shared answer is final. The owner wrote discipline, so these final labels are not
+independent of the tool's author. The results report how many final labels came from the
+owner, per question.
+"""
+
+[reliability]
+rule = """
+v7's [reliability] check (a) only, on both questions: Cohen's kappa between Rater 1 and
+Rater 2 on every packet item, with its 95% interval, the majority-label share, and the
+prevalence-adjusted agreement 2 * p_o - 1. Checks (b) and (c) need v7's two-human subset,
+which v8 does not run.
+"""
+min_acceptable_kappa = 0.75
+
+[power_and_bounds]
+rule = """
+v7's [power_and_bounds] `verdict_rule` and required n, on rule_fidelity final labels, with
+v7's [reliability] `verdict_rule`: since the two-human subset is not run, every verdict that
+would otherwise be PASS, `INTERMEDIATE_floor_within_ci` or REJECTED becomes
+`INTERMEDIATE_unreliable_labels` with the qualifier `no-human-labels`, the verdict the labels
+would have given reported beside it; `insufficient-n` stays `insufficient-n`. Actionability
+is reported as the would-block share with its Wilson interval and no verdict.
+"""
+# Step 0, computed with `scripts/benchmark_power_audit.py` (pinned by
+# tests/test_benchmark_power_bounds*.rs), at v6's structural n of 122 findings:
+# - smallest k with `wilson_score_interval(k, 122)` lower bound >= 0.90: 117 (0.959)
+# - `wilson_pass_probability(122, p, 0.90)`: p=0.90 -> 0.014, 0.93 -> 0.1372, 0.95 -> 0.4253,
+#   0.97 -> 0.8387, 0.99 -> 0.9985
+# - `sample_size_for_wilson_lower_bound(0.95, 0.90, 0.95, 5000)` -> 153
+# - `sample_size_for_wilson_lower_bound_power(0.95, 0.90, 0.95, 0.80, 5000)` -> 254
+# So the structural class is expected to be `insufficient-n` (about 122 < 153), and the
+# result to report is the measured share with its intervals. One pull request held 52 of v6's
+# 122 structural findings: the cluster bootstraps are reported beside every Wilson interval.
+structural_floor = 0.90
+heuristic_floor = 0.80
+bootstrap_seed = 20261110
+bootstrap_resamples = 20000
+
+[reporting]
+rule = """
+The results report, for discipline and for the twin: the pull-request block rate (0.32 code);
+rule-fidelity and actionability shares per class and per gate with Wilson and cluster
+bootstrap intervals; kappa per question; the count of owner-final labels; and every item's
+two slot labels and final label in `adjudication.json`. Charts and README copy describe the
+labels as "graded by two AI models from different vendors, with the owner settling every
+disagreement", never as human labels.
+"""
