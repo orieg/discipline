@@ -2917,6 +2917,100 @@
       }
     },
     {
+      "name": "python-expected-list-value-changed",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f(*a):\n    return list(a)\n",
+        "tests/test_m.py": "import unittest\n\nimport numpy as np\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        self.assertEqual(f(), [1, 2, 3])\n"
+      },
+      "head": {
+        "tests/test_m.py": "import unittest\n\nimport numpy as np\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        self.assertEqual(f(), [3, 2, 1])\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": {
+        "caught": [
+          "assertion-reduction/expected-value-changed"
+        ]
+      }
+    },
+    {
+      "name": "python-expected-constructor-value-changed",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f(*a):\n    return list(a)\n",
+        "tests/test_m.py": "import unittest\n\nimport numpy as np\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        assert f(1)[0] == np.array([1])\n"
+      },
+      "head": {
+        "tests/test_m.py": "import unittest\n\nimport numpy as np\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        assert f(1)[0] == np.array([-1])\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": {
+        "caught": [
+          "assertion-reduction/expected-value-changed"
+        ]
+      }
+    },
+    {
+      "name": "python-composite-expected-kept-input-changed",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f(*a):\n    return list(a)\n",
+        "tests/test_m.py": "import unittest\n\nimport numpy as np\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        self.assertEqual(f(1), [1])\n"
+      },
+      "head": {
+        "tests/test_m.py": "import unittest\n\nimport numpy as np\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        self.assertEqual(f(2), [1])\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
+      "name": "python-unittest-assertion-polarity-inverted",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f():\n    return [1, 2, 3]\n",
+        "tests/test_m.py": "import unittest\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        self.assertFalse(issubclass(int, str))\n"
+      },
+      "head": {
+        "tests/test_m.py": "import unittest\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        self.assertTrue(issubclass(int, str))\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "python-bare-assert-negated",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f():\n    return [1, 2, 3]\n",
+        "tests/test_m.py": "import unittest\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        assert f()\n"
+      },
+      "head": {
+        "tests/test_m.py": "import unittest\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        assert not f()\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": {
+        "caught": [
+          "assertion-reduction/weakened-bound"
+        ]
+      }
+    },
+    {
+      "name": "python-assertion-polarity-kept-value-changed",
+      "base": {
+        "pkg/__init__.py": "",
+        "pkg/m.py": "def f():\n    return [1, 2, 3]\n",
+        "tests/test_m.py": "import unittest\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        self.assertTrue(f())\n"
+      },
+      "head": {
+        "tests/test_m.py": "import unittest\n\nfrom pkg.m import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        self.assertTrue(list(f()))\n"
+      },
+      "gate": "assertion-reduction",
+      "verdict": "clean"
+    },
+    {
       "name": "python-own-assert-method-argument-changed",
       "base": {
         "pkg/__init__.py": "",

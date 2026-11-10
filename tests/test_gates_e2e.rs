@@ -1090,6 +1090,123 @@ fn python_expected_values_in_context_managers_and_locals_are_compared() {
     assert!(codes(&opened("a.txt"), &opened("b.txt")).is_empty());
 }
 
+/// A Python expected value changed inside a composite operand (#1048): a list, a dict, a
+/// constructor call (`np.array([1])`, `ConditionSet(.., 4*sin(x), ..)`) or an implicitly
+/// concatenated string is `expected-value-changed`. The value under test changed, the
+/// expected operand's structure changed, a literal inside a computing call changed, and
+/// two composite operands are not.
+#[test]
+fn python_expected_values_inside_composite_operands_are_compared() {
+    let codes = |base: &str, head: &str| -> Vec<String> {
+        let repo = Repo::new();
+        repo.write("src/__init__.py", "");
+        repo.write("src/calc.py", "def f(*a):\n    return list(a)\n");
+        let file = |body: &str| {
+            format!("import unittest\n\nimport numpy as np\n\nfrom src.calc import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        {body}\n")
+        };
+        repo.commit_base("tests/test_calc.py", &file(base), "test: f");
+        repo.write("tests/test_calc.py", &file(head));
+        repo.commit("test: change");
+        repo.check(&[])
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let changed = ["assertion-reduction/expected-value-changed"];
+    for (base, head) in [
+        (
+            "self.assertEqual(f(), [1, 2, 3])",
+            "self.assertEqual(f(), [3, 2, 1])",
+        ),
+        (
+            "assert f(1)[0] == np.array([1])",
+            "assert f(1)[0] == np.array([-1])",
+        ),
+        (
+            "self.assertEqual(f(), list((1, 2, 3)))",
+            "self.assertEqual(f(), list((3, 2, 1)))",
+        ),
+        ("assert f() == {'a': 1}", "assert f() == {'a': 2}"),
+        (
+            "self.assertEqual(f(x), ConditionSet(x, Eq(4*sin(x), 0), S.Reals))",
+            "self.assertEqual(f(x), ConditionSet(x, Eq(3*sin(x), 0), S.Reals))",
+        ),
+        ("assert f() == ('ab' 'cd')", "assert f() == ('ax' 'cd')"),
+    ] {
+        assert_eq!(codes(base, head), changed, "{base} -> {head}");
+        // Control: the same assertion kept, with the file changed below it.
+        assert!(
+            codes(base, &format!("{base}\n        # kept")).is_empty(),
+            "{base}"
+        );
+    }
+    for (base, head) in [
+        ("self.assertEqual(f(1), [1])", "self.assertEqual(f(2), [1])"),
+        ("assert f() == [1, 2]", "assert f() == [1, 2, 3]"),
+        ("assert f() == [abs(1)]", "assert f() == [abs(2)]"),
+        (
+            "self.assertEqual(Foo(1), [1])",
+            "self.assertEqual(Foo(2), [2])",
+        ),
+    ] {
+        assert!(codes(base, head).is_empty(), "{base} -> {head}");
+    }
+}
+
+/// A Python assertion whose polarity is inverted in an existing test (#1049): a
+/// `self.assert*` method swapped for its negated twin, or `not` added to or taken from a
+/// bare `assert`, fails the run. The same edit to a method of another family, or with the
+/// checked value changed as well, does not report a polarity change.
+#[test]
+fn python_assertions_with_inverted_polarity_fail_the_run() {
+    let codes = |base: &str, head: &str| -> Vec<String> {
+        let repo = Repo::new();
+        repo.write("src/__init__.py", "");
+        repo.write("src/calc.py", "def f():\n    return [1, 2, 3]\n");
+        let file = |body: &str| {
+            format!("import unittest\n\nfrom src.calc import f\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        {body}\n")
+        };
+        repo.commit_base("tests/test_calc.py", &file(base), "test: f");
+        repo.write("tests/test_calc.py", &file(head));
+        repo.commit("test: change");
+        repo.check(&[])
+            .violations("assertion-reduction")
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let inverted = ["assertion-reduction/weakened-bound"];
+    for (base, head) in [
+        (
+            "self.assertFalse(issubclass(int, str))",
+            "self.assertTrue(issubclass(int, str))",
+        ),
+        ("self.assertIs(f(), f())", "self.assertIsNot(f(), f())"),
+        ("self.assertIsNotNone(f())", "self.assertIsNone(f())"),
+        ("self.assertIn(1, f())", "self.assertNotIn(1, f())"),
+        ("assert f()", "assert not f()"),
+    ] {
+        assert_eq!(codes(base, head), inverted, "{base} -> {head}");
+        assert!(
+            codes(base, &format!("{base}\n        # kept")).is_empty(),
+            "{base}"
+        );
+    }
+    for (base, head) in [
+        (
+            "self.assertGreater(len(f()), 1)",
+            "self.assertLess(len(f()), 1)",
+        ),
+        ("self.assertTrue(f())", "self.assertFalse(list(f()))"),
+    ] {
+        assert!(
+            !codes(base, head).contains(&inverted[0].to_string()),
+            "{base} -> {head}"
+        );
+    }
+}
+
 /// A literal argument of a test case's own assertion method changed in a call statement
 /// (#1050) is `expected-value-changed`; a message argument, `unittest.TestCase`'s own
 /// methods' message, and a method of another object are not.

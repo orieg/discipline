@@ -156,7 +156,8 @@ impl<'a> Reader<'a> {
 }
 
 /// Lines of `head` expectations whose literal differs from the base expectation with the
-/// same skeleton. A skeleton that is not exactly once on each side is ambiguous and skipped.
+/// same skeleton, each line once. A skeleton that is not exactly once on each side is
+/// ambiguous and skipped.
 pub fn changed(base: &[Expectation], head: &[Expectation]) -> Vec<usize> {
     // For a skeleton: how many expectations have it, and the first.
     fn tally(set: &[Expectation]) -> HashMap<&str, (usize, usize)> {
@@ -173,7 +174,12 @@ pub fn changed(base: &[Expectation], head: &[Expectation]) -> Vec<usize> {
             Some((1, at)) => (base[*at].literal != h.literal).then_some(h.line),
             _ => None,
         })
-        .collect()
+        .fold(Vec::new(), |mut lines, line| {
+            if !lines.contains(&line) {
+                lines.push(line);
+            }
+            lines
+        })
 }
 
 fn rs_lit(n: Node) -> bool {
@@ -336,11 +342,13 @@ pub fn python<'t>(
             true
         }
         "assert_statement" => {
-            for side in py_equality(node, src, testing).unwrap_or_default() {
-                if let Some(lit) = py_operand(unparenthesized(side), src) {
+            let sides = py_equality(node, src, testing).unwrap_or_default();
+            for side in &sides {
+                if let Some(lit) = py_operand(unparenthesized(*side), src) {
                     reader.record(node, lit, src);
                 }
             }
+            py_composite_expected(node, &sides, src, reader);
             false
         }
         "expression_statement" => {
@@ -348,15 +356,137 @@ pub fn python<'t>(
             let Some(args) = py_equality(node, src, testing) else {
                 return true;
             };
-            for a in args.into_iter().map(unparenthesized) {
+            for a in args.iter().map(|a| unparenthesized(*a)) {
                 if py_lit(a) {
                     reader.record(node, a, src);
                 }
             }
+            py_composite_expected(node, &args, src, reader);
             false
         }
         _ => true,
     });
+}
+
+/// Callees that build a value rather than compute one, besides a name that starts with a
+/// capital letter (`Decimal(..)`, `pd.DataFrame(..)`, `ConditionSet(..)`).
+const PY_CONSTRUCTORS: &[&str] = &[
+    "array",
+    "asarray",
+    "list",
+    "tuple",
+    "set",
+    "frozenset",
+    "dict",
+    "date",
+    "datetime",
+    "time",
+    "timedelta",
+];
+
+/// Python: the expected values inside a composite operand of an equality assertion (#1048):
+/// a list, tuple, dict or set literal, an implicitly concatenated string, or a call to a
+/// constructor ([`PY_CONSTRUCTORS`], or a callee whose name starts with a capital letter).
+///
+/// The literals are read through containers, constructor arguments, keyword values and
+/// arithmetic; a literal inside any other call (`sin(2)`, `f(1)`) is the input of a
+/// computation and stays in the text. Each literal is recorded with the assertion's text,
+/// every literal of the operand masked, and its position in the operand, so an operand
+/// whose structure or names changed, or an assertion whose other operand changed, is not
+/// paired. When both operands are composite, neither is read: which one is the value under
+/// test cannot be told from the text.
+fn py_composite_expected(assertion: Node, sides: &[Node], src: &str, reader: &mut Reader) {
+    let composite: Vec<(Node, Vec<Node>)> = sides
+        .iter()
+        .map(|s| unparenthesized(*s))
+        .filter(|s| py_composite_root(*s, src))
+        .map(|s| {
+            let mut lits = Vec::new();
+            py_composite_literals(s, src, &mut lits);
+            (s, lits)
+        })
+        .filter(|(_, lits)| !lits.is_empty())
+        .collect();
+    let [(_, lits)] = composite.as_slice() else {
+        return;
+    };
+    let (s, e) = (assertion.start_byte(), assertion.end_byte());
+    let mut masked = String::new();
+    let mut at = s;
+    for lit in lits {
+        masked.push_str(&src[at..lit.start_byte()]);
+        masked.push('#');
+        at = lit.end_byte();
+    }
+    masked.push_str(&src[at..e]);
+    count(e.saturating_sub(s));
+    let masked = masked.split_whitespace().collect::<Vec<_>>().join(" ");
+    let calls = reader.calls_of(assertion, src);
+    for (i, lit) in lits.iter().enumerate() {
+        reader.records.add(Expectation {
+            line: lit.start_position().row + 1,
+            skeleton: format!("{masked} @{i}"),
+            literal: text(*lit, src).to_string(),
+            calls: calls.clone(),
+        });
+    }
+}
+
+/// Whether `n` is an operand [`py_composite_expected`] reads.
+fn py_composite_root(n: Node, src: &str) -> bool {
+    match n.kind() {
+        "list" | "tuple" | "dictionary" | "set" | "concatenated_string" => true,
+        "call" => py_constructor_call(n, src),
+        _ => false,
+    }
+}
+
+fn py_constructor_call(call: Node, src: &str) -> bool {
+    let name = call
+        .child_by_field_name("function")
+        .filter(|f| matches!(f.kind(), "identifier" | "attribute"))
+        .map_or("", |f| text(f, src));
+    let leaf = name.rsplit('.').next().unwrap_or("");
+    leaf.starts_with(|c: char| c.is_ascii_uppercase()) || PY_CONSTRUCTORS.contains(&leaf)
+}
+
+/// The literals of a composite operand, in the order of the source.
+fn py_composite_literals<'t>(n: Node<'t>, src: &str, out: &mut Vec<Node<'t>>) {
+    count(1);
+    if py_lit(n) {
+        out.push(n);
+        return;
+    }
+    match n.kind() {
+        "list"
+        | "tuple"
+        | "dictionary"
+        | "set"
+        | "pair"
+        | "concatenated_string"
+        | "parenthesized_expression"
+        | "binary_operator"
+        | "unary_operator"
+        | "argument_list" => {}
+        "keyword_argument" => {
+            if let Some(v) = n.child_by_field_name("value") {
+                py_composite_literals(v, src, out);
+            }
+            return;
+        }
+        "call" if py_constructor_call(n, src) => {
+            if let Some(args) = n.child_by_field_name("arguments") {
+                py_composite_literals(args, src, out);
+            }
+            return;
+        }
+        _ => return,
+    }
+    let mut c = n.walk();
+    let children: Vec<Node> = n.named_children(&mut c).collect();
+    for child in children {
+        py_composite_literals(child, src, out);
+    }
 }
 
 /// The parts of a Python equality assertion its expected values are read from: an
@@ -1033,6 +1163,81 @@ mod tests {
         let head =
             "def test_p():\n    with open('b.txt') as fh:\n        assert fh.read() == 'x'\n";
         assert!(py_changed(base, head).is_empty());
+    }
+
+    /// #1048: a value changed inside a composite expected operand (a container, a
+    /// constructor call, an implicitly concatenated string) is paired by the operand with
+    /// every literal masked; an edit to the value under test, to the operand's structure
+    /// or names, or inside a computing call is not.
+    #[test]
+    fn python_pairs_a_value_changed_inside_a_composite_expected_operand() {
+        let test = |line: &str| format!("def test_p(self):\n    {line}\n");
+        let changed_at = |base: &str, head: &str| py_changed(&test(base), &test(head));
+        for (base, head) in [
+            (
+                "self.assertEqual(f(), [1, 2, 3])",
+                "self.assertEqual(f(), [3, 2, 1])",
+            ),
+            (
+                "assert f()[0] == np.array([1])",
+                "assert f()[0] == np.array([-1])",
+            ),
+            (
+                "self.assertEqual(f(), list((1, 2, 3)))",
+                "self.assertEqual(f(), list((3, 2, 1)))",
+            ),
+            ("assert f() == {'a': 1}", "assert f() == {'a': 2}"),
+            ("assert f() == ('x', None)", "assert f() == ('x', 0)"),
+            (
+                "self.assertEqual(f(x), ConditionSet(x, Eq(4*sin(x), 0), Interval(0, 2*pi)))",
+                "self.assertEqual(f(x), ConditionSet(x, Eq(3*sin(x), 0), Interval(0, 2*pi)))",
+            ),
+            (
+                "self.assertEqual(f(), pd.DataFrame({'a': [1.0]}, index=[0]))",
+                "self.assertEqual(f(), pd.DataFrame({'a': [2.0]}, index=[0]))",
+            ),
+            ("assert f() == ('a' 'b')", "assert f() == ('c' 'b')"),
+        ] {
+            assert_eq!(changed_at(base, head), vec![2], "{base} -> {head}");
+            assert!(changed_at(base, base).is_empty(), "{base}");
+        }
+        // A comparing testing-library function the file imports.
+        let lib = |v: &str| {
+            format!("from pandas.testing import assert_frame_equal\n\ndef test_p():\n    assert_frame_equal(f(), pd.DataFrame({{'a': [{v}]}}))\n")
+        };
+        assert_eq!(py_changed(&lib("1.0"), &lib("2.0")), vec![4]);
+        // A value spread over lines is reported on the line of the literal that changed.
+        let base =
+            "def test_p(self):\n    self.assertEqual(f(), [\n        1,\n        2,\n    ])\n";
+        let head = base.replace("2,", "5,");
+        assert_eq!(py_changed(base, &head), vec![4]);
+        for (base, head) in [
+            // The value under test changed, the expected value did not.
+            (
+                "self.assertEqual(f(1), [1, 2])",
+                "self.assertEqual(f(2), [1, 2])",
+            ),
+            // The expected value's structure, or a name in it, changed.
+            ("assert f() == [1, 2]", "assert f() == [1, 2, 3]"),
+            (
+                "assert f() == np.array([1])",
+                "assert f() == np.asarray([2])",
+            ),
+            // A literal inside a computing call is an input.
+            ("assert f() == [sin(1)]", "assert f() == [sin(2)]"),
+            // Both operands composite: which is under test cannot be told.
+            (
+                "self.assertEqual(Foo(1), [1])",
+                "self.assertEqual(Foo(2), [2])",
+            ),
+            // Not an equality assertion.
+            ("assert f() < [1]", "assert f() < [2]"),
+            ("g(f(), [1])", "g(f(), [2])"),
+        ] {
+            assert!(changed_at(base, head).is_empty(), "{base} -> {head}");
+        }
+        // A computing callee is not a constructor.
+        assert!(changed_at("assert f() == g([1])", "assert f() == g([2])").is_empty());
     }
 
     /// #1050: a literal argument of a call statement of the test case's own `self.assert*`

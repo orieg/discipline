@@ -4721,6 +4721,49 @@ const CASES: &[Case] = &[
     ),
     #[cfg(feature = "lang-python")]
     (
+        "assertion-reduction: a value changed inside a Python composite expected operand is reported (#1048)",
+        || {
+            let path = "tests/test_m.py";
+            let test = |line: &str| format!("def test_f():\n    {line}\n");
+            let change = |base: &str, head: &str| {
+                helper_change(&[(path, &test(base), &test(head))], "")
+            };
+            Ok(
+                change("assert f() == [1, 2, 3]", "assert f() == [3, 2, 1]")?
+                    == ["assertion-reduction/expected-value-changed"]
+                    && change("assert f() == np.array([1])", "assert f() == np.array([-1])")?
+                        == ["assertion-reduction/expected-value-changed"]
+                    // Controls: the value under test changed; the expected operand's
+                    // structure changed.
+                    && change("assert f(1) == [1]", "assert f(2) == [1]")?.is_empty()
+                    && change("assert f() == [1]", "assert f() == [1, 2]")?.is_empty(),
+            )
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
+        "assertion-reduction: a Python assertion whose polarity is inverted is reported (#1049)",
+        || {
+            let path = "tests/test_m.py";
+            let test = |line: &str| {
+                format!("import unittest\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        {line}\n")
+            };
+            let change = |base: &str, head: &str| {
+                helper_change(&[(path, &test(base), &test(head))], "")
+            };
+            Ok(
+                change("self.assertFalse(f())", "self.assertTrue(f())")?
+                    == ["assertion-reduction/weakened-bound"]
+                    && change("assert f()", "assert not f()")?
+                        == ["assertion-reduction/weakened-bound"]
+                    // Controls: the checked value changed with the method; another family.
+                    && change("self.assertFalse(f())", "self.assertTrue(g())")?.is_empty()
+                    && change("self.assertTrue(f())", "self.assertIsNotNone(f())")?.is_empty(),
+            )
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
         "assertion-reduction: a literal argument of a test case's own assert method changed is reported (#1050)",
         || {
             let path = "tests/test_m.py";
