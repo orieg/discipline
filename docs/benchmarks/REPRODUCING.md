@@ -190,3 +190,11 @@ newer binary under the same study id.
 
 `docs/benchmarks/hook-latency.md` §3 gives the command and host requirement; its figures
 are medians from an idle host.
+
+## 6. Charts
+
+The charts in the README and on the Pages site (`docs/assets/img/results/`) are drawn from the
+committed results above by `python3 scripts/benchmark_charts.py`, which reads no other input.
+Re-run it after a result file changes; `tests/test_benchmark_charts.rs` fails while a chart and
+its results disagree. The recall charts are drawn only once
+`docs/benchmarks/results-recall-confirmatory/` is committed.

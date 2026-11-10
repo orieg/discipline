@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" role="img" viewBox="0 0 960 208" width="100%">
+<title>Merged coding-agent pull requests blocked</title>
+<defs><style>
+.bg{fill:#fff} .border{stroke:#e2e8f0;fill:none} .grid{stroke:#f1f5f9;stroke-dasharray:2,3}
+.axis{stroke:#cbd5e1;stroke-width:1.5px} .floor{stroke:#b45309;stroke-width:1.5px;stroke-dasharray:5,3}
+.t-title{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;font-size:12px;font-weight:700;letter-spacing:.6px;fill:#0f172a;text-transform:uppercase}
+.t-sub{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;font-size:10.5px;font-weight:500;fill:#334155}
+.t-note{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;font-size:9.5px;fill:#64748b}
+.t-row{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;font-size:11px;font-weight:600;fill:#0f172a}
+.t-axis{font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:9.5px;fill:#64748b}
+.t-val{font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:10.5px;font-weight:600;fill:#334155}
+.t-floor{font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:9.5px;font-weight:700;fill:#b45309}
+.c-disc{fill:#16a34a;stroke:#16a34a} .c-twin{fill:#64748b;stroke:#64748b} .c-alt{fill:#2563eb;stroke:#2563eb}
+.ci{stroke-width:2.5px;stroke-linecap:round}
+.bg{fill:#0d1117} .border{stroke:#30363d} .grid{stroke:#21262d} .axis{stroke:#484f58}
+.t-title,.t-row{fill:#f0f6fc} .t-sub{fill:#cbd5e1} .t-note,.t-axis{fill:#94a3b8} .t-val{fill:#e2e8f0}
+.floor{stroke:#f59e0b} .t-floor{fill:#fbbf24}
+.c-disc{fill:#22c55e;stroke:#22c55e} .c-twin{fill:#94a3b8;stroke:#94a3b8} .c-alt{fill:#3b82f6;stroke:#3b82f6}
+</style></defs>
+<rect class="bg" width="960" height="208" rx="6"/>
+<rect class="border" x=".5" y=".5" width="959" height="207" rx="6"/>
+<text class="t-title" x="24" y="30">Merged coding-agent pull requests blocked</text>
+<text class="t-sub" x="24" y="48">Share of merged agent pull requests each check would have blocked. Lower is less noise. Dot = point, bar = Wilson 95% CI.</text>
+<line class="grid" x1="254.0" y1="74" x2="254.0" y2="132"/>
+<text class="t-axis" x="254.0" y="146" text-anchor="middle">0%</text>
+<line class="grid" x1="366.4" y1="74" x2="366.4" y2="132"/>
+<text class="t-axis" x="366.4" y="146" text-anchor="middle">20%</text>
+<line class="grid" x1="478.8" y1="74" x2="478.8" y2="132"/>
+<text class="t-axis" x="478.8" y="146" text-anchor="middle">40%</text>
+<line class="grid" x1="591.2" y1="74" x2="591.2" y2="132"/>
+<text class="t-axis" x="591.2" y="146" text-anchor="middle">60%</text>
+<line class="grid" x1="703.6" y1="74" x2="703.6" y2="132"/>
+<text class="t-axis" x="703.6" y="146" text-anchor="middle">80%</text>
+<line class="grid" x1="816.0" y1="74" x2="816.0" y2="132"/>
+<text class="t-axis" x="816.0" y="146" text-anchor="middle">100%</text>
+<line class="axis" x1="254" y1="132" x2="816" y2="132"/>
+<text class="t-row" x="24" y="88">discipline 0.28.1</text>
+<line class="ci c-disc" x1="328.8" y1="84" x2="383.8" y2="84"/>
+<circle class="c-disc" cx="353.3" cy="84" r="4.5"/>
+<text class="t-val" x="826" y="88">41/232  [13.3, 23.1]</text>
+<text class="t-row" x="24" y="114">test-path twin</text>
+<line class="ci c-twin" x1="532.8" y1="110" x2="604.0" y2="110"/>
+<circle class="c-twin" cx="568.9" cy="110" r="4.5"/>
+<text class="t-val" x="826" y="114">130/232  [49.6, 62.3]</text>
+<text class="t-note" x="24" y="172">agent-pr-precision-v6: 232 merged coding-agent pull requests in 8 public repositories. The test-path twin flags any change to an existing test file, a CI workflow or a manifest / test configuration.</text>
+<text class="t-note" x="24" y="186">Blocked is not wrong: whether each block was warranted is the precision question, which is unresolved (precision-raters chart). (measured: Apple M1 macOS 26.4.1 arm64, 794362b6)</text>
+</svg>

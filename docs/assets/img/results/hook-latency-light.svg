@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" role="img" viewBox="0 0 960 298" width="100%">
+<title>Per-edit hook latency</title>
+<defs><style>
+.bg{fill:#fff} .border{stroke:#e2e8f0;fill:none} .grid{stroke:#f1f5f9;stroke-dasharray:2,3}
+.axis{stroke:#cbd5e1;stroke-width:1.5px} .floor{stroke:#b45309;stroke-width:1.5px;stroke-dasharray:5,3}
+.t-title{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;font-size:12px;font-weight:700;letter-spacing:.6px;fill:#0f172a;text-transform:uppercase}
+.t-sub{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;font-size:10.5px;font-weight:500;fill:#334155}
+.t-note{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;font-size:9.5px;fill:#64748b}
+.t-row{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;font-size:11px;font-weight:600;fill:#0f172a}
+.t-axis{font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:9.5px;fill:#64748b}
+.t-val{font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:10.5px;font-weight:600;fill:#334155}
+.t-floor{font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:9.5px;font-weight:700;fill:#b45309}
+.c-disc{fill:#16a34a;stroke:#16a34a} .c-twin{fill:#64748b;stroke:#64748b} .c-alt{fill:#2563eb;stroke:#2563eb}
+.ci{stroke-width:2.5px;stroke-linecap:round}
+</style></defs>
+<rect class="bg" width="960" height="298" rx="6"/>
+<rect class="border" x=".5" y=".5" width="959" height="297" rx="6"/>
+<text class="t-title" x="24" y="30">Per-edit hook latency</text>
+<text class="t-sub" x="24" y="48">Median seconds for the post-edit hook on a one-file change, 7 runs; the bar is min-max. Lower is better.</text>
+<line class="grid" x1="254.0" y1="74" x2="254.0" y2="236"/>
+<text class="t-axis" x="254.0" y="250" text-anchor="middle">0</text>
+<line class="grid" x1="366.4" y1="74" x2="366.4" y2="236"/>
+<text class="t-axis" x="366.4" y="250" text-anchor="middle">10</text>
+<line class="grid" x1="478.8" y1="74" x2="478.8" y2="236"/>
+<text class="t-axis" x="478.8" y="250" text-anchor="middle">20</text>
+<line class="grid" x1="591.2" y1="74" x2="591.2" y2="236"/>
+<text class="t-axis" x="591.2" y="250" text-anchor="middle">30</text>
+<line class="grid" x1="703.6" y1="74" x2="703.6" y2="236"/>
+<text class="t-axis" x="703.6" y="250" text-anchor="middle">40</text>
+<line class="grid" x1="816.0" y1="74" x2="816.0" y2="236"/>
+<text class="t-axis" x="816.0" y="250" text-anchor="middle">50</text>
+<line class="axis" x1="254" y1="236" x2="816" y2="236"/>
+<text class="t-row" x="24" y="88">discipline · before</text>
+<line class="ci c-twin" x1="785.1" y1="84" x2="786.2" y2="84"/>
+<circle class="c-twin" cx="785.7" cy="84" r="4.5"/>
+<text class="t-val" x="826" y="88">47.31 s</text>
+<text class="t-row" x="24" y="114">discipline · engine fast path (#994)</text>
+<line class="ci c-alt" x1="473.4" y1="110" x2="475.0" y2="110"/>
+<circle class="c-alt" cx="474.3" cy="110" r="4.5"/>
+<text class="t-val" x="826" y="114">19.60 s</text>
+<text class="t-row" x="24" y="140">discipline · + event-scoped (#995)</text>
+<line class="ci c-disc" x1="348.7" y1="136" x2="349.3" y2="136"/>
+<circle class="c-disc" cx="348.9" cy="136" r="4.5"/>
+<text class="t-val" x="826" y="140">8.44 s</text>
+<text class="t-row" x="24" y="166">ripgrep · before</text>
+<line class="ci c-twin" x1="358.9" y1="162" x2="359.1" y2="162"/>
+<circle class="c-twin" cx="359.0" cy="162" r="4.5"/>
+<text class="t-val" x="826" y="166">9.34 s</text>
+<text class="t-row" x="24" y="192">ripgrep · engine fast path (#994)</text>
+<line class="ci c-alt" x1="325.0" y1="188" x2="325.6" y2="188"/>
+<circle class="c-alt" cx="325.4" cy="188" r="4.5"/>
+<text class="t-val" x="826" y="192">6.35 s</text>
+<text class="t-row" x="24" y="218">ripgrep · + event-scoped (#995)</text>
+<line class="ci c-disc" x1="302.7" y1="214" x2="302.9" y2="214"/>
+<circle class="c-disc" cx="302.9" cy="214" r="4.5"/>
+<text class="t-val" x="826" y="218">4.35 s</text>
+<text class="t-note" x="24" y="276">Source: docs/benchmarks/hook-latency.md §4, §4.2, §4.3; release build, DISCIPLINE_NO_NETWORK=1. (measured: Apple M1, macOS)</text>
+</svg>

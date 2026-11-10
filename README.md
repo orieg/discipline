@@ -317,6 +317,18 @@ discipline audit --last 200 --format html -o audit.html
   <img alt="discipline audit report of this repository's last 200 merged changes: the headline, a strip of checks marked found, checked or not checked, and a ranked Needs a decision list" src="docs/assets/img/audit-overview-light.png" width="100%">
 </picture>
 
+## Results
+
+Measured on public pull requests and benchmarks; every figure is a Wilson 95% interval, and each study's method, pre-registration and raw results are in [`docs/benchmarks/`](docs/benchmarks/REPRODUCING.md). The charts are generated from the committed results by `scripts/benchmark_charts.py`.
+
+![Merged coding-agent pull requests blocked: discipline 0.28.1 blocks 41 of 232, a naive test-path filter 130 of 232](docs/assets/img/results/pr-block-rate.svg)
+
+Whether those blocks were warranted is not settled. The same findings score 95% precision under one set of labels and 10% under a fresh set, from synthetic raters who do not agree with each other; a human labelling pass is the outstanding check.
+
+![Structural-gate precision under the v5 and the v6 labels of the same findings, against the 90% floor](docs/assets/img/results/precision-raters.svg)
+
+![Post-edit hook latency before and after the engine fast path and event-scoped gate selection, on this repository and ripgrep](docs/assets/img/results/hook-latency.svg)
+
 ## Installation
 
 Discipline is distributed as a standalone static binary, native operating system packages (APT, RPM, Homebrew, MacPorts), cargo toolchain binary, or container image:

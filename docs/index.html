@@ -379,6 +379,12 @@
     .audit-grid { display: grid; gap: 1.25rem; }
     .audit-points { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; }
     .audit-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+    .result-chart { width: 100%; height: auto; display: block; }
+    .result-chart.light { display: none; }
+    [data-theme="light"] .result-chart.light { display: block; }
+    [data-theme="light"] .result-chart.dark { display: none; }
+    .results-grid { display: grid; gap: 1.25rem; }
+    .results-note { color: var(--text-muted); max-width: 72ch; }
 
     .section-block {
       padding: 3rem 0;
@@ -935,6 +941,7 @@
     <li><a href="#platforms">Platforms</a></li>
     <li><a href="#gates">Gate Reference</a></li>
     <li><a href="#audit">Audit</a></li>
+    <li><a href="#results">Results</a></li>
     <li><a href="#architecture">Architecture</a></li>
     <li><a href="#install">Install</a></li>
     <li><a href="tutorials/getting-started/">Tutorial</a></li>
@@ -1088,6 +1095,26 @@
       <div class="audit-actions">
         <a href="demo/audit.html" class="btn-primary">Open this repository's audit &rarr;</a>
         <a href="configuration/#auditing-escape-hatches-discipline-audit" class="btn-secondary">Read the reference</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Results -->
+  <section class="section-block" id="results">
+    <div class="section-head">
+      <div class="section-title">Measured Results</div>
+      <p class="section-desc">Public pull requests and benchmarks, pre-registered before the data existed, with every interval a Wilson 95% interval. Unfavourable and unresolved results are shown as they are.</p>
+    </div>
+    <div class="results-grid">
+      <img class="result-chart dark" src="assets/img/results/pr-block-rate-dark.svg" alt="Merged coding-agent pull requests blocked: discipline 0.28.1 blocks 41 of 232, a naive test-path filter 130 of 232" loading="lazy">
+      <img class="result-chart light" src="assets/img/results/pr-block-rate-light.svg" alt="Merged coding-agent pull requests blocked: discipline 0.28.1 blocks 41 of 232, a naive test-path filter 130 of 232" loading="lazy">
+      <p class="results-note">Whether those blocks were warranted is not settled: the same findings score 95% precision under one set of labels and 10% under a fresh set, from synthetic raters who do not agree with each other. A human labelling pass is the outstanding check.</p>
+      <img class="result-chart dark" src="assets/img/results/precision-raters-dark.svg" alt="Structural-gate precision under the v5 and the v6 labels of the same findings, against the 90% floor" loading="lazy">
+      <img class="result-chart light" src="assets/img/results/precision-raters-light.svg" alt="Structural-gate precision under the v5 and the v6 labels of the same findings, against the 90% floor" loading="lazy">
+      <img class="result-chart dark" src="assets/img/results/hook-latency-dark.svg" alt="Post-edit hook latency before and after the engine fast path and event-scoped gate selection, on this repository and ripgrep" loading="lazy">
+      <img class="result-chart light" src="assets/img/results/hook-latency-light.svg" alt="Post-edit hook latency before and after the engine fast path and event-scoped gate selection, on this repository and ripgrep" loading="lazy">
+      <div class="audit-actions">
+        <a href="https://github.com/orieg/discipline/blob/main/docs/benchmarks/REPRODUCING.md" class="btn-secondary">How each study is run and reproduced</a>
       </div>
     </div>
   </section>
