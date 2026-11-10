@@ -179,3 +179,23 @@ passes, so the replay stopped at its first pull request with no finding written.
 is `cargo build --release --locked` at the same commit on that host; its sha256 is recorded.
 No replay output and no grade existed when this was written.
 """
+
+[[amendment]]
+id = 2
+date = "2026-11-10"
+before_data = false
+change = """
+The tie-breaker is a Claude Fable 5.2 agent, not the owner. Both rater slots had answered every
+item when this was written; the owner had graded none of the 10 items they answer differently
+(PKT-0021, PKT-0054, PKT-0099, PKT-0136, PKT-0142, PKT-0167, PKT-0186, PKT-0190, PKT-0233,
+PKT-0274). The agent runs in its own session, which has not seen this study's conversation. It
+gets `rater_prompt` unchanged with one batch file holding those 10 items in the packet's fields
+only, blind to both slots' labels, the source tool and the gate. Its first valid answer is the
+final label on both questions for those items; v7's invalid-answer rule applies. After that
+answer the study session may ask it which lines each label rests on, to check the labels are
+read from the item; those replies are recorded in the results and change no label.
+The tie-breaker is from the same vendor as Rater 1, so on these 10 items the two-vendor design
+does not hold. As the lock requires, every rule-fidelity verdict is relabelled
+`INTERMEDIATE_amended_threshold_redesign`, with the verdict before this amendment reported
+beside it, and the results count the labels the tie-breaker set, per question.
+"""

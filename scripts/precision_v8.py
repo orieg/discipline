@@ -8,10 +8,11 @@
            rule summary) keeps its id; the others get `PKT-1nnn` ids. Writes the packet,
            the ground key (kept out of the raters' reach until grading ends) and the
            rater batches of 20.
-  report   combine the two rater slots and the owner's answers into final labels; write
+  report   combine the two rater slots and the tie-breaker's answers (the owner, or an LLM
+           under amendment 2) into final labels; write
            adjudication.json, findings.json and summary.json (block rates, rule-fidelity
            and actionability shares per class and gate with Wilson and cluster-bootstrap
-           intervals, kappa per question, degenerate slots, owner-final counts, verdicts).
+           intervals, kappa per question, degenerate slots, tie-breaker-final counts, verdicts).
 
 The replay, the twin rule, the rule summaries, the diff excerpts and the redaction are
 `scripts/benchmark_precision.py`'s, imported, so the packet is built as v6's was.
@@ -170,7 +171,8 @@ def report(args) -> int:
     d = Path(args.dir)
     gk = json.loads((d / "ground-key.json").read_text())
     r1, r2 = load_slot(d / "r1", False), load_slot(d / "r2", True)
-    owner = json.loads(Path(args.owner).read_text())
+    owner = json.loads(Path(args.answers).read_text())
+    llm = args.tie_breaker != "owner"
     ids = sorted(gk)
     if set(r1) != set(ids) or set(r2) != set(ids):
         raise SystemExit("a rater slot does not cover the packet")
@@ -178,7 +180,7 @@ def report(args) -> int:
     for i in ids:
         disagree = r1[i] != r2[i]
         if disagree and i not in owner:
-            raise SystemExit(f"{i}: the slots disagree and the owner has not answered")
+            raise SystemExit(f"{i}: the slots disagree and the tie-breaker has not answered")
         final = {}
         for q in QUESTIONS:
             if disagree:
@@ -189,7 +191,7 @@ def report(args) -> int:
         g = gk[i]
         cls = "twin" if g["source_tool"] != "discipline" else bp.gate_class_of(g["gate"])
         items.append({"item_id": i, **g, "gate_class": cls, "pr": f"{g['repo']}#{g['pr_number']}",
-                      "rater_1": r1[i], "rater_2": r2[i], "owner": owner.get(i), "final": final})
+                      "rater_1": r1[i], "rater_2": r2[i], "tie_breaker": owner.get(i), "final": final})
     raw = json.loads(Path(args.raw).read_text())
     blocked = sum(1 for c in raw if c["violations"])
     twin_blocked = sum(1 for c in raw if any(bp.classify_twin_sensitive_path(p, p in set(c["base_existing"])) for p in c["paths"]))
@@ -212,6 +214,9 @@ def report(args) -> int:
                 would = "INTERMEDIATE_floor_within_ci" if rf["point"] >= FLOORS[cls] else "REJECTED"
             entry["verdict_labels_would_give"] = would
             entry["verdict"] = would if would == "insufficient-n" else "INTERMEDIATE_unreliable_labels"
+            if llm:  # amendment 2: an LLM tie-breaker set after the rater labels existed
+                entry["verdict_before_amendment"] = entry["verdict"]
+                entry["verdict"] = "INTERMEDIATE_amended_threshold_redesign"
             entry["verdict_qualifier"] = "no-human-labels"
             entry["floor"], entry["required_n"] = FLOORS[cls], REQUIRED_N[cls]
         classes[cls] = entry
@@ -235,23 +240,27 @@ def report(args) -> int:
     summary = {
         "study_id": "agent-pr-precision-v8", "code_commit": "87447255f2d0f4d44644e6f801c2d49cc9e6d87c",
         "binary_sha256": args.binary_sha256, "host": args.host,
-        "rater_kind": "llm-subagent and llm-cli, owner adjudication",
-        "synthetic_rater_disclosure": "Rater 1 (Claude subagents) and Rater 2 (Gemini through the agy CLI) are AI models, not people. The owner, who wrote discipline, settled every item the two answered differently. No independent human labelled any item.",
+        "rater_kind": f"llm-subagent and llm-cli, {args.tie_breaker} tie-break",
+        "synthetic_rater_disclosure": "Rater 1 (Claude subagents) and Rater 2 (Gemini through the agy CLI) are AI models, not people. "
+            + (f"A {args.tie_breaker} agent, from the same vendor as Rater 1, settled every item the two answered differently (amendment 2). "
+               if llm else "The owner, who wrote discipline, settled every item the two answered differently. ")
+            + "No independent human labelled any item.",
+        "tie_breaker": args.tie_breaker, "amendments": [1, 2] if llm else [1],
         "pull_request_block_rates": {"total_pull_requests": len(raw), "discipline": share(blocked, len(raw)),
                                      "naive_sensitive_path_filter": share(twin_blocked, len(raw))},
-        "reliability": reliability, "owner_final_labels": owner_final, "classes": classes, "per_gate": per_gate,
+        "reliability": reliability, "tie_breaker_final_labels": owner_final, "classes": classes, "per_gate": per_gate,
         "bootstrap_seed": BOOTSTRAP_SEED, "bootstrap_resamples": BOOTSTRAP_RESAMPLES,
     }
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     (out / "adjudication.json").write_text(json.dumps({"items": [{k: it[k] for k in (
-        "item_id", "rater_1", "rater_2", "owner", "final")} for it in items]}, indent=2) + "\n")
+        "item_id", "rater_1", "rater_2", "tie_breaker", "final")} for it in items]}, indent=2) + "\n")
     (out / "findings.json").write_text(json.dumps({"items": [{k: it[k] for k in (
         "item_id", "source_tool", "gate", "code", "gate_class", "repo", "sha", "pr_number", "file", "line")} for it in items]}, indent=2) + "\n")
     s = classes["structural-ast-and-deterministic"]["rule_fidelity"]
     print(f"blocked {blocked}/{len(raw)}; structural rule fidelity {s['k']}/{s['n']}; kappa "
-          f"{reliability['rule_fidelity']['kappa']:.3f}; owner-final {owner_final}")
+          f"{reliability['rule_fidelity']['kappa']:.3f}; tie-breaker-final {owner_final}")
     return 0
 
 
@@ -277,7 +286,8 @@ def main() -> int:
     pk.add_argument("--out-dir", required=True)
     rp = sub.add_parser("report")
     rp.add_argument("--dir", required=True, help="the packet stage's directory, with r1/ and r2/ batch answers")
-    rp.add_argument("--owner", required=True, help="JSON {item_id: {rule_fidelity, actionability}} of the owner's answers")
+    rp.add_argument("--answers", required=True, help="JSON {item_id: {rule_fidelity, actionability}} of the tie-breaker's answers")
+    rp.add_argument("--tie-breaker", default="owner", help="who answered: owner, or the model name of an LLM tie-breaker (amendment 2)")
     rp.add_argument("--raw", required=True)
     rp.add_argument("--binary-sha256", required=True)
     rp.add_argument("--host", required=True)
