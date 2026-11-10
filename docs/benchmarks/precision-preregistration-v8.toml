@@ -40,7 +40,7 @@ inspected population; not a causal claim and not an estimate for unseen pull req
 """
 discipline_version = "0.32.0"
 discipline_binary = """
-`cargo build --release --locked` on the Linux replay host at commit
+`cargo build --release --locked` on the replay host (amendment 1) at commit
 `87447255f2d0f4d44644e6f801c2d49cc9e6d87c` of `orieg/discipline` (main after #1055). The
 0.32.0 release candidate is cut from main after this commit with release metadata only
 (versions, docs, man pages, templates); the results record the binary's sha256 and the
@@ -166,4 +166,16 @@ bootstrap intervals; kappa per question; the count of owner-final labels; and ev
 two slot labels and final label in `adjudication.json`. Charts and README copy describe the
 labels as "graded by two AI models from different vendors, with the owner settling every
 disagreement", never as human labels.
+"""
+
+[[amendment]]
+id = 1
+date = "2026-11-10"
+before_data = true
+change = """
+The replay host is the macOS arm64 machine the study is run from, not the Linux lab host:
+the lab host's git (2.43) has no `--no-lazy-fetch`, which `scripts/benchmark_precision.py`
+passes, so the replay stopped at its first pull request with no finding written. The binary
+is `cargo build --release --locked` at the same commit on that host; its sha256 is recorded.
+No replay output and no grade existed when this was written.
 """
