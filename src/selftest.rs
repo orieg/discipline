@@ -4742,6 +4742,28 @@ const CASES: &[Case] = &[
     ),
     #[cfg(feature = "lang-python")]
     (
+        "assertion-reduction: a Python assertion whose polarity is inverted is reported (#1049)",
+        || {
+            let path = "tests/test_m.py";
+            let test = |line: &str| {
+                format!("import unittest\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n        {line}\n")
+            };
+            let change = |base: &str, head: &str| {
+                helper_change(&[(path, &test(base), &test(head))], "")
+            };
+            Ok(
+                change("self.assertFalse(f())", "self.assertTrue(f())")?
+                    == ["assertion-reduction/weakened-bound"]
+                    && change("assert f()", "assert not f()")?
+                        == ["assertion-reduction/weakened-bound"]
+                    // Controls: the checked value changed with the method; another family.
+                    && change("self.assertFalse(f())", "self.assertTrue(g())")?.is_empty()
+                    && change("self.assertTrue(f())", "self.assertIsNotNone(f())")?.is_empty(),
+            )
+        },
+    ),
+    #[cfg(feature = "lang-python")]
+    (
         "deletion-rationale: a Python test hidden by a later def of its name is reported (#827)",
         || {
             use crate::ast::LanguagePack;
