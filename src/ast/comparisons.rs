@@ -489,11 +489,15 @@ mod tests {
                 ("<=", Some("5"), "assert 0 < f(rows) @ #"),
             ]
         );
-        let member = py("assert \"a\" not in rows");
-        assert_eq!(member.len(), 2);
-        assert_eq!(member[1].operator, "not in");
-        assert_eq!(member[1].skeleton, "assert # @ rows");
-        assert!(!member[1].fails_when_true);
+        // The polarity record (#1049) is checked by its own test below.
+        let member: Vec<_> = py("assert \"a\" not in rows")
+            .into_iter()
+            .filter(|c| !c.operator.starts_with("assert"))
+            .collect();
+        assert_eq!(member.len(), 1);
+        assert_eq!(member[0].operator, "not in");
+        assert_eq!(member[0].skeleton, "assert # @ rows");
+        assert!(!member[0].fails_when_true);
     }
 
     /// #1049: an inverted `self.assert*` method or a `not` added to or taken from a bare
