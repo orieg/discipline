@@ -8,8 +8,8 @@ Reads only committed result files and writes the charts to `docs/assets/img/resu
     (`agent-pr-precision-v6`, `docs/benchmarks/results-v6/summary.json`).
   - `precision-raters`: whether those blocks were right, as two rounds of AI grading judged the
     same findings (`docs/benchmarks/results-v5/`, `results-v6/`).
-  - `hook-latency`: how long the check after an agent edit takes, before and after #994 and
-    #995 (`docs/benchmarks/results-hook-latency/`).
+  - `hook-latency`: how long the CI check and the agent edit hook take on the released code
+    (`docs/benchmarks/results-hook-latency/release-0.32-hook-latency.json`).
   - `recall-tradeoff`, `recall-by-release`: test gaming caught on impossible tests
     (`impossible-recall-v1`, #838). Written only when `docs/benchmarks/results-recall-confirmatory/`
     is present.
@@ -261,39 +261,37 @@ def precision_raters() -> Chart:
     )
 
 
-def post_edit(name: str) -> dict[str, dict]:
-    d = load(BENCH / "results-hook-latency" / name)
-    repos = {}
-    for r in d["repos"]:
-        cell = r["cells"]["hook-post-edit"]
-        repos["discipline" if r["name"] in ("discipline", "src") else r["name"]] = cell
-    return repos
+RELEASE_LATENCY = "release-0.32-hook-latency.json"
 
 
 def hook_latency() -> Chart:
-    stages = [
-        ("Before", "hook-latency.json", "c-base"),
-        ("Faster engine", "fast-path-hook-latency.json", "c-hollow"),
-        ("+ checks only what the edit touches", "edit-scoped-main-hook-latency.json", "c-disc"),
+    d = load(BENCH / "results-hook-latency" / RELEASE_LATENCY)
+    cells = [
+        ("CI check (every gate)", "check-one-file", "c-base"),
+        ("Agent edit hook, blocking mode", "hook-post-edit-enforcing", "c-disc"),
+        ("Agent edit hook, observe mode", "hook-post-edit", "c-hollow"),
     ]
-    sections, spread, now = [], 0.0, {}
-    for repo, heading in (("discipline", "On this repository (large)"), ("ripgrep", "On ripgrep (a mid-size Rust project)")):
-        cells = [post_edit(name)[repo] for _, name, _ in stages]
-        first, last = cells[0]["median_s"], cells[-1]["median_s"]
-        now[repo] = (first, last)
+    sections, spread, edit, ci = [], 0.0, [], []
+    heads = {"discipline": "On this repository ({} files)", "ripgrep": "On ripgrep, a mid-size Rust project ({} files)"}
+    for r in d["repos"]:
+        name = "discipline" if r["name"] in ("discipline", "src") else r["name"]
         rows = []
-        for (label, _, cls), c in zip(stages, cells):
+        for label, key, cls in cells:
+            c = r["cells"][key]
             spread = max(spread, c["max_s"] - c["min_s"])
-            big = f"{c['median_s']:.1f} s"
-            detail = f"{first / c['median_s']:.1f}x faster" if c is cells[-1] else ""
-            rows.append((label, c["median_s"], c["min_s"], c["max_s"], cls, big, detail))
-        sections.append((heading, rows, {"xmax": 50, "percent": False, "unit": " s"}))
-    (d0, d1), (r0, r1) = now["discipline"], now["ripgrep"]
+            rows.append((label, c["median_s"], c["min_s"], c["max_s"], cls, f"{c['median_s']:.1f} s" if c["median_s"] >= 0.1 else f"{c['median_s']:.2f} s", ""))
+        edit.append(r["cells"]["hook-post-edit-enforcing"]["median_s"])
+        ci.append(r["cells"]["check-one-file"]["median_s"])
+        sections.append((heads.get(name, name + " ({} files)").format(r["files"]), rows, {"xmax": 20, "percent": False, "unit": " s"}))
     return chart(
-        f"The check after each agent edit now takes {r1:.1f} to {d1:.1f} seconds, down from {r0:.1f} to {d0:.0f}",
-        [f"Typical (median) time for the check that runs after an agent edits one file, over 7 runs. Lower is better. Runs varied by under {math.ceil(spread * 100) / 100:.2f} s."],
+        f"Each agent edit is checked in {min(edit):.1f} to {max(edit):.1f} seconds; a full CI check takes {min(ci):.1f} to {max(ci):.1f}",
+        [
+            "Typical (median) time for a one-file change, over 7 runs. Lower is better. Runs varied by under "
+            f"{math.ceil(spread * 100) / 100:.2f} s. In blocking mode the agent waits for the check; in observe mode the check runs in the background and never blocks.",
+        ],
         sections,
-        ["Release builds with the network off. The two speed-ups are #994 and #995; the method is in docs/benchmarks/hook-latency.md. (measured)"],
+        ["The CI check runs every gate; the edit hook runs the gates an edit can trip, and the full set runs when the agent stops. "
+         "Release build of the 0.32.0 code, network off. Method: docs/benchmarks/hook-latency.md §4.4. (measured: AWS c7g.2xlarge)"],
     )
 
 

@@ -319,7 +319,7 @@ discipline audit --last 200 --format html -o audit.html
 
 ## Results
 
-**In short:** discipline blocks far fewer agent pull requests than a simple test-file rule, and the check after each agent edit now takes a few seconds. Two things are still open: whether its blocks are right, and how much test gaming it catches.
+**In short:** discipline blocks far fewer agent pull requests than a simple test-file rule, and checks each agent edit in a few seconds. Two things are still open: whether its blocks are right, and how much test gaming it catches.
 
 Every number comes from public pull requests or public benchmarks. Each chart states what was measured, and how each study was run, with its raw data, is in [`docs/benchmarks/`](docs/benchmarks/REPRODUCING.md).
 
@@ -333,7 +333,7 @@ Every number comes from public pull requests or public benchmarks. Each chart st
 
 **How long does each check take?**
 
-![The check after each agent edit fell from 47.3 to 8.4 seconds on this repository, and from 9.3 to 4.3 seconds on ripgrep.](docs/assets/img/results/hook-latency.svg)
+![Each agent edit is checked in 7.9 seconds on this repository and 4.3 seconds on ripgrep when the hook can block, and in under 0.1 second in observe mode; a full CI check takes 19.5 and 6.3 seconds.](docs/assets/img/results/hook-latency.svg)
 
 **Does it catch test gaming?** This is measured, and the results are being reviewed before they are published. They will appear here whatever they show ([#838](https://github.com/orieg/discipline/issues/838)).
 

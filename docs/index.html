@@ -1104,7 +1104,7 @@
   <section class="section-block" id="results">
     <div class="section-head">
       <div class="section-title">Results</div>
-      <p class="section-desc">Discipline blocks far fewer agent pull requests than a simple test-file rule, and the check after each agent edit is now several times faster. Two things are still open: whether its blocks are right, and how much test gaming it catches.</p>
+      <p class="section-desc">Discipline blocks far fewer agent pull requests than a simple test-file rule, and checks each agent edit in a few seconds. Two things are still open: whether its blocks are right, and how much test gaming it catches.</p>
     </div>
     <div class="results-grid">
       <h3 class="results-q">How often does it block?</h3>
@@ -1114,8 +1114,8 @@
       <img class="result-chart dark" src="assets/img/results/precision-raters-dark.svg" alt="Two rounds of AI grading disagree on whether discipline's blocks were right: 119 of 125 findings in the first round (95%), 12 of 122 in the second (10%), against a 90% bar set in advance." loading="lazy">
       <img class="result-chart light" src="assets/img/results/precision-raters-light.svg" alt="Two rounds of AI grading disagree on whether discipline's blocks were right: 119 of 125 findings in the first round (95%), 12 of 122 in the second (10%), against a 90% bar set in advance." loading="lazy">
       <h3 class="results-q">How long does each check take?</h3>
-      <img class="result-chart dark" src="assets/img/results/hook-latency-dark.svg" alt="The check after each agent edit fell from 47.3 to 8.4 seconds on this repository, and from 9.3 to 4.3 seconds on ripgrep." loading="lazy">
-      <img class="result-chart light" src="assets/img/results/hook-latency-light.svg" alt="The check after each agent edit fell from 47.3 to 8.4 seconds on this repository, and from 9.3 to 4.3 seconds on ripgrep." loading="lazy">
+      <img class="result-chart dark" src="assets/img/results/hook-latency-dark.svg" alt="Each agent edit is checked in 7.9 seconds on this repository and 4.3 seconds on ripgrep when the hook can block, and in under 0.1 second in observe mode; a full CI check takes 19.5 and 6.3 seconds." loading="lazy">
+      <img class="result-chart light" src="assets/img/results/hook-latency-light.svg" alt="Each agent edit is checked in 7.9 seconds on this repository and 4.3 seconds on ripgrep when the hook can block, and in under 0.1 second in observe mode; a full CI check takes 19.5 and 6.3 seconds." loading="lazy">
       <h3 class="results-q">Does it catch test gaming?</h3>
       <p class="results-note">This is measured, and the results are being reviewed before they are published. They will appear here whatever they show (<a href="https://github.com/orieg/discipline/issues/838">#838</a>).</p>
       <h3 class="results-q">Judge it on your own repository</h3>

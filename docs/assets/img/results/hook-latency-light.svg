@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" role="img" viewBox="0 0 760 406" width="100%">
-<title>The check after each agent edit now takes 4.3 to 8.4 seconds, down from 9.3 to 47</title>
+<title>Each agent edit is checked in 4.3 to 7.9 seconds; a full CI check takes 6.3 to 19.5</title>
 <defs><style>
 .bg{fill:#fff} .border{stroke:#e2e8f0;fill:none} .grid{stroke:#f1f5f9;stroke-dasharray:2,3}
 .axis{stroke:#cbd5e1;stroke-width:1.5px} .floor{stroke:#b45309;stroke-width:1.5px;stroke-dasharray:5,3}
@@ -18,67 +18,67 @@
 </style></defs>
 <rect class="bg" width="760" height="406" rx="6"/>
 <rect class="border" x=".5" y=".5" width="759" height="405" rx="6"/>
-<text class="t-title" x="24" y="32">The check after each agent edit now takes 4.3 to 8.4 seconds, down from 9.3 to 47</text>
-<text class="t-sub" x="24" y="52">Typical (median) time for the check that runs after an agent edits one file, over 7 runs. Lower is better. Runs</text>
-<text class="t-sub" x="24" y="67">varied by under 0.15 s.</text>
-<text class="t-head" x="24" y="94">On this repository (large)</text>
+<text class="t-title" x="24" y="32">Each agent edit is checked in 4.3 to 7.9 seconds; a full CI check takes 6.3 to 19.5</text>
+<text class="t-sub" x="24" y="52">Typical (median) time for a one-file change, over 7 runs. Lower is better. Runs varied by under 0.06 s. In</text>
+<text class="t-sub" x="24" y="67">blocking mode the agent waits for the check; in observe mode the check runs in the background and never blocks.</text>
+<text class="t-head" x="24" y="94">On this repository (1405 files)</text>
 <line class="grid" x1="254.0" y1="110" x2="254.0" y2="194"/>
 <text class="t-axis" x="254.0" y="208" text-anchor="middle">0 s</text>
 <line class="grid" x1="306.0" y1="110" x2="306.0" y2="194"/>
-<text class="t-axis" x="306.0" y="208" text-anchor="middle">10 s</text>
+<text class="t-axis" x="306.0" y="208" text-anchor="middle">4 s</text>
 <line class="grid" x1="358.0" y1="110" x2="358.0" y2="194"/>
-<text class="t-axis" x="358.0" y="208" text-anchor="middle">20 s</text>
+<text class="t-axis" x="358.0" y="208" text-anchor="middle">8 s</text>
 <line class="grid" x1="410.0" y1="110" x2="410.0" y2="194"/>
-<text class="t-axis" x="410.0" y="208" text-anchor="middle">30 s</text>
+<text class="t-axis" x="410.0" y="208" text-anchor="middle">12 s</text>
 <line class="grid" x1="462.0" y1="110" x2="462.0" y2="194"/>
-<text class="t-axis" x="462.0" y="208" text-anchor="middle">40 s</text>
+<text class="t-axis" x="462.0" y="208" text-anchor="middle">16 s</text>
 <line class="grid" x1="514.0" y1="110" x2="514.0" y2="194"/>
-<text class="t-axis" x="514.0" y="208" text-anchor="middle">50 s</text>
+<text class="t-axis" x="514.0" y="208" text-anchor="middle">20 s</text>
 <line class="axis" x1="254" y1="194" x2="514" y2="194"/>
-<text class="t-row" x="24" y="124">Before</text>
-<line class="ci c-base" x1="499.7" y1="120" x2="500.2" y2="120"/>
-<circle class="c-base" cx="500.0" cy="120" r="4.5"/>
-<text class="t-big" x="526" y="124">47.3 s</text>
+<text class="t-row" x="24" y="124">CI check (every gate)</text>
+<line class="ci c-base" x1="507.1" y1="120" x2="507.8" y2="120"/>
+<circle class="c-base" cx="507.4" cy="120" r="4.5"/>
+<text class="t-big" x="526" y="124">19.5 s</text>
 <text class="t-val" x="576" y="124"></text>
-<text class="t-row" x="24" y="150">Faster engine</text>
-<line class="ci c-disc" x1="355.5" y1="146" x2="356.2" y2="146"/>
-<circle class="c-hollow" cx="355.9" cy="146" r="4.5"/>
-<text class="t-big" x="526" y="150">19.6 s</text>
+<text class="t-row" x="24" y="150">Agent edit hook, blocking mode</text>
+<line class="ci c-disc" x1="356.5" y1="146" x2="357.0" y2="146"/>
+<circle class="c-disc" cx="356.8" cy="146" r="4.5"/>
+<text class="t-big" x="526" y="150">7.9 s</text>
 <text class="t-val" x="576" y="150"></text>
-<text class="t-row" x="24" y="176">+ checks only what the edit touches</text>
-<line class="ci c-disc" x1="297.8" y1="172" x2="298.1" y2="172"/>
-<circle class="c-disc" cx="297.9" cy="172" r="4.5"/>
-<text class="t-big" x="526" y="176">8.4 s</text>
-<text class="t-val" x="576" y="176">5.6x faster</text>
-<text class="t-head" x="24" y="232">On ripgrep (a mid-size Rust project)</text>
+<text class="t-row" x="24" y="176">Agent edit hook, observe mode</text>
+<line class="ci c-disc" x1="254.2" y1="172" x2="254.3" y2="172"/>
+<circle class="c-hollow" cx="254.2" cy="172" r="4.5"/>
+<text class="t-big" x="526" y="176">0.02 s</text>
+<text class="t-val" x="576" y="176"></text>
+<text class="t-head" x="24" y="232">On ripgrep, a mid-size Rust project (225 files)</text>
 <line class="grid" x1="254.0" y1="248" x2="254.0" y2="332"/>
 <text class="t-axis" x="254.0" y="346" text-anchor="middle">0 s</text>
 <line class="grid" x1="306.0" y1="248" x2="306.0" y2="332"/>
-<text class="t-axis" x="306.0" y="346" text-anchor="middle">10 s</text>
+<text class="t-axis" x="306.0" y="346" text-anchor="middle">4 s</text>
 <line class="grid" x1="358.0" y1="248" x2="358.0" y2="332"/>
-<text class="t-axis" x="358.0" y="346" text-anchor="middle">20 s</text>
+<text class="t-axis" x="358.0" y="346" text-anchor="middle">8 s</text>
 <line class="grid" x1="410.0" y1="248" x2="410.0" y2="332"/>
-<text class="t-axis" x="410.0" y="346" text-anchor="middle">30 s</text>
+<text class="t-axis" x="410.0" y="346" text-anchor="middle">12 s</text>
 <line class="grid" x1="462.0" y1="248" x2="462.0" y2="332"/>
-<text class="t-axis" x="462.0" y="346" text-anchor="middle">40 s</text>
+<text class="t-axis" x="462.0" y="346" text-anchor="middle">16 s</text>
 <line class="grid" x1="514.0" y1="248" x2="514.0" y2="332"/>
-<text class="t-axis" x="514.0" y="346" text-anchor="middle">50 s</text>
+<text class="t-axis" x="514.0" y="346" text-anchor="middle">20 s</text>
 <line class="axis" x1="254" y1="332" x2="514" y2="332"/>
-<text class="t-row" x="24" y="262">Before</text>
-<line class="ci c-base" x1="302.5" y1="258" x2="302.6" y2="258"/>
-<circle class="c-base" cx="302.6" cy="258" r="4.5"/>
-<text class="t-big" x="526" y="262">9.3 s</text>
+<text class="t-row" x="24" y="262">CI check (every gate)</text>
+<line class="ci c-base" x1="335.5" y1="258" x2="335.8" y2="258"/>
+<circle class="c-base" cx="335.6" cy="258" r="4.5"/>
+<text class="t-big" x="526" y="262">6.3 s</text>
 <text class="t-val" x="576" y="262"></text>
-<text class="t-row" x="24" y="288">Faster engine</text>
-<line class="ci c-disc" x1="286.9" y1="284" x2="287.1" y2="284"/>
-<circle class="c-hollow" cx="287.0" cy="284" r="4.5"/>
-<text class="t-big" x="526" y="288">6.3 s</text>
+<text class="t-row" x="24" y="288">Agent edit hook, blocking mode</text>
+<line class="ci c-disc" x1="309.7" y1="284" x2="309.8" y2="284"/>
+<circle class="c-disc" cx="309.7" cy="284" r="4.5"/>
+<text class="t-big" x="526" y="288">4.3 s</text>
 <text class="t-val" x="576" y="288"></text>
-<text class="t-row" x="24" y="314">+ checks only what the edit touches</text>
-<line class="ci c-disc" x1="276.5" y1="310" x2="276.6" y2="310"/>
-<circle class="c-disc" cx="276.6" cy="310" r="4.5"/>
-<text class="t-big" x="526" y="314">4.3 s</text>
-<text class="t-val" x="576" y="314">2.1x faster</text>
-<text class="t-note" x="24" y="370">Release builds with the network off. The two speed-ups are #994 and #995; the method is in docs/benchmarks/hook-latency.md.</text>
-<text class="t-note" x="24" y="384">(measured)</text>
+<text class="t-row" x="24" y="314">Agent edit hook, observe mode</text>
+<line class="ci c-disc" x1="254.1" y1="310" x2="254.1" y2="310"/>
+<circle class="c-hollow" cx="254.1" cy="310" r="4.5"/>
+<text class="t-big" x="526" y="314">0.01 s</text>
+<text class="t-val" x="576" y="314"></text>
+<text class="t-note" x="24" y="370">The CI check runs every gate; the edit hook runs the gates an edit can trip, and the full set runs when the agent stops.</text>
+<text class="t-note" x="24" y="384">Release build of the 0.32.0 code, network off. Method: docs/benchmarks/hook-latency.md §4.4. (measured: AWS c7g.2xlarge)</text>
 </svg>
