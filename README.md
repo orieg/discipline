@@ -319,15 +319,25 @@ discipline audit --last 200 --format html -o audit.html
 
 ## Results
 
-Measured on public pull requests and benchmarks; every figure is a Wilson 95% interval, and each study's method, pre-registration and raw results are in [`docs/benchmarks/`](docs/benchmarks/REPRODUCING.md). The charts are generated from the committed results by `scripts/benchmark_charts.py`.
+**In short:** discipline blocks far fewer agent pull requests than a simple test-file rule, and the check after each agent edit now takes a few seconds. Two things are still open: whether its blocks are right, and how much test gaming it catches.
 
-![Merged coding-agent pull requests blocked: discipline 0.28.1 blocks 41 of 232, a naive test-path filter 130 of 232](docs/assets/img/results/pr-block-rate.svg)
+Every number comes from public pull requests or public benchmarks. Each chart states what was measured, and how each study was run, with its raw data, is in [`docs/benchmarks/`](docs/benchmarks/REPRODUCING.md).
 
-Whether those blocks were warranted is not settled. The same findings score 95% precision under one set of labels and 10% under a fresh set, from synthetic raters who do not agree with each other; a human labelling pass is the outstanding check.
+**How often does it block?**
 
-![Structural-gate precision under the v5 and the v6 labels of the same findings, against the 90% floor](docs/assets/img/results/precision-raters.svg)
+![Discipline blocked 41 of 232 merged coding-agent pull requests (18%); a simple rule that blocks any change to a test, CI or configuration file blocked 130 (56%).](docs/assets/img/results/pr-block-rate.svg)
 
-![Post-edit hook latency before and after the engine fast path and event-scoped gate selection, on this repository and ripgrep](docs/assets/img/results/hook-latency.svg)
+**Were those blocks right?**
+
+![Two rounds of AI grading disagree on whether discipline's blocks were right: 119 of 125 findings in the first round (95%), 12 of 122 in the second (10%), against a 90% bar set in advance.](docs/assets/img/results/precision-raters.svg)
+
+**How long does each check take?**
+
+![The check after each agent edit fell from 47.3 to 8.4 seconds on this repository, and from 9.3 to 4.3 seconds on ripgrep.](docs/assets/img/results/hook-latency.svg)
+
+**Does it catch test gaming?** This is measured, and the results are being reviewed before they are published. They will appear here whatever they show ([#838](https://github.com/orieg/discipline/issues/838)).
+
+**Judge it on your own repository:** `discipline replay --last 50` shows what discipline would have blocked in your last 50 merged changes, without blocking anything. The charts are generated from the committed results by `scripts/benchmark_charts.py`.
 
 ## Installation
 
