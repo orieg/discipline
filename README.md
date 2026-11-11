@@ -319,7 +319,7 @@ discipline audit --last 200 --format html -o audit.html
 
 ## Results
 
-**In short:** discipline 0.32.0 blocked 17% of merged agent pull requests; a simple test-file rule blocked 56%. 84% of its blocks are correct (likely 76–90%), against 2% for the simple rule. Each agent edit is checked in a few seconds. Still open: how much test gaming it catches.
+**In short:** discipline 0.32.0 blocked 17% of merged agent pull requests; a simple baseline rule that blocks any change to a test, CI or configuration file blocked 56%. 84% of discipline's blocks are correct (likely 76–90%), against 2% for that rule. Each agent edit is checked in a few seconds. Still open: how much test gaming it catches.
 
 Every number comes from public pull requests or public benchmarks. Each chart states what was measured, and how each study was run, with its raw data, is in [`docs/benchmarks/`](docs/benchmarks/REPRODUCING.md).
 

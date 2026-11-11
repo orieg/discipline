@@ -48,6 +48,6 @@
 <circle class="c-base" cx="399.7" cy="115" r="4.5"/>
 <text class="t-big" x="526" y="119">56%</text>
 <text class="t-val" x="576" y="119">130 of 232 · likely 49%–63%</text>
-<text class="t-note" x="24" y="175">Fewer blocks, less friction. The next chart shows whether the blocks are correct. The simple rule blocks any pull request</text>
-<text class="t-note" x="24" y="189">that changes a test, CI or configuration file. Discipline 0.32.0. (measured)</text>
+<text class="t-note" x="24" y="175">Fewer blocks, less friction. The next chart shows whether the blocks are correct. The simple rule is a baseline for</text>
+<text class="t-note" x="24" y="189">comparison: it blocks any pull request that changes a test, CI or configuration file. Discipline 0.32.0. (measured)</text>
 </svg>

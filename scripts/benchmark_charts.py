@@ -235,7 +235,7 @@ def pr_block_rate() -> Chart:
         [(None, rows, {})],
         [
             "Fewer blocks, less friction. The next chart shows whether the blocks are correct.",
-            "The simple rule blocks any pull request that changes a test, CI or configuration file. Discipline 0.32.0. (measured)",
+            "The simple rule is a baseline for comparison: it blocks any pull request that changes a test, CI or configuration file. Discipline 0.32.0. (measured)",
         ],
     )
 
@@ -256,7 +256,8 @@ def block_precision() -> Chart:
     graded = rf["n"] + tw["n"] + cls["heuristic-and-prose"]["rule_fidelity"]["n"]
     return chart(
         f"Discipline's blocks are correct {pct(rf['k'] / rf['n'])} of the time; the simple rule's, {tw['k'] / tw['n'] * 100:.0f}%",
-        ["Correct: the flagged code really has the problem the block names. Dot: measured. Line: likely range."],
+        ["Correct: the flagged code really has the problem the block names. The simple rule is a baseline for comparison:"
+         " it blocks any pull request that changes a test, CI or configuration file. Dot: measured. Line: likely range."],
         [
             (None, [disc, by_pr, proportion(SIMPLE_FILE_RULE, tw["k"], tw["n"], "c-base")], {}),
             ("By check (checks with 10 or more findings)", gates, {}),
